@@ -456,8 +456,9 @@ staging coverage must traverse all eight published root aliases for the exact
 progress magic, sequence, phase, and auxiliary identity before a replacement
 generation can observe it. Production AArch64 coverage must configure the
 EventPump in place, borrow it through both ordinary and deferred console loops,
-reset the CYW43 supervisor in place, and retain material emitted headroom within
-the 256-KiB root stack; a source-level linker-size check alone is insufficient.
+retain the CYW43 supervisor in place while beginning its boot episode exactly
+once, and retain material emitted headroom within the 256-KiB root stack; a
+source-level linker-size check alone is insufficient.
 Runtime
 tests must drive the retained Linux-ordered
 GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms
@@ -540,17 +541,17 @@ prove all of the following:
 - The producer revalidates and commits that exact snapshot before `ready`.
   Partial, reordered, duplicate, mixed-generation, generation-regressing,
   cross-recovery, and changed-before-commit snapshots fail closed.
-- Transport attachment publishes `stabilizing`. Each outer attempt uses one
-  absolute `now + 90,000 ms` Gate 8 deadline, and same-attempt pair recovery
-  cannot extend it. A subgate failure or deadline latches exactly one pair
-  restart only after an atomic eight-line failure snapshot plus its adjacent
-  recovery boundary is retained with one further slot reserved for the
-  immediately following supervisor `backoff`/`exhausted`/`permanent` terminal,
-  then records one transient outer-attempt failure; the 1/2/4/8-second schedule
-  ends at attempt 5 with exhaustion and no sixth attempt. Each numbered attempt
-  receives one new inner pair-restart allowance while an accepted physical
-  terminal owner remains in the sole drain lane; tests must reject alternating
-  hardware/no-op attempts caused by inheriting a spent allowance.
+- Transport attachment publishes `stabilizing`. The sole `attempt=1` outer boot
+  episode uses one absolute `now + 90,000 ms` Gate 8 deadline, and its
+  consumed-once full CYW43/SDIO pair repair cannot extend it. A subgate failure
+  or deadline latches that repair only after an atomic eight-line failure
+  snapshot plus its adjacent recovery boundary is retained with one further
+  slot reserved for the immediately following supervisor `recovery`, `failed`,
+  or `permanent` transition. Tests must prove no automatic whole-bootstrap backoff,
+  reset, second `begin`, or attempt 2 is admitted. A recurring pre-ready fault
+  after the repair is spent terminates bootstrap and quarantines network
+  service. Gate-local association, DHCP, and protocol retries remain bounded
+  inside their owning gates.
 - A fresh non-stable or different-generation observation retracts `ready` to
   `stabilizing`, including a same-generation loss of owner/admission proof. The
   old snapshot becomes non-authorizing and a later `ready` requires a complete
@@ -1002,22 +1003,22 @@ transport-fault phase advancement while
 retaining only their Linux-supported semantic `UNSUPPORTED`/`BADARG`
 continuations and visible transport telemetry.
 
-The supervisor retry-budget unit test must admit exactly five attempts with
-`1/2/4/8` second delays after failures one through four, return a terminal
-outcome after failure five, leave the next deadline at the no-attempt sentinel,
-and prove that even `u64::MAX` cannot admit attempt six. A successful episode
-must reset that budget for a later independently signalled recovery episode
-only after the matching ready generation is attached and the EventPump reports
-address/TCP network readiness. Each outer attempt admits at most one ordered
-pair restart before that proof. Successful context replay alone must preserve
-the spent inner restart count; an injected recurring transport fault then
-returns typed `cyw43-pair-recovery-limit` to the outer retry policy instead of
-starting another restart in the same attempt. A pre-issue lease conflict that
+The boot-supervisor lifecycle unit test must admit exactly one outer episode as
+`attempt=1`, reject every attempt-2-or-later record, reject a second `begin`,
+and prove no automatic whole-bootstrap backoff or reset can rearm it even at
+`u64::MAX`. The episode admits at most one ordered full CYW43/SDIO pair repair
+and one corresponding `status=recovery` while remaining `attempt=1`.
+Successful context replay alone must preserve the spent repair count and the
+original absolute Gate 8 deadline; an injected recurring transport fault then
+returns typed `cyw43-pair-recovery-limit` and terminates bootstrap instead of
+starting another repair or outer attempt. A pre-issue lease conflict that
 performed no child action and changed no scheduler state must clear locally;
-issued or scheduler-mutating uncertainty must request the one bounded pair
-restart.
-Production failure-cut coverage must show one queued `status=exhausted` record
-after the fifth retryable failure and after the HAL guard is released, followed
+issued or scheduler-mutating uncertainty must request the one bounded repair.
+Gate-local association, DHCP, and protocol retries remain independently
+bounded and must not mutate the boot-episode identity.
+
+Production failure-cut coverage must show one queued `status=failed` record
+after a retryable terminal failure and after the HAL guard is released, followed
 by ordinary EventPump turns with no automatic CYW43/SDIO operation. When a
 network stack was already attached, those turns must leave its poll/flush count
 at zero behind an explicit quarantine, dispatch no buffered TCP command, and
@@ -1031,35 +1032,44 @@ and keeps direct proof below the failure even if older observations reached a
 later gate. Paced serial and
 local-seat diagnostic, authentication, and reboot commands must still dispatch
 or return a typed unavailable/fenced result. The same coverage is required for
-an attached non-retryable recovery failure and a completion lacking
-ready-generation proof: exactly one permanent terminal status, explicit
-network quarantine, no later supervisor driver turn, and ordinary operator
-liveness. High-impact
-`preflight`, `begin`, `recovery`, `backoff`, `ready`, `exhausted`, and
+an attached non-retryable bootstrap or runtime-recovery failure and a
+completion lacking ready-generation proof: exactly one permanent terminal
+status, explicit network quarantine, no later supervisor driver turn, and
+ordinary operator liveness. High-impact
+`preflight`, `begin`, `recovery`, `stabilizing`, `ready`, `failed`, and
 `permanent` transitions must retain an HDMI rendering in their original order.
 Serial and qlog must contain the exact machine record byte-for-byte; each HDMI
 line must begin `[drivers] WiFi` and contain no
 `CYW43_BOOTSTRAP_SUPERVISOR`. Coverage must delay display long enough to fill
 the ordinary FIFO, add a terminal transition at saturation, prove that the
-FIFO plus terminal reserve does not overwrite start/backoff transitions, lose
+FIFO plus terminal reserve does not overwrite start/progress transitions, lose
 the readiness release, or affect serial/qlog, and drain at most one rendering
-per later `Display` turn. A sixth attempt, repeated exhausted record,
-same-turn display submission, swallowed command, automatic post-exhaustion pair
-restart, or quarantined network poll fails the gate.
+per later `Display` turn. A second boot `begin`, any `backoff`, attempt greater
+than one, a second recovery before same-generation Gate 10, a recovery that
+renews the Gate 8 deadline, repeated terminal record, same-turn display
+submission, swallowed command, automatic post-failure pair repair, or
+quarantined network poll fails the gate.
 
 Production supervisor-schema coverage must use the exact compact suffix
 `recovery=full ... telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes`, where
 `full` is configured fail-closed policy, `qlog` is `/log/queen.log`, and `hdmi`
 means a semantic mirror rather than byte-identical formatting. It must prove
-every `preflight`, `begin`, `recovery`, `backoff`, `ready`, `exhausted`, and
+every `preflight`, `begin`, `recovery`, `stabilizing`, `ready`, `failed`, and
 generic `permanent` raw record and typed display rendering fit losslessly in
-their separate fixed 256-byte queues at maximum integer widths. Attempt-zero preflight cannot
-consume an attempt; `begin` and attached `recovery` episodes follow exact
-`1/2/4/8` second backoffs; a later recovery episode may reset to attempt one
-only after matching ready-generation plus attached address/TCP readiness;
-exhausted is valid only at attempt five with the exact
-no-attempt sentinel. A maximum-length terminal record must survive saturated
-background breadcrumbs without evicting a response tail or prompt.
+their separate fixed 256-byte queues at maximum integer widths. Attempt-zero
+preflight cannot consume the episode; every later record is `attempt=1`. The
+parser must reject `backoff`, `exhausted`, a second `begin`, and any attempt
+greater than one. It permits at most one recovery in the active episode with
+zero backoff and no deadline renewal. `failed` requires `backoff_ms=0` and the
+exact no-next-attempt sentinel. It also permits
+`attempt=1 status=permanent` as the sole pre-`begin` record when fallible
+construction or immutable configuration/artifact validation fails. A
+maximum-length terminal record must survive
+saturated background breadcrumbs without evicting a response tail or prompt.
+Only same-generation Gate 10 plus attached address/TCP readiness may
+open one distinct steady-state runtime-recovery episode with one fresh
+consumed-once pair repair; that lifecycle remains `attempt=1` and cannot reset
+the boot result.
 
 Local-seat retained-service coverage must classify `Pending`, `Complete`, and
 `Failed` through the production HAL wrapper. Every normal `Pending` phase must
@@ -1318,10 +1328,154 @@ fix.
 
 Milestone 26c Pi runtime/DMA proof states are machine-checkable and must not be inferred from adjacent evidence. `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"` writes `out/pi4-sd/pi4-runtime-dma-proof.env` with `PI4_RUNTIME_DMA_PROOF=target-build`, `PI4_RUNTIME_DMA_PROFILE=bounded-no-iommu`, manifest hash, runtime CPIO hash, runtime uImage hash, staged image hash, and the hash of `pi4-image-identity.json`; this proves source freshness, packaging, and exact legacy-image identity only. Under Milestone 26d, that Pi build tree must validate independently as a `pi4_diagnostic` seL4 16.0.0 `bcm2711` profile with pinned source/build-input evidence, `KernelRootCNodeSizeBits=14`, `KernelArmExportVCNTUser=ON`, physical counter/timer-control exports off, `TIMER_CLOCK_HZ=54000000`, and no retained one-domain `KernelDomainSchedule` cache entry. The 14-bit root CNode is required for the bounded capability inventory of the linked-runtime images and isolated framebuffer mapping; a 13-bit external Pi tree is stale and cannot satisfy image or hardware proof. The static `out/sel4/profile-v2/pi4-diagnostic` PASS proves only the canonical configuration/artifact contract and cannot substitute for the staged/read-back image identity, boot, Wi-Fi, TCP/`cohsh`, or benchmark lanes. The image wrapper must reject legacy or ambient CMake configuration and non-canonical host `mkimage` tools rather than silently reconfiguring the tree. `scripts/pi4_trace_normalize.py --gate-summary` emits `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF`, `DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER`, and `PI4_RUNTIME_DMA_PROOF=absent`, `diagnostic`, `qemu-or-stale-log`, or `fresh-pi` from serial evidence. `scripts/pi4_gate_proof.sh --require-driver-task-proof --runtime-dma-proof-out out/test-plan/<run-id>/pi4-runtime-dma-proof.env` writes the live proof bundle only after normalization passes. Only `fresh-pi` counts as live hardware runtime/DMA proof, and it requires driver-task dedicated readiness, cap/fault/revoke/scheduling/affinity proof, isolated VSpace, pointer-free IPC, per-hot-path `DRIVER_TASK_OWNER_STATE ... descriptor=present root_pointer=no`, sealed descriptor version/hash/identity proof for every active hot path, sealed bus-link proof for USB and CYW43 split clients, per-hot-path `DRIVER_TASK_DMA_PROOF` with bounded no-IOMMU profile and cache/bus-address policy, aggregate `DRIVER_TASK_DMA_BLOCKER=none`, no compatibility service roles, no unresolved ring timeouts/deferred bootstrap, no resource blockers, a fresh Pi cold-boot marker, and a live prompt. Raw `DRIVER_TASK_RING_CALL_TIMEOUT` events remain diagnostic, but `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT` must be `0` after later return proof closes any bounded keep-active turn. It also emits `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified` only when `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, every observed `DRIVER_TASK_COUNTER` line is valid, and the latest activity-bearing snapshot exists for every selected network owner. A selected CYW43 path therefore requires both `contract=cyw43455 hot_path=cyw43-wifi` and `contract=sdio-host hot_path=sdio-host`; repeated cumulative snapshots cannot substitute another driver's activity or be added together.
 
-The isolated runtime engines contain production service turns for serial mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns, direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43 shared-control SDPCM command records, and SDIO fixed-layout CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority while preserving the contract MCP; roles outside the deferred Wi-Fi pair keep their existing profile-specific priority transition. Deferred CYW43 and SDIO remain at bootstrap priority `255` through prompt publication, owner-first descriptor and engine replay, firmware/control-context replay, and control-plane readiness; the supervisor proves SDIO first, then CYW43, and only then lowers SDIO and CYW43 in two separate outer turns. A linked serial runtime cuts over after its descriptor/init/owner-state path plus a valid service completion; RX-byte proof remains separate. Root may emit `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` so an unproved child cannot starve the root shell. Captures may show SDIO host, PCIe root, GENET, and CYW43 `DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof` lines before the prompt; those markers are acceptable only as shell-preserving fail-closed evidence, and the retained descriptor must later replay with `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled` before matching call/return service proof can close SDIO, PCIe, or network acceptance. Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof and linked serial service proof are present, root emits `[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`, publishes the serial `cohesix>` prompt, and then starts the persistent SDIO/CYW43 bootstrap supervisor. HDMI reports startup and concise Wi-Fi milestones during this episode. A supervisor `ready` is the Gate 8 driver frontier only; successful interactive Wi-Fi readiness remains withheld until current-generation DHCP is bound with a nonempty address, the TCP console listener is bound and admitted, and USB command admission is proven. `exhausted` or `permanent` may release a diagnostic HDMI console and prompt, but must never render the Wi-Fi `Ready to use` banner. Each episode emits `CYW43_BOOTSTRAP_SUPERVISOR attempt=<n> status=begin|recovery|backoff|ready|exhausted ... recovery=full telemetry_sinks=serial+qlog+hdmi`; it admits at most five attempts with `1/2/4/8` second backoffs. A fifth retryable failure emits `status=exhausted backoff_ms=0`, admits no automatic sixth attempt, and returns to the ordinary EventPump so diagnostics, authentication, and reboot remain responsive while Wi-Fi stays acceptance-red. If linked serial service is absent, the supervisor stays at the root console and reports `attempt=0 status=preflight serial=blocked`. Once both linked-runtime restart contexts exist, every retry must perform the complete fenced pair restart and retained firmware/control replay before ordinary network construction continues. A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and `DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`; the supervisor may retry only after another ordinary serial/local-seat event-pump turn and the elapsed backoff. If pointer-free proof is absent, root must emit `[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`, preserve serial diagnostics, and leave Wi-Fi acceptance red until an explicit diagnostic command retries the failed stage. Physical Pi local-seat captures must show HDMI as an independent display sink without making it a pre-prompt serial dependency: the framebuffer hint must be available before driver-task bootstrap, and after EventPump construction each `hdmi-text` descriptor/attach step and pending-frame service must consume one retained `Display` outer turn. Attach and frame submission cannot share a turn, and a successful attach schedules its canonical viewport snapshot only once. High-impact supervisor records may retain an HDMI mirror only after the Wi-Fi HAL guard is released; the mirror must wait for a later `Display` turn and restore any open prompt plus typed row with a bounded carriage-return/erase-line update rather than closing it or restarting a full viewport redraw. A no-reply HDMI render path is display-red evidence and must emit `DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is allowed; HDMI output must come from the isolated `hdmi-text` runtime only. Before linked-serial cutover, raw UART remains the boot log; after cutover, the serial child is the sole physical UART owner, root diagnostics are authoritative in `/log/queen.log`, and operator output may reach UART only through the linked reciprocal ring. Before EventPump construction, the current synchronous PCIe HAL prerequisite runs only as local bookkeeping and authority setup for the USB cursor. It cannot construct a root-owned steady USB backend or authorize combined later work, and missing proof leaves USB attach blocked at the PCIe prerequisite. After the serial `cohesix>` prompt, local-seat must defer if the USB runtime already has an active command, emit one `prompt-settle attach deferred reason=usb-runtime-active` summary, and retry after the normal quiet window; PCIe descriptor replay, USB init, enumeration, and keyboard report service then advance as retained one-action `LocalSeat` outer turns. While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must not poll USB, re-enter HDMI or echo, or start network work. It must then advance HID discovery only through the explicit keyboard-enumeration aux while ordinary background polls report the current frontier without re-entering enumeration. No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell` rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must retain its bounded keyboard-enumeration cursor and must not replay the whole isolated local-seat attach/init chain; each attempt consumes one later `LocalSeat` outer turn and is permitted only while the child USB enumeration marker advances, stopping at the finite cap, keyboard readiness, or no new marker. Root-console startup must emit UART-visible `[mark] root-console.start.begin`, publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL, association, DHCP, and retry backoff cannot hold the serial shell hostage. Once `cohesix>` is published and USB polling is armed, serial UART and USB keyboard input must both feed the shared parser concurrently after USB proof succeeds; during a Wi-Fi HAL turn local-seat dispatch remains buffered and command-fenced even though HDMI has not yet claimed interactive readiness. Steady physical Pi root submits serial/network service turns through bounded ring calls; HDMI submits are limited to high-impact progress lines, while init, deferred-resume, timeout, and proof turns retain bounded diagnostics and may enqueue linked-UART breadcrumbs. USB keyboard auto-poll uses bounded nonblocking sends until the runtime proves it can reply without risking serial. The isolated runtime `_start` entry must preserve root's task key, install the mapped driver-local IPC buffer before receiving commands, skip `Reply` for commands marked with the one-way flag, and emit replies only for call-delivered commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns; routine steady console data turns may be suppressed to keep interactive serial latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive `DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later service proof closes it. A role boolean is credited only from a line proving both `live_tcb=yes` and `hot_path=dedicated`; static contract isolation, callback-pointer live-TCB service turns, shared-root ring service turns, runtime-image declarations, runtime-region mapping, runtime-image smoke loops, runtime-init descriptor commands, and any ring command marked root-context or init-descriptor non-acceptance are diagnostic until the driver state boundary is owned by an isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and `owner_state=driver-owned` is present. Pre-root bootstrap turns, including the serial bootstrap reply proof, must not sample timer registers. Later ring latency telemetry may sample the EL0 virtual counter only when the profile enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency proof rather than reading CNT registers.
+The isolated runtime engines contain production service turns for serial
+mini-UART init/RX/TX, HDMI framebuffer rendering, PCIe MMIO turns,
+direct-root-port xHCI boot-keyboard polling, GENET MDIO/MAC/RX/TX rings, CYW43
+shared-control SDPCM command records, and SDIO fixed-layout
+CMD52/CMD53/POLL_IRQ service turns. Physical Pi root starts each isolated
+runtime with `TCB.WriteRegisters(resume=1)` at a shell-safe bootstrap priority
+while preserving the contract MCP; roles outside the deferred Wi-Fi pair keep
+their existing profile-specific priority transition. Deferred CYW43 and SDIO
+remain at bootstrap priority `255` through prompt publication, owner-first
+descriptor and engine replay, firmware/control-context replay, and
+control-plane readiness; the supervisor proves SDIO first, then CYW43, and only
+then lowers SDIO and CYW43 in two separate outer turns.
 
-The HDMI supervisor sequence has a twelve-entry ordinary FIFO plus one bounded
-terminal reserve, so a delayed display cannot lose the only readiness release.
+A linked serial runtime cuts over after its descriptor/init/owner-state path
+plus a valid service completion; RX-byte proof remains separate. Root may emit
+`DRIVER_TASK_BOOTSTRAP_DEFERRED ... reason=root-shell-before-first-service-proof`
+so an unproved child cannot starve the root shell. Captures may show SDIO host,
+PCIe root, GENET, and CYW43 records with that exact marker before the prompt;
+those markers are acceptable only as shell-preserving fail-closed evidence, and
+the retained descriptor must later replay with
+`DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=resumed owner=linked-runtime proof_effect=deferred-proof-retry-enabled`
+before matching call/return service proof can close SDIO, PCIe, or network
+acceptance.
+
+Wi-Fi descriptor replay is prompt-safe: when physical Pi pointer-free IPC proof
+and linked serial service proof are present, root emits
+`[net-console] deferred resume scheduled reason=driver-startup-before-root-prompt action=publish-prompt-then-supervise`,
+publishes the serial `cohesix>` prompt, and then starts the persistent
+SDIO/CYW43 supervisor. HDMI reports startup and concise Wi-Fi milestones during
+this episode. Supervisor `ready` is the Gate 8 driver frontier only; successful
+interactive Wi-Fi readiness remains withheld until current-generation DHCP is
+bound with a nonempty address, the TCP console listener is bound and admitted,
+and USB command admission is proven.
+
+Bootstrap has exactly one outer episode, always `attempt=1`. Its raw lifecycle
+is `status=begin|recovery|stabilizing|ready|failed|permanent`;
+`attempt=0 status=preflight` remains the linked-serial admission state. A failed
+or permanent episode may release a diagnostic HDMI console and prompt, but
+must never render the Wi-Fi `Ready to use` banner. The episode admits no
+automatic whole-bootstrap backoff, reset, second `begin`, or attempt 2. Once
+both linked-runtime restart contexts exist, it may emit one `status=recovery`
+and consume one complete fenced CYW43/SDIO pair repair with retained
+firmware/control replay. That repair does not renew the absolute Gate 8
+deadline, and replay success does not replenish it. Gate-local association,
+DHCP, and protocol retries remain independently bounded. A terminal failure
+quarantines network service and returns to the ordinary EventPump so
+diagnostics, authentication, reboot, serial, local-seat, and HDMI remain
+responsive while Wi-Fi stays acceptance-red. Only
+same-generation Gate 10 plus attached address/TCP readiness authorizes one
+later independent steady-state runtime-recovery episode with one fresh
+consumed-once pair repair; that lifecycle cannot emit or reset a boot attempt.
+Fallible supervisor construction or immutable configuration/artifact validation
+may emit `attempt=1 status=permanent` before `begin`; it is the sole terminal
+boot result and returns to the same bounded diagnostic operator mode.
+
+A no-reply runtime must emit `DRIVER_TASK_RING_CALL_TIMEOUT` and
+`DRIVER_TASK_RUNTIME_INIT_DEFERRED ... status=pending owner=linked-runtime action=serial-shell proof_effect=acceptance-red-until-replayed`;
+retained gate-local progress may continue only on later ordinary EventPump
+turns within the existing operation and deadline. It cannot start another outer
+episode. If pointer-free proof is absent, root must emit
+`[net-console] deferred resume skipped reason=driver-task-net-runtime-unproved action=serial-diagnostics-only`,
+preserve serial diagnostics, and leave Wi-Fi acceptance red until reboot starts
+a new boot.
+
+Physical Pi local-seat captures must show HDMI as an independent display sink
+without making it a pre-prompt serial dependency: the framebuffer hint must be
+available before driver-task bootstrap, and after EventPump construction each
+`hdmi-text` descriptor/attach step and pending-frame service must consume one
+retained `Display` outer turn. Attach and frame submission cannot share a turn,
+and a successful attach schedules its canonical viewport snapshot only once.
+High-impact supervisor records may retain an HDMI mirror only after the Wi-Fi
+HAL guard is released; the mirror must wait for a later `Display` turn and
+restore any open prompt plus typed row with a bounded carriage-return/erase-line
+update rather than closing it or restarting a full viewport redraw. A no-reply
+HDMI render path is display-red evidence and must emit
+`DRIVER_TASK_RING_CALL_TIMEOUT`, but it must not prevent `cohesix>` from
+becoming responsive on UART. No HAL-mapped framebuffer diagnostic mirror is
+allowed; HDMI output must come from the isolated `hdmi-text` runtime only.
+
+Before linked-serial cutover, raw UART remains the boot log; after cutover, the
+serial child is the sole physical UART owner, root diagnostics are authoritative
+in `/log/queen.log`, and operator output may reach UART only through the linked
+reciprocal ring. Before EventPump construction, the current synchronous PCIe
+HAL prerequisite runs only as local bookkeeping and authority setup for the USB
+cursor. It cannot construct a root-owned steady USB backend or authorize
+combined later work, and missing proof leaves USB attach blocked at the PCIe
+prerequisite. After the serial `cohesix>` prompt, local-seat must defer if the
+USB runtime already has an active command, emit one
+`prompt-settle attach deferred reason=usb-runtime-active` summary, and retry
+after the normal quiet window; PCIe descriptor replay, USB init, enumeration,
+and keyboard report service then advance as retained one-action `LocalSeat`
+outer turns.
+
+While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must
+not poll USB, re-enter HDMI or echo, or start network work. It must then advance
+HID discovery only through the explicit keyboard-enumeration aux while ordinary
+background polls report the current frontier without re-entering enumeration.
+No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus
+`[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell`
+rather than repeated blocking `usb-local-seat` calls. `usb probe-kbd` must
+retain its bounded keyboard-enumeration cursor and must not replay the whole
+isolated local-seat attach/init chain; each attempt consumes one later
+`LocalSeat` outer turn and is permitted only while the child USB enumeration
+marker advances, stopping at the finite cap, keyboard readiness, or no new
+marker.
+
+Root-console startup must emit UART-visible `[mark] root-console.start.begin`,
+publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails
+closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi
+bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL,
+association, DHCP, and retained gate-local progress cannot hold the serial
+shell hostage. Once `cohesix>` is published and USB polling is armed, serial
+UART and USB keyboard input must both feed the shared parser concurrently after
+USB proof succeeds; during a Wi-Fi HAL turn local-seat dispatch remains
+buffered and command-fenced even though HDMI has not yet claimed interactive
+readiness.
+
+Steady physical Pi root submits serial/network service turns through bounded
+ring calls; HDMI submits are limited to high-impact progress lines, while init,
+deferred-resume, timeout, and proof turns retain bounded diagnostics and may
+enqueue linked-UART breadcrumbs. USB keyboard auto-poll uses bounded
+nonblocking sends until the runtime proves it can reply without risking serial.
+The isolated runtime `_start` entry must preserve root's task key, install the
+mapped driver-local IPC buffer before receiving commands, skip `Reply` for
+commands marked with the one-way flag, and emit replies only for call-delivered
+commands. Hardware captures should show `DRIVER_TASK_RING_CALL_BEGIN` and the
+matching `DRIVER_TASK_RING_CALL_RETURN` for init/deferred-resume/proof turns;
+routine steady console data turns may be suppressed to keep interactive serial
+latency bounded. Any `DRIVER_TASK_RING_CALL_TIMEOUT` or positive
+`DRIVER_TASK_BOOTSTRAP_DEFERRED` keeps driver-task acceptance red until later
+service proof closes it.
+
+A role boolean is credited only from a line proving both `live_tcb=yes` and
+`hot_path=dedicated`; static contract isolation, callback-pointer live-TCB
+service turns, shared-root ring service turns, runtime-image declarations,
+runtime-region mapping, runtime-image smoke loops, runtime-init descriptor
+commands, and any ring command marked root-context or init-descriptor
+non-acceptance are diagnostic until the driver state boundary is owned by an
+isolated ring-backed task, VSpace proof is `yes`, pointer-free IPC is `yes`, and
+`owner_state=driver-owned` is present. Pre-root bootstrap turns, including the
+serial bootstrap reply proof, must not sample timer registers. Later ring
+latency telemetry may sample the EL0 virtual counter only when the profile
+enables `timers-arch-counter`; dummy-timer Pi captures must suppress latency
+proof rather than reading CNT registers.
+
+The HDMI supervisor sequence has a fixed episode-sized ordinary FIFO plus one
+bounded terminal reserve, so a delayed display cannot lose the only readiness
+release.
 The raw record uses `local_seat=enabled|disabled` for manifest configuration;
 USB command readiness remains a separate proof. A successful HDMI attach must
 schedule its one canonical snapshot before queued incremental startup text can
@@ -1883,7 +2037,38 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=genet --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
   - The minimum 26b Wi-Fi closure command is:
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=cyw43 --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
-  - `--require-usb-ready`, `--require-wifi-ready`, and `--require-ready` are stricter than gate/blocker success. They require the isolated runtime old-good replay fields from `scripts/pi4_trace_normalize.py --gate-summary`: `USB_OLDGOOD_REPLAY=yes`, `USB_OLDGOOD_MISSING=none`, `WIFI_OLDGOOD_REPLAY=yes`, and `WIFI_OLDGOOD_MISSING=none` for the selected full-ready path. Wi-Fi proof also requires `CYW43_BOOTSTRAP_SUPERVISOR_SEEN=yes`, `CYW43_BOOTSTRAP_SUPERVISOR_READY=yes`, `CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS=ready`, `CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER=none`, `CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT=1`, `CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES=0`, and `CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES=0`. Missing retry or recovery telemetry fails closed; an earlier `ready` followed by recovery or exhaustion cannot qualify the boot. Its ordered old-good sequence is scoped to the latest supervisor `begin` or `recovery` edge, so separate attempts cannot be stitched into one pass. Wi-Fi proof additionally requires the retained Gate 7 history `WIFI_GATE7_COMPLETE=yes`, `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and `WIFI_GATE7_MISSING=none`; the latest `WIFI_SUBGATE=7e` alone cannot hide a missing or reordered join, association, M1, M2/M3/M4/PTK/GTK, or secure-release step. USB ready proof also requires `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no` so parser admission cannot hide missing first-report or post-ready busy evidence. A replay miss reports the first missing translated May/U-Boot/Linux behavior through `*_OLDGOOD_MISSING`; gate 10 without replay remains triage evidence only. USB replay requires distinct ordered endpoint, interrupt-IN, first-report, first-byte, and runtime-gate proof, and the first report/byte must be isolated runtime HID sourced. Wi-Fi replay rejects failed readiness, failed join, generic EAPOL message tokens, firmware-supplicant shortcuts, and started-only nettest output.
+  - `--require-usb-ready`, `--require-wifi-ready`, and `--require-ready` are
+    stricter than gate/blocker success. They require the isolated runtime
+    old-good replay fields from `scripts/pi4_trace_normalize.py --gate-summary`:
+    `USB_OLDGOOD_REPLAY=yes`, `USB_OLDGOOD_MISSING=none`,
+    `WIFI_OLDGOOD_REPLAY=yes`, and `WIFI_OLDGOOD_MISSING=none` for the selected
+    full-ready path. Wi-Fi proof also requires
+    `CYW43_BOOTSTRAP_SUPERVISOR_SEEN=yes`,
+    `CYW43_BOOTSTRAP_SUPERVISOR_READY=yes`,
+    `CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS=ready`,
+    `CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER=none`,
+    `CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT=1`,
+    `CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES=0`, and
+    `CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES=0`. Missing lifecycle telemetry
+    fails closed; a boot `recovery`, `backoff`, `exhausted`, second `begin`, or
+    attempt greater than one cannot qualify the boot. Its ordered old-good
+    sequence is scoped to the sole supervisor `begin`, so separate boot or
+    runtime-recovery episodes cannot be stitched into one pass. Wi-Fi proof
+    additionally requires the retained Gate 7 history
+    `WIFI_GATE7_COMPLETE=yes`, `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`,
+    `WIFI_GATE7_LAST=7e`, and `WIFI_GATE7_MISSING=none`; the latest
+    `WIFI_SUBGATE=7e` alone cannot hide a missing or reordered join,
+    association, M1, M2/M3/M4/PTK/GTK, or secure-release step. USB ready proof
+    also requires `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`,
+    `USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no` so parser
+    admission cannot hide missing first-report or post-ready busy evidence. A
+    replay miss reports the first missing translated May/U-Boot/Linux behavior
+    through `*_OLDGOOD_MISSING`; gate 10 without replay remains triage evidence
+    only. USB replay requires distinct ordered endpoint, interrupt-IN,
+    first-report, first-byte, and runtime-gate proof, and the first report/byte
+    must be isolated runtime HID sourced. Wi-Fi replay rejects failed readiness,
+    failed join, generic EAPOL message tokens, firmware-supplicant shortcuts,
+    and started-only nettest output.
   - Existing logs may be normalized for triage only:
     - `scripts/pi4_gate_proof.sh --normalize-only --log <existing-log> --allow-summary-only`
     - `--allow-summary-only` is not acceptance proof and must not be combined with any `--require-*` hardware acceptance flag.
@@ -1904,7 +2089,44 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
     - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, and `USB_BUSY_AFTER_READY=no`, and hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; parser ingress reported as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic only. A printable-key line such as `runtime keyboard first-printable-byte ...` remains required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply/runtime-skipped pressure during typing, arrow-history, and lock-key bursts.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
-    - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at parser ingress on the live prompt row, boot/progress messages refreshing at the documented 5-10 s cadence, and new output scrolling the isolated HDMI viewport like a serial terminal without full-screen blink. On a successful deferred Wi-Fi boot, Gate 8 and supervisor `ready` remain progress only: the HDMI Wi-Fi `Ready to use` banner and interactive prompt must follow current-generation DHCP Bound, a nonempty address, TCP-listener admission, and USB command-ready proof. `exhausted` or `permanent` may expose a diagnostic prompt but must never show Wi-Fi ready. Preflight may report diagnostics available but must not claim Wi-Fi or interactive-console readiness. The first attached viewport snapshot is one-shot, and asynchronous driver milestones arriving during a partial command must use the bounded row-preserving update and restore the exact prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape sequences navigate the bounded root-owned HDMI history and trigger cursor-home redraws from canonical scrollback; redraws must use the framebuffer-derived safe-area row count even when the payload spans multiple bounded HDMI service turns. Each rendered row must use clear-to-end-of-line and the final chunk must use clear-to-end so framebuffer-derived wide modes cannot retain stale text on the right or below the viewport. Redraws must leave the cursor at the real end of the prompt/input text, not after padding spaces, and overflow recovery must not collapse into a stale or jumbled top-of-screen block. Arrow bytes must not enter the command parser or starve ordinary keyboard bytes. Linked HDMI submit misses, ring busy states, and queue backpressure must coalesce to one pending canonical redraw and supersede stale queued bytes rather than replaying raw payload tails; a capture with repeated `hdmi-text` no-reply growth, saturated `pending_bytes`, or jumbled/repeated screen content is not HDMI acceptance even if USB reaches Gate 10. Stage 01 driver coverage guards the cadence constants, serial runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and Wi-Fi progress suppression during USB boot activity and after USB first-byte proof. Pi 4 manifest-default boots must use `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing declared devices fail visibly. Runtime backend attach failures may degrade with `required=yes action=serial-shell`; that keeps the UART root shell reachable but does not satisfy HDMI/USB acceptance.
+    - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
+      parser ingress on the live prompt row, boot/progress messages refreshing
+      at the documented 5-10 s cadence, and new output scrolling the isolated
+      HDMI viewport like a serial terminal without full-screen blink. On a
+      successful deferred Wi-Fi boot, Gate 8 and supervisor `ready` remain
+      progress only: the HDMI Wi-Fi `Ready to use` banner and interactive prompt
+      must follow current-generation DHCP Bound, a nonempty address,
+      TCP-listener admission, and USB command-ready proof. `failed` or
+      `permanent` may expose a diagnostic prompt but must never show Wi-Fi ready.
+      Preflight may report diagnostics available but must not claim Wi-Fi or
+      interactive-console readiness. The first attached viewport snapshot is
+      one-shot, and asynchronous driver milestones arriving during a partial
+      command must use the bounded row-preserving update and restore the exact
+      prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape
+      sequences navigate the bounded root-owned HDMI history and trigger
+      cursor-home redraws from canonical scrollback; redraws must use the
+      framebuffer-derived safe-area row count even when the payload spans
+      multiple bounded HDMI service turns. Each rendered row must use
+      clear-to-end-of-line and the final chunk must use clear-to-end so
+      framebuffer-derived wide modes cannot retain stale text on the right or
+      below the viewport. Redraws must leave the cursor at the real end of the
+      prompt/input text, not after padding spaces, and overflow recovery must
+      not collapse into a stale or jumbled top-of-screen block. Arrow bytes
+      must not enter the command parser or starve ordinary keyboard bytes.
+      Linked HDMI submit misses, ring busy states, and queue backpressure must
+      coalesce to one pending canonical redraw and supersede stale queued bytes
+      rather than replaying raw payload tails; a capture with repeated
+      `hdmi-text` no-reply growth, saturated `pending_bytes`, or
+      jumbled/repeated screen content is not HDMI acceptance even if USB reaches
+      Gate 10. Stage 01 driver coverage guards the cadence constants, serial
+      runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and
+      Wi-Fi progress suppression during USB boot activity and after USB
+      first-byte proof. Pi 4 manifest-default boots must use
+      `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
+      `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing
+      declared devices fail visibly. Runtime backend attach failures may
+      degrade with `required=yes action=serial-shell`; that keeps the UART root
+      shell reachable but does not satisfy HDMI/USB acceptance.
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is credit-backed SDPCM completion proof and `tx_submit > tx_complete` is a Wi-Fi TX credit anomaly until host TCP/cohsh evidence proves the path recovered.

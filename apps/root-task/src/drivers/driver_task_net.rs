@@ -1400,8 +1400,6 @@ pub struct Cyw43BootstrapSupervisor {
     pair_restarts: u8,
     pair_restart_limit: u8,
     baseline_pair_normalization: bool,
-    post_gate8_repair_opened: bool,
-    retry_requires_pair_restart: bool,
     context_replay_owned: bool,
     initial_control_program_pending: bool,
     ready_generation: Option<u32>,
@@ -1440,8 +1438,6 @@ impl Cyw43BootstrapSupervisor {
             pair_restarts: 0,
             pair_restart_limit: CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
             baseline_pair_normalization: false,
-            post_gate8_repair_opened: false,
-            retry_requires_pair_restart: false,
             context_replay_owned: false,
             initial_control_program_pending: true,
             ready_generation: None,
@@ -1449,61 +1445,6 @@ impl Cyw43BootstrapSupervisor {
             gate8_generation: None,
             gate8_snapshot: None,
             stable_generation: None,
-        }
-    }
-
-    /// Reset this retained allocation for a new bounded bootstrap attempt.
-    ///
-    /// Retrying in place prevents the compiler from reserving a second
-    /// 46-KiB supervisor temporary beside the live EventPump. Payload and
-    /// control storage are scrubbed before their identities are discarded.
-    /// Turn and ticket identities remain monotonic for the lifetime of this
-    /// retained supervisor. A pre-issue failure before the linked pair exists
-    /// may restart registration locally. Once an action was issued, scheduler
-    /// ownership changed, or both restart contexts exist, a retry is admitted
-    /// only through generation poisoning and the complete owner-first pair
-    /// restart; it cannot re-enter bootstrap in the live generation that
-    /// observed the failure.
-    pub fn reset_for_attempt(&mut self, config: ConsoleNetConfig) {
-        begin_cyw43_bootstrap_causal_fault_capture();
-        self.retain_and_revoke_terminal_drain();
-        let pair_restart_required = self.retry_requires_pair_restart
-            || cyw43_recovery_required()
-            || crate::hal::driver_task::cyw43_sdio_pair_restart_context_available();
-        if let Some(pending) = self.pending.as_mut() {
-            pending.control.fill(0);
-        }
-        self.firmware_tail.fill(0);
-        self.nvram.fill(0);
-        self.config = config;
-        self.firmware_phase = Cyw43FirmwarePhase::Transport { attempt: 0 };
-        self.control_phase = Cyw43ControlPhase::Reset;
-        self.recovery_ticket = None;
-        self.pending = None;
-        self.bundle = None;
-        self.nvram_len = 0;
-        self.event_mask = CYW43_LINUX_EVENTMSGS_EXT_MASK;
-        self.engine = Cyw43EngineCursor::new();
-        self.wait = None;
-        self.engine_completion = None;
-        self.recovery_cursor = None;
-        self.recovery_action = None;
-        self.pair_restarts = 0;
-        self.pair_restart_limit = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
-        self.baseline_pair_normalization = false;
-        self.post_gate8_repair_opened = false;
-        self.context_replay_owned = false;
-        self.ready_generation = None;
-        self.ready_pair_scrub_epoch = None;
-        self.gate8_generation = None;
-        self.gate8_snapshot = None;
-        self.stable_generation = None;
-        if pair_restart_required {
-            self.arm_generation_recovery("cyw43-outer-attempt-retry");
-        } else {
-            self.retry_requires_pair_restart = false;
-            self.generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
-            self.phase = Cyw43BootstrapPhase::RegisterSdioService;
         }
     }
 
@@ -1558,10 +1499,6 @@ impl Cyw43BootstrapSupervisor {
         self.generation = snapshot.generation;
         self.gate8_generation = Some(snapshot.generation);
         self.gate8_snapshot = Some(snapshot);
-        if !self.post_gate8_repair_opened {
-            self.pair_restart_limit = self.pair_restarts.saturating_add(1);
-            self.post_gate8_repair_opened = true;
-        }
         *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
         *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
         true
@@ -1611,14 +1548,11 @@ impl Cyw43BootstrapSupervisor {
         self.gate8_generation = None;
         self.gate8_snapshot = None;
         self.stable_generation = None;
-        // This call is the exact boundary between two finite outer supervisor
-        // attempts. Each advertised attempt receives one fresh whole-pair
-        // restart budget; otherwise an attempt that itself began through pair
-        // recovery would consume the only restart and the following numbered
-        // attempt would fail locally without touching hardware.
-        self.pair_restarts = 0;
-        self.pair_restart_limit = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
-        self.post_gate8_repair_opened = false;
+        // Gate 8 remains inside the sole production boot episode. Never reset
+        // the pair-repair streak here: a transport repair already consumed
+        // before Gate 8 and a later Gate 8 repair are the same finite episode.
+        // A recurring pair fault therefore reaches the typed repair limit
+        // instead of warming the hardware through another whole bootstrap.
         // Gate 8 may expire while the ordinary NetData lane owns an exact
         // issued CYW43 continuation. Route through the same terminal-owner
         // drain used by every other generation fault so recovery cannot erase
@@ -1629,9 +1563,9 @@ impl Cyw43BootstrapSupervisor {
 
     /// Accept exact-generation address, nettest, TCP, and authenticated-cohsh proof.
     ///
-    /// Gate 8 owns the pair-restart streak. This later boundary records complete
-    /// Gate 10 so userland can reset the finite outer-attempt schedule without
-    /// conflating association or a listening socket with end-to-end proof.
+    /// Gate 8 owns the initial pair-repair streak. This later boundary records
+    /// complete Gate 10 and alone opens a fresh, independent steady-state
+    /// repair episode without re-arming the production boot attempt.
     pub fn mark_ready_generation_stable(&mut self, gate10_proven: bool) -> bool {
         let Some(gate8_generation) = self.gate8_generation else {
             return false;
@@ -1655,7 +1589,6 @@ impl Cyw43BootstrapSupervisor {
         self.stable_generation = Some(gate8_generation);
         self.pair_restarts = 0;
         self.pair_restart_limit = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
-        self.post_gate8_repair_opened = false;
         true
     }
 
@@ -2278,7 +2211,6 @@ impl Cyw43BootstrapSupervisor {
                 }
             }
             if CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some() {
-                self.retry_requires_pair_restart = true;
                 fence_cyw43_root_admission_for_recovery();
                 crate::hal::driver_task::request_cyw43_sdio_pair_restart();
                 self.generation = current_generation;
@@ -2367,7 +2299,6 @@ impl Cyw43BootstrapSupervisor {
                 return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
             }
             Err(DriverTaskNetError::RuntimeInit("cyw43-retained-service-failed")) => {
-                self.retry_requires_pair_restart = true;
                 record_cyw43_runtime_command_no_reply(
                     CYW43_WIFI_DRIVER_TASK_CONTRACT,
                     pending.ticket.stage,
@@ -2391,12 +2322,10 @@ impl Cyw43BootstrapSupervisor {
                 CYW43_WIFI_DRIVER_TASK_CONTRACT,
             );
             let Some(active_state) = active_state else {
-                self.retry_requires_pair_restart = true;
                 return self.poison_pending_action(pending, "cyw43-issued-owner-unknown");
             };
             let active_request = active_state.request();
             if active_state.command().is_none() {
-                self.retry_requires_pair_restart = true;
                 return self.poison_pending_action(pending, "cyw43-active-transport-invalid");
             }
             if let Cyw43ActionIssuance::AwaitingCompletion { request } = pending.issuance {
@@ -2405,7 +2334,6 @@ impl Cyw43BootstrapSupervisor {
                 }
             }
             let Some(issued) = self.active_ticket_issuance(&pending, active_request) else {
-                self.retry_requires_pair_restart = true;
                 record_cyw43_runtime_command_no_reply(
                     CYW43_WIFI_DRIVER_TASK_CONTRACT,
                     pending.ticket.stage,
@@ -2414,7 +2342,6 @@ impl Cyw43BootstrapSupervisor {
                 );
                 return self.poison_pending_action(pending, "cyw43-active-ticket-fingerprint");
             };
-            self.retry_requires_pair_restart |= issued;
             pending.issuance = if issued {
                 Cyw43ActionIssuance::AwaitingCompletion {
                     request: active_request,
@@ -2426,7 +2353,6 @@ impl Cyw43BootstrapSupervisor {
         };
 
         if completion.sequence == 0 {
-            self.retry_requires_pair_restart = true;
             return self.poison_pending_action(pending, "cyw43-completion-sequence-zero");
         }
         if let Cyw43ActionIssuance::AwaitingCompletion { request } = pending.issuance {
@@ -2437,17 +2363,10 @@ impl Cyw43BootstrapSupervisor {
                 if self.active_ticket_matches(&pending, request) {
                     return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
                 }
-                self.retry_requires_pair_restart = true;
                 return self.poison_pending_action(pending, "cyw43-stale-completion");
             }
         }
 
-        let completion_proves_preissue = completion.code
-            == DriverTaskCompletionCode::Fault.as_u16()
-            && cyw43_parent_action_completion_allows_same_command_retry(
-                pending.ticket.descriptor.op,
-                completion,
-            );
         record_cyw43_runtime_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion);
 
         if completion.code == DriverTaskCompletionCode::Fault.as_u16() {
@@ -2462,8 +2381,6 @@ impl Cyw43BootstrapSupervisor {
                 Some(payload),
             );
         }
-        self.retry_requires_pair_restart |= !completion_proves_preissue;
-
         if completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
             && completion.detail == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME
         {
@@ -2523,7 +2440,6 @@ impl Cyw43BootstrapSupervisor {
 
     fn arm_generation_recovery(&mut self, reason: &'static str) {
         self.baseline_pair_normalization = false;
-        self.retry_requires_pair_restart = true;
         let current_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
         if matches!(
             self.phase,
@@ -3534,8 +3450,6 @@ impl Cyw43BootstrapSupervisor {
         };
         if let Some(request) = self.engine.request {
             let active = crate::hal::driver_task::active_driver_task_retained_request(contract);
-            self.retry_requires_pair_restart |=
-                active.is_some_and(|state| state.issued() || state.command().is_none());
             if !active.is_some_and(|active| {
                 active.request() == request
                     && active.command().is_some_and(|active| {
@@ -3591,7 +3505,6 @@ impl Cyw43BootstrapSupervisor {
         let Some(completion) = completion else {
             let active = crate::hal::driver_task::active_driver_task_retained_request(contract);
             let Some(active) = active else {
-                self.retry_requires_pair_restart = true;
                 let reason = if hot_path == DriverTaskHotPath::Cyw43Wifi {
                     "cyw43-engine-issued-owner-unknown"
                 } else {
@@ -3601,7 +3514,6 @@ impl Cyw43BootstrapSupervisor {
                 return self.pending_outcome(reason, true);
             };
             let Some(active_command) = active.command() else {
-                self.retry_requires_pair_restart = true;
                 let reason = if hot_path == DriverTaskHotPath::Cyw43Wifi {
                     "cyw43-engine-active-transport-invalid"
                 } else {
@@ -3610,7 +3522,6 @@ impl Cyw43BootstrapSupervisor {
                 self.route_engine_generation_recovery(hot_path, reason);
                 return self.pending_outcome(reason, true);
             };
-            self.retry_requires_pair_restart |= active.issued();
             let active_request = active.request();
             if self
                 .engine
@@ -3637,7 +3548,6 @@ impl Cyw43BootstrapSupervisor {
             self.engine.request = Some(active_request);
             return self.pending_outcome(stage, true);
         };
-        self.retry_requires_pair_restart = true;
         if self
             .engine
             .request
@@ -3925,7 +3835,6 @@ impl Cyw43BootstrapSupervisor {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
                 }
-                self.retry_requires_pair_restart = true;
                 if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
                     SDIO_HOST_DRIVER_TASK_CONTRACT,
                 ) {
@@ -3960,7 +3869,6 @@ impl Cyw43BootstrapSupervisor {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
                 }
-                self.retry_requires_pair_restart = true;
                 if !crate::hal::driver_task::complete_deferred_cyw43_pair_priority_cutover(
                     CYW43_WIFI_DRIVER_TASK_CONTRACT,
                 ) {
@@ -4201,10 +4109,6 @@ impl Cyw43BootstrapSupervisor {
                         return self.fail(DriverTaskNetError::RuntimeInit(reason));
                     }
                 }
-                self.retry_requires_pair_restart |= Self::descriptor_replay_requires_pair_restart(
-                    SDIO_HOST_DRIVER_TASK_CONTRACT,
-                    None,
-                );
                 self.pending_outcome(STAGE, true)
             }
             Cyw43BootstrapPhase::RegisterCyw43Service => {
@@ -4284,10 +4188,6 @@ impl Cyw43BootstrapSupervisor {
                         return self.fail(DriverTaskNetError::RuntimeInit(reason));
                     }
                 }
-                self.retry_requires_pair_restart |= Self::descriptor_replay_requires_pair_restart(
-                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                    None,
-                );
                 self.pending_outcome(STAGE, true)
             }
             Cyw43BootstrapPhase::CheckSdioPrerequisites => {
@@ -4310,7 +4210,6 @@ impl Cyw43BootstrapSupervisor {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
                 }
-                self.retry_requires_pair_restart = true;
                 if !crate::hal::pi4_wifi::handoff_wifi_mailbox_to_sdio_runtime() {
                     return self.fail(DriverTaskNetError::RuntimeInit("sdio-host-mailbox-handoff"));
                 }
@@ -4347,7 +4246,6 @@ impl Cyw43BootstrapSupervisor {
                 if !claim_cyw43_outer_event_turn() {
                     return self.pending_outcome("cyw43-outer-event-turn-claimed", false);
                 }
-                self.retry_requires_pair_restart = true;
                 self.engine_completion = None;
                 if !crate::hal::driver_task::handoff_sdio_command_ring_to_cyw43(completion) {
                     return self.fail(DriverTaskNetError::RuntimeInit(
@@ -9728,12 +9626,14 @@ impl fmt::Display for DriverTaskNetError {
 }
 
 impl DriverTaskNetError {
-    /// Return whether a failed CYW43 bootstrap can be retried after a fenced
-    /// linked-runtime pair restart. Hardware timing, transport, and runtime
-    /// progress failures are transient by default. Only inputs that cannot
-    /// change without replacing configuration or build artifacts are terminal.
+    /// Classify whether a CYW43 bootstrap failure is transient.
+    ///
+    /// This classification selects terminal telemetry and permits pre-root
+    /// deferral into the sole post-prompt boot episode. It does not authorize
+    /// a second whole bootstrap attempt. Only inputs that cannot change
+    /// without replacing configuration or build artifacts are permanent.
     #[must_use]
-    pub fn cyw43_bootstrap_retryable(self) -> bool {
+    pub fn cyw43_bootstrap_failure_is_transient(self) -> bool {
         let Self::RuntimeInit(stage) = self else {
             return true;
         };
@@ -27170,7 +27070,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_supervisor_preissue_descriptor_failure_retries_registration_locally() {
+    fn cyw43_supervisor_preissue_descriptor_failure_is_terminal_for_the_boot_episode() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -27188,7 +27088,6 @@ mod tests {
         ));
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
         assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplaySdioDescriptor);
-        assert!(!supervisor.retry_requires_pair_restart);
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_context_available());
 
         supervisor.wait = Some(Cyw43SupervisorWaitCursor {
@@ -27204,27 +27103,24 @@ mod tests {
             ))
         );
         assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
-        assert!(!supervisor.retry_requires_pair_restart);
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
 
         let failed_turn = supervisor.turn_id;
-        supervisor.reset_for_attempt(ConsoleNetConfig::default());
-        assert_eq!(supervisor.turn_id, failed_turn);
-        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::RegisterSdioService);
-        assert!(!supervisor.retry_requires_pair_restart);
-        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
-
         begin_cyw43_outer_event_turn();
-        assert!(matches!(
+        assert_eq!(
             supervisor.service_turn(&mut hal),
-            Cyw43BootstrapTurnOutcome::Pending {
-                stage: "sdio-ring-service-register",
-                operation_executed: true,
-                ..
-            }
-        ));
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::ReplaySdioDescriptor);
+            Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                "sdio-descriptor-replay-deadline"
+            )),
+        );
+        assert_eq!(supervisor.turn_id, failed_turn.saturating_add(1));
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Failed(DriverTaskNetError::RuntimeInit(
+                "sdio-descriptor-replay-deadline"
+            ))
+        );
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
@@ -29269,8 +29165,8 @@ mod tests {
         );
         assert_eq!(cyw43_connection_generation(), generation_before);
         assert_eq!(
-            supervisor.pair_restarts, 0,
-            "a genuine next outer attempt receives its own bounded pair restart"
+            supervisor.pair_restarts, CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
+            "Gate 8 cannot reset a pair repair already spent in this boot episode"
         );
         assert!(CYW43_PENDING_PROMPT_POLL.lock().is_some_and(|owner| {
             owner.owner == Cyw43PromptPollOwner::NetData
@@ -29315,8 +29211,8 @@ mod tests {
             "proven-unissued recovery has no terminal owner to drain"
         );
         assert_eq!(
-            supervisor.pair_restarts, 0,
-            "the next advertised attempt cannot inherit a spent inner restart budget"
+            supervisor.pair_restarts, CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
+            "proven-unissued recovery still preserves the spent episode repair budget"
         );
         assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
         assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_none());
@@ -30194,7 +30090,7 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_retry_classification_keeps_hardware_timing_faults_transient() {
+    fn bootstrap_failure_classification_keeps_hardware_timing_faults_transient() {
         for stage in [
             "cyw43-sdio-prereq",
             "cyw43-function1-ready-timeout",
@@ -30207,15 +30103,16 @@ mod tests {
             "wifi-event-mask-too-short",
         ] {
             assert!(
-                DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_retryable(),
+                DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_failure_is_transient(),
                 "hardware/bootstrap stage must remain retryable: {stage}"
             );
         }
-        assert!(DriverTaskNetError::RuntimePending("descriptor-replay").cyw43_bootstrap_retryable());
+        assert!(DriverTaskNetError::RuntimePending("descriptor-replay")
+            .cyw43_bootstrap_failure_is_transient());
     }
 
     #[test]
-    fn bootstrap_retry_classification_rejects_permanent_inputs() {
+    fn bootstrap_failure_classification_rejects_permanent_inputs() {
         for stage in [
             "wifi-credentials-missing",
             "wifi-ssid-missing",
@@ -30225,7 +30122,7 @@ mod tests {
             "cyw43-command-budget",
         ] {
             assert!(
-                !DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_retryable(),
+                !DriverTaskNetError::RuntimeInit(stage).cyw43_bootstrap_failure_is_transient(),
                 "configuration/artifact stage must remain terminal: {stage}"
             );
         }
@@ -33323,7 +33220,6 @@ mod tests {
             );
             assert!(supervisor.pending.is_none());
             assert_eq!(supervisor.control_phase, Cyw43ControlPhase::TxGlom);
-            assert!(supervisor.retry_requires_pair_restart);
             assert!(!supervisor.control_optional_fault(Cyw43ControlPhase::TxGlom, completion));
             assert_eq!(
                 supervisor.fail(DriverTaskNetError::RuntimeInit("cyw43-control-txglomalign")),
@@ -33331,12 +33227,14 @@ mod tests {
                     "cyw43-control-txglomalign"
                 ))
             );
-            supervisor.reset_for_attempt(config);
+            begin_cyw43_outer_event_turn();
             assert_eq!(
-                supervisor.phase,
-                Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration)
+                supervisor.service_turn(&mut Cyw43SupervisorTestHal),
+                Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                    "cyw43-control-txglomalign"
+                )),
             );
-            assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
             assert_eq!(
                 ticket.descriptor.op,
                 DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
@@ -33352,7 +33250,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_txglomalign_reject_production_turns_fail_then_poison_before_reissue() {
+    fn cyw43_txglomalign_reject_production_turns_fail_without_whole_boot_reissue() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
@@ -33427,23 +33325,12 @@ mod tests {
         );
         let next_ticket_id = supervisor.next_ticket_id;
 
-        supervisor.reset_for_attempt(config);
-        assert_eq!(
-            supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration)
-        );
         begin_cyw43_outer_event_turn();
-        assert!(matches!(
-            supervisor.service_turn(&mut hal),
-            Cyw43BootstrapTurnOutcome::Pending {
-                stage: "cyw43-generation-poisoned",
-                operation_executed: false,
-                ..
-            }
-        ));
         assert_eq!(
-            supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::BeginPairRestart)
+            supervisor.service_turn(&mut hal),
+            Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                "cyw43-control-txglomalign"
+            )),
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
         assert_eq!(supervisor.next_ticket_id, next_ticket_id);
@@ -40948,7 +40835,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn gate8_stability_opens_only_one_post_gate8_repair_until_gate10() {
+    fn gate8_stability_preserves_the_one_repair_limit_until_gate10() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         mark_cyw43_gate8_ready_for_test(23);
@@ -40967,10 +40854,12 @@ mod tests {
         assert_eq!(supervisor.gate8_generation, Some(23));
         assert_eq!(
             supervisor.pair_restarts, 1,
-            "Gate 8 must not erase a recovery already spent in this outer attempt"
+            "Gate 8 must not erase a repair already spent in this boot episode"
         );
-        assert_eq!(supervisor.pair_restart_limit, 2);
-        assert!(supervisor.post_gate8_repair_opened);
+        assert_eq!(
+            supervisor.pair_restart_limit,
+            CYW43_SUPERVISOR_PAIR_RESTART_LIMIT
+        );
         assert_eq!(cyw43_deferred_recovery_diagnostic(), None);
         assert!(!supervisor.mark_gate8_generation_stable(snapshot));
 
@@ -40982,7 +40871,6 @@ mod tests {
             supervisor.pair_restart_limit,
             CYW43_SUPERVISOR_PAIR_RESTART_LIMIT
         );
-        assert!(!supervisor.post_gate8_repair_opened);
         assert_eq!(supervisor.stable_generation, Some(23));
         assert!(!supervisor.mark_ready_generation_stable(true));
 
@@ -43059,68 +42947,32 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_supervisor_retry_resets_large_retained_state_in_place() {
+    fn cyw43_supervisor_failure_cannot_rearm_the_boot_episode() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
         supervisor.turn_id = 37;
-        supervisor.firmware_tail.fill(0xa5);
-        supervisor.nvram.fill(0x5a);
-        supervisor.nvram_len = 32;
-        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
-        let control = [0x11, 0x22, 0x33, 0x44];
-        supervisor
-            .install_pending_action(
-                DriverRuntimeCyw43CommandDescriptor {
-                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-                    payload_len: control.len() as u16,
-                    ..DriverRuntimeCyw43CommandDescriptor::empty()
-                },
-                Cyw43RetainedPayload::Control { len: control.len() },
-                &control,
-                Some(&control),
-                "test-control",
-                "test",
-            )
-            .expect("pending control action");
-
-        supervisor.reset_for_attempt(ConsoleNetConfig::default());
-
-        assert!(supervisor.pending.is_none());
-        assert!(supervisor.firmware_tail.iter().all(|byte| *byte == 0));
-        assert!(supervisor.nvram.iter().all(|byte| *byte == 0));
-        assert_eq!(supervisor.nvram_len, 0);
-        assert_eq!(supervisor.pair_restarts, 0);
-        assert_eq!(supervisor.turn_id, 37);
-        assert_eq!(supervisor.next_ticket_id, 2);
-        assert!(!supervisor.retry_requires_pair_restart);
-        assert_eq!(supervisor.phase, Cyw43BootstrapPhase::RegisterSdioService);
-        reset_cyw43_status_flags();
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn cyw43_supervisor_retry_with_established_pair_context_requires_restart() {
-        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
-        reset_cyw43_status_flags();
-        crate::hal::driver_task::test_publish_cyw43_sdio_pair_restart_context_available();
-        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
-        assert!(!supervisor.retry_requires_pair_restart);
         assert_eq!(
-            supervisor.fail(DriverTaskNetError::RuntimeInit("test-preissue-failure")),
+            supervisor.fail(DriverTaskNetError::RuntimeInit("test-terminal-failure")),
             Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
-                "test-preissue-failure"
-            )),
+                "test-terminal-failure"
+            ))
         );
 
-        supervisor.reset_for_attempt(ConsoleNetConfig::default());
-
-        assert!(supervisor.retry_requires_pair_restart);
+        let mut hal = Cyw43SupervisorTestHal;
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            supervisor.service_turn(&mut hal),
+            Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                "test-terminal-failure"
+            ))
+        );
+        assert_eq!(supervisor.turn_id, 38);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
         assert_eq!(
             supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration)
+            Cyw43BootstrapPhase::Failed(DriverTaskNetError::RuntimeInit("test-terminal-failure"))
         );
-        assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
         reset_cyw43_status_flags();
     }
 
@@ -43166,7 +43018,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_supervisor_post_issue_retry_poisons_before_pair_restart() {
+    fn cyw43_supervisor_post_issue_failure_does_not_start_a_second_boot_episode() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
@@ -43225,58 +43077,31 @@ mod tests {
             CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
             u32::from(DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL)
         );
-        assert!(supervisor.retry_requires_pair_restart);
         let failed_turn = supervisor.turn_id;
         let next_ticket_id = supervisor.next_ticket_id;
         let failed_generation = supervisor.generation;
 
-        supervisor.reset_for_attempt(config);
-        assert_eq!(supervisor.turn_id, failed_turn);
-        assert_eq!(supervisor.next_ticket_id, next_ticket_id);
-        assert_eq!(
-            supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration)
-        );
-        assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
-
         begin_cyw43_outer_event_turn();
-        assert!(matches!(
+        assert_eq!(
             supervisor.service_turn(&mut hal),
-            Cyw43BootstrapTurnOutcome::Pending {
-                stage: "cyw43-generation-poisoned",
-                operation_executed: false,
-                ..
-            }
-        ));
+            Cyw43BootstrapTurnOutcome::Failed(DriverTaskNetError::RuntimeInit(
+                "cyw43-post-issue-definitive-failure-test"
+            ))
+        );
         assert_eq!(supervisor.turn_id, failed_turn.wrapping_add(1));
-        assert_ne!(supervisor.generation, failed_generation);
+        assert_eq!(supervisor.generation, failed_generation);
         assert_eq!(
             supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::BeginPairRestart)
+            Cyw43BootstrapPhase::Failed(DriverTaskNetError::RuntimeInit(
+                "cyw43-post-issue-definitive-failure-test"
+            ))
         );
         assert_eq!(
             CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
             1,
-            "generation poison must precede the sole owner-first restart cursor"
+            "terminal failure cannot reissue the accepted operation"
         );
-
-        let stale_descriptor = DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        };
-        supervisor
-            .install_empty_action(stale_descriptor, "stale-prior-attempt")
-            .expect("stale completion fixture installs");
-        let stale = supervisor.pending.as_mut().expect("stale action retained");
-        stale.ticket.generation = failed_generation;
-        begin_cyw43_outer_event_turn();
-        assert_eq!(
-            supervisor.service_pending_action(),
-            Cyw43RetainedActionOutcome::Poisoned("cyw43-stale-action-generation")
-        );
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
-        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
-        assert_eq!(supervisor.next_ticket_id, next_ticket_id.wrapping_add(1));
+        assert_eq!(supervisor.next_ticket_id, next_ticket_id);
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();

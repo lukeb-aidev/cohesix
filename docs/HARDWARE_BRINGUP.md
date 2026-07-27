@@ -481,8 +481,9 @@ boot-paired Wi-Fi packet capture. The normalizer must prove association, host
 EAPOL completion, DHCP, ARP/data progress, healthy DPC state, `nettest`, and
 authenticated TCP bytes; an association or DHCP line alone is insufficient.
 The same boot slice must end with the canonical CYW43 bootstrap supervisor
-present, ready, unblocked, and with `LAST_STATUS=ready`; a prior ready episode
-followed by recovery or exhaustion remains acceptance-red.
+present, ready, unblocked, and with `LAST_STATUS=ready`; any boot recovery,
+backoff, failure, second begin, or attempt greater than one remains
+acceptance-red.
 It must also report `WIFI_GATE7_COMPLETE=yes`, the exact retained history
 `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and
 `WIFI_GATE7_MISSING=none`. A latest-frontier `WIFI_SUBGATE=7e` cannot replace
@@ -611,14 +612,21 @@ or recovery ambiguity. The minimum closure sample is 10/10 cold power-on boots
 and 10/10 warm software-reset boots of the same independently read-back image.
 Every counted boot must contain that image's exact `[BUILD]` marker and must
 pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`, reach
-Wi-Fi `status=ready` on `attempt=1`, and contain zero transient retries. Any
-`status=backoff`, attempt-2-or-later success, or recovery used to rescue initial
-bootstrap keeps repeatability open rather than being hidden by extra passes.
+Wi-Fi `status=ready` on the sole `attempt=1` boot episode, and contain no
+automatic whole-bootstrap restart. Any `status=backoff`, second `status=begin`,
+attempt-2-or-later record, or reset used to rescue initial bootstrap is a
+production-schema failure rather than a pass hidden by extra passes. One
+`status=recovery` may mark the consumed-once pair repair inside `attempt=1`, but
+any use of it keeps that boot out of the clean repeatability sample. A later
+steady-state runtime-recovery episode is legal only after same-generation Gate
+10 proof and remains separately visible; it cannot rescue or rewrite the
+initial bootstrap result.
 
-Every cold attempt and later recovery uses one path after linked-pair admission:
-the sole retained 22-action CYW43/SDIO pair normalization, then its sole context
-replay, then firmware/control programming and owner-first steady-priority
-cutover. Cold normalization is part of attempt 1, not a retry. Reaching
+The cold boot episode and any later authorized steady-state runtime recovery use
+one path after linked-pair admission: the sole retained 22-action CYW43/SDIO
+pair normalization, then its sole context replay, then firmware/control
+programming and owner-first steady-priority cutover. Cold normalization is part
+of attempt 1, not a retry. Reaching
 firmware/control without that complete normalization, or using a separate cold,
 replay, or fallback path, fails this runbook.
 
@@ -631,9 +639,9 @@ earlier post-UP drain is not a substitute.
 
 Gate 8 is an ordered stability proof, not the first moment the linked transport
 attaches. After transport/control attachment, require
-`CYW43_BOOTSTRAP_SUPERVISOR ... status=stabilizing`. One outer attempt has one
-absolute 90,000-millisecond stabilization deadline; an internal pair repair in
-that attempt does not refresh it. Before accepting
+`CYW43_BOOTSTRAP_SUPERVISOR ... status=stabilizing`. The sole boot episode has
+one absolute 90,000-millisecond stabilization deadline; its consumed-once full
+pair repair does not refresh it. Before accepting
 `CYW43_BOOTSTRAP_SUPERVISOR ... status=ready`, the serial/qlog evidence must
 contain one all-or-nothing immutable snapshot immediately before that record:
 
@@ -758,25 +766,25 @@ evidence before assigning a cause.
 After `ready`, keep capturing. A later fresh non-stable or different-generation
 snapshot must produce `status=stabilizing`; this can occur in the same logical
 generation when exact owner/admission proof is lost. Discard the earlier
-snapshot and require a new complete 8a-through-8h proof. A `fail` or the
-90-second deadline first retains one atomic eight-line failure snapshot and its
-adjacent `CYW43_GATE8_RECOVERY` boundary, while reserving the next
-retained-serial slot for the supervisor `backoff`/`exhausted`/`permanent`
-terminal, then requests one fenced recovery. Retraction purges queued HDMI
-Ready/prompt bytes and forces a canonical Stabilizing redraw. Five outer
-attempts with 1/2/4/8-second backoffs are the finite limit. Each numbered
-attempt receives one fresh pair-restart allowance without discarding an
-accepted terminal-drain owner, so a reported attempt cannot fail locally
-merely because the prior attempt used its allowance. Attempt 5 must exhaust
-rather than start a sixth. This retry budget preserves diagnosis and
-containment, but any use of it disqualifies a production hardware boot: counted
-boots must pass on attempt 1 with zero transient retries. Gate 9 DHCP/address
-and Gate 10 nettest, TCP, and
-authenticated `cohsh` must remain in the accepted Gate 8 connection
+snapshot and require a new complete 8a-through-8h proof. Before same-generation
+Gate 10 closes bootstrap, a `fail` or the 90-second deadline first retains one
+atomic eight-line failure snapshot and its adjacent `CYW43_GATE8_RECOVERY`
+boundary, while reserving the next retained-serial slot for the supervisor
+`recovery`, `failed`, or `permanent` transition. The sole `attempt=1` boot
+episode may consume one fenced full CYW43/SDIO pair repair, but that repair does
+not renew the absolute deadline or create another outer attempt. A recurring
+fault after the repair is spent terminates bootstrap, quarantines network service, and returns
+to ordinary operator service; there is no automatic backoff, reset, or attempt
+2. Retraction purges queued HDMI Ready/prompt bytes and forces a canonical
+Stabilizing redraw. Gate-local association, DHCP, and protocol retries remain
+bounded inside their owning gates. Gate 9 DHCP/address and Gate 10 nettest, TCP,
+and authenticated `cohsh` must remain in the accepted Gate 8 connection
 generation. Each DHCP start must also publish a fresh generation-bound XID;
 late Offer/ACK packets carrying a prior XID are not current proof. Do not count
-a boot whose later recovery, generation change, or readiness retraction
-invalidates those proofs.
+a boot whose generation change or readiness retraction invalidates those
+proofs. A fault after this same-generation Gate 10 boundary may open one
+distinct steady-state runtime-recovery episode with one fresh consumed-once
+pair repair; it cannot publish or rewrite a boot attempt.
 
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and
@@ -895,7 +903,9 @@ boot-paired `tcpdump-wifi-20260724-214126.pcap` plus
 `tcpdump-usb-eth-20260724-214126.pcap`. It identifies clean marker commit
 `6c6d376768e6` and image id
 `8c62fc9ea9d08a560a1b92a775cc8dbafad98a89d19fc860213b4a13a785dbaf`.
-All five attempts stop before Gate 1 in the first `TRANSPORT_INIT` reciprocal
+This is historical old-image evidence from the retired five-outer-attempt
+policy, not the current production lifecycle. All five historical attempts stop
+before Gate 1 in the first `TRANSPORT_INIT` reciprocal
 `HOST_CONFIG` episode and eventually require pair restart. Serial, USB Gate 10,
 and all six runtime TCBs remain live; both paired captures contain zero
 Pi-originated frames. The cached SDIO `sequence=2`, `command-observed`,
@@ -958,8 +968,10 @@ the pre-containment snapshot is `PRESENT_STATE=0x01ef0006`,
 `INT_STATUS=0x00000000`, and `BLOCK_SIZE_COUNT=0x00017040`: the data path stays
 active/inhibited and the block count never decrements. This eliminates a lost
 `DATA_END`, post-transfer W1C, stale payload, or safe replay as the primary
-cause. Recovery poisons the generation, restarts the pair in bounded order,
-and exhausts after five attempts without an endless loop.
+cause. Under that historical old-image policy, recovery poisoned the
+generation, restarted the pair in bounded order, and exhausted after five
+attempts without an endless loop. The current production policy does not replay
+those five outer attempts.
 
 Within either conservative boot slice, neither paired capture contains the Pi
 Wi-Fi MAC, EAPOL, DHCP, ARP, IP, ICMP, TCP, or console-port traffic. The Wi-Fi
@@ -1057,8 +1069,9 @@ advances a retained masked rearm. State, health, `INT_ENABLE`, `SIGNAL_ENABLE`,
 ring/disposition, IRQ acknowledgement, and signal phases remain separate; the
 source is not rearmed until those admitted phases finish. Dongle/FIFO reads stay
 with the retained CYW43 DPC. Root configures the EventPump in place, borrows it
-through both Genet and deferred-WiFi loops, and resets the WiFi supervisor in
-place. The emitted Pi release chain now retains 136,480 bytes at the outer WiFi
+through both Genet and deferred-WiFi loops, and retains one WiFi supervisor in
+place without rearming its boot episode. The emitted Pi release chain now
+retains 136,480 bytes at the outer WiFi
 baseline and leaves 125,664 bytes of its 256-KiB root stack before nested calls.
 All changes in this paragraph remain an offline source-and-image candidate
 until that exact candidate is read back and booted on the Pi; they do not
@@ -1098,9 +1111,10 @@ as physically poisoned. These are hardware-free corrections until the next
 exact image is rebuilt, read back, and booted; this capture does not prove the
 fixed hardware result.
 
-The exact `f78208ce709a` boot reached `cyw43-control-plane-ready` in all six
-generations, then fenced each generation 4.46 to 4.72 seconds later. The
-post-exhaustion diagnostic reported op10 detail `0x5310` and result `0x32`.
+The exact `f78208ce709a` boot also predates the single-episode policy. It reached
+`cyw43-control-plane-ready` in all six historical generations, then fenced each
+generation 4.46 to 4.72 seconds later. Its historical post-exhaustion
+diagnostic reported op10 detail `0x5310` and result `0x32`.
 `0x32` is DPC event sequence 50, not a CYW43 generation. Runtime arbitration
 prevents the ordinary DPC from consuming a source event while its foreground
 source-probe transaction is active, and a production-ring zero-status
@@ -1321,26 +1335,29 @@ snapshots the live CYW43 state and release-publishes validity. Avoiding a second
 file-backed nonzero state image changes packaging size without changing the
 runtime aperture, replay capacity, or state semantics.
 
-Each initial bootstrap or later steady-state recovery episode is finite. The
-supervisor permits five attempts with `1/2/4/8` second virtual-counter backoffs
-between them. This uses brcmfmac's five-error SDIO access budget as the finite
-reliability analogue; it is not a claim that Linux retries its complete device
-bootstrap in the same way. Initial attempts emit `status=begin`, attempts after
-an attached-stack fault emit `status=recovery`, the first four retryable
-failures emit `status=backoff`, and success emits `status=ready`. A fifth
-retryable failure must emit exactly one `status=exhausted backoff_ms=0` record.
-Within each outer attempt, only one ordered pair restart is permitted until a
-matching ready generation and attached address/TCP network-ready observation
-prove stability. Descriptor/engine/context replay completion alone cannot reset
-that bound. A recurring pre-ready transport fault must fail the inner recovery
-with `cyw43-pair-recovery-limit` and return to the outer retry policy rather
-than remain in the same attempt. A lease conflict before issue that made no
-scheduler change fails locally; issued or scheduler-mutating uncertainty uses
-the one ordered restart. That fifth failure retains
-`next_attempt_ms=18446744073709551615` as the no-deadline sentinel and
-perform no automatic sixth child operation or pair restart. The supervisor then
-quarantines network service and returns to the ordinary EventPump with Wi-Fi
-acceptance red. An already-attached stack remains available to passive
+Initial bootstrap is exactly one finite outer boot episode, always
+`attempt=1`. It emits `status=begin`, may emit `status=stabilizing` and one
+consumed-once `status=recovery`, and ends in `status=ready`, `status=failed`, or
+`status=permanent`; it never emits `status=backoff`, never resets into another
+`status=begin`, and never admits attempts 2 through 5. This differs from both
+the retired Cohesix five-attempt supervisor and Linux's gate-local
+`BRCMF_SDIO_MAX_ACCESS_ERRORS` budget: neither is authority to retry the
+complete production bootstrap. Fallible supervisor construction or immutable
+configuration/artifact validation may instead emit
+`attempt=1 status=permanent` before `begin`; that is the sole terminal result,
+not another boot path.
+
+The sole boot episode may consume at most one ordered full CYW43/SDIO pair
+repair. Descriptor/engine/context replay completion alone cannot reset that
+bound or renew the one absolute Gate 8 deadline. A recurring pre-ready
+transport fault after the repair is spent fails with
+`cyw43-pair-recovery-limit`; any other retryable terminal bootstrap fault emits
+one `status=failed`. A lease conflict before issue that made no scheduler
+change fails locally; issued or scheduler-mutating uncertainty consumes the
+ordered repair. Terminal bootstrap performs no automatic next child operation,
+whole-bootstrap reset, or pair repair. The supervisor quarantines network
+service and returns to the ordinary EventPump with Wi-Fi acceptance red. An
+already-attached stack remains available to passive
 diagnostics only through immutable terminal and owner-ring evidence; its
 retained live DHCP/EAPOL/TCP status is stale and must not be read or allowed to
 supersede the terminal gate. The poisoned CYW43 generation receives no status,
@@ -1349,20 +1366,21 @@ quarantine ends the network-origin session and its stream/cursor authority
 locally before serial commands resume. A non-retryable attached recovery
 failure, including missing ready-generation proof, must emit one permanent
 terminal status, apply the same network quarantine, and enter the same ordinary
-operator mode rather than repeating bootstrap-only turns. Paced serial and local-seat commands remain
-dispatchable: `netstats`, `nettest`, `wifi diag`,
+operator mode rather than repeating bootstrap-only turns. Paced serial and
+local-seat commands remain dispatchable: `netstats`, `nettest`, `wifi diag`,
 `wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced
-error rather than being swallowed by the failed bootstrap. Only end-to-end
-network-ready proof resets the inner restart streak and the finite recovery
-state for a later independently signalled recovery episode.
-These later attempts remain fail-closed diagnostic and recovery machinery.
-Production hardware acceptance requires the canonical cold normalization and
-all later Wi-Fi gates to complete on attempt 1 without a backoff or transient
-retry.
+error rather than being swallowed by the failed bootstrap. Only
+same-generation Gate 10 plus attached address/TCP network-ready proof closes
+bootstrap and authorizes a later independently signalled steady-state
+runtime-recovery episode. That episode has one fresh consumed-once pair repair,
+uses the same canonical owner-first lane, and cannot alter the recorded boot
+result or publish another boot attempt. Production hardware acceptance requires
+the canonical cold normalization and all later Wi-Fi gates to complete in the
+sole attempt-1 boot episode.
 
-The high-impact `preflight`, `begin`, `recovery`, `backoff`, `ready`,
-`exhausted`, and `permanent` supervisor records declare
+The high-impact supervisor `preflight`, `begin`, `recovery`, `stabilizing`,
+`ready`, `failed`, and `permanent` records declare
 `recovery=full telemetry_sinks=serial+qlog+hdmi`; `full` names the configured
 fail-closed pair-recovery policy rather than claiming a restart already ran,
 and `qlog` names `/log/queen.log`. Attempt-zero `status=preflight` records
@@ -1371,13 +1389,15 @@ immediately before generic `status=permanent` retains the terminal reason. Every
 supervisor line fits the fixed 256-byte serial record at its numeric maxima.
 They are queued only after the Wi-Fi HAL guard is released. Serial and
 `/log/queen.log` retain the transition
-immediately; a fixed twelve-entry FIFO retains a complete worst-case episode
+immediately; a fixed episode-sized FIFO retains a complete worst-case episode
 without overwriting delayed milestones, and the isolated HDMI runtime mirrors
-at most one entry during each later ordinary `Display` turn. A trace with
-`attempt=6`, a same-turn HDMI submit, a lost queued terminal status, an attached
-network poll after any terminal recovery status, or an unresponsive prompt after
-`status=exhausted` or a permanent terminal status fails the software liveness
-contract even before Wi-Fi RF acceptance is considered.
+at most one entry during each later ordinary `Display` turn. A trace with a
+second boot `begin`, any `backoff`, `attempt>1`, a second recovery before the
+active episode earns same-generation Gate 10, a recovery that renews the Gate 8
+deadline, a same-turn HDMI submit, a lost queued terminal status, an attached
+network poll after a terminal status, or an unresponsive prompt after
+`status=failed` or `status=permanent` fails the software liveness contract even
+before Wi-Fi RF acceptance is considered.
 
 USB retained polling is likewise typed. A `Pending` prepare, boost, commit,
 endpoint-wake, or completion-poll phase is progress, not a no-reply event: it
@@ -1436,10 +1456,10 @@ readiness is intentionally distinct from end-to-end `tcp_ready`, which
 additionally requires accepted or authenticated physical data-path proof. The
 HDMI message is obvious operator availability, not raw TCP or
 authenticated-`cohsh` acceptance evidence. Diagnostic prompts may remain
-available after `exhausted` or `permanent`, but those states must never render
+available after `failed` or `permanent`, but those states must never render
 `Ready to use`.
 The serial record receives bounded physical-console priority: a terminal
-`ready`, `exhausted`, or `permanent` record may
+`ready`, `failed`, or `permanent` record may
 evict only an older nonterminal background record, never an `ACK`/`ERR`/`END`,
 prompt, or in-progress command line. The typed `[net-console] deferred failed
 detail=...` record immediately preceding generic `permanent` shares the
@@ -1483,11 +1503,10 @@ retained `ResponseTailPrompt` backlog record, not a separate one-bit slot.
 Physical-console command intake remains fenced until the current serial bytes,
 backlog records, and response barrier have drained. A later `Serial` turn
 retries one retained record; queue saturation must not silently discard or
-truncate it. Repeated or reordered console
-banners, or a prompt that freezes after otherwise successful DHCP, indicate
-failed linked-serial transport evidence, not a Wi-Fi supervisor retry, unless
-the capture also shows a later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=`
-record.
+truncate it. Repeated or reordered console banners, or a prompt that freezes
+after otherwise successful DHCP, indicate failed linked-serial transport
+evidence. A later numbered `CYW43_BOOTSTRAP_SUPERVISOR attempt=` record is
+itself a production lifecycle defect, not an authorized Wi-Fi retry.
 On a fresh boot with no authenticated session, use the paced serial
 `attach queen <ticket>` flow before `reboot`; authentication remains available
 during bootstrap because it touches only the parser and ticket table. All other
@@ -1579,9 +1598,10 @@ independently preserved SHA-256 of the exact identity sidecar, so a stale image,
 sidecar, and log set cannot authenticate itself merely by agreeing internally.
 A missing/unreadable artifact,
 hash mismatch, unsealed/absent/duplicated/conflicting marker, incomplete or
-non-ready bootstrap-supervisor
-record, any `status=backoff`, any attempt-2-or-later success, any transient
-retry, skip-only log, wired boot, failed boot slice, or any existing
+non-ready bootstrap-supervisor record, any selected acceptance slice containing
+`status=recovery` or `status=backoff`, any second boot `begin`, any
+attempt-2-or-later record,
+skip-only log, wired boot, failed boot slice, or any existing
 Wi-Fi/driver/operator blocker fails the aggregate. Cold versus warm remains an
 operator-recorded reset classification, so retain a per-run collection ledger
 and power/reset evidence alongside the serial and pcap files.

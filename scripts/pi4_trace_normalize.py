@@ -114,8 +114,7 @@ WIFI_GATE8_SUBGATE_RE = re.compile(
     r"generation=(?P<generation>[0-9]+) "
     r"blocker=(?P<blocker>[a-z0-9-]+)$"
 )
-CYW43_BOOTSTRAP_RETRY_BACKOFF_MS = (1_000, 2_000, 4_000, 8_000)
-CYW43_BOOTSTRAP_MAX_ATTEMPTS = 5
+CYW43_BOOTSTRAP_MAX_ATTEMPTS = 1
 U64_MAX = (1 << 64) - 1
 U32_MAX = (1 << 32) - 1
 CYW43_BOOTSTRAP_NO_ATTEMPT_MS = U64_MAX
@@ -611,7 +610,7 @@ class WifiDpcProof:
 
 @dataclass(frozen=True)
 class Cyw43BootstrapSupervisorProof:
-    """Validated terminal state for persistent CYW43 bootstrap retries."""
+    """Validated terminal state for the single production CYW43 attempt."""
 
     seen: bool = False
     max_attempt: int = 0
@@ -3356,9 +3355,11 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
             candidate = None
             candidate_first_line = 0
             stabilizing_line = 0
-            terminal = status in {"exhausted", "permanent"} or status.startswith(
-                "permanent-"
-            )
+            terminal = status in {
+                "failed",
+                "exhausted",
+                "permanent",
+            } or status.startswith("permanent-")
             supervisor_terminal = terminal
             latest = lifecycle_frontier(
                 status="fail" if terminal else "pending",
@@ -12805,7 +12806,7 @@ def summarize_wifi_dpc_proof(
 def summarize_cyw43_bootstrap_supervisor(
     events: Iterable[TraceEvent],
 ) -> Cyw43BootstrapSupervisorProof:
-    """Validate the persistent bootstrap supervisor's terminal retry state."""
+    """Validate the single-attempt production bootstrap lifecycle."""
 
     event_list = list(events)
     supervisor_events = [
@@ -12824,11 +12825,11 @@ def summarize_cyw43_bootstrap_supervisor(
     recoveries = 0
     last_status = "none"
     begin_ms = 0
-    scheduled_ms = 0
     preflight_seen = False
     preflight_serial_ready = False
     last_preflight_next_attempt_ms: int | None = None
     last_console_sequence: int | None = None
+    recovery_used_in_episode = False
 
     def mark_blocker(reason: str) -> None:
         nonlocal blocker
@@ -12843,29 +12844,7 @@ def summarize_cyw43_bootstrap_supervisor(
         parsed = int(value)
         return parsed if parsed <= U64_MAX else None
 
-    def exact_gate8_recovery_between(
-        previous_line: int,
-        current_line: int,
-        attempt: int,
-    ) -> bool:
-        """Return true for the production pair-restart boundary in this span."""
-
-        return any(
-            previous_line < candidate.line < current_line
-            and candidate.raw.startswith("CYW43_GATE8_RECOVERY")
-            and parse_hex_int(candidate.fields.get("attempt")) == attempt
-            and candidate.fields.get("action") == "pair-restart"
-            for candidate in event_list
-        )
-
-    previous_supervisor_line = 0
     for event in supervisor_events:
-        gate8_recovery_before_event = exact_gate8_recovery_between(
-            previous_supervisor_line,
-            event.line,
-            current_attempt,
-        )
-        previous_supervisor_line = event.line
         match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw)
         if match is None:
             last_status = event.fields.get("status", "malformed")
@@ -12946,85 +12925,56 @@ def summarize_cyw43_bootstrap_supervisor(
         if attempt == 0:
             mark_blocker("attempt-zero")
             continue
+        max_attempt = max(max_attempt, attempt)
+        if status == "recovery":
+            recoveries += 1
+        elif status == "backoff":
+            transient_retries += 1
         if attempt > CYW43_BOOTSTRAP_MAX_ATTEMPTS:
             mark_blocker("attempt-overflow")
             continue
-        max_attempt = max(max_attempt, attempt)
         if suffix_match is not None and suffix_match.group("serial") != "ready":
             mark_blocker("serial-blocked")
 
-        if status in ("begin", "recovery"):
-            if status == "recovery":
-                recoveries += 1
+        if status == "begin":
             sequence_valid = True
             if backoff_ms != 0:
                 mark_blocker("malformed-backoff-progression")
                 sequence_valid = False
-            if state == "none":
-                if attempt != 1 or status != "begin":
-                    mark_blocker("attempt-sequence-gap")
-                    sequence_valid = False
-            elif state == "backoff":
-                if attempt <= current_attempt:
-                    mark_blocker("attempt-regression")
-                    sequence_valid = False
-                elif attempt != current_attempt + 1:
-                    mark_blocker("attempt-sequence-gap")
-                    sequence_valid = False
-                if next_attempt_ms < scheduled_ms:
-                    mark_blocker("malformed-backoff-progression")
-                    sequence_valid = False
-            elif state in {"stabilizing", "ready"}:
-                # An attached network generation may fail while stabilizing or
-                # after it reaches the Gate-8 stability boundary. Production
-                # then emits a same-attempt recovery edge; attempt one is also
-                # the canonical start of a later independent recovery episode
-                # after a previously stable run.
-                if (
-                    status != "recovery"
-                    or (
-                        attempt != current_attempt
-                        and not (state == "ready" and attempt == 1)
-                    )
-                ):
-                    mark_blocker("invalid-status-sequence")
-                    sequence_valid = False
-            else:
+            if state != "none" or attempt != 1:
                 mark_blocker("invalid-status-sequence")
                 sequence_valid = False
             if sequence_valid:
                 state = "active"
                 current_attempt = attempt
                 begin_ms = next_attempt_ms
+                recovery_used_in_episode = False
+            continue
+
+        if status == "recovery":
+            sequence_valid = (
+                state in {"active", "stabilizing", "ready"}
+                and attempt == current_attempt == 1
+                and backoff_ms == 0
+            )
+            if recovery_used_in_episode:
+                mark_blocker("recovery-limit-exceeded")
+                sequence_valid = False
+            if backoff_ms != 0:
+                mark_blocker("malformed-backoff-progression")
+                sequence_valid = False
+            if not sequence_valid:
+                mark_blocker("invalid-status-sequence")
+            if sequence_valid:
+                state = "active"
+                begin_ms = next_attempt_ms
+                recovery_used_in_episode = True
             continue
 
         if status == "backoff":
-            transient_retries += 1
-            sequence_valid = (
-                (
-                    state == "active"
-                    or (
-                        state == "stabilizing"
-                        and gate8_recovery_before_event
-                    )
-                )
-                and attempt == current_attempt
-                and attempt < CYW43_BOOTSTRAP_MAX_ATTEMPTS
-            )
-            if not sequence_valid:
-                mark_blocker("invalid-status-sequence")
-            expected_backoff_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[
-                min(attempt - 1, len(CYW43_BOOTSTRAP_RETRY_BACKOFF_MS) - 1)
-            ]
-            if (
-                backoff_ms != expected_backoff_ms
-                or next_attempt_ms < begin_ms + backoff_ms
-            ):
-                mark_blocker("malformed-backoff-progression")
-                sequence_valid = False
-            if sequence_valid:
-                state = status
-                scheduled_ms = next_attempt_ms
+            mark_blocker("outer-backoff-forbidden")
+            state = "backoff"
+            current_attempt = attempt
             continue
 
         if status == "stabilizing":
@@ -13061,31 +13011,36 @@ def summarize_cyw43_bootstrap_supervisor(
             continue
 
         if status == "exhausted":
+            mark_blocker("legacy-exhausted-status")
+            state = "exhausted"
+            current_attempt = attempt
+            continue
+
+        if status == "failed":
             sequence_valid = (
-                (
-                    state == "active"
-                    or (
-                        state == "stabilizing"
-                        and gate8_recovery_before_event
-                    )
-                )
-                and attempt == current_attempt
-                and attempt == CYW43_BOOTSTRAP_MAX_ATTEMPTS
+                state in {"active", "stabilizing", "ready"}
+                and attempt == current_attempt == 1
             )
             if not sequence_valid:
                 mark_blocker("invalid-status-sequence")
-            if backoff_ms != 0 or next_attempt_ms != CYW43_BOOTSTRAP_NO_ATTEMPT_MS:
-                mark_blocker("malformed-exhausted-sentinel")
+            if (
+                backoff_ms != 0
+                or next_attempt_ms != CYW43_BOOTSTRAP_NO_ATTEMPT_MS
+            ):
+                mark_blocker("malformed-failed-sentinel")
                 sequence_valid = False
             if sequence_valid:
-                state = "exhausted"
-                mark_blocker("retry-exhausted")
+                state = "failed"
+                mark_blocker("failed-status")
             continue
 
         if status == "permanent" or status.startswith("permanent-"):
-            sequence_valid = backoff_ms == 0 and (
-                (state == "none" and attempt == 1)
-                or (state == "active" and attempt == current_attempt)
+            sequence_valid = backoff_ms == 0 and attempt == 1 and (
+                (state == "none" and current_attempt == 0)
+                or (
+                    state in {"active", "stabilizing", "ready"}
+                    and current_attempt == 1
+                )
             )
             if not sequence_valid:
                 mark_blocker("invalid-status-sequence")
@@ -13104,13 +13059,25 @@ def summarize_cyw43_bootstrap_supervisor(
         elif state == "stabilizing":
             blocker = "stabilizing-not-terminal"
         elif state == "backoff":
-            blocker = "scheduled-not-terminal"
+            blocker = "outer-backoff-forbidden"
         elif state == "none" and preflight_seen and not preflight_serial_ready:
             blocker = "serial-blocked"
         elif state != "ready":
             blocker = "ready-missing"
+        elif max_attempt != 1:
+            blocker = "attempt-count-invalid"
+        elif transient_retries != 0:
+            blocker = "outer-backoff-forbidden"
+        elif recoveries != 0:
+            blocker = "in-attempt-recovery-used"
 
-    ready = state == "ready" and blocker is None
+    ready = (
+        state == "ready"
+        and blocker is None
+        and max_attempt == 1
+        and transient_retries == 0
+        and recoveries == 0
+    )
     return Cyw43BootstrapSupervisorProof(
         seen=True,
         max_attempt=max_attempt,

@@ -2624,18 +2624,20 @@ where
     }
 }
 
-/// Return whether a failed physical-Pi CYW43 console bootstrap is eligible for
-/// the persistent supervisor. Missing devices, invalid policy, corrupted root
-/// storage/bootinfo, and immutable build-input defects remain terminal; normal
-/// driver timing and runtime progress faults are recoverable.
+/// Return whether a physical-Pi CYW43 bootstrap failure is transient.
+///
+/// Transient pre-root failures may defer into the sole post-prompt production
+/// boot episode. The classification does not authorize an automatic second
+/// episode. Missing devices, invalid policy, corrupted root storage/bootinfo,
+/// and immutable build-input defects remain permanent.
 #[cfg(feature = "kernel")]
 #[must_use]
-pub fn cyw43_net_console_bootstrap_error_retryable(error: &DefaultNetConsoleError) -> bool {
+pub fn cyw43_net_console_bootstrap_error_is_transient(error: &DefaultNetConsoleError) -> bool {
     matches!(
         error,
         NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
             driver_error
-        ))) if driver_error.cyw43_bootstrap_retryable()
+        ))) if driver_error.cyw43_bootstrap_failure_is_transient()
     )
 }
 
@@ -8840,22 +8842,22 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_bootstrap_supervisor_retries_driver_timing_but_not_configuration() {
+    fn cyw43_bootstrap_supervisor_classifies_timing_transient_and_configuration_permanent() {
         let timing =
             NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
                 DriverTaskNetError::RuntimeInit("cyw43-function1-ready-timeout"),
             )));
-        assert!(cyw43_net_console_bootstrap_error_retryable(&timing));
+        assert!(cyw43_net_console_bootstrap_error_is_transient(&timing));
 
         let artifact =
             NetConsoleError::Init(NetStackError::Driver(DefaultDriverError::DriverTaskNet(
                 DriverTaskNetError::RuntimeInit("cyw43-firmware-bundle"),
             )));
-        assert!(!cyw43_net_console_bootstrap_error_retryable(&artifact));
-        assert!(!cyw43_net_console_bootstrap_error_retryable(
+        assert!(!cyw43_net_console_bootstrap_error_is_transient(&artifact));
+        assert!(!cyw43_net_console_bootstrap_error_is_transient(
             &NetConsoleError::InvalidConfig("wifi-credentials-missing")
         ));
-        assert!(!cyw43_net_console_bootstrap_error_retryable(
+        assert!(!cyw43_net_console_bootstrap_error_is_transient(
             &NetConsoleError::NoDevice
         ));
     }

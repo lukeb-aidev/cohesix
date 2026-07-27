@@ -856,7 +856,7 @@ fn physical_pi_failed_net_bootstrap_should_defer(
     ) && config.wifi_credentials.is_some());
     physical_pi_owner
         && wifi_selected
-        && crate::net::cyw43_net_console_bootstrap_error_retryable(error)
+        && crate::net::cyw43_net_console_bootstrap_error_is_transient(error)
 }
 
 fn required_local_seat_probe_should_abort(

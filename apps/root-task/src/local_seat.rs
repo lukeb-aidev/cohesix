@@ -9635,13 +9635,13 @@ mod tests {
         }
 
         assert!(runtime.mirror_linked_hdmi_high_impact_above_open_line(
-            "[drivers] WiFi bootstrap attempt 2/5 starting",
+            "[drivers] WiFi repairing CYW43/SDIO within the active boot episode",
         ));
 
         let lines = runtime.mirrored_lines_snapshot();
         assert_eq!(
             lines[lines.len() - 2],
-            "[drivers] WiFi bootstrap attempt 2/5 starting"
+            "[drivers] WiFi repairing CYW43/SDIO within the active boot episode"
         );
         assert_eq!(lines[lines.len() - 1], "cohesix> hel");
         assert!(runtime.hdmi_open_line);
@@ -10549,8 +10549,12 @@ mod tests {
         assert!(
             runtime.queue_linked_hdmi_line("Cohesix startup in progress; serial console available")
         );
-        runtime.mirror_line_current_tcb("[drivers] WiFi bootstrap attempt 1/5 starting");
-        assert!(runtime.queue_linked_hdmi_line("[drivers] WiFi bootstrap attempt 1/5 starting"));
+        runtime.mirror_line_current_tcb(
+            "[drivers] WiFi bootstrap starting (single production attempt)",
+        );
+        assert!(runtime.queue_linked_hdmi_line(
+            "[drivers] WiFi bootstrap starting (single production attempt)"
+        ));
         let queued_before_attach = runtime.display_trace().pending_bytes;
         assert!(queued_before_attach > 0);
 
@@ -10570,8 +10574,8 @@ mod tests {
         }
         assert_no_blink_snapshot_payload(snapshot.as_slice());
         assert!(snapshot
-            .windows(b"WiFi bootstrap attempt 1/5".len())
-            .any(|window| window == b"WiFi bootstrap attempt 1/5"));
+            .windows(b"WiFi bootstrap starting (single production attempt)".len())
+            .any(|window| { window == b"WiFi bootstrap starting (single production attempt)" }));
 
         runtime.mirror_line_current_tcb("cohesix> ");
         runtime.open_linked_hdmi_prompt_line("cohesix> ");

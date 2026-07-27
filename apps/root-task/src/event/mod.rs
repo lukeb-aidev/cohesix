@@ -329,10 +329,10 @@ const LOCAL_SEAT_HDMI_PUMP_PASSES_PER_TURN: usize = 1;
 /// Serial retains first service, but queued HDMI must receive one later turn
 /// even when a large diagnostic keeps UART TX continuously backlogged.
 const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
-/// One failed bootstrap episode can retain at most ten attempt milestones
-/// (five starts, four backoffs, and exhaustion) plus the one-shot linked-serial
-/// blocked/ready transitions. Keeping the exact episode bound avoids dynamic
-/// allocation without permitting a delayed display to overwrite a milestone.
+/// Retain a bounded burst of high-impact milestones from the single production
+/// Wi-Fi boot episode plus its one-shot linked-serial transitions. The capacity
+/// decouples delayed display service from driver progress without deriving
+/// storage from an outer retry count.
 #[cfg(feature = "kernel")]
 const CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY: usize = 12;
 /// Material frontier changes wait at least five seconds after the preceding
@@ -343,8 +343,8 @@ const CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY: usize = 12;
 const CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS: u64 = 5_000;
 #[cfg(feature = "kernel")]
 const CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS: u64 = 5_000;
-/// Serial retains the complete five-attempt lifecycle: two preflight records,
-/// attempt begin/recovery, each typed failure, four backoffs, and one terminal
+/// Serial retains the complete single-attempt lifecycle: preflight, begin,
+/// optional in-episode repair, typed failure or Gate 8 proof, and one terminal
 /// result. This queue is a saturation fallback; ordinary turns drain records
 /// directly through the shared physical-console queue.
 #[cfg(feature = "kernel")]
@@ -1978,7 +1978,7 @@ fn cyw43_bootstrap_turn_attempt_and_stage(line: &str) -> Option<(u32, &str)> {
     let mut stage = None;
     for field in line.split_ascii_whitespace().skip(1) {
         if let Some(value) = field.strip_prefix("attempt=") {
-            attempt = value.parse::<u32>().ok().filter(|value| *value != 0);
+            attempt = value.parse::<u32>().ok().filter(|value| *value == 1);
         } else if let Some(value) = field.strip_prefix("stage=") {
             stage = (!value.is_empty()).then_some(value);
         }
@@ -1992,9 +1992,8 @@ fn cyw43_bootstrap_status_resets_hdmi_progress(
     releases_console_ready: bool,
 ) -> bool {
     releases_console_ready
-        || hdmi_line.contains(" bootstrap attempt ")
-        || hdmi_line.contains(" recovery attempt ")
-        || hdmi_line.contains(" paused; retry ")
+        || hdmi_line == "[drivers] WiFi bootstrap starting (single production attempt)"
+        || hdmi_line == "[drivers] WiFi repairing CYW43/SDIO within the active boot episode"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2650,8 +2649,8 @@ where
         true
     }
 
-    /// Quarantine an attached Wi-Fi stack after its retained recovery budget is
-    /// exhausted.
+    /// Quarantine an attached Wi-Fi stack after its single production
+    /// bootstrap attempt terminates in failure.
     ///
     /// The reference remains retained so its borrow and storage ownership stay
     /// valid, but it is no longer a trustworthy diagnostic source and ordinary
@@ -2663,9 +2662,14 @@ where
     /// network connection are revoked without calling back into that
     /// connection.
     #[cfg(feature = "net-console")]
-    pub fn quarantine_network_service_after_cyw43_exhaustion(&mut self) {
+    pub fn quarantine_network_service_after_cyw43_terminal_failure(&mut self) {
         self.network_service_quarantined = true;
         self.pending_net_flush = PendingNetFlush::default();
+        #[cfg(feature = "kernel")]
+        {
+            self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+            self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+        }
         let net_session = matches!(self.session_origin, Some(ConsoleInputSource::Net))
             || self.session_net_conn_id.is_some();
         let net_stream = matches!(self.stream_output_source, Some(ConsoleInputSource::Net))
@@ -3184,6 +3188,11 @@ where
     /// owner that submits the corresponding HDMI operation.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn reconcile_cyw43_network_ready_hdmi(&mut self) {
+        if self.network_service_quarantined {
+            self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+            self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+            return;
+        }
         if !self.cyw43_network_ready_hdmi_progress.active || self.reboot_pending {
             return;
         }
@@ -3610,7 +3619,7 @@ where
     /// Keep only the HDMI ready banner and prompt behind the Wi-Fi terminal.
     ///
     /// The serial prompt and buffered USB command fence remain active before
-    /// the five-attempt episode begins.
+    /// the single-attempt bootstrap episode begins.
     #[cfg(feature = "kernel")]
     pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
         let invalidated = self.pending_cyw43_bootstrap_hdmi_milestones.len()
@@ -3678,6 +3687,9 @@ where
 
     #[cfg(feature = "net-console")]
     fn m26d_network_oracle_service_due(&self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         self.net.as_ref().is_some_and(|net| {
             let status = net.status_report();
             m26d_network_proof_prefers_tcp_over_physical_input(&status)
@@ -4260,10 +4272,12 @@ where
         self.emit_serial_line(CONSOLE_BANNER);
         self.emit_serial_line("Cohesix console starting");
         #[cfg(feature = "net-console")]
-        if let Some(net) = self.net.as_mut() {
-            let _ = net.send_console_line(
-                "[net-console] authenticate using AUTH <role> <token> to receive console output",
-            );
+        if !self.network_service_quarantined {
+            if let Some(net) = self.net.as_mut() {
+                let _ = net.send_console_line(
+                    "[net-console] authenticate using AUTH <role> <token> to receive console output",
+                );
+            }
         }
         #[cfg(feature = "kernel")]
         {
@@ -4450,6 +4464,9 @@ where
     /// Returns the selected network interface label for net-console status messages.
     #[cfg(feature = "net-console")]
     pub fn net_console_active_interface(&self) -> Option<&'static str> {
+        if self.network_service_quarantined {
+            return None;
+        }
         self.net
             .as_ref()
             .map(|net| net.status_report().active_interface)
@@ -4458,6 +4475,9 @@ where
     /// Returns whether the active network transport is ready to carry the root console.
     #[cfg(feature = "net-console")]
     pub fn net_console_ready_for_root(&self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         match self.net.as_ref() {
             Some(net) => net_status_allows_root_console(&net.status_report()),
             None => false,
@@ -4467,6 +4487,9 @@ where
     /// Returns exact same-generation Wi-Fi Gate 10 proof.
     #[cfg(all(feature = "net-console", feature = "kernel"))]
     pub fn net_console_cyw43_gate10_proven_for_root(&self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
         let Some(net) = self.net.as_ref() else {
             return false;
         };
@@ -4480,6 +4503,9 @@ where
 
     #[cfg(feature = "net-console")]
     pub fn net_console_terminal_failure_reason(&self) -> Option<&'static str> {
+        if self.network_service_quarantined {
+            return None;
+        }
         self.net
             .as_ref()
             .and_then(|net| net_status_terminal_failure_reason(&net.status_report()))
@@ -4487,6 +4513,9 @@ where
 
     #[cfg(feature = "net-console")]
     pub fn net_console_pre_root_serial_release_reason(&self) -> Option<&'static str> {
+        if self.network_service_quarantined {
+            return None;
+        }
         self.net
             .as_ref()
             .and_then(|net| net_status_pre_root_serial_release_reason(&net.status_report()))
@@ -6926,13 +6955,25 @@ where
 
     #[cfg(feature = "kernel")]
     fn wifi_debug_commands_enabled(&self) -> bool {
-        #[cfg(test)]
-        if self.test_pi4_debug_commands {
+        if !Self::hardware_has_device_kind(crate::generated::HardwareDeviceKind::Wifi) {
+            #[cfg(test)]
+            if !self.test_pi4_debug_commands {
+                return false;
+            }
+            #[cfg(not(test))]
+            return false;
+        }
+
+        // Terminal CYW43 failure revokes all NetStack authority. The hardware
+        // declaration is sufficient to keep physical WiFi diagnostics
+        // available; never ask the quarantined stack whether WiFi was active.
+        if self.network_service_quarantined {
             return true;
         }
 
-        if !Self::hardware_has_device_kind(crate::generated::HardwareDeviceKind::Wifi) {
-            return false;
+        #[cfg(test)]
+        if self.test_pi4_debug_commands {
+            return true;
         }
 
         #[cfg(feature = "net-console")]
@@ -15858,7 +15899,7 @@ where
 
     #[cfg(feature = "net-console")]
     fn emit_wifi_credential_warning_current_before_prompt(&mut self) {
-        if self.wifi_credential_warning_emitted {
+        if self.wifi_credential_warning_emitted || self.network_service_quarantined {
             return;
         }
         let Some(net) = self.net.as_ref() else {
@@ -15885,7 +15926,7 @@ where
 
     #[cfg(feature = "net-console")]
     fn emit_wifi_credential_warning_current_before_prompt_atomic(&mut self) {
-        if self.wifi_credential_warning_emitted {
+        if self.wifi_credential_warning_emitted || self.network_service_quarantined {
             return;
         }
         let Some(net) = self.net.as_ref() else {
@@ -15912,6 +15953,9 @@ where
 
     #[cfg(feature = "net-console")]
     fn emit_wifi_network_status(&mut self) {
+        if self.network_service_quarantined {
+            return;
+        }
         let Some(net) = self.net.as_ref() else {
             return;
         };
@@ -17191,6 +17235,9 @@ where
 
     #[cfg(feature = "net-console")]
     fn drain_net_console_events(&mut self) {
+        if self.network_service_quarantined {
+            return;
+        }
         let session_is_net = matches!(self.session_origin, Some(ConsoleInputSource::Net));
         let session_net_conn_id = self.session_net_conn_id;
         let mut end_reason: Option<NetConsoleDisconnectReason> = None;
@@ -17719,7 +17766,9 @@ where
                 self.metrics.accepted_commands += 1;
                 self.emit_ack_ok(verb_label, None);
                 #[cfg(feature = "net-console")]
-                if self.last_input_source == ConsoleInputSource::Net {
+                if self.last_input_source == ConsoleInputSource::Net
+                    && !self.network_service_quarantined
+                {
                     if let Some(net) = self.net.as_mut() {
                         net.request_disconnect();
                     }
@@ -21062,16 +21111,22 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_turn_status_parser_rejects_malformed_or_zero_attempts() {
+    fn cyw43_turn_status_parser_accepts_only_the_production_attempt() {
         assert_eq!(
             cyw43_bootstrap_turn_attempt_and_stage(
-                "CYW43_BOOTSTRAP_TURN attempt=3 turn=42 stage=cyw43-firmware-chunk operation=true repeat=8"
+                "CYW43_BOOTSTRAP_TURN attempt=1 turn=42 stage=cyw43-firmware-chunk operation=true repeat=8"
             ),
-            Some((3, "cyw43-firmware-chunk"))
+            Some((1, "cyw43-firmware-chunk"))
         );
         assert_eq!(
             cyw43_bootstrap_turn_attempt_and_stage(
                 "CYW43_BOOTSTRAP_TURN attempt=0 stage=cyw43-firmware-chunk"
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_bootstrap_turn_attempt_and_stage(
+                "CYW43_BOOTSTRAP_TURN attempt=2 stage=cyw43-firmware-chunk"
             ),
             None
         );
@@ -21120,7 +21175,7 @@ mod tests {
                 .with_local_seat(&mut local_seat);
             assert!(pump.queue_cyw43_bootstrap_supervisor_status(
                 "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
-                "[drivers] WiFi bootstrap attempt 1/5 starting",
+                "[drivers] WiFi bootstrap starting (single production attempt)",
             ));
             assert!(pump.queue_cyw43_bootstrap_operator_line(
                 "CYW43_BOOTSTRAP_TURN attempt=1 turn=1 stage=cyw43-firmware-chunk operation=true repeat=1"
@@ -21222,7 +21277,7 @@ mod tests {
                 .with_local_seat(&mut local_seat);
             assert!(pump.queue_cyw43_bootstrap_supervisor_status(
                 "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
-                "[drivers] WiFi bootstrap attempt 1/5 starting",
+                "[drivers] WiFi bootstrap starting (single production attempt)",
             ));
             for turn in 1..=(CONSOLE_OUTPUT_BACKLOG_LINES + 8) {
                 let status = format!(
@@ -21240,7 +21295,9 @@ mod tests {
                 .unwrap()
                 .mirrored_lines_snapshot()
                 .iter()
-                .any(|line| line == "[drivers] WiFi bootstrap attempt 1/5 starting"));
+                .any(|line| {
+                    line == "[drivers] WiFi bootstrap starting (single production attempt)"
+                }));
 
             pump.now_ms = 4_999;
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
@@ -21353,12 +21410,12 @@ mod tests {
 
             assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
                 "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
-                "[drivers] WiFi bootstrap attempt 1/5 starting",
+                "[drivers] WiFi bootstrap starting (single production attempt)",
                 false,
             ));
             assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted",
-                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed",
+                "[drivers] WiFi startup failed; diagnostics remain active",
                 true,
             ));
 
@@ -21394,13 +21451,13 @@ mod tests {
         let lines = local_seat.mirrored_lines_snapshot();
         let begin = lines
             .iter()
-            .position(|line| line == "[drivers] WiFi bootstrap attempt 1/5 starting")
+            .position(|line| {
+                line == "[drivers] WiFi bootstrap starting (single production attempt)"
+            })
             .expect("begin milestone reaches HDMI first");
         let terminal = lines
             .iter()
-            .position(|line| {
-                line == "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active"
-            })
+            .position(|line| line == "[drivers] WiFi startup failed; diagnostics remain active")
             .expect("terminal milestone reaches HDMI");
         let ready = lines
             .iter()
@@ -30581,8 +30638,8 @@ mod tests {
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
-            let status = "CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=recovery";
-            let display = "[drivers] WiFi recovery attempt 2/5 starting";
+            let status = "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=recovery";
+            let display = "[drivers] WiFi repairing CYW43/SDIO within the active boot episode";
             assert!(pump.queue_cyw43_bootstrap_supervisor_status(status, display));
             assert!(pump.cyw43_bootstrap_hdmi_pending);
             assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
@@ -30601,10 +30658,9 @@ mod tests {
             assert!(rendered.contains(status), "{rendered}");
         }
 
-        assert!(local_seat
-            .mirrored_lines_snapshot()
-            .iter()
-            .any(|line| line == "[drivers] WiFi recovery attempt 2/5 starting"));
+        assert!(local_seat.mirrored_lines_snapshot().iter().any(|line| {
+            line == "[drivers] WiFi repairing CYW43/SDIO within the active boot episode"
+        }));
         assert!(!local_seat
             .mirrored_lines_snapshot()
             .iter()
@@ -30732,7 +30788,7 @@ mod tests {
             );
             assert!(pump.queue_cyw43_bootstrap_operator_lines_atomic(recovery_batch.as_slice(), 1,));
             let following_terminal =
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=backoff console_sequence=10";
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed console_sequence=10";
             assert!(pump.queue_cyw43_bootstrap_operator_line(following_terminal));
             assert_eq!(
                 pump.pending_cyw43_bootstrap_serial_milestones
@@ -30829,59 +30885,34 @@ mod tests {
             buffer_lines: 64,
         });
         local_seat.mark_root_console_ready();
+        // Repeated legal in-episode milestones exercise the bounded queue
+        // without inventing outer attempts or backoff states that production
+        // no longer admits.
         let specs = [
-            (
-                0,
-                crate::userland::DeferredNetSupervisorStatus::Preflight,
-                false,
-            ),
-            (
-                0,
-                crate::userland::DeferredNetSupervisorStatus::Preflight,
-                true,
-            ),
-            (1, crate::userland::DeferredNetSupervisorStatus::Begin, true),
-            (
-                1,
-                crate::userland::DeferredNetSupervisorStatus::Backoff,
-                true,
-            ),
-            (2, crate::userland::DeferredNetSupervisorStatus::Begin, true),
-            (
-                2,
-                crate::userland::DeferredNetSupervisorStatus::Backoff,
-                true,
-            ),
-            (3, crate::userland::DeferredNetSupervisorStatus::Begin, true),
-            (
-                3,
-                crate::userland::DeferredNetSupervisorStatus::Backoff,
-                true,
-            ),
-            (4, crate::userland::DeferredNetSupervisorStatus::Begin, true),
-            (
-                4,
-                crate::userland::DeferredNetSupervisorStatus::Backoff,
-                true,
-            ),
-            (5, crate::userland::DeferredNetSupervisorStatus::Begin, true),
-            (
-                5,
-                crate::userland::DeferredNetSupervisorStatus::Exhausted,
-                true,
-            ),
+            crate::userland::DeferredNetSupervisorStatus::Begin,
+            crate::userland::DeferredNetSupervisorStatus::Recovery,
+            crate::userland::DeferredNetSupervisorStatus::Stabilizing,
+            crate::userland::DeferredNetSupervisorStatus::Begin,
+            crate::userland::DeferredNetSupervisorStatus::Recovery,
+            crate::userland::DeferredNetSupervisorStatus::Stabilizing,
+            crate::userland::DeferredNetSupervisorStatus::Begin,
+            crate::userland::DeferredNetSupervisorStatus::Recovery,
+            crate::userland::DeferredNetSupervisorStatus::Stabilizing,
+            crate::userland::DeferredNetSupervisorStatus::Begin,
+            crate::userland::DeferredNetSupervisorStatus::Recovery,
+            crate::userland::DeferredNetSupervisorStatus::Stabilizing,
         ];
         let statuses: Vec<HeaplessString<DEFAULT_LINE_CAPACITY>> = specs
             .iter()
             .enumerate()
-            .map(|(index, (attempt, status, serial_ready))| {
+            .map(|(index, status)| {
                 crate::userland::format_deferred_net_bootstrap_supervisor_status(
                     index as u64,
-                    *attempt,
+                    1,
                     *status,
-                    index as u64 * 1_000,
-                    index as u64 * 2_000,
-                    *serial_ready,
+                    0,
+                    u64::MAX,
+                    true,
                     true,
                 )
                 .expect("production supervisor status must fit")
@@ -30889,37 +30920,45 @@ mod tests {
             .collect();
         let displays: Vec<HeaplessString<DEFAULT_LINE_CAPACITY>> = specs
             .iter()
-            .enumerate()
-            .map(|(index, (attempt, status, serial_ready))| {
+            .map(|status| {
                 crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
-                    *attempt,
-                    *status,
-                    index as u64 * 1_000,
-                    *serial_ready,
+                    1, *status, 0, true,
                 )
                 .expect("production display status must fit")
             })
             .collect();
         assert_eq!(statuses.len(), CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
         assert_eq!(displays.len(), CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY);
-        let rejected = crate::userland::format_deferred_net_bootstrap_supervisor_status(
+        assert_eq!(
+            displays[0].as_str(),
+            "[drivers] WiFi bootstrap starting (single production attempt)"
+        );
+        assert_eq!(
+            displays[1].as_str(),
+            "[drivers] WiFi repairing CYW43/SDIO within the active boot episode"
+        );
+        let terminal = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,
-            5,
-            crate::userland::DeferredNetSupervisorStatus::Ready,
+            1,
+            crate::userland::DeferredNetSupervisorStatus::Failed,
+            0,
             u64::MAX,
-            u64::MAX,
-            false,
-            false,
+            true,
+            true,
         )
         .expect("maximum terminal supervisor status must fit");
-        let rejected_display =
+        let terminal_display =
             crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
-                5,
-                crate::userland::DeferredNetSupervisorStatus::Ready,
-                u64::MAX,
-                false,
+                1,
+                crate::userland::DeferredNetSupervisorStatus::Failed,
+                0,
+                true,
             )
             .expect("maximum terminal display status must fit");
+        assert_eq!(
+            terminal_display.as_str(),
+            "[drivers] WiFi startup failed; diagnostics remain active"
+        );
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -30978,11 +31017,12 @@ mod tests {
                     .collect::<Vec<_>>()
             );
 
-            // Saturate the independent serial chatter budget. A thirteenth
-            // terminal HDMI record must be retained behind the full FIFO;
-            // otherwise delayed display service could fence readiness forever.
+            // Saturate the independent serial chatter budget. The terminal
+            // HDMI record must remain reserved behind the full FIFO; otherwise
+            // delayed display service could fence diagnostics forever.
             pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
-            let typed_failure = "[net-console] deferred failed detail=thirteenth-attempt-rejected";
+            let typed_failure =
+                "[net-console] deferred failed detail=single-attempt-terminal-retention";
             assert!(pump.queue_cyw43_bootstrap_operator_line(typed_failure));
             assert_eq!(
                 pump.pending_cyw43_bootstrap_hdmi_milestones
@@ -31003,29 +31043,29 @@ mod tests {
                 ));
             }
             assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
-                rejected.as_str(),
-                rejected_display.as_str(),
+                terminal.as_str(),
+                terminal_display.as_str(),
                 true,
             ));
-            let retained_after_rejection: Vec<String> = pump
+            let retained_after_terminal: Vec<String> = pump
                 .pending_cyw43_bootstrap_hdmi_milestones
                 .iter()
                 .map(|milestone| milestone.text.as_str().to_owned())
                 .collect();
-            assert_eq!(retained_after_rejection, retained);
-            assert!(!retained_after_rejection
+            assert_eq!(retained_after_terminal, retained);
+            assert!(!retained_after_terminal
                 .iter()
-                .any(|line| line == rejected.as_str()));
+                .any(|line| line == terminal_display.as_str()));
             assert!(pump
                 .pending_cyw43_bootstrap_hdmi_terminal_milestone
                 .as_ref()
                 .is_some_and(|milestone| {
-                    milestone.text.as_str() == rejected_display.as_str()
+                    milestone.text.as_str() == terminal_display.as_str()
                         && milestone.releases_console_ready
                 }));
             assert!(pump.pending_console_output.iter().any(|output| {
                 output.kind == PendingConsoleOutputKind::HighImpactLine
-                    && output.text.as_str() == rejected.as_str()
+                    && output.text.as_str() == terminal.as_str()
             }));
             let typed_failure_index = pump
                 .pending_console_output
@@ -31035,7 +31075,7 @@ mod tests {
             let terminal_index = pump
                 .pending_console_output
                 .iter()
-                .position(|output| output.text.as_str() == rejected.as_str())
+                .position(|output| output.text.as_str() == terminal.as_str())
                 .expect("terminal status remains retained");
             assert!(typed_failure_index < terminal_index);
 
@@ -31087,14 +31127,14 @@ mod tests {
             displays
                 .iter()
                 .map(|line| line.as_str().to_owned())
-                .chain(core::iter::once(rejected_display.as_str().to_owned()))
+                .chain(core::iter::once(terminal_display.as_str().to_owned()))
                 .collect::<Vec<_>>()
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn exhausted_cyw43_quarantine_keeps_operator_pump_live_without_net_poll() {
+    fn terminal_cyw43_failure_quarantine_keeps_operator_pump_live_without_net_poll() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -31131,10 +31171,10 @@ mod tests {
                 .with_network(&mut net)
                 .with_local_seat(&mut local_seat);
             assert!(pump.queue_cyw43_bootstrap_supervisor_status(
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=5 status=exhausted",
-                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed",
+                "[drivers] WiFi startup failed; diagnostics remain active",
             ));
-            pump.quarantine_network_service_after_cyw43_exhaustion();
+            pump.quarantine_network_service_after_cyw43_terminal_failure();
 
             for _ in 0..48 {
                 pump.poll();
@@ -31157,9 +31197,10 @@ mod tests {
         );
         let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
         assert!(rendered.contains("Commands:"), "{rendered}");
-        assert!(local_seat.mirrored_lines_snapshot().iter().any(|line| {
-            line == "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active"
-        }));
+        assert!(local_seat
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| { line == "[drivers] WiFi startup failed; diagnostics remain active" }));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -31222,7 +31263,7 @@ mod tests {
             .with_network(&mut net)
             .with_network_unavailable_detail(Some(stale_cause))
             .with_test_pi4_debug_commands();
-        pump.quarantine_network_service_after_cyw43_exhaustion();
+        pump.quarantine_network_service_after_cyw43_terminal_failure();
         assert!(pump.network_service_quarantined);
         assert!(pump.wifi_live_net_frontier().is_none());
         assert!(pump
@@ -31286,7 +31327,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn exhausted_cyw43_quarantine_revokes_net_authority_and_buffered_work() {
+    fn terminal_cyw43_failure_quarantine_revokes_net_authority_and_buffered_work() {
         struct TestReset;
 
         impl Drop for TestReset {
@@ -31347,7 +31388,7 @@ mod tests {
             pump.reboot_ack_source = Some(ConsoleInputSource::Net);
             pump.reboot_ack_net_conn_id = Some(41);
             pump.reboot_ack_deadline_ms = REBOOT_ACK_DEADLINE_MS;
-            pump.quarantine_network_service_after_cyw43_exhaustion();
+            pump.quarantine_network_service_after_cyw43_terminal_failure();
 
             assert!(pump.network_service_quarantined);
             assert_eq!(pump.session, None);
@@ -31433,7 +31474,12 @@ mod tests {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
                 .with_local_seat(&mut local_seat);
-            pump.quarantine_network_service_after_cyw43_exhaustion();
+            pump.cyw43_network_ready_hdmi_progress.begin(pump.now_ms);
+            pump.quarantine_network_service_after_cyw43_terminal_failure();
+            assert!(
+                !pump.cyw43_network_ready_hdmi_progress.active,
+                "terminal failure must cancel stale DHCP/TCP HDMI progress",
+            );
 
             assert_eq!(
                 crate::serial::test_inject_linked_runtime_only_rx(b"nettest\n"),
@@ -31478,6 +31524,11 @@ mod tests {
         assert_eq!(net.polls, 0);
         assert_eq!(net.tcp_flushes, 0);
         assert_eq!(net.self_test_starts, 0);
+        assert_eq!(
+            net.status_reports.get(),
+            0,
+            "serial and USB/local-seat service must not inspect the quarantined stack",
+        );
         let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
         assert!(rendered.matches(typed).count() >= 2, "{rendered}");
         assert!(local_seat

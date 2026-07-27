@@ -463,17 +463,12 @@ fn announce_root_console_loop_start() {
     feature = "kernel",
     feature = "net-console"
 ))]
-// Linux brcmfmac bounds SDIO access-error persistence at five. Cohesix uses
-// that finite budget as an analogue for one whole retained supervisor episode;
-// this does not assert that Linux retries its complete bootstrap identically.
-const CYW43_BOOTSTRAP_MAX_ATTEMPTS: u32 = 5;
-
-#[cfg(all(
-    feature = "serial-console",
-    feature = "kernel",
-    feature = "net-console"
-))]
-const CYW43_BOOTSTRAP_RETRY_BACKOFF_MS: [u64; 4] = [1_000, 2_000, 4_000, 8_000];
+// Linux brcmfmac performs one probe/bind episode and keeps retries local to
+// the owning operation. Cohesix likewise admits exactly one production boot
+// episode. Its split seL4 CYW43/SDIO ownership boundary may consume one
+// generation-fenced pair repair inside that episode, but never starts a
+// second whole bootstrap attempt automatically.
+const CYW43_BOOTSTRAP_ATTEMPT: u32 = 1;
 
 #[cfg(all(
     feature = "serial-console",
@@ -641,7 +636,7 @@ fn run_deferred_cyw43_attached_network_control_turn<Poll, Recovery, Diagnostic, 
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredNetSupervisorTerminal {
-    RetryBudgetExhausted,
+    BootstrapFailed,
     PermanentAttachedRecoveryFailure,
 }
 
@@ -677,9 +672,7 @@ const fn deferred_net_supervisor_driver_turn_allowed(
     feature = "net-console"
 ))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DeferredNetRetrySchedule {
-    transient_failures: u32,
-    next_attempt_ms: u64,
+struct DeferredNetSupervisorSequence {
     status_sequence: u64,
 }
 
@@ -688,53 +681,9 @@ struct DeferredNetRetrySchedule {
     feature = "kernel",
     feature = "net-console"
 ))]
-impl DeferredNetRetrySchedule {
-    const fn new(now_ms: u64) -> Self {
-        Self {
-            transient_failures: 0,
-            next_attempt_ms: now_ms,
-            status_sequence: 0,
-        }
-    }
-
-    const fn attempt_due(self, now_ms: u64) -> bool {
-        !self.exhausted() && now_ms >= self.next_attempt_ms
-    }
-
-    const fn attempt_number(self) -> u32 {
-        let next = self.transient_failures.saturating_add(1);
-        if next > CYW43_BOOTSTRAP_MAX_ATTEMPTS {
-            CYW43_BOOTSTRAP_MAX_ATTEMPTS
-        } else {
-            next
-        }
-    }
-
-    const fn exhausted(self) -> bool {
-        self.transient_failures >= CYW43_BOOTSTRAP_MAX_ATTEMPTS
-    }
-
-    fn record_transient_failure(&mut self, now_ms: u64) -> Option<u64> {
-        if self.exhausted() {
-            return None;
-        }
-        let failed_attempt = self.transient_failures;
-        self.transient_failures = self.transient_failures.saturating_add(1);
-        if self.exhausted() {
-            self.next_attempt_ms = u64::MAX;
-            return None;
-        }
-        let index = usize::try_from(failed_attempt)
-            .unwrap_or(usize::MAX)
-            .min(CYW43_BOOTSTRAP_RETRY_BACKOFF_MS.len() - 1);
-        let delay_ms = CYW43_BOOTSTRAP_RETRY_BACKOFF_MS[index];
-        self.next_attempt_ms = now_ms.saturating_add(delay_ms);
-        Some(delay_ms)
-    }
-
-    fn reset_attempt_budget(&mut self, now_ms: u64) {
-        self.transient_failures = 0;
-        self.next_attempt_ms = now_ms;
+impl DeferredNetSupervisorSequence {
+    const fn new() -> Self {
+        Self { status_sequence: 0 }
     }
 
     fn next_status_sequence(&mut self) -> u64 {
@@ -797,18 +746,6 @@ enum DeferredGate8Observation {
     feature = "kernel",
     feature = "net-console"
 ))]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DeferredGate8RecoveryBudget {
-    AlreadyRecorded,
-    Backoff { delay_ms: u64, next_attempt_ms: u64 },
-    Exhausted,
-}
-
-#[cfg(all(
-    feature = "serial-console",
-    feature = "kernel",
-    feature = "net-console"
-))]
 impl DeferredGate8Lifecycle {
     const fn new() -> Self {
         Self::Detached
@@ -833,6 +770,16 @@ impl DeferredGate8Lifecycle {
                 gate10_complete: false,
                 ..
             } => {
+                *self = Self::Stabilizing {
+                    attempt,
+                    deadline_ms,
+                };
+                return deadline_ms;
+            }
+            Self::Recovering {
+                failed_attempt,
+                deadline_ms,
+            } if failed_attempt == attempt => {
                 *self = Self::Stabilizing {
                     attempt,
                     deadline_ms,
@@ -962,24 +909,6 @@ impl DeferredGate8Lifecycle {
             Self::Detached => None,
         }
     }
-
-    fn consume_failure(
-        &mut self,
-        failed_attempt: u32,
-        now_ms: u64,
-        retry_schedule: &mut DeferredNetRetrySchedule,
-    ) -> DeferredGate8RecoveryBudget {
-        if !self.begin_recovery(failed_attempt) {
-            return DeferredGate8RecoveryBudget::AlreadyRecorded;
-        }
-        match retry_schedule.record_transient_failure(now_ms) {
-            Some(delay_ms) => DeferredGate8RecoveryBudget::Backoff {
-                delay_ms,
-                next_attempt_ms: retry_schedule.next_attempt_ms,
-            },
-            None => DeferredGate8RecoveryBudget::Exhausted,
-        }
-    }
 }
 
 #[cfg(all(
@@ -1028,10 +957,9 @@ pub(crate) enum DeferredNetSupervisorStatus {
     Preflight,
     Begin,
     Recovery,
-    Backoff,
     Stabilizing,
     Ready,
-    Exhausted,
+    Failed,
     Permanent,
 }
 
@@ -1041,14 +969,13 @@ pub(crate) enum DeferredNetSupervisorStatus {
     feature = "net-console"
 ))]
 impl DeferredNetSupervisorStatus {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 7] = [
         Self::Preflight,
         Self::Begin,
         Self::Recovery,
-        Self::Backoff,
         Self::Stabilizing,
         Self::Ready,
-        Self::Exhausted,
+        Self::Failed,
         Self::Permanent,
     ];
 
@@ -1057,10 +984,9 @@ impl DeferredNetSupervisorStatus {
             Self::Preflight => "preflight",
             Self::Begin => "begin",
             Self::Recovery => "recovery",
-            Self::Backoff => "backoff",
             Self::Stabilizing => "stabilizing",
             Self::Ready => "ready",
-            Self::Exhausted => "exhausted",
+            Self::Failed => "failed",
             Self::Permanent => "permanent",
         }
     }
@@ -1068,7 +994,7 @@ impl DeferredNetSupervisorStatus {
     const fn valid_attempt(self, attempt: u32) -> bool {
         match self {
             Self::Preflight => attempt == 0,
-            _ => attempt != 0 && attempt <= CYW43_BOOTSTRAP_MAX_ATTEMPTS,
+            _ => attempt == CYW43_BOOTSTRAP_ATTEMPT,
         }
     }
 
@@ -1077,7 +1003,7 @@ impl DeferredNetSupervisorStatus {
         // until EventPump independently proves DHCP Bound plus a listening
         // TCP console. Terminal failures release the local HDMI console while
         // keeping their explicit Wi-Fi-unavailable message visible.
-        matches!(self, Self::Exhausted | Self::Permanent)
+        matches!(self, Self::Failed | Self::Permanent)
     }
 }
 
@@ -1123,10 +1049,7 @@ fn format_deferred_net_bootstrap_supervisor_semantic_status(
     if !status.valid_attempt(attempt) {
         return None;
     }
-    let semantic_backoff_ms = if matches!(
-        status,
-        DeferredNetSupervisorStatus::Preflight | DeferredNetSupervisorStatus::Backoff
-    ) {
+    let semantic_backoff_ms = if matches!(status, DeferredNetSupervisorStatus::Preflight) {
         backoff_ms
     } else {
         0
@@ -1161,7 +1084,7 @@ fn format_deferred_net_bootstrap_supervisor_semantic_status(
 pub(crate) fn format_deferred_net_bootstrap_supervisor_display_status(
     attempt: u32,
     status: DeferredNetSupervisorStatus,
-    backoff_ms: u64,
+    _backoff_ms: u64,
     serial_ready: bool,
 ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
     if !status.valid_attempt(attempt) {
@@ -1177,32 +1100,21 @@ pub(crate) fn format_deferred_net_bootstrap_supervisor_display_status(
             line.push_str("[drivers] WiFi waiting for safe serial path; bootstrap paused")
                 .is_err()
         }
-        DeferredNetSupervisorStatus::Begin => write!(
-            line,
-            "[drivers] WiFi bootstrap attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} starting"
-        )
-        .is_err(),
-        DeferredNetSupervisorStatus::Recovery => write!(
-            line,
-            "[drivers] WiFi recovery attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} starting"
-        )
-        .is_err(),
-        DeferredNetSupervisorStatus::Backoff => write!(
-            line,
-            "[drivers] WiFi attempt {attempt}/{CYW43_BOOTSTRAP_MAX_ATTEMPTS} paused; retry in {backoff_ms} ms"
-        )
-        .is_err(),
+        DeferredNetSupervisorStatus::Begin => line
+            .push_str("[drivers] WiFi bootstrap starting (single production attempt)")
+            .is_err(),
+        DeferredNetSupervisorStatus::Recovery => line
+            .push_str("[drivers] WiFi repairing CYW43/SDIO within the active boot episode")
+            .is_err(),
         DeferredNetSupervisorStatus::Stabilizing => line
             .push_str("[drivers] WiFi transport attached; Gate 8 association security stabilizing")
             .is_err(),
         DeferredNetSupervisorStatus::Ready => line
             .push_str(crate::local_seat::CYW43_GATE8_READY_HDMI_LINE)
             .is_err(),
-        DeferredNetSupervisorStatus::Exhausted => write!(
-            line,
-            "[drivers] WiFi unavailable after {CYW43_BOOTSTRAP_MAX_ATTEMPTS} attempts; diagnostics remain active"
-        )
-        .is_err(),
+        DeferredNetSupervisorStatus::Failed => line
+            .push_str("[drivers] WiFi startup failed; diagnostics remain active")
+            .is_err(),
         DeferredNetSupervisorStatus::Permanent => line
             .push_str(
                 "[drivers] WiFi unavailable: non-retryable startup failure; diagnostics remain active",
@@ -1391,10 +1303,10 @@ where
     if recovery.push_str(recovery_line).is_err() || lines.push(recovery).is_err() {
         return false;
     }
-    // A terminal attempt publishes exactly one passive eight-line snapshot
+    // One in-episode repair publishes exactly one passive eight-line snapshot
     // immediately followed by its recovery boundary. The pair cannot restart
-    // until the complete causal batch and one following Backoff, Exhausted, or
-    // Permanent supervisor terminal slot are retained.
+    // until the complete causal batch and one following Recovery or Permanent
+    // supervisor slot are retained.
     pump.queue_cyw43_bootstrap_operator_lines_atomic(lines.as_slice(), 1)
 }
 
@@ -1557,15 +1469,15 @@ where
         announce_root_console_loop_start();
     }
     let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
-    let mut retry_schedule = DeferredNetRetrySchedule::new(crate::hal::timebase().now_ms());
+    let mut supervisor_sequence = DeferredNetSupervisorSequence::new();
     if hal_ptr == 0 {
         let mut detail = HeaplessString::<192>::new();
         let _ = detail.push_str("deferred HAL pointer missing");
         emit_deferred_net_console_failure(pump, &detail, true);
         emit_deferred_net_bootstrap_supervisor_status(
             pump,
-            retry_schedule.next_status_sequence(),
-            1,
+            supervisor_sequence.next_status_sequence(),
+            CYW43_BOOTSTRAP_ATTEMPT,
             DeferredNetSupervisorStatus::Permanent,
             0,
             crate::hal::timebase().now_ms(),
@@ -1582,8 +1494,8 @@ where
             emit_deferred_net_console_failure(pump, &detail, true);
             emit_deferred_net_bootstrap_supervisor_status(
                 pump,
-                retry_schedule.next_status_sequence(),
-                1,
+                supervisor_sequence.next_status_sequence(),
+                CYW43_BOOTSTRAP_ATTEMPT,
                 DeferredNetSupervisorStatus::Permanent,
                 0,
                 crate::hal::timebase().now_ms(),
@@ -1634,7 +1546,7 @@ where
                         serial_retry.record_ready();
                         emit_deferred_net_bootstrap_supervisor_status(
                             pump,
-                            retry_schedule.next_status_sequence(),
+                            supervisor_sequence.next_status_sequence(),
                             0,
                             DeferredNetSupervisorStatus::Preflight,
                             0,
@@ -1649,7 +1561,7 @@ where
                         if report_due && serial_retry.record_missing_proof(serial_now_ms) {
                             emit_deferred_net_bootstrap_supervisor_status(
                                 pump,
-                                retry_schedule.next_status_sequence(),
+                                supervisor_sequence.next_status_sequence(),
                                 0,
                                 DeferredNetSupervisorStatus::Preflight,
                                 SERIAL_LINKED_RUNTIME_RETRY_MS,
@@ -1701,7 +1613,7 @@ where
             }
             let stability_now_ms = crate::hal::timebase().now_ms();
             let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
-            let attempt = retry_schedule.attempt_number();
+            let attempt = CYW43_BOOTSTRAP_ATTEMPT;
             let diagnostic = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
             if !recovery_required {
                 crate::drivers::driver_task_net::record_cyw43_pre_recovery_gate8(diagnostic);
@@ -1739,7 +1651,7 @@ where
                         && crate::drivers::driver_task_net::publish_cyw43_gate8_data_consumer(
                             generation,
                         );
-                    let ready_sequence = retry_schedule.next_status_sequence();
+                    let ready_sequence = supervisor_sequence.next_status_sequence();
                     let ready_queued = consumer_published
                         && emit_deferred_net_gate8_ready_transaction(
                             pump,
@@ -1770,13 +1682,12 @@ where
                         pump.net_console_cyw43_gate10_proven_for_root(),
                     ) {
                         if gate8_lifecycle.mark_gate10_complete(diagnostic.generation) {
-                            retry_schedule.reset_attempt_budget(stability_now_ms);
                             crate::log_buffer::append_log_line(
-                                "[net-console] CYW43 recovery budget reset after same-generation nettest/TCP/cohsh proof",
+                                "[net-console] CYW43 steady-state repair episode armed after same-generation nettest/TCP/cohsh proof",
                             );
                         } else {
                             crate::log_buffer::append_log_line(
-                                "CYW43_GATE10_LIFECYCLE status=generation-mismatch action=preserve-retry-budget",
+                                "CYW43_GATE10_LIFECYCLE status=generation-mismatch action=preserve-repair-budget",
                             );
                         }
                     }
@@ -1794,7 +1705,7 @@ where
                     };
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Stabilizing,
                         0,
@@ -1844,10 +1755,17 @@ where
                     sel4::yield_now();
                     continue;
                 }
+                if !gate8_lifecycle.begin_recovery(attempt) {
+                    crate::log_buffer::append_log_line(
+                        "CYW43_GATE8_RECOVERY status=already-recorded action=preserve-active-repair",
+                    );
+                    sel4::yield_now();
+                    continue;
+                }
                 if !bootstrap.request_gate8_stabilization_recovery(blocker) {
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
                         0,
@@ -1855,51 +1773,17 @@ where
                         local_seat_enabled,
                         false,
                     );
-                    pump.quarantine_network_service_after_cyw43_exhaustion();
+                    pump.quarantine_network_service_after_cyw43_terminal_failure();
                     terminal_mode =
                         Some(DeferredNetSupervisorTerminal::PermanentAttachedRecoveryFailure);
                     attempt_active = false;
                     sel4::yield_now();
                     continue;
                 }
-                match gate8_lifecycle.consume_failure(
-                    attempt,
-                    stability_now_ms,
-                    &mut retry_schedule,
-                ) {
-                    DeferredGate8RecoveryBudget::AlreadyRecorded => {}
-                    DeferredGate8RecoveryBudget::Backoff {
-                        delay_ms,
-                        next_attempt_ms,
-                    } => {
-                        emit_deferred_net_bootstrap_supervisor_status(
-                            pump,
-                            retry_schedule.next_status_sequence(),
-                            attempt,
-                            DeferredNetSupervisorStatus::Backoff,
-                            delay_ms,
-                            next_attempt_ms,
-                            local_seat_enabled,
-                            false,
-                        );
-                        attempt_active = false;
-                    }
-                    DeferredGate8RecoveryBudget::Exhausted => {
-                        emit_deferred_net_bootstrap_supervisor_status(
-                            pump,
-                            retry_schedule.next_status_sequence(),
-                            attempt,
-                            DeferredNetSupervisorStatus::Exhausted,
-                            0,
-                            retry_schedule.next_attempt_ms,
-                            local_seat_enabled,
-                            false,
-                        );
-                        pump.quarantine_network_service_after_cyw43_exhaustion();
-                        terminal_mode = Some(DeferredNetSupervisorTerminal::RetryBudgetExhausted);
-                        attempt_active = false;
-                    }
-                }
+                // This is the sole consumed-once pair repair inside the active
+                // boot episode, not another whole bootstrap attempt. The
+                // driver-owned repair streak is deliberately not reset here.
+                attempt_active = false;
                 sel4::yield_now();
                 continue;
             }
@@ -1921,14 +1805,10 @@ where
             }
             let now_ms = crate::hal::timebase().now_ms();
             if !attempt_active {
-                if !retry_schedule.attempt_due(now_ms) {
-                    sel4::yield_now();
-                    continue;
-                }
                 emit_deferred_net_bootstrap_supervisor_status(
                     pump,
-                    retry_schedule.next_status_sequence(),
-                    retry_schedule.attempt_number(),
+                    supervisor_sequence.next_status_sequence(),
+                    CYW43_BOOTSTRAP_ATTEMPT,
                     if network_attached {
                         DeferredNetSupervisorStatus::Recovery
                     } else {
@@ -1947,7 +1827,7 @@ where
         }
 
         let now_ms = crate::hal::timebase().now_ms();
-        let attempt = retry_schedule.attempt_number();
+        let attempt = CYW43_BOOTSTRAP_ATTEMPT;
         wifi_operation_started = true;
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         let Some(turn) = with_deferred_net_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
@@ -1992,7 +1872,7 @@ where
                     emit_deferred_net_console_failure(pump, &detail, false);
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
                         0,
@@ -2001,7 +1881,7 @@ where
                         false,
                     );
                     if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
-                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        pump.quarantine_network_service_after_cyw43_terminal_failure();
                         terminal_mode = Some(mode);
                         sel4::yield_now();
                         continue;
@@ -2025,7 +1905,7 @@ where
                     }
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Stabilizing,
                         0,
@@ -2052,7 +1932,7 @@ where
                         emit_deferred_net_console_failure(pump, &detail, false);
                         emit_deferred_net_bootstrap_supervisor_status(
                             pump,
-                            retry_schedule.next_status_sequence(),
+                            supervisor_sequence.next_status_sequence(),
                             attempt,
                             DeferredNetSupervisorStatus::Permanent,
                             0,
@@ -2071,7 +1951,7 @@ where
                     emit_deferred_net_console_failure(pump, &detail, false);
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
                         0,
@@ -2084,7 +1964,7 @@ where
                 let gate8_deadline_ms = gate8_lifecycle.enter_stabilizing(attempt, now_ms);
                 emit_deferred_net_bootstrap_supervisor_status(
                     pump,
-                    retry_schedule.next_status_sequence(),
+                    supervisor_sequence.next_status_sequence(),
                     attempt,
                     DeferredNetSupervisorStatus::Stabilizing,
                     0,
@@ -2111,39 +1991,24 @@ where
                 let mut detail = HeaplessString::<192>::new();
                 let _ = write!(detail, "{err}");
                 emit_deferred_net_console_failure(pump, &detail, false);
-                if crate::net::cyw43_net_console_bootstrap_error_retryable(&err) {
-                    if let Some(delay_ms) = retry_schedule.record_transient_failure(failure_now_ms)
-                    {
-                        emit_deferred_net_bootstrap_supervisor_status(
-                            pump,
-                            retry_schedule.next_status_sequence(),
-                            attempt,
-                            DeferredNetSupervisorStatus::Backoff,
-                            delay_ms,
-                            retry_schedule.next_attempt_ms,
-                            local_seat_enabled,
-                            false,
-                        );
-                        bootstrap.reset_for_attempt(config);
-                    } else {
-                        emit_deferred_net_bootstrap_supervisor_status(
-                            pump,
-                            retry_schedule.next_status_sequence(),
-                            attempt,
-                            DeferredNetSupervisorStatus::Exhausted,
-                            0,
-                            retry_schedule.next_attempt_ms,
-                            local_seat_enabled,
-                            false,
-                        );
-                        pump.quarantine_network_service_after_cyw43_exhaustion();
-                        terminal_mode = Some(DeferredNetSupervisorTerminal::RetryBudgetExhausted);
-                    }
+                if crate::net::cyw43_net_console_bootstrap_error_is_transient(&err) {
+                    emit_deferred_net_bootstrap_supervisor_status(
+                        pump,
+                        supervisor_sequence.next_status_sequence(),
+                        attempt,
+                        DeferredNetSupervisorStatus::Failed,
+                        0,
+                        u64::MAX,
+                        local_seat_enabled,
+                        false,
+                    );
+                    pump.quarantine_network_service_after_cyw43_terminal_failure();
+                    terminal_mode = Some(DeferredNetSupervisorTerminal::BootstrapFailed);
                     attempt_active = false;
                 } else {
                     emit_deferred_net_bootstrap_supervisor_status(
                         pump,
-                        retry_schedule.next_status_sequence(),
+                        supervisor_sequence.next_status_sequence(),
                         attempt,
                         DeferredNetSupervisorStatus::Permanent,
                         0,
@@ -2152,7 +2017,7 @@ where
                         false,
                     );
                     if let Some(mode) = permanent_failure_terminal_mode(network_attached) {
-                        pump.quarantine_network_service_after_cyw43_exhaustion();
+                        pump.quarantine_network_service_after_cyw43_terminal_failure();
                         terminal_mode = Some(mode);
                     } else {
                         run_root_console_pump(pump);
@@ -2930,7 +2795,7 @@ mod tests {
             let attempt = if status == super::DeferredNetSupervisorStatus::Preflight {
                 0
             } else {
-                super::CYW43_BOOTSTRAP_MAX_ATTEMPTS
+                super::CYW43_BOOTSTRAP_ATTEMPT
             };
             let line = super::format_deferred_net_bootstrap_supervisor_status(
                 u64::MAX,
@@ -3027,45 +2892,38 @@ mod tests {
                 super::DeferredNetSupervisorStatus::Begin,
                 0,
                 true,
-                "[drivers] WiFi bootstrap attempt 1/5 starting",
+                "[drivers] WiFi bootstrap starting (single production attempt)",
             ),
             (
-                2,
+                1,
                 super::DeferredNetSupervisorStatus::Recovery,
                 0,
                 true,
-                "[drivers] WiFi recovery attempt 2/5 starting",
+                "[drivers] WiFi repairing CYW43/SDIO within the active boot episode",
             ),
             (
-                3,
-                super::DeferredNetSupervisorStatus::Backoff,
-                u64::MAX,
-                true,
-                "[drivers] WiFi attempt 3/5 paused; retry in 18446744073709551615 ms",
-            ),
-            (
-                4,
+                1,
                 super::DeferredNetSupervisorStatus::Stabilizing,
                 0,
                 true,
                 "[drivers] WiFi transport attached; Gate 8 association security stabilizing",
             ),
             (
-                4,
+                1,
                 super::DeferredNetSupervisorStatus::Ready,
                 0,
                 true,
                 "[drivers] WiFi Gate 8 stable; DHCP and TCP continuing",
             ),
             (
-                5,
-                super::DeferredNetSupervisorStatus::Exhausted,
+                1,
+                super::DeferredNetSupervisorStatus::Failed,
                 0,
                 true,
-                "[drivers] WiFi unavailable after 5 attempts; diagnostics remain active",
+                "[drivers] WiFi startup failed; diagnostics remain active",
             ),
             (
-                5,
+                1,
                 super::DeferredNetSupervisorStatus::Permanent,
                 0,
                 true,
@@ -3084,10 +2942,10 @@ mod tests {
         }
         assert!(!super::DeferredNetSupervisorStatus::Preflight.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Begin.releases_hdmi_console_ready());
-        assert!(!super::DeferredNetSupervisorStatus::Backoff.releases_hdmi_console_ready());
+        assert!(!super::DeferredNetSupervisorStatus::Recovery.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Stabilizing.releases_hdmi_console_ready());
         assert!(!super::DeferredNetSupervisorStatus::Ready.releases_hdmi_console_ready());
-        assert!(super::DeferredNetSupervisorStatus::Exhausted.releases_hdmi_console_ready());
+        assert!(super::DeferredNetSupervisorStatus::Failed.releases_hdmi_console_ready());
         assert!(super::DeferredNetSupervisorStatus::Permanent.releases_hdmi_console_ready());
     }
 
@@ -3097,51 +2955,31 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn cyw43_bootstrap_supervisor_stops_after_five_attempts() {
-        let mut supervisor = super::DeferredNetRetrySchedule::new(100);
-        assert!(supervisor.attempt_due(100));
-        assert_eq!(supervisor.attempt_number(), 1);
-        assert!(!supervisor.exhausted());
+    fn cyw43_bootstrap_supervisor_has_one_attempt_and_no_backoff_state() {
+        let mut sequence = super::DeferredNetSupervisorSequence::new();
+        assert_eq!(sequence.next_status_sequence(), 1);
+        assert_eq!(sequence.next_status_sequence(), 2);
 
-        let expected = [1_000, 2_000, 4_000, 8_000];
-        let mut now_ms = 100;
-        for (index, expected_delay) in expected.into_iter().enumerate() {
-            let delay = supervisor.record_transient_failure(now_ms);
-            assert_eq!(delay, Some(expected_delay));
-            assert!(!supervisor.attempt_due(supervisor.next_attempt_ms.saturating_sub(1)));
-            assert!(supervisor.attempt_due(supervisor.next_attempt_ms));
-            assert_eq!(supervisor.attempt_number(), index as u32 + 2);
-            assert!(!supervisor.exhausted());
-            now_ms = supervisor.next_attempt_ms;
-        }
-
-        assert_eq!(supervisor.attempt_number(), 5);
-        assert_eq!(supervisor.record_transient_failure(now_ms), None);
-        assert!(supervisor.exhausted());
-        assert_eq!(supervisor.next_attempt_ms, u64::MAX);
-        assert!(!supervisor.attempt_due(u64::MAX));
-        assert_eq!(supervisor.record_transient_failure(u64::MAX), None);
-        assert_eq!(supervisor.attempt_number(), 5);
-    }
-
-    #[cfg(all(
-        feature = "serial-console",
-        feature = "kernel",
-        feature = "net-console"
-    ))]
-    #[test]
-    fn successful_cyw43_episode_resets_the_next_recovery_budget() {
-        let mut supervisor = super::DeferredNetRetrySchedule::new(100);
-        assert_eq!(supervisor.record_transient_failure(100), Some(1_000));
-        assert_eq!(supervisor.record_transient_failure(1_100), Some(2_000));
-        assert_eq!(supervisor.attempt_number(), 3);
-
-        supervisor.reset_attempt_budget(3_100);
-
-        assert_eq!(supervisor.attempt_number(), 1);
-        assert!(supervisor.attempt_due(3_100));
-        assert!(!supervisor.exhausted());
-        assert_eq!(supervisor.record_transient_failure(3_100), Some(1_000));
+        assert!(super::format_deferred_net_bootstrap_supervisor_status(
+            1,
+            super::CYW43_BOOTSTRAP_ATTEMPT,
+            super::DeferredNetSupervisorStatus::Failed,
+            0,
+            u64::MAX,
+            true,
+            true,
+        )
+        .is_some());
+        assert!(super::format_deferred_net_bootstrap_supervisor_status(
+            2,
+            2,
+            super::DeferredNetSupervisorStatus::Begin,
+            0,
+            0,
+            true,
+            true,
+        )
+        .is_none());
     }
 
     #[cfg(all(
@@ -3184,7 +3022,7 @@ mod tests {
         feature = "net-console"
     ))]
     #[test]
-    fn gate8_failure_consumes_one_outer_attempt_and_cannot_double_count() {
+    fn gate8_failure_opens_one_in_attempt_repair_without_renewing_deadline() {
         let failed = gate8_lifecycle_snapshot(
             4,
             9,
@@ -3192,7 +3030,6 @@ mod tests {
             "association-terminal-failure",
         );
         let mut lifecycle = super::DeferredGate8Lifecycle::new();
-        let mut retry_schedule = super::DeferredNetRetrySchedule::new(100);
 
         assert_eq!(
             lifecycle.observe(1, 100, false, failed),
@@ -3201,62 +3038,16 @@ mod tests {
                 blocker: "association-terminal-failure",
             },
         );
+        assert!(lifecycle.begin_recovery(1));
+        assert!(!lifecycle.begin_recovery(1));
         assert_eq!(
-            lifecycle.consume_failure(1, 100, &mut retry_schedule),
-            super::DeferredGate8RecoveryBudget::Backoff {
-                delay_ms: 1_000,
-                next_attempt_ms: 1_100,
-            },
-        );
-        assert_eq!(retry_schedule.attempt_number(), 2);
-        assert_eq!(
-            lifecycle.consume_failure(1, 101, &mut retry_schedule),
-            super::DeferredGate8RecoveryBudget::AlreadyRecorded,
-        );
-        assert_eq!(retry_schedule.attempt_number(), 2);
-        assert_eq!(
-            lifecycle.observe(2, 1_100, false, failed),
+            lifecycle.observe(1, 1_100, false, failed),
             super::DeferredGate8Observation::Pending,
-            "the recovering state cannot consume another attempt before the sole supervisor completes",
+            "the recovering state cannot open another repair before the retained supervisor completes",
         );
 
-        assert_eq!(lifecycle.enter_stabilizing(2, 1_100), 91_100);
-        assert_eq!(lifecycle.deadline_ms(), Some(91_100));
-    }
-
-    #[cfg(all(
-        feature = "serial-console",
-        feature = "kernel",
-        feature = "net-console"
-    ))]
-    #[test]
-    fn gate8_failures_exhaust_exactly_five_outer_attempts() {
-        let mut lifecycle = super::DeferredGate8Lifecycle::new();
-        let mut retry_schedule = super::DeferredNetRetrySchedule::new(0);
-        let mut now_ms = 0;
-
-        for attempt in 1..=super::CYW43_BOOTSTRAP_MAX_ATTEMPTS {
-            lifecycle.enter_stabilizing(attempt, now_ms);
-            let budget = lifecycle.consume_failure(attempt, now_ms, &mut retry_schedule);
-            if attempt < super::CYW43_BOOTSTRAP_MAX_ATTEMPTS {
-                let super::DeferredGate8RecoveryBudget::Backoff {
-                    next_attempt_ms, ..
-                } = budget
-                else {
-                    panic!("attempt {attempt} must schedule one bounded recovery");
-                };
-                now_ms = next_attempt_ms;
-            } else {
-                assert_eq!(budget, super::DeferredGate8RecoveryBudget::Exhausted);
-            }
-        }
-
-        assert!(retry_schedule.exhausted());
-        assert_eq!(retry_schedule.attempt_number(), 5);
-        assert_eq!(
-            lifecycle.consume_failure(5, now_ms, &mut retry_schedule),
-            super::DeferredGate8RecoveryBudget::AlreadyRecorded,
-        );
+        assert_eq!(lifecycle.enter_stabilizing(1, 1_100), 90_100);
+        assert_eq!(lifecycle.deadline_ms(), Some(90_100));
     }
 
     #[cfg(all(
@@ -3374,10 +3165,10 @@ mod tests {
             "none",
         );
         let mut lifecycle = super::DeferredGate8Lifecycle::new();
-        assert_eq!(lifecycle.enter_stabilizing(3, 500), 90_500);
+        assert_eq!(lifecycle.enter_stabilizing(1, 500), 90_500);
 
         assert_eq!(
-            lifecycle.observe(3, 90_500, false, stable),
+            lifecycle.observe(1, 90_500, false, stable),
             super::DeferredGate8Observation::Deadline {
                 generation: 12,
                 deadline_ms: 90_500,
