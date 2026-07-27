@@ -1846,13 +1846,31 @@ generation and XID.
   cursor, so NIC work, response flushing, and command dispatch never share one
   outer turn. GENET and idle CYW43 service retain the ordinary phase rotation.
   When the selected CYW43 path has an authenticated TCP session, a pending
-  response flush, or non-empty runtime/root RX telemetry, `Network` may retain
-  the next outer turn up to four consecutive turns. Every retained turn still
-  admits at most one CYW43 operation; the fourth turn must release the burst to
-  the physical-console phase rotation. `LocalSeat` performs one retained USB
+  response flush, non-empty runtime/root RX telemetry, a current valid pending
+  or masked SDIO DPC event, or an exact retained NetData/TX/fairness
+  continuation, `Network` may retain the next outer turn up to four consecutive
+  turns. Raw DPC and retained owner work receive this weighting before TCP
+  authentication so connection establishment cannot wait for an unrelated
+  serial/USB/display rotation after every child continuation. The predicate is
+  passive and rejects stale-epoch, poisoned, overrun, acknowledgement-failed,
+  or inconsistent DPC state. Every retained turn still admits at most one
+  CYW43 operation; the fourth turn must release the burst to the
+  physical-console phase rotation. `LocalSeat` performs one retained USB
   keyboard turn, and `Display` performs at most one retained HDMI attach or
   frame turn. Every phase returns to the outer loop before its successor; a
   missing local seat returns from the bounded CYW43 burst to `Serial`.
+
+  The TCP console keeps exactly one parser, authentication server, and attached
+  session authority. Once that active socket enters the single
+  `Draining`/`Closing` lane, one standby smoltcp acceptor may listen on the same
+  port and buffer at most one unauthenticated peer. It cannot parse,
+  authenticate, dispatch, or become active until the old socket is terminal
+  and all old session, peer, inbound, and outbound authority is cleared.
+  Promotion is bounded by the combined 20-second virtual-counter drain/close
+  deadline; early FIN/RST and non-promotable standby states are aborted and
+  recycled. Network-generation and stack resets abort both sockets. This
+  generic handoff is shared by CYW43 and GENET and does not introduce a second
+  console or boot path.
 
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing

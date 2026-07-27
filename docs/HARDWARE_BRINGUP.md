@@ -1583,12 +1583,27 @@ buffered for the next `Dispatch` turn; receiving a command and dispatching it
 therefore never share an outer turn. For wired GENET, the one `Network` service
 may instead be the next retained post-command TCP flush described above;
 dispatch itself performs none. GENET and idle CYW43 service follow the ordinary
-rotation. A data-ready CYW43 connection never uses the GENET cursor and may
-retain `Network` for at most four consecutive outer turns while authenticated
-TCP, response-flush, or runtime/root RX backlog remains. Every such turn still
-admits at most one CYW43 operation, and turn four must return to the bounded
-physical-console rotation. `LocalSeat` performs one retained USB keyboard turn,
-and `Display` performs at most one retained HDMI attach or pending-frame turn.
+rotation. The selected, in-progress CYW43 path never uses the GENET cursor and
+may retain `Network` for at most four consecutive outer turns while
+authenticated TCP, response-flush, runtime/root RX backlog, a current valid
+pending or masked SDIO DPC event, or an exact retained
+NetData/TX/fairness continuation remains. Raw DPC and retained owner work are
+eligible before authentication. The passive snapshot changes scheduling weight
+only, never issues or completes child work, and rejects stale-epoch, poisoned,
+overrun, acknowledgement-failed, or inconsistent DPC state. Every such turn
+still admits at most one CYW43 operation, and turn four must return to the
+bounded physical-console rotation. `LocalSeat` performs one retained USB
+keyboard turn, and `Display` performs at most one retained HDMI attach or
+pending-frame turn.
+
+The TCP console retains one parser/authentication/session authority. After its
+active socket enters the sole `Draining`/`Closing` lane, one standby smoltcp
+acceptor may buffer one unauthenticated peer but performs no console parsing or
+authentication. Promotion requires the old socket to be terminal and all old
+session, client, peer, inbound, and outbound state to be clear. The combined
+drain/close virtual-counter deadline is 20 seconds; early FIN/RST or another
+non-promotable standby state is aborted and recycled. A network-generation or
+stack reset aborts the pair. CYW43 and GENET use this same bounded handoff.
 
 If a TX command already owns the shared ring slot, RX remains unallocated and
 cannot install a competing ticket or fingerprint. CYW43 likewise retains a

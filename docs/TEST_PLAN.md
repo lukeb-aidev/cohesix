@@ -1232,16 +1232,36 @@ connection. Each later
 normally or sixteen while the display reports backlog pressure. A second
 buffered command stays behind the first cursor, and a changed or absent active
 connection rejects stale cursor work. A data-ready CYW43 connection must not
-create the GENET cursor. When authenticated TCP, a response flush, or
-runtime/root RX backlog is live, CYW43 may retain at most four successive
-`Network` outer turns; every turn must still admit no more than one CYW43
-operation, and the fourth must release to the physical-console rotation. Tests
-must prove idle CYW43 and GENET do not enter this burst, and that reboot,
-quarantine, or a pending physical-console response cancels it. CYW43 device
+create the GENET cursor. When an authenticated TCP session, a response flush,
+runtime/root RX backlog, a current valid pending or masked SDIO DPC event, or
+an exact retained CYW43 NetData/TX/fairness continuation is live, CYW43 may
+retain at most four successive `Network` outer turns. This bounded service is
+available before TCP authentication so raw DPC and retained owner work cannot
+be starved while establishing a connection. Every turn must still admit no
+more than one CYW43 physical operation, and the fourth must release to the
+physical-console rotation. Tests must prove idle, stale-epoch, poisoned,
+overrun, acknowledgement-failed, and inconsistent CYW43 DPC work plus GENET do
+not enter this burst, and that reboot, quarantine, or a pending
+physical-console response cancels it. CYW43 device
 tests must also prove that a retained TX or unproved credit window withholds
 smoltcp's paired RX/TX token, preserves the copied RX frame, advances only the
 sole retained owner, and produces zero fabricated TX drops before the frame is
 later delivered.
+
+The console socket pack must cover the maximum enabled profile: active and
+standby console acceptors, DHCP, two UDP self-test sockets, two TCP self-test
+sockets, and the optional outbound probe. All application close origins enter
+one `Draining`/`Closing` state machine. A standby acceptor may be armed only
+after that transition, may retain at most one unauthenticated peer for the
+20-second virtual-counter handoff deadline, and must never run the console
+parser or authentication server concurrently with the active socket. Tests
+must cover clean quit, peer EOF, authentication failure/timeout, receive error,
+inactivity timeout, early standby FIN/RST recycling, promotion only after the
+old socket and session authority are clear, and pair abort on
+network-generation or stack reset. Fresh Pi proof must include immediate
+sequential `.coh` connections plus a probe-then-authenticated connection on
+both selected WiFi and GENET; a delayed successful reconnect does not satisfy
+this gate.
 `LocalSeat` may perform one retained USB keyboard turn, and `Display` may
 perform at most one retained HDMI attach or pending-frame turn. Every retained
 phase must return before its successor.

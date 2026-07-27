@@ -3096,6 +3096,9 @@ where
                 || self.pending_net_flush.active()
                 || counters.wifi_rx_runtime_queue_count != 0
                 || counters.wifi_rx_pending_queue_count != 0
+                || crate::drivers::driver_task_net::cyw43_steady_network_work_pending(
+                    net.driver_task_contract(),
+                )
         })
     }
 
@@ -29936,6 +29939,74 @@ mod tests {
                 "the bounded burst must return ownership to physical operator service"
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+        }
+
+        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS as usize);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_pending_dpc_receives_four_bounded_network_turns_before_auth() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let dpc_generation =
+            crate::generated::driver_runtime_image_policy().bus_links[0].link_epoch;
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
+                generation: dpc_generation,
+                captures: 12,
+                published: 12,
+                consumed: 11,
+                sample_consumer: 11,
+                rearms: 11,
+                overruns: 0,
+                epoch_errors: 0,
+                sequence_errors: 0,
+                ack_failures: 0,
+                ring_poisoned: false,
+                client_sample_stale: false,
+                poisoned: false,
+                masked: true,
+            },
+        ));
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            for _ in 1..LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS {
+                pump.poll();
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Network,
+                    "one current DPC event must retain the bounded pre-auth Network burst"
+                );
+            }
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "DPC urgency must still return ownership after the fourth turn"
+            );
         }
 
         assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS as usize);

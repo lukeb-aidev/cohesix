@@ -90,7 +90,9 @@ const TCP_SERVICE_BYTES_PER_TURN: u32 =
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
-const SOCKET_CAPACITY: usize = 6;
+// Full networking can concurrently own two console acceptors, DHCP, UDP
+// beacon/echo, inbound/outbound smoke sockets, and the outbound probe.
+const SOCKET_CAPACITY: usize = 8;
 const FLUSH_BLOCKED_HEARTBEAT_MS: u64 = 2_000;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
@@ -120,6 +122,8 @@ const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
 const DISCONNECT_DRAIN_DEADLINE_MS: u64 = 10_000;
 const DISCONNECT_CLOSE_DEADLINE_MS: u64 = 10_000;
+const CONSOLE_HANDOFF_PENDING_DEADLINE_MS: u64 =
+    DISCONNECT_DRAIN_DEADLINE_MS + DISCONNECT_CLOSE_DEADLINE_MS;
 const BOOTINFO_NET_LOGGER_PREFIX_BUDGET: usize = 48;
 const BOOTINFO_NET_LOGGER_FRAME_LIMIT: usize = 192;
 #[cfg(feature = "net-outbound-probe")]
@@ -242,6 +246,71 @@ const fn console_disconnect_application_queues_drained(
         && !server_outbound_pending
         && !coalescer_output_pending
         && inbound_queued == 0
+}
+
+fn begin_console_disconnect(
+    phase: &mut ConsoleDisconnectPhase,
+    phase_started_ms: &mut Option<u64>,
+    active_reason: &mut NetConsoleDisconnectReason,
+    entered_this_turn: &mut bool,
+    reason: NetConsoleDisconnectReason,
+) -> bool {
+    if !matches!(*phase, ConsoleDisconnectPhase::Idle) {
+        return false;
+    }
+    *phase = ConsoleDisconnectPhase::Draining;
+    *phase_started_ms = None;
+    *active_reason = reason;
+    *entered_this_turn = true;
+    true
+}
+
+const fn console_standby_should_arm(phase: ConsoleDisconnectPhase) -> bool {
+    !matches!(phase, ConsoleDisconnectPhase::Idle)
+}
+
+const fn console_standby_pending_state(state: TcpState) -> bool {
+    matches!(state, TcpState::SynReceived | TcpState::Established)
+}
+
+const fn console_standby_promotable_state(state: TcpState) -> bool {
+    matches!(
+        state,
+        TcpState::Listen | TcpState::SynReceived | TcpState::Established
+    )
+}
+
+const fn console_active_terminal_state(state: TcpState) -> bool {
+    matches!(state, TcpState::Closed | TcpState::TimeWait)
+}
+
+const fn console_standby_pending_expired(pending_since_ms: Option<u64>, now_ms: u64) -> bool {
+    match pending_since_ms {
+        Some(started_ms) => {
+            now_ms.saturating_sub(started_ms) >= CONSOLE_HANDOFF_PENDING_DEADLINE_MS
+        }
+        None => false,
+    }
+}
+
+const fn console_handoff_authority_cleared(
+    phase: ConsoleDisconnectPhase,
+    session_active: bool,
+    active_client_present: bool,
+    authenticated: bool,
+    auth_state: AuthState,
+    peer_present: bool,
+    inbound_queued: u32,
+    coalescer_pending: bool,
+) -> bool {
+    matches!(phase, ConsoleDisconnectPhase::Idle)
+        && !session_active
+        && !active_client_present
+        && !authenticated
+        && matches!(auth_state, AuthState::Start)
+        && !peer_present
+        && inbound_queued == 0
+        && !coalescer_pending
 }
 
 const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
@@ -689,6 +758,8 @@ pub enum NetStackError<DE> {
     SocketStoragePoisoned,
     TcpRxStorageInUse,
     TcpTxStorageInUse,
+    TcpStandbyRxStorageInUse,
+    TcpStandbyTxStorageInUse,
     TcpSmokeRxStorageInUse,
     TcpSmokeTxStorageInUse,
     UdpBeaconStorageInUse,
@@ -712,6 +783,8 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::SocketStoragePoisoned => f.write_str("socket storage poisoned"),
             Self::TcpRxStorageInUse => f.write_str("TCP RX storage already in use"),
             Self::TcpTxStorageInUse => f.write_str("TCP TX storage already in use"),
+            Self::TcpStandbyRxStorageInUse => f.write_str("TCP standby RX storage already in use"),
+            Self::TcpStandbyTxStorageInUse => f.write_str("TCP standby TX storage already in use"),
             Self::TcpSmokeRxStorageInUse => f.write_str("TCP smoke test RX storage already in use"),
             Self::TcpSmokeTxStorageInUse => f.write_str("TCP smoke test TX storage already in use"),
             Self::UdpBeaconStorageInUse => f.write_str("UDP beacon storage already in use"),
@@ -1043,6 +1116,44 @@ fn reserve_tcp_tx_storage<DE>(
     )
 }
 
+fn reserve_tcp_standby_rx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_STANDBY_RX_STORAGE_IN_USE,
+            owner: &TCP_STANDBY_RX_STORAGE_OWNER,
+            tag_id: &TCP_STANDBY_RX_STORAGE_TAG_ID,
+            tag_label: &TCP_STANDBY_RX_STORAGE_TAG_LABEL,
+            label: "tcp-standby-rx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpStandbyRxStorageInUse,
+        None,
+    )
+}
+
+fn reserve_tcp_standby_tx_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &TCP_STANDBY_TX_STORAGE_IN_USE,
+            owner: &TCP_STANDBY_TX_STORAGE_OWNER,
+            tag_id: &TCP_STANDBY_TX_STORAGE_TAG_ID,
+            tag_label: &TCP_STANDBY_TX_STORAGE_TAG_LABEL,
+            label: "tcp-standby-tx",
+        },
+        owner_id,
+        tag,
+        NetStackError::TcpStandbyTxStorageInUse,
+        None,
+    )
+}
+
 fn reserve_tcp_smoke_rx_storage<DE>(
     owner_id: u64,
     tag: StorageTag,
@@ -1220,6 +1331,8 @@ struct StorageReservation {
     socket: StorageLease,
     tcp_rx: StorageLease,
     tcp_tx: StorageLease,
+    tcp_standby_rx: StorageLease,
+    tcp_standby_tx: StorageLease,
     dhcp: Option<StorageLease>,
     tcp_smoke_rx: Option<StorageLease>,
     tcp_smoke_tx: Option<StorageLease>,
@@ -1244,6 +1357,8 @@ impl StorageReservation {
         let socket = reserve_socket_storage(owner.owner_id(), reservation_tag)?;
         let tcp_rx = reserve_tcp_rx_storage(owner.owner_id(), reservation_tag)?;
         let tcp_tx = reserve_tcp_tx_storage(owner.owner_id(), reservation_tag)?;
+        let tcp_standby_rx = reserve_tcp_standby_rx_storage(owner.owner_id(), reservation_tag)?;
+        let tcp_standby_tx = reserve_tcp_standby_tx_storage(owner.owner_id(), reservation_tag)?;
         let dhcp = if dhcp_enabled {
             Some(reserve_dhcp_storage(owner.owner_id(), reservation_tag)?)
         } else {
@@ -1303,6 +1418,8 @@ impl StorageReservation {
             socket,
             tcp_rx,
             tcp_tx,
+            tcp_standby_rx,
+            tcp_standby_tx,
             dhcp,
             tcp_smoke_rx,
             tcp_smoke_tx,
@@ -1409,6 +1526,16 @@ static TCP_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 static TCP_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
 static TCP_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static mut TCP_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
+static TCP_STANDBY_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_STANDBY_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_STANDBY_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_STANDBY_RX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
+static mut TCP_STANDBY_RX_STORAGE: [u8; TCP_RX_BUFFER] = [0u8; TCP_RX_BUFFER];
+static TCP_STANDBY_TX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static TCP_STANDBY_TX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static TCP_STANDBY_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static TCP_STANDBY_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
+static mut TCP_STANDBY_TX_STORAGE: [u8; TCP_TX_BUFFER] = [0u8; TCP_TX_BUFFER];
 static TCP_SMOKE_RX_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static TCP_SMOKE_RX_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 static TCP_SMOKE_RX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
@@ -1480,6 +1607,16 @@ static mut UDP_ECHO_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_C
 static mut DHCP_RX_STORAGE: [u8; DHCP_PAYLOAD_CAPACITY] = [0u8; DHCP_PAYLOAD_CAPACITY];
 static mut DHCP_TX_STORAGE: [u8; DHCP_PAYLOAD_CAPACITY] = [0u8; DHCP_PAYLOAD_CAPACITY];
 
+fn new_console_tcp_socket(
+    rx_storage: &'static mut [u8],
+    tx_storage: &'static mut [u8],
+) -> TcpSocket<'static> {
+    TcpSocket::new(
+        TcpSocketBuffer::new(rx_storage),
+        TcpSocketBuffer::new(tx_storage),
+    )
+}
+
 /// Shared monotonic clock for the interface.
 #[derive(Debug, Default)]
 pub struct NetworkClock;
@@ -1514,6 +1651,9 @@ pub struct NetStack<D: NetDevice> {
     _reservation: StorageReservation,
     init_attempt: NetInitAttempt,
     tcp_handle: SocketHandle,
+    tcp_standby_handle: SocketHandle,
+    standby_listener_armed: bool,
+    standby_pending_since_ms: Option<u64>,
     server: TcpConsoleServer,
     outbound: OutboundCoalescer,
     telemetry: NetTelemetry,
@@ -2112,6 +2252,22 @@ fn log_storage_addresses_once(marker: &'static str) {
             TCP_TX_BUFFER,
         ),
         StorageAddressSnapshot::new(
+            "tcp-standby-rx",
+            &TCP_STANDBY_RX_STORAGE_IN_USE,
+            &TCP_STANDBY_RX_STORAGE_OWNER,
+            &TCP_STANDBY_RX_STORAGE_TAG_ID,
+            core::ptr::addr_of!(TCP_STANDBY_RX_STORAGE).cast::<u8>(),
+            TCP_RX_BUFFER,
+        ),
+        StorageAddressSnapshot::new(
+            "tcp-standby-tx",
+            &TCP_STANDBY_TX_STORAGE_IN_USE,
+            &TCP_STANDBY_TX_STORAGE_OWNER,
+            &TCP_STANDBY_TX_STORAGE_TAG_ID,
+            core::ptr::addr_of!(TCP_STANDBY_TX_STORAGE).cast::<u8>(),
+            TCP_TX_BUFFER,
+        ),
+        StorageAddressSnapshot::new(
             "tcp-smoke-rx",
             &TCP_SMOKE_RX_STORAGE_IN_USE,
             &TCP_SMOKE_RX_STORAGE_OWNER,
@@ -2669,6 +2825,12 @@ where
         }
         NetStackError::TcpRxStorageInUse => NetConsoleError::Init(NetStackError::TcpRxStorageInUse),
         NetStackError::TcpTxStorageInUse => NetConsoleError::Init(NetStackError::TcpTxStorageInUse),
+        NetStackError::TcpStandbyRxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpStandbyRxStorageInUse)
+        }
+        NetStackError::TcpStandbyTxStorageInUse => {
+            NetConsoleError::Init(NetStackError::TcpStandbyTxStorageInUse)
+        }
         NetStackError::TcpSmokeRxStorageInUse => {
             NetConsoleError::Init(NetStackError::TcpSmokeRxStorageInUse)
         }
@@ -2731,20 +2893,22 @@ impl<D: NetDevice> NetStack<D> {
         console_listener_defer_reason_for(self.mode, self.ip, self.device.bringup_status_label())
     }
 
-    fn rebuild_console_socket(
+    fn rebuild_console_sockets(
         &mut self,
         now_ms: u64,
-        rx_capacity: usize,
-        tx_capacity: usize,
-        rx_queue: usize,
-        tx_queue: usize,
+        active: (usize, usize, usize, usize),
+        standby: (usize, usize, usize, usize),
     ) -> bool {
         error!(
-            "[net-console] console socket buffer corruption detected (rx_capacity={}, tx_capacity={}, rx_queue={}, tx_queue={}); rebuilding socket",
-            rx_capacity,
-            tx_capacity,
-            rx_queue,
-            tx_queue
+            "[net-console] console socket buffer corruption detected active(rx_capacity={}, tx_capacity={}, rx_queue={}, tx_queue={}) standby(rx_capacity={}, tx_capacity={}, rx_queue={}, tx_queue={}); rebuilding both sockets",
+            active.0,
+            active.1,
+            active.2,
+            active.3,
+            standby.0,
+            standby.1,
+            standby.2,
+            standby.3,
         );
         self.outbound.reset();
         self.server.end_session();
@@ -2752,12 +2916,24 @@ impl<D: NetDevice> NetStack<D> {
         self.active_client_id = None;
         self.peer_endpoint = None;
         self.listener_announced = false;
+        self.standby_listener_armed = false;
+        self.standby_pending_since_ms = None;
         self.reset_session_state_with(None);
         let defer_reason = self.console_listener_defer_reason();
         let _ = self.sockets.remove(self.tcp_handle);
-        let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
-        let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
-        let mut tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+        let _ = self.sockets.remove(self.tcp_standby_handle);
+        // SAFETY: This NetStack holds every console storage lease and both old
+        // sockets were removed above, so neither static buffer pair has a live
+        // TcpSocket alias while the replacement pair is constructed.
+        let (mut tcp_socket, standby_socket) = unsafe {
+            (
+                new_console_tcp_socket(&mut TCP_RX_STORAGE[..], &mut TCP_TX_STORAGE[..]),
+                new_console_tcp_socket(
+                    &mut TCP_STANDBY_RX_STORAGE[..],
+                    &mut TCP_STANDBY_TX_STORAGE[..],
+                ),
+            )
+        };
         match defer_reason {
             Some(reason) => {
                 info!(
@@ -2783,11 +2959,12 @@ impl<D: NetDevice> NetStack<D> {
             }
         }
         self.tcp_handle = self.sockets.add(tcp_socket);
+        self.tcp_standby_handle = self.sockets.add(standby_socket);
         true
     }
 
     fn validate_console_socket(&mut self, now_ms: u64) -> bool {
-        let (rx_capacity, tx_capacity, rx_queue, tx_queue) = {
+        let active = {
             let socket = self.sockets.get::<TcpSocket>(self.tcp_handle);
             (
                 socket.recv_capacity(),
@@ -2796,13 +2973,219 @@ impl<D: NetDevice> NetStack<D> {
                 socket.send_queue(),
             )
         };
-        let capacity_ok = Self::console_socket_capacity_ok(rx_capacity, tx_capacity);
-        let queue_ok = rx_queue <= rx_capacity && tx_queue <= tx_capacity;
-        if capacity_ok && queue_ok {
+        let standby = {
+            let socket = self.sockets.get::<TcpSocket>(self.tcp_standby_handle);
+            (
+                socket.recv_capacity(),
+                socket.send_capacity(),
+                socket.recv_queue(),
+                socket.send_queue(),
+            )
+        };
+        let active_ok = Self::console_socket_capacity_ok(active.0, active.1)
+            && active.2 <= active.0
+            && active.3 <= active.1;
+        let standby_ok = Self::console_socket_capacity_ok(standby.0, standby.1)
+            && standby.2 <= standby.0
+            && standby.3 <= standby.1;
+        if active_ok && standby_ok {
             return true;
         }
-        self.rebuild_console_socket(now_ms, rx_capacity, tx_capacity, rx_queue, tx_queue);
+        self.rebuild_console_sockets(now_ms, active, standby);
         false
+    }
+
+    fn abort_console_standby(&mut self, reason: &'static str) -> bool {
+        let (state, pending_bytes) = {
+            let socket = self.sockets.get::<TcpSocket>(self.tcp_standby_handle);
+            (socket.state(), socket.recv_queue())
+        };
+        let was_active = self.standby_listener_armed
+            || self.standby_pending_since_ms.is_some()
+            || state != TcpState::Closed;
+        if state != TcpState::Closed {
+            self.sockets
+                .get_mut::<TcpSocket>(self.tcp_standby_handle)
+                .abort();
+        }
+        self.standby_listener_armed = false;
+        self.standby_pending_since_ms = None;
+        if was_active {
+            debug!(
+                "[net-console] standby handoff cleared reason={} state={:?} pending_bytes={}",
+                reason, state, pending_bytes
+            );
+        }
+        was_active
+    }
+
+    fn abort_console_socket_pair(&mut self, reason: &'static str) {
+        let active_state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
+        if active_state != TcpState::Closed {
+            self.sockets.get_mut::<TcpSocket>(self.tcp_handle).abort();
+        }
+        let _ = self.abort_console_standby(reason);
+    }
+
+    fn arm_console_standby_listener(&mut self, now_ms: u64) -> bool {
+        let state = self
+            .sockets
+            .get::<TcpSocket>(self.tcp_standby_handle)
+            .state();
+        if state != TcpState::Closed && state != TcpState::TimeWait {
+            self.sockets
+                .get_mut::<TcpSocket>(self.tcp_standby_handle)
+                .abort();
+        }
+        let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_standby_handle);
+        if let Err(err) = socket.listen(IpListenEndpoint::from(self.listen_port)) {
+            self.standby_listener_armed = false;
+            self.standby_pending_since_ms = None;
+            warn!(
+                "[net-console] standby handoff listen failed port={} state={:?} err={err:?}",
+                self.listen_port,
+                socket.state()
+            );
+            return false;
+        }
+        self.standby_listener_armed = true;
+        self.standby_pending_since_ms = None;
+        self.listener_announced = true;
+        NET_DIAG.record_listener_bound();
+        debug!(
+            "[net-console] standby handoff armed port={} active_conn={} phase={:?} now_ms={}",
+            self.listen_port,
+            self.active_client_id.unwrap_or(0),
+            self.disconnect_phase,
+            now_ms
+        );
+        true
+    }
+
+    fn service_console_standby(&mut self, now_ms: u64) -> bool {
+        if !console_standby_should_arm(self.disconnect_phase) {
+            return false;
+        }
+
+        if !self.standby_listener_armed
+            || !self
+                .sockets
+                .get::<TcpSocket>(self.tcp_standby_handle)
+                .is_open()
+        {
+            return self.arm_console_standby_listener(now_ms);
+        }
+
+        let state = self
+            .sockets
+            .get::<TcpSocket>(self.tcp_standby_handle)
+            .state();
+        if console_standby_pending_state(state) {
+            if self.standby_pending_since_ms.is_none() {
+                self.standby_pending_since_ms = Some(now_ms);
+                let pending_bytes = self
+                    .sockets
+                    .get::<TcpSocket>(self.tcp_standby_handle)
+                    .recv_queue();
+                debug!(
+                    "[net-console] standby handoff pending state={:?} pending_bytes={} deadline_ms={} now_ms={}",
+                    state,
+                    pending_bytes,
+                    now_ms.saturating_add(CONSOLE_HANDOFF_PENDING_DEADLINE_MS),
+                    now_ms
+                );
+                return true;
+            }
+            if console_standby_pending_expired(self.standby_pending_since_ms, now_ms) {
+                warn!(
+                    "[net-console] standby handoff expired state={:?} pending_bytes={} now_ms={}",
+                    state,
+                    self.sockets
+                        .get::<TcpSocket>(self.tcp_standby_handle)
+                        .recv_queue(),
+                    now_ms
+                );
+                let cleared = self.abort_console_standby("pending-deadline");
+                return self.arm_console_standby_listener(now_ms) || cleared;
+            }
+            return false;
+        }
+
+        if state == TcpState::Listen {
+            self.standby_pending_since_ms = None;
+            return false;
+        }
+
+        debug!(
+            "[net-console] standby handoff rejected state={:?} reason=non-promotable",
+            state
+        );
+        let cleared = self.abort_console_standby("non-promotable");
+        self.arm_console_standby_listener(now_ms) || cleared
+    }
+
+    fn console_authority_cleared_for_handoff(&self) -> bool {
+        console_handoff_authority_cleared(
+            self.disconnect_phase,
+            self.session_active,
+            self.active_client_id.is_some(),
+            self.server.is_authenticated(),
+            self.auth_state,
+            self.peer_endpoint.is_some(),
+            self.server.ingest_snapshot().queued,
+            self.outbound.has_pending(),
+        )
+    }
+
+    fn promote_console_standby(&mut self, now_ms: u64) -> bool {
+        if !self.standby_listener_armed {
+            return false;
+        }
+        let active_state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
+        if !console_active_terminal_state(active_state) {
+            return false;
+        }
+        let standby_state = self
+            .sockets
+            .get::<TcpSocket>(self.tcp_standby_handle)
+            .state();
+        if console_standby_pending_expired(self.standby_pending_since_ms, now_ms) {
+            warn!(
+                "[net-console] standby handoff promotion rejected reason=pending-deadline state={:?}",
+                standby_state
+            );
+            return self.abort_console_standby("promotion-deadline");
+        }
+        if !console_standby_promotable_state(standby_state) {
+            warn!(
+                "[net-console] standby handoff promotion rejected reason=state state={:?}",
+                standby_state
+            );
+            return self.abort_console_standby("promotion-state");
+        }
+        if !self.console_authority_cleared_for_handoff() {
+            error!(
+                "[net-console] standby handoff promotion rejected reason=authority-not-cleared state={:?}",
+                standby_state
+            );
+            return self.abort_console_standby("authority-not-cleared");
+        }
+
+        let pending_bytes = self
+            .sockets
+            .get::<TcpSocket>(self.tcp_standby_handle)
+            .recv_queue();
+        mem::swap(&mut self.tcp_handle, &mut self.tcp_standby_handle);
+        self.standby_listener_armed = false;
+        self.standby_pending_since_ms = None;
+        self.listener_announced = true;
+        self.listener_defer_reason = None;
+        self.last_poll_snapshot = None;
+        info!(
+            "[net-console] standby handoff promoted state={:?} pending_bytes={} now_ms={}",
+            standby_state, pending_bytes, now_ms
+        );
+        true
     }
 
     fn set_auth_state(auth_state: &mut AuthState, active_client_id: Option<u64>, next: AuthState) {
@@ -3450,6 +3833,9 @@ impl<D: NetDevice> NetStack<D> {
             _reservation: reservation,
             init_attempt: attempt,
             tcp_handle: SocketHandle::default(),
+            tcp_standby_handle: SocketHandle::default(),
+            standby_listener_armed: false,
+            standby_pending_since_ms: None,
             server: TcpConsoleServer::new(
                 console_config.auth_token,
                 console_config.idle_timeout_ms,
@@ -3570,10 +3956,22 @@ impl<D: NetDevice> NetStack<D> {
         debug_assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         debug_assert!(TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
         debug_assert!(TCP_TX_STORAGE_IN_USE.load(Ordering::Acquire));
-        let rx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_RX_STORAGE[..]) };
-        let tx_buffer = unsafe { TcpSocketBuffer::new(&mut TCP_TX_STORAGE[..]) };
-        let tcp_socket = TcpSocket::new(rx_buffer, tx_buffer);
+        debug_assert!(TCP_STANDBY_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        debug_assert!(TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        // SAFETY: StorageReservation uniquely owns both console buffer pairs,
+        // and initialization has not yet created a socket referencing either
+        // pair. The two constructors receive disjoint static storage.
+        let (tcp_socket, tcp_standby_socket) = unsafe {
+            (
+                new_console_tcp_socket(&mut TCP_RX_STORAGE[..], &mut TCP_TX_STORAGE[..]),
+                new_console_tcp_socket(
+                    &mut TCP_STANDBY_RX_STORAGE[..],
+                    &mut TCP_STANDBY_TX_STORAGE[..],
+                ),
+            )
+        };
         self.tcp_handle = self.sockets.add(tcp_socket);
+        self.tcp_standby_handle = self.sockets.add(tcp_standby_socket);
         self.log_init_canary("net.init.socket.tcp")?;
         Ok(())
     }
@@ -3753,7 +4151,7 @@ impl<D: NetDevice> NetStack<D> {
             self.wifi_static_address_pending = true;
         }
 
-        self.sockets.get_mut::<TcpSocket>(self.tcp_handle).abort();
+        self.abort_console_socket_pair("wifi-generation-reset");
         if let Some(handle) = self.tcp_smoke_handle {
             self.sockets.get_mut::<TcpSocket>(handle).abort();
         }
@@ -6094,11 +6492,12 @@ impl<D: NetDevice> NetStack<D> {
                 self.listener_defer_reason = Some(reason);
             }
             self.listener_announced = false;
+            activity |= self.abort_console_standby("listener-deferred");
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
             if !self.session_active && socket.is_open() {
                 socket.abort();
             }
-            return false;
+            return activity;
         }
         if let Some(reason) = self.listener_defer_reason.take() {
             info!(
@@ -6110,6 +6509,7 @@ impl<D: NetDevice> NetStack<D> {
                 now_ms
             );
         }
+        activity |= self.service_console_standby(now_ms);
 
         let (snapshot, tcp_state) = {
             let socket = self.sockets.get_mut::<TcpSocket>(self.tcp_handle);
@@ -6207,8 +6607,13 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             if !self.stage_policy.allow_console_io && socket.state() == TcpState::Established {
-                socket.close();
-                return true;
+                activity |= begin_console_disconnect(
+                    &mut self.disconnect_phase,
+                    &mut self.disconnect_phase_started_ms,
+                    &mut self.disconnect_reason,
+                    &mut disconnect_entered_this_turn,
+                    NetConsoleDisconnectReason::Error,
+                );
             }
 
             let new_established = socket.state() == TcpState::Established
@@ -6578,30 +6983,13 @@ impl<D: NetDevice> NetStack<D> {
                                             );
                                         }
                                     }
-                                    Self::log_session_closed(
-                                        &mut self.session_state,
-                                        self.peer_endpoint,
-                                        socket,
+                                    activity |= begin_console_disconnect(
+                                        &mut self.disconnect_phase,
+                                        &mut self.disconnect_phase_started_ms,
+                                        &mut self.disconnect_reason,
+                                        &mut disconnect_entered_this_turn,
+                                        NetConsoleDisconnectReason::Error,
                                     );
-                                    socket.close();
-                                    self.outbound.reset();
-                                    self.server.end_session();
-                                    self.session_active = false;
-                                    if let Some(conn_id) = self.active_client_id {
-                                        Self::note_close_reason(
-                                            &mut log_closed_conn,
-                                            conn_id,
-                                            NetConsoleDisconnectReason::Error,
-                                        );
-                                        Self::note_close_reason(
-                                            &mut record_closed_conn,
-                                            conn_id,
-                                            NetConsoleDisconnectReason::Error,
-                                        );
-                                    }
-                                    reset_session = true;
-                                    self.peer_endpoint = None;
-                                    self.active_client_id = None;
                                     break;
                                 }
                                 SessionEvent::Close => {
@@ -6619,31 +7007,13 @@ impl<D: NetDevice> NetStack<D> {
                                         MAX_CONSOLE_FRAMES_PER_POLL,
                                         MAX_CONSOLE_BYTES_PER_POLL,
                                     );
-                                    Self::log_session_closed(
-                                        &mut self.session_state,
-                                        self.peer_endpoint,
-                                        socket,
+                                    activity |= begin_console_disconnect(
+                                        &mut self.disconnect_phase,
+                                        &mut self.disconnect_phase_started_ms,
+                                        &mut self.disconnect_reason,
+                                        &mut disconnect_entered_this_turn,
+                                        NetConsoleDisconnectReason::Eof,
                                     );
-                                    socket.close();
-                                    self.outbound.reset();
-                                    self.server.end_session();
-                                    self.session_active = false;
-                                    self.peer_endpoint = None;
-                                    if let Some(conn_id) = self.active_client_id {
-                                        Self::note_close_reason(
-                                            &mut log_closed_conn,
-                                            conn_id,
-                                            NetConsoleDisconnectReason::Eof,
-                                        );
-                                        Self::note_close_reason(
-                                            &mut record_closed_conn,
-                                            conn_id,
-                                            NetConsoleDisconnectReason::Eof,
-                                        );
-                                    }
-                                    reset_session = true;
-                                    self.active_client_id = None;
-                                    activity = true;
                                     break;
                                 }
                             }
@@ -6679,28 +7049,13 @@ impl<D: NetDevice> NetStack<D> {
                                 self.auth_state,
                                 self.active_client_id.unwrap_or(0)
                             );
-                            Self::log_session_closed(
-                                &mut self.session_state,
-                                self.peer_endpoint,
-                                socket,
+                            activity |= begin_console_disconnect(
+                                &mut self.disconnect_phase,
+                                &mut self.disconnect_phase_started_ms,
+                                &mut self.disconnect_reason,
+                                &mut disconnect_entered_this_turn,
+                                reason,
                             );
-                            socket.close();
-                            self.outbound.reset();
-                            self.server.end_session();
-                            self.session_active = false;
-                            self.peer_endpoint = None;
-                            reset_session = true;
-                            if let Some(conn_id) = self.active_client_id {
-                                Self::note_close_reason(&mut log_closed_conn, conn_id, reason);
-                                Self::note_close_reason(&mut record_closed_conn, conn_id, reason);
-                            }
-                            info!(
-                                "[net-console] conn {}: bytes read={}, bytes written={}",
-                                self.active_client_id.unwrap_or(0),
-                                self.conn_bytes_read,
-                                self.conn_bytes_written
-                            );
-                            self.active_client_id = None;
                             break;
                         }
                     }
@@ -6715,34 +7070,13 @@ impl<D: NetDevice> NetStack<D> {
                 && socket.state() == TcpState::Established
                 && !socket.may_recv()
             {
-                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                self.outbound.reset();
-                socket.close();
-                self.server.end_session();
-                self.session_active = false;
-                outbound_pending = false;
-                if let Some(conn_id) = self.active_client_id {
-                    Self::note_close_reason(
-                        &mut log_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Eof,
-                    );
-                    Self::note_close_reason(
-                        &mut record_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Eof,
-                    );
-                }
-                self.active_client_id = None;
-                self.peer_endpoint = None;
-                Self::set_auth_state(
-                    &mut self.auth_state,
-                    self.active_client_id,
-                    AuthState::Start,
+                activity |= begin_console_disconnect(
+                    &mut self.disconnect_phase,
+                    &mut self.disconnect_phase_started_ms,
+                    &mut self.disconnect_reason,
+                    &mut disconnect_entered_this_turn,
+                    NetConsoleDisconnectReason::Eof,
                 );
-                reset_session = true;
-                reset_tcp_state = Some(socket.state());
-                allow_flush = false;
             }
             if self.disconnect_phase == ConsoleDisconnectPhase::Idle
                 && self.session_active
@@ -6782,33 +7116,18 @@ impl<D: NetDevice> NetStack<D> {
                     MAX_CONSOLE_FRAMES_PER_POLL,
                     MAX_CONSOLE_BYTES_PER_POLL,
                 );
-                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                socket.close();
-                self.outbound.reset();
-                self.server.end_session();
-                self.session_active = false;
-                self.peer_endpoint = None;
                 Self::set_auth_state(
                     &mut self.auth_state,
                     self.active_client_id,
                     AuthState::Failed,
                 );
-                if let Some(conn_id) = self.active_client_id {
-                    Self::note_close_reason(
-                        &mut log_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Error,
-                    );
-                    Self::note_close_reason(
-                        &mut record_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Error,
-                    );
-                }
-                self.active_client_id = None;
-                reset_session = true;
-                reset_tcp_state = Some(socket.state());
-                activity |= true;
+                activity |= begin_console_disconnect(
+                    &mut self.disconnect_phase,
+                    &mut self.disconnect_phase_started_ms,
+                    &mut self.disconnect_reason,
+                    &mut disconnect_entered_this_turn,
+                    NetConsoleDisconnectReason::Error,
+                );
             }
 
             if self.disconnect_phase == ConsoleDisconnectPhase::Idle
@@ -6844,33 +7163,18 @@ impl<D: NetDevice> NetStack<D> {
                     MAX_CONSOLE_FRAMES_PER_POLL,
                     MAX_CONSOLE_BYTES_PER_POLL,
                 );
-                Self::log_session_closed(&mut self.session_state, self.peer_endpoint, socket);
-                socket.close();
-                self.outbound.reset();
-                self.server.end_session();
-                self.session_active = false;
-                self.peer_endpoint = None;
                 Self::set_auth_state(
                     &mut self.auth_state,
                     self.active_client_id,
                     AuthState::Failed,
                 );
-                if let Some(conn_id) = self.active_client_id {
-                    Self::note_close_reason(
-                        &mut log_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Error,
-                    );
-                    Self::note_close_reason(
-                        &mut record_closed_conn,
-                        conn_id,
-                        NetConsoleDisconnectReason::Error,
-                    );
-                }
-                self.active_client_id = None;
-                reset_session = true;
-                reset_tcp_state = Some(socket.state());
-                activity |= true;
+                activity |= begin_console_disconnect(
+                    &mut self.disconnect_phase,
+                    &mut self.disconnect_phase_started_ms,
+                    &mut self.disconnect_reason,
+                    &mut disconnect_entered_this_turn,
+                    NetConsoleDisconnectReason::Error,
+                );
             }
 
             let tcp_state = socket.state();
@@ -6882,11 +7186,13 @@ impl<D: NetDevice> NetStack<D> {
                     self.active_client_id.unwrap_or(0),
                     tcp_state
                 );
-                self.disconnect_phase = ConsoleDisconnectPhase::Draining;
-                self.disconnect_phase_started_ms = None;
-                self.disconnect_reason = NetConsoleDisconnectReason::Eof;
-                disconnect_entered_this_turn = true;
-                activity = true;
+                activity |= begin_console_disconnect(
+                    &mut self.disconnect_phase,
+                    &mut self.disconnect_phase_started_ms,
+                    &mut self.disconnect_reason,
+                    &mut disconnect_entered_this_turn,
+                    NetConsoleDisconnectReason::Eof,
+                );
             } else if self.disconnect_phase == ConsoleDisconnectPhase::Idle
                 && matches!(
                     tcp_state,
@@ -7087,6 +7393,11 @@ impl<D: NetDevice> NetStack<D> {
         }
         if let Some((conn_id, reason)) = record_closed_conn {
             self.record_conn_closed(conn_id, reason);
+        }
+        if self.disconnect_phase == ConsoleDisconnectPhase::Idle {
+            activity |= self.promote_console_standby(now_ms);
+        } else {
+            activity |= self.service_console_standby(now_ms);
         }
 
         activity || outbound_pending
@@ -7903,6 +8214,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             // delayed linked-runtime poll must still get one chance to flush
             // the queued QUIT response into smoltcp before expiry is judged.
             self.disconnect_phase_started_ms = None;
+            let now_ms = self.last_now_ms.unwrap_or(0);
+            let _ = self.service_console_standby(now_ms);
         }
     }
 
@@ -7938,12 +8251,22 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     fn inject_console_line(&mut self, _line: &str) {}
 
     fn reset(&mut self) {
+        self.abort_console_socket_pair("stack-reset");
         self.server.end_session();
         self.session_active = false;
+        self.active_client_id = None;
+        self.peer_endpoint = None;
         self.disconnect_phase = ConsoleDisconnectPhase::Idle;
         self.disconnect_phase_started_ms = None;
         self.disconnect_reason = NetConsoleDisconnectReason::Quit;
         self.disconnect_forced_aborts = 0;
+        self.listener_announced = false;
+        self.listener_defer_reason = None;
+        self.auth_state = AuthState::Start;
+        self.session_state = SessionState::default();
+        self.conn_bytes_read = 0;
+        self.conn_bytes_written = 0;
+        self.events.clear();
         self.telemetry = NetTelemetry::default();
         self.outbound.reset();
         self.tcp_smoke_outbound_sent = false;
@@ -8679,7 +9002,7 @@ mod tests {
 
     static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-    fn reset_socket_and_tcp_rx_state() {
+    fn reset_console_storage_state() {
         SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
         SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
         SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
@@ -8689,6 +9012,21 @@ mod tests {
         TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
         TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
         *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
+
+        TCP_TX_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_TX_STORAGE_OWNER.store(0, Ordering::Release);
+        TCP_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
+        *TCP_TX_STORAGE_TAG_LABEL.lock() = None;
+
+        TCP_STANDBY_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_STANDBY_RX_STORAGE_OWNER.store(0, Ordering::Release);
+        TCP_STANDBY_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
+        *TCP_STANDBY_RX_STORAGE_TAG_LABEL.lock() = None;
+
+        TCP_STANDBY_TX_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_STANDBY_TX_STORAGE_OWNER.store(0, Ordering::Release);
+        TCP_STANDBY_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
+        *TCP_STANDBY_TX_STORAGE_TAG_LABEL.lock() = None;
     }
 
     #[test]
@@ -8740,6 +9078,57 @@ mod tests {
         assert!(console_disconnect_application_queues_drained(
             false, false, 0, false,
         ));
+    }
+
+    #[test]
+    fn orderly_console_shutdowns_enter_one_draining_lane() {
+        for reason in [
+            NetConsoleDisconnectReason::Quit,
+            NetConsoleDisconnectReason::Eof,
+            NetConsoleDisconnectReason::Error,
+        ] {
+            let mut phase = ConsoleDisconnectPhase::Idle;
+            let mut started_ms = Some(99);
+            let mut active_reason = NetConsoleDisconnectReason::Reset;
+            let mut entered_this_turn = false;
+            assert!(begin_console_disconnect(
+                &mut phase,
+                &mut started_ms,
+                &mut active_reason,
+                &mut entered_this_turn,
+                reason,
+            ));
+            assert_eq!(phase, ConsoleDisconnectPhase::Draining);
+            assert_eq!(started_ms, None);
+            assert_eq!(active_reason, reason);
+            assert!(entered_this_turn);
+        }
+
+        let mut phase = ConsoleDisconnectPhase::Closing;
+        let mut started_ms = Some(41);
+        let mut active_reason = NetConsoleDisconnectReason::Eof;
+        let mut entered_this_turn = false;
+        assert!(!begin_console_disconnect(
+            &mut phase,
+            &mut started_ms,
+            &mut active_reason,
+            &mut entered_this_turn,
+            NetConsoleDisconnectReason::Error,
+        ));
+        assert_eq!(phase, ConsoleDisconnectPhase::Closing);
+        assert_eq!(started_ms, Some(41));
+        assert_eq!(active_reason, NetConsoleDisconnectReason::Eof);
+        assert!(!entered_this_turn);
+    }
+
+    #[test]
+    fn socket_capacity_covers_full_profile_with_outbound_probe() {
+        const FULL_PROFILE_WITH_OUTBOUND_PROBE: usize = 2 // active + standby console
+            + 1 // DHCP
+            + 2 // UDP beacon + echo
+            + 2 // TCP smoke listener + outbound
+            + 1; // outbound probe
+        assert!(SOCKET_CAPACITY >= FULL_PROFILE_WITH_OUTBOUND_PROBE);
     }
 
     #[test]
@@ -8878,6 +9267,140 @@ mod tests {
             ConsoleDisconnectAction::Wait,
             "a long scheduling gap before first service cannot expire an unarmed disconnect"
         );
+    }
+
+    #[test]
+    fn console_standby_arms_only_after_active_shutdown_begins() {
+        assert!(!console_standby_should_arm(ConsoleDisconnectPhase::Idle));
+        assert!(console_standby_should_arm(ConsoleDisconnectPhase::Draining,));
+        assert!(console_standby_should_arm(ConsoleDisconnectPhase::Closing,));
+    }
+
+    #[test]
+    fn console_standby_pending_connection_is_bounded_and_promotable() {
+        assert!(!console_standby_pending_state(TcpState::Listen));
+        assert!(console_standby_pending_state(TcpState::SynReceived));
+        assert!(console_standby_pending_state(TcpState::Established));
+        assert!(!console_standby_pending_state(TcpState::CloseWait));
+
+        for state in [
+            TcpState::Listen,
+            TcpState::SynReceived,
+            TcpState::Established,
+        ] {
+            assert!(console_standby_promotable_state(state));
+        }
+        for state in [
+            TcpState::Closed,
+            TcpState::CloseWait,
+            TcpState::FinWait1,
+            TcpState::FinWait2,
+            TcpState::Closing,
+            TcpState::LastAck,
+            TcpState::TimeWait,
+        ] {
+            assert!(!console_standby_promotable_state(state));
+        }
+
+        let started_ms = 41;
+        assert!(!console_standby_pending_expired(
+            Some(started_ms),
+            started_ms + CONSOLE_HANDOFF_PENDING_DEADLINE_MS - 1,
+        ));
+        assert!(console_standby_pending_expired(
+            Some(started_ms),
+            started_ms + CONSOLE_HANDOFF_PENDING_DEADLINE_MS,
+        ));
+        assert!(!console_standby_pending_expired(None, u64::MAX));
+    }
+
+    #[test]
+    fn console_standby_promotion_requires_terminal_socket_and_cleared_authority() {
+        assert!(!console_active_terminal_state(TcpState::Established));
+        assert!(!console_active_terminal_state(TcpState::LastAck));
+        assert!(console_active_terminal_state(TcpState::Closed));
+        assert!(console_active_terminal_state(TcpState::TimeWait));
+
+        assert!(console_handoff_authority_cleared(
+            ConsoleDisconnectPhase::Idle,
+            false,
+            false,
+            false,
+            AuthState::Start,
+            false,
+            0,
+            false,
+        ));
+        assert!(!console_handoff_authority_cleared(
+            ConsoleDisconnectPhase::Closing,
+            false,
+            false,
+            false,
+            AuthState::Start,
+            false,
+            0,
+            false,
+        ));
+        assert!(!console_handoff_authority_cleared(
+            ConsoleDisconnectPhase::Idle,
+            true,
+            false,
+            false,
+            AuthState::Start,
+            false,
+            0,
+            false,
+        ));
+        assert!(!console_handoff_authority_cleared(
+            ConsoleDisconnectPhase::Idle,
+            false,
+            true,
+            false,
+            AuthState::Start,
+            false,
+            0,
+            false,
+        ));
+        assert!(!console_handoff_authority_cleared(
+            ConsoleDisconnectPhase::Idle,
+            false,
+            false,
+            true,
+            AuthState::Attached,
+            true,
+            1,
+            true,
+        ));
+    }
+
+    #[test]
+    fn smoltcp_acceptor_slots_can_listen_on_the_same_console_port() {
+        let mut active_rx = [0u8; 128];
+        let mut active_tx = [0u8; 128];
+        let mut standby_rx = [0u8; 128];
+        let mut standby_tx = [0u8; 128];
+        let mut storage = [SocketStorage::EMPTY; 2];
+        let mut sockets = SocketSet::new(&mut storage[..]);
+        let active = sockets.add(TcpSocket::new(
+            TcpSocketBuffer::new(&mut active_rx[..]),
+            TcpSocketBuffer::new(&mut active_tx[..]),
+        ));
+        let standby = sockets.add(TcpSocket::new(
+            TcpSocketBuffer::new(&mut standby_rx[..]),
+            TcpSocketBuffer::new(&mut standby_tx[..]),
+        ));
+
+        sockets
+            .get_mut::<TcpSocket>(active)
+            .listen(IpListenEndpoint::from(31_337))
+            .expect("active acceptor should listen");
+        sockets
+            .get_mut::<TcpSocket>(standby)
+            .listen(IpListenEndpoint::from(31_337))
+            .expect("standby acceptor should share the console port");
+
+        assert_eq!(sockets.get::<TcpSocket>(active).state(), TcpState::Listen);
+        assert_eq!(sockets.get::<TcpSocket>(standby).state(), TcpState::Listen);
     }
 
     #[test]
@@ -9054,7 +9577,7 @@ mod tests {
     #[test]
     fn reservation_releases_on_error() {
         let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
-        reset_socket_and_tcp_rx_state();
+        reset_console_storage_state();
 
         TCP_RX_STORAGE_IN_USE.store(true, Ordering::Release);
         let attempt = NetInitAttempt::new("test.reservation");
@@ -10412,7 +10935,7 @@ mod tests {
     #[test]
     fn reservation_sets_metadata_and_owner() {
         let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
-        reset_socket_and_tcp_rx_state();
+        reset_console_storage_state();
 
         let attempt = NetInitAttempt::new("test.acquisition");
         let reservation =
@@ -10422,18 +10945,61 @@ mod tests {
         assert!(SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         assert_ne!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
         assert_ne!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+        assert!(TCP_STANDBY_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(
+            TCP_STANDBY_RX_STORAGE_OWNER.load(Ordering::Acquire),
+            attempt.owner_id()
+        );
+        assert!(TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(
+            TCP_STANDBY_TX_STORAGE_OWNER.load(Ordering::Acquire),
+            attempt.owner_id()
+        );
 
         drop(reservation);
 
         assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
         assert_eq!(SOCKET_STORAGE_OWNER.load(Ordering::Acquire), 0);
         assert_eq!(SOCKET_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+        assert!(!TCP_STANDBY_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(TCP_STANDBY_RX_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert!(!TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(TCP_STANDBY_TX_STORAGE_OWNER.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn standby_reservation_failure_releases_all_earlier_console_leases() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
+        reset_console_storage_state();
+
+        TCP_STANDBY_RX_STORAGE_IN_USE.store(true, Ordering::Release);
+        TCP_STANDBY_RX_STORAGE_OWNER.store(0xfeed, Ordering::Release);
+        let attempt = NetInitAttempt::new("test.standby-reservation");
+        let result = StorageReservation::acquire::<Infallible>(
+            false,
+            false,
+            &attempt,
+            "test.standby-reservation",
+        );
+
+        assert!(matches!(
+            result,
+            Err(NetStackError::TcpStandbyRxStorageInUse)
+        ));
+        assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(TCP_STANDBY_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+
+        TCP_STANDBY_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+        TCP_STANDBY_RX_STORAGE_OWNER.store(0, Ordering::Release);
     }
 
     #[test]
     fn poisoned_flag_is_reported() {
         let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
-        reset_socket_and_tcp_rx_state();
+        reset_console_storage_state();
 
         SOCKET_STORAGE_IN_USE.store(true, Ordering::Release);
         SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
@@ -10452,7 +11018,7 @@ mod tests {
     #[test]
     fn busy_socket_reports_owner_and_tag() {
         let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
-        reset_socket_and_tcp_rx_state();
+        reset_console_storage_state();
 
         SOCKET_STORAGE_OWNER.store(0xdead_beef, Ordering::Release);
         SOCKET_STORAGE_TAG_ID.store(0xcafe_0001, Ordering::Release);

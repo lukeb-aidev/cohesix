@@ -103,7 +103,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
-    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN,
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_ENGINE_INIT_AUX,
     DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
     DRIVER_RUNTIME_REJECT_OUTER_GENERATION, DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION,
@@ -5137,6 +5137,96 @@ pub(crate) fn cyw43_sdio_dpc_diagnostic() -> Option<Cyw43SdioDpcDiagnostic> {
     let ring = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()?;
     let client = cyw43_dpc_client_counters(ring.epoch)?;
     Some(cyw43_sdio_dpc_diagnostic_from(ring, client))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_dpc_expected_generation() -> Option<u32> {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required || policy.bus_links.len() != 1 {
+        return None;
+    }
+    let link = policy.bus_links[0];
+    if link.channel != "cyw43-sdio"
+        || link.client_hot_path != DriverTaskHotPath::Cyw43Wifi.as_str()
+        || link.owner_hot_path != DriverTaskHotPath::SdioHost.as_str()
+        || link.link_epoch == 0
+    {
+        return None;
+    }
+    Some(link.link_epoch)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_dpc_ring_work_pending(
+    ring: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
+    expected_generation: Option<u32>,
+) -> bool {
+    expected_generation.is_some_and(|generation| ring.epoch == generation)
+        && ring.overruns == 0
+        && ring.ack_failures == 0
+        && ring.flags
+            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
+            == 0
+        && (ring.producer != ring.consumer
+            || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0)
+}
+
+#[cfg(all(feature = "kernel", test))]
+fn cyw43_sdio_dpc_diagnostic_work_pending(
+    snapshot: Cyw43SdioDpcDiagnostic,
+    expected_generation: Option<u32>,
+) -> bool {
+    expected_generation.is_some_and(|generation| snapshot.generation == generation)
+        && snapshot.overruns == 0
+        && snapshot.epoch_errors == 0
+        && snapshot.sequence_errors == 0
+        && snapshot.ack_failures == 0
+        && !snapshot.ring_poisoned
+        && !snapshot.client_sample_stale
+        && !snapshot.poisoned
+        && snapshot.sample_consumer == snapshot.consumed
+        && (snapshot.published != snapshot.consumed || snapshot.masked)
+}
+
+/// Return whether the isolated SDIO/CYW43 pipeline has current steady-state
+/// work that needs another bounded Network turn.
+///
+/// This is a passive ownership snapshot. It never polls either child or
+/// advances a retained request. The EventPump uses it only to retain its
+/// existing one-operation Network phase for up to the configured burst cap,
+/// matching Linux DPC urgency without creating a second issuer.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_steady_network_work_pending(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        return false;
+    }
+    let expected_generation = cyw43_sdio_dpc_expected_generation();
+    #[cfg(test)]
+    let dpc_override = *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock();
+    #[cfg(test)]
+    let dpc_pending = dpc_override.map_or_else(
+        || {
+            crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
+                .is_some_and(|ring| cyw43_sdio_dpc_ring_work_pending(ring, expected_generation))
+        },
+        |snapshot| cyw43_sdio_dpc_diagnostic_work_pending(snapshot, expected_generation),
+    );
+    #[cfg(not(test))]
+    let dpc_pending = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
+        .is_some_and(|ring| cyw43_sdio_dpc_ring_work_pending(ring, expected_generation));
+    dpc_pending
+        || cyw43_net_data_pre_poll_continuation_pending(contract)
+        || CYW43_PENDING_DATA_TX.lock().is_some()
+        || !CYW43_PENDING_ARP_TX.lock().is_empty()
+        || cyw43_current_generation_data_tx_rx_fairness_due()
+        || cyw43_active_runtime_descriptor(contract).is_some_and(|(_, descriptor)| {
+            matches!(
+                descriptor.op,
+                DRIVER_RUNTIME_CYW43_OP_ETH_TX | DRIVER_RUNTIME_CYW43_OP_RX_POLL
+            )
+        })
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -22354,6 +22444,15 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         pending.generation,
         &pending.frame[..frame_len],
     );
+    if completion.is_none() && cyw43_outer_event_turn_rejected() {
+        // A later smoltcp callback re-entered the retained TX owner after this
+        // outer EventPump turn had already spent its sole CYW43 operation.
+        // Roll back the bookkeeping before trace classification: this is an
+        // expected scheduling deferral, not a child or physical TX retry.
+        pending.deadline = deadline_before_turn;
+        pending.turns = pending.turns.saturating_sub(1);
+        return retain_cyw43_pending_data_tx(pending);
+    }
     let pending_rx = cyw43_pending_rx_token_occupied();
     let action = match completion {
         Some(completion) if driver_task_tx_completion_submitted(completion) => "submitted",
@@ -22377,11 +22476,6 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
     );
 
     let Some(completion) = completion else {
-        if cyw43_outer_event_turn_rejected() {
-            pending.deadline = deadline_before_turn;
-            pending.turns = pending.turns.saturating_sub(1);
-            return retain_cyw43_pending_data_tx(pending);
-        }
         let retained = cyw43_retained_descriptor_active_state_with_payload(
             contract,
             pending.generation,
@@ -39240,6 +39334,150 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn steady_network_dpc_urgency_rejects_stale_and_faulted_states() {
+        let expected_generation =
+            cyw43_sdio_dpc_expected_generation().expect("generated CYW43/SDIO link epoch");
+        let healthy_ring = crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+            epoch: expected_generation,
+            producer: 12,
+            consumer: 11,
+            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            overruns: 0,
+            ack_failures: 0,
+        };
+        assert!(cyw43_sdio_dpc_ring_work_pending(
+            healthy_ring,
+            Some(expected_generation)
+        ));
+
+        let mut stale_ring = healthy_ring;
+        stale_ring.epoch ^= 1;
+        let mut poisoned_ring = healthy_ring;
+        poisoned_ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED;
+        let mut overrun_ring = healthy_ring;
+        overrun_ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN;
+        let mut counted_overrun_ring = healthy_ring;
+        counted_overrun_ring.overruns = 1;
+        let mut ack_failed_ring = healthy_ring;
+        ack_failed_ring.ack_failures = 1;
+        let mut idle_ring = healthy_ring;
+        idle_ring.producer = idle_ring.consumer;
+        idle_ring.flags = 0;
+
+        for (reason, ring, expected) in [
+            ("missing-generation", healthy_ring, None),
+            ("stale-generation", stale_ring, Some(expected_generation)),
+            ("poisoned", poisoned_ring, Some(expected_generation)),
+            ("overrun-flag", overrun_ring, Some(expected_generation)),
+            (
+                "overrun-counter",
+                counted_overrun_ring,
+                Some(expected_generation),
+            ),
+            ("ack-failed", ack_failed_ring, Some(expected_generation)),
+            ("idle", idle_ring, Some(expected_generation)),
+        ] {
+            assert!(
+                !cyw43_sdio_dpc_ring_work_pending(ring, expected),
+                "{reason} DPC state must not earn EventPump urgency"
+            );
+        }
+
+        let healthy_diagnostic = Cyw43SdioDpcDiagnostic {
+            generation: expected_generation,
+            captures: 12,
+            published: 12,
+            consumed: 11,
+            sample_consumer: 11,
+            rearms: 11,
+            overruns: 0,
+            epoch_errors: 0,
+            sequence_errors: 0,
+            ack_failures: 0,
+            ring_poisoned: false,
+            client_sample_stale: false,
+            poisoned: false,
+            masked: true,
+        };
+        assert!(cyw43_sdio_dpc_diagnostic_work_pending(
+            healthy_diagnostic,
+            Some(expected_generation)
+        ));
+
+        for (reason, snapshot) in [
+            (
+                "stale-generation",
+                Cyw43SdioDpcDiagnostic {
+                    generation: expected_generation ^ 1,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "overrun-counter",
+                Cyw43SdioDpcDiagnostic {
+                    overruns: 1,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "epoch-error",
+                Cyw43SdioDpcDiagnostic {
+                    epoch_errors: 1,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "sequence-error",
+                Cyw43SdioDpcDiagnostic {
+                    sequence_errors: 1,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "ack-failed",
+                Cyw43SdioDpcDiagnostic {
+                    ack_failures: 1,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "ring-poisoned",
+                Cyw43SdioDpcDiagnostic {
+                    ring_poisoned: true,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "client-sample-stale",
+                Cyw43SdioDpcDiagnostic {
+                    client_sample_stale: true,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "aggregate-poisoned",
+                Cyw43SdioDpcDiagnostic {
+                    poisoned: true,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "consumer-mismatch",
+                Cyw43SdioDpcDiagnostic {
+                    sample_consumer: 10,
+                    ..healthy_diagnostic
+                },
+            ),
+        ] {
+            assert!(
+                !cyw43_sdio_dpc_diagnostic_work_pending(snapshot, Some(expected_generation)),
+                "{reason} diagnostic must not earn EventPump urgency"
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn dpc_client_counters_require_same_generation_v9_sample() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
@@ -46469,6 +46707,80 @@ mod tests {
             Cyw43DataTxTurnOutcome::Submitted
         );
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_data_tx_same_outer_turn_deferral_is_not_a_trace_retry() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"tcp-ack"
+        ));
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Pending
+        );
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
+            1,
+            "one accepted child result that needs another turn remains a genuine retry"
+        );
+        let trace_retries = CYW43_DATA_TRACE_TX_RETRY_COUNT.load(Ordering::Acquire);
+        let retained_turns = CYW43_PENDING_DATA_TX
+            .lock()
+            .as_ref()
+            .expect("retry frame remains retained")
+            .turns;
+
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Pending
+        );
+        assert_eq!(
+            CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
+            1,
+            "same-turn reentry must not reach the child"
+        );
+        assert_eq!(
+            CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
+            1,
+            "same-turn reentry must not charge a genuine retry"
+        );
+        assert_eq!(
+            CYW43_DATA_TRACE_TX_RETRY_COUNT.load(Ordering::Acquire),
+            trace_retries,
+            "same-turn scheduling deferral must not inflate retry telemetry"
+        );
+        assert_eq!(
+            CYW43_PENDING_DATA_TX
+                .lock()
+                .as_ref()
+                .expect("same frame remains retained")
+                .turns,
+            retained_turns,
+            "same-turn scheduling deferral must roll back retained-turn accounting"
+        );
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Submitted
+        );
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
 

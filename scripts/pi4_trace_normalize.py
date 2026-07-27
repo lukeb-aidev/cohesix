@@ -1256,6 +1256,12 @@ def sanitize_line(line: str) -> str:
     return clean
 
 
+def is_host_annotation(line: str) -> bool:
+    """Return whether a capture-controller note is not target telemetry."""
+
+    return ANSI_RE.sub("", line).replace("\r", "").lstrip().startswith("[host]")
+
+
 def redact_sensitive_line(line: str) -> str:
     """Redact Wi-Fi secrets before normalized trace records are emitted."""
 
@@ -1795,6 +1801,8 @@ def parse_events(lines: Iterable[str], line_base: int = 0) -> list[TraceEvent]:
 
     events: list[TraceEvent] = []
     for line_number, line in enumerate(lines, start=line_base + 1):
+        if is_host_annotation(line):
+            continue
         raw_clean = ANSI_RE.sub("", line).replace("\r", "").strip()
         if raw_clean.startswith("cohesix>"):
             events.append(
@@ -12847,6 +12855,17 @@ def summarize_cyw43_bootstrap_supervisor(
     for event in supervisor_events:
         match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw)
         if match is None:
+            if (
+                event.fields.get("attempt") == "0"
+                and current_attempt == 0
+                and state == "none"
+            ):
+                # Attempt zero is a non-authoritative preflight breadcrumb.
+                # A host capture annotation can bisect that UART line while
+                # linked-serial cutover is still occurring. Ignore only this
+                # pre-episode fragment; malformed attempt-one or later records
+                # remain fail-closed.
+                continue
             last_status = event.fields.get("status", "malformed")
             mark_blocker("malformed-line")
             continue
@@ -15197,6 +15216,8 @@ def boot_slices(lines: list[str]) -> list[tuple[int, list[str]]]:
     latest_start = None
     latest_start_is_chain = False
     for index, line in enumerate(lines):
+        if is_host_annotation(line):
+            continue
         clean = ANSI_RE.sub("", line).lower()
         if any(clean.startswith(marker) for marker in BOOT_CHAIN_ROOT_MARKERS):
             latest_start = index

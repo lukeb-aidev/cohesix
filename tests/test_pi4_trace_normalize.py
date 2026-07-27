@@ -701,6 +701,41 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert events[2].fields["tag"] == "reset-write"
 
 
+def test_host_annotation_tail_cannot_replay_target_gate_or_boot_evidence() -> None:
+    lines = [
+        "U-Boot 2026.01",
+        "Bootstrapping kernel",
+        "CYW43_BOOTSTRAP_SUPERVISOR attempt=0 sta",
+        "[host] drain post-root-prompt-settle-before-diagnostics duration_s=8.00",
+        (
+            "tus=preflight backoff_ms=250 next_attempt_ms=250 serial=blocked "
+            "local_seat=enabled recovery=full console_seq=1 "
+            "telemetry_sinks=serial+queen-log prompt_refresh=no"
+        ),
+        *oldgood_wifi_replay_lines(),
+        (
+            "[host] diagnostics timeout tail='U-Boot 2026.01\\r\\n"
+            "Bootstrapping kernel\\r\\n"
+            "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing "
+            "backoff_ms=0 next_attempt_ms=999 serial=ready local_seat=ready "
+            "recovery=full console_seq=99 "
+            "telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes\\r\\n"
+            "wifi: gate 8 subgate=8a-pair-generation status=pass "
+            "pair_epoch=1 generation=9 blocker=none\\r\\n'"
+        ),
+    ]
+
+    slices = normalizer.boot_slices(lines)
+    assert len(slices) == 1
+    events = normalizer.parse_events(normalizer.latest_boot_lines(lines))
+    assert all(event.line != len(lines) for event in events)
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_STATUS"] == "pass"
+
+
 def test_pi4_wifi_mailbox_usb_power_lines_are_usb_platform_evidence() -> None:
     event = normalizer.parse_line(
         "[pi4-platform] mailbox vl805-usb-hcd-power action=begin module=0x00000003",
