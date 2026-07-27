@@ -630,7 +630,7 @@ of attempt 1, not a retry. Reaching
 firmware/control without that complete normalization, or using a separate cold,
 replay, or fallback path, fails this runbook.
 
-The sole event quiet fence is immediately pre-Join, after
+The sole ordered event-drain snapshot is immediately pre-Join, after
 `HostEapolPromisc` for a protected network or `OpenWpaAuth` for an open network.
 It must observe two consecutive exact `Idle` terminals before Join event
 ownership is armed. `FrameReady` or `Progress` resets the streak; 256 polls is
@@ -643,11 +643,25 @@ Only the exact Join request's post-Function-2 progress (or its typed
 post-transmit terminal) may arm current-generation association events; older
 events remain history.
 
+The snapshot is completed by a Join-only final SDIO source fence. Immediately
+before the Join Function 2 CMD53 writes `SDHCI_COMMAND`, the sole SDIO owner
+samples host `CARD_INT`. An asserted source must produce the typed not-issued
+terminal with no command, DMA, FIFO, SDPCM-sequence, containment, or
+pair-recovery side effect. The same retained Join parent and absolute deadline
+must then run a forced `DPC_ACTIVATE`, consume that level source through the
+ordinary DPC lane, and repeat the normal drain/credit/setup path. Only the
+source-clear child may issue the Join CMD53. Treat host/model tests as
+implementation proof only: this closes the documented owner-side gap but does
+not establish 10/10 Pi repeatability until fresh serial and paired-capture
+cycles prove it.
+
 Gate 8 is an ordered stability proof, not the first moment the linked transport
 attaches. After transport/control attachment, require
 `CYW43_BOOTSTRAP_SUPERVISOR ... status=stabilizing`. The sole boot episode has
-one absolute 90,000-millisecond stabilization deadline; its consumed-once full
-pair repair does not refresh it. Before accepting
+one absolute 90,000-millisecond stabilization deadline. Gate 8 is passive and
+cannot create a pair-recovery request. Only a separately typed runtime/SDIO
+fault or issued-unknown physical operation may consume the one full pair
+repair, and that repair does not refresh the deadline. Before accepting
 `CYW43_BOOTSTRAP_SUPERVISOR ... status=ready`, the serial/qlog evidence must
 contain one all-or-nothing immutable snapshot immediately before that record:
 
@@ -668,7 +682,22 @@ connection-generation publication checked by the normalizer; it cannot be
 used to stitch pair/control evidence from an earlier recovery into the current
 snapshot. A partial, reordered, duplicated, generation-regressing, or
 cross-recovery sequence, or any gap between 8h and `status=ready`, fails closed.
-The eight records are one immutable candidate transaction. In particular,
+The eight records are one immutable candidate transaction, but Ready requires
+the same stable pair epoch and logical generation on two consecutive ordinary
+control turns. Both observations must be publication-quiescent: no pending
+current-generation host-EAPOL event or queued pre-secure EAPOL RX frame; no
+host-EAPOL prompt, session work, deferred reauthentication, or post-association
+BSSID work; no maintenance, logical-control, prompt-poll, terminal-drain, or
+retained HAL driver-task owner; no recovery or rejoin; and an empty, healthy
+linked SDIO DPC ring. The ring must have producer equal to consumer, zero
+current-generation flags, and the same nonzero DPC epoch, producer watermark,
+and cumulative overrun/IRQ-ACK-failure counters on both observations.
+Historical nonzero counters remain admissible after a successful typed
+recovery; movement is not. Any intervening owner activity, DPC publication,
+counter movement, DPC epoch change, or logical/pair generation change clears
+the candidate. Root rechecks the exact pair/generation/DPC/history receipt
+before and after consumer-token publication, and a failed recheck publishes no
+Ready. In particular,
 `8h ... status=pass` proves that the exact-generation handoff snapshot is
 eligible; it does not open the steady DHCP/TCP consumer and is not accepted
 Gate 8 by itself. The immediately adjacent `status=ready` is the lifecycle
@@ -677,7 +706,27 @@ state, and recovery state, then publish the separate consumer token. A failed
 publication retracts the candidate and publishes no Ready. A later recovery
 does not rewrite an earlier accepted record, but it retracts current readiness
 and requires a fresh complete candidate plus Ready before ordinary data
-admission resumes.
+admission resumes. Once Ready is published, one exact current-generation
+NetData continuation remains legal and does not by itself retract stable
+proof; before initial publication, the same owner must reach its exact terminal
+so publication quiescence is true.
+First-cause deferred-recovery and terminal-drain telemetry must remain visible
+until the complete 8a-through-8h plus Ready transaction is retained; a rejected
+receipt or output preflight cannot erase it.
+
+An ordinary firmware `AUTH` timeout is diagnostic telemetry, not a terminal
+association event. Unsuccessful `SET_SSID`, link-down/no-network,
+deauthentication, and disassociation remain in the single association
+supervisor: 8c reports `pending` with
+`blocker=association-retry-pending`, authentication is suspended only after
+any accepted child action drains, and bounded backoff starts a new logical
+generation/Join on the same linked pair. These logical connection failures do
+not authorize pair normalization or SDIO recovery.
+An exact BSSID-refresh failure at 8e similarly reports
+`blocker=bssid-refresh-retry-pending`, and an exact required maintenance
+failure at 8g reports
+`blocker=post-key-maintenance-retry-pending`; both use that same supervisor,
+same-pair backoff, and new logical generation.
 
 Gate 8h cannot become a candidate pass until root has committed the handoff for
 the same generation; that handoff commit remains fenced from steady consumers
@@ -702,6 +751,13 @@ Root then captures the publishable post-commit snapshot. This commit performs
 no SDIO/CYW43 I/O and introduces no second boot, owner, polling, or fallback
 lane. Before it succeeds, 8h must report
 `blocker=data-handoff-commit-pending`.
+
+If that ordinary attached Network turn discovers a typed runtime/SDIO fault,
+it commits no handoff and yields immediately. The next outer iteration is the
+hardware-free Operator turn; only after that turn yields may the following
+Driver iteration service one recovery child. Driver rechecks reboot and linked
+serial admission before issuing the child, so accepted operator `reboot` work
+cannot compose with or be followed by a same-iteration CYW43/SDIO operation.
 
 The child decoded-RX queue, its bounded drain budget, and the root copied-RX
 queue all use
@@ -773,15 +829,25 @@ After `ready`, keep capturing. A later fresh non-stable or different-generation
 snapshot must produce `status=stabilizing`; this can occur in the same logical
 generation when exact owner/admission proof is lost. Discard the earlier
 snapshot and require a new complete 8a-through-8h proof. Before same-generation
-Gate 10 closes bootstrap, a `fail` or the 90-second deadline first retains one
-atomic eight-line failure snapshot and its adjacent `CYW43_GATE8_RECOVERY`
-boundary, while reserving the next retained-serial slot for the supervisor
-`recovery`, `failed`, or `permanent` transition. The sole `attempt=1` boot
-episode may consume one fenced full CYW43/SDIO pair repair, but that repair does
-not renew the absolute deadline or create another outer attempt. A recurring
-fault after the repair is spent terminates bootstrap, quarantines network service, and returns
-to ordinary operator service; there is no automatic backoff, reset, or attempt
-2. Retraction purges queued HDMI Ready/prompt bytes and forces a canonical
+Gate 10 closes bootstrap, a logical `fail` remains inside Gate 8 until the
+90-second deadline. Deadline exhaustion retains the complete eight-line
+terminal snapshot and adjacent
+`CYW43_GATE8_TERMINAL ... action=quarantine`, then emits terminal
+`status=permanent`, quarantines attached Wi-Fi network service, and returns to
+ordinary operator service without pair repair. Serial, local-seat, HDMI
+diagnostics, authentication, and `reboot` must remain responsive. There is no
+automatic backoff, reset, or attempt 2. If retained-output capacity delays this
+terminal transaction, only the hardware-free operator-output turn may run. A
+newly visible typed runtime/SDIO recovery may supersede the logical terminal
+while schema/route/capacity preflight remains blocked. Once preflight succeeds,
+root performs one final typed-recovery probe and, if clear, commits the explicit
+terminal decision immediately before atomically retaining the batch. That
+decision cut, not later output drain, linearizes terminal policy; no
+network/child poll may reopen it while the batch and adjacent Permanent record
+drain. A
+separately typed runtime/SDIO or issued-unknown fault may still use the
+consumed-once pair repair inside `attempt=1`, without renewing the deadline.
+Retraction purges queued HDMI Ready/prompt bytes and forces a canonical
 Stabilizing redraw. Gate-local association, DHCP, and protocol retries remain
 bounded inside their owning gates. Gate 9 DHCP/address and Gate 10 nettest, TCP,
 and authenticated `cohsh` must remain in the accepted Gate 8 connection
@@ -1357,12 +1423,15 @@ The sole boot episode may consume at most one ordered full CYW43/SDIO pair
 repair. Descriptor/engine/context replay completion alone cannot reset that
 bound or renew the one absolute Gate 8 deadline. A recurring pre-ready
 transport fault after the repair is spent fails with
-`cyw43-pair-recovery-limit`; any other retryable terminal bootstrap fault emits
-one `status=failed`. A lease conflict before issue that made no scheduler
-change fails locally; issued or scheduler-mutating uncertainty consumes the
-ordered repair. Terminal bootstrap performs no automatic next child operation,
-whole-bootstrap reset, or pair repair. The supervisor quarantines network
-service and returns to the ordinary EventPump with Wi-Fi acceptance red. An
+`cyw43-pair-recovery-limit`; other non-Gate8 retryable terminal bootstrap faults
+emit one `status=failed`. Gate 8 logical failure instead remains pending to its
+absolute deadline and then emits `CYW43_GATE8_TERMINAL ... action=quarantine`
+plus `status=permanent`, without pair repair. A lease conflict before issue
+that made no scheduler change fails locally; issued or scheduler-mutating
+uncertainty consumes the ordered repair. Terminal bootstrap performs no
+automatic next child operation, whole-bootstrap reset, or pair repair. The
+supervisor quarantines network service and returns to the ordinary EventPump
+with Wi-Fi acceptance red. An
 already-attached stack remains available to passive
 diagnostics only through immutable terminal and owner-ring evidence; its
 retained live DHCP/EAPOL/TCP status is stale and must not be read or allowed to

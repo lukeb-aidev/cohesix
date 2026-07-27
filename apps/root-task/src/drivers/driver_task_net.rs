@@ -61,6 +61,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES,
     DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME,
     DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER, DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+    DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE,
     DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
@@ -123,7 +124,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED,
     DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS, DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_REASON_SHIFT,
-    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
 };
 #[cfg(test)]
 use pi4_driver_abi::{
@@ -1483,6 +1484,7 @@ impl Cyw43BootstrapSupervisor {
             || snapshot.pair_scrub_epoch != pair_scrub_epoch_before
             || snapshot.generation != connection_generation_before
             || !snapshot.stable()
+            || !cyw43_gate8_publication_quiescent(snapshot.generation)
             || CYW43_CONTROL_PROGRAM_EPOCH_VALID.load(Ordering::Acquire) == 0
             || CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.load(Ordering::Acquire) != ready_pair_scrub_epoch
             || cyw43_gate8_diagnostic() != snapshot
@@ -1499,6 +1501,23 @@ impl Cyw43BootstrapSupervisor {
         self.generation = snapshot.generation;
         self.gate8_generation = Some(snapshot.generation);
         self.gate8_snapshot = Some(snapshot);
+        true
+    }
+
+    /// Retire pre-Ready causal diagnostics only after the complete retained
+    /// Gate 8 plus Ready operator transaction has linearized.
+    ///
+    /// Snapshot acceptance alone is revocable: the exact DPC receipt or output
+    /// preflight may still reject publication. Clearing first-cause telemetry
+    /// before this boundary would make that rejected edge invisible.
+    pub fn commit_gate8_ready_publication(&mut self, generation: u32) -> bool {
+        if self.gate8_generation != Some(generation)
+            || self
+                .gate8_snapshot
+                .is_none_or(|snapshot| snapshot.generation != generation || !snapshot.stable())
+        {
+            return false;
+        }
         *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
         *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
         true
@@ -1539,33 +1558,12 @@ impl Cyw43BootstrapSupervisor {
         true
     }
 
-    /// Route a Gate 8 failure or absolute stabilization timeout through the
-    /// sole retained pair-recovery supervisor.
-    pub fn request_gate8_stabilization_recovery(&mut self, reason: &'static str) -> bool {
-        if !self.is_ready() {
-            return matches!(self.phase, Cyw43BootstrapPhase::Recovery(_));
-        }
-        self.gate8_generation = None;
-        self.gate8_snapshot = None;
-        self.stable_generation = None;
-        // Gate 8 remains inside the sole production boot episode. Never reset
-        // the pair-repair streak here: a transport repair already consumed
-        // before Gate 8 and a later Gate 8 repair are the same finite episode.
-        // A recurring pair fault therefore reaches the typed repair limit
-        // instead of warming the hardware through another whole bootstrap.
-        // Gate 8 may expire while the ordinary NetData lane owns an exact
-        // issued CYW43 continuation. Route through the same terminal-owner
-        // drain used by every other generation fault so recovery cannot erase
-        // an accepted op8/op11 parent before its physical terminal is observed.
-        self.route_generation_recovery(reason);
-        true
-    }
-
     /// Accept exact-generation address, nettest, TCP, and authenticated-cohsh proof.
     ///
-    /// Gate 8 owns the initial pair-repair streak. This later boundary records
-    /// complete Gate 10 and alone opens a fresh, independent steady-state
-    /// repair episode without re-arming the production boot attempt.
+    /// Typed transport recovery owns the initial pair-repair streak. This
+    /// later boundary records complete Gate 10 and alone opens a fresh,
+    /// independent steady-state repair episode without re-arming the
+    /// production boot attempt.
     pub fn mark_ready_generation_stable(&mut self, gate10_proven: bool) -> bool {
         let Some(gate8_generation) = self.gate8_generation else {
             return false;
@@ -2949,7 +2947,7 @@ impl Cyw43BootstrapSupervisor {
             Cyw43ControlPhase::PreJoinDrain { remaining, .. } => {
                 if remaining == 0 {
                     return Err(DriverTaskNetError::RuntimeInit(
-                        "cyw43-control-pre-join-event-quiet-fence",
+                        "cyw43-control-pre-join-event-drain-snapshot",
                     ));
                 }
                 let poll = CYW43_CONTROL_PLANE_POLL_ATTEMPTS
@@ -3310,7 +3308,7 @@ impl Cyw43BootstrapSupervisor {
                     Cyw43ControlPhase::Finalize
                 } else if remaining == 0 {
                     return Err(DriverTaskNetError::RuntimeInit(
-                        "cyw43-control-pre-join-event-quiet-fence",
+                        "cyw43-control-pre-join-event-drain-snapshot",
                     ));
                 } else {
                     Cyw43ControlPhase::PreJoinDrain {
@@ -4719,6 +4717,24 @@ struct Cyw43AssociationTerminalEventReceipt {
     join_tx_committed: bool,
     source_stage: &'static str,
 }
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43AssociationJoinArmReceipt {
+    generation: u32,
+    pair_scrub_epoch: u64,
+    request: u32,
+    issued: bool,
+    accepted: bool,
+    tx_committed: bool,
+}
+
+// Exact authority that armed current-generation association events. The live
+// Join cursor is cleared after its terminal reply, so a later firmware event
+// must not reconstruct request/issue proof from that transient diagnostic.
+#[cfg(feature = "kernel")]
+static CYW43_ASSOCIATION_JOIN_ARM_RECEIPT: Mutex<Option<Cyw43AssociationJoinArmReceipt>> =
+    Mutex::new(None);
 
 // First current-generation terminal association event observed after the
 // initial control-plane reset. Pair recovery and association retries retain
@@ -6561,7 +6577,7 @@ fn invalidate_cyw43_root_generation_for_recovery(expected_generation: u32) -> Op
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
     CYW43_OPEN_NETWORK_ACTIVE.store(0, Ordering::Release);
     CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
-    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_association_event_arm();
     CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
@@ -6612,7 +6628,7 @@ fn transition_cyw43_host_eapol_to_reauthentication() {
         .wrapping_add(1);
     CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.store(0, Ordering::Release);
     invalidate_cyw43_data_handoff();
-    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_association_event_arm();
     CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
     CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(next_epoch), Ordering::Release);
     keep_cyw43_reauthentication_pending();
@@ -6770,7 +6786,6 @@ fn reject_stale_cyw43_host_eapol_epoch(
 const fn cyw43_event_is_terminal_association_failure(event: Cyw43EventFrame) -> bool {
     match event.event_type {
         CYW43_EVENT_SET_SSID => event.status != CYW43_EVENT_STATUS_SUCCESS,
-        CYW43_EVENT_AUTH => event.status == CYW43_EVENT_STATUS_TIMEOUT,
         CYW43_EVENT_LINK => {
             event.status == CYW43_EVENT_STATUS_NO_NETWORKS || !cyw43_event_has_link_flag(event)
         }
@@ -6783,24 +6798,59 @@ const fn cyw43_event_is_terminal_association_failure(event: Cyw43EventFrame) -> 
 fn arm_cyw43_association_events_for_join_request(
     generation: u32,
     request: Option<u32>,
+    issued: bool,
     tx_committed: bool,
 ) -> bool {
-    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation
-        || request.is_none_or(|request| request == 0)
-        || !tx_committed
-    {
+    let Some(request) = request.filter(|request| *request != 0) else {
+        return false;
+    };
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation || !issued || !tx_committed {
         return false;
     }
+    let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+    *CYW43_ASSOCIATION_JOIN_ARM_RECEIPT.lock() = Some(Cyw43AssociationJoinArmReceipt {
+        generation,
+        pair_scrub_epoch,
+        request,
+        issued,
+        accepted: cyw43_child_action_accepted(Some(request), issued),
+        tx_committed,
+    });
+    core::sync::atomic::fence(Ordering::Release);
     CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN
         .store(cyw43_epoch_token(generation), Ordering::Release);
-    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
+        && CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == pair_scrub_epoch
+    {
+        return true;
+    }
+    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    *CYW43_ASSOCIATION_JOIN_ARM_RECEIPT.lock() = None;
+    false
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_association_event_arm() {
+    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    *CYW43_ASSOCIATION_JOIN_ARM_RECEIPT.lock() = None;
 }
 
 #[cfg(feature = "kernel")]
 fn cyw43_association_events_armed_for_generation(generation: u32) -> bool {
+    let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
     CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
         && CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.load(Ordering::Acquire)
             == cyw43_epoch_token(generation)
+        && CYW43_ASSOCIATION_JOIN_ARM_RECEIPT
+            .lock()
+            .is_some_and(|receipt| {
+                receipt.generation == generation
+                    && receipt.pair_scrub_epoch == pair_scrub_epoch
+                    && receipt.request != 0
+                    && receipt.issued
+                    && receipt.accepted
+                    && receipt.tx_committed
+            })
 }
 
 #[cfg(feature = "kernel")]
@@ -6821,21 +6871,20 @@ fn record_cyw43_association_event_outcome(event: Cyw43EventFrame, source_stage: 
         return;
     }
     if cyw43_event_is_terminal_association_failure(event) {
-        let join = *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock();
+        let join_arm = *CYW43_ASSOCIATION_JOIN_ARM_RECEIPT.lock();
         let mut receipt = CYW43_BOOT_FIRST_ASSOCIATION_TERMINAL_EVENT.lock();
         if receipt.is_none() {
             *receipt = Some(Cyw43AssociationTerminalEventReceipt {
                 generation,
-                pair_scrub_epoch: CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+                pair_scrub_epoch: join_arm.map_or(0, |arm| arm.pair_scrub_epoch),
                 event_type: event.event_type,
                 status: event.status,
                 reason: event.reason,
                 auth_type: event.auth_type,
-                join_request: join.map_or(0, |join| join.request.unwrap_or(0)),
-                join_issued: join.is_some_and(|join| join.issued),
-                join_accepted: join
-                    .is_some_and(|join| cyw43_child_action_accepted(join.request, join.issued)),
-                join_tx_committed: cyw43_association_events_armed_for_generation(generation),
+                join_request: join_arm.map_or(0, |arm| arm.request),
+                join_issued: join_arm.is_some_and(|arm| arm.issued),
+                join_accepted: join_arm.is_some_and(|arm| arm.accepted),
+                join_tx_committed: join_arm.is_some_and(|arm| arm.tx_committed),
                 source_stage,
             });
         }
@@ -7224,6 +7273,7 @@ struct Cyw43AssociationObservation {
     generation: u32,
     progress_epoch: u32,
     terminal_failure: bool,
+    gate8_logical_retry_required: bool,
     runtime_ready: bool,
     primary_join_ready: bool,
     rejoin_pending: bool,
@@ -8186,17 +8236,118 @@ fn cyw43_post_assoc_bssid_obligation_pending(session: &Cyw43HostEapolSession) ->
 
 #[cfg(feature = "kernel")]
 fn cyw43_host_eapol_runtime_work_pending() -> bool {
-    CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.load(Ordering::Acquire) != 0
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    if CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.load(Ordering::Acquire) != 0
         || cyw43_prompt_poll_owned_by_host_eapol()
-        || CYW43_HOST_EAPOL_SESSION
+    {
+        return true;
+    }
+    if CYW43_OPEN_NETWORK_ACTIVE.load(Ordering::Acquire) == 0 {
+        if CYW43_HOST_EAPOL_PENDING_EVENTS
             .lock()
-            .as_ref()
-            .is_some_and(|session| {
-                session.pending_tx_submit.is_some()
-                    || session.pending_key_install.is_some()
-                    || session.pending_tx_drain.is_some()
-                    || cyw43_post_assoc_bssid_obligation_pending(session)
-            })
+            .iter()
+            .any(|pending| pending.generation == generation)
+        {
+            return true;
+        }
+        if cyw43_pending_pre_secure_eapol_available_for_generation(generation) {
+            return true;
+        }
+    }
+    CYW43_HOST_EAPOL_SESSION
+        .lock()
+        .as_ref()
+        .is_some_and(|session| {
+            session.pending_tx_submit.is_some()
+                || session.pending_key_install.is_some()
+                || session.pending_tx_drain.is_some()
+                || cyw43_post_assoc_bssid_obligation_pending(session)
+        })
+}
+
+/// Immutable proof that the initial Gate 8 publication boundary observed one
+/// empty, healthy linked SDIO DPC ring.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43Gate8PublicationReceipt {
+    pub(crate) pair_scrub_epoch: u64,
+    pub(crate) generation: u32,
+    pub(crate) dpc_epoch: u32,
+    pub(crate) dpc_producer: u32,
+    pub(crate) dpc_overruns: u32,
+    pub(crate) dpc_ack_failures: u32,
+}
+
+#[cfg(all(feature = "kernel", test))]
+static CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE: Mutex<
+    Option<crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot>,
+> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+fn cyw43_gate8_root_publication_idle(expected_generation: u32) -> bool {
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
+        && !cyw43_recovery_required()
+        && !cyw43_rejoin_pending_for_epoch(expected_generation)
+        && !cyw43_host_eapol_runtime_work_pending()
+        && !cyw43_logical_control_owner_active()
+        && CYW43_MAINTENANCE_CURSOR.lock().action.is_none()
+        && CYW43_PENDING_PROMPT_POLL.lock().is_none()
+        && CYW43_TERMINAL_DRAIN_CURSOR.lock().is_none()
+        && crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .is_none()
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_gate8_sdio_dpc_ring_snapshot(
+) -> Option<crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() {
+        return Some(snapshot);
+    }
+    crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
+}
+
+/// Return the exact passive receipt for one publication-quiescent Gate 8
+/// sample.
+///
+/// This is a passive root/HAL snapshot. It never polls the runtime, completes
+/// an action, or changes ownership. Initial Ready publication uses the stricter
+/// fence; an already-published generation may continue an exact NetData
+/// request without retracting otherwise stable Gate 8 proof.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_gate8_publication_receipt(
+    expected_generation: u32,
+) -> Option<Cyw43Gate8PublicationReceipt> {
+    if !cyw43_gate8_root_publication_idle(expected_generation) {
+        return None;
+    }
+    let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+    let dpc = cyw43_gate8_sdio_dpc_ring_snapshot()?;
+    if dpc.epoch == 0 || dpc.producer != dpc.consumer || dpc.flags != 0 {
+        return None;
+    }
+    core::sync::atomic::fence(Ordering::Acquire);
+    if !cyw43_gate8_root_publication_idle(expected_generation)
+        || CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) != pair_scrub_epoch
+        || cyw43_gate8_sdio_dpc_ring_snapshot() != Some(dpc)
+    {
+        return None;
+    }
+    Some(Cyw43Gate8PublicationReceipt {
+        pair_scrub_epoch,
+        generation: expected_generation,
+        dpc_epoch: dpc.epoch,
+        dpc_producer: dpc.producer,
+        dpc_overruns: dpc.overruns,
+        dpc_ack_failures: dpc.ack_failures,
+    })
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_gate8_publication_quiescent(expected_generation: u32) -> bool {
+    cyw43_gate8_publication_receipt(expected_generation).is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -8540,8 +8691,8 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
         subgates[2] = if inputs.terminal_failure {
             cyw43_gate8_record(
                 "8c-join-terminal",
-                Cyw43Gate8SubgateStatus::Fail,
-                "association-terminal-failure",
+                Cyw43Gate8SubgateStatus::Pending,
+                "association-retry-pending",
             )
         } else if inputs.primary_join_ready
             && inputs.primary_join_current
@@ -8562,13 +8713,7 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
     }
 
     if subgates[2].status == Cyw43Gate8SubgateStatus::Pass {
-        subgates[3] = if inputs.terminal_failure {
-            cyw43_gate8_record(
-                "8d-association-link",
-                Cyw43Gate8SubgateStatus::Fail,
-                "association-terminal-failure",
-            )
-        } else if inputs.associated && inputs.link_up {
+        subgates[3] = if inputs.associated && inputs.link_up {
             cyw43_gate8_record("8d-association-link", Cyw43Gate8SubgateStatus::Pass, "none")
         } else {
             cyw43_gate8_record(
@@ -8589,8 +8734,8 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
         } else if inputs.post_assoc_bssid_failure {
             cyw43_gate8_record(
                 "8e-bssid-refresh",
-                Cyw43Gate8SubgateStatus::Fail,
-                "bssid-refresh-terminal-failure",
+                Cyw43Gate8SubgateStatus::Pending,
+                "bssid-refresh-retry-pending",
             )
         } else {
             cyw43_gate8_record(
@@ -8641,8 +8786,8 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
         subgates[6] = if maintenance_failed {
             cyw43_gate8_record(
                 "8g-post-key-maintenance",
-                Cyw43Gate8SubgateStatus::Fail,
-                "post-key-maintenance-terminal-failure",
+                Cyw43Gate8SubgateStatus::Pending,
+                "post-key-maintenance-retry-pending",
             )
         } else if maintenance_ready {
             cyw43_gate8_record(
@@ -8737,7 +8882,6 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
         subgates,
         current_work_pending: frontier_status == Cyw43Gate8SubgateStatus::Pending
             && !inputs.pair_failure
-            && !inputs.terminal_failure
             && inputs.linked_pair_ready,
     }
 }
@@ -8903,11 +9047,15 @@ pub(crate) fn commit_cyw43_data_handoff_if_ready(expected_generation: u32) -> bo
 /// steps, and a failed operator transaction must retract the reservation. This
 /// function performs no driver or HAL work.
 #[cfg(feature = "kernel")]
-pub(crate) fn publish_cyw43_gate8_data_consumer(expected_generation: u32) -> bool {
+pub(crate) fn publish_cyw43_gate8_data_consumer(
+    expected_generation: u32,
+    expected_receipt: Cyw43Gate8PublicationReceipt,
+) -> bool {
     let expected_token = cyw43_epoch_token(expected_generation);
     let diagnostic = cyw43_gate8_diagnostic();
     if diagnostic.generation != expected_generation
         || !diagnostic.stable()
+        || cyw43_gate8_publication_receipt(expected_generation) != Some(expected_receipt)
         || !cyw43_data_handoff_committed_for_generation(expected_generation)
         || cyw43_recovery_required()
         || cyw43_rejoin_pending_for_epoch(expected_generation)
@@ -8919,6 +9067,7 @@ pub(crate) fn publish_cyw43_gate8_data_consumer(expected_generation: u32) -> boo
     CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.store(expected_token, Ordering::Release);
     core::sync::atomic::fence(Ordering::SeqCst);
     if cyw43_data_handoff_committed_for_generation(expected_generation)
+        && cyw43_gate8_publication_receipt(expected_generation) == Some(expected_receipt)
         && !cyw43_recovery_required()
         && !cyw43_rejoin_pending_for_epoch(expected_generation)
         && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
@@ -9907,6 +10056,19 @@ fn cyw43_association_auth_mode(credentials: WifiCredentials) -> Cyw43Association
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_gate8_logical_retry_required(generation: u32) -> bool {
+    let generation_token = cyw43_epoch_token(generation);
+    if CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN.load(Ordering::Acquire)
+        == generation_token
+    {
+        return true;
+    }
+    let maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+    maintenance.generation == generation
+        && maintenance.failed & maintenance.required & CYW43_MAINTENANCE_POST_KEY_MASK != 0
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_association_observation(mode: Cyw43AssociationAuthMode) -> Cyw43AssociationObservation {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let associated = CYW43_ASSOCIATED.load(Ordering::Acquire) != 0;
@@ -9919,6 +10081,7 @@ fn cyw43_association_observation(mode: Cyw43AssociationAuthMode) -> Cyw43Associa
         generation,
         progress_epoch: CYW43_ASSOCIATION_PROGRESS_EPOCH.load(Ordering::Acquire),
         terminal_failure: CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire) != 0,
+        gate8_logical_retry_required: cyw43_gate8_logical_retry_required(generation),
         runtime_ready: runtime_ready(DriverTaskHotPath::Cyw43Wifi),
         primary_join_ready: CYW43_PRIMARY_BSSCFG_JOIN_READY.load(Ordering::Acquire) != 0,
         rejoin_pending: cyw43_rejoin_pending_for_epoch(generation),
@@ -10071,7 +10234,14 @@ impl Cyw43AssociationSupervisor {
                 !observation.runtime_ready
                     || observation.host_terminal
                     || observation.terminal_failure
+                    || observation.gate8_logical_retry_required
                     || cyw43_association_attempt_deadline_expired(observation, since_ms, now_ms)
+            }
+            Cyw43AssociationPhase::Connected => {
+                !observation.runtime_ready
+                    || observation.host_terminal
+                    || observation.terminal_failure
+                    || observation.gate8_logical_retry_required
             }
             _ => false,
         }
@@ -10112,7 +10282,51 @@ impl Cyw43AssociationSupervisor {
         if matches!(self.phase, Cyw43AssociationPhase::Join(_)) {
             return self.service_join(credentials, now_ms);
         }
-        if observation.ready && !matches!(self.phase, Cyw43AssociationPhase::Recovery { .. }) {
+        if !observation.runtime_ready && matches!(self.phase, Cyw43AssociationPhase::Connected) {
+            let invalid_generation = observation.generation;
+            latch_cyw43_pair_recovery(invalid_generation, Cyw43RecoveryCause::Association);
+            self.schedule_recovery(now_ms, invalid_generation, 0);
+            return Cyw43AssociationServiceOutcome {
+                activity: true,
+                claimed_runtime_turn: true,
+                ..Cyw43AssociationServiceOutcome::default()
+            };
+        }
+        let logical_retry_required = observation.host_terminal
+            || observation.terminal_failure
+            || observation.gate8_logical_retry_required;
+        if observation.runtime_ready
+            && logical_retry_required
+            && matches!(
+                self.phase,
+                Cyw43AssociationPhase::Awaiting { .. } | Cyw43AssociationPhase::Connected
+            )
+        {
+            if observation.mode == Cyw43AssociationAuthMode::HostEapol
+                && cyw43_host_eapol_accepted_action_pending()
+            {
+                // A logical connection failure cannot revoke a different
+                // accepted host-EAPOL action. Drain that immutable ticket
+                // before starting the existing same-pair logical Join retry.
+                return Cyw43AssociationServiceOutcome {
+                    activity: true,
+                    host_eapol_allowed: true,
+                    ..Cyw43AssociationServiceOutcome::default()
+                };
+            }
+            suspend_cyw43_association_authentication(observation.mode);
+            self.schedule_backoff(now_ms, observation.progress_epoch);
+            return Cyw43AssociationServiceOutcome {
+                activity: true,
+                ..Cyw43AssociationServiceOutcome::default()
+            };
+        }
+        if observation.ready
+            && !observation.host_terminal
+            && !observation.terminal_failure
+            && !observation.gate8_logical_retry_required
+            && !matches!(self.phase, Cyw43AssociationPhase::Recovery { .. })
+        {
             clear_cyw43_association_join_diagnostic();
             let activity = self.phase != Cyw43AssociationPhase::Connected;
             self.phase = Cyw43AssociationPhase::Connected;
@@ -10145,31 +10359,6 @@ impl Cyw43AssociationSupervisor {
                     return Cyw43AssociationServiceOutcome {
                         activity: true,
                         claimed_runtime_turn: true,
-                        ..Cyw43AssociationServiceOutcome::default()
-                    };
-                }
-                if observation.host_terminal || observation.terminal_failure {
-                    if observation.mode == Cyw43AssociationAuthMode::HostEapol
-                        && cyw43_host_eapol_accepted_action_pending()
-                    {
-                        // A terminal association observation does not revoke
-                        // an already accepted child-runtime action. Let the
-                        // ordinary host-EAPOL service lane advance that
-                        // immutable ticket by one bounded operation per later
-                        // outer turn until it becomes typed terminal.
-                        // Suspending here would classify the still-live prompt
-                        // poll as ambiguous, poison the generation, and turn
-                        // every normal association timeout into a pair restart.
-                        return Cyw43AssociationServiceOutcome {
-                            activity: true,
-                            host_eapol_allowed: true,
-                            ..Cyw43AssociationServiceOutcome::default()
-                        };
-                    }
-                    suspend_cyw43_association_authentication(observation.mode);
-                    self.schedule_backoff(now_ms, observation.progress_epoch);
-                    return Cyw43AssociationServiceOutcome {
-                        activity: true,
                         ..Cyw43AssociationServiceOutcome::default()
                     };
                 }
@@ -10221,6 +10410,7 @@ impl Cyw43AssociationSupervisor {
                 if observation.progress_epoch != progress_epoch
                     && (observation.associated || observation.link_up)
                     && !observation.terminal_failure
+                    && !observation.gate8_logical_retry_required
                 {
                     self.phase = Cyw43AssociationPhase::Awaiting {
                         since_ms: now_ms,
@@ -10562,7 +10752,7 @@ fn begin_cyw43_association_retry(
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
     invalidate_cyw43_data_handoff();
-    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_association_event_arm();
     CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
@@ -10704,13 +10894,27 @@ fn begin_cyw43_pending_association_join(
     }
     let mut tx_frame = [0u8; CYW43_ASSOCIATION_JOIN_CONTROL_FRAME_BYTES];
     tx_frame[..frame_len].copy_from_slice(&frame[..frame_len]);
-    let tx_descriptor = cyw43_control_exchange_descriptor(
+    let mut tx_descriptor = cyw43_control_exchange_descriptor(
         frame_len,
         CYW43_WLC_SET_VAR,
         id,
         Cyw43ControlHeaderMode::Extended,
         true,
     );
+    tx_descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE;
+    // The retained root template intentionally leaves its physical shared
+    // payload offset unset until HAL stages the immutable command material.
+    // Validate the final ABI shape against that canonical staging aperture
+    // without changing the logical descriptor identity retained by root.
+    let staged_validation_descriptor = DriverRuntimeCyw43CommandDescriptor {
+        payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+        ..tx_descriptor
+    };
+    if !staged_validation_descriptor.valid() {
+        return Err(DriverTaskNetError::RuntimeInit(
+            "association Join pre-TX DPC fence descriptor is invalid",
+        ));
+    }
     emit_cyw43_join_payload_trace(CYW43_WIFI_DRIVER_TASK_CONTRACT, credentials, &join_payload);
     emit_cyw43_control_request_trace(
         CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -11069,6 +11273,7 @@ fn advance_cyw43_pending_association_join(
             let _ = arm_cyw43_association_events_for_join_request(
                 pending.generation,
                 pending.request,
+                pending.issued,
                 pending.tx_committed,
             );
         }
@@ -11142,6 +11347,7 @@ fn advance_cyw43_pending_association_join(
             let _ = arm_cyw43_association_events_for_join_request(
                 pending.generation,
                 pending.request,
+                pending.issued,
                 pending.tx_committed,
             );
         }
@@ -11188,6 +11394,7 @@ fn advance_cyw43_pending_association_join(
         let _ = arm_cyw43_association_events_for_join_request(
             pending.generation,
             Some(completion.sequence),
+            pending.issued,
             pending.tx_committed,
         );
     }
@@ -18611,7 +18818,7 @@ fn reset_cyw43_control_plane_state(mode: Cyw43ControlPlaneResetMode) {
     CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_ASSOCIATION_PROGRESS_EPOCH.store(0, Ordering::Release);
     CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
-    CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_association_event_arm();
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
     clear_cyw43_active_prompt_poll();
@@ -23433,13 +23640,20 @@ fn cyw43_pending_eapol_progress_rank(flags: u16, token: &DriverTaskNetRxToken) -
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_pending_pre_secure_eapol_available() -> bool {
+fn cyw43_pending_pre_secure_eapol_available_for_generation(generation: u32) -> bool {
     let queue = CYW43_PENDING_RX_QUEUE.lock();
     let (front, back) = queue.as_slices();
-    front
-        .iter()
-        .chain(back.iter())
-        .any(|pending| cyw43_pending_eapol_progress_rank(pending.flags, &pending.token).is_some())
+    front.iter().chain(back.iter()).any(|pending| {
+        pending.sampled_generation == generation
+            && cyw43_pending_eapol_progress_rank(pending.flags, &pending.token).is_some()
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_pre_secure_eapol_available() -> bool {
+    cyw43_pending_pre_secure_eapol_available_for_generation(
+        CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -25157,7 +25371,7 @@ mod tests {
         CYW43_ASSOCIATION_SERVICE_TURNS.store(0, Ordering::Release);
         CYW43_ASSOCIATION_JOIN_STARTS.store(0, Ordering::Release);
         CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
-        CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN.store(0, Ordering::Release);
+        clear_cyw43_association_event_arm();
         CYW43_PAIR_CONTEXT_RECOVERY_EPOCH.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_VALID.store(0, Ordering::Release);
@@ -25222,6 +25436,7 @@ mod tests {
         CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
         CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
         CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
+        *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = None;
         CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
         CYW43_SUPERVISOR_RING_TURNS.store(0, Ordering::Release);
         CYW43_SUPERVISOR_LAST_OP.store(0, Ordering::Release);
@@ -26633,7 +26848,7 @@ mod tests {
                 usize::from(CYW43_CONTROL_PLANE_QUIET_IDLE_TERMINALS),
                 usize::from(CYW43_CONTROL_PLANE_QUIET_IDLE_TERMINALS),
             ),
-            "each quiet-fence poll publishes one exact grant and one root wake",
+            "each pre-Join drain snapshot poll publishes one exact grant and one root wake",
         );
         assert_eq!(supervisor.control_phase, Cyw43ControlPhase::Finalize);
         assert!(
@@ -26704,7 +26919,7 @@ mod tests {
         assert_eq!(
             supervisor.advance_control_success(supervisor.control_phase, idle),
             Err(DriverTaskNetError::RuntimeInit(
-                "cyw43-control-pre-join-event-quiet-fence"
+                "cyw43-control-pre-join-event-drain-snapshot"
             )),
             "one final Idle cannot satisfy the two-terminal fence"
         );
@@ -26728,7 +26943,7 @@ mod tests {
         assert_eq!(
             supervisor.advance_control_success(supervisor.control_phase, progress),
             Err(DriverTaskNetError::RuntimeInit(
-                "cyw43-control-pre-join-event-quiet-fence"
+                "cyw43-control-pre-join-event-drain-snapshot"
             ))
         );
         reset_cyw43_status_flags();
@@ -29200,7 +29415,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn gate8_timeout_drains_exact_issued_net_data_owner_before_pair_restart() {
+    fn gate8_publication_quiescence_rejects_an_issued_net_data_owner() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
@@ -29257,25 +29472,13 @@ mod tests {
                 )
         }));
 
-        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
-        supervisor.phase = Cyw43BootstrapPhase::Complete;
-        supervisor.ready_generation = Some(0);
-        supervisor.gate8_generation = Some(0);
-        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
         let generation_before = cyw43_connection_generation();
 
-        assert!(supervisor.request_gate8_stabilization_recovery("gate8-stabilization-deadline"));
-
-        assert_eq!(
-            supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::DrainTerminalOwner),
-            "Gate 8 recovery must enter the sole exact-terminal drain lane"
+        assert!(
+            !cyw43_gate8_publication_quiescent(generation_before),
+            "initial Ready must wait for the exact issued NetData owner to become terminal"
         );
         assert_eq!(cyw43_connection_generation(), generation_before);
-        assert_eq!(
-            supervisor.pair_restarts, CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
-            "Gate 8 cannot reset a pair repair already spent in this boot episode"
-        );
         assert!(CYW43_PENDING_PROMPT_POLL.lock().is_some_and(|owner| {
             owner.owner == Cyw43PromptPollOwner::NetData
                 && owner.request == Some(request)
@@ -29294,7 +29497,11 @@ mod tests {
         assert_eq!(
             CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
             0,
-            "recovery routing cannot execute or replay the accepted child"
+            "the passive publication check cannot execute or replay the accepted child"
+        );
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
+            "publication quiescence cannot synthesize a physical pair fault"
         );
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
@@ -29303,27 +29510,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn gate8_timeout_without_accepted_owner_routes_directly_to_generation_poison() {
+    fn gate8_association_terminal_is_logical_pending_not_pair_recovery() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
-        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
-        supervisor.phase = Cyw43BootstrapPhase::Complete;
-        supervisor.ready_generation = Some(0);
-        supervisor.pair_restarts = CYW43_SUPERVISOR_PAIR_RESTART_LIMIT;
-
-        assert!(supervisor.request_gate8_stabilization_recovery("gate8-stabilization-deadline"));
-
+        let mut inputs = stable_cyw43_gate8_inputs_for_test(0);
+        inputs.terminal_failure = true;
+        inputs.associated = false;
+        inputs.link_up = false;
+        let diagnostic = evaluate_cyw43_gate8(inputs);
         assert_eq!(
-            supervisor.phase,
-            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration),
-            "proven-unissued recovery has no terminal owner to drain"
+            diagnostic.subgates[2],
+            cyw43_gate8_record(
+                "8c-join-terminal",
+                Cyw43Gate8SubgateStatus::Pending,
+                "association-retry-pending",
+            ),
         );
-        assert_eq!(
-            supervisor.pair_restarts, CYW43_SUPERVISOR_PAIR_RESTART_LIMIT,
-            "proven-unissued recovery still preserves the spent episode repair budget"
+        assert!(diagnostic.current_work_pending);
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
+            "a connection-attempt terminal cannot invent an SDIO pair fault"
         );
-        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
-        assert!(CYW43_TERMINAL_DRAIN_CURSOR.lock().is_none());
         reset_cyw43_status_flags();
     }
 
@@ -30348,7 +30555,11 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
-    fn mark_cyw43_gate8_ready_for_test(generation: u32) {
+    fn prepare_cyw43_gate8_publication_for_test(
+        generation: u32,
+        dpc: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
+    ) {
+        *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = Some(dpc);
         CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
         invalidate_cyw43_data_handoff();
         mark_cyw43_data_plane_ready_for_test();
@@ -30369,7 +30580,94 @@ mod tests {
             ..Cyw43MaintenanceCursor::new()
         };
         assert!(commit_cyw43_data_handoff_if_ready(generation));
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn mark_cyw43_gate8_ready_for_test(generation: u32) {
+        prepare_cyw43_gate8_publication_for_test(
+            generation,
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: generation.wrapping_add(1).max(1),
+                producer: 0,
+                consumer: 0,
+                flags: 0,
+                overruns: 0,
+                ack_failures: 0,
+            },
+        );
+        let receipt =
+            cyw43_gate8_publication_receipt(generation).expect("test Gate 8 publication receipt");
+        assert!(publish_cyw43_gate8_data_consumer(generation, receipt));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn publish_cyw43_gate8_data_consumer_for_test(generation: u32) -> bool {
+        cyw43_gate8_publication_receipt(generation)
+            .is_some_and(|receipt| publish_cyw43_gate8_data_consumer(generation, receipt))
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn gate8_publication_receipt_tracks_empty_dpc_ring_and_cumulative_history() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 61;
+        let stable_history = crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+            epoch: 7,
+            producer: 11,
+            consumer: 11,
+            flags: 0,
+            overruns: 4,
+            ack_failures: 2,
+        };
+        prepare_cyw43_gate8_publication_for_test(generation, stable_history);
+
+        let retained = cyw43_gate8_publication_receipt(generation)
+            .expect("stable cumulative DPC history remains publishable");
+        assert_eq!(retained.dpc_epoch, 7);
+        assert_eq!(retained.dpc_producer, 11);
+        assert_eq!(retained.dpc_overruns, 4);
+        assert_eq!(retained.dpc_ack_failures, 2);
+
+        for invalid in [
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: 0,
+                ..stable_history
+            },
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                producer: 12,
+                ..stable_history
+            },
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                flags: 1,
+                ..stable_history
+            },
+        ] {
+            *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = Some(invalid);
+            assert!(
+                cyw43_gate8_publication_receipt(generation).is_none(),
+                "zero epoch, pending producer, and current-generation flags fail closed"
+            );
+        }
+
+        let advanced_history = crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+            overruns: stable_history.overruns + 1,
+            ack_failures: stable_history.ack_failures + 1,
+            ..stable_history
+        };
+        *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = Some(advanced_history);
+        assert_ne!(
+            cyw43_gate8_publication_receipt(generation),
+            Some(retained),
+            "counter movement must invalidate the retained publication receipt"
+        );
+        assert!(!publish_cyw43_gate8_data_consumer(generation, retained));
+        assert_eq!(
+            CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.load(Ordering::Acquire),
+            0,
+            "a changed DPC receipt cannot publish the consumer token"
+        );
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -31492,6 +31790,7 @@ mod tests {
             pending.tx_descriptor.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
                 | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+                | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE
         );
         assert_eq!(usize::from(pending.tx_descriptor.payload_len), frame_len);
         assert_eq!(pending.tx_descriptor.total_len, frame_len as u32);
@@ -31572,6 +31871,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             pending.generation,
             pending.request,
+            pending.issued,
             pending.tx_committed,
         ));
 
@@ -32329,7 +32629,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn association_supervisor_treats_repeated_terminal_events_as_immediate_failure() {
+    fn association_supervisor_keeps_terminal_events_in_the_same_pair_retry_lane() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
@@ -32338,19 +32638,35 @@ mod tests {
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
             .expect("valid host-EAPOL credentials");
         let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 100);
-        let timeout = Cyw43EventFrame {
+        let auth_timeout = Cyw43EventFrame {
             event_type: CYW43_EVENT_AUTH,
             status: CYW43_EVENT_STATUS_TIMEOUT,
+            ..Cyw43EventFrame::default()
+        };
+        let set_ssid_failure = Cyw43EventFrame {
+            event_type: CYW43_EVENT_SET_SSID,
+            status: CYW43_EVENT_STATUS_NO_NETWORKS,
             ..Cyw43EventFrame::default()
         };
         assert!(arm_cyw43_association_events_for_join_request(
             0,
             Some(1),
+            true,
             true
         ));
 
         for _ in 0..8 {
-            record_cyw43_association_event_outcome(timeout, "test-auth-timeout");
+            record_cyw43_association_event_outcome(auth_timeout, "test-auth-timeout");
+        }
+        assert_eq!(
+            CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
+            0,
+            "AUTH timeout remains diagnostic because Linux does not use it as the connect terminal"
+        );
+        assert!(!supervisor.claims_runtime_turn(Some(credentials), 101));
+
+        for _ in 0..8 {
+            record_cyw43_association_event_outcome(set_ssid_failure, "test-set-ssid-failure");
         }
         assert_eq!(
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
@@ -32367,6 +32683,148 @@ mod tests {
                 progress_epoch: 8,
             }
         );
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
+            "a connection-attempt terminal cannot reset a healthy linked pair"
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_supervisor_routes_connected_logical_terminals_through_same_pair_backoff() {
+        #[derive(Clone, Copy, Debug)]
+        enum AssociationLogicalTerminal {
+            FirmwareEvent,
+            HostEapol,
+            BssidRefresh,
+            PostKeyMaintenance,
+        }
+
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+
+        for terminal in [
+            AssociationLogicalTerminal::FirmwareEvent,
+            AssociationLogicalTerminal::HostEapol,
+            AssociationLogicalTerminal::BssidRefresh,
+            AssociationLogicalTerminal::PostKeyMaintenance,
+        ] {
+            reset_cyw43_status_flags();
+            let generation = 23;
+            CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+            CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+            CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+            CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN
+                .store(cyw43_epoch_token(generation), Ordering::Release);
+            CYW43_ASSOCIATED.store(1, Ordering::Release);
+            CYW43_LINK_UP.store(1, Ordering::Release);
+            CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+
+            let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+            let mut supervisor =
+                Cyw43AssociationSupervisor::new(true, Some(credentials), generation, 10);
+            assert_eq!(
+                supervisor.phase,
+                Cyw43AssociationPhase::Awaiting {
+                    since_ms: 10,
+                    progress_epoch: 0,
+                }
+            );
+            assert!(supervisor.service(Some(credentials), 10).activity);
+            assert_eq!(supervisor.phase, Cyw43AssociationPhase::Connected);
+
+            match terminal {
+                AssociationLogicalTerminal::FirmwareEvent => {
+                    CYW43_ASSOCIATION_TERMINAL_FAILURE.store(1, Ordering::Release);
+                }
+                AssociationLogicalTerminal::HostEapol => {
+                    CYW43_HOST_EAPOL_REQUIRED.store(1, Ordering::Release);
+                }
+                AssociationLogicalTerminal::BssidRefresh => {
+                    CYW43_POST_ASSOC_BSSID_REFRESH_FAILURE_EPOCH_TOKEN
+                        .store(cyw43_epoch_token(generation), Ordering::Release);
+                }
+                AssociationLogicalTerminal::PostKeyMaintenance => {
+                    *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor {
+                        generation,
+                        required: CYW43_MAINTENANCE_POST_KEY_MASK,
+                        completed: CYW43_MAINTENANCE_POST_KEY_MASK & !CYW43_MAINTENANCE_SCB,
+                        failed: CYW43_MAINTENANCE_SCB,
+                        ..Cyw43MaintenanceCursor::new()
+                    };
+                }
+            }
+
+            assert_eq!(
+                cyw43_gate8_logical_retry_required(generation),
+                matches!(
+                    terminal,
+                    AssociationLogicalTerminal::BssidRefresh
+                        | AssociationLogicalTerminal::PostKeyMaintenance
+                )
+            );
+            assert!(supervisor.claims_runtime_turn(Some(credentials), 11));
+            let backoff = supervisor.service(Some(credentials), 11);
+            assert!(backoff.activity);
+            assert!(!backoff.claimed_runtime_turn);
+            assert_eq!(
+                supervisor.phase,
+                Cyw43AssociationPhase::Backoff {
+                    since_ms: 11,
+                    delay_ms: 1_000,
+                    progress_epoch: 0,
+                },
+                "logical terminal {terminal:?} must use the existing bounded association backoff"
+            );
+            assert_eq!(
+                CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                generation,
+                "entering logical backoff does not poison the connection generation"
+            );
+            assert_eq!(
+                CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+                pair_scrub_epoch,
+                "logical terminal {terminal:?} cannot scrub the linked pair"
+            );
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_context_replay_required());
+            assert!(!supervisor.claims_runtime_turn(Some(credentials), 1_010));
+            assert!(supervisor.claims_runtime_turn(Some(credentials), 1_011));
+
+            // Hold the already-counted outer turn so the supervisor can prove
+            // generation advance without issuing the freshly retained Join in
+            // this unit-test turn.
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+            begin_cyw43_outer_event_turn();
+            CYW43_OUTER_EVENT_TURN_CLAIMED.store(1, Ordering::Release);
+            let retry = supervisor.service(Some(credentials), 1_011);
+            assert!(retry.claimed_runtime_turn);
+            assert_eq!(
+                CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+                generation.wrapping_add(1)
+            );
+            assert_eq!(supervisor.generation, generation.wrapping_add(1));
+            assert!(matches!(supervisor.phase, Cyw43AssociationPhase::Join(_)));
+            assert_eq!(
+                CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
+                0
+            );
+            assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
+            assert!(!cyw43_gate8_logical_retry_required(
+                generation.wrapping_add(1)
+            ));
+            assert_eq!(
+                CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+                pair_scrub_epoch,
+                "same-pair Join retry cannot alter the physical pair epoch"
+            );
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_context_replay_required());
+            CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        }
+
         reset_cyw43_status_flags();
     }
 
@@ -32409,8 +32867,12 @@ mod tests {
         assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 7);
 
         assert!(
-            !arm_cyw43_association_events_for_join_request(7, None, true),
+            !arm_cyw43_association_events_for_join_request(7, None, true, true),
             "physical TX without an exact request is not Join ownership"
+        );
+        assert!(
+            !arm_cyw43_association_events_for_join_request(7, Some(319), false, true),
+            "a TX receipt without the child-issued boundary cannot arm Join events"
         );
         crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -32429,6 +32891,7 @@ mod tests {
             !arm_cyw43_association_events_for_join_request(
                 7,
                 pending.request,
+                pending.issued,
                 pending.tx_committed,
             ),
             "a child-accepted Join remains unarmed before physical TX"
@@ -32479,6 +32942,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             7,
             pending.request,
+            pending.issued,
             pending.tx_committed,
         ));
         record_cyw43_association_event_outcome(stale_link_down, "test-armed-link");
@@ -32496,8 +32960,8 @@ mod tests {
         record_cyw43_association_event_outcome(auth_timeout, "test-armed-auth");
         assert_eq!(
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
-            1,
-            "an explicit current-generation authentication timeout is terminal"
+            0,
+            "an armed AUTH timeout remains telemetry rather than a connect terminal"
         );
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -32523,12 +32987,14 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             7,
             pending.request,
+            pending.issued,
             pending.tx_committed,
         ));
+        clear_cyw43_association_join_diagnostic();
 
         let first = Cyw43EventFrame {
-            event_type: CYW43_EVENT_AUTH,
-            status: CYW43_EVENT_STATUS_TIMEOUT,
+            event_type: CYW43_EVENT_SET_SSID,
+            status: CYW43_EVENT_STATUS_NO_NETWORKS,
             reason: 0x1234_5678,
             auth_type: 0x8765_4321,
             ..Cyw43EventFrame::default()
@@ -32538,10 +33004,10 @@ mod tests {
         assert!(receipt.first_terminal_event_present);
         assert_eq!(receipt.first_terminal_event_generation, 7);
         assert_eq!(receipt.first_terminal_event_pair_epoch, 3);
-        assert_eq!(receipt.first_terminal_event_type, CYW43_EVENT_AUTH);
+        assert_eq!(receipt.first_terminal_event_type, CYW43_EVENT_SET_SSID);
         assert_eq!(
             receipt.first_terminal_event_status,
-            CYW43_EVENT_STATUS_TIMEOUT
+            CYW43_EVENT_STATUS_NO_NETWORKS
         );
         assert_eq!(receipt.first_terminal_event_reason, 0x1234_5678);
         assert_eq!(receipt.first_terminal_event_auth_type, 0x8765_4321);
@@ -37310,7 +37776,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn host_eapol_auth_timeout_names_association_gate() {
+    fn host_eapol_auth_timeout_is_diagnostic_not_a_connect_terminal() {
         let mut progress = Cyw43HostEapolProgress::default();
         let auth_timeout = Cyw43EventFrame {
             flags: 0x4f01,
@@ -37331,6 +37797,10 @@ mod tests {
         assert_eq!(
             cyw43_host_eapol_event_trace_label(auth_timeout),
             "auth-timeout"
+        );
+        assert!(
+            !cyw43_event_is_terminal_association_failure(auth_timeout),
+            "AUTH timeout is retained telemetry, not Linux connect-result authority"
         );
         assert_eq!(
             cyw43_host_eapol_required_reason(&progress),
@@ -37520,6 +37990,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             0,
             Some(1),
+            true,
             true
         ));
 
@@ -37634,6 +38105,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             0,
             Some(1),
+            true,
             true
         ));
 
@@ -37700,6 +38172,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             initial_epoch,
             Some(1),
+            true,
             true
         ));
 
@@ -37809,6 +38282,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             7,
             Some(1),
+            true,
             true
         ));
 
@@ -37877,6 +38351,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             9,
             Some(1),
+            true,
             true,
         ));
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
@@ -37976,6 +38451,7 @@ mod tests {
         assert!(arm_cyw43_association_events_for_join_request(
             0,
             Some(1),
+            true,
             true
         ));
 
@@ -40487,6 +40963,86 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn gate8_ready_waits_for_queued_eapol_events_and_frames() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 41;
+        mark_cyw43_gate8_ready_for_test(generation);
+        assert!(cyw43_gate8_publication_quiescent(generation));
+
+        cyw43_store_pending_host_eapol_event_record(Cyw43PendingHostEapolEvent {
+            generation,
+            state_admitted: true,
+            event: Cyw43EventFrame {
+                event_type: CYW43_EVENT_AUTH,
+                status: CYW43_EVENT_STATUS_TIMEOUT,
+                ..Cyw43EventFrame::default()
+            },
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+            len: CYW43_BRCMF_EVENT_MIN_PACKET_LEN as u16,
+        });
+        assert!(cyw43_host_eapol_runtime_work_pending());
+        assert!(!cyw43_gate8_publication_quiescent(generation));
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[6],
+            cyw43_gate8_record(
+                "8g-post-key-maintenance",
+                Cyw43Gate8SubgateStatus::Pending,
+                "host-eapol-owner-active",
+            ),
+            "a queued firmware event cannot sit behind a published Ready boundary"
+        );
+
+        CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
+        let mut eapol = [0u8; MAX_FRAME_LEN];
+        let station = CYW43_DRIVER_TASK_MAC.0;
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let eapol_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut eapol, &station, &ap).expect("test M1");
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&eapol[..eapol_len]),
+        ));
+        assert!(cyw43_pending_pre_secure_eapol_available());
+        assert!(cyw43_host_eapol_runtime_work_pending());
+        assert!(!cyw43_gate8_publication_quiescent(generation));
+        assert_eq!(
+            cyw43_gate8_diagnostic().subgates[6],
+            cyw43_gate8_record(
+                "8g-post-key-maintenance",
+                Cyw43Gate8SubgateStatus::Pending,
+                "host-eapol-owner-active",
+            ),
+            "a queued current-generation EAPOL frame must drain before Ready"
+        );
+
+        CYW43_PENDING_RX_QUEUE.lock().clear();
+        assert!(!cyw43_host_eapol_runtime_work_pending());
+        assert!(cyw43_gate8_publication_quiescent(generation));
+
+        CYW43_OPEN_NETWORK_ACTIVE.store(1, Ordering::Release);
+        cyw43_store_pending_host_eapol_event_record(Cyw43PendingHostEapolEvent {
+            generation,
+            state_admitted: true,
+            event: Cyw43EventFrame {
+                event_type: CYW43_EVENT_LINK,
+                status: CYW43_EVENT_STATUS_SUCCESS,
+                flags: CYW43_EVENT_FLAG_LINK,
+                ..Cyw43EventFrame::default()
+            },
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+            len: CYW43_BRCMF_EVENT_MIN_PACKET_LEN as u16,
+        });
+        assert!(
+            !cyw43_host_eapol_runtime_work_pending(),
+            "open association state is applied at capture and has no host-EAPOL queue owner"
+        );
+        CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn retained_pre_recovery_gate8_tracks_latest_complete_snapshot_and_resets() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -40520,7 +41076,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn gate8_rejects_unsuccessful_bssid_keys_and_post_key_maintenance_terminals() {
+    fn gate8_keeps_bssid_and_maintenance_terminals_in_logical_retry() {
         let ready = stable_cyw43_gate8_inputs_for_test(31);
 
         let mut bssid_failed = ready;
@@ -40530,8 +41086,8 @@ mod tests {
             evaluate_cyw43_gate8(bssid_failed).subgates[4],
             cyw43_gate8_record(
                 "8e-bssid-refresh",
-                Cyw43Gate8SubgateStatus::Fail,
-                "bssid-refresh-terminal-failure",
+                Cyw43Gate8SubgateStatus::Pending,
+                "bssid-refresh-retry-pending",
             )
         );
 
@@ -40554,8 +41110,8 @@ mod tests {
             evaluate_cyw43_gate8(maintenance_failed).subgates[6],
             cyw43_gate8_record(
                 "8g-post-key-maintenance",
-                Cyw43Gate8SubgateStatus::Fail,
-                "post-key-maintenance-terminal-failure",
+                Cyw43Gate8SubgateStatus::Pending,
+                "post-key-maintenance-retry-pending",
             )
         );
     }
@@ -40753,7 +41309,7 @@ mod tests {
             !cyw43_current_generation_data_consumer_open(),
             "8h candidate proof cannot open data before Ready publication"
         );
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
         assert!(cyw43_current_generation_data_consumer_open());
 
         assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
@@ -41113,8 +41669,18 @@ mod tests {
             supervisor.pair_restart_limit,
             CYW43_SUPERVISOR_PAIR_RESTART_LIMIT
         );
-        assert_eq!(cyw43_deferred_recovery_diagnostic(), None);
+        assert!(
+            cyw43_deferred_recovery_diagnostic().is_some(),
+            "revocable Gate 8 snapshot acceptance must retain first-cause telemetry"
+        );
         assert!(!supervisor.mark_gate8_generation_stable(snapshot));
+        assert!(!supervisor.commit_gate8_ready_publication(24));
+        assert!(
+            cyw43_deferred_recovery_diagnostic().is_some(),
+            "a rejected Ready publication must not erase first-cause telemetry"
+        );
+        assert!(supervisor.commit_gate8_ready_publication(23));
+        assert_eq!(cyw43_deferred_recovery_diagnostic(), None);
 
         assert!(!supervisor.mark_ready_generation_stable(false));
         assert_eq!(supervisor.pair_restarts, 1);
@@ -44420,7 +44986,7 @@ mod tests {
         assert_eq!(cyw43_data_handoff_diagnostic().root_rx_queue_len, 1);
         assert!(commit_cyw43_data_handoff_if_ready(generation));
         assert!(!cyw43_current_generation_data_consumer_open());
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
         let (rx, _) = dev
             .receive(Instant::from_millis(1))
             .expect("the committed consumer receives the preserved pre-poll token");
@@ -45929,7 +46495,7 @@ mod tests {
         assert_eq!(retracted.publication_epoch_token, 0);
         assert!(!retracted.consumer_open);
         assert!(
-            publish_cyw43_gate8_data_consumer(generation),
+            publish_cyw43_gate8_data_consumer_for_test(generation),
             "the unchanged exact Gate 8 snapshot may be freshly republished"
         );
         assert!(cyw43_current_generation_data_consumer_open());
@@ -45975,7 +46541,7 @@ mod tests {
             !cyw43_current_generation_data_consumer_open(),
             "the 8h candidate remains fenced until the Ready publication"
         );
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
         assert!(cyw43_current_generation_data_consumer_open());
         let token = receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
             .expect("exact committed generation releases the preserved RX token");
@@ -46339,7 +46905,7 @@ mod tests {
         assert!(!cyw43_data_tx_admission_ready(
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
         assert!(cyw43_data_tx_admission_ready(
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
@@ -46376,7 +46942,7 @@ mod tests {
             "a failed Ready publication leaves ARP behind the consumer fence"
         );
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
-        assert!(publish_cyw43_gate8_data_consumer(generation));
+        assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
         assert!(!cyw43_data_tx_admission_ready(
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));

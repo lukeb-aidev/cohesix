@@ -407,7 +407,7 @@ This as-built defect closure is authorized by active Milestone 26d task
 `m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
 ownership, bootstrap, recovery, or proof lane.
 
-#### Sole pair-normalization and pre-Join lane
+#### Sole pair-normalization and ordered pre-Join drain
 
 Cold bootstrap and recovery do not have separate post-handoff implementations.
 After initial linked-runtime admission and CYW43-to-SDIO producer handoff, both
@@ -421,8 +421,8 @@ normalization is part of attempt 1, not a retry. There is no direct
 cold-to-firmware path, recovery-only replay path, same-generation fallback, or
 second restart cursor.
 
-The sole event quiet fence is immediately before association Join. It runs
-after the last Join-affecting protected-network control
+The sole ordered event-drain snapshot is immediately before association Join.
+It runs after the last Join-affecting protected-network control
 (`HostEapolPromisc`) or open-network control (`OpenWpaAuth`) and before Join
 event ownership can be armed. It completes only after two consecutive exact
 `Idle` terminals. Any `FrameReady` or `Progress` activity resets that streak,
@@ -433,14 +433,33 @@ the Function 2 write. Root arms association-event ownership only after the
 exact Join request publishes a post-Function-2 TX progress phase; HAL
 child-command issue and `CONTROL_TX_BEGIN` are not physical TX proof. Events
 drained before that boundary remain history and cannot poison the new
-generation. There is no earlier or additional post-UP quiet fence.
+generation.
+
+The ordered drain is followed by one Join-only SDIO owner fence. Root marks
+only the retained association Join exchange; generic control, maintenance,
+host-EAPOL, and data traffic do not inherit this policy. Immediately before
+writing `SDHCI_COMMAND` for that Join's Function 2 CMD53, the sole SDIO owner
+samples the level-retained host `CARD_INT`. If it is asserted, the child
+returns a typed not-issued terminal without starting DMA, touching the FIFO,
+advancing the SDPCM sequence, entering containment, or requesting pair
+recovery. The same immutable operation-11 parent, payload, generation, and
+absolute deadline return to the canonical forced `DPC_ACTIVATE` source probe,
+consume the event through the sole DPC lane, and then re-enter the ordinary
+drain/credit/setup path. Only a later source-clear child may issue the Join
+CMD53, exactly once. This closes the owner-side late-source interval without a
+second Join, recovery, or fallback lane; repeated fresh-Pi proof remains
+required before claiming hardware repeatability.
 
 #### Ordered Gate 8 stability contract
 
 Transport and control-plane attachment enter `stabilizing`, not `ready`.
 Each outer supervisor attempt owns one fixed absolute Gate 8 deadline of
-90,000 milliseconds. A retained pair repair inside that attempt preserves the
-original deadline; it cannot manufacture another stabilization window.
+90,000 milliseconds. Gate 8 is a passive proof surface: evaluating a subgate,
+observing a logical failure, or exhausting this deadline performs no HAL,
+runtime, SDIO, completion, retry, or pair-recovery mutation. Only an
+independently typed runtime/SDIO fault or issued-unknown physical operation may
+invoke the consumed-once pair repair, and that repair preserves the original
+deadline rather than manufacturing another stabilization window.
 
 One passive, immutable snapshot evaluates and publishes the eight subgates in
 this exact order:
@@ -458,6 +477,21 @@ this exact order:
    all logical control owners are clear.
 8. `8h-data-admission` proves the current-generation data handoff and bounded
    fairness/loss invariants.
+
+An ordinary firmware `AUTH` timeout remains event telemetry and is not a
+terminal association failure. Unsuccessful `SET_SSID`, link-down/no-network,
+deauthentication, and disassociation events are logical connection failures:
+8c reports `pending` with `blocker=association-retry-pending`, and the single
+association supervisor suspends authentication, applies its bounded backoff,
+and starts a fresh logical generation/Join on the same admitted linked pair.
+An exact current-generation BSSID-refresh failure at 8e reports
+`pending` with `blocker=bssid-refresh-retry-pending`; an exact required
+post-key-maintenance failure at 8g reports `pending` with
+`blocker=post-key-maintenance-retry-pending`. The same association supervisor
+owns both outcomes and applies the same bounded same-pair logical-generation
+retry.
+These events never fabricate an SDIO fault or enter the pair-normalization
+repair lane.
 
 Gate 8h has one explicit root-consumer commit. Association-generation start
 does not establish the data-handoff baseline because, unlike Linux
@@ -506,26 +540,61 @@ the same snapshot before that transaction. A prefix, mixed generation,
 cross-recovery stitch, non-adjacent Ready, or snapshot that changed before
 commit is not Gate 8 proof.
 
+Initial Ready publication additionally requires two consecutive ordinary
+control turns with the same pair epoch and logical generation, with all eight
+subgates stable and the publication lane quiescent on both observations. The
+quiescence snapshot requires no current-generation pending host-EAPOL event or
+queued pre-secure EAPOL RX frame, no host-EAPOL prompt, session work, deferred
+reauthentication, or post-association BSSID work, no maintenance or other
+logical control owner, no prompt poll or terminal-drain cursor, and no retained
+HAL driver-task request. The linked SDIO DPC ring must also be empty and
+healthy: producer equals consumer and current-generation flags are zero. DPC
+overrun and IRQ-ACK-failure counters are cumulative boot history, so they need
+not be zero after a successful typed recovery; their exact values, the nonzero
+DPC epoch, and the producer watermark must remain unchanged across both
+observations. Pair recovery/rejoin must also remain absent. Any owner activity,
+DPC publication, counter movement, DPC epoch change, or logical/pair generation
+change clears the candidate and requires two fresh observations. The snapshot
+commit and consumer-token publication recheck the exact
+pair/generation/DPC/history receipt before publication and again after the
+release boundary; rejection publishes no Ready. This stricter rule applies to
+initial publication only: after Ready, one exact current-generation NetData
+continuation and ordinary newly published DPC traffic remain legal and do not
+by themselves retract otherwise stable proof.
+The first deferred-recovery and terminal-drain diagnostics remain retained
+through every revocable snapshot/publication attempt and are cleared only
+after the complete 8a-through-8h plus Ready operator transaction is retained.
+
 `ready` is revocable. Any later fresh snapshot that is non-stable or has a
 different generation retracts `ready` to `stabilizing`, even when the logical
 generation number did not change. The old snapshot becomes non-authorizing
 immediately, and a complete new 8a-through-8h snapshot is required before
-another `ready`. A subgate `fail` or the absolute deadline may request the sole
-fenced full CYW43/SDIO pair repair only after one atomic eight-line failure
-snapshot plus its immediately following `CYW43_GATE8_RECOVERY` boundary is
-retained. That repair is consumed once inside the same `attempt=1` boot episode
-and does not renew the absolute Gate 8 deadline. The atomic admission reserves
-one additional retained-serial slot for the immediately following supervisor
-`recovery`, `failed`, or `permanent` transition, so saturation cannot hide the
-episode outcome. Retraction also invalidates queued HDMI Ready/prompt bytes and
-schedules a canonical Stabilizing redraw. There is no automatic
-whole-bootstrap backoff, reset, or attempt 2. A recurring pre-ready fault after
-the repair is spent terminates bootstrap and quarantines network service rather
-than spinning. Gate-local association, DHCP, and protocol retries remain
+another `ready`. A logical subgate failure remains visible and pending inside
+its owning gate-local policy until the original absolute deadline. Deadline
+exhaustion retains the complete eight-line snapshot plus an adjacent
+`CYW43_GATE8_TERMINAL ... action=quarantine` record, publishes terminal
+`status=permanent`, and quarantines the attached Wi-Fi network path without
+requesting pair repair. Serial, local-seat, HDMI diagnostics, authentication,
+and `reboot` remain live. While output capacity delays that terminal batch, the
+supervisor runs only the hardware-free operator-output turn. A newly visible
+typed runtime/SDIO recovery may supersede the logical terminal while
+schema/route/capacity preflight remains blocked. After successful preflight,
+one final typed-recovery probe either declines terminal policy or commits its
+explicit decision cut immediately before atomic batch retention. That decision
+linearizes terminal policy, and no child/network poll may reopen the episode
+while the batch and adjacent Permanent record drain.
+Retraction also invalidates queued HDMI Ready/prompt bytes and schedules a
+canonical Stabilizing redraw. There is no automatic whole-bootstrap backoff,
+reset, or attempt 2. Gate-local association, DHCP, and protocol retries remain
 bounded inside their owning gates and do not create another outer episode.
 
 Gate 8h deliberately permits normal bounded root RX, data TX, ARP, runtime
 backlog, and an exact already-assigned current-generation NetData request.
+Before initial Ready publication, however, the separate publication-quiescence
+predicate waits for that exact request and its terminal-drain/HAL ownership to
+finish; Gate 8h pass is not permission to publish through an active physical
+owner. After Ready, the exact continuation is legal under the revocable
+steady-state proof above.
 Before the root-consumer commit, a missing/stale commit or baseline token is
 `pending` with blocker `data-handoff-commit-pending`, and pre-consumer queue
 pressure cannot be relabelled as a post-handoff failure. After the token is
@@ -1465,7 +1534,10 @@ generation and XID.
   association, EAPOL, data, or pair-context fault fences ordinary NetStack
   work and re-enters that retained supervisor; a stale completion cannot
   mutate the replacement generation, and an issued-but-unknown action is
-  poisoned rather than replayed.
+  poisoned rather than replayed. Recovery entry is a strict
+  `Network -> yield -> Operator -> yield -> Driver` sequence. Driver repeats
+  the reboot/linked-serial admission check before its child turn; it cannot
+  share an outer iteration with the operator service that preceded it.
 - Descriptor replay, engine initialization, prerequisite admission, context
   replay, and post-secure retained maintenance carry absolute virtual-counter
   deadlines. The linked engine envelope is eight seconds, covering the
@@ -1635,10 +1707,11 @@ generation and XID.
   association recovery, host-EAPOL maintenance, data TX, and ARP/GARP output
   retain their next action for a later turn. EventPump and NetStack do not
   manufacture private Wi-Fi poll, tail-ingest, TCP-flush, or EAPOL bursts. In
-  particular, the sole immediately pre-Join quiet fence consumes one poll per
-  separately admitted outer turn, requires two consecutive exact `Idle`
-  terminals, resets that streak on activity, and fails closed at its finite
-  256-poll cap.
+  particular, the sole immediately pre-Join ordered drain snapshot consumes one
+  poll per separately admitted outer turn, requires two consecutive exact
+  `Idle` terminals, resets that streak on activity, and fails closed at its
+  finite 256-poll cap. It is not an atomic exclusion fence for a source that
+  becomes pending after the final observation.
 - Steady Gate 8 polling uses one retained-owner arbitration rule. An existing
   `NetData` prompt poll remains first until its immutable request reaches a
   typed terminal, including while its prepared ring sequence is deliberately

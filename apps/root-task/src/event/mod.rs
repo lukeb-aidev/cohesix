@@ -349,6 +349,22 @@ const CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS: u64 = 5_000;
 /// directly through the shared physical-console queue.
 #[cfg(feature = "kernel")]
 const CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY: usize = 20;
+/// Result of preflighting one retained CYW43 proof batch, taking its explicit
+/// caller-owned decision cut, and then appending the complete batch.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43BootstrapAtomicDecisionOutcome {
+    /// Schema, route, or retained capacity is not yet ready; the decision
+    /// callback was not invoked and no output was mutated.
+    PreflightBlocked,
+    /// The caller declined its final decision after successful preflight.
+    DecisionDeclined,
+    /// The decision committed and the complete batch was retained.
+    Retained,
+    /// A preflighted fixed-capacity append failed unexpectedly. The caller's
+    /// decision already committed, so recovery must remain fenced.
+    RetentionInvariantFailed,
+}
 #[cfg(feature = "net-console")]
 const LOCAL_SEAT_HDMI_PUMP_PASSES_UNDER_NET_PRESSURE: usize = 1;
 const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
@@ -1957,7 +1973,7 @@ const fn serial_linked_runtime_cutover_action(
 fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
     line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
         || line.as_bytes().starts_with(b"wifi: gate 8 subgate=")
-        || line.as_bytes().starts_with(b"CYW43_GATE8_RECOVERY ")
+        || line.as_bytes().starts_with(b"CYW43_GATE8_TERMINAL ")
         || line
             .as_bytes()
             .starts_with(b"[net-console] deferred failed detail=")
@@ -3377,15 +3393,9 @@ where
         self.queue_physical_console_output(PendingConsoleOutputKind::BackgroundLine, line)
     }
 
-    /// Atomically retain one ordered machine-proof batch plus later reserve.
-    ///
-    /// Gate 8 publishes eight generation-bound subgates immediately before
-    /// its `ready` supervisor terminal. Preflighting the dedicated retained
-    /// queue prevents a short prefix from becoming visible when there is no
-    /// room for the complete snapshot and its following terminal record.
     #[cfg(feature = "kernel")]
-    pub fn queue_cyw43_bootstrap_operator_lines_atomic(
-        &mut self,
+    fn cyw43_bootstrap_operator_lines_atomic_preflight(
+        &self,
         lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>],
         reserve_after: usize,
     ) -> bool {
@@ -3411,6 +3421,14 @@ where
         if required > CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY {
             return false;
         }
+        true
+    }
+
+    #[cfg(feature = "kernel")]
+    fn retain_cyw43_bootstrap_operator_lines_preflighted(
+        &mut self,
+        lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>],
+    ) -> bool {
         for line in lines {
             crate::log_buffer::append_log_line(line.as_str());
             let queued = self
@@ -3425,6 +3443,56 @@ where
             }
         }
         true
+    }
+
+    /// Atomically retain one ordered machine-proof batch plus later reserve.
+    ///
+    /// Gate 8 publishes eight generation-bound subgates immediately before
+    /// either its Ready record or the bounded terminal-quarantine boundary.
+    /// Preflighting the dedicated retained queue prevents a short prefix from
+    /// becoming visible when there is no room for the complete snapshot and
+    /// its following supervisor record.
+    #[cfg(feature = "kernel")]
+    pub fn queue_cyw43_bootstrap_operator_lines_atomic(
+        &mut self,
+        lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>],
+        reserve_after: usize,
+    ) -> bool {
+        if !self.cyw43_bootstrap_operator_lines_atomic_preflight(lines, reserve_after) {
+            return false;
+        }
+        self.retain_cyw43_bootstrap_operator_lines_preflighted(lines)
+    }
+
+    /// Preflight one proof batch, take a caller-owned final decision cut, and
+    /// retain the complete batch without another mutable operation between the
+    /// decision and append.
+    ///
+    /// The callback is invoked only after route, schema, and capacity proof.
+    /// Returning `false` leaves every output queue unchanged. Returning `true`
+    /// commits caller policy even if the mathematically preflighted append
+    /// later reports an invariant failure.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn queue_cyw43_bootstrap_operator_lines_atomic_with_decision<Decision>(
+        &mut self,
+        lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>],
+        reserve_after: usize,
+        decide: Decision,
+    ) -> Cyw43BootstrapAtomicDecisionOutcome
+    where
+        Decision: FnOnce() -> bool,
+    {
+        if !self.cyw43_bootstrap_operator_lines_atomic_preflight(lines, reserve_after) {
+            return Cyw43BootstrapAtomicDecisionOutcome::PreflightBlocked;
+        }
+        if !decide() {
+            return Cyw43BootstrapAtomicDecisionOutcome::DecisionDeclined;
+        }
+        if self.retain_cyw43_bootstrap_operator_lines_preflighted(lines) {
+            Cyw43BootstrapAtomicDecisionOutcome::Retained
+        } else {
+            Cyw43BootstrapAtomicDecisionOutcome::RetentionInvariantFailed
+        }
     }
 
     /// Atomically publish one complete Gate 8 snapshot and its Ready terminal.
@@ -28738,8 +28806,14 @@ mod tests {
             "wifi: gate 8 subgate=8a-pair-generation status=pass pair_epoch=0 generation=0 blocker=none"
         ));
         assert!(super::cyw43_bootstrap_serial_milestone(
-            "CYW43_GATE8_RECOVERY attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=pair-restart"
+            "CYW43_GATE8_TERMINAL attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=quarantine"
         ));
+        assert!(
+            !super::cyw43_bootstrap_serial_milestone(
+                "CYW43_GATE8_RECOVERY attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=pair-restart"
+            ),
+            "the removed Gate 8 pair-restart lane must not regain retained milestone authority",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -30947,14 +31021,14 @@ mod tests {
         }
         let serial_ready = "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready console_sequence=9";
         let hdmi_ready = crate::local_seat::CYW43_GATE8_READY_HDMI_LINE;
-        let recovery_line = "CYW43_GATE8_RECOVERY attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=pair-restart";
-        let mut recovery_batch = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 9>::new();
+        let terminal_line = "CYW43_GATE8_TERMINAL attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=quarantine";
+        let mut terminal_batch = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 9>::new();
         for line in &subgates {
-            recovery_batch.push(line.clone()).unwrap();
+            terminal_batch.push(line.clone()).unwrap();
         }
-        let mut recovery = HeaplessString::new();
-        recovery.push_str(recovery_line).unwrap();
-        recovery_batch.push(recovery).unwrap();
+        let mut terminal = HeaplessString::new();
+        terminal.push_str(terminal_line).unwrap();
+        terminal_batch.push(terminal).unwrap();
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -30994,32 +31068,74 @@ mod tests {
                 retained_before,
                 "a failed preflight must not expose a partial 8a-8h prefix"
             );
+            let terminal_decision_called = core::cell::Cell::new(false);
+            assert_eq!(
+                pump.queue_cyw43_bootstrap_operator_lines_atomic_with_decision(
+                    terminal_batch.as_slice(),
+                    1,
+                    || {
+                        terminal_decision_called.set(true);
+                        true
+                    },
+                ),
+                Cyw43BootstrapAtomicDecisionOutcome::PreflightBlocked,
+            );
+            assert!(
+                !terminal_decision_called.get(),
+                "capacity proof must precede the terminal decision cut",
+            );
+            assert_eq!(
+                pump.pending_cyw43_bootstrap_serial_milestones.len(),
+                retained_before,
+                "a rejected terminal batch must expose neither subgates nor terminal boundary"
+            );
             assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
 
             let target_len = CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY - 10;
-            let mut drained_for_recovery = false;
+            let mut drained_for_terminal = false;
             for _ in 0..64 {
                 pump.poll_cyw43_bootstrap_supervisor_event_turn();
                 let _ = crate::serial::test_take_linked_runtime_only_tx();
                 if pump.pending_cyw43_bootstrap_serial_milestones.len() <= target_len {
-                    drained_for_recovery = true;
+                    drained_for_terminal = true;
                     break;
                 }
             }
             assert!(
-                drained_for_recovery,
-                "hardware-free recovery turns must release retained proof capacity"
+                drained_for_terminal,
+                "hardware-free terminal turns must release retained proof capacity"
             );
-            assert!(pump.queue_cyw43_bootstrap_operator_lines_atomic(recovery_batch.as_slice(), 1,));
+            let before_declined = pump.pending_cyw43_bootstrap_serial_milestones.len();
+            assert_eq!(
+                pump.queue_cyw43_bootstrap_operator_lines_atomic_with_decision(
+                    terminal_batch.as_slice(),
+                    1,
+                    || false,
+                ),
+                Cyw43BootstrapAtomicDecisionOutcome::DecisionDeclined,
+            );
+            assert_eq!(
+                pump.pending_cyw43_bootstrap_serial_milestones.len(),
+                before_declined,
+                "a declined final recovery decision must leave the proof queue unchanged",
+            );
+            assert_eq!(
+                pump.queue_cyw43_bootstrap_operator_lines_atomic_with_decision(
+                    terminal_batch.as_slice(),
+                    1,
+                    || true,
+                ),
+                Cyw43BootstrapAtomicDecisionOutcome::Retained,
+            );
             let following_terminal =
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed console_sequence=10";
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=permanent console_sequence=10";
             assert!(pump.queue_cyw43_bootstrap_operator_line(following_terminal));
             assert_eq!(
                 pump.pending_cyw43_bootstrap_serial_milestones
                     .back()
                     .map(|line| line.as_str()),
                 Some(following_terminal),
-                "the failure batch must reserve its following supervisor terminal"
+                "the terminal batch must reserve its following Permanent record"
             );
 
             pump.pending_cyw43_bootstrap_serial_milestones.clear();
@@ -31080,6 +31196,10 @@ mod tests {
                 .iter()
                 .any(|line| line == expected_ready.as_str()));
         }
+        assert_eq!(
+            net.polls, 0,
+            "hardware-free terminal and retained-output turns must never poll the network",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

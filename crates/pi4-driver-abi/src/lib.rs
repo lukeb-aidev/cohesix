@@ -274,6 +274,9 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD: u16 = 1 << 2;
 pub const DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN: u16 = 1 << 3;
 /// CYW43 command flag: after delivering steady data RX, queue bounded tail frames.
 pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
+/// CYW43 command flag: fence an association Join Function-2 transmit against
+/// a newly asserted DPC source at the final SDIO pre-issue boundary.
+pub const DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE: u16 = 1 << 5;
 /// CYW43 positive detail: a control Function 2 TX retry recovered a transfer fault.
 pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x5801;
 /// CYW43 positive detail: an event/data frame interrupted a retained control exchange.
@@ -2185,7 +2188,7 @@ pub struct DriverRuntimeSdioCommandDescriptor {
     pub block_size: u16,
     /// Block count for CMD53 block-mode transfers.
     pub block_count: u16,
-    /// Bit 0 requests incrementing CMD53 address mode.
+    /// Role-specific primitive flags.
     pub flags: u16,
     /// Reserved for alignment and future fields.
     pub reserved: u16,
@@ -2203,6 +2206,9 @@ impl DriverRuntimeSdioCommandDescriptor {
     /// DPC activation must publish one generation-bound source-probe event
     /// even when the host `CARD_INT` latch is not currently asserted.
     pub const FLAG_DPC_FORCE_SOURCE_PROBE: u16 = 1 << 3;
+    /// A Function-2 CMD53 write must sample the host `CARD_INT` source at the
+    /// final pre-issue boundary and defer without issuing when it is asserted.
+    pub const FLAG_PRE_TX_DPC_FENCE: u16 = 1 << 4;
 
     /// Empty descriptor.
     #[must_use]
@@ -2249,6 +2255,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE;
         let cmd53 = self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
+        let pre_tx_dpc_fence = self.flags & Self::FLAG_PRE_TX_DPC_FENCE != 0;
         let read_result = self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
@@ -2328,6 +2335,8 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.block_count == 0
                     && (self.flags == 0 || self.flags == Self::FLAG_DPC_FORCE_SOURCE_PROBE)
                     && self.reserved == 0))
+            && (!pre_tx_dpc_fence
+                || (self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE && self.function == 2))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -2424,7 +2433,8 @@ impl DriverRuntimeCyw43CommandDescriptor {
             DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE => {
                 self.flags
                     & !(DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
-                        | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN)
+                        | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+                        | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE)
                     == 0
             }
             DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
@@ -2455,6 +2465,8 @@ impl DriverRuntimeCyw43CommandDescriptor {
                 && post_release_shared_payload);
         known_op
             && known_flags
+            && (self.flags & DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE == 0
+                || self.flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0)
             && ((carries_payload && self.payload_len != 0 && shared_payload)
                 || (zero_payload && self.payload_len == 0))
             && (self.total_len == 0 || self.total_len >= self.payload_len as u32)
@@ -4210,6 +4222,48 @@ mod tests {
     }
 
     #[test]
+    fn sdio_pre_tx_dpc_fence_is_scoped_to_function2_cmd53_writes() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0x8000,
+            data_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_READ;
+        assert!(!descriptor.valid());
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
+        descriptor.function = 1;
+        assert!(!descriptor.valid());
+        descriptor.function = 2;
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE;
+        descriptor.len = 1;
+        descriptor.block_size = 0;
+        descriptor.block_count = 0;
+        assert!(!descriptor.valid());
+        descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: 0x4359_5302,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            timeout_us: 1_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
     fn sdio_command_descriptor_validates_host_config_bounds() {
         let mut descriptor = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
@@ -4450,6 +4504,10 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+            | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE;
+        assert!(!descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE;
         assert!(descriptor.valid());
         descriptor.payload_len = DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES + 1;
@@ -4479,6 +4537,16 @@ mod tests {
         assert!(descriptor.valid());
         descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN;
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+            | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+            | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE;
+        assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+            | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE;
+        assert!(!descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+            | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+            | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE;
         descriptor.payload_len = 0;
         assert!(!descriptor.valid());
         descriptor.payload_len = 16;
