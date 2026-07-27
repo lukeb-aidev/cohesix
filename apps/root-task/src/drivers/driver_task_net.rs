@@ -4716,6 +4716,7 @@ struct Cyw43AssociationTerminalEventReceipt {
     join_request: u32,
     join_issued: bool,
     join_accepted: bool,
+    join_tx_committed: bool,
     source_stage: &'static str,
 }
 
@@ -6782,11 +6783,11 @@ const fn cyw43_event_is_terminal_association_failure(event: Cyw43EventFrame) -> 
 fn arm_cyw43_association_events_for_join_request(
     generation: u32,
     request: Option<u32>,
-    issued: bool,
+    tx_committed: bool,
 ) -> bool {
     if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation
         || request.is_none_or(|request| request == 0)
-        || !cyw43_child_action_accepted(request, issued)
+        || !tx_committed
     {
         return false;
     }
@@ -6834,6 +6835,7 @@ fn record_cyw43_association_event_outcome(event: Cyw43EventFrame, source_stage: 
                 join_issued: join.is_some_and(|join| join.issued),
                 join_accepted: join
                     .is_some_and(|join| cyw43_child_action_accepted(join.request, join.issued)),
+                join_tx_committed: cyw43_association_events_armed_for_generation(generation),
                 source_stage,
             });
         }
@@ -7245,6 +7247,7 @@ struct Cyw43PendingAssociationJoin {
     payload_digest: Cyw43PayloadDigest,
     request: Option<u32>,
     issued: bool,
+    tx_committed: bool,
     deadline: Cyw43PollDeadline,
     child_reply_latched: bool,
     child_reply_renewals: u16,
@@ -7718,6 +7721,7 @@ struct Cyw43AssociationJoinDiagnostic {
     generation: u32,
     request: Option<u32>,
     issued: bool,
+    tx_committed: bool,
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     ticket_id: u64,
     completion_detail: u16,
@@ -7746,6 +7750,7 @@ fn publish_cyw43_association_join_diagnostic(pending: &Cyw43PendingAssociationJo
         generation: pending.generation,
         request: pending.request,
         issued: pending.issued,
+        tx_committed: pending.tx_committed,
         descriptor: pending.tx_descriptor,
         ticket_id: u64::from(pending.id),
         completion_detail,
@@ -7865,6 +7870,7 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub first_terminal_event_join_request: u32,
     pub first_terminal_event_join_issued: bool,
     pub first_terminal_event_join_accepted: bool,
+    pub first_terminal_event_join_tx_committed: bool,
     pub first_terminal_event_source_stage: &'static str,
     pub deferred_reauth_current: bool,
     pub deferred_reauth_generation: u32,
@@ -7873,6 +7879,7 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub retained_request: u32,
     pub retained_issued: bool,
     pub retained_accepted: bool,
+    pub retained_tx_committed: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -8060,9 +8067,10 @@ fn cyw43_host_eapol_retained_action_pending(session: &Cyw43HostEapolSession) -> 
 #[cfg(feature = "kernel")]
 const fn cyw43_child_action_accepted(_request: Option<u32>, issued: bool) -> bool {
     // A retained request ID proves only that root owns a transport lease.
-    // Issued is the child-visible boundary: only then can the physical action
-    // be ambiguous, require terminal drain, or block teardown awaiting an
-    // exact completion.
+    // Issued is the child-visible command boundary: only then can the nested
+    // operation require terminal drain or block teardown awaiting an exact
+    // completion. For op11 this does not prove that its later Function-2
+    // sub-action has physically transmitted.
     issued
 }
 
@@ -8287,6 +8295,8 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
             .is_some_and(|receipt| receipt.join_issued),
         first_terminal_event_join_accepted: first_terminal_event
             .is_some_and(|receipt| receipt.join_accepted),
+        first_terminal_event_join_tx_committed: first_terminal_event
+            .is_some_and(|receipt| receipt.join_tx_committed),
         first_terminal_event_source_stage: first_terminal_event
             .map_or("none", |receipt| receipt.source_stage),
         deferred_reauth_current: deferred_reauth_token == cyw43_epoch_token(generation),
@@ -8296,6 +8306,7 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
         retained_request: retained.map_or(0, |retained| retained.2),
         retained_issued: retained.is_some_and(|retained| retained.3),
         retained_accepted: retained.is_some_and(|retained| retained.4),
+        retained_tx_committed: join.is_some_and(|join| join.tx_committed),
     }
 }
 
@@ -10698,7 +10709,7 @@ fn begin_cyw43_pending_association_join(
         CYW43_WLC_SET_VAR,
         id,
         Cyw43ControlHeaderMode::Extended,
-        false,
+        true,
     );
     emit_cyw43_join_payload_trace(CYW43_WIFI_DRIVER_TASK_CONTRACT, credentials, &join_payload);
     emit_cyw43_control_request_trace(
@@ -10707,7 +10718,7 @@ fn begin_cyw43_pending_association_join(
         CYW43_WLC_SET_VAR,
         id,
         Cyw43ControlHeaderMode::Extended,
-        false,
+        true,
         &tx_frame[..frame_len],
     );
     Ok(Cyw43PendingAssociationJoin {
@@ -10721,6 +10732,7 @@ fn begin_cyw43_pending_association_join(
         payload_digest: cyw43_payload_digest(&tx_frame[..frame_len]),
         request: None,
         issued: false,
+        tx_committed: false,
         deadline: cyw43_poll_deadline_from_millis_or_polls(
             cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE),
             cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE),
@@ -10807,7 +10819,7 @@ fn cyw43_retained_descriptor_active_state_with_payload(
 }
 
 #[cfg(feature = "kernel")]
-const fn cyw43_association_completion_proves_join_issued(
+const fn cyw43_association_completion_proves_join_tx(
     completion: DriverTaskCompletionRecord,
 ) -> bool {
     if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
@@ -10824,6 +10836,47 @@ const fn cyw43_association_completion_proves_join_issued(
         cyw43_control_exchange_timeout_result_reason(completion.result),
         Some(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY)
     )
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_association_progress_proves_join_tx(phase: u32) -> bool {
+    matches!(
+        phase,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_BEGIN
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_DONE
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_EMPTY
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME
+            | pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn latch_cyw43_association_join_tx_committed(
+    contract: DriverTaskContract,
+    pending: &mut Cyw43PendingAssociationJoin,
+) -> bool {
+    if pending.tx_committed {
+        return true;
+    }
+    let Some(request) = pending.request else {
+        return false;
+    };
+    let Some(progress) = crate::hal::driver_task::latest_driver_task_ring_progress(contract) else {
+        return false;
+    };
+    if !pending.issued
+        || !progress.marker_valid
+        || progress.sequence != request
+        || progress.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        || !cyw43_association_progress_proves_join_tx(progress.phase)
+    {
+        return false;
+    }
+    pending.tx_committed = true;
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -11012,11 +11065,11 @@ fn advance_cyw43_pending_association_join(
             return Cyw43AssociationJoinStep::RecoveryRequired;
         };
         pending.issued |= issued;
-        if pending.issued {
+        if latch_cyw43_association_join_tx_committed(contract, pending) {
             let _ = arm_cyw43_association_events_for_join_request(
                 pending.generation,
                 pending.request,
-                pending.issued,
+                pending.tx_committed,
             );
         }
         let _ = retain_cyw43_terminal_drain_cursor(
@@ -11085,11 +11138,11 @@ fn advance_cyw43_pending_association_join(
         }
         pending.request = Some(request);
         pending.issued |= issued;
-        if pending.issued {
+        if latch_cyw43_association_join_tx_committed(contract, pending) {
             let _ = arm_cyw43_association_events_for_join_request(
                 pending.generation,
                 pending.request,
-                pending.issued,
+                pending.tx_committed,
             );
         }
         let _ = retain_cyw43_terminal_drain_cursor(
@@ -11127,12 +11180,15 @@ fn advance_cyw43_pending_association_join(
     clear_cyw43_terminal_drain_cursor(pending.generation, completion.sequence);
     let interleaved = completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
         && completion.detail == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME;
-    if cyw43_association_completion_proves_join_issued(completion) {
+    if cyw43_association_completion_proves_join_tx(completion) {
         pending.issued = true;
+        pending.tx_committed = true;
+    }
+    if pending.tx_committed {
         let _ = arm_cyw43_association_events_for_join_request(
             pending.generation,
             Some(completion.sequence),
-            pending.issued,
+            pending.tx_committed,
         );
     }
     pending.request = None;
@@ -29689,6 +29745,7 @@ mod tests {
                 generation: 0,
                 request,
                 issued,
+                tx_committed: false,
                 descriptor,
                 ticket_id: 0x8899,
                 completion_detail: 0,
@@ -31434,6 +31491,7 @@ mod tests {
         assert_eq!(
             pending.tx_descriptor.flags,
             DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
         );
         assert_eq!(usize::from(pending.tx_descriptor.payload_len), frame_len);
         assert_eq!(pending.tx_descriptor.total_len, frame_len as u32);
@@ -31471,7 +31529,7 @@ mod tests {
             "PreTxDrain/WaitCredit NOT_READY proves the join was never issued"
         );
         assert!(
-            !cyw43_association_completion_proves_join_issued(pre_tx_not_ready),
+            !cyw43_association_completion_proves_join_tx(pre_tx_not_ready),
             "pre-TX NOT_READY cannot authorize association events"
         );
         assert_eq!(
@@ -31480,7 +31538,7 @@ mod tests {
             "WaitReply timeout is issued-unknown and must poison the pair"
         );
         assert!(
-            cyw43_association_completion_proves_join_issued(post_tx_timeout),
+            cyw43_association_completion_proves_join_tx(post_tx_timeout),
             "post-TX timeout proves the exact Join left the pre-TX state"
         );
         assert_eq!(
@@ -31504,10 +31562,18 @@ mod tests {
             .expect("valid wifi credentials");
         let mut pending = begin_cyw43_pending_association_join(credentials, 0)
             .expect("retained join must encode");
+        pending.request = Some(42);
+        pending.issued = true;
+        pending.tx_committed = true;
         let retained = pending;
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);
+        assert!(arm_cyw43_association_events_for_join_request(
+            pending.generation,
+            pending.request,
+            pending.tx_committed,
+        ));
 
         let packet = test_cyw43_event_packet(CYW43_EVENT_LINK, CYW43_EVENT_STATUS_SUCCESS, 0);
         let event_frame = test_cyw43_bdc_event_frame(&packet);
@@ -31594,7 +31660,7 @@ mod tests {
             "0x5802 never denotes the matched reply"
         );
         assert!(
-            !cyw43_association_completion_proves_join_issued(interleaved),
+            !cyw43_association_completion_proves_join_tx(interleaved),
             "an interleaved event may precede the Join TX and cannot arm event ownership"
         );
         assert_eq!(
@@ -31602,7 +31668,7 @@ mod tests {
             Cyw43AssociationJoinStep::RecoveryRequired
         );
         assert!(
-            !cyw43_association_completion_proves_join_issued(bus_link_loss),
+            !cyw43_association_completion_proves_join_tx(bus_link_loss),
             "an unrelated bus-link fault cannot prove the Join TX was issued"
         );
         assert!(cyw43_fault_invalidates_root_generation(
@@ -32309,8 +32375,17 @@ mod tests {
     fn association_events_before_join_issue_cannot_poison_the_new_generation() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        );
         CYW43_CONNECTION_EPOCH.store(7, Ordering::Release);
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let mut pending = begin_cyw43_pending_association_join(credentials, 7)
+            .expect("retained association join");
+        pending.request = Some(319);
+        pending.issued = true;
         let stale_link_down = Cyw43EventFrame {
             event_type: CYW43_EVENT_LINK,
             status: CYW43_EVENT_STATUS_NO_NETWORKS,
@@ -32335,11 +32410,28 @@ mod tests {
 
         assert!(
             !arm_cyw43_association_events_for_join_request(7, None, true),
-            "issued without an exact request is not Join ownership"
+            "physical TX without an exact request is not Join ownership"
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            319,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_TX_BEGIN,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
         );
         assert!(
-            !arm_cyw43_association_events_for_join_request(7, Some(319), false),
-            "a prepared Join request is not child-accepted"
+            !latch_cyw43_association_join_tx_committed(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                &mut pending,
+            ),
+            "HAL-issued and TX-BEGIN state is not physical Function-2 completion"
+        );
+        assert!(
+            !arm_cyw43_association_events_for_join_request(
+                7,
+                pending.request,
+                pending.tx_committed,
+            ),
+            "a child-accepted Join remains unarmed before physical TX"
         );
         record_cyw43_association_event_outcome(auth_timeout, "test-unaccepted-auth");
         assert_eq!(
@@ -32348,16 +32440,52 @@ mod tests {
             "the observed pre-Join AUTH timeout cannot mutate the generation"
         );
 
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            320,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        assert!(
+            !latch_cyw43_association_join_tx_committed(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                &mut pending,
+            ),
+            "a stale sequence cannot commit the retained Join"
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            319,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+            DRIVER_RUNTIME_ENGINE_INIT_AUX,
+        );
+        assert!(
+            !latch_cyw43_association_join_tx_committed(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                &mut pending,
+            ),
+            "a wrong route cannot commit the retained Join"
+        );
+        crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            319,
+            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_POLL_BEGIN,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+        );
+        assert!(latch_cyw43_association_join_tx_committed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &mut pending,
+        ));
         assert!(arm_cyw43_association_events_for_join_request(
             7,
-            Some(319),
-            true
+            pending.request,
+            pending.tx_committed,
         ));
         record_cyw43_association_event_outcome(stale_link_down, "test-armed-link");
         assert_eq!(
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
             1,
-            "once Join is issued, its current-generation LINK failure is terminal"
+            "once Join physically transmits, its current-generation LINK failure is terminal"
         );
         assert!(
             !cyw43_carrier_loss_applies_to_armed_generation(stale_link_down),
@@ -32370,6 +32498,9 @@ mod tests {
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
             1,
             "an explicit current-generation authentication timeout is terminal"
+        );
+        crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
         reset_cyw43_status_flags();
     }
@@ -32387,11 +32518,12 @@ mod tests {
             .expect("retained association join");
         pending.request = Some(319);
         pending.issued = true;
+        pending.tx_committed = true;
         publish_cyw43_association_join_diagnostic(&pending);
         assert!(arm_cyw43_association_events_for_join_request(
             7,
             pending.request,
-            pending.issued,
+            pending.tx_committed,
         ));
 
         let first = Cyw43EventFrame {
@@ -32416,6 +32548,7 @@ mod tests {
         assert_eq!(receipt.first_terminal_event_join_request, 319);
         assert!(receipt.first_terminal_event_join_issued);
         assert!(receipt.first_terminal_event_join_accepted);
+        assert!(receipt.first_terminal_event_join_tx_committed);
         assert_eq!(
             receipt.first_terminal_event_source_stage,
             "test-first-terminal"
@@ -37741,6 +37874,11 @@ mod tests {
         reset_cyw43_status_flags();
         CYW43_CONNECTION_EPOCH.store(9, Ordering::Release);
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(9), Ordering::Release);
+        assert!(arm_cyw43_association_events_for_join_request(
+            9,
+            Some(1),
+            true,
+        ));
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
             .expect("valid host-EAPOL credentials");
         let mut session =

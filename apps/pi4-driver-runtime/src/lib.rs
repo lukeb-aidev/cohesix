@@ -16807,9 +16807,11 @@ fn cyw43_control_exchange_command_turn(
                 state.control_exchange = cursor;
                 return cyw43_control_exchange_timeout_completion(state, sequence, false, false);
             }
-            if cursor.pre_tx_frames >= CYW43_CONTROL_EXCHANGE_PRE_TX_FRAME_LIMIT
-                || state.rx_queue_count == 0
-            {
+            if cursor.pre_tx_frames >= CYW43_CONTROL_EXCHANGE_PRE_TX_FRAME_LIMIT {
+                state.control_exchange = cursor;
+                return cyw43_control_exchange_timeout_completion(state, sequence, false, false);
+            }
+            if state.rx_queue_count == 0 {
                 state.control_startup_status_drained = true;
                 cursor.phase = Cyw43ControlExchangePhase::WaitCredit;
                 state.control_exchange = cursor;
@@ -16849,6 +16851,13 @@ fn cyw43_control_exchange_command_turn(
             ) {
                 state.control_exchange = cursor;
                 return cyw43_control_exchange_timeout_completion(state, sequence, false, false);
+            }
+            if cursor.descriptor_flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0
+                && state.rx_queue_count != 0
+            {
+                cursor.phase = Cyw43ControlExchangePhase::PreTxDrain;
+                state.control_exchange = cursor;
+                return RuntimeCommandTurn::Pending;
             }
             if !has_sdpcm_credit_for_frame(state.sdpcm_seq, state.sdpcm_seq_max, false) {
                 state.control_exchange = cursor;
@@ -58862,8 +58871,51 @@ mod tests {
             "one turn closes the pre-TX drain before any Function 2 write",
         );
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 0);
+        let late_event = *b"late-event";
+        let late_event_flags = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 6);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert_eq!(
+                state.control_exchange.phase,
+                Cyw43ControlExchangePhase::WaitCredit
+            );
+            queue_cyw43_raw_frame_at(state, 0, late_event_flags, &late_event);
+            state.rx_queue_head = 0;
+            state.rx_queue_count = 1;
+        });
         assert_eq!(
-            advance_cyw43_control_exchange_through_retained_f2_tx(402),
+            service_command_turn(0, cyw43_descriptor_command(402)),
+            RuntimeCommandTurn::Pending,
+            "a frame admitted while waiting for credit returns to the same pre-TX FIFO drain",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.control_exchange.phase,
+                Cyw43ControlExchangePhase::PreTxDrain
+            );
+        });
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 0);
+        assert_eq!(
+            service_command_turn(0, cyw43_descriptor_command(402)),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::frame_ready_with_detail(
+                402,
+                DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME,
+                DriverFrameDescriptor {
+                    offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                    len: late_event.len() as u16,
+                    flags: late_event_flags,
+                },
+            ))
+        );
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 0);
+
+        stage_cyw43_control_exchange_request(cmd, id, flags, &body);
+        assert_eq!(
+            service_command_turn(0, cyw43_descriptor_command(403)),
+            RuntimeCommandTurn::Pending,
+            "the late pre-TX event is retired before the Join may reach Function 2",
+        );
+        assert_eq!(
+            advance_cyw43_control_exchange_through_retained_f2_tx(403),
             RuntimeCommandTurn::Pending
         );
         CYW43_RUNTIME_STATE.with_ref(|state| {
@@ -58883,9 +58935,9 @@ mod tests {
             state.rx_queue_count = 1;
         });
         assert_eq!(
-            service_command_turn(0, cyw43_descriptor_command(402)),
+            service_command_turn(0, cyw43_descriptor_command(403)),
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::frame_ready_with_detail(
-                402,
+                403,
                 DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME,
                 DriverFrameDescriptor {
                     offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
@@ -58909,9 +58961,9 @@ mod tests {
             queue_cyw43_control_reply(state, cmd, id, CYW43_CDC_STATUS_SUCCESS, &response);
         });
         assert_eq!(
-            service_command_turn(0, cyw43_descriptor_command(403)),
+            service_command_turn(0, cyw43_descriptor_command(404)),
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::frame_ready_with_descriptor(
-                403,
+                404,
                 DriverFrameDescriptor {
                     offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
                     len: response.len() as u16,

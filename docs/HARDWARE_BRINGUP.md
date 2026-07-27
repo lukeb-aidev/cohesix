@@ -635,7 +635,13 @@ The sole event quiet fence is immediately pre-Join, after
 It must observe two consecutive exact `Idle` terminals before Join event
 ownership is armed. `FrameReady` or `Progress` resets the streak; 256 polls is
 the finite fail-closed cap, not a mandatory delay on an already quiet boot. An
-earlier post-UP drain is not a substitute.
+earlier post-UP drain is not a substitute. Join then retains the same pre-TX
+drain through any SDPCM-credit wait: a newly queued EVENT or DATA frame returns
+the cursor to the ordered drain before Function 2 TX. Treat HAL
+child-command issue and `CONTROL_TX_BEGIN` as ownership only, not wire proof.
+Only the exact Join request's post-Function-2 progress (or its typed
+post-transmit terminal) may arm current-generation association events; older
+events remain history.
 
 Gate 8 is an ordered stability proof, not the first moment the linked transport
 attaches. After transport/control attachment, require

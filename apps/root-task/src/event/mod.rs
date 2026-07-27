@@ -11631,7 +11631,7 @@ where
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: association first_terminal_raw type=0x{:02x} status=0x{:08x} reason=0x{:08x} auth_type=0x{:08x} join_request={} join_issued={} join_accepted={}",
+            "wifi: association first_terminal_raw type=0x{:02x} status=0x{:08x} reason=0x{:08x} auth_type=0x{:08x} join_request={} join_issued={} join_accepted={} join_tx_committed={}",
             association.first_terminal_event_type,
             association.first_terminal_event_status,
             association.first_terminal_event_reason,
@@ -11639,6 +11639,7 @@ where
             association.first_terminal_event_join_request,
             Self::yes_no(association.first_terminal_event_join_issued),
             Self::yes_no(association.first_terminal_event_join_accepted),
+            Self::yes_no(association.first_terminal_event_join_tx_committed),
         ))
     }
 
@@ -11673,12 +11674,13 @@ where
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: association retained owner={} generation={} request={} issued={} accepted={}",
+            "wifi: association retained owner={} generation={} request={} issued={} accepted={} tx_committed={}",
             association.retained_owner,
             association.retained_generation,
             association.retained_request,
             Self::yes_no(association.retained_issued),
             Self::yes_no(association.retained_accepted),
+            Self::yes_no(association.retained_tx_committed),
         ))
     }
 
@@ -22631,6 +22633,7 @@ mod tests {
             first_terminal_event_join_request: u32::MAX,
             first_terminal_event_join_issued: true,
             first_terminal_event_join_accepted: true,
+            first_terminal_event_join_tx_committed: true,
             first_terminal_event_source_stage: "cyw43-runtime-event-frame",
             deferred_reauth_current: true,
             deferred_reauth_generation: u32::MAX,
@@ -22639,6 +22642,7 @@ mod tests {
             retained_request: u32::MAX,
             retained_issued: true,
             retained_accepted: true,
+            retained_tx_committed: true,
         };
         let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
             cause: "issued-owner-unknown",
@@ -22810,12 +22814,12 @@ mod tests {
             "event_armed=yes event_generation=4294967295 terminal_failure=yes deferred_reauth=yes deferred_generation=4294967295"
         ));
         assert!(lines[2].contains("generation=4294967295 current=no"));
-        assert!(lines[3].contains("request=4294967295 issued=yes accepted=yes"));
+        assert!(lines[3].contains("request=4294967295 issued=yes accepted=yes tx_committed=yes"));
         assert!(lines[14].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
         assert!(lines[15].contains(
-            "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes"
+            "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes join_tx_committed=yes"
         ));
         assert!(lines[4].contains(
             "refinement=exact-owner logical_terminal_observed=yes cause=issued-owner-unknown",

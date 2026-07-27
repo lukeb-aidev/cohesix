@@ -427,7 +427,13 @@ after the last Join-affecting protected-network control
 event ownership can be armed. It completes only after two consecutive exact
 `Idle` terminals. Any `FrameReady` or `Progress` activity resets that streak,
 and 256 polls is the finite fail-closed cap rather than mandatory work on an
-already quiet boot. There is no earlier or additional post-UP quiet fence.
+already quiet boot. Join uses the same `CONTROL_PRE_TX_DRAIN` lane, which
+rechecks the ordered RX FIFO after every SDPCM-credit wait before permitting
+the Function 2 write. Root arms association-event ownership only after the
+exact Join request publishes a post-Function-2 TX progress phase; HAL
+child-command issue and `CONTROL_TX_BEGIN` are not physical TX proof. Events
+drained before that boundary remain history and cannot poison the new
+generation. There is no earlier or additional post-UP quiet fence.
 
 #### Ordered Gate 8 stability contract
 
@@ -1243,7 +1249,11 @@ generation and XID.
   A control exchange carrying `CONTROL_PRE_TX_DRAIN` first issues one immutable,
   generation-bound `DPC_ACTIVATE` source probe through that same reciprocal
   owner ring, then lets the ordinary CYW43 DPC cursor inspect and drain any
-  function-side source before Function 2 TX. After the one exact TX completes,
+  function-side source before Function 2 TX. If a frame arrives after that
+  drain while the cursor waits for SDPCM credit, the cursor returns to the same
+  FIFO drain; exhausting its finite pre-TX frame bound terminates as
+  not-issued rather than transmitting ahead of an older frame. After the one
+  exact TX completes,
   an empty software reply FIFO yields the foreground cursor and issues the same
   bounded source probe before the next reply-deadline observation. The SDIO
   owner checks the durable event ring before publication. It preserves and

@@ -903,7 +903,13 @@ shared op11 outcome classifier through the real association, PTK/GTK, and
 SCB/filter/BSSID maintenance consumers: pre-TX `NOT_READY` and decoded firmware
 replies are terminal, while every encoded post-TX reply timeout must suppress
 Gate 7a/cursor advancement, publish the immutable ambiguity ticket, and enter
-the exact pair restart with no same-generation replay.
+the exact pair restart with no same-generation replay. Association coverage
+must additionally prove that an exact HAL-issued Join at
+`CONTROL_TX_BEGIN` remains event-unarmed, stale sequence or route progress
+cannot arm it, and only its exact post-Function-2 progress can do so. Inject an
+EVENT after the initial pre-TX drain while the cursor is waiting for credit;
+that event must complete with zero Function 2 writes before the single Join
+write is admitted.
 
 Card-init tests must prove CMD7 uses the R1b short-busy response and distinguish
 the pre-command entry-inhibit wait from a post-command busy timeout. Only the
