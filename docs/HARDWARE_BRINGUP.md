@@ -1422,6 +1422,13 @@ semantic rendering on a later isolated-display turn; it must not render the raw
 supervisor record. The `telemetry_sinks=serial+qlog+hdmi` field declares the
 configured routing targets without requiring byte-identical presentation; it
 is not proof that an unavailable or saturated display accepted the mirror.
+The first attempt explicitly reports baseline CYW43/SDIO pair normalization.
+Material bootstrap, association, DHCP, and listener frontiers are coalesced,
+while an unchanged frontier emits a `[drivers] WiFi ... (still working)`
+heartbeat every five virtual-time seconds. Routine serial bootstrap telemetry
+must not starve that independent display turn; authenticated serial response
+tails retain priority and may delay it only until their bounded tail is
+complete.
 For the selected Wi-Fi/DHCP lane, supervisor `ready` is driver readiness only.
 HDMI may render `Ready to use` only after current-generation DHCP is bound and
 the TCP console listener is bound, non-deferred, and admitted. Listener

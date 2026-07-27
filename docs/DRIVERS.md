@@ -1422,7 +1422,7 @@ generation and XID.
   Between those milestones, sparse retained-turn records are collapsed into
   concise `[drivers] WiFi ...` gate frontiers. A material frontier may be
   queued no sooner than five virtual-time seconds after the preceding progress
-  line; an unchanged frontier emits a `still working` heartbeat after ten
+  line; an unchanged frontier emits a `still working` heartbeat after five
   seconds. One coalescing slot retains only the latest progress frontier, and
   only a later ordinary `Display` EventPump turn may submit it, so bootstrap
   telemetry cannot create an unbounded HDMI queue or combine display service

@@ -818,6 +818,7 @@ pub(crate) enum Cyw43BootstrapDisplayFrontier {
     LinkedRuntimes,
     SdioHost,
     Cyw43Runtime,
+    PairNormalization,
     CardPath,
     FirmwareUpload,
     FirmwareStart,
@@ -838,6 +839,9 @@ impl Cyw43BootstrapDisplayFrontier {
             Self::LinkedRuntimes => "preparing linked driver runtimes",
             Self::SdioHost => "initializing the SDIO host",
             Self::Cyw43Runtime => "starting the CYW43/SDIO service",
+            Self::PairNormalization => {
+                "normalizing the CYW43/SDIO pair for a consistent first attempt"
+            }
             Self::CardPath => "gates 1-5 of 10: checking power, SDIO card, clock, and backplane",
             Self::FirmwareUpload => "gate 6/10: uploading WiFi firmware",
             Self::FirmwareStart => "gates 6-7 of 10: starting firmware and enabling Function 2",
@@ -866,7 +870,7 @@ pub(crate) fn cyw43_bootstrap_display_frontier(
         return None;
     }
     if stage.starts_with("cyw43-baseline-") {
-        return Some(Frontier::Cyw43Runtime);
+        return Some(Frontier::PairNormalization);
     }
     if stage.contains("pair-restart")
         || stage.contains("context-replay")
@@ -33078,7 +33082,7 @@ mod tests {
         );
         assert_eq!(
             cyw43_bootstrap_display_frontier("cyw43-baseline-normalization-begin"),
-            Some(Frontier::Cyw43Runtime)
+            Some(Frontier::PairNormalization)
         );
         assert_eq!(
             cyw43_bootstrap_display_frontier("cyw43-control-txglomalign"),

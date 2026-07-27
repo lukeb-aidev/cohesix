@@ -1334,6 +1334,13 @@ configured routing targets, not delivery proof. Serial and qlog preserve the
 raw `CYW43_BOOTSTRAP_SUPERVISOR` schema; when HDMI is present and its bounded
 FIFO or bounded terminal reserve admits the transition, it preserves only the
 concise typed `[drivers] WiFi ...` rendering on a later `Display` turn.
+During an active Wi-Fi attempt, the physical display must show the baseline
+pair-normalization frontier and must not remain unchanged for more than five
+virtual-time seconds: an unchanged frontier emits a bounded `still working`
+heartbeat. Fill the routine serial bootstrap backlog in the focused EventPump
+test and prove that it cannot starve this display lane. An authenticated serial
+response tail may preempt display only until its bounded ACK/ERR/END plus prompt
+sequence completes.
 
 CYW43/SDIO runtime foreground coverage must prove the correct authority path,
 not only software state transitions. Non-CYW43 root-to-runtime commands use an

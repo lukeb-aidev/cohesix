@@ -337,12 +337,12 @@ const LOCAL_SEAT_HDMI_MAX_SERIAL_DEFERRALS: u8 = 4;
 const CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY: usize = 12;
 /// Material frontier changes wait at least five seconds after the preceding
 /// HDMI progress line; an unchanged frontier emits one liveness heartbeat at
-/// most every ten seconds. Both durations are measured by the ordinary event
+/// most every five seconds. Both durations are measured by the ordinary event
 /// timer, never by CPU loops or retained-turn counts.
 #[cfg(feature = "kernel")]
 const CYW43_BOOTSTRAP_HDMI_PROGRESS_MIN_INTERVAL_MS: u64 = 5_000;
 #[cfg(feature = "kernel")]
-const CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS: u64 = 10_000;
+const CYW43_BOOTSTRAP_HDMI_PROGRESS_HEARTBEAT_MS: u64 = 5_000;
 /// Serial retains the complete five-attempt lifecycle: two preflight records,
 /// attempt begin/recovery, each typed failure, four backoffs, and one terminal
 /// result. This queue is a saturation fallback; ordinary turns drain records
@@ -20984,8 +20984,10 @@ mod tests {
         assert_eq!(cadence.due(10_999), None);
         assert_eq!(cadence.due(11_000), Some((Frontier::FirmwareUpload, false)));
         cadence.record_emitted(Frontier::FirmwareUpload, 11_000);
-        assert_eq!(cadence.due(20_999), None);
-        assert_eq!(cadence.due(21_000), Some((Frontier::FirmwareUpload, true)));
+        // Keep the production five-second contract explicit rather than
+        // deriving this boundary from the implementation constant.
+        assert_eq!(cadence.due(15_999), None);
+        assert_eq!(cadence.due(16_000), Some((Frontier::FirmwareUpload, true)));
 
         cadence.observe(2, Frontier::CardPath, 30_000);
         assert_eq!(cadence.due(34_999), None);
@@ -21047,12 +21049,14 @@ mod tests {
             Some((Cyw43NetworkReadyHdmiState::WaitingForTcpListener, false,))
         );
         cadence.record_emitted(Cyw43NetworkReadyHdmiState::WaitingForTcpListener, 11_000);
-        assert_eq!(cadence.due(20_999), None);
+        // DHCP/listener wait feedback uses the same explicit five-second
+        // physical-display contract as bootstrap frontiers.
+        assert_eq!(cadence.due(15_999), None);
         assert_eq!(
-            cadence.due(21_000),
+            cadence.due(16_000),
             Some((Cyw43NetworkReadyHdmiState::WaitingForTcpListener, true,))
         );
-        cadence.clear(21_000);
+        cadence.clear(16_000);
         assert_eq!(cadence.due(u64::MAX), None);
     }
 
@@ -21143,7 +21147,7 @@ mod tests {
                 .any(|line| line == "[drivers] WiFi gate 6/10: uploading WiFi firmware"));
 
             // A changed internal stage in the same material frontier does not
-            // create another line before the ten-second heartbeat.
+            // create another line before the five-second heartbeat.
             assert!(pump.queue_cyw43_bootstrap_operator_line(
                 "CYW43_BOOTSTRAP_TURN attempt=1 turn=2 stage=cyw43-nvram-chunk operation=true repeat=1"
             ));
@@ -21182,6 +21186,123 @@ mod tests {
             assert!(pump
                 .pending_cyw43_bootstrap_hdmi_progress_milestone
                 .is_none());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_hdmi_progress_cannot_be_starved_by_routine_serial_backlog() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(32, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "pass").unwrap();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: DEFAULT_LINE_CAPACITY as u16,
+            buffer_lines: 32,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_local_seat(&mut local_seat);
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
+                "[drivers] WiFi bootstrap attempt 1/5 starting",
+            ));
+            for turn in 1..=(CONSOLE_OUTPUT_BACKLOG_LINES + 8) {
+                let status = format!(
+                    "CYW43_BOOTSTRAP_TURN attempt=1 turn={turn} stage=cyw43-baseline-normalization-begin operation=true repeat={turn}"
+                );
+                let _ = pump.queue_cyw43_bootstrap_operator_line(status.as_str());
+            }
+
+            for _ in 0..4 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            }
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line == "[drivers] WiFi bootstrap attempt 1/5 starting"));
+
+            pump.now_ms = 4_999;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_none());
+
+            // A bounded authenticated response tail may temporarily own the
+            // physical operator turn. The due progress record must remain in
+            // the one coalescing slot and become visible on the first eligible
+            // display turn after the barrier clears.
+            pump.now_ms = 5_000;
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .pending_cyw43_bootstrap_hdmi_progress_milestone
+                .is_some());
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt"
+                }));
+            pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt"
+                }));
+
+            pump.now_ms = 9_999;
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt (still working)"
+                }));
+            pump.now_ms = 10_000;
+            for _ in 0..4 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            }
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| {
+                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt (still working)"
+                }));
         }
     }
 
