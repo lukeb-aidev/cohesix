@@ -7940,6 +7940,28 @@ impl Cyw43AssociationDiagnostic {
     }
 }
 
+/// Passive decomposition of the aggregate Gate 8g host-EAPOL work fence.
+///
+/// `wifi diag` uses this snapshot to name the retained leaf obligation without
+/// polling the runtime or changing ownership. Counts are generation-local and
+/// bounded by fixed-capacity queues.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43HostEapolWorkDiagnostic {
+    pub generation: u32,
+    pub pending: bool,
+    pub blocker: &'static str,
+    pub open_network: bool,
+    pub deferred_reauth: bool,
+    pub prompt_poll: bool,
+    pub pending_events: u32,
+    pub pending_eapol_frames: u32,
+    pub pending_tx_submit: bool,
+    pub pending_key_install: bool,
+    pub pending_tx_drain: bool,
+    pub bssid_obligation: bool,
+}
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43AssociationJoinStep {
@@ -8263,6 +8285,82 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
                 || session.pending_tx_drain.is_some()
                 || cyw43_post_assoc_bssid_obligation_pending(session)
         })
+}
+
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_host_eapol_work_diagnostic() -> Cyw43HostEapolWorkDiagnostic {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let open_network = CYW43_OPEN_NETWORK_ACTIVE.load(Ordering::Acquire) != 0;
+    let deferred_reauth = CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.load(Ordering::Acquire) != 0;
+    let prompt_poll = cyw43_prompt_poll_owned_by_host_eapol();
+    let pending_events = if open_network {
+        0
+    } else {
+        CYW43_HOST_EAPOL_PENDING_EVENTS
+            .lock()
+            .iter()
+            .filter(|pending| pending.generation == generation)
+            .count() as u32
+    };
+    let pending_eapol_frames = if open_network {
+        0
+    } else {
+        let queue = CYW43_PENDING_RX_QUEUE.lock();
+        let (front, back) = queue.as_slices();
+        front
+            .iter()
+            .chain(back.iter())
+            .filter(|pending| {
+                pending.sampled_generation == generation
+                    && cyw43_pending_eapol_progress_rank(pending.flags, &pending.token).is_some()
+            })
+            .count() as u32
+    };
+    let (pending_tx_submit, pending_key_install, pending_tx_drain, bssid_obligation) =
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_ref()
+            .map_or((false, false, false, false), |session| {
+                (
+                    session.pending_tx_submit.is_some(),
+                    session.pending_key_install.is_some(),
+                    session.pending_tx_drain.is_some(),
+                    cyw43_post_assoc_bssid_obligation_pending(session),
+                )
+            });
+    let blocker = if deferred_reauth {
+        "deferred-reauth"
+    } else if prompt_poll {
+        "prompt-poll"
+    } else if pending_events != 0 {
+        "pending-event"
+    } else if pending_eapol_frames != 0 {
+        "queued-eapol"
+    } else if pending_tx_submit {
+        "tx-submit"
+    } else if pending_key_install {
+        "key-install"
+    } else if pending_tx_drain {
+        "tx-drain"
+    } else if bssid_obligation {
+        "bssid-obligation"
+    } else {
+        "none"
+    };
+    Cyw43HostEapolWorkDiagnostic {
+        generation,
+        pending: blocker != "none",
+        blocker,
+        open_network,
+        deferred_reauth,
+        prompt_poll,
+        pending_events,
+        pending_eapol_frames,
+        pending_tx_submit,
+        pending_key_install,
+        pending_tx_drain,
+        bssid_obligation,
+    }
 }
 
 /// Immutable proof that the initial Gate 8 publication boundary observed one
@@ -13502,26 +13600,33 @@ fn service_cyw43_host_eapol_slice_with_outcome(
             let secure = CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
                 || mark_cyw43_host_eapol_secure(contract, &session.progress);
             activity |= secure;
+            let mut maintenance_latched = false;
             if secure
                 && cyw43_post_assoc_bssid_obligation_pending(session)
                 && !session.bssid_refreshed_after_assoc
             {
-                let latched = latch_cyw43_bssid_maintenance(Cyw43MaintenanceBssidContext {
+                maintenance_latched = latch_cyw43_bssid_maintenance(Cyw43MaintenanceBssidContext {
                     purpose: Cyw43MaintenanceBssidPurpose::PostAssociation,
                     station_mac,
                     poll: session.progress.polls as usize,
                 });
-                if latched {
+                if maintenance_latched {
                     session.bssid_refreshed_after_assoc = true;
                 }
-                activity |= latched;
+                activity |= maintenance_latched;
             }
-            if secure {
+            let queued_eapol = cyw43_pending_pre_secure_eapol_available_for_generation(
+                session.progress.connection_epoch,
+            );
+            if secure && (maintenance_latched || !queued_eapol) {
                 // Secure data admission and the current-generation BSSID proof
                 // are separate obligations. Retain the same host-EAPOL policy
                 // session until maintenance publishes an exact success/failure
-                // terminal; ordinary NetData is fenced by
-                // `cyw43_host_eapol_runtime_work_pending` in the meantime.
+                // terminal. A valid EAPOL frame already copied into the root
+                // queue is also an exact policy-owner obligation: fall through
+                // to consume one below. Otherwise the aggregate pending-work
+                // fence would block NetData while this secure branch refused
+                // to drain the frame, permanently holding Gate 8g.
                 break 'turn;
             }
         }
@@ -14052,6 +14157,8 @@ fn process_cyw43_host_eapol_data_completion(
                 emit_cyw43_host_eapol_status(contract, "rx-observed", &session.progress);
             }
             if ethertype == Some(ETH_P_EAPOL) {
+                let post_secure = session.progress.secure_keys_ready
+                    || CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0;
                 session.record_eapol_activity(crate::hal::timebase().now_ms(), poll as u32);
                 if let Some(proof) = cyw43_host_eapol::inspect_host_eapol_frame(frame) {
                     emit_cyw43_host_eapol_proof(contract, "rx", poll, frame.len(), proof);
@@ -14080,19 +14187,43 @@ fn process_cyw43_host_eapol_data_completion(
                 let action = match session.eapol.handle_packet(station_mac.0, frame, tx_frame) {
                     Ok(action) => action,
                     Err(err) => {
-                        session.progress.record_eapol_error(err);
+                        if post_secure {
+                            fail_cyw43_post_secure_eapol(session, err);
+                        } else {
+                            session.progress.record_eapol_error(err);
+                        }
                         emit_cyw43_host_eapol_error(
                             contract,
-                            "handle-packet",
+                            if post_secure {
+                                "post-secure-handle-packet"
+                            } else {
+                                "handle-packet"
+                            },
                             err,
                             poll,
                             frame.len(),
                         );
+                        if post_secure {
+                            emit_cyw43_host_eapol_status(
+                                contract,
+                                "post-secure-error",
+                                &session.progress,
+                            );
+                            return Ok(result);
+                        }
                         return Err(DriverTaskNetError::RuntimeInit(err));
                     }
                 };
                 CYW43_HOST_EAPOL_RX.store(session.eapol.rx_packets(), Ordering::Release);
-                emit_cyw43_host_eapol_status(contract, "eapol-rx", &session.progress);
+                emit_cyw43_host_eapol_status(
+                    contract,
+                    if post_secure {
+                        "post-secure-eapol-rx"
+                    } else {
+                        "eapol-rx"
+                    },
+                    &session.progress,
+                );
                 match action {
                     HostEapolAction::None => {}
                     HostEapolAction::Inspect { .. } => {}
@@ -14107,18 +14238,38 @@ fn process_cyw43_host_eapol_data_completion(
                     }
                     HostEapolAction::SendM2 { len } => {
                         CYW43_HOST_EAPOL_M1.fetch_add(1, Ordering::AcqRel);
-                        session
-                            .progress
-                            .record_eapol_association_proof("eapol-m1", poll);
-                        emit_cyw43_host_eapol_message(contract, "m1", "recv-m1", poll, frame.len());
+                        if !post_secure {
+                            session
+                                .progress
+                                .record_eapol_association_proof("eapol-m1", poll);
+                        }
+                        emit_cyw43_host_eapol_message(
+                            contract,
+                            "m1",
+                            if post_secure {
+                                "post-secure-recv-m1"
+                            } else {
+                                "recv-m1"
+                            },
+                            poll,
+                            frame.len(),
+                        );
                         begin_cyw43_host_eapol_tx_submit(
                             contract,
                             session,
                             &tx_frame[..len],
-                            "cyw43-host-eapol-m2",
-                            "m2-before-m3",
+                            if post_secure {
+                                "cyw43-host-eapol-post-secure-m2"
+                            } else {
+                                "cyw43-host-eapol-m2"
+                            },
+                            if post_secure {
+                                "post-secure-m2-before-m3"
+                            } else {
+                                "m2-before-m3"
+                            },
                             poll,
-                            Cyw43HostEapolTxDrainContinuation::M2 { post_secure: false },
+                            Cyw43HostEapolTxDrainContinuation::M2 { post_secure },
                         )?;
                         result.activity = true;
                         return Ok(result);
@@ -14128,7 +14279,11 @@ fn process_cyw43_host_eapol_data_completion(
                         emit_cyw43_host_eapol_message(
                             contract,
                             "m3",
-                            "recv-m3-retransmit",
+                            if post_secure {
+                                "post-secure-recv-m3-retransmit"
+                            } else {
+                                "recv-m3-retransmit"
+                            },
                             poll,
                             frame.len(),
                         );
@@ -14136,12 +14291,24 @@ fn process_cyw43_host_eapol_data_completion(
                             contract,
                             session,
                             &tx_frame[..len],
-                            "cyw43-host-eapol-m4-retransmit",
-                            "m4-before-wsec",
+                            if post_secure {
+                                "cyw43-host-eapol-post-secure-m4-retransmit"
+                            } else {
+                                "cyw43-host-eapol-m4-retransmit"
+                            },
+                            if post_secure {
+                                "post-secure-m4-before-wsec"
+                            } else {
+                                "m4-before-wsec"
+                            },
                             poll,
                             Cyw43HostEapolTxDrainContinuation::M4Retransmit {
-                                post_secure: false,
-                                retry_frame: None,
+                                post_secure,
+                                retry_frame: if post_secure {
+                                    retain_cyw43_host_eapol_m3_retry_frame(frame)
+                                } else {
+                                    None
+                                },
                             },
                         )?;
                         result.activity = true;
@@ -14149,22 +14316,39 @@ fn process_cyw43_host_eapol_data_completion(
                     }
                     HostEapolAction::SendM4InstallKeys { len, keys } => {
                         CYW43_HOST_EAPOL_M3.fetch_add(1, Ordering::AcqRel);
-                        session
-                            .progress
-                            .record_eapol_association_proof("eapol-m3", poll);
-                        emit_cyw43_host_eapol_message(contract, "m3", "recv-m3", poll, frame.len());
+                        if !post_secure {
+                            session
+                                .progress
+                                .record_eapol_association_proof("eapol-m3", poll);
+                        }
+                        emit_cyw43_host_eapol_message(
+                            contract,
+                            "m3",
+                            if post_secure {
+                                "post-secure-recv-m3"
+                            } else {
+                                "recv-m3"
+                            },
+                            poll,
+                            frame.len(),
+                        );
                         reject_stale_cyw43_host_eapol_epoch(&mut session.progress)?;
                         begin_cyw43_host_eapol_tx_submit(
                             contract,
                             session,
                             &tx_frame[..len],
-                            "cyw43-host-eapol-m4",
-                            "m4-before-wsec",
-                            poll,
-                            Cyw43HostEapolTxDrainContinuation::M4InstallKeys {
-                                keys,
-                                post_secure: false,
+                            if post_secure {
+                                "cyw43-host-eapol-post-secure-m4"
+                            } else {
+                                "cyw43-host-eapol-m4"
                             },
+                            if post_secure {
+                                "post-secure-m4-before-wsec"
+                            } else {
+                                "m4-before-wsec"
+                            },
+                            poll,
+                            Cyw43HostEapolTxDrainContinuation::M4InstallKeys { keys, post_secure },
                         )?;
                         result.activity = true;
                         return Ok(result);
@@ -14173,7 +14357,11 @@ fn process_cyw43_host_eapol_data_completion(
                         emit_cyw43_host_eapol_message(
                             contract,
                             "group-key",
-                            "recv-group-key",
+                            if post_secure {
+                                "post-secure-recv-group-key"
+                            } else {
+                                "recv-group-key"
+                            },
                             poll,
                             frame.len(),
                         );
@@ -14183,7 +14371,7 @@ fn process_cyw43_host_eapol_data_completion(
                             session,
                             keys,
                             &tx_frame[..len],
-                            false,
+                            post_secure,
                         )?;
                         result.activity = true;
                         return Ok(result);
@@ -41005,6 +41193,24 @@ mod tests {
         ));
         assert!(cyw43_pending_pre_secure_eapol_available());
         assert!(cyw43_host_eapol_runtime_work_pending());
+        assert_eq!(
+            cyw43_host_eapol_work_diagnostic(),
+            Cyw43HostEapolWorkDiagnostic {
+                generation,
+                pending: true,
+                blocker: "queued-eapol",
+                open_network: false,
+                deferred_reauth: false,
+                prompt_poll: false,
+                pending_events: 0,
+                pending_eapol_frames: 1,
+                pending_tx_submit: false,
+                pending_key_install: false,
+                pending_tx_drain: false,
+                bssid_obligation: false,
+            },
+            "wifi diag must identify the exact leaf behind the aggregate 8g fence"
+        );
         assert!(!cyw43_gate8_publication_quiescent(generation));
         assert_eq!(
             cyw43_gate8_diagnostic().subgates[6],
@@ -41018,6 +41224,7 @@ mod tests {
 
         CYW43_PENDING_RX_QUEUE.lock().clear();
         assert!(!cyw43_host_eapol_runtime_work_pending());
+        assert_eq!(cyw43_host_eapol_work_diagnostic().blocker, "none");
         assert!(cyw43_gate8_publication_quiescent(generation));
 
         CYW43_OPEN_NETWORK_ACTIVE.store(1, Ordering::Release);
@@ -45192,6 +45399,132 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_secure_gate8_slice_drains_queued_eapol_before_publication() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let _io_guard = test_enable_cyw43_host_eapol_io_stub();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring = test_publish_cyw43_ring(&mut ring_page);
+        let generation = 7;
+        prepare_cyw43_gate8_publication_for_test(
+            generation,
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: generation + 1,
+                producer: 0,
+                consumer: 0,
+                flags: 0,
+                overruns: 0,
+                ack_failures: 0,
+            },
+        );
+        let station = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
+        let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.progress.connection_epoch = generation;
+        session.progress.associated = true;
+        session.progress.link_up = true;
+        session.progress.secure_keys_ready = true;
+        session.bssid_refreshed_after_assoc = true;
+        *CYW43_RUNTIME_MAC.lock() = EthernetAddress(station);
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+        CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(0, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_CONTROL_PLANE_READY.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        CYW43_POST_ASSOC_BSSID_REFRESH_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation), Ordering::Release);
+        *CYW43_MAINTENANCE_CURSOR.lock() = Cyw43MaintenanceCursor {
+            generation,
+            required: CYW43_MAINTENANCE_POST_KEY_MASK,
+            completed: CYW43_MAINTENANCE_POST_KEY_MASK,
+            ..Cyw43MaintenanceCursor::new()
+        };
+
+        let mut m1 = [0u8; MAX_FRAME_LEN];
+        let m1_len =
+            cyw43_host_eapol::write_test_m1_frame(&mut m1, &station, &ap).expect("test M1");
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&m1[..m1_len]),
+        ));
+        assert!(cyw43_pending_pre_secure_eapol_available_for_generation(
+            generation
+        ));
+        assert!(cyw43_host_eapol_runtime_work_pending());
+        assert!(cyw43_gate8_publication_receipt(generation).is_none());
+
+        let outcome = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 1);
+
+        assert!(
+            outcome.activity,
+            "the secure policy owner must consume one queued EAPOL frame"
+        );
+        assert!(
+            !cyw43_pending_pre_secure_eapol_available_for_generation(generation),
+            "a secure-session queue entry cannot permanently hold Gate 8g"
+        );
+        assert_eq!(cyw43_pending_rx_queue_len(), 0);
+        {
+            let guard = CYW43_HOST_EAPOL_SESSION.lock();
+            let pending = guard
+                .as_ref()
+                .and_then(|session| session.pending_tx_submit)
+                .expect("queued secure M1 retains one response");
+            assert_eq!(pending.stage, "cyw43-host-eapol-post-secure-m2");
+            assert_eq!(pending.drain_stage, "post-secure-m2-before-m3");
+            assert!(matches!(
+                pending.continuation,
+                Cyw43HostEapolTxDrainContinuation::M2 { post_secure: true }
+            ));
+        }
+        assert_eq!(
+            CYW43_HOST_EAPOL_TEST_TX_SUBMITTED.load(Ordering::Acquire),
+            0,
+            "the receive turn may retain a response but cannot submit it privately"
+        );
+
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        let submit = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 2);
+        assert!(submit.activity);
+        {
+            let mut guard = CYW43_HOST_EAPOL_SESSION.lock();
+            let drain = guard
+                .as_mut()
+                .and_then(|session| session.pending_tx_drain.as_mut())
+                .expect("the next outer turn submits M2 and retains its drain");
+            assert_eq!(drain.stage, "post-secure-m2-before-m3");
+            drain.protocol_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        begin_cyw43_outer_event_turn();
+        let drain_terminal = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 3);
+        assert!(drain_terminal.activity);
+        begin_cyw43_outer_event_turn();
+        let continuation = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 4);
+        assert!(continuation.activity);
+        assert!(
+            !cyw43_host_eapol_runtime_work_pending(),
+            "the existing response continuation must reach a terminal owner state"
+        );
+        assert!(
+            cyw43_gate8_publication_receipt(generation).is_some(),
+            "Gate 8 publication must reopen after the exact queued EAPOL obligation drains"
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_full_pre_secure_dhcp_queue_admits_required_eapol() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
@@ -45376,10 +45709,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        CYW43_ASSOCIATED.store(1, Ordering::Release);
-        CYW43_LINK_UP.store(1, Ordering::Release);
-        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
-        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+        mark_cyw43_gate8_ready_for_test(0);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let eapol = test_cyw43_eapol_frame();

@@ -710,6 +710,15 @@ admission resumes. Once Ready is published, one exact current-generation
 NetData continuation remains legal and does not by itself retract stable
 proof; before initial publication, the same owner must reach its exact terminal
 so publication quiescence is true.
+
+Before initial publication, a queued current-generation EAPOL frame is still
+a host-EAPOL policy obligation. Once BSSID/filter maintenance is terminal, the
+same policy session consumes one queued frame per ordinary control turn and
+retains any response continuation for later turns. It must not leave the frame
+queued while simultaneously using that queue as the reason to fence NetData.
+Post-key frames retain post-secure handling; no diagnostic or fallback poll is
+introduced.
+
 First-cause deferred-recovery and terminal-drain telemetry must remain visible
 until the complete 8a-through-8h plus Ready transaction is retained; a rejected
 receipt or output preflight cannot erase it.
@@ -795,6 +804,8 @@ Capture the passive scheduler, handoff, and retained-frontier lines from both
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
+wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
+wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
 wifi: data_handoff lane consumer=<blocked|open> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
@@ -804,6 +815,16 @@ wifi: data_handoff postcommit_first_loss=no
 wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 ```
+
+A live NetStack frontier becomes authoritative only with complete current
+`8a`-through-`8h` proof and no active pair recovery. Until then, retain recovery,
+bootstrap/resource failure, exact runtime/SDIO terminal evidence, and the
+current ordered Gate 8 frontier as the causal authority. A text-only
+host-EAPOL cause refines that frontier only when `8a` through `8e` have passed,
+`8f-eapol-keys` is current, and no recovery is active; otherwise report it only
+as secondary telemetry. Do not let DHCP counters relabel an earlier driver
+failure. A complete serial diagnostic must still end in its terminal
+`ACK`/`ERR` and prompt.
 
 After recovery, use `gate8 retained_frontier` as the last non-recovery Gate 8
 state; the live snapshot may correctly show only the generic pair-recovery
