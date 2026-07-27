@@ -1907,6 +1907,9 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS: u8 = 4;
+
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2386,6 +2389,8 @@ where
     serial_console_turn_active: bool,
     #[cfg(feature = "kernel")]
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_network_consecutive_turns: u8,
     #[cfg(feature = "kernel")]
     serial_root_uart_released_for_linked_runtime: bool,
     #[cfg(feature = "kernel")]
@@ -2557,6 +2562,8 @@ where
             serial_console_turn_active: false,
             #[cfg(feature = "kernel")]
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_network_consecutive_turns: 0,
             #[cfg(feature = "kernel")]
             serial_root_uart_released_for_linked_runtime: false,
             #[cfg(feature = "kernel")]
@@ -2995,6 +3002,26 @@ where
                 // next dedicated Dispatch phase, after the NIC guard and
                 // reciprocal-ring ownership have been released.
                 self.poll_runtime(true, false, true);
+                #[cfg(feature = "net-console")]
+                {
+                    self.linked_runtime_network_consecutive_turns = self
+                        .linked_runtime_network_consecutive_turns
+                        .saturating_add(1);
+                    if self.linked_runtime_cyw43_network_burst_due()
+                        && self.linked_runtime_network_consecutive_turns
+                            < LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS
+                    {
+                        // A CYW43 op8 completion exposes exactly one copied
+                        // frame. Keep the NIC phase for a bounded number of
+                        // later outer EventPump turns while TCP is active or
+                        // the child/root RX queues are non-empty. Each turn
+                        // still owns at most one linked-runtime operation;
+                        // serial, USB, and HDMI resume after the fourth turn.
+                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                        return;
+                    }
+                    self.linked_runtime_network_consecutive_turns = 0;
+                }
                 self.linked_runtime_service_phase = if self.local_seat.is_some() {
                     LinkedRuntimeServicePhase::LocalSeat
                 } else {
@@ -3032,6 +3059,28 @@ where
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
             }
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_cyw43_network_burst_due(&self) -> bool {
+        if self.network_service_quarantined
+            || self.reboot_pending
+            || self.physical_console_response_pending()
+        {
+            return false;
+        }
+        self.net.as_ref().is_some_and(|net| {
+            if net.driver_task_contract()
+                != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            {
+                return false;
+            }
+            let counters = net.stats();
+            net.authenticated_console_conn_id().is_some()
+                || self.pending_net_flush.active()
+                || counters.wifi_rx_runtime_queue_count != 0
+                || counters.wifi_rx_pending_queue_count != 0
+        })
     }
 
     /// Dispatch at most one network-console line already retained by the NIC
@@ -23414,6 +23463,7 @@ mod tests {
         exhaust_flush_budget: bool,
         disconnect_requests: usize,
         active_conn_id: Option<u64>,
+        authenticated_conn_id: Option<u64>,
         console_output_drained: bool,
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
@@ -23444,6 +23494,7 @@ mod tests {
                 exhaust_flush_budget: false,
                 disconnect_requests: 0,
                 active_conn_id: None,
+                authenticated_conn_id: None,
                 console_output_drained: true,
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
@@ -23579,6 +23630,10 @@ mod tests {
 
         fn active_console_conn_id(&self) -> Option<u64> {
             self.active_conn_id
+        }
+
+        fn authenticated_console_conn_id(&self) -> Option<u64> {
+            self.authenticated_conn_id
         }
 
         fn console_listener_ready(&self) -> bool {
@@ -29608,6 +29663,171 @@ mod tests {
         assert_eq!(crate::serial::test_take_linked_runtime_only_tx().len(), 128);
         assert_eq!(pump.serial_mut().driver_mut().io_call_counts(), (0, 0));
         assert!(pump.serial_mut().tx_pending());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_tcp_backlog_receives_four_bounded_network_turns() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.counters.wifi_rx_runtime_queue_count = 37;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            for completed_turns in 1..LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS {
+                pump.poll();
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Network,
+                    "CYW43 backlog must retain the next bounded NIC turn after turn {completed_turns}"
+                );
+            }
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the bounded burst must return ownership to physical operator service"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+        }
+
+        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS as usize);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_accepted_unauthenticated_peer_does_not_trigger_tcp_weighting() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(18);
+
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        assert!(
+            !pump.linked_runtime_cyw43_network_burst_due(),
+            "an accepted but unauthenticated peer cannot earn TCP weighting"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_network_burst_is_cyw43_backlog_only_and_quarantine_cancels() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(21);
+        genet.authenticated_conn_id = Some(21);
+        genet.counters.wifi_rx_runtime_queue_count = 37;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut genet);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "GENET must retain the ordinary single-Network-turn rotation"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+        }
+        assert_eq!(genet.polls, 1);
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(22);
+        wifi.authenticated_conn_id = Some(22);
+        wifi.counters.wifi_rx_runtime_queue_count = 37;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+            assert!(
+                pump.linked_runtime_cyw43_network_burst_due(),
+                "the CYW43 backlog must make a bounded burst eligible"
+            );
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            assert!(
+                !pump.linked_runtime_cyw43_network_burst_due(),
+                "a physical-console response must cancel CYW43 weighting"
+            );
+            pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
+            pump.reboot_pending = true;
+            assert!(
+                !pump.linked_runtime_cyw43_network_burst_due(),
+                "reboot must cancel CYW43 weighting"
+            );
+            pump.reboot_pending = false;
+            pump.network_service_quarantined = true;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "quarantine must cancel a CYW43 burst before another NIC turn"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+        }
+        assert_eq!(wifi.polls, 0);
     }
 
     #[cfg(feature = "kernel")]

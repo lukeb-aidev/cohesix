@@ -1478,22 +1478,27 @@ serial command, with no queue-tail restoration after an unknown result. A valid
 partial completion advances only the written prefix; its FIFO suffix receives a
 new action ticket. TX is limited to 128 bytes per action and alternates with RX
 after every completed chunk, so large startup output cannot hide a paced serial
-command. The ordinary linked EventPump rotates through separate `Serial`,
-`Dispatch`, `Network`, `LocalSeat`, and `Display` outer turns. `Serial` admits
-one TX-first serial-ring turn. `Dispatch` consumes at most one serial, buffered
-local-seat, or already-buffered network command without polling the NIC.
-`Network` performs one NIC service and leaves any received command buffered for
-the next `Dispatch` turn; receiving a command and dispatching it therefore never
-share an outer turn. `LocalSeat` performs one retained USB keyboard turn, and
-`Display` performs at most one retained HDMI attach or pending-frame turn.
-For wired GENET, the one `Network` service may instead be the next retained
-post-command TCP flush described above; dispatch itself performs none. A
-data-ready CYW43 connection never uses that GENET cursor and continues through
-ordinary one-operation network polls on successive `Network` phases.
+command. The ordinary linked EventPump uses separate `Serial`, `Dispatch`,
+`Network`, `LocalSeat`, and `Display` outer-turn classes. `Serial` admits one
+TX-first serial-ring turn. `Dispatch` consumes at most one serial, buffered
+local-seat, or already-buffered network command without polling the NIC. Each
+`Network` turn performs one NIC service and leaves any received command
+buffered for the next `Dispatch` turn; receiving a command and dispatching it
+therefore never share an outer turn. For wired GENET, the one `Network` service
+may instead be the next retained post-command TCP flush described above;
+dispatch itself performs none. GENET and idle CYW43 service follow the ordinary
+rotation. A data-ready CYW43 connection never uses the GENET cursor and may
+retain `Network` for at most four consecutive outer turns while authenticated
+TCP, response-flush, or runtime/root RX backlog remains. Every such turn still
+admits at most one CYW43 operation, and turn four must return to the bounded
+physical-console rotation. `LocalSeat` performs one retained USB keyboard turn,
+and `Display` performs at most one retained HDMI attach or pending-frame turn.
 
 If a TX command already owns the shared ring slot, RX remains unallocated and
-cannot install a competing ticket or fingerprint. When the bounded linked TX
-queue is full, complete output remains retained. Three backlog records are
+cannot install a competing ticket or fingerprint. CYW43 likewise retains a
+copied RX frame instead of exposing smoltcp's paired response token while a
+prior retained TX or unproved credit window would reject that token. When the
+bounded linked TX queue is full, complete output remains retained. Three backlog records are
 reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`
 records cannot consume them. A response-priority enqueue may preempt only the
 newest `BackgroundLine`, whose authoritative copy is already in

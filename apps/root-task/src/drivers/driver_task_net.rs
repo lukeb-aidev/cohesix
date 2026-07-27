@@ -6779,8 +6779,15 @@ const fn cyw43_event_is_terminal_association_failure(event: Cyw43EventFrame) -> 
 }
 
 #[cfg(feature = "kernel")]
-fn arm_cyw43_association_events_for_generation(generation: u32) -> bool {
-    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
+fn arm_cyw43_association_events_for_join_request(
+    generation: u32,
+    request: Option<u32>,
+    issued: bool,
+) -> bool {
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation
+        || request.is_none_or(|request| request == 0)
+        || !cyw43_child_action_accepted(request, issued)
+    {
         return false;
     }
     CYW43_ASSOCIATION_EVENT_ARMED_EPOCH_TOKEN
@@ -10800,6 +10807,26 @@ fn cyw43_retained_descriptor_active_state_with_payload(
 }
 
 #[cfg(feature = "kernel")]
+const fn cyw43_association_completion_proves_join_issued(
+    completion: DriverTaskCompletionRecord,
+) -> bool {
+    if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
+        return completion.detail != DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME
+            && cyw43_frame_channel(completion.frame.flags)
+                == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL;
+    }
+    if completion.code != DriverTaskCompletionCode::Fault.as_u16()
+        || completion.detail != CYW43_CONTROL_EXCHANGE_FAULT_DETAIL
+    {
+        return false;
+    }
+    !matches!(
+        cyw43_control_exchange_timeout_result_reason(completion.result),
+        Some(CYW43_CONTROL_EXCHANGE_TIMEOUT_REASON_NOT_READY)
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_association_exchange_terminal_step(
     completion: DriverTaskCompletionRecord,
     logical_epoch_stale: bool,
@@ -10986,7 +11013,11 @@ fn advance_cyw43_pending_association_join(
         };
         pending.issued |= issued;
         if pending.issued {
-            let _ = arm_cyw43_association_events_for_generation(pending.generation);
+            let _ = arm_cyw43_association_events_for_join_request(
+                pending.generation,
+                pending.request,
+                pending.issued,
+            );
         }
         let _ = retain_cyw43_terminal_drain_cursor(
             request,
@@ -11055,7 +11086,11 @@ fn advance_cyw43_pending_association_join(
         pending.request = Some(request);
         pending.issued |= issued;
         if pending.issued {
-            let _ = arm_cyw43_association_events_for_generation(pending.generation);
+            let _ = arm_cyw43_association_events_for_join_request(
+                pending.generation,
+                pending.request,
+                pending.issued,
+            );
         }
         let _ = retain_cyw43_terminal_drain_cursor(
             request,
@@ -11090,8 +11125,16 @@ fn advance_cyw43_pending_association_join(
         return Cyw43AssociationJoinStep::RecoveryRequired;
     }
     clear_cyw43_terminal_drain_cursor(pending.generation, completion.sequence);
-    pending.issued = true;
-    let _ = arm_cyw43_association_events_for_generation(pending.generation);
+    let interleaved = completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
+        && completion.detail == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME;
+    if cyw43_association_completion_proves_join_issued(completion) {
+        pending.issued = true;
+        let _ = arm_cyw43_association_events_for_join_request(
+            pending.generation,
+            Some(completion.sequence),
+            pending.issued,
+        );
+    }
     pending.request = None;
     pending.child_reply_latched = false;
     record_cyw43_runtime_completion(contract, completion);
@@ -11116,9 +11159,7 @@ fn advance_cyw43_pending_association_join(
         pending.interleaved_frames,
         pending.malformed_frames,
     );
-    if completion.code == DriverTaskCompletionCode::FrameReady.as_u16()
-        && completion.detail == DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME
-    {
+    if interleaved {
         return route_cyw43_association_exchange_interleaved_frame(contract, pending, completion);
     }
     let attempt_stale = pending.logical_epoch_stale
@@ -16734,6 +16775,23 @@ fn cyw43_data_tx_admission_ready(contract: DriverTaskContract) -> bool {
         let _ = contract;
         true
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_paired_tx_owner_admission_ready(contract: DriverTaskContract) -> bool {
+    if CYW43_PENDING_DATA_TX.lock().is_some() {
+        // smoltcp's RX-associated TxToken cannot report admission failure.
+        // Advance the sole retained TX owner and preserve copied RX until a
+        // later outer turn can return a response token that is safe to use.
+        let _ = cyw43_data_tx_admission_ready(contract);
+        return false;
+    }
+    // Logical control and the post-TX fairness cursor are handled before the
+    // copied-RX dequeue. This final owner check also fences an active control
+    // or ETH_TX descriptor that is not represented by the root TX slot.
+    cyw43_data_plane_ready()
+        && cyw43_fresh_tx_admission_ready(contract)
+        && cyw43_tx_unproven_window_ready(contract)
 }
 
 #[cfg(feature = "kernel")]
@@ -23017,6 +23075,9 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         );
         return None;
     }
+    if !cyw43_paired_tx_owner_admission_ready(contract) {
+        return None;
+    }
     while let Some((flags, token)) = take_cyw43_pending_rx_token() {
         let _ = complete_cyw43_unproven_tx_window_from_rx_flags(flags);
         if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
@@ -23043,15 +23104,6 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         );
         queue_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
         return Some(token);
-    }
-    if service_cyw43_pending_data_tx_turn(contract) {
-        // An already-copied current-generation RX token is consumed above
-        // without issuing hardware work. Only when that bounded root queue is
-        // empty may the retained ETH_TX cursor consume this outer device turn.
-        // This prevents TCP ACK/FIN input from waiting behind a complete
-        // multi-turn CYW43/SDIO TX lease while preserving one physical child
-        // operation per EventPump turn.
-        return None;
     }
     if stage_one_cyw43_arp_tx_if_ready(contract) {
         return None;
@@ -31418,10 +31470,18 @@ mod tests {
             Cyw43AssociationJoinStep::Rejected,
             "PreTxDrain/WaitCredit NOT_READY proves the join was never issued"
         );
+        assert!(
+            !cyw43_association_completion_proves_join_issued(pre_tx_not_ready),
+            "pre-TX NOT_READY cannot authorize association events"
+        );
         assert_eq!(
             cyw43_association_exchange_terminal_step(post_tx_timeout, false),
             Cyw43AssociationJoinStep::RecoveryRequired,
             "WaitReply timeout is issued-unknown and must poison the pair"
+        );
+        assert!(
+            cyw43_association_completion_proves_join_issued(post_tx_timeout),
+            "post-TX timeout proves the exact Join left the pre-TX state"
         );
         assert_eq!(
             cyw43_association_exchange_terminal_step(post_tx_timeout, true),
@@ -31533,9 +31593,17 @@ mod tests {
             Cyw43AssociationJoinStep::Pending { activity: true },
             "0x5802 never denotes the matched reply"
         );
+        assert!(
+            !cyw43_association_completion_proves_join_issued(interleaved),
+            "an interleaved event may precede the Join TX and cannot arm event ownership"
+        );
         assert_eq!(
             cyw43_association_exchange_terminal_step(bus_link_loss, false),
             Cyw43AssociationJoinStep::RecoveryRequired
+        );
+        assert!(
+            !cyw43_association_completion_proves_join_issued(bus_link_loss),
+            "an unrelated bus-link fault cannot prove the Join TX was issued"
         );
         assert!(cyw43_fault_invalidates_root_generation(
             CYW43_TRANSPORT_BUS_LINK_MISSING_DETAIL
@@ -32209,7 +32277,11 @@ mod tests {
             status: CYW43_EVENT_STATUS_TIMEOUT,
             ..Cyw43EventFrame::default()
         };
-        assert!(arm_cyw43_association_events_for_generation(0));
+        assert!(arm_cyw43_association_events_for_join_request(
+            0,
+            Some(1),
+            true
+        ));
 
         for _ in 0..8 {
             record_cyw43_association_event_outcome(timeout, "test-auth-timeout");
@@ -32244,6 +32316,11 @@ mod tests {
             status: CYW43_EVENT_STATUS_NO_NETWORKS,
             ..Cyw43EventFrame::default()
         };
+        let auth_timeout = Cyw43EventFrame {
+            event_type: CYW43_EVENT_AUTH,
+            status: CYW43_EVENT_STATUS_TIMEOUT,
+            ..Cyw43EventFrame::default()
+        };
 
         record_cyw43_association_event_outcome(stale_link_down, "test-stale-link");
         assert_eq!(
@@ -32256,7 +32333,26 @@ mod tests {
         ));
         assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), 7);
 
-        assert!(arm_cyw43_association_events_for_generation(7));
+        assert!(
+            !arm_cyw43_association_events_for_join_request(7, None, true),
+            "issued without an exact request is not Join ownership"
+        );
+        assert!(
+            !arm_cyw43_association_events_for_join_request(7, Some(319), false),
+            "a prepared Join request is not child-accepted"
+        );
+        record_cyw43_association_event_outcome(auth_timeout, "test-unaccepted-auth");
+        assert_eq!(
+            CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
+            0,
+            "the observed pre-Join AUTH timeout cannot mutate the generation"
+        );
+
+        assert!(arm_cyw43_association_events_for_join_request(
+            7,
+            Some(319),
+            true
+        ));
         record_cyw43_association_event_outcome(stale_link_down, "test-armed-link");
         assert_eq!(
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
@@ -32269,11 +32365,6 @@ mod tests {
         );
 
         CYW43_ASSOCIATION_TERMINAL_FAILURE.store(0, Ordering::Release);
-        let auth_timeout = Cyw43EventFrame {
-            event_type: CYW43_EVENT_AUTH,
-            status: CYW43_EVENT_STATUS_TIMEOUT,
-            ..Cyw43EventFrame::default()
-        };
         record_cyw43_association_event_outcome(auth_timeout, "test-armed-auth");
         assert_eq!(
             CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire),
@@ -32297,7 +32388,11 @@ mod tests {
         pending.request = Some(319);
         pending.issued = true;
         publish_cyw43_association_join_diagnostic(&pending);
-        assert!(arm_cyw43_association_events_for_generation(7));
+        assert!(arm_cyw43_association_events_for_join_request(
+            7,
+            pending.request,
+            pending.issued,
+        ));
 
         let first = Cyw43EventFrame {
             event_type: CYW43_EVENT_AUTH,
@@ -37289,7 +37384,11 @@ mod tests {
             .lock()
             .expect("cyw43 status-label tests must serialize");
         reset_cyw43_status_flags();
-        assert!(arm_cyw43_association_events_for_generation(0));
+        assert!(arm_cyw43_association_events_for_join_request(
+            0,
+            Some(1),
+            true
+        ));
 
         let packet = test_cyw43_event_packet(CYW43_EVENT_SET_SSID, CYW43_EVENT_STATUS_SUCCESS, 0);
         let event_frame = test_cyw43_bdc_event_frame(&packet);
@@ -37399,7 +37498,11 @@ mod tests {
         CYW43_HOST_EAPOL_SCB_AUTH_ATTEMPTED.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_SCB_AUTHORIZED.store(1, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes([192, 168, 86, 154]), Ordering::Release);
-        assert!(arm_cyw43_association_events_for_generation(0));
+        assert!(arm_cyw43_association_events_for_join_request(
+            0,
+            Some(1),
+            true
+        ));
 
         let packet = test_cyw43_event_packet(CYW43_EVENT_DEAUTH_IND, CYW43_EVENT_STATUS_SUCCESS, 0);
         let event_frame = test_cyw43_bdc_event_frame(&packet);
@@ -37461,7 +37564,11 @@ mod tests {
         CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes([192, 168, 86, 154]), Ordering::Release);
         let initial_epoch = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
-        assert!(arm_cyw43_association_events_for_generation(initial_epoch));
+        assert!(arm_cyw43_association_events_for_join_request(
+            initial_epoch,
+            Some(1),
+            true
+        ));
 
         let packet = test_cyw43_event_packet(CYW43_EVENT_LINK, CYW43_EVENT_STATUS_SUCCESS, 0);
         let event_frame = test_cyw43_bdc_event_frame(&packet);
@@ -37566,7 +37673,11 @@ mod tests {
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(cyw43_epoch_token(7), Ordering::Release);
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         CYW43_OPEN_NETWORK_ACTIVE.store(1, Ordering::Release);
-        assert!(arm_cyw43_association_events_for_generation(7));
+        assert!(arm_cyw43_association_events_for_join_request(
+            7,
+            Some(1),
+            true
+        ));
 
         let sta = [0x88, 0xa2, 0x9e, 0x66, 0x59, 0x10];
         let ap = [0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5];
@@ -37724,7 +37835,11 @@ mod tests {
             .lock()
             .expect("cyw43 status-label tests must serialize");
         reset_cyw43_status_flags();
-        assert!(arm_cyw43_association_events_for_generation(0));
+        assert!(arm_cyw43_association_events_for_join_request(
+            0,
+            Some(1),
+            true
+        ));
 
         for (event_type, event_flags) in [
             (CYW43_EVENT_SET_SSID, 0),
@@ -44949,6 +45064,129 @@ mod tests {
         assert_eq!(CYW43_TX_SUBMITTED.load(Ordering::Acquire), 2);
         assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 2);
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), 0);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_receive_preserves_second_rx_while_paired_tx_is_retained() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let frame = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
+        assert_eq!(cyw43_pending_rx_queue_len(), 2);
+
+        let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("the first copied RX receives an admissible paired TX token");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        paired_tx.consume(64, |bytes| bytes.fill(0x42));
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), 0);
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+
+        let drops_before = CYW43_TX_DROPPED.load(Ordering::Acquire);
+        begin_cyw43_outer_event_turn();
+        assert!(
+            dev.receive(Instant::from_millis(1)).is_none(),
+            "the retained paired TX owner must advance before another RX is exposed"
+        );
+        assert_eq!(
+            cyw43_pending_rx_queue_len(),
+            1,
+            "the second copied RX must remain queued for the next outer turn"
+        );
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "an Idle child completion retains the exact first paired TX"
+        );
+        assert_eq!(
+            CYW43_TX_DROPPED.load(Ordering::Acquire),
+            drops_before,
+            "preserving the second RX must not fabricate a TX drop"
+        );
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+
+        begin_cyw43_outer_event_turn();
+        assert!(
+            dev.receive(Instant::from_millis(2)).is_none(),
+            "the retained paired TX terminal still consumes its own outer turn"
+        );
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert!(cyw43_current_generation_data_tx_rx_fairness_due());
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+        assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_receive_preserves_rx_until_queued_credit_proves_paired_tx_admission() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(1, Ordering::Release);
+
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"tcp-response"
+        ));
+        assert_eq!(
+            drive_cyw43_pending_data_tx_for_test(1),
+            Cyw43DataTxTurnOutcome::Submitted
+        );
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_KNOWN
+        );
+        // Isolate paired-token credit admission from the separately tested
+        // post-TX fairness poll.
+        CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.store(0, Ordering::Release);
+
+        let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        let frame = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
+        let drops_before = CYW43_TX_DROPPED.load(Ordering::Acquire);
+        let mut dev = Cyw43DriverTaskDevice::default();
+        assert!(
+            dev.receive(Instant::from_millis(0)).is_none(),
+            "RX without covering SDPCM credit must not expose an unusable paired TX token"
+        );
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+        assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
+
+        let credit_flags = flags | (2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT);
+        assert!(store_cyw43_pending_rx_token(
+            credit_flags,
+            test_rx_token(&frame)
+        ));
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(1))
+            .expect("queued covering credit must make the paired TX token admissible");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_NONE
+        );
+        CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(0, Ordering::Release);
+        paired_tx.consume(64, |bytes| bytes.fill(0x24));
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
 
         reset_cyw43_status_flags();
     }

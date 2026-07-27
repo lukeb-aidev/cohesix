@@ -1215,6 +1215,12 @@ pub trait NetPoller {
         None
     }
 
+    /// Return the active TCP console connection identifier only when its
+    /// current session has completed authentication.
+    fn authenticated_console_conn_id(&self) -> Option<u64> {
+        None
+    }
+
     /// Inject a console line into the network transport (testing hook).
     fn inject_console_line(&mut self, _line: &str) {}
 

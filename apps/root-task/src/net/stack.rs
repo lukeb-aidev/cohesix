@@ -16,7 +16,8 @@
 //! - With `tcp-echo-31337`, run `nc 127.0.0.1 31337` and type input; expect
 //!   echoed bytes plus `[net-trace]` RX/TX lines for port 31337.
 //! - With tracing enabled, `./cohsh --transport tcp --tcp-port 31337 --role queen`
-//!   should emit auth frame logs showing the exact bytes parsed on the server.
+//!   should emit auth telemetry describing frame length and session state without
+//!   disclosing credentials.
 #![allow(unsafe_code)]
 #![cfg(any(test, feature = "kernel"))]
 
@@ -3061,9 +3062,12 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     #[inline]
-    fn trace_conn_prefix(payload: &[u8]) -> ([u8; 16], usize) {
+    fn trace_conn_prefix(payload: &[u8], disclose_payload: bool) -> ([u8; 16], usize) {
         const PREFIX_CAP: usize = 16;
         let mut prefix = [0u8; PREFIX_CAP];
+        if !disclose_payload {
+            return (prefix, 0);
+        }
         let prefix_len = payload.len().min(PREFIX_CAP);
         if prefix_len > 0 {
             let _ = maybe_report_str_write(
@@ -3079,11 +3083,19 @@ impl<D: NetDevice> NetStack<D> {
         (prefix, prefix_len)
     }
 
-    fn trace_conn_recv(conn_id: u64, payload: &[u8]) {
+    fn trace_conn_recv(conn_id: u64, payload: &[u8], disclose_payload: bool) {
         if !log::log_enabled!(log::Level::Debug) {
             return;
         }
-        let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
+        if !disclose_payload {
+            log::debug!(
+                "[cohsh-net] conn id={} recv bytes={} payload=redacted auth=pending",
+                conn_id,
+                payload.len(),
+            );
+            return;
+        }
+        let (prefix, prefix_len) = Self::trace_conn_prefix(payload, true);
         log::debug!(
             "[cohsh-net] conn id={} recv bytes={} first16={:02x?}",
             conn_id,
@@ -3092,11 +3104,19 @@ impl<D: NetDevice> NetStack<D> {
         );
     }
 
-    fn trace_conn_send(conn_id: u64, payload: &[u8]) {
+    fn trace_conn_send(conn_id: u64, payload: &[u8], disclose_payload: bool) {
         if !log::log_enabled!(log::Level::Debug) {
             return;
         }
-        let (prefix, prefix_len) = Self::trace_conn_prefix(payload);
+        if !disclose_payload {
+            log::debug!(
+                "[cohsh-net] conn id={} send bytes={} payload=redacted auth=pending",
+                conn_id,
+                payload.len(),
+            );
+            return;
+        }
+        let (prefix, prefix_len) = Self::trace_conn_prefix(payload, true);
         log::debug!(
             "[cohsh-net] conn id={} send bytes={} first16={:02x?}",
             conn_id,
@@ -6367,14 +6387,23 @@ impl<D: NetDevice> NetStack<D> {
                         break;
                     }
                     let mut copied = 0usize;
+                    let disclose_payload = self.server.is_authenticated();
                     let recv_result = socket.recv(|data| {
-                        let preview_len = core::cmp::min(data.len(), 32);
-                        log::debug!(
-                            target: "net-console",
-                            "[tcp] recv on console socket: len={} first_bytes={:02x?}",
-                            data.len(),
-                            &data[..preview_len],
-                        );
+                        if disclose_payload {
+                            let preview_len = core::cmp::min(data.len(), 32);
+                            log::debug!(
+                                target: "net-console",
+                                "[tcp] recv on console socket: len={} first_bytes={:02x?}",
+                                data.len(),
+                                &data[..preview_len],
+                            );
+                        } else {
+                            log::debug!(
+                                target: "net-console",
+                                "[tcp] recv auth payload redacted: len={}",
+                                data.len(),
+                            );
+                        }
                         let copy_len = core::cmp::min(
                             data.len(),
                             core::cmp::min(temp.len(), remaining_budget),
@@ -6413,9 +6442,16 @@ impl<D: NetDevice> NetStack<D> {
                                     peer_port,
                                     socket.state()
                                 );
-                                trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                                if disclose_payload {
+                                    trace!("[cohsh-net][tcp] recv hex: {:02x?}", &temp[..dump_len]);
+                                } else {
+                                    trace!(
+                                        "[cohsh-net][tcp] recv auth payload redacted: nbytes={}",
+                                        copied
+                                    );
+                                }
                             }
-                            Self::trace_conn_recv(conn_id, &temp[..copied]);
+                            Self::trace_conn_recv(conn_id, &temp[..copied], disclose_payload);
                             if ECHO_MODE {
                                 match socket.send_slice(&temp[..copied]) {
                                     Ok(sent) => {
@@ -6424,7 +6460,11 @@ impl<D: NetDevice> NetStack<D> {
                                         NET_DIAG.add_bytes_written(sent as u64);
                                         self.counters.tcp_tx_bytes =
                                             self.counters.tcp_tx_bytes.saturating_add(sent as u64);
-                                        Self::trace_conn_send(conn_id, &temp[..sent.min(copied)]);
+                                        Self::trace_conn_send(
+                                            conn_id,
+                                            &temp[..sent.min(copied)],
+                                            true,
+                                        );
                                     }
                                     Err(err) => {
                                         log::warn!(
@@ -6448,10 +6488,6 @@ impl<D: NetDevice> NetStack<D> {
                                     peer_label,
                                     peer_port
                                 );
-                                info!(
-                                    "[cohsh-net][auth] frame hex: {:02x?}",
-                                    &temp[..copied.min(32)]
-                                );
                             }
                             self.session_state.logged_first_recv = true;
                             match self.server.ingest(&temp[..copied], now_ms) {
@@ -6463,19 +6499,12 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         AuthState::Attached,
                                     );
-                                    let mut preview: HeaplessString<DEFAULT_LINE_CAPACITY> =
-                                        HeaplessString::new();
-                                    for &byte in &temp[..copied.min(preview.capacity())] {
-                                        if byte == b'\n' || byte == b'\r' {
-                                            break;
-                                        }
-                                        let _ = preview.push(byte as char);
-                                    }
                                     info!(
                                         target: "net-console",
-                                        "[net-console] recv line on TCP session {}: {}",
+                                        "[net-console] authenticated TCP session {} frame_bytes={} state={:?}",
                                         conn_id,
-                                        preview
+                                        copied,
+                                        self.auth_state,
                                     );
                                     info!(
                                         "[cohsh-net][auth] auth OK, session established (generation={} conn_id={})",
@@ -7304,13 +7333,21 @@ impl<D: NetDevice> NetStack<D> {
         }
         match socket.send_slice(payload) {
             Ok(sent) if sent == payload.len() => {
-                let preview_len = core::cmp::min(sent, 32);
-                log::debug!(
-                    target: "net-console",
-                    "[tcp] send on console socket: len={} first_bytes={:02x?}",
-                    sent,
-                    &payload[..preview_len],
-                );
+                if pre_auth {
+                    log::debug!(
+                        target: "net-console",
+                        "[tcp] send auth payload redacted: len={}",
+                        sent,
+                    );
+                } else {
+                    let preview_len = core::cmp::min(sent, 32);
+                    log::debug!(
+                        target: "net-console",
+                        "[tcp] send on console socket: len={} first_bytes={:02x?}",
+                        sent,
+                        &payload[..preview_len],
+                    );
+                }
                 *conn_bytes_written = conn_bytes_written.saturating_add(sent as u64);
                 NET_DIAG.add_bytes_written(sent as u64);
                 counters.tcp_tx_bytes = counters.tcp_tx_bytes.saturating_add(sent as u64);
@@ -7325,25 +7362,32 @@ impl<D: NetDevice> NetStack<D> {
                     server.mark_activity(now_ms);
                 }
                 let conn_id = conn_id.unwrap_or(0);
-                Self::trace_conn_send(conn_id, payload);
+                Self::trace_conn_send(conn_id, payload, !pre_auth);
                 #[cfg(feature = "net-trace-31337")]
                 {
                     let tcp_state = socket.state();
-                    let dump_len = payload.len().min(32);
-                    info!(
-                        "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
-                        sent,
-                        tcp_state,
-                        auth_state,
-                        &payload[..dump_len]
-                    );
+                    if pre_auth {
+                        info!(
+                            "[cohsh-net] send: {} auth bytes redacted (state={:?}, auth_state={:?})",
+                            sent, tcp_state, auth_state,
+                        );
+                    } else {
+                        let dump_len = payload.len().min(32);
+                        info!(
+                            "[cohsh-net] send: {} bytes (state={:?}, auth_state={:?}): {:02x?}",
+                            sent,
+                            tcp_state,
+                            auth_state,
+                            &payload[..dump_len]
+                        );
+                    }
                 }
                 if pre_auth && matches!(lane, OutboundLane::Control) {
                     info!(
-                        "[net-console] conn {}: sent pre-auth payload len={} first_bytes={:02x?}",
+                        "[net-console] conn {}: sent pre-auth payload len={} state={:?}",
                         conn_id,
                         payload.len(),
-                        &payload[..core::cmp::min(payload.len(), 32)]
+                        auth_state,
                     );
                     info!(
                         "[net-console] auth response sent; session state = {:?}",
@@ -7884,6 +7928,11 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 
     fn active_console_conn_id(&self) -> Option<u64> {
         self.active_client_id
+    }
+
+    fn authenticated_console_conn_id(&self) -> Option<u64> {
+        self.active_client_id
+            .filter(|_| self.server.is_authenticated())
     }
 
     fn inject_console_line(&mut self, _line: &str) {}
@@ -8520,6 +8569,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.active_console_conn_id(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.active_console_conn_id(),
+        }
+    }
+
+    fn authenticated_console_conn_id(&self) -> Option<u64> {
+        match self {
+            Self::Rtl8139(stack) => stack.authenticated_console_conn_id(),
+            Self::GenetDriverTask(stack) => stack.authenticated_console_conn_id(),
+            Self::Cyw43DriverTask(stack) => stack.authenticated_console_conn_id(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.authenticated_console_conn_id(),
         }
     }
 
@@ -10416,7 +10475,7 @@ mod tests {
             *byte = i as u8;
         }
 
-        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
+        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload, true);
         assert_eq!(prefix_len, 16);
         assert_eq!(&prefix[..prefix_len], &payload[..16]);
     }
@@ -10424,9 +10483,17 @@ mod tests {
     #[test]
     fn trace_conn_prefix_handles_short_payload() {
         let payload = [1u8, 2u8, 3u8];
-        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload);
+        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(&payload, true);
         assert_eq!(prefix_len, payload.len());
         assert_eq!(&prefix[..prefix_len], payload);
+    }
+
+    #[test]
+    fn trace_conn_prefix_redacts_unauthenticated_payload() {
+        let payload = b"AUTH production-secret";
+        let (prefix, prefix_len) = NetStack::<DefaultNetDevice>::trace_conn_prefix(payload, false);
+        assert_eq!(prefix_len, 0);
+        assert_eq!(prefix, [0u8; 16]);
     }
 
     #[test]

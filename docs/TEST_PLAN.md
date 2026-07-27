@@ -1140,7 +1140,8 @@ failure, result, and raw diagnostic records must enqueue or append to
 `/log/queen.log` without a raw/current-TCB UART write; tests must show the
 linked flush waits for the following operator turn and does not share a turn
 with a CYW43 operation. Ordinary linked EventPump coverage must prove the
-five-phase `Serial -> Dispatch -> Network -> LocalSeat -> Display` arbiter.
+`Serial -> Dispatch -> Network -> LocalSeat -> Display` phase classes and the
+bounded CYW43 network weighting.
 `Serial` may perform one TX-first reciprocal-ring turn; `Dispatch` may consume
 one serial, buffered local-seat, or buffered network command without polling
 the NIC or flushing TCP. `Network` may perform exactly one ordinary NIC service
@@ -1153,7 +1154,16 @@ connection. Each later
 normally or sixteen while the display reports backlog pressure. A second
 buffered command stays behind the first cursor, and a changed or absent active
 connection rejects stale cursor work. A data-ready CYW43 connection must not
-create the GENET cursor; it continues ordinary one-operation network polls.
+create the GENET cursor. When authenticated TCP, a response flush, or
+runtime/root RX backlog is live, CYW43 may retain at most four successive
+`Network` outer turns; every turn must still admit no more than one CYW43
+operation, and the fourth must release to the physical-console rotation. Tests
+must prove idle CYW43 and GENET do not enter this burst, and that reboot,
+quarantine, or a pending physical-console response cancels it. CYW43 device
+tests must also prove that a retained TX or unproved credit window withholds
+smoltcp's paired RX/TX token, preserves the copied RX frame, advances only the
+sole retained owner, and produces zero fabricated TX drops before the frame is
+later delivered.
 `LocalSeat` may perform one retained USB keyboard turn, and `Display` may
 perform at most one retained HDMI attach or pending-frame turn. Every retained
 phase must return before its successor.

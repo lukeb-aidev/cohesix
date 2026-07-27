@@ -1727,27 +1727,34 @@ generation and XID.
   and a completed chunk forces one RX turn before another chunk so startup
   output cannot starve commands or reboot. Malformed or over-reported
   completions poison TX without replay while preserving fail-closed RX service.
-  The ordinary linked EventPump rotates through five retained phases: `Serial`,
+  The ordinary linked EventPump uses five retained phase classes: `Serial`,
   `Dispatch`, `Network`, `LocalSeat`, and `Display`. `Serial` queues at most one
   pending output record and admits one TX-first serial-ring turn. `Dispatch`
   consumes at most one serial, buffered local-seat, or already-buffered network
   command and performs no NIC poll or TCP flush. Dispatching a GENET command
-  retains its connection-owned response-flush cursor and returns. `Network`
-  performs exactly one ordinary NIC service or one retained GENET TCP flush,
-  then leaves any received command buffered for a later `Dispatch` phase. A
-  second buffered network command remains behind the active response cursor, so
-  NIC work, response flushing, and command dispatch never share one outer turn.
-  CYW43 data-ready traffic continues through ordinary one-operation network
-  polls and does not use the GENET cursor. `LocalSeat`
-  performs one retained USB keyboard turn, and `Display` performs at most one
-  retained HDMI attach or frame turn. Every phase returns to the outer loop
-  before the next phase; a missing local seat skips directly from `Network` to
-  `Serial`.
+  retains its connection-owned response-flush cursor and returns. Each
+  `Network` turn performs exactly one ordinary NIC service or one retained GENET
+  TCP flush, then leaves any received command buffered for a later `Dispatch`
+  phase. A second buffered network command remains behind the active response
+  cursor, so NIC work, response flushing, and command dispatch never share one
+  outer turn. GENET and idle CYW43 service retain the ordinary phase rotation.
+  When the selected CYW43 path has an authenticated TCP session, a pending
+  response flush, or non-empty runtime/root RX telemetry, `Network` may retain
+  the next outer turn up to four consecutive turns. Every retained turn still
+  admits at most one CYW43 operation; the fourth turn must release the burst to
+  the physical-console phase rotation. `LocalSeat` performs one retained USB
+  keyboard turn, and `Display` performs at most one retained HDMI attach or
+  frame turn. Every phase returns to the outer loop before its successor; a
+  missing local seat returns from the bounded CYW43 burst to `Serial`.
 
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing
   fingerprint; once TX completes, the mandatory RX fairness turn proceeds
-  normally. There is no generic/current-TCB UART fallback. If the bounded
+  normally. The CYW43 device also withholds smoltcp's paired RX/TX token while
+  that retained TX owner or its unproved credit window is active. The copied RX
+  frame remains queued until the paired token can stage a response without
+  silently reporting a dropped TX as success. There is no generic/current-TCB
+  UART fallback. If the bounded
   linked TX queue cannot accept an operator response, EventPump retains the
   complete record instead of dropping or truncating it. The pending-console
   backlog reserves three records for response tails. Ordinary `Line` and
