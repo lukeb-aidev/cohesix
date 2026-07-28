@@ -13123,7 +13123,9 @@ fn sdio_retained_capture_failure_telemetry_with<I: SdioTransferIo>(
 ) -> RuntimeCommandTurn {
     let identity = cursor.identity;
     if !cursor.failure_snapshot_valid {
-        cursor.failure_snapshot = sdio_external_dma_request_snapshot_with(io, cursor.authority);
+        cursor.failure_snapshot =
+            sdio_external_dma_request_status_snapshot_with(io, cursor.authority);
+        cursor.failure_snapshot.response0 = io.read32(SDHCI_RESPONSE);
         cursor.failure_snapshot_valid = true;
     }
     cursor.failure_frame = sdio_write_fault_telemetry_frame_from_snapshot_with(
@@ -14474,9 +14476,7 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
-    let snapshot = sdio_external_dma_request_snapshot_with(io, cursor.authority);
-    cursor.failure_snapshot = snapshot;
-    cursor.failure_snapshot_valid = true;
+    let mut snapshot = sdio_external_dma_request_status_snapshot_with(io, cursor.authority);
     cursor.poll_turns = cursor.poll_turns.saturating_add(1);
     let identity = cursor.identity;
     let has_data = identity.flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
@@ -14508,6 +14508,21 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     if ack != 0 {
         io.write32(SDHCI_INT_STATUS, ack);
     }
+    if !cursor.response_seen
+        && snapshot.status & (SDHCI_INT_RESPONSE | SDHCI_INT_ALL_ERROR_MASK) != 0
+    {
+        // Match bcm2835-mmc's command-completion order: acknowledge the
+        // request-owned interrupt snapshot first, including the controller's
+        // mandatory two-current-clock write settle, and only then consume the
+        // response register for that same immutable owner. A pre-ack response
+        // read can observe the previous/zero value even though RESPONSE is
+        // already asserted.
+        snapshot.response0 = io.read32(SDHCI_RESPONSE);
+    } else if cursor.response_seen {
+        snapshot.response0 = cursor.response0;
+    }
+    cursor.failure_snapshot = snapshot;
+    cursor.failure_snapshot_valid = true;
     if uses_external_dma && snapshot.dma_cs & BCM2835_DMA_CS_INT != 0 {
         io.external_dma_write32(
             cursor.authority.channel_vaddr + BCM2835_DMA_CS,
@@ -23511,16 +23526,16 @@ const fn sdhci_preissue_clear_mask(identity: SdioExternalDmaRequestIdentity) -> 
 }
 
 #[cfg(any(target_os = "none", test))]
-fn sdio_external_dma_request_snapshot_with<I: SdioTransferIo>(
+fn sdio_external_dma_request_status_snapshot_with<I: SdioTransferIo>(
     io: &mut I,
     authority: SdioExternalDmaAuthority,
 ) -> SdioExternalDmaRequestSnapshot {
-    // One retained continuation owns one immutable cross-controller sample.
-    // All state transitions below consume these values; no branch rereads a
-    // status register and accidentally joins edges from different turns.
+    // One retained continuation owns one immutable pre-ack cross-controller
+    // sample. RESPONSE is deliberately excluded: the issued-request owner
+    // reads it only after W1C completion and the bcm2835 two-clock write
+    // settle, so it cannot join a stale response with this status edge.
     let status = io.read32(SDHCI_INT_STATUS);
     let present = io.read32(SDHCI_PRESENT_STATE);
-    let response0 = io.read32(SDHCI_RESPONSE);
     let host_clock = u32::from(io.read8(SDHCI_HOST_CONTROL))
         | (u32::from(io.read8(SDHCI_POWER_CONTROL)) << 8)
         | (u32::from(io.read16(SDHCI_CLOCK_CONTROL)) << 16);
@@ -23553,7 +23568,7 @@ fn sdio_external_dma_request_snapshot_with<I: SdioTransferIo>(
     SdioExternalDmaRequestSnapshot {
         status,
         present,
-        response0,
+        response0: 0,
         host_clock,
         block_reg,
         argument_reg,
@@ -46731,6 +46746,10 @@ mod tests {
         command_present_set: u32,
         command_present_clear: u32,
         command_response: u32,
+        command_response_visible_after_ack: bool,
+        command_response_acknowledged: bool,
+        response_reads_before_ack: usize,
+        response_reads_after_ack: usize,
         data_end_after_words: usize,
         clear_data_state_on_end: bool,
         dma_authority_available: bool,
@@ -46790,6 +46809,10 @@ mod tests {
                 command_present_set: 0,
                 command_present_clear: 0,
                 command_response: 0,
+                command_response_visible_after_ack: false,
+                command_response_acknowledged: false,
+                response_reads_before_ack: 0,
+                response_reads_after_ack: 0,
                 data_end_after_words: 0,
                 clear_data_state_on_end: true,
                 dma_authority_available: true,
@@ -46898,7 +46921,15 @@ mod tests {
         }
 
         fn command_committed(&mut self) {
-            self.set_register(SDHCI_RESPONSE, self.command_response);
+            self.command_response_acknowledged = false;
+            self.set_register(
+                SDHCI_RESPONSE,
+                if self.command_response_visible_after_ack {
+                    0
+                } else {
+                    self.command_response
+                },
+            );
             let status = self.register(SDHCI_INT_STATUS) | self.command_status;
             self.set_register(SDHCI_INT_STATUS, status);
             let present = (self.register(SDHCI_PRESENT_STATE) | self.command_present_set)
@@ -47156,6 +47187,14 @@ mod tests {
             if offset == SDHCI_INT_STATUS {
                 self.advance_external_dma_dreq_snapshot();
             }
+            if offset == SDHCI_RESPONSE && self.command_response_visible_after_ack {
+                if self.command_response_acknowledged {
+                    self.response_reads_after_ack = self.response_reads_after_ack.saturating_add(1);
+                } else {
+                    self.response_reads_before_ack =
+                        self.response_reads_before_ack.saturating_add(1);
+                }
+            }
             self.register(offset)
         }
 
@@ -47222,12 +47261,18 @@ mod tests {
             }
             self.record_write(offset, value);
             if offset == SDHCI_INT_STATUS {
+                let acknowledges_current_response = value & SDHCI_INT_RESPONSE != 0
+                    && self.register(offset) & SDHCI_INT_RESPONSE != 0;
                 if self.int_status_w1c_failures_remaining != 0 {
                     self.int_status_w1c_failures_remaining =
                         self.int_status_w1c_failures_remaining.saturating_sub(1);
                 } else {
                     let retained = self.register(offset) & !value;
                     self.set_register(offset, retained);
+                    if self.command_response_visible_after_ack && acknowledges_current_response {
+                        self.command_response_acknowledged = true;
+                        self.set_register(SDHCI_RESPONSE, self.command_response);
+                    }
                 }
             } else {
                 self.set_register(offset, value);
@@ -70461,6 +70506,48 @@ mod tests {
         assert!(sdio_owner_path_quiescent_with(&mut write_io));
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 2);
         assert_eq!(SDIO_RUNTIME_STATE.with_ref(|state| state.commands), 2);
+    }
+
+    #[test]
+    fn sdio_retained_owner_acks_response_before_reading_r5_once() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        let descriptor = sdio_bus_link_cmd52_descriptor(false, 0, SDIO_CCCR_SPEED, 0)
+            .expect("CCCR SPEED read descriptor must encode");
+        let command = stage_sdio_descriptor_service_command(0x5203, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_CARD_INT;
+        io.command_response = u32::from(SDIO_CCCR_SPEED_SHS);
+        io.command_response_visible_after_ack = true;
+
+        let completion = service_sdio_descriptor_command_with_io(command, &mut io);
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::frame_ready_at(command.sequence, data_offset as u32, 1,),
+        );
+        assert_eq!(read_runtime_payload_byte(data_offset), SDIO_CCCR_SPEED_SHS,);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(
+            io.response_reads_before_ack, 0,
+            "the retained owner must not consume RESPONSE before its request W1C completes",
+        );
+        assert_eq!(
+            io.response_reads_after_ack, 1,
+            "one immutable response edge admits exactly one post-W1C RESPONSE read",
+        );
+        assert_eq!(
+            io.register(SDHCI_INT_STATUS),
+            SDHCI_INT_CARD_INT,
+            "the independent CARD_INT owner remains live",
+        );
+        assert!(io.writes[..io.write_count]
+            .iter()
+            .filter(|write| write.offset == SDHCI_INT_STATUS)
+            .all(|write| write.value & SDHCI_INT_CARD_INT == 0));
+        assert!(sdio_owner_path_quiescent_with(&mut io));
     }
 
     #[test]

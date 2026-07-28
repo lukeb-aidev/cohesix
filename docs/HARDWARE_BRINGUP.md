@@ -1323,7 +1323,12 @@ host-width changes, `IOEx` read, one-shot `IOEx.F1` write, each `IORx` read,
 and each deadline observation are separate outer turns. Missing `CAP_SMB`, an
 illegal low-speed/four-bit contract, issued-unknown work, or stale ownership
 invalidates transport readiness and requires typed pair recovery before any
-prior edge can be considered again.
+prior edge can be considered again. For every issued CMD5/CMD52/CMD53
+completion, the SDIO owner consumes one immutable interrupt snapshot,
+W1C-acknowledges its request-owned status bits while preserving `CARD_INT`,
+waits for the BCM2835 ordered write settle, and only then reads the response
+register once. A visible `RESPONSE` status edge never authorizes a pre-W1C
+response read.
 
 Firmware preparation repeats neither that initial trace nor the initial
 `FORCE_ALP` policy. It uses a second request- and generation-bound cursor with
@@ -1632,21 +1637,24 @@ The selected CYW43 path never uses the GENET cursor and may retain `Network`
 only for an exact current DPC/RX/TX/fairness continuation, a nonempty
 runtime/root queue, or actual TCP socket, parser, or response work. An
 authenticated but idle socket is not a weighting reason. One continuation
-quantum is capped at both 32 separately opened outer turns and 25 milliseconds
-from the seL4 virtual counter. An already-open quantum rechecks the time cap
-before each `Network` admission, so a delayed resumption performs no extra
-NIC/SDIO operation. Reaching either cap returns to `Serial` and `LocalSeat`; a
-pending physical response, reboot, or quarantine also breaks the quantum after
-the current exact turn. Raw DPC and retained owner work remain
+quantum is capped at both the compiler-declared CYW43 `max_ops_per_turn`
+service bound (currently 192 separately opened outer turns) and 25 milliseconds
+from the seL4 virtual counter. There is no fixed four-turn operator stride
+inside that quantum: the 25 millisecond pre-admission fence is the physical
+operator bound, while a complete TCP command, pending physical response,
+reboot, or quarantine is an immediate typed exit. An already-open quantum
+rechecks the time cap before each `Network` admission, so a delayed resumption
+performs no extra NIC/SDIO operation. Reaching either cap returns to `Serial`
+and `LocalSeat`. Raw DPC and retained owner work remain
 eligible before authentication. The passive snapshot changes scheduling weight
 only, never issues or completes child work, and rejects stale-epoch, poisoned,
 overrun, acknowledgement-failed, or inconsistent DPC state. Every retained
 turn still admits at most one CYW43 operation. `netstats` exposes quantum
-counts, turns, maximum turns/duration, and idle, turn-cap, time-cap, physical,
-and guard exits; those counters remain zero for GENET. `Display` performs at
-most one retained HDMI attach or pending-frame turn. Without a local seat, the
-rotation skips directly from `Serial` to `Dispatch` and from `Network` back to
-`Serial`.
+counts, turns, maximum turns/duration, the zero-valued compatibility
+`operator_yields` count, and idle, turn-cap, time-cap, physical, and guard
+exits; those counters remain zero for GENET. `Display` performs at most one
+retained HDMI attach or pending-frame turn. Without a local seat, the rotation
+skips directly from `Serial` to `Dispatch` and from `Network` back to `Serial`.
 
 The TCP console retains one parser/authentication/session authority. After its
 active socket enters the sole `Draining`/`PeerCloseWait`/`Closing` lane, one

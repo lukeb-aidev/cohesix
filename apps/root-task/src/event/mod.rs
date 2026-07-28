@@ -1498,8 +1498,12 @@ pub struct PumpMetrics {
     pub net_cyw43_service_quanta: u64,
     /// CYW43 Network outer turns consumed across those bounded quanta.
     pub net_cyw43_service_turns: u64,
-    /// Retained CYW43 Network bursts that yielded to the physical-operator
-    /// rotation at the fixed service stride.
+    /// Retained CYW43 Network bursts that used the removed intra-quantum
+    /// operator stride.
+    ///
+    /// This compatibility counter remains zero for the production lane. The
+    /// virtual-counter admission fence and typed terminal exits now bound the
+    /// sole contiguous Network quantum.
     pub net_cyw43_service_operator_yields: u64,
     /// CYW43 Network quanta that ended because exact work became idle.
     pub net_cyw43_service_terminal_exits: u64,
@@ -1948,11 +1952,12 @@ enum LinkedRuntimeServicePhase {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u8 = 32;
+const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u16 =
+    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        .budget
+        .max_ops_per_turn;
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-const LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS: u8 = 4;
 
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
@@ -2434,7 +2439,7 @@ where
     #[cfg(feature = "kernel")]
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    linked_runtime_network_consecutive_turns: u8,
+    linked_runtime_network_consecutive_turns: u16,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_quantum_started_ms: Option<u64>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -3129,28 +3134,16 @@ where
                         && elapsed_us
                             < LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
                     {
-                        if self
-                            .linked_runtime_network_consecutive_turns
-                            .is_multiple_of(LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS)
-                        {
-                            // Preserve the live quantum counter/start/deadline
-                            // while routing through the ordinary physical
-                            // operator phases. Serial, optional USB local-seat,
-                            // and Dispatch each retain their own outer turn, so
-                            // this cannot compose two physical operations.
-                            self.metrics.net_cyw43_service_operator_yields = self
-                                .metrics
-                                .net_cyw43_service_operator_yields
-                                .saturating_add(1);
-                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
-                            return;
-                        }
                         // A CYW43 op8 completion exposes exactly one copied
                         // frame. Keep the NIC phase only while an exact
                         // continuation, queue, or TCP response is pending.
-                        // Each outer turn still owns at most one linked-runtime
-                        // operation; the fixed turn/deadline cut returns to
-                        // serial and USB before another quantum.
+                        // One root turn still owns at most one linked-runtime
+                        // operation. The contract-derived turn bound is large
+                        // enough for the split CYW43/SDIO retained transaction,
+                        // while the virtual-counter admission fence, complete
+                        // command exit, and physical-response guard return to
+                        // serial and USB without an arbitrary mid-transaction
+                        // operator rotation.
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
                         return;
                     }
@@ -30454,7 +30447,7 @@ mod tests {
             let mut outer_turns = 0usize;
             while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
                 assert!(
-                    outer_turns < 128,
+                    outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
                     "bounded CYW43 quantum must reach its turn cap"
                 );
                 pump.poll();
@@ -30472,22 +30465,32 @@ mod tests {
                 u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
             );
             assert_eq!(
-                pump.metrics.net_cyw43_service_operator_yields,
-                u64::from(
-                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
-                        / LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS
-                        - 1
-                ),
-                "operator strides must not weaken the fixed transaction cap"
+                pump.metrics.net_cyw43_service_operator_yields, 0,
+                "the production lane has no forced intra-quantum operator rotation"
+            );
+            assert_eq!(
+                LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS,
+                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                    .budget
+                    .max_ops_per_turn,
+                "the scheduler turn cap must track compiler-declared CYW43 authority"
+            );
+            assert_eq!(
+                outer_turns,
+                usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
             );
         }
 
-        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS as usize);
+        assert_eq!(
+            net.polls,
+            usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+            "each outer EventPump turn may admit exactly one Network poll"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_operator_stride_preserves_live_quantum_across_dispatch_rotation() {
+    fn linked_cyw43_quantum_has_no_forced_four_turn_operator_rotation() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30515,62 +30518,29 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for _ in 1..LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS {
+            for completed_turns in 1..=5 {
                 pump.poll();
                 assert_eq!(
                     pump.linked_runtime_service_phase,
-                    LinkedRuntimeServicePhase::Network
+                    LinkedRuntimeServicePhase::Network,
+                    "exact CYW43 work must stay contiguous after turn {completed_turns}"
+                );
+                assert_eq!(
+                    pump.linked_runtime_network_consecutive_turns,
+                    completed_turns
+                );
+                assert_eq!(
+                    pump.metrics.net_cyw43_service_turns,
+                    u64::from(completed_turns)
                 );
             }
-            let quantum_start = pump
-                .linked_runtime_network_quantum_started_ms
-                .expect("the first CYW43 turn must open a retained quantum");
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial
-            );
-            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
-            assert_eq!(
-                pump.linked_runtime_network_quantum_started_ms,
-                Some(quantum_start)
-            );
-            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
-
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Dispatch
-            );
-            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
-            assert_eq!(
-                pump.linked_runtime_network_quantum_started_ms,
-                Some(quantum_start)
-            );
-
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Network
-            );
-            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
-            assert_eq!(
-                pump.linked_runtime_network_quantum_started_ms,
-                Some(quantum_start)
-            );
-
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Network
-            );
-            assert_eq!(pump.linked_runtime_network_consecutive_turns, 5);
             assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 0);
         }
 
         assert_eq!(
             net.polls, 5,
-            "Serial and Dispatch stride turns must not submit another NIC operation"
+            "five outer EventPump turns must perform exactly five Network polls"
         );
     }
 
@@ -30667,52 +30637,43 @@ mod tests {
         net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         net.console_service_pending = true;
 
+        let admitted_turns;
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for _ in 1..LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS {
-                pump.poll();
-                assert_eq!(
-                    pump.linked_runtime_service_phase,
-                    LinkedRuntimeServicePhase::Network
+            let mut outer_turns = 0usize;
+            while pump.metrics.net_cyw43_service_time_cap_exits == 0 {
+                assert!(
+                    pump.metrics.net_cyw43_service_turns
+                        < u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+                    "the virtual-counter fence must precede the contract turn cap"
                 );
+                pump.poll();
+                outer_turns = outer_turns.saturating_add(1);
             }
-            pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "the fourth NIC turn must yield to the physical operator"
-            );
-            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
-            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Dispatch
-            );
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Network
-            );
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "the elapsed deadline must fence the fifth NIC admission"
+                LinkedRuntimeServicePhase::Serial
             );
             assert_eq!(pump.metrics.net_cyw43_service_time_cap_exits, 1);
             assert!(
                 pump.metrics.net_cyw43_service_max_elapsed_us >= 25_000,
-                "operator rotation time remains part of the retained deadline"
+                "the retained quantum must end at the virtual-counter deadline"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 0);
+            admitted_turns = pump.metrics.net_cyw43_service_turns;
+            assert_eq!(
+                usize::try_from(admitted_turns).expect("bounded service-turn count"),
+                outer_turns,
+                "the deadline must close the quantum on its final admitted Network turn"
             );
         }
-
         assert_eq!(
-            net.polls, 4,
-            "the operator stride must not admit a fifth NIC operation after the deadline"
+            net.polls,
+            usize::try_from(admitted_turns).expect("bounded service-turn count"),
+            "one admitted outer turn must perform exactly one Network poll"
         );
     }
 
@@ -30824,7 +30785,7 @@ mod tests {
             let mut outer_turns = 0usize;
             while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
                 assert!(
-                    outer_turns < 128,
+                    outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
                     "bounded DPC quantum must reach its turn cap"
                 );
                 pump.poll();
@@ -30836,16 +30797,15 @@ mod tests {
                 "DPC urgency must return ownership at the fixed transaction cap"
             );
             assert_eq!(
-                pump.metrics.net_cyw43_service_operator_yields,
-                u64::from(
-                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
-                        / LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS
-                        - 1
-                )
+                pump.metrics.net_cyw43_service_operator_yields, 0,
+                "DPC urgency must not reintroduce the removed four-turn stride"
             );
         }
 
-        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS as usize);
+        assert_eq!(
+            net.polls,
+            usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

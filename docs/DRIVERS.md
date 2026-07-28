@@ -356,7 +356,13 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   record, plus the retained action identity in an adjacent bounded record,
   copied from the same snapshot under the existing cursor lock without
   servicing that action; retained
-  deferred recovery is labelled against the live connection generation.
+  deferred recovery is labelled against the live connection generation. A
+  terminal child completion during firmware replay retains its exact
+  descriptor, ticket, sequence, detail, result, and generation before the sole
+  pair-recovery policy consumes it. An optional control operation rejected
+  with that phase's documented `BADARG` or `UNSUPPORTED` result remains
+  visible as trace output but cannot replace an earlier causal transport
+  terminal; a transport fault at the same phase remains causal.
   `netstats` and `smp` are passive retained-counter reports. In contrast,
   `nettest` starts the bounded network self-test and `usb probe-kbd` advances
   one retained enumeration attempt, so operators must wait for each command's
@@ -930,7 +936,13 @@ generation and XID.
   uncleared request-owned edge poisons the current SDIO owner generation:
   later same-generation descriptors reject before `COMMAND`, and only the
   ordinary pair reprobe may establish a replacement generation. `CARD_INT` is
-  excluded from every request W1C and remains owned by the DPC lane.
+  excluded from every request W1C and remains owned by the DPC lane. After an
+  issued command asserts `RESPONSE` or an error edge, the same retained owner
+  first W1C-acknowledges that immutable request-status snapshot, completes the
+  BCM2835 two-clock posted-write settle, and then reads `RESPONSE` exactly
+  once. Reading the response register before that acknowledgement is invalid:
+  the controller may still expose the preceding or zero response even though
+  the new `RESPONSE` status bit is visible.
   Every CMD5, CMD52, and CMD53 first receives a separate 10-millisecond
   pre-issue inhibit fence. The owner arms a fresh Linux-equivalent 10-second
   request watchdog only after that fence succeeds and immediately before the
@@ -1900,14 +1912,16 @@ generation and XID.
   weighting reason. A complete TCP command retained by the ingest queue ends
   the current Network burst so the ordinary physical-operator rotation reaches
   `Dispatch` before another NIC operation. Raw or partial traffic cannot
-  retain Network indefinitely: after each four admitted CYW43 operations,
-  Cohesix runs `Serial`, optional `LocalSeat`, and `Dispatch`, then resumes the
-  same quantum with its original start, turn count, and deadline. One
-  continuation quantum is still capped at both 32 separately opened Network
-  turns and 25 ms from the seL4 virtual counter. The time cap is checked again
-  at `Network` entry, so resuming an already-open quantum after its deadline
-  admits no additional NIC/SDIO operation. Reaching either bound returns to
-  `Serial` and `LocalSeat` before another quantum. At
+  retain Network indefinitely. The sole contiguous continuation quantum is
+  capped at both the compiler-declared CYW43 `max_ops_per_turn` service bound
+  (currently 192 separately opened Network turns) and 25 ms from the seL4
+  virtual counter. There is no fixed intra-quantum operator stride: splitting
+  the root-to-CYW43-to-SDIO retained transaction every four turns adds
+  full-rotation latency without improving the virtual-counter bound. The time
+  cap is checked before each `Network` admission, so a quantum already at its
+  deadline admits no additional NIC/SDIO operation. Reaching either bound, a
+  complete TCP command, a pending physical response, reboot, or quarantine
+  returns to `Serial` and `LocalSeat` before another quantum. At
   `Network` entry, quarantine or an already-owned physical response skips NIC
   inspection and service, opens no CYW43 quantum, and returns directly to
   `Serial`. The sole physical-response exception is the exact network-origin
@@ -1920,7 +1934,8 @@ generation and XID.
   retained turn still admits at most one CYW43 operation. `netstats` reports
   quantum count, turns, maximum turns/duration, operator yields, and idle,
   dispatch, turn-cap, time-cap, physical, and guard exit counts; those CYW43
-  counters remain zero for GENET.
+  counters remain zero for GENET. The retained `operator_yields` compatibility
+  counter remains zero in this production lane.
   `Display` performs at most one retained HDMI attach or frame turn after the
   Network phase. Every phase returns to the outer loop before its successor; a
   missing local seat skips directly from `Serial` to `Dispatch` and from

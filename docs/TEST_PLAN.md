@@ -696,7 +696,11 @@ must write `TIMEOUT_CONTROL=0x0e`. Before every COMMAND, the owner must W1C and
 read back the request-owned command/data/error status bits while excluding
 `CARD_INT`; a retained nonzero readback may retry only that W1C within the
 entry deadline, and expiry must report typed pre-issue stage 8 with zero command
-issues. Stage 8 containment must poison that SDIO owner generation, and a
+issues. After COMMAND, a delayed-response adversary must withhold the current
+response register value until the request owner W1C-acknowledges its immutable
+`RESPONSE` edge. The owner must then read the current response exactly once,
+preserve a coalesced `CARD_INT`, complete the CMD52 from that response, and
+issue no second command. Stage 8 containment must poison that SDIO owner generation, and a
 subsequent same-generation descriptor must reject with zero command issues
 until the ordinary pair reprobe establishes a replacement generation. The
 owner may reserve two transfer attempts,
@@ -1091,7 +1095,13 @@ prompt poll must retain the existing generation-poisoning proof. Other
 optional-control tests must reject
 transport-fault phase advancement while
 retaining only their Linux-supported semantic `UNSUPPORTED`/`BADARG`
-continuations and visible transport telemetry.
+continuations and visible transport telemetry. A semantic rejection at an
+allowed optional phase must not replace the first retained causal fault or
+emit a false SDIO-owner snapshot; a transport fault at that same phase must
+still become the latest visible transport terminal. Firmware-replay fault
+coverage must retain the exact current-generation ticket, descriptor, payload
+digest, completion sequence, detail, and result before the sole pair-recovery
+transition clears the pending action.
 
 The boot-supervisor lifecycle unit test must admit exactly one outer episode as
 `attempt=1`, reject every attempt-2-or-later record, reject a second `begin`,
@@ -1253,23 +1263,29 @@ connection rejects stale cursor work. A data-ready CYW43 connection must not
 create the GENET cursor. A response flush, exact socket/parser work,
 runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX/fairness continuation may retain `Network` for at most
-32 successive outer turns and 25 ms on the seL4 virtual counter, whichever
-comes first. Authentication without pending work must not extend the quantum.
-Tests must advance time between outer turns and prove that a quantum already at
-its deadline returns to `Serial` with zero additional NIC/SDIO operations.
+the compiler-declared CYW43 `max_ops_per_turn` service bound (currently 192
+successive outer turns) and 25 ms on the seL4 virtual counter, whichever comes
+first. Authentication without pending work must not extend the quantum. Tests
+must prove the first five exact-work turns remain contiguous without a forced
+four-turn operator rotation. They must advance time between outer turns and
+prove that a quantum already at its deadline returns to `Serial` with zero
+additional NIC/SDIO operations.
 This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
-must release to `Serial` and `LocalSeat`. Tests must prove idle, stale-epoch,
-poisoned, overrun, acknowledgement-failed, and inconsistent CYW43 DPC work plus
-GENET do not enter the quantum. At `Network` entry, quarantine and an already
-owned physical response must skip NIC inspection and polling, open no CYW43
-quantum, consume no CYW43 turn, and return directly to `Serial`. The sole
-exception must be the exact network-origin reboot acknowledgement drain; after
-that required NIC service turn, or when a physical response becomes pending
-during an admitted operation, the next phase must be `Serial` rather than
-`Display`. `netstats` must expose quantum count, turns, maximum duration, and
-exit reasons. CYW43 device
+must release to `Serial` and `LocalSeat`. A complete buffered TCP command and a
+pending physical response must also exit immediately. Tests must prove idle,
+stale-epoch, poisoned, overrun, acknowledgement-failed, and inconsistent CYW43
+DPC work plus GENET do not enter the quantum. GENET must retain its ordinary
+single-Network-turn rotation and all CYW43 quantum counters must remain zero.
+At `Network` entry, quarantine and an already owned physical response must skip
+NIC inspection and polling, open no CYW43 quantum, consume no CYW43 turn, and
+return directly to `Serial`. The sole exception must be the exact
+network-origin reboot acknowledgement drain; after that required NIC service
+turn, or when a physical response becomes pending during an admitted operation,
+the next phase must be `Serial` rather than `Display`. `netstats` must expose
+quantum count, turns, maximum duration, zero-valued compatibility
+`operator_yields`, and exit reasons. CYW43 device
 tests must also prove that a retained TX or unproved credit window withholds
 smoltcp's paired RX/TX token, preserves the copied RX frame, advances only the
 sole retained owner, and produces zero fabricated TX drops before the frame is
