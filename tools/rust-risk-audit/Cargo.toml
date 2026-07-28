@@ -9,8 +9,9 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-proc-macro2 = "1.0"
+proc-macro2 = "1.0.107"
 serde = { workspace = true }
-sha2 = { workspace = true, features = ["std"] }
-syn = { version = "2.0", features = ["full", "visit"] }
-toml = "0.8"
+sha2 = { workspace = true }
+hex = { workspace = true }
+syn = { version = "3.0.3", features = ["full", "visit"] }
+toml = "1.1.3"

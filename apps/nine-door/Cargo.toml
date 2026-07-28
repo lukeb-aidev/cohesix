@@ -32,4 +32,4 @@ worker-gpu = { path = "../worker-gpu" }
 gpu-bridge-host = { path = "../gpu-bridge-host", default-features = false }
 sidecar-bus = { path = "../sidecar-bus", default-features = false }
 trace-model = { path = "../../crates/trace-model" }
-log = "0.4"
+log = "0.4.33"

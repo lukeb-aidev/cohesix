@@ -73,14 +73,14 @@ impl TelemetryCborSchema {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TelemetryFrameV1 {
     pub schema: String,
     pub worker_id: String,
     pub role: String,
     pub seq: u64,
     pub emitted_ms: u64,
-    pub payload: serde_cbor::Value,
+    pub payload: ciborium::value::Value,
 }
 
 pub struct CborSnippet {
@@ -136,21 +136,22 @@ mod tests {
 
     #[test]
     fn cbor_frame_roundtrip() {
-        let mut payload = std::collections::BTreeMap::new();
-        payload.insert(
-            serde_cbor::Value::Text("tick".to_owned()),
-            serde_cbor::Value::Integer(42.into()),
-        );
+        let payload = vec![(
+            ciborium::value::Value::Text("tick".to_owned()),
+            ciborium::value::Value::Integer(42.into()),
+        )];
         let frame = TelemetryFrameV1 {
             schema: "telemetry-frame/v1".to_owned(),
             worker_id: "worker-1".to_owned(),
             role: "worker-heartbeat".to_owned(),
             seq: 4,
             emitted_ms: 42,
-            payload: serde_cbor::Value::Map(payload),
+            payload: ciborium::value::Value::Map(payload),
         };
-        let encoded = serde_cbor::to_vec(&frame).expect("encode cbor frame");
-        let decoded: TelemetryFrameV1 = serde_cbor::from_slice(&encoded).expect("decode cbor");
+        let mut encoded = Vec::new();
+        ciborium::ser::into_writer(&frame, &mut encoded).expect("encode cbor frame");
+        let decoded: TelemetryFrameV1 =
+            ciborium::de::from_reader(encoded.as_slice()).expect("decode cbor");
         assert_eq!(decoded, frame);
     }
 

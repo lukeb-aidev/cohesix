@@ -120,7 +120,7 @@ impl SnapshotCache {
             payload: payload.to_vec(),
         };
         let encoded =
-            serde_cbor::to_vec(&entry).map_err(|err| CacheError::Decode(err.to_string()))?;
+            crate::cbor::to_vec(&entry).map_err(|err| CacheError::Decode(err.to_string()))?;
         if encoded.len() > self.max_bytes {
             return Err(CacheError::TooLarge {
                 actual: encoded.len(),
@@ -149,7 +149,7 @@ impl SnapshotCache {
         }
         let bytes = fs::read(&path)?;
         let entry: SnapshotEntry =
-            serde_cbor::from_slice(&bytes).map_err(|err| CacheError::Decode(err.to_string()))?;
+            crate::cbor::from_slice(&bytes).map_err(|err| CacheError::Decode(err.to_string()))?;
         if entry.version != SNAPSHOT_VERSION {
             return Err(CacheError::Version(entry.version));
         }

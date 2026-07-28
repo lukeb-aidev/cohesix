@@ -13,8 +13,8 @@ panic-handler = []
 
 [dependencies]
 sel4-sys = { path = "../sel4-sys" }
-heapless = { version = "0.9.1", default-features = false }
-spin = { version = "0.10.1", default-features = false, features = ["mutex", "spin_mutex"] }
+heapless = { version = "0.9.3", default-features = false }
+spin = { version = "0.12.2", default-features = false, features = ["mutex", "spin_mutex"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(sel4_config_printing)'] }

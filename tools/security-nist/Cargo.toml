@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Validate NIST 800-53 control registry and generate summary reports.
+# Copyright 2026 Lukas Bower
 [package]
 name = "security-nist"
 version = "0.1.0"
@@ -8,4 +9,4 @@ publish = false
 
 [dependencies]
 serde = { workspace = true }
-toml = "0.8"
+toml = "1.1.3"

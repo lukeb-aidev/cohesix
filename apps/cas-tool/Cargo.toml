@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the CAS packaging and upload tool.
+# Copyright 2026 Lukas Bower
 [package]
 name = "cas-tool"
 version = "0.1.0"
@@ -22,4 +23,4 @@ cohesix-ticket = { workspace = true }
 cohsh = { path = "../cohsh", features = ["tcp"] }
 
 [dev-dependencies]
-tempfile = "3.10"
+tempfile = "3.27.0"

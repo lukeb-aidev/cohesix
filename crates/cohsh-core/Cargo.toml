@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the Cohesix shared cohsh-core grammar/transport crate.
+# Copyright 2026 Lukas Bower
 [package]
 name = "cohsh-core"
 version = "0.1.0"
@@ -17,12 +18,12 @@ tcp = ["dep:smoltcp"]
 cohesix-ticket = { workspace = true }
 cohesix-proto = { workspace = true }
 console-ack-wire = { workspace = true }
-heapless = "0.9.1"
+heapless = "0.9.3"
 secure9p-codec = { workspace = true }
 sha2 = { workspace = true }
 
 [dependencies.smoltcp]
-version = "0.12.0"
+version = "0.13.1"
 optional = true
 default-features = false
 features = ["alloc", "proto-ipv4", "socket-tcp"]

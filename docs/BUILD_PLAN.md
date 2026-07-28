@@ -164,7 +164,12 @@ manual availability, profile selection, implementation, and target proof.
 [Milestones](#Milestones)
 
 **Status:** Complete — the repository/workspace scaffolding, build scripts, size
-guard, and bounded `m0-rust-1-97-1-security-refresh` task are complete.
+guard, bounded `m0-rust-1-97-1-security-refresh` task, and bounded
+`m0-rust-current-stable-dependency-refresh` task are complete. Dependency
+closure retains the pre-existing
+`event::tests::serial_console_flood_yields_between_lines_when_local_seat_is_active`
+failure described below as an unrelated baseline defect; later staged gates
+remain unclaimed.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -208,6 +213,57 @@ Commands:
 Checks: the exact compiler, Cargo, rustfmt, Clippy, host standard library, and aarch64-unknown-none standard library resolve from Rust 1.97.1; all mandatory repository gates pass without product, protocol, authority, generated-artifact, or evidence-tier drift.
 Deliverables: synchronized exact toolchain pins and documentation plus host and bare-metal compile, lint, test, dependency, generated-artifact, risk-ratchet, and staged Test Plan evidence.
 ```
+
+```
+Title/ID: m0-rust-current-stable-dependency-refresh
+Milestone: Milestone 0 — Repository Skeleton & Toolchain / Current stable Rust dependency refresh
+Goal: Move every crates.io dependency to its current stable, maintained release while preserving Cohesix protocol, authority, no_std, target, and evidence contracts.
+Inputs: Cargo.toml, Cargo.lock, all workspace Cargo.toml files, host and no_std Rust sources/tests, RustSec advisories, crates.io release metadata, and staged Test Plan gates.
+Changes:
+  - Cargo manifests + Cargo.lock — refresh compatible dependencies, migrate direct breaking releases, and remove or replace unmaintained dependency lanes.
+  - host and no_std Rust sources/tests — adapt only the APIs required by the dependency migrations without changing Cohesix behavior, protocol, authority, or generated interfaces.
+  - docs/BUILD_PLAN.md + dependency-policy evidence — record exact scope, validation, intentional retained exceptions if any, and the final dependency frontier.
+Commands:
+  - cargo update
+  - cargo fmt --all -- --check
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo check --workspace
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+  - cargo test --workspace -- --test-threads=1
+  - cargo audit
+  - cargo deny check advisories
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m0-rust-current-stable-dependencies-qemu
+Checks: every direct crates.io dependency resolves to its current stable maintained release or has a documented target/contract blocker; the resolved graph has no unaddressed advisory regression; all mandatory repository gates pass without product, protocol, authority, no_std, generated-artifact, or evidence-tier drift.
+Deliverables: synchronized manifests and lockfile, required API migrations and tests, dependency/advisory evidence, generated-artifact verification, and staged Test Plan evidence.
+```
+
+**M0 dependency-refresh evidence (2026-07-28)**
+- All 47 direct crates.io dependencies resolve to their current stable releases.
+  Required breaking migrations cover AES, Axum, Base64, CBOR, Ed25519/signature,
+  FUSE, libloading, NVML, Rand, SHA-2, smoltcp, spin, syn, Tauri, TOML, and ureq.
+- `cargo update --dry-run -v` reports no further resolvable updates. Five
+  transitive packages remain intentionally constrained by the current direct
+  parents: `generic-array 0.14.7` through Tauri's SHA-2 0.10 graph,
+  `matchit 0.8.4` through Axum 0.8.9, and `toml 0.8.2`,
+  `toml_datetime 0.6.3`, and `toml_edit 0.20.2` through Tauri's GTK3 build
+  graph. Forcing the advertised newer versions fails the upstream exact-version
+  requirements; no local patch or duplicate authority lane is introduced.
+- `cargo audit` reports no vulnerability failure. Its 17 allowed warnings are
+  the existing unmaintained/unsound GTK3 and `urlpattern` transitive graph
+  retained by current Tauri; `cargo deny check advisories` passes. The obsolete
+  serde_cbor and FUSE advisory exceptions are removed.
+- Formatting, workspace Clippy with warnings denied, workspace/all-target
+  compilation, FUSE/NVML/Tauri optional compilation, QEMU root-task
+  compilation, the `aarch64-unknown-none` Pi runtime compilation, generated
+  artifact checks, 706 Pi runtime tests, and every dependency-migration test
+  pass.
+- `cargo test --workspace --no-fail-fast` has one failure:
+  `event::tests::serial_console_flood_yields_between_lines_when_local_seat_is_active`.
+  The same assertion fails at baseline commit `189172b57` with the pre-refresh
+  manifests and lockfile. The staged QEMU Test Plan therefore stops at
+  stage 1 `host.workspace-tests`; later stages are not claimed.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)

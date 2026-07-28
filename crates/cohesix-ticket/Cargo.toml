@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the Cohesix ticket crate dependencies and metadata.
+# Copyright 2026 Lukas Bower
 [package]
 name = "cohesix-ticket"
 version = "0.1.0"
@@ -8,6 +9,6 @@ license = "MIT"
 publish = false
 
 [dependencies]
-blake3 = { version = "1.5", default-features = false, features = ["pure"] }
+blake3 = { version = "1.8.5", default-features = false, features = ["pure"] }
 hex = { workspace = true }
 thiserror = { workspace = true, default-features = false }

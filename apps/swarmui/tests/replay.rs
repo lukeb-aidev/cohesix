@@ -38,10 +38,18 @@ impl SwarmUiTransportFactory for NoConnectFactory {
 const DEMO_CREATED_MS: u64 = 1_725_000_000_000;
 const DEMO_DIGEST: u64 = 0x8ca29cb91bf32073;
 
+fn encode_cbor<T: serde::Serialize + ?Sized>(
+    value: &T,
+) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(value, &mut payload)?;
+    Ok(payload)
+}
+
 #[test]
 fn demo_snapshot_fixture_matches_payload() -> Result<()> {
     let snapshot = demo_snapshot();
-    let payload = serde_cbor::to_vec(&snapshot).context("encode demo snapshot")?;
+    let payload = encode_cbor(&snapshot).context("encode demo snapshot")?;
     let path = demo_snapshot_path();
     if std::env::var("SWARMUI_WRITE_DEMO").is_ok() {
         fs::create_dir_all(path.parent().unwrap()).context("create fixtures dir")?;
@@ -75,7 +83,7 @@ fn expired_hive_snapshot_is_rejected() -> Result<()> {
         calls: Arc::clone(&calls),
     };
     let mut backend = SwarmUiBackend::new(config, factory);
-    let payload = serde_cbor::to_vec(&demo_snapshot()).context("encode demo snapshot")?;
+    let payload = encode_cbor(&demo_snapshot()).context("encode demo snapshot")?;
     backend
         .cache_write("hive:demo", &payload)
         .context("cache write")?;

@@ -25,10 +25,18 @@ const WORKER_ID: &str = "worker-1";
 const HIVE_CREATED_MS: u64 = 1_735_000_000_000;
 const HIVE_EVENT_TARGET: usize = 3600;
 
+fn encode_cbor<T: serde::Serialize + ?Sized>(
+    value: &T,
+) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(value, &mut payload)?;
+    Ok(payload)
+}
+
 #[test]
 fn trace_hive_fixture_matches_payload() -> Result<()> {
     let snapshot = trace_hive_snapshot();
-    let payload = serde_cbor::to_vec(&snapshot).context("encode hive snapshot")?;
+    let payload = encode_cbor(&snapshot).context("encode hive snapshot")?;
     let path = trace_hive_fixture_path();
     if std::env::var(TRACE_ENV).is_ok() {
         fs::create_dir_all(path.parent().unwrap()).context("create hive fixture dir")?;

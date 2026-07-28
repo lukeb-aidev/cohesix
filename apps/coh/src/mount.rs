@@ -53,11 +53,7 @@ impl AppendOnlyTracker {
     }
 
     /// Validate the next write offset and advance the cursor.
-    pub fn check_and_advance(&mut self, offset: i64, len: usize) -> Result<()> {
-        if offset < 0 {
-            return Err(anyhow!("append-only offset must be >= 0"));
-        }
-        let offset = offset as u64;
+    pub fn check_and_advance(&mut self, offset: u64, len: usize) -> Result<()> {
         if offset != self.cursor {
             return Err(anyhow!(
                 "append-only offset mismatch: expected {} got {}",
@@ -262,6 +258,16 @@ pub fn mock_mount(at: &Path, policy: &CohPolicy) -> Result<()> {
     Ok(())
 }
 
+#[cfg(any(feature = "fuse", target_os = "linux"))]
+fn fuse_config() -> fuser::Config {
+    let mut config = fuser::Config::default();
+    config.mount_options = vec![
+        fuser::MountOption::FSName("coh".to_owned()),
+        fuser::MountOption::AutoUnmount,
+    ];
+    config
+}
+
 /// Start a FUSE mount backed by Secure9P.
 pub fn mount<T: Secure9pTransport + Send + 'static>(
     client: CohClient<T>,
@@ -272,11 +278,7 @@ pub fn mount<T: Secure9pTransport + Send + 'static>(
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = CohFuse::new(client, validator);
-        let options = [
-            fuser::MountOption::FSName("coh".to_owned()),
-            fuser::MountOption::AutoUnmount,
-        ];
-        fuser::mount2(filesystem, at, &options)
+        fuser::mount(filesystem, at, &fuse_config())
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
@@ -297,11 +299,7 @@ pub fn mount_console(session: ConsoleSession, policy: &CohPolicy, at: &Path) -> 
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = AccessFuse::new(session, validator, policy.telemetry.root.as_str());
-        let options = [
-            fuser::MountOption::FSName("coh".to_owned()),
-            fuser::MountOption::AutoUnmount,
-        ];
-        fuser::mount2(filesystem, at, &options)
+        fuser::mount(filesystem, at, &fuse_config())
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
@@ -322,11 +320,7 @@ pub fn mount_rest(session: RestSession, policy: &CohPolicy, at: &Path) -> Result
     {
         let validator = MountValidator::from_policy(policy)?;
         let filesystem = AccessFuse::new(session, validator, policy.telemetry.root.as_str());
-        let options = [
-            fuser::MountOption::FSName("coh".to_owned()),
-            fuser::MountOption::AutoUnmount,
-        ];
-        fuser::mount2(filesystem, at, &options)
+        fuser::mount(filesystem, at, &fuse_config())
             .with_context(|| format!("mount {}", at.display()))?;
         Ok(())
     }
@@ -367,7 +361,7 @@ impl<T: Secure9pTransport> CohFuse<T> {
     fn attr_for(&self, inode: u64, is_dir: bool) -> fuser::FileAttr {
         let now = SystemTime::now();
         fuser::FileAttr {
-            ino: inode,
+            ino: fuser::INodeNo(inode),
             size: 0,
             blocks: 0,
             atime: now,
@@ -415,18 +409,18 @@ impl<T: Secure9pTransport> CohFuse<T> {
 }
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
-impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
+impl<T: Secure9pTransport + Send + 'static> fuser::Filesystem for CohFuse<T> {
     fn lookup(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        parent: u64,
+        &self,
+        _req: &fuser::Request,
+        parent: fuser::INodeNo,
         name: &std::ffi::OsStr,
         reply: fuser::ReplyEntry,
     ) {
-        let parent_path = match self.resolve_inode_path(parent) {
+        let parent_path = match self.resolve_inode_path(parent.0) {
             Some(path) => path,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -439,14 +433,14 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         let remote = match self.validator.resolve_remote(&child_path) {
             Ok(remote) => remote,
             Err(_) => {
-                reply.error(libc::EACCES);
+                reply.error(fuser::Errno::EACCES);
                 return;
             }
         };
         let is_dir = match self.stat_remote(&remote) {
             Ok((_, is_dir)) => is_dir,
             Err(_) => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -455,40 +449,40 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             inodes.insert(&child_path, is_dir)
         };
         let attr = self.attr_for(inode, is_dir);
-        reply.entry(&TTL, &attr, 0);
+        reply.entry(&TTL, &attr, fuser::Generation(0));
     }
 
     fn getattr(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        _fh: Option<u64>,
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        _fh: Option<fuser::FileHandle>,
         reply: fuser::ReplyAttr,
     ) {
         let entry = {
             let inodes = self.inodes.lock().expect("inode lock");
-            inodes.path_for(inode).cloned()
+            inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         };
-        let attr = self.attr_for(inode, entry.is_dir);
+        let attr = self.attr_for(inode.0, entry.is_dir);
         reply.attr(&TTL, &attr);
     }
 
     fn readdir(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        _fh: fuser::FileHandle,
+        offset: u64,
         mut reply: fuser::ReplyDirectory,
     ) {
-        let path = match self.resolve_inode_path(inode) {
+        let path = match self.resolve_inode_path(inode.0) {
             Some(path) => path,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -496,7 +490,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             match self.list_root_entries() {
                 Ok(entries) => entries,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
@@ -504,7 +498,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             let remote = match self.validator.resolve_remote(&path) {
                 Ok(remote) => remote,
                 Err(_) => {
-                    reply.error(libc::EACCES);
+                    reply.error(fuser::Errno::EACCES);
                     return;
                 }
             };
@@ -512,13 +506,13 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             match list_dir(&mut *client, &remote, MAX_DIR_LIST_BYTES) {
                 Ok(entries) => entries,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
         };
         let mut listing = Vec::with_capacity(entries.len().saturating_add(2));
-        listing.push((inode, fuser::FileType::Directory, ".".to_owned()));
+        listing.push((inode.0, fuser::FileType::Directory, ".".to_owned()));
         listing.push((ROOT_INODE, fuser::FileType::Directory, "..".to_owned()));
         for entry in entries {
             let child_path = if path == "/" {
@@ -549,31 +543,40 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             };
             listing.push((inode, file_type, entry));
         }
-        let start = offset.max(0) as usize;
+        let Ok(start) = usize::try_from(offset) else {
+            reply.ok();
+            return;
+        };
         for (idx, (inode, file_type, name)) in listing.into_iter().enumerate().skip(start) {
-            if reply.add(inode, (idx + 1) as i64, file_type, name) {
+            if reply.add(fuser::INodeNo(inode), (idx + 1) as u64, file_type, name) {
                 break;
             }
         }
         reply.ok();
     }
 
-    fn open(&mut self, _req: &fuser::Request<'_>, inode: u64, flags: i32, reply: fuser::ReplyOpen) {
-        let path = match self.resolve_inode_path(inode) {
+    fn open(
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        flags: fuser::OpenFlags,
+        reply: fuser::ReplyOpen,
+    ) {
+        let path = match self.resolve_inode_path(inode.0) {
             Some(path) => path,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
         let remote = match self.validator.resolve_remote(&path) {
             Ok(remote) => remote,
             Err(_) => {
-                reply.error(libc::EACCES);
+                reply.error(fuser::Errno::EACCES);
                 return;
             }
         };
-        let write = flags & libc::O_ACCMODE != libc::O_RDONLY;
+        let write = flags.0 & libc::O_ACCMODE != libc::O_RDONLY;
         let mode = if write {
             OpenMode::write_append()
         } else {
@@ -584,7 +587,7 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             match client.open_with_qid(&remote, mode) {
                 Ok(value) => value,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
@@ -592,13 +595,13 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
         if write && !qid.ty().is_append_only() {
             let mut client = self.client.lock().expect("coh client lock");
             let _ = client.clunk(fid);
-            reply.error(libc::EACCES);
+            reply.error(fuser::Errno::EACCES);
             return;
         }
         if qid.ty().is_directory() && write {
             let mut client = self.client.lock().expect("coh client lock");
             let _ = client.clunk(fid);
-            reply.error(libc::EISDIR);
+            reply.error(fuser::Errno::EISDIR);
             return;
         }
         let handle = self.next_handle.fetch_add(1, Ordering::Relaxed);
@@ -610,38 +613,34 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
             .lock()
             .expect("handle lock")
             .insert(handle, file_handle);
-        reply.opened(handle, 0);
+        reply.opened(fuser::FileHandle(handle), fuser::FopenFlags::empty());
     }
 
     fn read(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: fuser::ReplyData,
     ) {
         let handle = {
             let handles = self.handles.lock().expect("handle lock");
-            handles.get(&fh).cloned()
+            handles.get(&fh.0).cloned()
         };
         let Some(handle) = handle else {
-            reply.error(libc::EBADF);
+            reply.error(fuser::Errno::EBADF);
             return;
         };
-        if offset < 0 {
-            reply.error(libc::EINVAL);
-            return;
-        }
         let count = size.min(cohsh::SECURE9P_MSIZE);
         let mut client = self.client.lock().expect("coh client lock");
-        let data = match client.read(handle.fid, offset as u64, count) {
+        let data = match client.read(handle.fid, offset, count) {
             Ok(data) => data,
             Err(_) => {
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
@@ -649,34 +648,38 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
     }
 
     fn write(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: fuser::WriteFlags,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: fuser::ReplyWrite,
     ) {
         let mut handles = self.handles.lock().expect("handle lock");
-        let handle = match handles.get_mut(&fh) {
+        let handle = match handles.get_mut(&fh.0) {
             Some(handle) => handle,
             None => {
-                reply.error(libc::EBADF);
+                reply.error(fuser::Errno::EBADF);
                 return;
             }
         };
-        if let Err(_) = handle.append_tracker.check_and_advance(offset, data.len()) {
-            reply.error(libc::EINVAL);
+        if handle
+            .append_tracker
+            .check_and_advance(offset, data.len())
+            .is_err()
+        {
+            reply.error(fuser::Errno::EINVAL);
             return;
         }
         let mut client = self.client.lock().expect("coh client lock");
         let written = match client.write(handle.fid, u64::MAX, data) {
             Ok(written) => written,
             Err(_) => {
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
@@ -684,18 +687,18 @@ impl<T: Secure9pTransport> fuser::Filesystem for CohFuse<T> {
     }
 
     fn release(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
         let handle = {
             let mut handles = self.handles.lock().expect("handle lock");
-            handles.remove(&fh)
+            handles.remove(&fh.0)
         };
         if let Some(handle) = handle {
             let mut client = self.client.lock().expect("coh client lock");
@@ -742,7 +745,7 @@ impl<C: CohAccess + Send> AccessFuse<C> {
     fn attr_for(&self, inode: u64, is_dir: bool, size: u64) -> fuser::FileAttr {
         let now = SystemTime::now();
         fuser::FileAttr {
-            ino: inode,
+            ino: fuser::INodeNo(inode),
             size: if is_dir { 0 } else { size },
             blocks: 0,
             atime: now,
@@ -824,18 +827,18 @@ impl<C: CohAccess + Send> AccessFuse<C> {
 }
 
 #[cfg(any(feature = "fuse", target_os = "linux"))]
-impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
+impl<C: CohAccess + Send + 'static> fuser::Filesystem for AccessFuse<C> {
     fn lookup(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        parent: u64,
+        &self,
+        _req: &fuser::Request,
+        parent: fuser::INodeNo,
         name: &std::ffi::OsStr,
         reply: fuser::ReplyEntry,
     ) {
-        let parent_path = match self.resolve_inode_path(parent) {
+        let parent_path = match self.resolve_inode_path(parent.0) {
             Some(path) => path,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -848,7 +851,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
         let remote = match self.validator.resolve_remote(&child_path) {
             Ok(remote) => remote,
             Err(_) => {
-                reply.error(libc::EACCES);
+                reply.error(fuser::Errno::EACCES);
                 return;
             }
         };
@@ -858,7 +861,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             match self.list_root_entries() {
                 Ok(entries) => entries,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
@@ -866,7 +869,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             let parent_remote = match self.validator.resolve_remote(&parent_path) {
                 Ok(remote) => remote,
                 Err(_) => {
-                    reply.error(libc::EACCES);
+                    reply.error(fuser::Errno::EACCES);
                     return;
                 }
             };
@@ -875,7 +878,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
                 Ok(entries) => entries,
                 Err(_) => {
                     if dynamic_kind.is_none() {
-                        reply.error(libc::EIO);
+                        reply.error(fuser::Errno::EIO);
                         return;
                     }
                     Vec::new()
@@ -883,7 +886,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             }
         };
         if !entries.iter().any(|entry| entry == name.as_ref()) && dynamic_kind.is_none() {
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         }
 
@@ -893,7 +896,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             match self.probe_is_dir(&remote) {
                 Ok(is_dir) => is_dir,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
@@ -908,22 +911,22 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             self.file_size_bytes(&remote)
         };
         let attr = self.attr_for(inode, is_dir, size);
-        reply.entry(&TTL, &attr, 0);
+        reply.entry(&TTL, &attr, fuser::Generation(0));
     }
 
     fn getattr(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        _fh: Option<u64>,
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        _fh: Option<fuser::FileHandle>,
         reply: fuser::ReplyAttr,
     ) {
         let entry = {
             let inodes = self.inodes.lock().expect("inode lock");
-            inodes.path_for(inode).cloned()
+            inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         };
         let size = if entry.is_dir {
@@ -934,22 +937,22 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
                 Err(_) => 0,
             }
         };
-        let attr = self.attr_for(inode, entry.is_dir, size);
+        let attr = self.attr_for(inode.0, entry.is_dir, size);
         reply.attr(&TTL, &attr);
     }
 
     fn readdir(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        inode: u64,
-        _fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        _fh: fuser::FileHandle,
+        offset: u64,
         mut reply: fuser::ReplyDirectory,
     ) {
-        let path = match self.resolve_inode_path(inode) {
+        let path = match self.resolve_inode_path(inode.0) {
             Some(path) => path,
             None => {
-                reply.error(libc::ENOENT);
+                reply.error(fuser::Errno::ENOENT);
                 return;
             }
         };
@@ -957,7 +960,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             match self.list_root_entries() {
                 Ok(entries) => entries,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
@@ -965,7 +968,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             let remote = match self.validator.resolve_remote(&path) {
                 Ok(remote) => remote,
                 Err(_) => {
-                    reply.error(libc::EACCES);
+                    reply.error(fuser::Errno::EACCES);
                     return;
                 }
             };
@@ -973,13 +976,13 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             match client.list_dir(&remote, MAX_DIR_LIST_BYTES) {
                 Ok(entries) => entries,
                 Err(_) => {
-                    reply.error(libc::EIO);
+                    reply.error(fuser::Errno::EIO);
                     return;
                 }
             }
         };
         let mut listing = Vec::with_capacity(entries.len().saturating_add(2));
-        listing.push((inode, fuser::FileType::Directory, ".".to_owned()));
+        listing.push((inode.0, fuser::FileType::Directory, ".".to_owned()));
         listing.push((ROOT_INODE, fuser::FileType::Directory, "..".to_owned()));
         for entry in entries {
             let child_path = if path == "/" {
@@ -1013,33 +1016,42 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             };
             listing.push((inode, file_type, entry));
         }
-        let start = offset.max(0) as usize;
+        let Ok(start) = usize::try_from(offset) else {
+            reply.ok();
+            return;
+        };
         for (idx, (inode, file_type, name)) in listing.into_iter().enumerate().skip(start) {
-            if reply.add(inode, (idx + 1) as i64, file_type, name) {
+            if reply.add(fuser::INodeNo(inode), (idx + 1) as u64, file_type, name) {
                 break;
             }
         }
         reply.ok();
     }
 
-    fn open(&mut self, _req: &fuser::Request<'_>, inode: u64, flags: i32, reply: fuser::ReplyOpen) {
-        let write = flags & libc::O_ACCMODE != libc::O_RDONLY;
+    fn open(
+        &self,
+        _req: &fuser::Request,
+        inode: fuser::INodeNo,
+        flags: fuser::OpenFlags,
+        reply: fuser::ReplyOpen,
+    ) {
+        let write = flags.0 & libc::O_ACCMODE != libc::O_RDONLY;
         let entry = {
             let inodes = self.inodes.lock().expect("inode lock");
-            inodes.path_for(inode).cloned()
+            inodes.path_for(inode.0).cloned()
         };
         let Some(entry) = entry else {
-            reply.error(libc::ENOENT);
+            reply.error(fuser::Errno::ENOENT);
             return;
         };
         if entry.is_dir && write {
-            reply.error(libc::EISDIR);
+            reply.error(fuser::Errno::EISDIR);
             return;
         }
         let remote = match self.validator.resolve_remote(&entry.path) {
             Ok(remote) => remote,
             Err(_) => {
-                reply.error(libc::EACCES);
+                reply.error(fuser::Errno::EACCES);
                 return;
             }
         };
@@ -1056,41 +1068,40 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             .lock()
             .expect("handle lock")
             .insert(handle, file_handle);
-        reply.opened(handle, 0);
+        reply.opened(fuser::FileHandle(handle), fuser::FopenFlags::empty());
     }
 
     fn read(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        offset: u64,
         size: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: fuser::ReplyData,
     ) {
         let handle = {
             let handles = self.handles.lock().expect("handle lock");
-            handles.get(&fh).cloned()
+            handles.get(&fh.0).cloned()
         };
         let Some(handle) = handle else {
-            reply.error(libc::EBADF);
+            reply.error(fuser::Errno::EBADF);
             return;
         };
-        if offset < 0 {
-            reply.error(libc::EINVAL);
-            return;
-        }
         let mut client = self.client.lock().expect("coh client lock");
         let data: Vec<u8> = match client.read_file(&handle.path, MAX_DIR_LIST_BYTES) {
             Ok(data) => data,
             Err(_) => {
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
-        let offset = offset as usize;
+        let Ok(offset) = usize::try_from(offset) else {
+            reply.data(&[]);
+            return;
+        };
         if offset >= data.len() {
             reply.data(&[]);
             return;
@@ -1101,22 +1112,22 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     }
 
     fn write(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        offset: i64,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        offset: u64,
         data: &[u8],
-        _write_flags: u32,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        _write_flags: fuser::WriteFlags,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         reply: fuser::ReplyWrite,
     ) {
         let mut handles = self.handles.lock().expect("handle lock");
-        let handle = match handles.get_mut(&fh) {
+        let handle = match handles.get_mut(&fh.0) {
             Some(handle) => handle,
             None => {
-                reply.error(libc::EBADF);
+                reply.error(fuser::Errno::EBADF);
                 return;
             }
         };
@@ -1125,15 +1136,13 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
             .check_and_advance(offset, data.len())
             .is_err()
         {
-            if offset >= 0 {
-                handle.append_tracker.cursor = self.file_size_bytes(&handle.path);
-            }
+            handle.append_tracker.cursor = self.file_size_bytes(&handle.path);
             if handle
                 .append_tracker
                 .check_and_advance(offset, data.len())
                 .is_err()
             {
-                reply.error(libc::EINVAL);
+                reply.error(fuser::Errno::EINVAL);
                 return;
             }
         }
@@ -1141,7 +1150,7 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
         let written: usize = match client.write_append(&handle.path, data) {
             Ok(written) => written,
             Err(_) => {
-                reply.error(libc::EIO);
+                reply.error(fuser::Errno::EIO);
                 return;
             }
         };
@@ -1150,21 +1159,21 @@ impl<C: CohAccess + Send> fuser::Filesystem for AccessFuse<C> {
     }
 
     fn release(
-        &mut self,
-        _req: &fuser::Request<'_>,
-        _inode: u64,
-        fh: u64,
-        _flags: i32,
-        _lock_owner: Option<u64>,
+        &self,
+        _req: &fuser::Request,
+        _inode: fuser::INodeNo,
+        fh: fuser::FileHandle,
+        _flags: fuser::OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
         _flush: bool,
         reply: fuser::ReplyEmpty,
     ) {
         let handle = {
             let mut handles = self.handles.lock().expect("handle lock");
-            handles.remove(&fh)
+            handles.remove(&fh.0)
         };
         if handle.is_none() {
-            reply.error(libc::EBADF);
+            reply.error(fuser::Errno::EBADF);
             return;
         }
         reply.ok();

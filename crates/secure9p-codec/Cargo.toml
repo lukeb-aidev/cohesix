@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Define the Secure9P codec crate packaging and dependencies.
+# Copyright 2026 Lukas Bower
 [package]
 name = "secure9p-codec"
 version = "0.1.0"
@@ -11,4 +12,4 @@ publish = false
 thiserror = { workspace = true, default-features = false }
 
 [dev-dependencies]
-rand = "0.9"
+rand = "0.10.2"

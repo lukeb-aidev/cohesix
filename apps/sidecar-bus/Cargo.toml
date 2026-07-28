@@ -15,4 +15,4 @@ dnp3 = []
 tokio = ["std", "dep:tokio"]
 
 [dependencies]
-tokio = { version = "1.39", features = ["rt", "time"], optional = true }
+tokio = { version = "1.53.1", features = ["rt", "time"], optional = true }

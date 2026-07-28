@@ -8,11 +8,14 @@
 //! REST client helpers for the Cohesix hive-gateway.
 
 use anyhow::{anyhow, Context, Result};
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 /// Default REST timeout applied to hive-gateway requests.
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(3);
+
+type HttpResponse = ureq::http::Response<ureq::Body>;
 
 /// REST client for the hive-gateway API.
 #[derive(Debug, Clone)]
@@ -29,10 +32,14 @@ impl GatewayClient {
         while base.ends_with('/') {
             base.pop();
         }
-        let agent = ureq::AgentBuilder::new()
-            .timeout_read(DEFAULT_TIMEOUT)
-            .timeout_write(DEFAULT_TIMEOUT)
+        let config = ureq::Agent::config_builder()
+            .timeout_send_request(Some(DEFAULT_TIMEOUT))
+            .timeout_send_body(Some(DEFAULT_TIMEOUT))
+            .timeout_recv_response(Some(DEFAULT_TIMEOUT))
+            .timeout_recv_body(Some(DEFAULT_TIMEOUT))
+            .http_status_as_error(false)
             .build();
+        let agent = config.into();
         Self {
             base_url: base,
             agent,
@@ -60,52 +67,20 @@ impl GatewayClient {
     /// Fetch manifest-derived bounds from the gateway.
     pub fn bounds(&self) -> Result<BoundsResponse> {
         let url = format!("{}/v1/meta/bounds", self.base_url);
-        match self.with_auth(self.agent.get(&url)).call() {
-            Ok(resp) => resp
-                .into_json()
-                .map_err(|err| anyhow!(err))
-                .context("decode bounds response"),
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                if body.is_empty() {
-                    Err(anyhow!("BOUNDS failed (http {code})"))
-                } else {
-                    Err(anyhow!("BOUNDS failed (http {code}): {body}"))
-                }
-            }
-            Err(ureq::Error::Transport(err)) => {
-                Err(anyhow!(err).context("gateway transport error"))
-            }
-        }
+        decode_json_response("BOUNDS", "bounds", self.get(&url))
     }
 
     /// Fetch gateway connection and broker backpressure status.
     pub fn status(&self) -> Result<GatewayStatusResponse> {
         let url = format!("{}/v1/meta/status", self.base_url);
-        match self.with_auth(self.agent.get(&url)).call() {
-            Ok(resp) => resp
-                .into_json()
-                .map_err(|err| anyhow!(err))
-                .context("decode status response"),
-            Err(ureq::Error::Status(code, resp)) => {
-                let body = resp.into_string().unwrap_or_default();
-                if body.is_empty() {
-                    Err(anyhow!("STATUS failed (http {code})"))
-                } else {
-                    Err(anyhow!("STATUS failed (http {code}): {body}"))
-                }
-            }
-            Err(ureq::Error::Transport(err)) => {
-                Err(anyhow!(err).context("gateway transport error"))
-            }
-        }
+        decode_json_response("STATUS", "status", self.get(&url))
     }
 
     /// Issue an LS request via the gateway.
     pub fn list(&self, path: &str) -> Result<Vec<String>> {
         let path = urlencoding::encode(path);
         let url = format!("{}/v1/fs/ls?path={}", self.base_url, path);
-        let response = self.with_auth(self.agent.get(&url)).call();
+        let response = self.get(&url);
         let parsed = handle_response("LS", response)?;
         Ok(parsed.lines)
     }
@@ -117,7 +92,7 @@ impl GatewayClient {
             "{}/v1/fs/cat?path={}&max_bytes={}",
             self.base_url, path, max_bytes
         );
-        let response = self.with_auth(self.agent.get(&url)).call();
+        let response = self.get(&url);
         let parsed = handle_response("CAT", response)?;
         Ok(parsed.lines)
     }
@@ -143,7 +118,7 @@ impl GatewayClient {
             url.push_str("&lines=");
             url.push_str(&lines.to_string());
         }
-        let response = self.with_auth(self.agent.get(&url)).call();
+        let response = self.get(&url);
         let parsed = handle_response("TAIL", response)?;
         Ok(parsed.lines)
     }
@@ -155,18 +130,33 @@ impl GatewayClient {
             path: path.to_owned(),
             line: Some(line.to_owned()),
         };
-        let response = self.with_auth(self.agent.post(&url)).send_json(payload);
+        let response = self.post_json(&url, &payload);
         let parsed = handle_response("ECHO", response)?;
         Ok(parsed.bytes.unwrap_or(0))
     }
 
-    fn with_auth(&self, request: ureq::Request) -> ureq::Request {
-        let Some(token) = self.request_auth_token.as_deref() else {
-            return request;
-        };
-        request
-            .set("Authorization", format!("Bearer {token}").as_str())
-            .set("x-cohesix-auth", token)
+    fn get(&self, url: &str) -> Result<HttpResponse, ureq::Error> {
+        let request = self.agent.get(url);
+        if let Some(token) = self.request_auth_token.as_deref() {
+            request
+                .header("Authorization", format!("Bearer {token}"))
+                .header("x-cohesix-auth", token)
+                .call()
+        } else {
+            request.call()
+        }
+    }
+
+    fn post_json<T: Serialize>(&self, url: &str, payload: &T) -> Result<HttpResponse, ureq::Error> {
+        let request = self.agent.post(url);
+        if let Some(token) = self.request_auth_token.as_deref() {
+            request
+                .header("Authorization", format!("Bearer {token}"))
+                .header("x-cohesix-auth", token)
+                .send_json(payload)
+        } else {
+            request.send_json(payload)
+        }
     }
 }
 
@@ -433,37 +423,70 @@ struct EchoRequest {
 
 fn handle_response(
     verb: &str,
-    response: Result<ureq::Response, ureq::Error>,
+    response: Result<HttpResponse, ureq::Error>,
 ) -> Result<GatewayResponse> {
     match response {
-        Ok(resp) => ensure_ok(verb, parse_response(resp)?),
-        Err(ureq::Error::Status(code, resp)) => {
-            let parsed = parse_response(resp).unwrap_or_else(|err| GatewayResponse {
-                status: "ERR".to_owned(),
-                verb: verb.to_owned(),
-                path: String::new(),
-                end: true,
-                lines: Vec::new(),
-                bytes: None,
-                error: Some(format!("http {code}: {err}")),
-                manifest_sha256: None,
-                secure9p: None,
-                console: None,
-                paths: None,
-                control_plane: None,
-                policy: None,
-                observability: None,
-            });
-            Err(anyhow!(parsed
-                .error
-                .unwrap_or_else(|| format!("{verb} failed (http {code})"))))
+        Ok(resp) => {
+            let code = resp.status().as_u16();
+            let parsed = parse_response(resp);
+            if code >= 400 {
+                let parsed = parsed.unwrap_or_else(|err| GatewayResponse {
+                    status: "ERR".to_owned(),
+                    verb: verb.to_owned(),
+                    path: String::new(),
+                    end: true,
+                    lines: Vec::new(),
+                    bytes: None,
+                    error: Some(format!("http {code}: {err}")),
+                    manifest_sha256: None,
+                    secure9p: None,
+                    console: None,
+                    paths: None,
+                    control_plane: None,
+                    policy: None,
+                    observability: None,
+                });
+                return Err(anyhow!(parsed
+                    .error
+                    .unwrap_or_else(|| format!("{verb} failed (http {code})"))));
+            }
+            ensure_ok(verb, parsed?)
         }
-        Err(ureq::Error::Transport(err)) => Err(anyhow!(err).context("gateway transport error")),
+        Err(err) => Err(anyhow!(err).context("gateway transport error")),
     }
 }
 
-fn parse_response(resp: ureq::Response) -> Result<GatewayResponse> {
-    resp.into_json()
+fn decode_json_response<T: DeserializeOwned>(
+    verb: &str,
+    response_name: &str,
+    response: Result<HttpResponse, ureq::Error>,
+) -> Result<T> {
+    match response {
+        Ok(mut resp) => {
+            let code = resp.status().as_u16();
+            if code >= 400 {
+                let body = resp
+                    .body_mut()
+                    .read_to_string()
+                    .map_err(|err| anyhow!(err))
+                    .with_context(|| format!("read {response_name} error response"))?;
+                if body.is_empty() {
+                    return Err(anyhow!("{verb} failed (http {code})"));
+                }
+                return Err(anyhow!("{verb} failed (http {code}): {body}"));
+            }
+            resp.body_mut()
+                .read_json()
+                .map_err(|err| anyhow!(err))
+                .with_context(|| format!("decode {response_name} response"))
+        }
+        Err(err) => Err(anyhow!(err).context("gateway transport error")),
+    }
+}
+
+fn parse_response(mut resp: HttpResponse) -> Result<GatewayResponse> {
+    resp.body_mut()
+        .read_json()
         .map_err(|err| anyhow!(err))
         .context("decode gateway response")
 }
@@ -478,7 +501,66 @@ fn ensure_ok(verb: &str, response: GatewayResponse) -> Result<GatewayResponse> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BoundsResponse, GatewayStatusResponse};
+    use super::{BoundsResponse, GatewayClient, GatewayStatusResponse};
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc::{self, Receiver};
+    use std::thread::{self, JoinHandle};
+    use std::time::Duration;
+
+    fn serve_once(status: &str, response_body: &str) -> (String, Receiver<String>, JoinHandle<()>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind loopback test server");
+        let address = listener.local_addr().expect("read loopback server address");
+        let status = status.to_owned();
+        let response_body = response_body.to_owned();
+        let (request_tx, request_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept loopback request");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(2)))
+                .expect("set loopback request timeout");
+            let mut request = Vec::new();
+            let mut buffer = [0_u8; 1024];
+            let header_end = loop {
+                let count = stream.read(&mut buffer).expect("read request");
+                assert!(count != 0, "request ended before the HTTP headers");
+                request.extend_from_slice(&buffer[..count]);
+                if let Some(offset) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break offset + 4;
+                }
+            };
+            let headers =
+                std::str::from_utf8(&request[..header_end]).expect("request headers are UTF-8");
+            let content_length = headers
+                .lines()
+                .filter_map(|line| line.split_once(':'))
+                .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+                .map(|(_, value)| {
+                    value
+                        .trim()
+                        .parse::<usize>()
+                        .expect("valid request content length")
+                })
+                .unwrap_or(0);
+            while request.len() < header_end + content_length {
+                let count = stream.read(&mut buffer).expect("read request body");
+                assert!(count != 0, "request ended before the declared body");
+                request.extend_from_slice(&buffer[..count]);
+            }
+            request_tx
+                .send(String::from_utf8(request).expect("request is UTF-8"))
+                .expect("publish captured request");
+
+            let response = format!(
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response_body}",
+                response_body.len(),
+            );
+            stream
+                .write_all(response.as_bytes())
+                .expect("write loopback response");
+        });
+        (format!("http://{address}"), request_rx, server)
+    }
 
     #[test]
     fn bounds_response_parses_without_status_wrapper() {
@@ -563,5 +645,50 @@ mod tests {
         assert_eq!(parsed.broker.telemetry_waiters, 57);
         assert_eq!(parsed.broker.control_write_retry_exhaustions, 1080);
         assert_eq!(parsed.broker.relay_queue_depth, 9);
+    }
+
+    #[test]
+    fn ureq3_echo_sends_trimmed_auth_headers_and_json_body() {
+        let (base_url, request_rx, server) = serve_once(
+            "200 OK",
+            r#"{"status":"OK","verb":"ECHO","path":"/queen/ctl","end":true,"bytes":2}"#,
+        );
+        let bytes = GatewayClient::new(base_url)
+            .with_request_auth_token("  test-token  ")
+            .echo("/queen/ctl", "go")
+            .expect("authenticated echo succeeds");
+        assert_eq!(bytes, 2);
+
+        let request = request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture authenticated request");
+        server.join().expect("loopback server exits");
+        let lowercase = request.to_ascii_lowercase();
+        assert!(lowercase.starts_with("post /v1/fs/echo http/1.1\r\n"));
+        assert!(lowercase.contains("\r\nauthorization: bearer test-token\r\n"));
+        assert!(lowercase.contains("\r\nx-cohesix-auth: test-token\r\n"));
+        let (_, body) = request
+            .split_once("\r\n\r\n")
+            .expect("captured request contains a body");
+        let body: serde_json::Value = serde_json::from_str(body).expect("valid request JSON");
+        assert_eq!(body["path"], "/queen/ctl");
+        assert_eq!(body["line"], "go");
+    }
+
+    #[test]
+    fn ureq3_json_route_preserves_non_success_status_and_body() {
+        let (base_url, request_rx, server) = serve_once("401 Unauthorized", "denied");
+        let error = GatewayClient::new(base_url)
+            .bounds()
+            .expect_err("non-success response must fail");
+        request_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("capture bounds request");
+        server.join().expect("loopback server exits");
+        assert_eq!(
+            error.to_string(),
+            "BOUNDS failed (http 401): denied",
+            "the upgraded client must retain the gateway error body",
+        );
     }
 }

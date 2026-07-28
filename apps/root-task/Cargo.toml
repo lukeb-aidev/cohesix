@@ -121,12 +121,12 @@ ffi_shim = [
 ]
 
 [dependencies]
-aes = { version = "0.8.4", default-features = false }
+aes = { version = "0.9.2", default-features = false }
 cohesix-ticket = { workspace = true }
 cohesix-proto = { workspace = true }
 embedded-io = { version = "0.7.1", default-features = false }
-nb = "1.1"
-portable-atomic = "1.6"
+nb = "1.1.0"
+portable-atomic = "1.14.0"
 pi4-driver-abi = { workspace = true }
 secure9p-codec = { workspace = true }
 sha2 = { workspace = true, default-features = false }
@@ -136,9 +136,9 @@ ed25519-dalek = { workspace = true }
 signature = { workspace = true }
 hex = { workspace = true }
 base64 = { workspace = true, default-features = false, features = ["alloc"] }
-linked_list_allocator = { version = "0.10", default-features = false, optional = true, features = ["use_spin"] }
-log = { version = "0.4", default-features = false }
-static_assertions = "1.1"
+linked_list_allocator = { version = "0.10.6", default-features = false, optional = true, features = ["use_spin"] }
+log = { version = "0.4.33", default-features = false }
+static_assertions = "1.1.0"
 trace-model = { path = "../../crates/trace-model" }
 cohesix-net-constants = { workspace = true }
 cohsh-core = { workspace = true }
@@ -152,10 +152,10 @@ optional = true
 path = "../../crates/sel4-panicking"
 default-features = false
 [dependencies.heapless]
-version = "0.9.1"
+version = "0.9.3"
 
 [dependencies.smoltcp]
-version = "0.12.0"
+version = "0.13.1"
 optional = true
 default-features = false
 features = [
@@ -167,7 +167,7 @@ features = [
 ]
 
 [dependencies.spin]
-version = "0.10.0"
+version = "0.12.2"
 optional = true
 
 [dependencies.sel4-runtime]
@@ -179,7 +179,7 @@ path = "../../crates/sel4-runtime"
 anyhow = { workspace = true }
 
 [dev-dependencies]
-tempfile = "3.10"
+tempfile = "3.27.0"
 [dev-dependencies.sel4-sys]
 version = "0.0.28"
 path = "../../crates/sel4-sys"
@@ -337,5 +337,5 @@ path = "tests/worker_authority.rs"
 
 [build-dependencies]
 cargo-build-directive = { workspace = true }
-regex = "1.10"
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+regex = "1.13.1"
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }

@@ -9,6 +9,7 @@
 //! SwarmUI backend helpers: session management, transcripts, and cache handling.
 
 mod cache;
+mod cbor;
 mod desktop;
 mod hive;
 mod transport;
@@ -1551,7 +1552,7 @@ where
             let Some(cache) = self.cache.as_ref() else {
                 return;
             };
-            match serde_cbor::to_vec(transcript) {
+            match cbor::to_vec(transcript) {
                 Ok(payload) => (Some(cache.write(key, &payload)), None),
                 Err(err) => (None, Some(err.to_string())),
             }
@@ -1593,7 +1594,7 @@ where
             }
         };
 
-        match serde_cbor::from_slice::<SwarmUiTranscript>(&record.payload) {
+        match cbor::from_slice::<SwarmUiTranscript>(&record.payload) {
             Ok(transcript) => transcript,
             Err(err) => {
                 let detail = format!("reason=cache-decode:{err}");
@@ -3318,7 +3319,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             let Some(cache) = self.cache.as_ref() else {
                 return;
             };
-            match serde_cbor::to_vec(transcript) {
+            match cbor::to_vec(transcript) {
                 Ok(payload) => (Some(cache.write(key, &payload)), None),
                 Err(err) => (None, Some(err.to_string())),
             }
@@ -3360,7 +3361,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
             }
         };
 
-        match serde_cbor::from_slice::<SwarmUiTranscript>(&record.payload) {
+        match cbor::from_slice::<SwarmUiTranscript>(&record.payload) {
             Ok(transcript) => transcript,
             Err(err) => {
                 let detail = format!("reason=cache-decode:{err}");

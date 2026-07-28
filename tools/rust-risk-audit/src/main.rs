@@ -17,8 +17,8 @@ use syn::punctuated::Punctuated;
 use syn::visit::{self, Visit};
 use syn::{
     Attribute, Expr, ExprMethodCall, ExprPath, ExprUnsafe, ForeignItem, ImplItem, Item,
-    ItemForeignMod, ItemImpl, ItemMacro, ItemTrait, Lit, Macro, Meta, Signature, Token, TraitItem,
-    TypeBareFn, UseTree,
+    ItemForeignMod, ItemImpl, ItemMacro, ItemTrait, Lit, Macro, Meta, Safety, Signature, Token,
+    TraitItem, TypeFnPtr, UseTree,
 };
 
 const SCANNER_VERSION: &str = "rust-risk-audit/v4";
@@ -616,7 +616,7 @@ impl<'ast> Visit<'ast> for RiskVisitor {
     }
 
     fn visit_signature(&mut self, signature: &'ast Signature) {
-        if signature.unsafety.is_some() {
+        if matches!(signature.safety, Safety::Unsafe(_)) {
             self.counts.unsafe_count += 1;
         }
         visit::visit_signature(self, signature);
@@ -643,11 +643,11 @@ impl<'ast> Visit<'ast> for RiskVisitor {
         visit::visit_item_foreign_mod(self, item);
     }
 
-    fn visit_type_bare_fn(&mut self, bare_fn: &'ast TypeBareFn) {
-        if bare_fn.unsafety.is_some() {
+    fn visit_type_fn_ptr(&mut self, fn_ptr: &'ast TypeFnPtr) {
+        if fn_ptr.unsafety.is_some() {
             self.counts.unsafe_count += 1;
         }
-        visit::visit_type_bare_fn(self, bare_fn);
+        visit::visit_type_fn_ptr(self, fn_ptr);
     }
 
     fn visit_expr_unsafe(&mut self, expression: &'ast ExprUnsafe) {
@@ -1083,7 +1083,7 @@ fn validate_out_dir_include(
         validate_repo_source_file(root, &root.join(generator), "OUT_DIR include generator")?;
     let generator_bytes = fs::read(&generator_path)
         .map_err(|error| format!("unable to read {}: {error}", generator_path.display()))?;
-    let actual_hash = format!("{:x}", Sha256::digest(&generator_bytes));
+    let actual_hash = hex::encode(Sha256::digest(&generator_bytes));
     if actual_hash != *current_hash && actual_hash != *historical_hash {
         return Err(format!(
             "OUT_DIR generator contract hash changed: {generator} expected-current={current_hash} expected-historical={historical_hash} actual={actual_hash}"
@@ -1792,7 +1792,7 @@ fn validate_hashed_file_contracts(
         }
         let bytes = fs::read(&path)
             .map_err(|error| format!("unable to read contracted {label} {relative}: {error}"))?;
-        let actual = format!("{:x}", Sha256::digest(bytes));
+        let actual = hex::encode(Sha256::digest(bytes));
         let expected = match mode {
             AuditMode::Current => current_hash,
             AuditMode::HistoricalReplay => historical_hash,
@@ -1829,7 +1829,7 @@ fn validate_current_only_build_tool_contracts(root: &Path, mode: AuditMode) -> R
         let bytes = fs::read(&path).map_err(|error| {
             format!("unable to read current-only Cargo build helper {relative}: {error}")
         })?;
-        let actual = format!("{:x}", Sha256::digest(bytes));
+        let actual = hex::encode(Sha256::digest(bytes));
         if actual != current_hash {
             return Err(format!(
                 "current-only Cargo build helper hash changed: {relative} expected={current_hash} actual={actual}"

@@ -13,5 +13,5 @@ description = "Cohesix hive-gateway REST client"
 anyhow = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-ureq = { version = "2.12.1", features = ["json"] }
-urlencoding = "2.1"
+ureq = { version = "3.3.0", features = ["json"] }
+urlencoding = "2.1.3"

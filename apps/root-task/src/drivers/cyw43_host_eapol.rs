@@ -10,9 +10,9 @@
 //! publish DHCP/data readiness after PTK/GTK installation has succeeded.
 
 #[cfg(test)]
-use aes::cipher::BlockEncrypt;
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
-use aes::Aes128;
+use aes::cipher::BlockCipherEncrypt;
+use aes::cipher::{BlockCipherDecrypt, KeyInit};
+use aes::{Aes128, Block};
 
 use crate::net::MAX_FRAME_LEN;
 
@@ -1367,7 +1367,7 @@ fn aes128_key_unwrap(
     let mut a = [0u8; 8];
     a.copy_from_slice(&wrapped[..8]);
     output[..plain_len].copy_from_slice(&wrapped[8..]);
-    let cipher = Aes128::new(GenericArray::from_slice(kek));
+    let cipher = Aes128::new_from_slice(kek).map_err(|_| "eapol-key-data-wrap-key")?;
     let mut j = 6usize;
     while j > 0 {
         j -= 1;
@@ -1378,7 +1378,9 @@ fn aes128_key_unwrap(
             block[..8].copy_from_slice(&a);
             xor_key_wrap_t(&mut block[..8], t);
             block[8..].copy_from_slice(&output[(i - 1) * 8..i * 8]);
-            cipher.decrypt_block(GenericArray::from_mut_slice(&mut block));
+            let mut aes_block = Block::from(block);
+            cipher.decrypt_block(&mut aes_block);
+            block.copy_from_slice(&aes_block);
             a.copy_from_slice(&block[..8]);
             output[(i - 1) * 8..i * 8].copy_from_slice(&block[8..]);
             i -= 1;
@@ -1697,14 +1699,16 @@ fn test_aes128_key_wrap(
     }
     let mut a = [0xa6u8; 8];
     output[8..wrapped_len].copy_from_slice(plain);
-    let cipher = Aes128::new(GenericArray::from_slice(kek));
+    let cipher = Aes128::new_from_slice(kek).map_err(|_| "eapol-key-data-test-wrap-key")?;
     for j in 0..6 {
         for i in 1..=n {
             let t = (n * j + i) as u64;
             let mut block = [0u8; 16];
             block[..8].copy_from_slice(&a);
             block[8..].copy_from_slice(&output[8 + (i - 1) * 8..8 + i * 8]);
-            cipher.encrypt_block(GenericArray::from_mut_slice(&mut block));
+            let mut aes_block = Block::from(block);
+            cipher.encrypt_block(&mut aes_block);
+            block.copy_from_slice(&aes_block);
             a.copy_from_slice(&block[..8]);
             xor_key_wrap_t(&mut a, t);
             output[8 + (i - 1) * 8..8 + i * 8].copy_from_slice(&block[8..]);

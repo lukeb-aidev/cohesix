@@ -407,11 +407,11 @@ impl HiveReplay {
     }
 
     pub(crate) fn decode(bytes: &[u8]) -> Result<Self, String> {
-        let snapshot_result = serde_cbor::from_slice::<SwarmUiHiveSnapshot>(bytes);
+        let snapshot_result = crate::cbor::from_slice::<SwarmUiHiveSnapshot>(bytes);
         if let Ok(snapshot) = snapshot_result {
             return Ok(Self::new(snapshot));
         }
-        let transcript = serde_cbor::from_slice::<SwarmUiTranscript>(bytes)
+        let transcript = crate::cbor::from_slice::<SwarmUiTranscript>(bytes)
             .map_err(|err| format!("replay decode error: {err}"))?;
         let agent = SwarmUiHiveAgent {
             id: "worker-replay".to_owned(),

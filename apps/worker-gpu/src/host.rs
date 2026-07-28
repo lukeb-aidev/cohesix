@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Provide host-side GPU worker descriptors and ticket claims.
 // Author: Lukas Bower
@@ -16,7 +16,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{anyhow, Result};
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims};
-use rand::{rngs::OsRng, TryRngCore};
+use rand::{rngs::SysRng, TryRng};
 use secure9p_codec::SessionId;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -29,7 +29,7 @@ impl JobId {
     /// Generate a random job identifier with a `job-` prefix.
     pub fn random() -> Self {
         let mut bytes = [0u8; 8];
-        OsRng
+        SysRng
             .try_fill_bytes(&mut bytes)
             .expect("os entropy source unavailable");
         Self(format!("job-{}", hex::encode(bytes)))

@@ -15,6 +15,14 @@ use swarmui::{
 
 mod support;
 
+fn encode_cbor<T: serde::Serialize + ?Sized>(
+    value: &T,
+) -> Result<Vec<u8>, ciborium::ser::Error<std::io::Error>> {
+    let mut payload = Vec::new();
+    ciborium::ser::into_writer(value, &mut payload)?;
+    Ok(payload)
+}
+
 struct NoConnectFactory {
     calls: Arc<Mutex<usize>>,
 }
@@ -121,7 +129,7 @@ fn offline_tail_reads_cached_snapshot_only() {
             "END".to_owned(),
         ],
     };
-    let payload = serde_cbor::to_vec(&transcript).expect("encode snapshot");
+    let payload = encode_cbor(&transcript).expect("encode snapshot");
     backend
         .cache_write("telemetry:worker-1", &payload)
         .expect("cache write");
