@@ -222,24 +222,26 @@ capability invariant. Bytes emitted before the production PL011 mapping is
 admitted stay in the bounded panic/debug buffer until the real sink is
 installed.
 
-The five canonical defaults are fresh, isolated `profile-v2` trees:
+The five fresh source-build profiles use isolated `profile-v2` trees:
 
 | Directory | Target profile | Important boundary |
 | --- | --- | --- |
 | `out/sel4/profile-v2/qemu-smp-production` | QEMU production | Canonical static release-profile contract; not boot proof |
 | `out/sel4/profile-v2/qemu-smp-diagnostic` | QEMU diagnostic | Diagnostic/runtime profile only |
 | `out/sel4/profile-v2/pi4-production` | Pi 4 production | Static release-profile contract; exact-image Pi proof remains separate |
-| `out/sel4/profile-v2/pi4-diagnostic` | Pi 4 diagnostic | Diagnostic profile used alongside, not in place of, the CYW43 exact-image lane |
+| `out/sel4/profile-v2/pi4-diagnostic` | Pi 4 diagnostic source-build audit | Fresh-source audit lane only; not an input to the CYW43 exact-image lane |
 | `out/sel4/profile-v2/bcm2711-proof-eligibility` | BCM2711 proof eligibility | Upstream configuration compatibility only; not a Cohesix proof |
 
-The repo-managed `seL4/` reference trees are refreshed from the same v16
-profile outputs: `seL4/build` mirrors `qemu_smp_production`,
+The repo-managed `seL4/` trees were refreshed from the same v16 profile
+outputs: `seL4/build` mirrors `qemu_smp_production`,
 `seL4/SMP_build` mirrors `qemu_smp_diagnostic`, and `seL4/build_UBOOT`
 mirrors `pi4_diagnostic`. They no longer contain seL4 15 artifacts. Their
-embedded build paths and causal stamps still name the original
-`out/sel4/profile-v2/*` builds, so the tracked copies remain reviewable mirrors
-rather than relocated fresh-build evidence. Active build, release, regression,
-and publication claims validate the corresponding `profile-v2` tree.
+embedded build paths and causal stamps still name the historical
+`out/sel4/profile-v2/*` builds. The Pi exact-image lane nevertheless consumes
+`seL4/build_UBOOT` as its immutable canonical diagnostic artifact input: the
+relocated validator matches each tracked artifact by digest without treating
+it as fresh source-build or release proof. Pi composition must not configure or
+build this tree. It creates only disposable outputs and evidence below `out/`.
 
 These build directories contain generated kernel truth, not vendored seL4
 source. The selected directory must match the intended target and root-task
@@ -380,75 +382,44 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --evidence out/audit/m26d-profile-v2-qemu-smp-production.json
 ```
 
-The Pi diagnostic default uses the separately prepared Pi source and the same
-wrapper/toolchain contract:
+The current Pi exact-image lane validates and consumes the tracked diagnostic
+artifact tree directly:
 
 ```bash
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py configure \
+.venv/bin/python scripts/sel4_profile.py validate \
+  --repo-managed \
   --profile pi4_diagnostic \
-  --source "$COHESIX_SEL4_PI4_PROJECT" \
-  --build-dir out/sel4/profile-v2/pi4-diagnostic
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py build \
-  --profile pi4_diagnostic \
-  --source "$COHESIX_SEL4_PI4_PROJECT" \
-  --build-dir out/sel4/profile-v2/pi4-diagnostic
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
-  --profile pi4_diagnostic \
-  --build-dir out/sel4/profile-v2/pi4-diagnostic \
-  --source "$COHESIX_SEL4_PI4_PROJECT" \
-  --require-source \
+  --build-dir seL4/build_UBOOT \
   --require-artifacts \
   --for-runtime \
-  --evidence out/audit/m26d-profile-v2-pi4-diagnostic.json
-```
-
-The parallel CYW43 exact-image lane consumes the repo-managed canonical
-`pi4-diagnostic` build under `out/sel4/profile-v2/pi4-diagnostic`. The tracked
-`seL4/build_UBOOT` directory mirrors that completed build for review, but is
-not reconfigured in place. These commands validate the canonical input and
-stage from it:
-
-```bash
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py prepare-source \
-  --profile pi4_diagnostic \
-  --source out/sel4/v16-pi4-project
-out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
-  --profile pi4_diagnostic \
-  --source out/sel4/v16-pi4-project \
-  --build-dir out/sel4/profile-v2/pi4-diagnostic \
-  --require-source \
-  --require-artifacts \
-  --for-runtime \
-  --evidence out/audit/m26d-profile-v2-pi4-diagnostic.json
+  --evidence out/audit/pi4-repo-managed-profile.json
+SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" \
+cargo check -p root-task \
+  --target aarch64-unknown-none \
+  --no-default-features \
+  --features release-pi4
 scripts/pi4-image-build.sh \
   --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --sel4-build-dir out/sel4/profile-v2/pi4-diagnostic \
-  --sel4-kernel-source-dir out/sel4/v16-pi4-project/kernel
+  --venv .venv
 ```
 
-The build is incomplete until
-`out/sel4/profile-v2/pi4-diagnostic/cohesix-profile-build-inputs.json` has schema
-`cohesix-sel4-profile-build-inputs/v2`, status `complete`, and profile
-`pi4_diagnostic`. Its exact build directory, source revisions and authenticated
-overlay, contract and validator hashes, configure/build commands, parallelism,
-disabled memoization environment, compiler/Python/`mkimage` supply-chain
-identities, causal build-start record, generated configuration inputs, and every
-required artifact digest must recompute byte-for-byte during validation. A
-pending, missing, stale, reused, re-stamped, or path-moved record does not
-qualify as exact-image input.
+The tracked `cohesix-profile-build-inputs.json` must have schema
+`cohesix-sel4-profile-build-inputs/v2`, status `complete`, profile
+`pi4_diagnostic`, and artifact/configuration identities that relocate under
+`seL4/build_UBOOT` without any byte change. Validation rejects a dirty tracked
+tree, an untracked entry, a changed contract, a missing artifact, or an identity
+mismatch. It deliberately does not require the historical absolute source,
+CMake, or build paths to exist.
 
-`scripts/pi4-image-build.sh` consumes that qualified tree read-only. It hashes
-the complete tree, creates and validates a fresh disposable `pi4_diagnostic`
-composition build below `out/`, and injects the exact stripped Cohesix
-rootserver only into that derivative. Final provenance binds the canonical
-stamp/tree fingerprint, the derivative's pristine stamp and generated timing
-configuration, and the derived rootserver/newc/wrapper bytes. The canonical
-tree must validate and retain the same complete fingerprint after composition
-and final staging; the script never repairs, re-stamps, or accepts a mutated
-profile tree. With no override, the wrapper selects the repo-managed canonical
-v16 `out/sel4/profile-v2/pi4-diagnostic` build. Neither
-`~/seL4_16/build_pi4_diagnostic` nor the tracked `seL4/build_UBOOT` reference
-mirror is auto-selected; an explicit override must pass the same v16 validator.
+`scripts/pi4-image-build.sh` hashes the complete immutable input tree before
+and after composition. It rebuilds the tracked baseline elfloader from the
+archived object set as a byte-for-byte toolchain oracle, then creates a new
+rootserver archive and relinks only in a disposable composition directory.
+Final provenance binds the canonical stamp and tree, exact tool identities and
+oracle, and the derived rootserver/newc/wrapper bytes. No CMake or Ninja command
+runs against `seL4/build_UBOOT`; no source or seL4 build input below `out/` is
+consulted. These diagnostic artifacts and their composition are not release,
+media, boot, Wi-Fi, TCP, or benchmark proof.
 
 Wrapper AArch64 contracts set `AARCH64=ON`, and every profile binds
 `CROSS_COMPILER_PREFIX=aarch64-none-elf-` before upstream `kernel/gcc.cmake`

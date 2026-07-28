@@ -946,9 +946,7 @@ class TestPlanEvidenceTests(unittest.TestCase):
         finally:
             sys.path.pop(0)
         root = pathlib.Path("/workspace/cohesix")
-        expected = (
-            root / "out/sel4/profile-v2/pi4-diagnostic"
-        ).resolve(strict=False)
+        expected = (root / "seL4/build_UBOOT").resolve(strict=False)
         with mock.patch.object(test_plan_evidence.os, "environ", {}):
             self.assertEqual(
                 test_plan_evidence.selected_sel4_dir(root, "pi4"),

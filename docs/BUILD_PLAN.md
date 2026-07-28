@@ -1708,13 +1708,14 @@ LoRA meaning, intentional negative tests, and this correction record.
 Historical release snapshots remain unchanged and are explicitly superseded by
 `docs/audit/M26C_DOC_DRIFT_LEDGER.md` entry `M26C-DOC-019`.
 
-**Separate repository gate:** This correction does not close the active
-Milestone 26d Pi packaging-size blocker. The regenerated
-`seL4/build_UBOOT/elfloader/archive.archive.o.cpio` is 5,001,728 bytes against
+**Separate repository gate at that checkpoint:** On 2026-07-15, the regenerated
+`seL4/build_UBOOT/elfloader/archive.archive.o.cpio` was 5,001,728 bytes against
 the mandatory 4 MiB limit; the preceding checked-in artifact was 5,005,824
 bytes. The correction therefore reduced the archive by 4 KiB and did not
-introduce the breach, but `scripts/ci/size_guard.sh` remains red until the
-Milestone 26d repository-gate task restores that independent invariant.
+introduce the breach. Later Milestone 26d repository-gate work restored the
+invariant; the current tracked seL4 16 archive is 3,237,888 bytes. The historical
+figures remain evidence for that checkpoint, not a current blocker or capacity
+available for in-place rootserver replacement.
 
 **Why now (context):** Remaining edge use cases depend on deterministic
 adapters for industrial buses. Implementing them as sidecars preserves the
@@ -6165,7 +6166,7 @@ lane; implementation is sequenced after its exact-image surface is frozen and
 must re-prove the resulting root/image identity separately.
 
 **Why now (context):**  
-Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` builds `seL4/build_UBOOT`, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the isolated runtime layout used by Milestone 26a/26b.
+Upstream seL4 Pi 4 bring-up documentation originally used direct U-Boot image loading examples on `bcm2711`, not a UEFI handoff chain. Cohesix now follows the active staged U-Boot path: `scripts/pi4-image-build.sh` validates and consumes immutable `seL4/build_UBOOT` artifacts, composes the new rootserver and wrapper only in disposable output, stages the seL4 binary image, driver-runtime CPIO, and padded DTB, then hands off with `bootm <image> <runtime-cpio> <dtb>`. This preserves deterministic control at the U-Boot prompt while matching the isolated runtime layout used by Milestone 26a/26b.
 
 **Non-negotiable constraints:**  
 - Boot chain for Pi 4 Milestone 26 is: `Pi firmware (start4/fixup) -> U-Boot -> seL4 image -> root-task`.
@@ -8083,7 +8084,7 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
 - Concurrent CYW43/SDIO reliability, exact-image identity, operator-liveness, and Pi evidence files remain owned by their active 26b/26d closure lane. Capability work must not rewrite driver timing/state-machine logic, evidence classification, image packaging, or hardware claims, and offline capability PASS results must not be counted as Wi-Fi or exact-image proof.
 - `rust-sel4` adoption is out of scope. Cohesix may audit upstream Rust support for compatibility reference, but 26d must preserve the current Cohesix-owned `sel4-sys` / `sel4-runtime` / root-task bootstrap stack unless a separate milestone authorizes replacement.
 - Canonical kernel/manual provenance must be updated with specific versions and, where available, upstream commit identifiers for QEMU, SMP, and Pi 4/U-Boot build flows.
-- Canonical seL4 builds must be configured from the pinned official seL4 16.0.0 manifest through a source-controlled Cohesix profile wrapper. Hand-edited CMake caches, stripped generated settings, or copied external build trees are diagnostic inputs only and cannot establish production, diagnostic, or proof-profile closure.
+- Canonical fresh seL4 profile builds must be configured from the pinned official seL4 16.0.0 manifest through a source-controlled Cohesix profile wrapper. Hand-edited CMake caches, stripped generated settings, or unauthenticated copied external build trees cannot establish production, diagnostic, or proof-profile closure. The tracked `seL4/build_UBOOT` tree is the narrow Pi image exception: its completed causal stamp and every relocated artifact identity must validate before it can serve as immutable diagnostic composition input, and it still cannot establish fresh source-build, release, or hardware proof.
 - Older manual/reference mentions are known 26d blockers, not acceptable post-26d residue. Later milestones must not cite seL4 16 alignment until `m26d-kernel-provenance-refresh` updates or explicitly retires those references.
 - Any seL4 build configuration that still depends on legacy `KernelDomainSchedule` / `domain_schedule.c` handling must be either removed when semantically unused or migrated/documented consistently with seL4 16 behavior; one-domain configurations must not retain hidden schedule-file dependencies.
 - Generated Worker roles may be described as implemented, capability-backed, notification-backed, or live only when the selected target actually creates the declared TCB, CSpace, VSpace, IPC buffer, stack, endpoint badge, lifecycle notifications, and fault/revocation path. Model-only or in-process Worker behavior must be emitted and documented as such.
@@ -8190,9 +8191,9 @@ Upgrade Cohesix's external seL4 baseline and normative references to seL4 16.0.0
 - `out/toolchain/sel4-profile-venv/bin/python -m pytest -q tests/test_sel4_profile.py`
 - `out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate --all --require-source --require-artifacts --evidence out/audit/m26d-profile-v2-all.json`
 - `cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_`
-- `SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/pi4-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
+- `SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4`
 - `scripts/cohesix-build-run.sh --sel4-build out/sel4/profile-v2/qemu-smp-production --no-run --cargo-target aarch64-unknown-none --profile release --root-task-features cohesix-dev`
-- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "${COHESIX_SEL4_PI4_BUILD:-$PWD/out/sel4/profile-v2/pi4-diagnostic}" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"`
+- `scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --venv .venv`
 - `python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_pi4_compare_driver_models.py`
 - `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26d-qemu-sel4-16-initial`
 - `python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --no-qemu --no-gateway --rest-url http://<pi4-gateway-host>:<port> --log-dir out/bench --log-prefix m26d-pi4-sel4-16-initial`
@@ -8260,14 +8261,14 @@ Deliverables: passing workspace/build-target checks and refreshed low-level comp
 ```
 Title/ID: m26d-pi4-counter-contract-refresh
 Goal: Reprove the Pi 4 virtual-counter timer contract on the seL4 16 baseline before accepting isolated runtime latency or performance evidence.
-Inputs: out/sel4/profile-v2/pi4-production, out/sel4/profile-v2/pi4-diagnostic, the repo-managed `seL4/build_UBOOT` v16 reference mirror, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
+Inputs: fresh-source Pi profile audit outputs, the repo-managed immutable `seL4/build_UBOOT` v16 diagnostic artifact input, apps/root-task/build.rs, apps/root-task/src/arch/aarch64/timer.rs, apps/pi4-driver-runtime/build.rs, apps/pi4-driver-runtime/src/lib.rs, scripts/pi4-image-build.sh, scripts/pi4_gate_proof.sh, scripts/pi4_trace_normalize.py, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md.
 Changes:
   - scripts/pi4-image-build.sh — keep seL4 16 Pi 4 staging blocked unless VCNT export is enabled, physical counter/timer-control exports are disabled, and generated `TIMER_CLOCK_HZ` matches the accepted Pi profile.
   - apps/root-task/build.rs + apps/root-task/src/arch/aarch64/timer.rs — preserve root-task build/runtime checks that use `CNTVCT_EL0` only under the `timers-arch-counter` profile and scale elapsed-time proof from generated frequency.
   - apps/pi4-driver-runtime/build.rs + apps/pi4-driver-runtime/src/lib.rs — preserve isolated runtime build/runtime checks and `RuntimeDeadline` conversion from legacy retry counts to counter-backed deadlines.
   - scripts/pi4_gate_proof.sh + scripts/pi4_trace_normalize.py + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — ensure refreshed Pi 4 proof gates require `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, and `DUMMY_TIMER_SEEN=no` before latency proof is accepted.
 Commands:
-  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --venv .venv
   - cargo check -p root-task --target aarch64-unknown-none --no-default-features --features "kernel bootstrap-trace serial-console net-console"
   - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
   - scripts/pi4_gate_proof.sh --require-driver-task-proof
@@ -8305,11 +8306,11 @@ Deliverables:
 ```
 Title/ID: m26d-domain-schedule-debt-removal
 Goal: Remove or explicitly resolve stale legacy domain-schedule dependencies from Cohesix seL4 build configurations.
-Inputs: out/sel4/profile-v2/pi4-{production,diagnostic}, the repo-managed `seL4/build_UBOOT` v16 reference mirror, Pi 4 build scripts, seL4 16.0.0 upgrade notes.
+Inputs: fresh-source Pi profile audit outputs, the repo-managed immutable `seL4/build_UBOOT` v16 diagnostic artifact input, Pi 4 build scripts, seL4 16.0.0 upgrade notes.
 Changes:
   - scripts/pi4-image-build.sh and related build docs — ensure Cohesix-owned Pi 4 flows do not silently depend on stale `domain_schedule.c` defaults when domains are not in use.
   - docs/HARDWARE_BRINGUP.md and docs/BUILD_PLAN.md — document the resolved seL4 16 domain-schedule posture for Cohesix.
-Commands: scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel"
+Commands: scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --venv .venv
 Checks: one-domain Cohesix builds no longer inherit accidental `sel4test` schedule-file assumptions.
 Deliverables: documented and verified domain-schedule posture for Cohesix seL4 16 builds.
 ```
@@ -8326,7 +8327,7 @@ Changes:
 Commands:
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests::runtime_
   - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib hal::tests
-  - SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/pi4-production" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
+  - SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
 Checks: no writable child page is executable, no unvalidated ELF flag can create executable authority, cache/device policy is preserved, and the isolated-runtime ABI plus CYW43-owned state machine are unchanged.
 Deliverables: reviewed W^X implementation, focused regression tests, and Pi 4 target compile evidence.
 ```
@@ -8419,7 +8420,7 @@ Changes:
   - Cargo.toml + Cargo.lock + CI — update vulnerable or yanked transitive dependency selections to supported compatible versions without widening VM dependency closure, track the lockfile, and reject stale resolution before build/test commands.
   - apps/root-task/build.rs + apps/root-task/build_support.rs + apps/root-task/src — correct fresh-checkout generated-artifact validation, deterministic test-contract drift, and strict lint failures exposed by the canonical Pi 4 Stage 02 feature set.
   - apps/root-task/src/hal + apps/root-task/src/sel4.rs + configs/sel4/profiles.toml + tools/sel4-profile-project/CMakeLists.txt — admit the complete selected linked-runtime capability inventory before creating any child, retain bounded post-bootstrap CSpace headroom, transfer child-only code/stack/framebuffer mappings without permanent root aliases, and require a 14-bit Pi root CNode so runtime-image growth fails in deterministic build/bootstrap gates instead of panicking during shared HDMI setup.
-  - apps/root-task/sel4.ld + scripts/pi4-image-build.sh + scripts/pi4_image_identity.py + scripts/pi4_wifi_repeatability.py — place one fixed-width marker in a dedicated file-backed root-task load section, keep the selected stamped seL4 profile tree immutable while composing the rootserver in a separately validated disposable tree, bind both pristine profile inputs plus the derived rootserver/CPIO/wrapper tuple in provenance, seal the wrapper with the domain-separated normalized digest of the complete legacy Pi image, repair and revalidate U-Boot CRCs, and require staged/read-back bytes plus every UART slice to agree on that content-derived identity.
+  - apps/root-task/sel4.ld + scripts/pi4-image-build.sh + scripts/pi4_image_identity.py + scripts/pi4_wifi_repeatability.py — place one fixed-width marker in a dedicated file-backed root-task load section, keep the tracked `seL4/build_UBOOT` profile artifact tree immutable, reproduce its baseline elfloader byte-for-byte as a relink-tool oracle, compose the new rootserver/CPIO/wrapper only in disposable output, bind the canonical tree, tool identities, oracle, and derived tuple in provenance, seal the wrapper with the domain-separated normalized digest of the complete legacy Pi image, repair and revalidate U-Boot CRCs, and require staged/read-back bytes plus every UART slice to agree on that content-derived identity.
   - scripts/cohesix-build-run.sh and focused tests/docs — keep the QEMU rootfs below the 4 MiB guard while preserving all manifest-declared runtime artifact names, bytes, and isolated-runtime lookup semantics.
   - scripts/ci, tools/rust-risk-audit, README.md, and canonical docs — make Python selection exact and recoverable, count cfg-test Rust separately from production risk, record the real linked-runtime unsafe delta, and align as-built packaging explanations with the canonical QEMU path.
   - .github/workflows/*.yml — audit every trigger and job, consolidate required pull-request, main-branch, manual, and scheduled checks into the smallest auditable workflow set, retire stubs and jobs that invoke removed tooling, preserve clean-runner Rust, generated-artifact, Stage 01 integrity, artifact-independent VM-boundary, and dependency gates, and use least-privilege permissions with deterministic toolchain/action pins and retained failure evidence; keep Stage 02 target compilation and QEMU packaging in the provisioned macOS ARM64 evidence lane because their canonical external seL4 build trees are intentionally not vendored.
@@ -8475,7 +8476,7 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26d-cyw43-hardware-free-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m26d-cyw43-hardware-free-pi4
   - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m26d-cyw43-hardware-free-pi4
-  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --sel4-build-dir "$PWD/out/sel4/profile-v2/pi4-diagnostic" --sel4-kernel-source-dir "$PWD/out/sel4/v16-pi4-project/kernel" --venv .venv
+  - scripts/pi4-image-build.sh --manifest configs/root_task_pi4_uboot_aarch64.toml --venv .venv
 Checks: every retained production action consumes at most one outer turn; each delegated `Pending` quantum requires one fresh exact acknowledged grant and follows `Poll -> Grant -> Poll`; the real production firmware parent crosses the sequence-last reciprocal ring and retained SDIO controller as `511 * 64 + 1 * 64`, rather than fabricated child completions; Function 2 IORx readiness, backplane-window selection, and CMD53 issue consume separate turns; control/EAPOL TX crosses the exact five-child owner path; post-F2 release crosses the exact 18-child owner path through real DPC activation; one real DPC RX episode drains before queue-only foreground service; the 256-frame drain consumes 256 turns and zero queue-only owner operations; a DPC frame hint is admitted once per sequence and never resurrected by a continuation; foreground and DPC paths reject torn, stale, wrong-generation, mutated, replayed, exhausted-id, or already-consumed grants; issued-unknown work is never replayed; stale completions cannot mutate a replacement generation; the sole boot episode cannot rearm or produce attempt 2; its consumed-once pair repair preserves exact owner-first order and cannot cycle indefinitely after context replay; only same-generation Gate 10 plus attached address/TCP network-ready proof authorizes one fresh pair repair in a later independent steady-state runtime-recovery episode; the emitted Pi release call chain retains material headroom inside the 256-KiB root stack; operator surfaces remain bounded and live after terminal quarantine; all deterministic repository gates pass; the exact clean image is internally self-consistent and bound to its commit.
 Deliverables: retained linked-runtime implementation, production-chain adversarial tests, aligned canonical docs, exact-image identity metadata, deterministic gate records, and a Pi-ready exact image. Closure is hardware-free only: the same committed/read-back image must still pass 10 cold and 10 warm boots with association, all Wi-Fi gates including every Gate 7 sub-gate, EAPOL, DHCP, ARP, raw TCP/authenticated `cohsh`, USB/local-seat, boot-paired pcaps, and benchmark evidence before physical repeatability can be claimed.
 ```

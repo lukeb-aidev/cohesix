@@ -54,7 +54,7 @@ def test_pi4_image_build_defaults_to_pi4_release_features() -> None:
 
 
 def test_pi4_image_build_honors_the_staged_runner_job_budget() -> None:
-    """U-Boot and seL4 composition must not bypass test-plan CPU limits."""
+    """U-Boot rebuilds must not bypass test-plan CPU limits."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     resolver = source[
@@ -67,7 +67,7 @@ def test_pi4_image_build_honors_the_staged_runner_job_budget() -> None:
         'TP_HOST_JOBS:-${CARGO_BUILD_JOBS:-${CMAKE_BUILD_PARALLEL_LEVEL:-}}'
         in resolver
     )
-    assert source.count('jobs="$(resolve_build_jobs)"') == 2
+    assert source.count('jobs="$(resolve_build_jobs)"') == 1
     assert source.count('jobs="$(sysctl -n hw.ncpu)"') == 1
 
 
@@ -131,11 +131,37 @@ def test_pi4_image_build_prefers_repo_local_sel4_build_tree() -> None:
     source = SCRIPT_PATH.read_text(encoding="utf-8")
 
     assert (
-        'DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/out/sel4/profile-v2/pi4-diagnostic"'
+        'DEFAULT_REPO_SEL4_BUILD_DIR="${ROOT_DIR}/seL4/build_UBOOT"'
         in source
     )
     assert 'SEL4_BUILD_DIR="${DEFAULT_REPO_SEL4_BUILD_DIR}"' in source
-    assert "default: canonical v16" in source
+    assert "(must resolve to seL4/build_UBOOT)" in source
+    assert "alternate or out/ seL4 inputs are not supported" in source
+    assert "out/sel4" not in source
+
+
+def test_pi4_image_build_rejects_noncanonical_sel4_input(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The command-line override cannot restore a deleted out/ input lane."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    accepted = _source_function(
+        script,
+        (
+            'SEL4_BUILD_DIR="$(realpath_py "$DEFAULT_REPO_SEL4_BUILD_DIR")"; '
+            "validate_canonical_sel4_build_dir"
+        ),
+    )
+    rejected = _source_function(
+        script,
+        'SEL4_BUILD_DIR="$(realpath_py "$ROOT_DIR/out/sel4")"; '
+        "validate_canonical_sel4_build_dir",
+    )
+
+    assert accepted.returncode == 0, accepted.stderr
+    assert rejected.returncode != 0
+    assert "alternate or out/ seL4 inputs are not supported" in rejected.stderr
 
 
 def test_pi4_image_build_skip_build_rejects_stale_selected_image() -> None:
@@ -161,28 +187,22 @@ def test_pi4_image_build_requires_canonical_runtime_profile_and_mkimage() -> Non
     ]
 
     assert 'PI4_SEL4_PROFILE="pi4_diagnostic"' in source
-    assert 'COHESIX_SEL4_PROJECT_ROOT:PATH=' in source
+    assert 'COHESIX_SEL4_PROJECT_ROOT:PATH=' not in source
+    assert '--repo-managed' in validator
     assert '--profile "$PI4_SEL4_PROFILE"' in validator
-    assert '--require-source' in validator
+    assert '--require-source' not in validator
     assert '--require-artifacts' in validator
     assert '--for-runtime' in validator
     assert "cmake -S" not in validator
     assert "configure_pi4_sel4_build" not in source
     assert (
-        'local canonical="${ROOT_DIR}/out/toolchain/u-boot-tools-build/tools/mkimage"'
+        'local canonical="${ROOT_DIR}/third_party/u-boot/tools/mkimage"'
         in source
     )
     assert "command -v mkimage" not in source
-    assert 'third_party/u-boot/tools/mkimage"' not in source
-    assert "DEFAULT_SEL4_KERNEL_SOURCE_DIR" not in source
-
-    kernel_resolver = source[
-        source.index("resolve_sel4_kernel_source_dir()") : source.index(
-            "verify_pi4_sel4_xhci_device_untyped()"
-        )
-    ]
-    assert "COHESIX_SEL4_PROJECT_ROOT:PATH=" in kernel_resolver
-    assert 'cached="${source_root}/kernel"' in kernel_resolver
+    assert "resolve_sel4_kernel_source_dir" not in source
+    assert "--sel4-kernel-source-dir" not in source
+    assert "SEL4_KERNEL_SOURCE_DIR" not in source
 
     domain_guard = source[
         source.index("verify_one_domain_schedule_cache_absent()") : source.index(
@@ -197,6 +217,40 @@ def test_pi4_image_build_requires_canonical_runtime_profile_and_mkimage() -> Non
     assert skip_branch.index("validate_pi4_sel4_build") < skip_branch.index(
         "verify_skip_build_provenance"
     )
+
+
+def test_pi4_image_build_uses_one_absolute_binutils_family(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Root-task and driver-runtime stripping must match the composer tool family."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    script = _copy_sourceable_build_script(tmp_path)
+    prefix = tmp_path / "toolchain" / "aarch64-linux-gnu-"
+    strip_tool = pathlib.Path(f"{prefix}strip")
+    strip_tool.parent.mkdir()
+    strip_tool.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    strip_tool.chmod(0o755)
+
+    selected = _source_function(
+        script,
+        f"COHESIX_AARCH64_BINUTILS_PREFIX={str(prefix)!r}; find_aarch64_strip",
+    )
+    rejected = _source_function(
+        script,
+        "COHESIX_AARCH64_BINUTILS_PREFIX=relative-prefix-; find_aarch64_strip",
+    )
+
+    assert (
+        "COHESIX_AARCH64_BINUTILS_PREFIX:-/opt/homebrew/bin/"
+        "aarch64-linux-gnu-"
+    ) in source
+    assert source.count('strip_tool="$(find_aarch64_strip)"') == 2
+    assert "command -v aarch64-elf-strip" not in source
+    assert selected.returncode == 0, selected.stderr
+    assert selected.stdout.strip() == str(strip_tool)
+    assert rejected.returncode != 0
+    assert "must be an absolute tool prefix" in rejected.stderr
 
 
 def test_pi4_image_build_defaults_to_usb_uboot_menu_input() -> None:
@@ -935,19 +989,23 @@ def test_pi4_image_build_proves_root_archive_and_v2_identity() -> None:
 
 
 def test_pi4_image_composition_never_writes_canonical_profile_tree() -> None:
-    """Rootserver composition must target only the fresh disposable build."""
+    """Rootserver composition must publish only into the output assembly."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
-    build_start = source.index("build_pi4_image() {")
-    build_end = source.index("\nstage_uboot_logo() {", build_start)
-    build_body = source[build_start:build_end]
+    compose_start = source.index("compose_pi4_assembly() {")
+    compose_end = source.index("\nbuild_pi4_image() {", compose_start)
+    compose_body = source[compose_start:compose_end]
     validator_start = source.index("validate_pi4_sel4_build() {")
     validator_end = source.index("\nresolve_mkimage() {", validator_start)
     validator = source[validator_start:validator_end]
 
-    assert 'cmake --build "$SEL4_BUILD_DIR"' not in build_body
-    assert 'cp -f "$STRIPPED_ROOT_TASK_ELF" "$composition_rootserver"' in build_body
-    assert 'cmake --build "$COMPOSITION_SEL4_BUILD_DIR"' in build_body
+    assert "cmake --build" not in source
+    assert '--sel4-build-dir "$SEL4_BUILD_DIR"' in compose_body
+    assert '--rootserver "$STRIPPED_ROOT_TASK_ELF"' in compose_body
+    assert '--output-dir "$PI4_ASSEMBLY_DIR"' in compose_body
+    assert '--timestamp "$composition_epoch"' in compose_body
+    assert 'cp -f "${SEL4_BUILD_DIR}/CMakeCache.txt"' in compose_body
+    assert 'cp -f "$STRIPPED_ROOT_TASK_ELF" "${SEL4_BUILD_DIR}' not in source
     assert "generate_pi4_elfloader_platform_info" not in source
     assert "cmake --build" not in validator
     assert "mkdir -p" not in validator
@@ -955,7 +1013,7 @@ def test_pi4_image_composition_never_writes_canonical_profile_tree() -> None:
 
 
 def test_pi4_image_composition_revalidates_unchanged_canonical_input() -> None:
-    """The selected stamped tree is fingerprinted across every derived build."""
+    """The selected stamped tree is fingerprinted across artifact composition."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     build_start = source.index("build_pi4_image() {")
@@ -963,17 +1021,17 @@ def test_pi4_image_composition_revalidates_unchanged_canonical_input() -> None:
     build_body = source[build_start:build_end]
 
     capture = build_body.index("capture_canonical_sel4_state")
-    compose = build_body.index("prepare_pi4_composition_tree")
+    compose = build_body.index("compose_pi4_assembly")
     post_compose = build_body.index(
-        'verify_canonical_sel4_state "after derived rootserver composition"'
+        'verify_canonical_sel4_state "after rootserver composition"'
     )
     revalidate = build_body.rindex("validate_pi4_sel4_build")
     post_validate = build_body.index(
-        'verify_canonical_sel4_state "after canonical post-composition validation"'
+        'verify_canonical_sel4_state "after post-composition validation"'
     )
-    publish = build_body.index("publish_pi4_assembly")
+    provenance = build_body.index("write_sel4_image_provenance")
 
-    assert capture < compose < post_compose < revalidate < post_validate < publish
+    assert capture < compose < post_compose < revalidate < post_validate < provenance
 
 
 def test_pi4_stage_dir_cannot_alias_out_or_derived_assembly(
@@ -1188,7 +1246,7 @@ def test_skip_build_requires_exact_manifest_feature_and_profile_provenance() -> 
         "root_task_features",
         "canonical_profile_stamp_sha256",
         "canonical_profile_state_sha256",
-        "composition_profile_stamp_sha256",
+        "composition_record_sha256",
         "composition_cmake_cache_sha256",
         "composition_timer_header_sha256",
         "wrapper_sha256",
@@ -1239,7 +1297,7 @@ def test_skip_build_provenance_rejects_each_bound_artifact_tamper(
         'EXACT_ROOT_ELF="$ROOT_DIR/assembly/rootserver"; '
         'EXACT_ROOT_CPIO="$ROOT_DIR/assembly/archive.archive.o.cpio"; '
         'EXACT_CANONICAL_PROFILE_STAMP="$ROOT_DIR/sel4-build/cohesix-profile-build-inputs.json"; '
-        'EXACT_COMPOSITION_PROFILE_STAMP="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
+        'EXACT_COMPOSITION_RECORD="$ROOT_DIR/assembly/composition-profile-build-inputs.json"; '
         'EXACT_COMPOSITION_CACHE="$ROOT_DIR/assembly/composition-CMakeCache.txt"; '
         'EXACT_COMPOSITION_TIMER_HEADER="$ROOT_DIR/assembly/composition-platform_gen.h"; '
         f'CANONICAL_SEL4_STATE_DIGEST={"b" * 64!r}; '

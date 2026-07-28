@@ -1251,6 +1251,82 @@ def test_configure_refuses_tracked_generated_tree() -> None:
         )
 
 
+def test_repo_managed_pi_profile_accepts_only_canonical_tracked_tree() -> None:
+    canonical_contract = sel4_profile.load_contract(
+        sel4_profile.DEFAULT_CONTRACT
+    )
+    build_dir = sel4_profile.ROOT / "seL4" / "build_UBOOT"
+
+    evidence = sel4_profile.validate_repo_managed_build(
+        canonical_contract,
+        "pi4_diagnostic",
+        build_dir,
+        for_runtime=True,
+    )
+
+    assert evidence["valid"] is True
+    assert evidence["build_mode"] == "repository-managed-artifacts"
+    assert evidence["claim_eligibility"]["runtime"] is True
+    assert evidence["claim_eligibility"]["artifact_set_shipping"] is False
+    assert evidence["repo_managed"]["tracked"] is True
+    assert evidence["repo_managed"]["clean"] is True
+
+
+def test_repo_managed_pi_profile_rejects_noncanonical_path(
+    tmp_path: Path,
+) -> None:
+    canonical_contract = sel4_profile.load_contract(
+        sel4_profile.DEFAULT_CONTRACT
+    )
+
+    evidence = sel4_profile.validate_repo_managed_build(
+        canonical_contract,
+        "pi4_diagnostic",
+        tmp_path,
+        for_runtime=True,
+    )
+
+    assert evidence["valid"] is False
+    assert "repository-managed profile selection mismatch" in _errors(evidence)
+
+
+def test_repo_managed_cli_rejects_source_and_release_claims(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    build_dir = sel4_profile.ROOT / "seL4" / "build_UBOOT"
+
+    source_status = sel4_profile.main(
+        (
+            "validate",
+            "--repo-managed",
+            "--profile",
+            "pi4_diagnostic",
+            "--build-dir",
+            str(build_dir),
+            "--source",
+            "/tmp/not-used",
+        )
+    )
+    source_stderr = capsys.readouterr().err
+    release_status = sel4_profile.main(
+        (
+            "validate",
+            "--repo-managed",
+            "--profile",
+            "pi4_diagnostic",
+            "--build-dir",
+            str(build_dir),
+            "--for-release",
+        )
+    )
+    release_stderr = capsys.readouterr().err
+
+    assert source_status == 2
+    assert "source validation belongs to a fresh source-build lane" in source_stderr
+    assert release_status == 2
+    assert "--repo-managed artifacts are not release proof" in release_stderr
+
+
 def test_configure_refuses_nonempty_transient_tree(tmp_path: Path) -> None:
     build_dir = tmp_path / "profile-build"
     build_dir.mkdir()

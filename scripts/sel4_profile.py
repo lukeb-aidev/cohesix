@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = ROOT / "configs" / "sel4" / "profiles.toml"
 WRAPPER_PROJECT = ROOT / "tools" / "sel4-profile-project"
 TRACKED_SEL4_ROOT = ROOT / "seL4"
+REPO_MANAGED_PROFILE_BUILDS = {
+    "pi4_diagnostic": TRACKED_SEL4_ROOT / "build_UBOOT",
+}
 GIC_DETECTOR = ROOT / "scripts" / "lib" / "detect_gic_version.py"
 VALIDATOR = Path(__file__).resolve()
 WRAPPER_CMAKE = WRAPPER_PROJECT / "CMakeLists.txt"
@@ -1504,6 +1507,233 @@ def git_output(repo: Path, *args: str) -> str:
     """Run a read-only Git query in a pinned source repository."""
 
     return run_checked(("git", "-C", str(repo), *args)).stdout.rstrip()
+
+
+def repo_managed_build_evidence(
+    profile_name: str,
+    build_dir: Path,
+    contract: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[str]]:
+    """Validate one relocated, repository-managed profile artifact tree."""
+
+    errors: list[str] = []
+    canonical_name, _profile = get_profile(contract, profile_name)
+    expected_dir = REPO_MANAGED_PROFILE_BUILDS.get(canonical_name)
+    resolved = build_dir.expanduser().resolve()
+    evidence: dict[str, Any] = {
+        "schema": "cohesix-sel4-repo-managed-build/v1",
+        "profile": canonical_name,
+        "build_dir": str(resolved),
+        "expected_build_dir": (
+            str(expected_dir.resolve()) if expected_dir is not None else None
+        ),
+        "tracked": False,
+        "clean": False,
+        "stamp": None,
+        "relocated_records": {},
+    }
+    if expected_dir is None:
+        errors.append(
+            f"profile {canonical_name!r} has no repository-managed build tree"
+        )
+        return evidence, errors
+    expected_resolved = expected_dir.resolve()
+    if resolved != expected_resolved:
+        errors.append(
+            "repository-managed profile selection mismatch: "
+            f"expected {expected_resolved}, got {resolved}"
+        )
+        return evidence, errors
+
+    relative_dir = resolved.relative_to(ROOT.resolve())
+    tracked = git_output(ROOT, "ls-files", "--", str(relative_dir))
+    evidence["tracked"] = bool(tracked)
+    if not tracked:
+        errors.append(f"repository-managed build tree is not tracked: {resolved}")
+
+    diff = subprocess.run(
+        (
+            "git",
+            "-C",
+            str(ROOT),
+            "diff",
+            "--no-ext-diff",
+            "--quiet",
+            "HEAD",
+            "--",
+            str(relative_dir),
+        ),
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if diff.returncode not in {0, 1}:
+        errors.append(
+            "cannot compare repository-managed build tree with HEAD: "
+            + (diff.stderr.strip() or f"git exited {diff.returncode}")
+        )
+    untracked = git_output(
+        ROOT,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "--",
+        str(relative_dir),
+    )
+    evidence["clean"] = diff.returncode == 0 and not untracked
+    evidence["untracked_entry_count"] = (
+        len(untracked.splitlines()) if untracked else 0
+    )
+    if diff.returncode == 1:
+        errors.append(
+            f"repository-managed build tree differs from HEAD: {relative_dir}"
+        )
+    if untracked:
+        errors.append(
+            f"repository-managed build tree contains untracked entries: {relative_dir}"
+        )
+
+    stamp_path = resolved / BUILD_INPUT_STAMP_NAME
+    stamp_record = file_evidence(stamp_path)
+    evidence["stamp"] = stamp_record
+    if not stamp_path.is_file():
+        errors.append(
+            f"repository-managed build-input stamp is missing: {stamp_path}"
+        )
+        return evidence, errors
+    try:
+        stamp = load_json_object(stamp_path, "repository-managed build-input stamp")
+    except ProfileError as exc:
+        errors.append(str(exc))
+        return evidence, errors
+
+    for key, expected in (
+        ("schema", "cohesix-sel4-profile-build-inputs/v2"),
+        ("status", "complete"),
+        ("profile", canonical_name),
+        ("build_mode", "wrapper"),
+        ("contract_values_sha256", canonical_sha256(contract)),
+    ):
+        actual = stamp.get(key)
+        if actual != expected:
+            errors.append(
+                f"repository-managed build stamp {key} mismatch: "
+                f"expected {expected!r}, got {actual!r}"
+            )
+
+    recorded_root_value = stamp.get("build_dir")
+    if not isinstance(recorded_root_value, str) or not recorded_root_value:
+        errors.append("repository-managed build stamp has no original build_dir")
+        return evidence, errors
+    recorded_root = Path(recorded_root_value)
+
+    relocated_records: dict[str, dict[str, Any]] = {}
+    record_groups: list[tuple[str, Any]] = [
+        ("artifacts", stamp.get("artifacts")),
+        ("configuration", stamp.get("configuration")),
+    ]
+    freshness = stamp.get("causal_freshness")
+    if isinstance(freshness, dict):
+        record_groups.append(
+            (
+                "causal_freshness.post_build_outputs",
+                freshness.get("post_build_outputs"),
+            )
+        )
+    for group_name, group in record_groups:
+        if not isinstance(group, dict):
+            errors.append(
+                f"repository-managed build stamp lacks {group_name} records"
+            )
+            continue
+        for label, original in group.items():
+            record_label = f"{group_name}.{label}"
+            if not isinstance(original, dict):
+                errors.append(
+                    f"repository-managed build stamp record is invalid: {record_label}"
+                )
+                continue
+            original_path = original.get("path")
+            if not isinstance(original_path, str) or not original_path:
+                errors.append(
+                    f"repository-managed build stamp record lacks path: {record_label}"
+                )
+                continue
+            try:
+                relative = Path(original_path).relative_to(recorded_root)
+            except ValueError:
+                errors.append(
+                    "repository-managed build stamp record escapes its original "
+                    f"build root: {record_label}"
+                )
+                continue
+            relocated = (resolved / relative).resolve()
+            if not relocated.is_relative_to(resolved):
+                errors.append(
+                    "repository-managed build stamp record escapes the relocated "
+                    f"build root: {record_label}"
+                )
+                continue
+            observed = file_evidence(relocated)
+            relocated_records[record_label] = observed
+            if not observed.get("exists"):
+                errors.append(
+                    f"repository-managed build artifact is missing: {relocated}"
+                )
+                continue
+            for identity_key in ("size", "sha256"):
+                expected_identity = original.get(identity_key)
+                if observed.get(identity_key) != expected_identity:
+                    errors.append(
+                        "repository-managed build artifact identity mismatch for "
+                        f"{record_label} {identity_key}: expected "
+                        f"{expected_identity!r}, got {observed.get(identity_key)!r}"
+                    )
+    evidence["relocated_records"] = relocated_records
+    return evidence, errors
+
+
+def validate_repo_managed_build(
+    contract: Mapping[str, Any],
+    profile_name: str,
+    build_dir: Path,
+    *,
+    for_runtime: bool = False,
+) -> dict[str, Any]:
+    """Validate an immutable repository artifact tree without live build paths."""
+
+    canonical_name, profile = get_profile(contract, profile_name)
+    managed, errors = repo_managed_build_evidence(
+        canonical_name,
+        build_dir,
+        contract,
+    )
+    if for_runtime and not profile.get("runtime_eligible", False):
+        errors.append(f"profile {canonical_name} is not runtime eligible")
+    return {
+        "schema": "cohesix-sel4-profile-evidence/v2",
+        "profile": canonical_name,
+        "description": profile.get("description"),
+        "evidence_class": profile.get("evidence_class"),
+        "claim_eligibility": {
+            "profile_configuration_for_release": False,
+            "runtime": bool(profile.get("runtime_eligible", False)),
+            "artifact_set_shipping": False,
+            "cohesix_system_image": False,
+        },
+        "build_mode": "repository-managed-artifacts",
+        "build_dir": str(build_dir.expanduser().resolve()),
+        "repo_managed": managed,
+        "requirements": {
+            "source": False,
+            "artifacts": True,
+            "release": False,
+            "runtime": for_runtime,
+        },
+        "valid": not errors,
+        "errors": errors,
+    }
 
 
 def validate_source(
@@ -3474,6 +3704,14 @@ def parse_arguments(argv: Iterable[str] | None = None) -> argparse.Namespace:
     )
     validate_parser.add_argument("--for-release", action="store_true")
     validate_parser.add_argument("--for-runtime", action="store_true")
+    validate_parser.add_argument(
+        "--repo-managed",
+        action="store_true",
+        help=(
+            "validate the profile's immutable repository-managed artifact tree "
+            "without requiring its historical absolute build path"
+        ),
+    )
     validate_parser.add_argument("--evidence", type=Path)
 
     prepare_parser = subparsers.add_parser(
@@ -3531,6 +3769,8 @@ def main(argv: Iterable[str] | None = None) -> int:
 
         if args.command == "validate":
             if args.all:
+                if args.repo_managed:
+                    raise ProfileError("--repo-managed cannot be combined with --all")
                 if args.build_dir is not None:
                     raise ProfileError(
                         "--build-dir cannot be combined with --all; "
@@ -3551,17 +3791,34 @@ def main(argv: Iterable[str] | None = None) -> int:
                     raise ProfileError("--diagnostic-relaxed requires --all")
                 if args.build_dir is None:
                     raise ProfileError("--build-dir is required with --profile")
-                evidence = validate_build(
-                    contract,
-                    args.profile,
-                    args.build_dir,
-                    contract_path=args.contract,
-                    source_root=args.source,
-                    require_source=args.require_source,
-                    require_artifacts=args.require_artifacts,
-                    for_release=args.for_release,
-                    for_runtime=args.for_runtime,
-                )
+                if args.repo_managed:
+                    if args.source is not None or args.require_source:
+                        raise ProfileError(
+                            "--repo-managed validates relocated artifacts; source "
+                            "validation belongs to a fresh source-build lane"
+                        )
+                    if args.for_release:
+                        raise ProfileError(
+                            "--repo-managed artifacts are not release proof"
+                        )
+                    evidence = validate_repo_managed_build(
+                        contract,
+                        args.profile,
+                        args.build_dir,
+                        for_runtime=args.for_runtime,
+                    )
+                else:
+                    evidence = validate_build(
+                        contract,
+                        args.profile,
+                        args.build_dir,
+                        contract_path=args.contract,
+                        source_root=args.source,
+                        require_source=args.require_source,
+                        require_artifacts=args.require_artifacts,
+                        for_release=args.for_release,
+                        for_runtime=args.for_runtime,
+                    )
             if args.evidence:
                 write_evidence(args.evidence, evidence)
             if not evidence["valid"]:

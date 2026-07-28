@@ -228,6 +228,28 @@ def _minimize_elf_for_boot(payload: bytes) -> tuple[bytes, int]:
     return bytes(minimized), removed
 
 
+def rewrite_rootserver_archive(
+    archive: bytes,
+    rootserver: bytes,
+    *,
+    minimize_rootserver: bool,
+) -> tuple[bytes, int, int, int]:
+    """Replace one exact rootserver entry in an elfloader newc archive.
+
+    Returns
+    ``(rebuilt_archive, old_rootserver_size, new_rootserver_size, removed_bytes)``.
+    The caller chooses whether to remove boot-irrelevant ELF section metadata.
+    """
+
+    entries = _parse_cpio(archive)
+    payload = rootserver
+    removed = 0
+    if minimize_rootserver:
+        payload, removed = _minimize_elf_for_boot(rootserver)
+    old_size, new_size = _rewrite_rootserver(entries, payload)
+    return _build_cpio(entries), old_size, new_size, removed
+
+
 def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tuple[int, int, int, int]:
     """Copy elfloader, replace the rootserver payload, and persist result.
 
@@ -250,11 +272,13 @@ def prepare_elfloader(source: Path, destination: Path, rootserver: Path) -> tupl
         raise ElfloaderError("Computed archive bounds fall outside elfloader image")
 
     archive = bytes(data[archive_start:archive_end])
-    entries = _parse_cpio(archive)
-
-    payload, removed_rootserver_bytes = _minimize_elf_for_boot(rootserver.read_bytes())
-    old_size, new_size = _rewrite_rootserver(entries, payload)
-    rebuilt = _build_cpio(entries)
+    rebuilt, old_size, new_size, removed_rootserver_bytes = (
+        rewrite_rootserver_archive(
+            archive,
+            rootserver.read_bytes(),
+            minimize_rootserver=True,
+        )
+    )
 
     original_len = len(archive)
     rebuilt_len = len(rebuilt)

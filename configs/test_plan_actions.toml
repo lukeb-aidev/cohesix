@@ -338,9 +338,9 @@ tier = "pi4-transport"
 scope = "provisioned-target"
 targets = ["pi4"]
 description = "Validate the canonical repo-managed Pi 4 seL4 16 diagnostic profile."
-command = "\"${TEST_PLAN_ROOT}/out/toolchain/sel4-profile-venv/bin/python\" scripts/sel4_profile.py validate --profile pi4_diagnostic --build-dir \"${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic\" --require-source --require-artifacts --for-runtime"
+command = "\"${TEST_PLAN_ROOT}/.venv/bin/python\" scripts/sel4_profile.py validate --repo-managed --profile pi4_diagnostic --build-dir \"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" --require-artifacts --for-runtime"
 timeout_seconds = 600
-trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "tools/sel4-profile-project/**"]
+trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "seL4/build_UBOOT/**"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
 
@@ -351,9 +351,9 @@ tier = "pi4-transport"
 scope = "provisioned-target"
 targets = ["pi4"]
 description = "Compile the exact root-task Pi 4 release feature set against the canonical seL4 16 diagnostic profile."
-command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/out/sel4/profile-v2/pi4-diagnostic\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
+command = "SEL4_BUILD_DIR=\"${TEST_PLAN_ROOT}/seL4/build_UBOOT\" cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4"
 timeout_seconds = 1800
-trigger_paths = ["apps/root-task/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "Cargo.lock"]
+trigger_paths = ["apps/root-task/**", "configs/root_task_pi4_uboot_aarch64.toml", "configs/sel4/**", "seL4/build_UBOOT/**", "Cargo.lock"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
 

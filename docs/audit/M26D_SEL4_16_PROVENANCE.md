@@ -210,3 +210,22 @@ image, booted target-qualified QEMU Test Plan, Pi media readback, fresh board
 boot, CYW43 repeatability, TCP/`cohsh`, operator-liveness, and refreshed
 performance gates remain open. No v15 result, path rename, upstream CAmkES
 smoke, or offline PASS may fill those evidence classes.
+
+## Current Pi artifact consumption
+
+The historical refresh record above remains the source-build provenance for the
+tracked bytes. The current Pi exact-image lane consumes
+`seL4/build_UBOOT` as the immutable canonical `pi4_diagnostic` artifact input.
+`scripts/sel4_profile.py validate --repo-managed` requires that exact tracked
+path, a clean subtree, the completed v2 build-input stamp, the current contract
+hash, and matching relocated configuration and artifact identities. It does not
+claim that the historical absolute source, CMake, or build paths still exist.
+
+Image composition must not invoke CMake or Ninja in `seL4/build_UBOOT`, repair
+or re-stamp it, or select a seL4 source/build input from `out/`. Instead, the
+image wrapper verifies its relink tool family by reproducing the tracked
+baseline elfloader byte-for-byte, then creates the new rootserver archive,
+elfloader wrapper, staged image, and provenance only in disposable output
+directories. This consumption proves diagnostic artifact identity and linked
+image inputs only. It remains ineligible for seL4 release, fresh source-build,
+media read-back, boot, Wi-Fi, TCP, or benchmark claims.

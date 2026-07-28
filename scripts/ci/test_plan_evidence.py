@@ -409,9 +409,7 @@ def selected_sel4_dir(
             root / "out/sel4/profile-v2/qemu-smp-production"
         ).resolve(strict=False)
     if target == "pi4":
-        return (
-            root / "out/sel4/profile-v2/pi4-diagnostic"
-        ).resolve(strict=False)
+        return (root / "seL4/build_UBOOT").resolve(strict=False)
     return None
 
 
