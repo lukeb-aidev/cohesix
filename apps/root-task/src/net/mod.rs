@@ -845,6 +845,20 @@ pub struct NetSelfTestResult {
     pub peer_assisted_ok: bool,
 }
 
+impl NetSelfTestResult {
+    /// Return the stable console verdict for this terminal result.
+    #[must_use]
+    pub const fn verdict(self) -> &'static str {
+        if self.tx_ok && self.udp_echo_ok && self.tcp_ok && self.console_ok {
+            "pass"
+        } else if self.peer_assisted_ok {
+            "peer-assisted-pass"
+        } else {
+            "fail"
+        }
+    }
+}
+
 /// Outcome when attempting to start a network self-test run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NetSelfTestStartResult {
@@ -916,6 +930,8 @@ pub struct NetSelfTestReport {
     pub enabled: bool,
     /// True while a self-test run is active.
     pub running: bool,
+    /// Immutable identifier assigned when the current or last run was admitted.
+    pub run_generation: u64,
     /// Last recorded result, if any.
     pub last_result: Option<NetSelfTestResult>,
     /// Active backend label.
@@ -931,6 +947,7 @@ impl Default for NetSelfTestReport {
         Self {
             enabled: false,
             running: false,
+            run_generation: 0,
             last_result: None,
             backend: "disabled",
             udp_target: HeaplessString::new(),
@@ -1559,5 +1576,29 @@ mod tests {
         assert!(wifi_boot_join_should_defer(NetInterfacePolicy::Wifi));
         assert!(wifi_boot_join_should_defer(NetInterfacePolicy::Auto));
         assert!(!wifi_boot_join_should_defer(NetInterfacePolicy::Wired));
+    }
+
+    #[test]
+    fn net_self_test_verdict_is_stable_and_fail_closed() {
+        assert_eq!(NetSelfTestResult::default().verdict(), "fail");
+        assert_eq!(
+            NetSelfTestResult {
+                tx_ok: true,
+                udp_echo_ok: true,
+                tcp_ok: true,
+                console_ok: true,
+                peer_assisted_ok: false,
+            }
+            .verdict(),
+            "pass"
+        );
+        assert_eq!(
+            NetSelfTestResult {
+                peer_assisted_ok: true,
+                ..NetSelfTestResult::default()
+            }
+            .verdict(),
+            "peer-assisted-pass"
+        );
     }
 }

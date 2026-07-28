@@ -59,7 +59,6 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "netstats": (b"OK NETSTATS", b"ERR NETSTATS"),
     "nettest": (b"OK NETTEST", b"ERR NETTEST"),
     "wifi diag": (b"OK WIFI", b"ERR WIFI"),
-    "wifi probe-ht": (b"OK WIFI", b"ERR WIFI"),
     "usb diag": (b"OK USB", b"ERR USB"),
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
     "smp activity": (b"OK SMP", b"ERR SMP"),
@@ -70,17 +69,35 @@ DIAGNOSTIC_READY_MARKERS = (
 DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
 DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
 NETTEST_STARTED_MARKER = b"OK NETTEST detail=started"
-NETTEST_RESULT_PREFIX = b"[net-selftest] result generation="
-NETTEST_RESULT_TIMEOUT_S = 30.0
+NETTEST_OBSERVATION_S = 17.0
+U32_MAX = (1 << 32) - 1
+U64_MAX = (1 << 64) - 1
+NETTEST_STARTED_RE = re.compile(
+    rb"OKNETTESTdetail=startedrun_generation="
+    rb"(?P<run_generation>[1-9][0-9]*)"
+)
 NETTEST_RESULT_RE = re.compile(
     rb"\[net-selftest\] result "
-    rb"generation=(?P<generation>[0-9]+) "
-    rb"tx_ok=(?:true|false) "
-    rb"udp_echo_ok=(?:true|false) "
-    rb"tcp_ok=(?:true|false) "
-    rb"console_ok=(?:true|false) "
-    rb"peer_assisted_ok=(?:true|false) "
+    rb"generation=(?P<generation>0|[1-9][0-9]*) "
+    rb"run_generation=(?P<run_generation>[1-9][0-9]*) "
+    rb"tx_ok=(?P<tx_ok>true|false) "
+    rb"udp_echo_ok=(?P<udp_echo_ok>true|false) "
+    rb"tcp_ok=(?P<tcp_ok>true|false) "
+    rb"console_ok=(?P<console_ok>true|false) "
+    rb"peer_assisted_ok=(?P<peer_assisted_ok>true|false) "
     rb"result=(?P<result>pass|peer-assisted-pass|fail)(?:\r?\n|$)"
+)
+NETTEST_STATUS_RE = re.compile(
+    rb"nettest: generation=(?P<generation>0|[1-9][0-9]*) "
+    rb"run_generation=(?P<run_generation>0|[1-9][0-9]*) "
+    rb"enabled=(?P<enabled>true|false) "
+    rb"running=(?P<running>true|false) "
+    rb"verdict=(?P<result>none|running|pass|peer-assisted-pass|fail) "
+    rb"tx_ok=(?P<tx_ok>true|false|na) "
+    rb"udp_echo_ok=(?P<udp_echo_ok>true|false|na) "
+    rb"tcp_ok=(?P<tcp_ok>true|false|na) "
+    rb"console_ok=(?P<console_ok>true|false|na) "
+    rb"peer_assisted_ok=(?P<peer_assisted_ok>true|false|na)"
 )
 ASYNC_RESULT_FRAGMENT_RE = re.compile(
     rb"(?:"
@@ -373,41 +390,117 @@ def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
     return compact_marker in compact_snapshot
 
 
-def parse_nettest_result(snapshot: bytes) -> tuple[int, str] | None:
-    """Return the generation and verdict from one complete self-test result."""
+def parse_nettest_started_run_generation(snapshot: bytes) -> int | None:
+    """Return the immutable run generation from one admission ACK."""
 
-    match = NETTEST_RESULT_RE.search(snapshot)
+    cleaned = ASYNC_RESULT_FRAGMENT_RE.sub(b"", snapshot)
+    compact = b"".join(cleaned.split())
+    matches = list(NETTEST_STARTED_RE.finditer(compact))
+    if len(matches) != 1:
+        return None
+    run_generation = int(matches[0].group("run_generation"))
+    return run_generation if run_generation <= U64_MAX else None
+
+
+def nettest_result_verdict(
+    *,
+    tx_ok: bool,
+    udp_echo_ok: bool,
+    tcp_ok: bool,
+    console_ok: bool,
+    peer_assisted_ok: bool,
+) -> str:
+    """Return the target's deterministic verdict for one result tuple."""
+
+    if tx_ok and udp_echo_ok and tcp_ok and console_ok:
+        return "pass"
+    if peer_assisted_ok:
+        return "peer-assisted-pass"
+    return "fail"
+
+
+def parse_nettest_result(snapshot: bytes) -> tuple[int, int, str] | None:
+    """Return both generations and verdict from one complete async result."""
+
+    matches = list(NETTEST_RESULT_RE.finditer(snapshot))
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    generation = int(match.group("generation"))
+    run_generation = int(match.group("run_generation"))
+    result = match.group("result").decode("ascii")
+    expected_result = nettest_result_verdict(
+        tx_ok=match.group("tx_ok") == b"true",
+        udp_echo_ok=match.group("udp_echo_ok") == b"true",
+        tcp_ok=match.group("tcp_ok") == b"true",
+        console_ok=match.group("console_ok") == b"true",
+        peer_assisted_ok=match.group("peer_assisted_ok") == b"true",
+    )
+    if (
+        generation > U32_MAX
+        or run_generation > U64_MAX
+        or result != expected_result
+    ):
+        return None
+    return generation, run_generation, result
+
+
+def parse_nettest_status(snapshot: bytes) -> tuple[int, int, bool, str] | None:
+    """Return a complete, internally consistent compact ``netstats`` status."""
+
+    candidates = [
+        line.removesuffix(b"\r")
+        for line in snapshot.splitlines()
+        if line.startswith(b"nettest:")
+    ]
+    if len(candidates) != 1 or b"[truncated]" in candidates[0]:
+        return None
+    match = NETTEST_STATUS_RE.fullmatch(candidates[0])
     if match is None:
         return None
-    return int(match.group("generation")), match.group("result").decode("ascii")
-
-
-def wait_for_nettest_result(
-    controller: RedactingSerialController,
-    initial_snapshot: bytes,
-    timeout_s: float = NETTEST_RESULT_TIMEOUT_S,
-) -> tuple[int, str]:
-    """Wait boundedly for the complete generation-tagged async result."""
-
-    deadline = time.monotonic() + timeout_s
-    snapshot = bytearray(initial_snapshot[-TAIL_LIMIT:])
-    while True:
-        parsed = parse_nettest_result(bytes(snapshot))
-        if parsed is not None:
-            return parsed
-        remaining_s = deadline - time.monotonic()
-        if remaining_s <= 0:
-            raise SerialMarkerTimeout(
-                "timed out waiting for generation-tagged net-selftest result"
-            )
-        chunk = controller.read_until(
-            (NETTEST_RESULT_PREFIX, b"\n"),
-            remaining_s,
-            label="generation-tagged net-selftest result",
+    generation = int(match.group("generation"))
+    run_generation = int(match.group("run_generation"))
+    enabled = match.group("enabled") == b"true"
+    if generation > U32_MAX or run_generation > U64_MAX:
+        return None
+    running = match.group("running") == b"true"
+    result = match.group("result").decode("ascii")
+    result_fields = tuple(
+        match.group(field).decode("ascii")
+        for field in (
+            "tx_ok",
+            "udp_echo_ok",
+            "tcp_ok",
+            "console_ok",
+            "peer_assisted_ok",
         )
-        snapshot.extend(chunk)
-        if len(snapshot) > TAIL_LIMIT:
-            del snapshot[: len(snapshot) - TAIL_LIMIT]
+    )
+    if run_generation == 0 and (
+        running or result != "none" or result_fields != ("na",) * 5
+    ):
+        return None
+    if not enabled:
+        if running or result != "none" or result_fields != ("na",) * 5:
+            return None
+    elif running:
+        if result != "running" or result_fields != ("na",) * 5:
+            return None
+    elif result == "none":
+        if result_fields != ("na",) * 5:
+            return None
+    elif result == "running" or any(value == "na" for value in result_fields):
+        return None
+    else:
+        expected_result = nettest_result_verdict(
+            tx_ok=result_fields[0] == "true",
+            udp_echo_ok=result_fields[1] == "true",
+            tcp_ok=result_fields[2] == "true",
+            console_ok=result_fields[3] == "true",
+            peer_assisted_ok=result_fields[4] == "true",
+        )
+        if result != expected_result:
+            return None
+    return generation, run_generation, running, result
 
 
 def mint_ticket(repo: pathlib.Path, cohsh: pathlib.Path, ticket_config: pathlib.Path) -> str:
@@ -682,7 +775,9 @@ def run_diagnostics(
     lane: str,
     *,
     prompt_ready: bool,
-) -> None:
+) -> bool:
+    """Run every diagnostic and return whether all terminal results passed."""
+
     commands = [
         ("netstats", "netstats"),
         ("nettest", "nettest"),
@@ -692,7 +787,6 @@ def run_diagnostics(
         commands.extend(
             [
                 ("wifi diag", "wifi diag"),
-                ("wifi probe-ht", "wifi probe-ht"),
             ]
         )
     commands.extend(
@@ -703,6 +797,11 @@ def run_diagnostics(
         ]
     )
     usb_scored = True
+    failures: list[str] = []
+    nettest_started = False
+    nettest_started_run_generation: int | None = None
+    nettest_final_observed = False
+    nettest_async_result: tuple[int, int, str] | None = None
     if prompt_ready:
         settle = controller.drain_for(
             8.0,
@@ -739,7 +838,14 @@ def run_diagnostics(
                 90,
                 label=f"result for {label}",
             )
-            if command == "nettest" and serial_marker_seen(
+            error_marker = DIAGNOSTIC_RESULT_MARKERS[command][1]
+            if serial_marker_seen(command_snapshot, error_marker):
+                failures.append(f"{label}:err")
+                controller.note(
+                    f"diagnostic terminal command={command!r} label={label!r} "
+                    "result=err action=continue"
+                )
+            elif command == "nettest" and serial_marker_seen(
                 command_snapshot,
                 NETTEST_STARTED_MARKER,
             ):
@@ -754,20 +860,116 @@ def run_diagnostics(
                     if started_offset >= 0
                     else b""
                 )
-                generation, result = wait_for_nettest_result(
-                    controller,
-                    post_ack_snapshot,
+                nettest_started = True
+                nettest_started_run_generation = (
+                    parse_nettest_started_run_generation(command_snapshot)
                 )
-                controller.note(
-                    "nettest terminal "
-                    f"generation={generation} result={result} "
-                    "action=capture-final-netstats"
+                if nettest_started_run_generation is None:
+                    failures.append("nettest:started-run-generation-missing")
+                    controller.note(
+                        "nettest admission run_generation=missing "
+                        "action=observe-and-fail-closed"
+                    )
+                observation = controller.drain_for(
+                    NETTEST_OBSERVATION_S,
+                    label="nettest terminal observation window",
                 )
+                nettest_async_result = parse_nettest_result(
+                    post_ack_snapshot + observation
+                )
+                if nettest_async_result is None:
+                    controller.note(
+                        "nettest async-terminal absent "
+                        "action=query-generation-tagged-netstats"
+                    )
+                else:
+                    generation, run_generation, result = nettest_async_result
+                    controller.note(
+                        "nettest async-terminal observed "
+                        f"generation={generation} "
+                        f"run_generation={run_generation} result={result} "
+                        "action=confirm-with-netstats"
+                    )
+            elif label == "netstats-final" and nettest_started:
+                nettest_final_observed = True
+                terminal = parse_nettest_status(command_snapshot)
+                if terminal is None:
+                    failures.append("nettest:terminal-netstats-missing")
+                    controller.note(
+                        "nettest terminal result=missing "
+                        "source=netstats action=fail-closed"
+                    )
+                else:
+                    generation, run_generation, running, result = terminal
+                    controller.note(
+                        "nettest terminal "
+                        f"generation={generation} "
+                        f"run_generation={run_generation} "
+                        f"running={str(running).lower()} "
+                        f"result={result} source=netstats"
+                    )
+                    if (
+                        nettest_started_run_generation is not None
+                        and run_generation != nettest_started_run_generation
+                    ):
+                        failures.append("nettest:run-generation-mismatch")
+                        controller.note(
+                            "nettest terminal mismatch "
+                            f"started_run_generation="
+                            f"{nettest_started_run_generation} "
+                            f"netstats_run_generation={run_generation} "
+                            "action=fail-closed"
+                        )
+                    elif (
+                        nettest_async_result is not None
+                        and nettest_async_result
+                        != (generation, run_generation, result)
+                    ):
+                        (
+                            async_generation,
+                            async_run_generation,
+                            async_result,
+                        ) = nettest_async_result
+                        failures.append("nettest:terminal-contract-mismatch")
+                        controller.note(
+                            "nettest terminal mismatch "
+                            f"async_generation={async_generation} "
+                            f"async_run_generation={async_run_generation} "
+                            f"async_result={async_result} "
+                            f"netstats_generation={generation} "
+                            f"netstats_run_generation={run_generation} "
+                            f"netstats_result={result} action=fail-closed"
+                        )
+                    elif running or result in {"none", "running"}:
+                        failures.append(
+                            "nettest:"
+                            f"generation-{generation}-"
+                            f"run-{run_generation}-not-terminal"
+                        )
+                    elif result == "fail":
+                        failures.append(
+                            "nettest:"
+                            f"generation-{generation}-"
+                            f"run-{run_generation}-fail"
+                        )
         except SerialMarkerTimeout as exc:
             controller.note(
                 f"diagnostic timeout command={command!r} label={label!r} error={exc}"
             )
             raise
+    if nettest_started and not nettest_final_observed:
+        failures.append("nettest:terminal-netstats-unavailable")
+        controller.note(
+            "nettest terminal result=unavailable "
+            "source=netstats action=fail-closed"
+        )
+    if failures:
+        controller.note(
+            "diagnostics complete result=fail failures=" + ",".join(failures)
+        )
+        return False
+    controller.note("diagnostics complete result=pass")
+    return True
 
 
 def run() -> int:
@@ -815,8 +1017,13 @@ def run() -> int:
         select_lane(controller, args.lane, menu_snapshot)
         controller.read_until((b"[BUILD]",), args.boot_timeout_s, label="fresh build marker")
         controller.read_until((ROOT_PROMPT,), args.boot_timeout_s, label="root prompt")
-        if args.diagnostics:
-            run_diagnostics(controller, args.lane, prompt_ready=True)
+        if args.diagnostics and not run_diagnostics(
+            controller,
+            args.lane,
+            prompt_ready=True,
+        ):
+            controller.note("complete result=diagnostic-failure exit=1")
+            return 1
         controller.note("complete")
         return 0
     finally:

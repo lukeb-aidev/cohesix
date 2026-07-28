@@ -589,10 +589,14 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
         "[dhcp] rx ack ip=192.168.86.154 phase=bound len=300 rx_packets=2",
         "[dhcp] lease bound ip=192.168.86.154/24 gateway=192.168.86.1 "
         "server=192.168.86.1 lease_s=86400",
-        "[net-selftest] result generation=9 tx_ok=true udp_echo_ok=false "
+        "[net-selftest] result generation=9 run_generation=1 "
+        "tx_ok=true udp_echo_ok=false "
         "tcp_ok=false console_ok=true peer_assisted_ok=true "
         "result=peer-assisted-pass",
-        "OK NETTEST detail=started generation=9",
+        "OK NETTEST detail=started run_generation=1",
+        "nettest: generation=9 run_generation=1 enabled=true running=false "
+        "verdict=peer-assisted-pass tx_ok=true udp_echo_ok=false "
+        "tcp_ok=false console_ok=true peer_assisted_ok=true",
         "netstats: rx_pkts=590 tx_pkts=141 rx_used=590 tx_used=141 polls=9831",
         "netstats: generation=9 udp_rx=2 udp_tx=27 tcp_accepts=4 tcp_auth=4 "
         "tcp_rx_bytes=320 tcp_tx_bytes=11287",
@@ -13514,7 +13518,7 @@ def test_gate_summary_does_not_credit_started_nettest_as_gate_ten() -> None:
     assert record["NETTEST_PROOF"] == "no"
 
 
-def test_gate_summary_clears_exact_after_peer_assisted_netstats_ready() -> None:
+def test_gate_summary_keeps_async_peer_assisted_result_unproved_after_netstats() -> None:
     events = normalizer.parse_events(
         [
             "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
@@ -13530,10 +13534,11 @@ def test_gate_summary_clears_exact_after_peer_assisted_netstats_ready() -> None:
     )
 
     gates = normalizer.summarize_gates(events)
+    record = gates.to_record()
 
     assert gates.wifi_gate == 9
-    assert gates.wifi_blocker == "tcp-auth-proof-missing"
-    assert gates.wifi_exact == "tcp-auth-proof-missing"
+    assert gates.wifi_blocker == "netstats-missing"
+    assert record["NETTEST_PROOF"] == "no"
 
 
 def test_gate_summary_does_not_downgrade_remote_cohsh_after_peer_echo_missing() -> None:
@@ -13954,6 +13959,7 @@ def wifi_gate8_transaction_lines(
 def wifi_generation_gate10_lines(
     generation: int,
     *,
+    run_generation: int = 1,
     selftest_result: str = "peer-assisted-pass",
     tcp_counters: bool = True,
     auth_generation: int | None = None,
@@ -13972,14 +13978,29 @@ def wifi_generation_gate10_lines(
         "server=192.168.10.1 lease_s=3600",
     ]
     if selftest_result == "started-only":
-        lines.append(f"OK NETTEST detail=started generation={generation}")
+        lines.extend(
+            [
+                "OK NETTEST detail=started "
+                f"run_generation={run_generation}",
+                f"nettest: generation={generation} "
+                f"run_generation={run_generation} enabled=true running=true "
+                "verdict=running tx_ok=na udp_echo_ok=na tcp_ok=na "
+                "console_ok=na peer_assisted_ok=na",
+            ]
+        )
     else:
         lines.extend(
             [
-                f"[net-selftest] result generation={generation} tx_ok=true "
+                f"[net-selftest] result generation={generation} "
+                f"run_generation={run_generation} tx_ok=true "
                 "udp_echo_ok=false tcp_ok=false console_ok=true "
                 f"peer_assisted_ok=true result={selftest_result}",
-                f"OK NETTEST detail=started generation={generation}",
+                "OK NETTEST detail=started "
+                f"run_generation={run_generation}",
+                f"nettest: generation={generation} "
+                f"run_generation={run_generation} enabled=true running=false "
+                f"verdict={selftest_result} tx_ok=true udp_echo_ok=false "
+                "tcp_ok=false console_ok=true peer_assisted_ok=true",
             ]
         )
     lines.extend(
@@ -14189,6 +14210,117 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth() -> None:
     assert independent_dpc_epoch["WIFI_GATE"] == 10
     assert independent_dpc_epoch["WIFI_DPC_PROOF"] == "yes"
     assert independent_dpc_epoch["WIFI_DPC_GENERATION"] == 8
+
+
+def test_wifi_gate10_rejects_internal_async_result_without_compact_status() -> None:
+    """Internal self-test completion cannot replace target-visible final status."""
+
+    async_only = [
+        line
+        for line in wifi_generation_gate10_lines(9)
+        if not line.startswith("nettest:")
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                *wifi_gate8_transaction_lines(generation=9),
+                *async_only,
+            ]
+        )
+    ).to_record()
+
+    assert record["WIFI_GATE"] != 10
+    assert record["NETTEST_PROOF"] == "no"
+
+
+def test_nettest_compact_status_is_target_visible_terminal_proof() -> None:
+    """The final untruncated ``netstats`` verdict does not require debug logs."""
+
+    successful = normalizer.parse_events(
+        [
+            "nettest: generation=9 run_generation=3 enabled=true "
+            "running=false verdict=peer-assisted-pass "
+            "tx_ok=true udp_echo_ok=false "
+            "tcp_ok=false console_ok=true peer_assisted_ok=true"
+        ]
+    )
+    running = normalizer.parse_events(
+        [
+            "nettest: generation=9 run_generation=3 enabled=true "
+            "running=true verdict=running "
+            "tx_ok=na udp_echo_ok=na tcp_ok=na "
+            "console_ok=na peer_assisted_ok=na"
+        ]
+    )
+    disabled = normalizer.parse_events(
+        [
+            "nettest: generation=0 run_generation=0 enabled=false "
+            "running=false verdict=none "
+            "tx_ok=na udp_echo_ok=na tcp_ok=na "
+            "console_ok=na peer_assisted_ok=na"
+        ]
+    )
+    enabled_quiescent = normalizer.parse_events(
+        [
+            "nettest: generation=0 run_generation=0 enabled=true "
+            "running=false verdict=none "
+            "tx_ok=na udp_echo_ok=na tcp_ok=na "
+            "console_ok=na peer_assisted_ok=na"
+        ]
+    )
+
+    assert normalizer.summarize_net_state(successful)[4]
+    assert not normalizer.summarize_net_state(running)[4]
+    assert normalizer.parse_wifi_nettest_status(disabled[0]) is not None
+    assert not normalizer.summarize_net_state(disabled)[4]
+    assert (
+        normalizer.parse_wifi_nettest_status(enabled_quiescent[0]) is not None
+    )
+    assert not normalizer.summarize_net_state(enabled_quiescent)[4]
+
+
+@pytest.mark.parametrize(
+    "line",
+    (
+        (
+            "nettest: generation=9 run_generation=3 enabled=true "
+            "running=false verdict=peer-assisted-pass tx_ok=true [truncated]"
+        ),
+        (
+            "nettest: generation=9 run_generation=3 enabled=true "
+            "running=false verdict=peer-assisted-pass tx_ok=true "
+            "udp_echo_ok=false tcp_ok=false console_ok=true"
+        ),
+        (
+            "nettest: generation=9 run_generation=3 enabled=true "
+            "running=false verdict=pass tx_ok=true udp_echo_ok=false "
+            "tcp_ok=true console_ok=true peer_assisted_ok=false"
+        ),
+        (
+            "nettest: generation=9 run_generation=3 enabled=false "
+            "running=false verdict=pass tx_ok=true udp_echo_ok=true "
+            "tcp_ok=true console_ok=true peer_assisted_ok=false"
+        ),
+        (
+            "nettest: generation=9 enabled=true running=false "
+            "verdict=pass tx_ok=true udp_echo_ok=true tcp_ok=true "
+            "console_ok=true peer_assisted_ok=false"
+        ),
+        (
+            "nettest: generation=9 run_generation=0 enabled=true "
+            "running=false verdict=pass tx_ok=true udp_echo_ok=true "
+            "tcp_ok=true console_ok=true peer_assisted_ok=false"
+        ),
+    ),
+)
+def test_nettest_compact_status_rejects_invalid_proof(line: str) -> None:
+    """Malformed or internally inconsistent compact status fails closed."""
+
+    events = normalizer.parse_events([line])
+
+    assert len(events) == 1
+    assert normalizer.parse_wifi_nettest_status(events[0]) is None
+    assert not normalizer.summarize_net_state(events)[4]
 
 
 def test_gate8_proof_rejects_pair_epoch_stitching_inside_one_snapshot() -> None:

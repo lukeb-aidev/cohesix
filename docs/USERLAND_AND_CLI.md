@@ -64,8 +64,8 @@ the most precise description of that boot.
 | `mem` | Print the RAM/device untyped summary. |
 | `ping` | Return the liveness response. |
 | `cachelog [n]` | Dump a bounded number of recent cache operations. |
-| `nettest` | Run the profile-gated network self-test. |
-| `netstats` | Print bounded network state and counters. |
+| `nettest` | Start the profile-gated bounded network self-test. `OK NETTEST detail=started run_generation=<n>` is admission, not a terminal verdict. |
+| `netstats` | Print bounded network state, counters, and the complete generation-tagged `nettest` terminal/running verdict. |
 | `reboot` | Schedule a platform reboot only when Queen authorization and a reboot backend are both available. |
 | `quit` | In the event-pump console, end the session and request network disconnect when applicable. The earlier bootstrap `RootConsole` phase reports `quit` as unsupported. |
 
@@ -84,6 +84,14 @@ runbooks.
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
 and `wifi` diagnostic families. Their gate meanings are documented in
 [DRIVERS.md](DRIVERS.md).
+
+After `nettest` admission, allow its bounded 15-second window to finish and
+query `netstats`. The authoritative line is
+`nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>`.
+The positive run generation must match the admission ACK; another run on the
+same connection cannot satisfy the command.
+Targets and backend identity are emitted separately as `nettargets:` so the
+terminal verdict cannot be truncated by long target strings.
 
 ### Shared console line protocol
 

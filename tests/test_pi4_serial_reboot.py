@@ -113,12 +113,33 @@ RESET_MENU = b"""
 Select option [0]:
 """
 
-NETTEST_STARTED = b"OK NETTEST detail=started\ncohesix>"
+NETTEST_RUN_GENERATION = 31
+NETTEST_STARTED = (
+    b"OK NETTEST detail=started run_generation=31\ncohesix>"
+)
 NETTEST_RESULT = (
-    b"[net-selftest] result generation=14 tx_ok=true udp_echo_ok=true "
-    b"tcp_ok=true console_ok=true peer_assisted_ok=false result=pass\n"
+    b"[net-selftest] result generation=14 run_generation=31 "
+    b"tx_ok=true udp_echo_ok=true tcp_ok=true console_ok=true "
+    b"peer_assisted_ok=false result=pass\n"
+)
+NETTEST_FAILURE_RESULT = (
+    b"[net-selftest] result generation=15 run_generation=31 "
+    b"tx_ok=true udp_echo_ok=false tcp_ok=false console_ok=true "
+    b"peer_assisted_ok=false result=fail\n"
 )
 NETSTATS_OK = b"OK NETSTATS\ncohesix>"
+NETTEST_STATUS_PASS = (
+    b"nettest: generation=14 run_generation=31 enabled=true running=false "
+    b"verdict=pass tx_ok=true udp_echo_ok=true tcp_ok=true "
+    b"console_ok=true peer_assisted_ok=false\n"
+)
+NETTEST_STATUS_FAILURE = (
+    b"nettest: generation=15 run_generation=31 enabled=true running=false "
+    b"verdict=fail tx_ok=true udp_echo_ok=false tcp_ok=false "
+    b"console_ok=true peer_assisted_ok=false\n"
+)
+NETSTATS_TERMINAL_PASS = NETTEST_STATUS_PASS + NETSTATS_OK
+NETSTATS_TERMINAL_FAILURE = NETTEST_STATUS_FAILURE + NETSTATS_OK
 
 
 class FakeController:
@@ -169,6 +190,12 @@ class FakeController:
         self.drains.append((duration_s, label))
         if self.drain_reads:
             return self.drain_reads.pop(0)
+        if (
+            label == "nettest terminal observation window"
+            and self.reads
+            and b"[net-selftest] result generation=" in self.reads[0]
+        ):
+            return self.reads.pop(0)
         return b""
 
     def synchronize_root_diagnostic_command(self, *, label: str) -> None:
@@ -445,44 +472,58 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
                 + NETTEST_STARTED
             ),
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
-            b"ERR WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "wifi", prompt_ready=True)
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=True,
+    )
 
+    assert diagnostics_ok
     assert controller.sent == [
         "netstats",
         "nettest",
         "netstats",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True, True]
+    assert controller.reinforced == [True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
         "netstats-final",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
     ]
     assert (
-        "nettest terminal generation=14 result=pass "
-        "action=capture-final-netstats"
+        "nettest async-terminal observed generation=14 "
+        "run_generation=31 result=pass "
+        "action=confirm-with-netstats"
     ) in controller.notes
-    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+    assert (
+        "nettest terminal generation=14 run_generation=31 "
+        "running=false result=pass source=netstats"
+    ) in controller.notes
+    assert "diagnostics complete result=pass" in controller.notes
+    assert controller.drains == [
+        (8.0, "post-root-prompt-settle-before-diagnostics"),
+        (
+            pi4_serial_reboot.NETTEST_OBSERVATION_S,
+            "nettest terminal observation window",
+        ),
+    ]
 
 
 def test_diagnostics_accept_interleaved_result_marker() -> None:
@@ -497,15 +538,20 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
             ),
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
 
+    assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
         "nettest",
@@ -514,6 +560,10 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
         "usb probe-kbd",
         "smp activity",
     ]
+    assert (
+        "diagnostics complete result=fail failures=netstats:err"
+        in controller.notes
+    )
 
 
 def test_diagnostics_accept_prompt_tail_after_result() -> None:
@@ -523,17 +573,22 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             b"OK NETSTATS\nx>",
-            b"OK NETTEST detail=started\nx>",
+            b"OK NETTEST detail=started run_generation=31\nx>",
             NETTEST_RESULT,
-            b"OK NETSTATS\nx>",
+            NETTEST_STATUS_PASS + b"OK NETSTATS\nx>",
             b"OK USB\nx>",
             b"OK USB\nx>",
             b"OK SMP\nx>",
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
 
+    assert diagnostics_ok
     assert controller.sent == [
         "netstats",
         "nettest",
@@ -553,7 +608,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
             b"OK NETSTATS\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -564,8 +619,13 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
         b"clean_polls=2 no_reply=0 recovery_pending=no\n"
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
 
+    assert diagnostics_ok
     assert controller.sent == [
         "netstats",
         "nettest",
@@ -590,7 +650,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
             b"OK NETSTATS\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -608,7 +668,13 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         "smp activity",
     ]
     assert controller.reads == []
-    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+    assert controller.drains == [
+        (8.0, "post-root-prompt-settle-before-diagnostics"),
+        (
+            pi4_serial_reboot.NETTEST_OBSERVATION_S,
+            "nettest terminal observation window",
+        ),
+    ]
 
 
 def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> None:
@@ -625,7 +691,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
             b"OK NETSTATS\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -661,7 +727,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
             b"OK NETSTATS\n",
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -697,7 +763,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
             b"OK NETSTATS\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
-            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -714,7 +780,13 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         "usb probe-kbd",
         "smp activity",
     ]
-    assert controller.drains == [(8.0, "post-root-prompt-settle-before-diagnostics")]
+    assert controller.drains == [
+        (8.0, "post-root-prompt-settle-before-diagnostics"),
+        (
+            pi4_serial_reboot.NETTEST_OBSERVATION_S,
+            "nettest terminal observation window",
+        ),
+    ]
     assert any(
         "diagnostics serial_only_usb_unproven_after_command_ready_timeout" in note
         for note in controller.notes
@@ -726,67 +798,123 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
 
 
 def test_nettest_result_parser_requires_complete_generation_tagged_terminal() -> None:
-    """Admission ACKs and untagged/partial result lines are not terminal."""
+    """Admission ACKs and incomplete or inconsistent results are not terminal."""
 
     assert pi4_serial_reboot.parse_nettest_result(NETTEST_STARTED) is None
     assert (
         pi4_serial_reboot.parse_nettest_result(
-            b"[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
-            b"console_ok=true peer_assisted_ok=false result=pass\n"
+            b"[net-selftest] result generation=14 tx_ok=true "
+            b"udp_echo_ok=true tcp_ok=true console_ok=true "
+            b"peer_assisted_ok=false result=pass\n"
         )
         is None
     )
     assert (
         pi4_serial_reboot.parse_nettest_result(
-            b"[net-selftest] result generation=14 tx_ok=true udp_echo_ok=true "
-            b"tcp_ok=true console_ok=true peer_assisted_ok=false\n"
+            b"[net-selftest] result generation=14 run_generation=31 "
+            b"tx_ok=true udp_echo_ok=true tcp_ok=true console_ok=true "
+            b"peer_assisted_ok=false\n"
         )
         is None
     )
-    assert pi4_serial_reboot.parse_nettest_result(NETTEST_RESULT) == (14, "pass")
-
-
-def test_nettest_result_wait_reassembles_split_generation_tagged_line() -> None:
-    """The bounded waiter retains a result split across serial reads."""
-
-    controller = FakeController(
-        [
-            b"[net-selftest] result generation=",
-            (
-                b"14 tx_ok=true udp_echo_ok=false tcp_ok=false "
-                b"console_ok=true peer_assisted_ok=true "
-                b"result=peer-assisted-pass\n"
-            ),
-        ]
-    )
-
-    result = pi4_serial_reboot.wait_for_nettest_result(
-        controller,
-        b"",
-        timeout_s=1,
-    )
-
-    assert result == (14, "peer-assisted-pass")
-    assert controller.reads == []
-
-
-def test_nettest_result_wait_times_out_on_untagged_result() -> None:
-    """An untagged asynchronous line cannot release the next diagnostic."""
-
-    controller = FakeController()
-
-    with pytest.raises(
-        pi4_serial_reboot.SerialMarkerTimeout,
-        match="generation-tagged",
-    ):
-        pi4_serial_reboot.wait_for_nettest_result(
-            controller,
-            (
-                b"[net-selftest] result tx_ok=true udp_echo_ok=true tcp_ok=true "
-                b"console_ok=true peer_assisted_ok=false result=pass\n"
-            ),
-            timeout_s=0,
+    assert (
+        pi4_serial_reboot.parse_nettest_result(
+            NETTEST_RESULT.replace(b"result=pass", b"result=fail")
         )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_result(
+            NETTEST_RESULT.replace(b"run_generation=31", b"run_generation=0")
+        )
+        is None
+    )
+    assert pi4_serial_reboot.parse_nettest_result(NETTEST_RESULT) == (
+        14,
+        NETTEST_RUN_GENERATION,
+        "pass",
+    )
+
+
+def test_nettest_started_parser_requires_one_immutable_run_generation() -> None:
+    """Admission proof carries one canonical run generation despite async logs."""
+
+    assert (
+        pi4_serial_reboot.parse_nettest_started_run_generation(NETTEST_STARTED)
+        == NETTEST_RUN_GENERATION
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_started_run_generation(
+            b"OK NETTEST detail=started\ncohesix>"
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_started_run_generation(
+            b"OK NETTEST detail=started run_generation=0\ncohesix>"
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_started_run_generation(
+            b"OK NETTEST detail=started run_[local-seat] redraw\n"
+            b"generation=31\ncohesix>"
+        )
+        == NETTEST_RUN_GENERATION
+    )
+
+
+def test_nettest_status_parser_requires_complete_compact_terminal() -> None:
+    """Only the complete generation-tagged ``netstats`` line is authoritative."""
+
+    assert pi4_serial_reboot.parse_nettest_status(NETTEST_STATUS_PASS) == (
+        14,
+        NETTEST_RUN_GENERATION,
+        False,
+        "pass",
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_status(
+            b"nettest: generation=14 run_generation=31 enabled=true "
+            b"running=false verdict=pass tx_ok=true [truncated]\n"
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_status(
+            b"nettest: generation=14 profile_backend=cyw43 "
+            b"active_driver=cyw43 enabled=true running=false last=Some(...)\n"
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_status(
+            NETTEST_STATUS_PASS.replace(b"udp_echo_ok=true", b"udp_echo_ok=false")
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_status(
+            NETTEST_STATUS_PASS.replace(b"enabled=true", b"enabled=false")
+        )
+        is None
+    )
+    assert (
+        pi4_serial_reboot.parse_nettest_status(
+            NETTEST_STATUS_PASS.replace(b"run_generation=31", b"run_generation=0")
+        )
+        is None
+    )
+    assert pi4_serial_reboot.parse_nettest_status(
+        b"nettest: generation=0 run_generation=0 enabled=false running=false "
+        b"verdict=none tx_ok=na udp_echo_ok=na tcp_ok=na "
+        b"console_ok=na peer_assisted_ok=na\n"
+    ) == (0, 0, False, "none")
+    assert pi4_serial_reboot.parse_nettest_status(
+        b"nettest: generation=0 run_generation=0 enabled=true running=false "
+        b"verdict=none tx_ok=na udp_echo_ok=na tcp_ok=na "
+        b"console_ok=na peer_assisted_ok=na\n"
+    ) == (0, 0, False, "none")
 
 
 def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
@@ -804,8 +932,13 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
         ]
     )
 
-    pi4_serial_reboot.run_diagnostics(controller, "genet", prompt_ready=True)
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
 
+    assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
         "nettest",
@@ -820,6 +953,250 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
         "netstats-final",
     ]
     assert not any(note.startswith("nettest terminal") for note in controller.notes)
+    assert (
+        "diagnostics complete result=fail failures=nettest:err"
+        in controller.notes
+    )
+
+
+def test_diagnostics_accept_netstats_terminal_without_async_log() -> None:
+    """The target's compact status is authoritative when async logs stay internal."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETTEST_STARTED,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+
+    assert diagnostics_ok
+    assert (
+        "nettest async-terminal absent action=query-generation-tagged-netstats"
+        in controller.notes
+    )
+    assert (
+        "nettest terminal generation=14 run_generation=31 "
+        "running=false result=pass source=netstats"
+    ) in controller.notes
+
+
+def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
+    """The final status must belong to the run admitted by this helper."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETTEST_STARTED,
+            NETSTATS_TERMINAL_PASS.replace(
+                b"run_generation=31",
+                b"run_generation=32",
+            ),
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+
+    assert not diagnostics_ok
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "netstats",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert (
+        "nettest terminal mismatch started_run_generation=31 "
+        "netstats_run_generation=32 action=fail-closed"
+    ) in controller.notes
+    assert (
+        "diagnostics complete result=fail "
+        "failures=nettest:run-generation-mismatch"
+    ) in controller.notes
+
+
+def test_diagnostics_reject_async_and_netstats_generation_mismatch() -> None:
+    """Optional async evidence must exactly match the authoritative status."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS.replace(
+                b"generation=14",
+                b"generation=15",
+            ),
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+
+    assert not diagnostics_ok
+    assert (
+        "nettest terminal mismatch async_generation=14 "
+        "async_run_generation=31 async_result=pass "
+        "netstats_generation=15 netstats_run_generation=31 "
+        "netstats_result=pass action=fail-closed"
+    ) in controller.notes
+    assert (
+        "diagnostics complete result=fail "
+        "failures=nettest:terminal-contract-mismatch"
+    ) in controller.notes
+
+
+def test_diagnostics_reject_async_and_netstats_result_mismatch() -> None:
+    """The same generations cannot identify two different terminal results."""
+
+    terminal_failure = (
+        b"nettest: generation=14 run_generation=31 enabled=true running=false "
+        b"verdict=fail tx_ok=true udp_echo_ok=false tcp_ok=false "
+        b"console_ok=true peer_assisted_ok=false\n"
+        + NETSTATS_OK
+    )
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            terminal_failure,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+
+    assert not diagnostics_ok
+    assert (
+        "nettest terminal mismatch async_generation=14 "
+        "async_run_generation=31 async_result=pass "
+        "netstats_generation=14 netstats_run_generation=31 "
+        "netstats_result=fail action=fail-closed"
+    ) in controller.notes
+    assert (
+        "diagnostics complete result=fail "
+        "failures=nettest:terminal-contract-mismatch"
+    ) in controller.notes
+
+
+def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
+    """A failed async self-test is scored only after every diagnostic runs."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETTEST_STARTED,
+            NETTEST_FAILURE_RESULT,
+            NETSTATS_TERMINAL_FAILURE,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+    )
+
+    assert not diagnostics_ok
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "netstats",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert (
+        "nettest terminal generation=15 run_generation=31 "
+        "running=false result=fail source=netstats"
+    ) in controller.notes
+    assert (
+        "diagnostics complete result=fail "
+        "failures=nettest:generation-15-run-31-fail"
+    ) in controller.notes
+
+
+def test_run_returns_nonzero_after_diagnostic_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """The CLI reports diagnostic failure only after the evidence run completes."""
+
+    class Args:
+        lane = "genet"
+        log = tmp_path / "serial.log"
+        repo = REPO_ROOT
+        port = "serial-test"
+        baud = 115_200
+        no_echo = True
+        char_delay_ms = 0.0
+        initial_state = "menu"
+        boot_timeout_s = 1.0
+        diagnostics = True
+
+    class RunController(FakeController):
+        def __init__(self, *_args: object, **_kwargs: object) -> None:
+            super().__init__([b"[BUILD]", b"cohesix>"])
+            self.closed = False
+
+        def close(self) -> None:
+            self.closed = True
+
+    controller = RunController()
+    monkeypatch.setattr(pi4_serial_reboot, "parse_args", Args)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "RedactingSerialController",
+        lambda *_args, **_kwargs: controller,
+    )
+    monkeypatch.setattr(pi4_serial_reboot, "select_lane", lambda *_args: None)
+    monkeypatch.setattr(
+        pi4_serial_reboot,
+        "run_diagnostics",
+        lambda *_args, **_kwargs: False,
+    )
+
+    assert pi4_serial_reboot.run() == 1
+    assert controller.closed
+    assert "complete result=diagnostic-failure exit=1" in controller.notes
 
 
 def test_diagnostics_require_command_specific_result_marker() -> None:

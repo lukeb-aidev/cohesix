@@ -1923,6 +1923,7 @@ fn cyw43_runtime_service_live_bringup_status(bringup_status: Option<&'static str
 struct SelfTestState {
     enabled: bool,
     running: bool,
+    run_generation: u64,
     started_ms: u64,
     last_beacon_ms: u64,
     beacon_seq: u32,
@@ -1990,6 +1991,10 @@ impl SelfTestState {
     }
 
     fn reset(&mut self, now_ms: u64, start_tx_complete: u64) {
+        self.run_generation = self.run_generation.wrapping_add(1);
+        if self.run_generation == 0 {
+            self.run_generation = 1;
+        }
         self.running = true;
         self.started_ms = now_ms;
         self.last_beacon_ms = now_ms.saturating_sub(SELF_TEST_BEACON_INTERVAL_MS);
@@ -2022,6 +2027,16 @@ impl SelfTestState {
         }
         self.reset(now_ms, start_tx_complete);
         true
+    }
+
+    fn reset_for_connection_generation(&mut self) {
+        let enabled = self.enabled;
+        let run_generation = self.run_generation;
+        *self = Self {
+            enabled,
+            run_generation,
+            ..Self::default()
+        };
     }
 
     fn current_result(&self, counters: NetCounters) -> NetSelfTestResult {
@@ -2084,6 +2099,7 @@ impl SelfTestState {
         NetSelfTestReport {
             enabled: self.enabled,
             running: self.running,
+            run_generation: self.run_generation,
             last_result: self.last_result,
             backend: "unknown",
             udp_target: HeaplessString::new(),
@@ -2119,16 +2135,6 @@ fn self_test_peer_assisted_ok(result: NetSelfTestResult, counters: NetCounters) 
             || counters.tcp_auth_sessions > 0
             || counters.wifi_host_eapol_secure > 0)
         && (!result.udp_echo_ok || !result.tcp_ok || !result.console_ok)
-}
-
-const fn self_test_result_label(result: NetSelfTestResult) -> &'static str {
-    if result.tx_ok && result.udp_echo_ok && result.tcp_ok && result.console_ok {
-        "pass"
-    } else if result.peer_assisted_ok {
-        "peer-assisted-pass"
-    } else {
-        "fail"
-    }
 }
 
 fn self_test_failure_hint(
@@ -4183,7 +4189,7 @@ impl<D: NetDevice> NetStack<D> {
         self.tcp_smoke_outbound_sent = false;
         self.tcp_smoke_outbound_connecting = false;
         self.tcp_smoke_last_attempt_ms = 0;
-        self.self_test = SelfTestState::new(self.self_test.enabled);
+        self.self_test.reset_for_connection_generation();
         self.budgeted_phase = BudgetedNetPhase::Interface;
         #[cfg(feature = "net-outbound-probe")]
         {
@@ -5644,14 +5650,15 @@ impl<D: NetDevice> NetStack<D> {
     fn log_self_test_result(&self, result: NetSelfTestResult) {
         let counters = self.current_counters();
         info!(
-            "[net-selftest] result generation={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
+            "[net-selftest] result generation={} run_generation={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={} result={}",
             self.wifi_connection_generation,
+            self.self_test.run_generation,
             result.tx_ok,
             result.udp_echo_ok,
             result.tcp_ok,
             result.console_ok,
             result.peer_assisted_ok,
-            self_test_result_label(result),
+            result.verdict(),
         );
         if !result.udp_echo_ok {
             match self.self_test.udp_last_peer {
@@ -8430,6 +8437,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         NetSelfTestReport {
             enabled: self.self_test.enabled,
             running: self.self_test.running,
+            run_generation: self.self_test.run_generation,
             last_result: self.self_test.last_result,
             backend: self.backend.label(),
             udp_target: udp_target.primary,
@@ -11083,6 +11091,21 @@ mod tests {
                 "[net-selftest] hint: driver RX works, but no peer UDP/TCP reached self-test sockets -> run the logged host-side commands on the peer and verify IP/ARP/route",
             )
         );
+    }
+
+    #[test]
+    fn self_test_run_generation_is_nonzero_and_advances_per_admission() {
+        let mut state = SelfTestState::new(true);
+
+        assert_eq!(state.report().run_generation, 0);
+        assert!(state.start(100, 0));
+        assert_eq!(state.report().run_generation, 1);
+        state.reset_for_connection_generation();
+        assert_eq!(state.report().run_generation, 1);
+        assert!(!state.report().running);
+        assert!(state.report().last_result.is_none());
+        assert!(state.start(200, 0));
+        assert_eq!(state.report().run_generation, 2);
     }
 
     #[test]

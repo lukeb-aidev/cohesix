@@ -373,11 +373,28 @@ after every command:
 netstats
 nettest
 wifi diag
-wifi probe-ht
 usb diag
 usb probe-kbd
 smp
 ```
+
+`OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
+least 15 seconds, then issue the final `netstats` before continuing. It must
+contain a complete, untruncated
+`nettest: generation=<connection> run_generation=<run> ... running=false verdict=<pass|peer-assisted-pass|fail> ...`
+line whose run generation matches the admitted ACK. The standard serial reboot
+helper performs a 17-second observation window, treats an asynchronous internal
+log as optional corroboration, and fails closed on a missing, running,
+mismatched, incomplete, truncated, or failed final `netstats` verdict while
+still collecting the remaining diagnostics.
+
+The production helper deliberately omits `wifi probe-ht`: the physical
+linked-runtime profile returns the exact typed refusal
+`ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required`
+because no root-owned live SDIO probe exists. Operators may issue the command
+manually to verify that boundary, but every command executed by the helper must
+return its ordinary successful terminal status; no `ERR` is relabelled as
+success.
 
 `usb diag` returns the compact cached ten-gate report; use `usb status` only
 when the additional counter detail is needed. A complete response includes

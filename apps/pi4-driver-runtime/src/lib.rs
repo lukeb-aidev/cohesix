@@ -37295,12 +37295,15 @@ fn dma_store_barrier() {
 }
 
 fn dma_store_completion_barrier() {
+    device_store_completion_barrier();
+}
+
+fn device_store_completion_barrier() {
     core::sync::atomic::compiler_fence(Ordering::SeqCst);
     #[cfg(target_arch = "aarch64")]
-    // SAFETY: The SDIO runtime's legacy DMA channel mapping is uncached but
-    // is not independently proven to use Device memory attributes. Complete
-    // RESET/CONBLK/ACTIVE publication before the same-channel readback admits
-    // terminal polling, matching Linux's ordered MMIO lifecycle.
+    // SAFETY: HAL admits only the bounded device apertures mapped for this
+    // isolated runtime. Complete an ordinary device-register store before a
+    // subsequent readback or elapsed settle interval admits the next action.
     unsafe {
         core::arch::asm!("dsb sy", options(nostack, preserves_flags));
     }
@@ -44164,8 +44167,9 @@ fn sdio_read32(_offset: usize) -> u32 {
 #[cfg(target_os = "none")]
 fn sdio_write32(offset: usize, value: u32) {
     // Raspberry Pi's `mmc-bcm2835` WiFi host integration is 32-bit-only and
-    // delays ordinary register writes by at least two SD clocks. FIFO writes
-    // use the separate raw path below, matching Linux's `mmc_raw_writel()`.
+    // delays every ordinary register write by at least two clocks at the
+    // current SD clock, floored at 400 kHz. FIFO writes use the separate raw
+    // path below, matching Linux's `mmc_raw_writel()`.
     // SAFETY: The SDIO runtime maps the declared SDHCI MMIO page at
     // `DRIVER_TASK_DEVICE_MMIO_VADDR`; all offsets used by callers are bounded
     // aligned register constants within that page.
@@ -44175,6 +44179,10 @@ fn sdio_write32(offset: usize, value: u32) {
     unsafe {
         core::ptr::write_volatile((DRIVER_TASK_DEVICE_MMIO_VADDR + offset) as *mut u32, value);
     }
+    // Make the store globally observable before starting the two-current-clock
+    // settle interval so a linked-runtime quantum cannot collapse adjacent
+    // register writes into the controller's unsupported spacing window.
+    device_store_completion_barrier();
     let delay_us = sdio_bcm2835_post_write_delay_us(SDIO_ACTIVE_CLOCK_HZ.load(Ordering::Acquire));
     runtime_settle_micros(
         delay_us,

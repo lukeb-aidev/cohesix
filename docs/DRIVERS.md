@@ -361,6 +361,10 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   `nettest` starts the bounded network self-test and `usb probe-kbd` advances
   one retained enumeration attempt, so operators must wait for each command's
   terminal status before sending the next burst.
+  `OK NETTEST detail=started run_generation=<n>` is admission only; after the
+  15-second window, a final `netstats` reports one complete connection- and
+  run-generation-tagged `verdict` line, with targets on a separate
+  `nettargets:` line. A result from another admitted run is not proof.
 - If a USB diagnostic service turn stops replying, preserve the boot evidence
   and stop submitting more commands until the bounded recovery path or a fresh
   boot.
@@ -900,6 +904,12 @@ generation and XID.
   supervisor on the 256-KiB root stack while preserving one no-allocation
   owner.
 - Each SDHCI request follows the selected Pi 4 `mmc-bcm2835` register contract.
+  Every ordinary 32-bit SDHCI register write completes its device-store
+  publication before the runtime begins Linux's clock-dependent post-write
+  interval: the integer quotient for two card clocks using a 400-kilohertz
+  floor, plus Linux's one-microsecond guard. This is 6 microseconds during
+  startup and 1 microsecond at the 50-megahertz active clock. Raw
+  `SDHCI_BUFFER` FIFO writes remain on Linux's separate no-delay access path.
   Every CMD5, CMD52, and CMD53 first receives a separate 10-millisecond
   pre-issue inhibit fence. The owner arms a fresh Linux-equivalent 10-second
   request watchdog only after that fence succeeds and immediately before the

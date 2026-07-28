@@ -61,12 +61,25 @@ TRACE_SEGMENT_RE = re.compile(
     r"|CYW43_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
+    r"|(?<![A-Za-z0-9_.:-])(?:nettest:|nettargets:)"
     r"|Kernel entry via Interrupt"
     r"))"
 )
 MALFORMED_WIFI_PREFIX_RE = re.compile(r"(?<![A-Za-z0-9_.:-])(?:wif|wi):")
 STARTUP_DIAG_GATE_RE = re.compile(
     r"^(?P<domain>usb|wifi): gate (?P<gate>[0-9]+)\b", re.IGNORECASE
+)
+NETTEST_STATUS_RE = re.compile(
+    r"^nettest: generation=(?P<generation>0|[1-9][0-9]*) "
+    r"run_generation=(?P<run_generation>0|[1-9][0-9]*) "
+    r"enabled=(?P<enabled>true|false) "
+    r"running=(?P<running>true|false) "
+    r"verdict=(?P<verdict>none|running|pass|peer-assisted-pass|fail) "
+    r"tx_ok=(?P<tx_ok>true|false|na) "
+    r"udp_echo_ok=(?P<udp_echo_ok>true|false|na) "
+    r"tcp_ok=(?P<tcp_ok>true|false|na) "
+    r"console_ok=(?P<console_ok>true|false|na) "
+    r"peer_assisted_ok=(?P<peer_assisted_ok>true|false|na)$"
 )
 CYW43_SDIO_DPC_RE = re.compile(
     r"^CYW43_SDIO_DPC "
@@ -1648,6 +1661,8 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("[smp] activity net")
         or line.startswith("netstatus")
         or line.startswith("netstats")
+        or line.startswith("nettest:")
+        or line.startswith("nettargets:")
     ):
         return "wifi"
     if "[net-console]" in lower and (
@@ -6424,6 +6439,100 @@ def wifi_netselftest_terminal_success(event: TraceEvent) -> bool:
     )
 
 
+def nettest_result_verdict(
+    tx_ok: bool,
+    udp_echo_ok: bool,
+    tcp_ok: bool,
+    console_ok: bool,
+    peer_assisted_ok: bool,
+) -> str:
+    """Return the target's deterministic verdict for a compact result tuple."""
+
+    if tx_ok and udp_echo_ok and tcp_ok and console_ok:
+        return "pass"
+    if peer_assisted_ok:
+        return "peer-assisted-pass"
+    return "fail"
+
+
+def parse_wifi_nettest_status(event: TraceEvent) -> dict[str, str] | None:
+    """Validate one complete, untruncated, internally consistent status line."""
+
+    if (
+        event.domain != "wifi"
+        or not event.raw.lower().startswith("nettest:")
+        or "[truncated]" in event.raw.lower()
+    ):
+        return None
+    match = NETTEST_STATUS_RE.fullmatch(event.raw.lower())
+    if match is None:
+        return None
+    fields = match.groupdict()
+    generation = int(fields["generation"])
+    run_generation = int(fields["run_generation"])
+    if generation > U32_MAX or run_generation > U64_MAX:
+        return None
+    enabled = fields["enabled"] == "true"
+    running = fields["running"] == "true"
+    verdict = fields["verdict"]
+    result_fields = tuple(
+        fields[field]
+        for field in (
+            "tx_ok",
+            "udp_echo_ok",
+            "tcp_ok",
+            "console_ok",
+            "peer_assisted_ok",
+        )
+    )
+    if run_generation == 0 and (
+        running or verdict != "none" or result_fields != ("na",) * 5
+    ):
+        return None
+    if not enabled:
+        if running or verdict != "none" or result_fields != ("na",) * 5:
+            return None
+    elif running:
+        if verdict != "running" or result_fields != ("na",) * 5:
+            return None
+    elif verdict == "none":
+        if result_fields != ("na",) * 5:
+            return None
+    elif verdict == "running" or any(value == "na" for value in result_fields):
+        return None
+    elif verdict != nettest_result_verdict(
+        result_fields[0] == "true",
+        result_fields[1] == "true",
+        result_fields[2] == "true",
+        result_fields[3] == "true",
+        result_fields[4] == "true",
+    ):
+        return None
+    return fields
+
+
+def wifi_nettest_status_terminal_success(event: TraceEvent) -> bool:
+    """Return true for the complete target-visible terminal ``netstats`` verdict."""
+
+    status = parse_wifi_nettest_status(event)
+    return (
+        status is not None
+        and status["running"] == "false"
+        and status["verdict"] in {"pass", "peer-assisted-pass"}
+    )
+
+
+def wifi_nettest_status_terminal_failure(event: TraceEvent) -> bool:
+    """Return true for a complete target-visible failed terminal verdict."""
+
+    status = parse_wifi_nettest_status(event)
+    return (
+        status is not None
+        and status["running"] == "false"
+        and status["verdict"] == "fail"
+    )
+
+
 def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     """Summarize the WiFi CYW43455 proof gate from HT through nettest."""
 
@@ -7363,6 +7472,17 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
         if "[net-selftest] starting run" in raw:
             gate = max(gate, 9)
             post_f2_progress_seen = True
+        if raw.startswith("nettest:"):
+            if wifi_nettest_status_terminal_success(event):
+                nettest_success_seen = True
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "netstats-missing"
+            elif wifi_nettest_status_terminal_failure(event):
+                gate = max(gate, 9)
+                post_f2_progress_seen = True
+                blocker = "nettest-failed"
+            continue
         if "[net-selftest] result" in raw:
             tx_ok = fields.get("tx_ok")
             udp_ok = fields.get("udp_echo_ok")
@@ -7374,12 +7494,10 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 tcp_ok,
                 console_ok,
             } <= {"true", "1"}:
-                nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 blocker = "netstats-missing"
             elif wifi_netselftest_terminal_success(event):
-                nettest_success_seen = True
                 gate = max(gate, 9)
                 post_f2_progress_seen = True
                 if blocker in {"none", "unknown", "tcp-proof-missing"} or (
@@ -10040,8 +10158,10 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             host_tcp_proof = False
             tcp_ready = False
             nettest_proof = False
-        if wifi_netselftest_terminal_success(event):
+        if wifi_nettest_status_terminal_success(event):
             nettest_proof = True
+        elif raw.startswith("nettest:"):
+            nettest_proof = False
         if raw.startswith("[dhcp]") or "[dhcp]" in raw:
             interface = event.fields.get("interface")
             if interface:
@@ -12289,7 +12409,7 @@ def wifi_nettest_step(event: TraceEvent) -> bool:
 
     return event.domain == "wifi" and (
         wifi_nettest_ok_terminal_success(event)
-        or wifi_netselftest_terminal_success(event)
+        or wifi_nettest_status_terminal_success(event)
     )
 
 

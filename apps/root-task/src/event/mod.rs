@@ -17703,9 +17703,14 @@ where
                     } else if let Some(net) = self.net.as_mut() {
                         match net.start_self_test(self.now_ms) {
                             NetSelfTestStartResult::Started => {
+                                let report = net.self_test_report();
+                                let detail = format_message(format_args!(
+                                    "detail=started run_generation={}",
+                                    report.run_generation
+                                ));
                                 self.metrics.accepted_commands += 1;
                                 self.emit_console_line("[net-selftest] triggered");
-                                self.emit_ack_ok(verb_label, Some("detail=started"));
+                                self.emit_ack_ok(verb_label, Some(detail.as_str()));
                             }
                             result => {
                                 self.metrics.denied_commands += 1;
@@ -17934,16 +17939,46 @@ where
                             status.dhcp_phase,
                             if status.tcp_ready { "yes" } else { "no" },
                         ));
+                        let (verdict, tx_ok, udp_echo_ok, tcp_ok, console_ok, peer_assisted_ok) =
+                            if report.running {
+                                ("running", "na", "na", "na", "na", "na")
+                            } else if let Some(result) = report.last_result {
+                                (
+                                    result.verdict(),
+                                    if result.tx_ok { "true" } else { "false" },
+                                    if result.udp_echo_ok { "true" } else { "false" },
+                                    if result.tcp_ok { "true" } else { "false" },
+                                    if result.console_ok { "true" } else { "false" },
+                                    if result.peer_assisted_ok {
+                                        "true"
+                                    } else {
+                                        "false"
+                                    },
+                                )
+                            } else {
+                                ("none", "na", "na", "na", "na", "na")
+                            };
                         let status_line = format_message(format_args!(
-                            "nettest: generation={} profile_backend={} active_driver={} enabled={} running={} udp={} tcp={} last={:?}",
+                            "nettest: generation={} run_generation={} enabled={} running={} verdict={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={}",
+                            stats.wifi_connection_generation,
+                            report.run_generation,
+                            report.enabled,
+                            report.running,
+                            verdict,
+                            tx_ok,
+                            udp_echo_ok,
+                            tcp_ok,
+                            console_ok,
+                            peer_assisted_ok,
+                        ));
+                        let target_line = format_message(format_args!(
+                            "nettargets: generation={} profile_backend={} active_driver={} backend={} udp={} tcp={}",
                             stats.wifi_connection_generation,
                             status.profile_backend,
                             status.active_driver,
-                            report.enabled,
-                            report.running,
+                            report.backend,
                             report.udp_target,
                             report.tcp_target,
-                            report.last_result
                         ));
                         self.emit_console_line(line_one.as_str());
                         self.emit_console_line(line_two.as_str());
@@ -17970,6 +18005,7 @@ where
                         }
                         self.emit_console_line(line_six.as_str());
                         self.emit_console_line(status_line.as_str());
+                        self.emit_console_line(target_line.as_str());
                         self.metrics.accepted_commands += 1;
                         self.emit_ack_ok(verb_label, None);
                     } else {
@@ -23696,6 +23732,7 @@ mod tests {
         status: NetStatusReport,
         status_reports: core::cell::Cell<usize>,
         counters: NetCounters,
+        self_test_report: NetSelfTestReport,
         polls: usize,
         tcp_flushes: usize,
         tcp_flush_send_counts: heapless::Vec<usize, 32>,
@@ -23727,6 +23764,7 @@ mod tests {
                 status: NetStatusReport::default(),
                 status_reports: core::cell::Cell::new(0),
                 counters: NetCounters::default(),
+                self_test_report: NetSelfTestReport::default(),
                 polls: 0,
                 tcp_flushes: 0,
                 tcp_flush_send_counts: heapless::Vec::new(),
@@ -23889,6 +23927,10 @@ mod tests {
         fn start_self_test(&mut self, _now_ms: u64) -> NetSelfTestStartResult {
             self.self_test_starts = self.self_test_starts.saturating_add(1);
             self.start_result
+        }
+
+        fn self_test_report(&self) -> NetSelfTestReport {
+            self.self_test_report.clone()
         }
 
         fn status_report(&self) -> NetStatusReport {
@@ -25891,6 +25933,34 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
+    fn nettest_started_ack_names_immutable_run_generation() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.start_result = NetSelfTestStartResult::Started;
+        net.self_test_report.run_generation = 7;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"nettest\n");
+
+        pump.poll();
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains("OK NETTEST detail=started run_generation=7"),
+            "{rendered}"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
     fn nettest_reports_dhcp_pending_detail() {
         let driver = LoopbackSerial::<128>::new();
         let serial = SerialPort::<_, 128, 128, DEFAULT_LINE_CAPACITY>::new(driver);
@@ -26092,7 +26162,9 @@ mod tests {
         );
         assert!(
             mirrored.iter().any(|line| {
-                line.starts_with("nettest: generation=0 profile_backend=bcmgenet-v5")
+                line.starts_with(
+                    "nettest: generation=0 run_generation=0 enabled=false running=false verdict=none",
+                )
             }),
             "{mirrored:?}"
         );
@@ -26166,6 +26238,87 @@ mod tests {
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: wifi_assoc="), "{rendered}");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn nettest_terminal_status_fits_at_maximum_generations() {
+        let line = format_message(format_args!(
+            "nettest: generation={} run_generation={} enabled={} running={} verdict={} tx_ok={} udp_echo_ok={} tcp_ok={} console_ok={} peer_assisted_ok={}",
+            u32::MAX,
+            u64::MAX,
+            true,
+            false,
+            "peer-assisted-pass",
+            "false",
+            "false",
+            "false",
+            "false",
+            "false",
+        ));
+
+        assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn netstats_emits_complete_generation_tagged_nettest_verdict() {
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 8192, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
+        net.counters.wifi_connection_generation = 14;
+        net.self_test_report = NetSelfTestReport {
+            enabled: true,
+            running: false,
+            run_generation: 7,
+            last_result: Some(NetSelfTestResult {
+                tx_ok: true,
+                udp_echo_ok: false,
+                tcp_ok: false,
+                console_ok: true,
+                peer_assisted_ok: true,
+            }),
+            backend: "cyw43",
+            ..NetSelfTestReport::default()
+        };
+        net.self_test_report
+            .udp_target
+            .push_str("192.168.86.20:31338")
+            .unwrap();
+        net.self_test_report
+            .tcp_target
+            .push_str("192.168.86.20:31339")
+            .unwrap();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.session = Some(SessionRole::Queen);
+        pump.serial_mut().driver_mut().push_rx(b"netstats\n");
+
+        pump.poll();
+
+        let transcript = pump.serial_mut().driver_mut().drain_tx();
+        let rendered = String::from_utf8(transcript.into_iter().collect())
+            .expect("serial output must be utf8");
+        assert!(
+            rendered.contains(
+                "nettest: generation=14 run_generation=7 enabled=true running=false verdict=peer-assisted-pass tx_ok=true udp_echo_ok=false tcp_ok=false console_ok=true peer_assisted_ok=true"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "nettargets: generation=14 profile_backend=bcmgenet-v5 active_driver=cyw43 backend=cyw43 udp=192.168.86.20:31338 tcp=192.168.86.20:31339"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            !rendered.contains("nettest: generation=14 run_generation=7 enabled=true [truncated]")
+        );
     }
 
     #[cfg(feature = "net-console")]
