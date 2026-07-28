@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Host-side mock network queue and TCP console stack used in tests.
 // Author: Lukas Bower
@@ -507,7 +507,11 @@ impl NetPoller for NetStack {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use smoltcp::wire::Ipv4Address;
+    use smoltcp::phy::ChecksumCapabilities;
+    use smoltcp::wire::{
+        ArpOperation, ArpPacket, ArpRepr, EthernetFrame, EthernetProtocol, EthernetRepr,
+        Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr,
+    };
 
     fn frame_line<const N: usize>(line: &str) -> HeaplessVec<u8, N> {
         let mut buf = HeaplessVec::new();
@@ -573,6 +577,116 @@ mod tests {
         assert!(telemetry.link_up);
         assert_eq!(telemetry.last_poll_ms, 25);
         assert_eq!(telemetry.tx_drops, handle.tx_drops());
+    }
+
+    #[test]
+    fn icmp_echo_request_emits_reply_with_explicit_smoltcp_feature() {
+        let local_ip = Ipv4Address::new(10, 0, 2, 15);
+        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
+        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let echo_data = [0xaa, 0x00, 0x00, 0xff];
+        let (mut stack, handle) = NetStack::new(local_ip);
+
+        let arp_ethernet_repr = EthernetRepr {
+            src_addr: peer_mac,
+            dst_addr: EthernetAddress::BROADCAST,
+            ethertype: EthernetProtocol::Arp,
+        };
+        let arp_repr = ArpRepr::EthernetIpv4 {
+            operation: ArpOperation::Request,
+            source_hardware_addr: peer_mac,
+            source_protocol_addr: peer_ip,
+            target_hardware_addr: EthernetAddress::from_bytes(&[0; 6]),
+            target_protocol_addr: local_ip,
+        };
+        let arp_frame_len = arp_ethernet_repr.buffer_len() + arp_repr.buffer_len();
+        let mut arp_request = [0u8; 64];
+        arp_ethernet_repr.emit(&mut EthernetFrame::new_unchecked(
+            &mut arp_request[..arp_frame_len],
+        ));
+        arp_repr.emit(&mut ArpPacket::new_unchecked(
+            &mut arp_request[arp_ethernet_repr.buffer_len()..arp_frame_len],
+        ));
+        handle
+            .push_rx(
+                Frame::from_slice(&arp_request[..arp_frame_len]).expect("valid ARP request frame"),
+            )
+            .expect("RX queue accepts ARP request");
+        assert!(stack.poll_with_time(1), "smoltcp must answer ARP");
+        let arp_reply = handle.pop_tx().expect("ARP reply missing");
+        let arp_reply =
+            EthernetFrame::new_checked(arp_reply.as_slice()).expect("valid ARP reply frame");
+        assert_eq!(arp_reply.ethertype(), EthernetProtocol::Arp);
+
+        let ethernet_repr = EthernetRepr {
+            src_addr: peer_mac,
+            dst_addr: stack.hardware_address(),
+            ethertype: EthernetProtocol::Ipv4,
+        };
+        let icmp_repr = Icmpv4Repr::EchoRequest {
+            ident: 0x1234,
+            seq_no: 0xabcd,
+            data: &echo_data,
+        };
+        let ipv4_repr = Ipv4Repr {
+            src_addr: peer_ip,
+            dst_addr: local_ip,
+            next_header: IpProtocol::Icmp,
+            payload_len: icmp_repr.buffer_len(),
+            hop_limit: 64,
+        };
+        let ethernet_len = ethernet_repr.buffer_len();
+        let ipv4_len = ipv4_repr.buffer_len();
+        let frame_len = ethernet_len + ipv4_len + icmp_repr.buffer_len();
+        let mut request = [0u8; 64];
+
+        ethernet_repr.emit(&mut EthernetFrame::new_unchecked(&mut request[..frame_len]));
+        ipv4_repr.emit(
+            &mut Ipv4Packet::new_unchecked(&mut request[ethernet_len..frame_len]),
+            &ChecksumCapabilities::default(),
+        );
+        icmp_repr.emit(
+            &mut Icmpv4Packet::new_unchecked(&mut request[ethernet_len + ipv4_len..frame_len]),
+            &ChecksumCapabilities::default(),
+        );
+
+        handle
+            .push_rx(Frame::from_slice(&request[..frame_len]).expect("valid echo request frame"))
+            .expect("RX queue accepts echo request");
+        assert!(
+            stack.poll_with_time(2),
+            "smoltcp must consume the echo request and emit a reply"
+        );
+
+        let reply = handle.pop_tx().expect("ICMP echo reply missing");
+        let ethernet_packet =
+            EthernetFrame::new_checked(reply.as_slice()).expect("valid reply Ethernet frame");
+        let reply_ethernet =
+            EthernetRepr::parse(&ethernet_packet).expect("valid reply Ethernet header");
+        assert_eq!(reply_ethernet.src_addr, stack.hardware_address());
+        assert_eq!(reply_ethernet.dst_addr, peer_mac);
+        assert_eq!(reply_ethernet.ethertype, EthernetProtocol::Ipv4);
+
+        let ipv4_packet =
+            Ipv4Packet::new_checked(ethernet_packet.payload()).expect("valid reply IPv4 packet");
+        let reply_ipv4 = Ipv4Repr::parse(&ipv4_packet, &ChecksumCapabilities::default())
+            .expect("valid reply IPv4 header");
+        assert_eq!(reply_ipv4.src_addr, local_ip);
+        assert_eq!(reply_ipv4.dst_addr, peer_ip);
+        assert_eq!(reply_ipv4.next_header, IpProtocol::Icmp);
+
+        let icmp_packet =
+            Icmpv4Packet::new_checked(ipv4_packet.payload()).expect("valid reply ICMP packet");
+        let reply_icmp = Icmpv4Repr::parse(&icmp_packet, &ChecksumCapabilities::default())
+            .expect("valid reply ICMP representation");
+        assert_eq!(
+            reply_icmp,
+            Icmpv4Repr::EchoReply {
+                ident: 0x1234,
+                seq_no: 0xabcd,
+                data: &echo_data,
+            }
+        );
     }
 
     #[test]

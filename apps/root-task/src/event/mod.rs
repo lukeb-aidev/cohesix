@@ -588,6 +588,17 @@ fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option
 }
 
 #[cfg(feature = "net-console")]
+/// Return the passive pre-poll signal for a CYW43 association-owner turn.
+///
+/// The priority lease must be decided before `NetStack::poll_with_budget`
+/// asks the association supervisor to claim the turn. `wifi-associating` is
+/// the as-built status throughout that pre-Join window, including the first
+/// turn that prepares the immutable op11 parent.
+fn net_status_cyw43_association_turn_pending(status: &NetStatusReport) -> bool {
+    status.active_interface == "wifi" && status.address_source == "wifi-associating"
+}
+
+#[cfg(feature = "net-console")]
 fn net_status_needs_host_eapol_burst(status: &NetStatusReport) -> bool {
     status.address_source == "wifi-host-eapol-pending"
 }
@@ -2540,18 +2551,19 @@ struct ConsoleContext {
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn linked_runtime_network_cancel_requires_pair_restart(
     lease_finish: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
+    boundary_parent: crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent,
     cannot_resume_exact_parent: bool,
 ) -> bool {
     cannot_resume_exact_parent
-        && matches!(
+        && (matches!(
             lease_finish,
             crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired { .. }
-        )
+        ) || boundary_parent.resumable())
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Cyw43ClosingDrainDecision {
+enum Cyw43RetainedDrainDecision {
     Continue,
     Complete,
     Dispatch,
@@ -2562,6 +2574,13 @@ enum Cyw43ClosingDrainDecision {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43NetworkDrainOwner {
+    Closing(crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish),
+    Boundary(crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent),
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_closing_drain_decision(
     before: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
     after: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
@@ -2569,7 +2588,7 @@ const fn cyw43_closing_drain_decision(
     physical_response_pending: bool,
     turns: u16,
     elapsed_us: u64,
-) -> Cyw43ClosingDrainDecision {
+) -> Cyw43RetainedDrainDecision {
     use crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::{
         Closed, DrainRequired, Inactive, RecoveryRequired,
     };
@@ -2586,23 +2605,80 @@ const fn cyw43_closing_drain_decision(
             },
         ) if before_request == after_request && (!before_issued || after_issued) => {
             if physical_response_pending {
-                Cyw43ClosingDrainDecision::Physical
+                Cyw43RetainedDrainDecision::Physical
             } else if buffered_console_line {
-                Cyw43ClosingDrainDecision::Dispatch
+                Cyw43RetainedDrainDecision::Dispatch
             } else if elapsed_us >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
             {
-                Cyw43ClosingDrainDecision::TimeCap
+                Cyw43RetainedDrainDecision::TimeCap
             } else if turns >= LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
-                Cyw43ClosingDrainDecision::TurnCap
+                Cyw43RetainedDrainDecision::TurnCap
             } else {
-                Cyw43ClosingDrainDecision::Continue
+                Cyw43RetainedDrainDecision::Continue
             }
         }
-        (DrainRequired { .. }, Closed) => Cyw43ClosingDrainDecision::Complete,
+        (DrainRequired { .. }, Closed) => Cyw43RetainedDrainDecision::Complete,
         (DrainRequired { .. }, Inactive | RecoveryRequired | DrainRequired { .. }) => {
-            Cyw43ClosingDrainDecision::Recovery
+            Cyw43RetainedDrainDecision::Recovery
         }
-        _ => Cyw43ClosingDrainDecision::Recovery,
+        _ => Cyw43RetainedDrainDecision::Recovery,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_boundary_drain_decision(
+    before: crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent,
+    after: crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent,
+    buffered_console_line: bool,
+    physical_response_pending: bool,
+    turns: u16,
+    elapsed_us: u64,
+) -> Cyw43RetainedDrainDecision {
+    use crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::{Inactive, Issued, Prepared};
+
+    let exact_forward_progress = match (before, after) {
+        (
+            Prepared {
+                request: before_request,
+                command_fingerprint: before_fingerprint,
+            },
+            Prepared {
+                request: after_request,
+                command_fingerprint: after_fingerprint,
+            }
+            | Issued {
+                request: after_request,
+                command_fingerprint: after_fingerprint,
+            },
+        ) => before_request == after_request && before_fingerprint == after_fingerprint,
+        (
+            Issued {
+                request: before_request,
+                command_fingerprint: before_fingerprint,
+            },
+            Issued {
+                request: after_request,
+                command_fingerprint: after_fingerprint,
+            },
+        ) => before_request == after_request && before_fingerprint == after_fingerprint,
+        _ => false,
+    };
+    if exact_forward_progress {
+        if physical_response_pending {
+            Cyw43RetainedDrainDecision::Physical
+        } else if buffered_console_line {
+            Cyw43RetainedDrainDecision::Dispatch
+        } else if elapsed_us >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000) {
+            Cyw43RetainedDrainDecision::TimeCap
+        } else if turns >= LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
+            Cyw43RetainedDrainDecision::TurnCap
+        } else {
+            Cyw43RetainedDrainDecision::Continue
+        }
+    } else if matches!((before, after), (Prepared { .. } | Issued { .. }, Inactive)) {
+        Cyw43RetainedDrainDecision::Complete
+    } else {
+        Cyw43RetainedDrainDecision::Recovery
     }
 }
 
@@ -3188,15 +3264,44 @@ where
                                     // Closing lease rejects every fresh parent,
                                     // so only this identity may receive the
                                     // bounded drain slice below.
-                                    Some(
+                                    Some(Cyw43NetworkDrainOwner::Closing(
                                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
                                             request,
                                             issued,
                                         },
-                                    )
+                                    ))
                                 }
-                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive
-                                | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
+                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive => {
+                                    match crate::hal::driver_task::cyw43_sdio_network_boundary_parent() {
+                                        parent @ (
+                                            crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Prepared { .. }
+                                            | crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Issued { .. }
+                                        ) => {
+                                            // A poll admitted before the
+                                            // outer lease was actionable may
+                                            // already own one immutable
+                                            // parent. Adopt only that typed
+                                            // identity; its request-bound
+                                            // lease remains the sole scheduler
+                                            // and ring issuer.
+                                            Some(Cyw43NetworkDrainOwner::Boundary(parent))
+                                        }
+                                        crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Inactive => {
+                                            self.linked_runtime_network_consecutive_turns = 0;
+                                            self.linked_runtime_network_quantum_started_ms = None;
+                                            self.linked_runtime_network_quantum_started_ticks = 0;
+                                            self.linked_runtime_service_phase =
+                                                LinkedRuntimeServicePhase::Serial;
+                                            return;
+                                        }
+                                        crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Invalid { .. } => {
+                                            crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+                                            self.cancel_linked_runtime_network_quantum();
+                                            return;
+                                        }
+                                    }
+                                }
+                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
                                     self.linked_runtime_network_consecutive_turns = 0;
                                     self.linked_runtime_network_quantum_started_ms = None;
                                     self.linked_runtime_network_quantum_started_ticks = 0;
@@ -3229,7 +3334,7 @@ where
                         }
                         drain @ crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
                             ..
-                        } => Some(drain),
+                        } => Some(Cyw43NetworkDrainOwner::Closing(drain)),
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
                             self.cancel_linked_runtime_network_quantum();
                             return;
@@ -3295,25 +3400,42 @@ where
                         self.metrics.net_cyw43_service_turns.saturating_add(1);
                     if let Some(drain_before) = cyw43_priority_lease_drain_owner {
                         let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
-                        let drain_after = Self::close_cyw43_sdio_network_priority_lease();
                         let buffered_console_line = self
                             .net
                             .as_ref()
                             .is_some_and(|net| net.buffered_console_lines_pending());
                         let physical_response_pending = self.physical_console_response_pending();
-                        let decision = cyw43_closing_drain_decision(
-                            drain_before,
-                            drain_after,
-                            buffered_console_line,
-                            physical_response_pending,
-                            self.linked_runtime_network_consecutive_turns,
-                            elapsed_us,
-                        );
-                        if decision == Cyw43ClosingDrainDecision::Continue {
+                        let decision = match drain_before {
+                            Cyw43NetworkDrainOwner::Closing(drain_before) => {
+                                let drain_after = Self::close_cyw43_sdio_network_priority_lease();
+                                cyw43_closing_drain_decision(
+                                    drain_before,
+                                    drain_after,
+                                    buffered_console_line,
+                                    physical_response_pending,
+                                    self.linked_runtime_network_consecutive_turns,
+                                    elapsed_us,
+                                )
+                            }
+                            Cyw43NetworkDrainOwner::Boundary(drain_before) => {
+                                let drain_after =
+                                    crate::hal::driver_task::cyw43_sdio_network_boundary_parent();
+                                cyw43_boundary_drain_decision(
+                                    drain_before,
+                                    drain_after,
+                                    buffered_console_line,
+                                    physical_response_pending,
+                                    self.linked_runtime_network_consecutive_turns,
+                                    elapsed_us,
+                                )
+                            }
+                        };
+                        if decision == Cyw43RetainedDrainDecision::Continue {
                             // Linux finishes the current MMC request inside
                             // one bounded request/DPC context. Cohesix must
                             // preserve its one-operation-per-outer-turn ABI,
-                            // but those turns remain contiguous while Closing
+                            // but those turns remain contiguous while either
+                            // Closing or the exact active HAL fingerprint
                             // rejects every fresh parent. This avoids inserting
                             // a full Serial/Dispatch/display rotation between
                             // the retained parent's prepare, issue, notify,
@@ -3329,42 +3451,42 @@ where
                             .net_cyw43_service_max_elapsed_us
                             .max(elapsed_us);
                         match decision {
-                            Cyw43ClosingDrainDecision::Complete => {
+                            Cyw43RetainedDrainDecision::Complete => {
                                 self.metrics.net_cyw43_service_terminal_exits = self
                                     .metrics
                                     .net_cyw43_service_terminal_exits
                                     .saturating_add(1);
                             }
-                            Cyw43ClosingDrainDecision::Dispatch => {
+                            Cyw43RetainedDrainDecision::Dispatch => {
                                 self.metrics.net_cyw43_service_dispatch_exits = self
                                     .metrics
                                     .net_cyw43_service_dispatch_exits
                                     .saturating_add(1);
                             }
-                            Cyw43ClosingDrainDecision::Physical => {
+                            Cyw43RetainedDrainDecision::Physical => {
                                 self.metrics.net_cyw43_service_physical_exits = self
                                     .metrics
                                     .net_cyw43_service_physical_exits
                                     .saturating_add(1);
                             }
-                            Cyw43ClosingDrainDecision::TurnCap => {
+                            Cyw43RetainedDrainDecision::TurnCap => {
                                 self.metrics.net_cyw43_service_turn_cap_exits = self
                                     .metrics
                                     .net_cyw43_service_turn_cap_exits
                                     .saturating_add(1);
                             }
-                            Cyw43ClosingDrainDecision::TimeCap => {
+                            Cyw43RetainedDrainDecision::TimeCap => {
                                 self.metrics.net_cyw43_service_time_cap_exits = self
                                     .metrics
                                     .net_cyw43_service_time_cap_exits
                                     .saturating_add(1);
                             }
-                            Cyw43ClosingDrainDecision::Recovery => {
+                            Cyw43RetainedDrainDecision::Recovery => {
                                 self.metrics.net_cyw43_service_guard_exits =
                                     self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
                                 crate::hal::driver_task::request_cyw43_sdio_pair_restart();
                             }
-                            Cyw43ClosingDrainDecision::Continue => {}
+                            Cyw43RetainedDrainDecision::Continue => {}
                         }
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_started_ms = None;
@@ -3472,8 +3594,10 @@ where
             self.linked_runtime_network_quantum_started_ticks = 0;
             lease_finish
         };
+        let boundary_parent = crate::hal::driver_task::cyw43_sdio_network_boundary_parent();
         if linked_runtime_network_cancel_requires_pair_restart(
             lease_finish,
+            boundary_parent,
             self.network_service_quarantined || self.reboot_pending,
         ) {
             // A quarantined stack must never be polled, and a reboot cannot
@@ -3594,10 +3718,12 @@ where
                 return false;
             }
             let counters = net.stats();
+            let status = net.status_report();
             self.pending_net_flush.active()
                 || net.console_service_pending()
                 || counters.wifi_rx_runtime_queue_count != 0
                 || counters.wifi_rx_pending_queue_count != 0
+                || net_status_cyw43_association_turn_pending(&status)
                 || crate::drivers::driver_task_net::cyw43_steady_network_work_pending(
                     net.driver_task_contract(),
                 )
@@ -13290,6 +13416,45 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn wifi_gate8_prerequisites_supersede_runtime_progress(
+        gate8: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+        pair_recovery_active: bool,
+    ) -> bool {
+        !pair_recovery_active
+            && matches!(
+                gate8.subgates[0].status,
+                crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+            )
+            && matches!(
+                gate8.subgates[1].status,
+                crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+            )
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_startup_nonterminal_progress_gate(
+        gate8_prerequisites_ready: bool,
+        gate8_frontier_present: bool,
+        cyw43_progress_gate: Option<u8>,
+        cyw43_progress_suppresses_sdio_fallback: bool,
+        sdio_progress_gate: Option<u8>,
+    ) -> Option<u8> {
+        if gate8_prerequisites_ready {
+            if gate8_frontier_present {
+                Some(8)
+            } else {
+                None
+            }
+        } else if cyw43_progress_gate.is_some() {
+            cyw43_progress_gate
+        } else if cyw43_progress_suppresses_sdio_fallback {
+            None
+        } else {
+            sdio_progress_gate
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_host_eapol_exact_can_refine_gate8(
         gate8_frontier: Option<crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic>,
         pair_recovery_active: bool,
@@ -14073,6 +14238,12 @@ where
                 subgate.status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
             })
             .copied();
+        // Gate 8a proves the current linked pair and Gate 8b proves its
+        // epoch-bound control program. Reaching both is stronger than the
+        // unversioned last-progress breadcrumbs left by bootstrap and proves
+        // that this boot already crossed Gates 1-7.
+        let gate8_prerequisites_ready =
+            Self::wifi_gate8_prerequisites_supersede_runtime_progress(gate8, pair_recovery_active);
         // A partially alive NetStack is not stronger than the current CYW43
         // owner. It supersedes old bootstrap breadcrumbs only after this exact
         // connection generation has a complete Gate 8 proof and no pair
@@ -14160,6 +14331,7 @@ where
             });
         let cyw43_sdio_pair_restart_blocks_gate_one = !runtime_bootstrap_failed
             && deferred_gate8.is_none()
+            && !gate8_prerequisites_ready
             && crate::drivers::driver_task_net::wifi_cyw43_sdio_pair_restart_blocks_gate_one(
                 cyw43_runtime_progress,
                 direct_pwrseq_proof,
@@ -14182,28 +14354,33 @@ where
         } else if host_eapol_refines_gate8 {
             Some(8)
         } else {
-            cyw43_progress_gate.or(if cyw43_progress_suppresses_sdio_fallback {
-                None
-            } else {
-                sdio_progress_gate
-            })
+            Self::wifi_startup_nonterminal_progress_gate(
+                gate8_prerequisites_ready,
+                gate8_frontier.is_some(),
+                cyw43_progress_gate,
+                cyw43_progress_suppresses_sdio_fallback,
+                sdio_progress_gate,
+            )
         };
         let direct_gate8_terminal = cyw43_fault_gate == Some(8) || sdio_replay_gate == Some(8);
         let live_net_channel_ready = live_net_supersedes_runtime;
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_prep_complete);
-        let power_ready = live_net_channel_ready
+        let power_ready = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || snapshot.is_some_and(|snapshot| {
                 matches!(snapshot.power_state, WifiPowerState::On)
                     && matches!(snapshot.reset_state, WifiResetState::Deasserted)
             })
             || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
-        let card_selected = live_net_channel_ready
+        let card_selected = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| snapshot.card_ready && snapshot.card_rca != 0);
-        let f1_ready = live_net_channel_ready
+        let f1_ready = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| {
                 snapshot.io_enable.is_some_and(|value| (value & 0x02) != 0)
@@ -14215,11 +14392,13 @@ where
                     .is_some_and(|value| (value & 0x02) != 0)
                     && trace.cccr_io_ready.is_some_and(|value| (value & 0x02) != 0)
             });
-        let ht_ready = live_net_channel_ready
+        let ht_ready = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
             || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready);
-        let backplane_ready = live_net_channel_ready
+        let backplane_ready = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_prep_complete
             || snapshot.is_some_and(|snapshot| {
                 snapshot.programmed_backplane_window.is_some()
@@ -14233,19 +14412,22 @@ where
             });
         let release_fault_after_upload =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_uploaded);
-        let firmware_uploaded = live_net_channel_ready
+        let firmware_uploaded = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || release_fault_after_upload
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.upload_state == "uploaded" || proof.verified);
-        let firmware_verified = live_net_channel_ready
+        let firmware_verified = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || firmware_trace.is_some_and(|trace| trace.firmware_download_verified)
             || firmware_trace
                 .and_then(|trace| trace.proof)
                 .is_some_and(|proof| proof.verified);
-        let f2_enabled = live_net_channel_ready
+        let f2_enabled = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || snapshot.is_some_and(|snapshot| {
                 snapshot.io_enable.is_some_and(|value| (value & 0x04) != 0)
@@ -14255,7 +14437,8 @@ where
                     .cccr_io_enable
                     .is_some_and(|value| (value & 0x04) != 0)
             });
-        let f2_ready = live_net_channel_ready
+        let f2_ready = gate8_prerequisites_ready
+            || live_net_channel_ready
             || firmware_ready
             || snapshot
                 .is_some_and(|snapshot| snapshot.io_ready.is_some_and(|value| (value & 0x04) != 0))
@@ -14348,6 +14531,8 @@ where
             Self::wifi_sdio_runtime_replay_blocker(status)
         } else if host_eapol_refines_gate8 {
             exact_error
+        } else if gate8_prerequisites_ready {
+            Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         } else if let Some(progress) = sdio_runtime_progress
             .filter(|_| sdio_progress_gate == Some(1) && !cyw43_progress_suppresses_sdio_fallback)
         {
@@ -14399,6 +14584,8 @@ where
             Self::wifi_sdio_runtime_replay_next_action(status)
         } else if host_eapol_refines_gate8 {
             "inspect-host-eapol-rx-path"
+        } else if gate8_prerequisites_ready {
+            Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
         } else if let Some(progress) = sdio_runtime_progress
             .filter(|_| sdio_progress_gate == Some(1) && !cyw43_progress_suppresses_sdio_fallback)
         {
@@ -14480,7 +14667,17 @@ where
             || fault.is_some()
             || sdio_replay_gate.is_some()
             || runtime_bootstrap_failed
-            || host_eapol_refines_gate8;
+            || host_eapol_refines_gate8
+            || gate8_prerequisites_ready;
+        if gate8_prerequisites_ready {
+            let precedence = format_message(format_args!(
+                "wifi: evidence startup_precedence proof=current-gate8a+8b pair_epoch={} generation={} frontier={} supersedes=bootstrap-progress",
+                gate8.pair_scrub_epoch,
+                gate8.generation,
+                gate8_frontier.map_or("complete", |frontier| frontier.token),
+            ));
+            self.emit_console_line(precedence.as_str());
+        }
         if let Some(progress) = cyw43_runtime_progress {
             let progress_line = format_message(format_args!(
                 "wifi: cyw43 last_progress marker_valid={} sequence={} phase={} phase_name={} aux0=0x{:08x} gate={} superseded={}",
@@ -16353,9 +16550,7 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending"
-                    || exact_error.starts_with("cyw43-association-")
-                {
+                if Self::wifi_exact_error_is_association_frontier(exact_error) {
                     "cyw43-association-join-pending"
                 } else if exact_error.starts_with("cyw43-host-eapol-") {
                     "host-eapol"
@@ -16386,9 +16581,7 @@ where
             6 => "firmware-upload",
             7 => "function2-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending"
-                    || exact_error.starts_with("cyw43-association-")
-                {
+                if Self::wifi_exact_error_is_association_frontier(exact_error) {
                     "association-join"
                 } else if exact_error.starts_with("cyw43-host-eapol-") {
                     "host-eapol"
@@ -16410,9 +16603,7 @@ where
 
     #[cfg(feature = "kernel")]
     fn wifi_control_stage_for_exact_error(exact_error: &str) -> &str {
-        if exact_error == "cyw43-association-join-pending"
-            || exact_error.starts_with("cyw43-association-")
-        {
+        if Self::wifi_exact_error_is_association_frontier(exact_error) {
             "association-join"
         } else if exact_error.starts_with("cyw43-host-eapol-") {
             "host-eapol"
@@ -16439,9 +16630,7 @@ where
             6 => "inspect-cyw43-firmware-upload",
             7 => "verify-function2-enable-ready",
             8 => {
-                if exact_error == "cyw43-association-join-pending"
-                    || exact_error.starts_with("cyw43-association-")
-                {
+                if Self::wifi_exact_error_is_association_frontier(exact_error) {
                     "resume-exact-association-join-owner"
                 } else if exact_error.starts_with("cyw43-host-eapol-") {
                     "complete-host-eapol-handshake"
@@ -16785,6 +16974,20 @@ where
             exact_error,
             "sdio-cmd52-write" | "sdio-cmd52-read" | "sdio-cmd53-r5-error"
         ) || exact_error.contains("cmd53-r5")
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_exact_error_is_association_frontier(exact_error: &str) -> bool {
+        exact_error == "cyw43-association-join-pending"
+            || exact_error.starts_with("cyw43-association-")
+            || matches!(
+                exact_error,
+                "join-owner-active"
+                    | "join-submit-pending"
+                    | "association-retry-pending"
+                    | "association-event-pending"
+                    | "link-up-pending"
+            )
     }
 
     #[cfg(feature = "kernel")]
@@ -24026,6 +24229,22 @@ mod tests {
             ),
             "resume-exact-association-join-owner",
         );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_blocker_for_gate(8, "join-owner-active"),
+            "cyw43-association-join-pending",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_gate_name_for_gate(8, "join-owner-active"),
+            "association-join",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_control_stage_for_exact_error("join-owner-active"),
+            "association-join",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_next_action_for_gate(8, "join-owner-active"),
+            "resume-exact-association-join-owner",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -31196,6 +31415,35 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_association_claim_preopens_priority_lane() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.status.active_driver = "cyw43";
+        wifi.status.active_interface = "wifi";
+        wifi.status.address_source = "wifi-associating";
+        wifi.status.dhcp_phase = "associating";
+
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        assert!(
+            pump.linked_runtime_cyw43_network_burst_due(),
+            "the first association owner turn must open the CYW43 priority lane before preparing Join"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_priority_work_due(),
+            "association actionability must reach the lease admission decision"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_pending_unauthenticated_socket_work_extends_network_quantum() {
         struct LinkedRuntimeTestReset;
 
@@ -31360,17 +31608,17 @@ mod tests {
         };
         assert_eq!(
             cyw43_closing_drain_decision(prepared, prepared, false, false, 1, 100),
-            Cyw43ClosingDrainDecision::Continue,
+            Cyw43RetainedDrainDecision::Continue,
             "an ABI-invisible Prepared parent must keep its bounded Network slice",
         );
         assert_eq!(
             cyw43_closing_drain_decision(prepared, issued, false, false, 2, 200),
-            Cyw43ClosingDrainDecision::Continue,
+            Cyw43RetainedDrainDecision::Continue,
             "the same parent may cross the one-way physical issue boundary",
         );
         assert_eq!(
             cyw43_closing_drain_decision(issued, Closed, false, false, 3, 300),
-            Cyw43ClosingDrainDecision::Complete,
+            Cyw43RetainedDrainDecision::Complete,
             "terminal restore must end the slice exactly once",
         );
         assert_eq!(
@@ -31382,7 +31630,7 @@ mod tests {
                 LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS,
                 300,
             ),
-            Cyw43ClosingDrainDecision::TurnCap,
+            Cyw43RetainedDrainDecision::TurnCap,
         );
         assert_eq!(
             cyw43_closing_drain_decision(
@@ -31393,15 +31641,15 @@ mod tests {
                 3,
                 LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS * 1_000,
             ),
-            Cyw43ClosingDrainDecision::TimeCap,
+            Cyw43RetainedDrainDecision::TimeCap,
         );
         assert_eq!(
             cyw43_closing_drain_decision(issued, issued, true, false, 3, 300),
-            Cyw43ClosingDrainDecision::Dispatch,
+            Cyw43RetainedDrainDecision::Dispatch,
         );
         assert_eq!(
             cyw43_closing_drain_decision(issued, issued, false, true, 3, 300),
-            Cyw43ClosingDrainDecision::Physical,
+            Cyw43RetainedDrainDecision::Physical,
             "physical operator service retains precedence over TCP dispatch",
         );
         assert_eq!(
@@ -31416,25 +31664,99 @@ mod tests {
                 3,
                 300,
             ),
-            Cyw43ClosingDrainDecision::Recovery,
+            Cyw43RetainedDrainDecision::Recovery,
             "Closing may never switch retained-parent identity",
         );
         assert_eq!(
             cyw43_closing_drain_decision(issued, prepared, false, false, 3, 300),
-            Cyw43ClosingDrainDecision::Recovery,
+            Cyw43RetainedDrainDecision::Recovery,
             "an issued parent may never move backward to Prepared",
         );
         assert_eq!(
             cyw43_closing_drain_decision(issued, Inactive, false, false, 3, 300),
-            Cyw43ClosingDrainDecision::Recovery,
+            Cyw43RetainedDrainDecision::Recovery,
             "disappearing without a typed Closed terminal is torn state",
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_unleased_boundary_adopts_only_one_exact_parent() {
+        use crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::{
+            Inactive, Invalid, Issued, Prepared,
+        };
+
+        let prepared = Prepared {
+            request: 66,
+            command_fingerprint: 0x1234_5678,
+        };
+        let issued = Issued {
+            request: 66,
+            command_fingerprint: 0x1234_5678,
+        };
+        assert_eq!(
+            cyw43_boundary_drain_decision(prepared, prepared, false, false, 1, 100),
+            Cyw43RetainedDrainDecision::Continue,
+            "a prepared root continuation must receive its second owner turn"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(prepared, issued, false, false, 2, 200),
+            Cyw43RetainedDrainDecision::Continue,
+            "the exact fingerprint may advance across the issue boundary"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(issued, Inactive, false, false, 3, 300),
+            Cyw43RetainedDrainDecision::Complete,
+            "only disappearance after the exact owner turn is terminal"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(
+                prepared,
+                Prepared {
+                    request: 67,
+                    command_fingerprint: 0x1234_5678,
+                },
+                false,
+                false,
+                2,
+                200,
+            ),
+            Cyw43RetainedDrainDecision::Recovery,
+            "request identity cannot switch at the boundary"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(
+                prepared,
+                Prepared {
+                    request: 66,
+                    command_fingerprint: 0x8765_4321,
+                },
+                false,
+                false,
+                2,
+                200,
+            ),
+            Cyw43RetainedDrainDecision::Recovery,
+            "the immutable command fingerprint cannot switch"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(issued, prepared, false, false, 3, 300),
+            Cyw43RetainedDrainDecision::Recovery,
+            "an issued parent cannot move backward to Prepared"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(prepared, Invalid { request: 66 }, false, false, 2, 200,),
+            Cyw43RetainedDrainDecision::Recovery,
+            "torn or wrong-parent state is never adopted"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_cancel_escalates_only_when_exact_parent_cannot_resume() {
-        use crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish;
+        use crate::hal::driver_task::{
+            Cyw43SdioNetworkBoundaryParent, Cyw43SdioNetworkPriorityLeaseFinish,
+        };
 
         let prepared = Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
             request: 41,
@@ -31445,23 +31767,47 @@ mod tests {
             issued: true,
         };
         assert!(
-            linked_runtime_network_cancel_requires_pair_restart(prepared, true),
+            linked_runtime_network_cancel_requires_pair_restart(
+                prepared,
+                Cyw43SdioNetworkBoundaryParent::Inactive,
+                true,
+            ),
             "quarantine/reboot must escalate a prepared exact parent instead of stranding the lease",
         );
         assert!(
-            linked_runtime_network_cancel_requires_pair_restart(issued, true),
+            linked_runtime_network_cancel_requires_pair_restart(
+                issued,
+                Cyw43SdioNetworkBoundaryParent::Inactive,
+                true,
+            ),
             "quarantine/reboot must preserve issued-unknown ownership through pair recovery",
         );
         assert!(
-            !linked_runtime_network_cancel_requires_pair_restart(prepared, false),
+            !linked_runtime_network_cancel_requires_pair_restart(
+                prepared,
+                Cyw43SdioNetworkBoundaryParent::Inactive,
+                false,
+            ),
             "an ordinary physical-console interruption must leave the exact parent drainable",
         );
         assert!(
             !linked_runtime_network_cancel_requires_pair_restart(
                 Cyw43SdioNetworkPriorityLeaseFinish::Closed,
+                Cyw43SdioNetworkBoundaryParent::Inactive,
                 true,
             ),
             "a clean close needs no recovery",
+        );
+        assert!(
+            linked_runtime_network_cancel_requires_pair_restart(
+                Cyw43SdioNetworkPriorityLeaseFinish::Inactive,
+                Cyw43SdioNetworkBoundaryParent::Prepared {
+                    request: 66,
+                    command_fingerprint: 0x1234_5678,
+                },
+                true,
+            ),
+            "an unleased exact parent also needs recovery when its owner cannot resume",
         );
     }
 
@@ -35041,6 +35387,93 @@ mod tests {
         assert!(!rendered.contains("next_action=inspect-host-eapol-rx-path"));
         assert!(!rendered.contains("wifi: cyw43 fault "), "{rendered}");
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn current_gate8_prerequisites_supersede_unversioned_bootstrap_progress() {
+        use crate::drivers::driver_task_net::{
+            Cyw43Gate8Diagnostic, Cyw43Gate8SubgateDiagnostic, Cyw43Gate8SubgateStatus,
+        };
+
+        let pending = Cyw43Gate8SubgateDiagnostic {
+            token: "8c-join-terminal",
+            status: Cyw43Gate8SubgateStatus::Pending,
+            blocker: "join-owner-active",
+        };
+        let mut subgates = [pending; 8];
+        subgates[0] = Cyw43Gate8SubgateDiagnostic {
+            token: "8a-pair-generation",
+            status: Cyw43Gate8SubgateStatus::Pass,
+            blocker: "none",
+        };
+        subgates[1] = Cyw43Gate8SubgateDiagnostic {
+            token: "8b-control-program",
+            status: Cyw43Gate8SubgateStatus::Pass,
+            blocker: "none",
+        };
+        let gate8 = Cyw43Gate8Diagnostic {
+            pair_scrub_epoch: 7,
+            generation: 11,
+            subgates,
+            current_work_pending: true,
+        };
+
+        assert!(
+            KernelConsoleTestPump::wifi_gate8_prerequisites_supersede_runtime_progress(
+                gate8, false,
+            ),
+            "current 8a/8b proof must outrank historical ring progress"
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_gate8_prerequisites_supersede_runtime_progress(
+                gate8, true,
+            ),
+            "active pair recovery remains stronger than the retained Gate 8 frontier"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_nonterminal_progress_gate(
+                true,
+                true,
+                Some(2),
+                false,
+                Some(2),
+            ),
+            Some(8),
+            "a current association frontier must replace a stale Gate 2 breadcrumb"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_nonterminal_progress_gate(
+                true,
+                false,
+                Some(2),
+                false,
+                Some(2),
+            ),
+            None,
+            "complete Gate 8 proof must advance to DHCP instead of regressing"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_startup_nonterminal_progress_gate(
+                false,
+                true,
+                Some(2),
+                false,
+                Some(2),
+            ),
+            Some(2),
+            "without current Gate 8 proof the low-level frontier remains authoritative"
+        );
+
+        let mut gate8_without_control_program = gate8;
+        gate8_without_control_program.subgates[1].status = Cyw43Gate8SubgateStatus::Pending;
+        assert!(
+            !KernelConsoleTestPump::wifi_gate8_prerequisites_supersede_runtime_progress(
+                gate8_without_control_program,
+                false,
+            ),
+            "8a alone must not suppress a current bootstrap frontier"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

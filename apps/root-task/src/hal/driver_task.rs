@@ -3138,6 +3138,47 @@ pub(crate) enum Cyw43SdioNetworkPriorityLeaseFinish {
     RecoveryRequired,
 }
 
+/// Exact retained CYW43 parent visible at an inactive Network-lease boundary.
+///
+/// A `Prepared` or `Issued` value is safe only for resuming the same immutable
+/// root continuation through its existing owner. `Invalid` includes torn
+/// state and active CYW43 commands that are not root-continuation operations;
+/// neither may be adopted by EventPump.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkBoundaryParent {
+    Inactive,
+    Prepared {
+        request: u32,
+        command_fingerprint: u32,
+    },
+    Issued {
+        request: u32,
+        command_fingerprint: u32,
+    },
+    Invalid {
+        request: u32,
+    },
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioNetworkBoundaryParent {
+    #[must_use]
+    pub(crate) const fn request(self) -> u32 {
+        match self {
+            Self::Inactive => 0,
+            Self::Prepared { request, .. }
+            | Self::Issued { request, .. }
+            | Self::Invalid { request } => request,
+        }
+    }
+
+    #[must_use]
+    pub(crate) const fn resumable(self) -> bool {
+        matches!(self, Self::Prepared { .. } | Self::Issued { .. })
+    }
+}
+
 #[cfg(all(test, feature = "kernel"))]
 static TEST_ROOT_GRANT_PUBLICATIONS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(test, feature = "kernel"))]
@@ -4545,6 +4586,101 @@ fn active_driver_task_retained_request_snapshot(
         state,
         command_fingerprint,
     })
+}
+
+#[cfg(feature = "kernel")]
+fn classify_cyw43_sdio_network_boundary_parent(
+    snapshot: Option<DriverTaskRetainedRequestSnapshot>,
+) -> Cyw43SdioNetworkBoundaryParent {
+    let Some(snapshot) = snapshot else {
+        return Cyw43SdioNetworkBoundaryParent::Inactive;
+    };
+    let request = snapshot.state.request();
+    let Some(command) = snapshot.state.command() else {
+        return Cyw43SdioNetworkBoundaryParent::Invalid { request };
+    };
+    if snapshot.command_fingerprint == 0
+        || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+    {
+        return Cyw43SdioNetworkBoundaryParent::Invalid { request };
+    }
+    match snapshot.state {
+        DriverTaskRetainedRequestState::Prepared { .. } => {
+            Cyw43SdioNetworkBoundaryParent::Prepared {
+                request,
+                command_fingerprint: snapshot.command_fingerprint,
+            }
+        }
+        DriverTaskRetainedRequestState::Issued { .. } => Cyw43SdioNetworkBoundaryParent::Issued {
+            request,
+            command_fingerprint: snapshot.command_fingerprint,
+        },
+        DriverTaskRetainedRequestState::Invalid { .. } => {
+            Cyw43SdioNetworkBoundaryParent::Invalid { request }
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+const fn validate_cyw43_sdio_network_boundary_parent(
+    parent: Cyw43SdioNetworkBoundaryParent,
+    phase: Option<Cyw43SdioNetworkPriorityLeasePhase>,
+    priority_token_present: bool,
+    pair_current: bool,
+) -> Cyw43SdioNetworkBoundaryParent {
+    if !parent.resumable() {
+        return parent;
+    }
+    if matches!(phase, Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive))
+        && !priority_token_present
+        && pair_current
+    {
+        parent
+    } else {
+        Cyw43SdioNetworkBoundaryParent::Invalid {
+            request: parent.request(),
+        }
+    }
+}
+
+/// Snapshot the sole exact CYW43 parent that may cross from an unleased
+/// network turn into the lease-aware EventPump lane.
+///
+/// This boundary exists for an already-prepared parent only. It never admits a
+/// fresh command and rejects torn, wrong-operation, pair-recovery, or leaked
+/// priority-token state.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_sdio_network_boundary_parent() -> Cyw43SdioNetworkBoundaryParent {
+    let snapshot =
+        active_driver_task_retained_request_for_slot(&DRIVER_TASK_SLOT_CYW43455).map(|state| {
+            DriverTaskRetainedRequestSnapshot {
+                state,
+                command_fingerprint: DRIVER_TASK_SLOT_CYW43455
+                    .active_command_fingerprint
+                    .load(Ordering::Acquire),
+            }
+        });
+    let parent = classify_cyw43_sdio_network_boundary_parent(snapshot);
+    if !parent.resumable() {
+        return parent;
+    }
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .load(Ordering::Acquire),
+    );
+    let priority_token_present = DRIVER_TASK_SLOT_CYW43455
+        .retained_priority_boost_active
+        .load(Ordering::Acquire)
+        == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+        || DRIVER_TASK_SLOT_SDIO_HOST
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN;
+    let pair_current = CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
+    validate_cyw43_sdio_network_boundary_parent(parent, phase, priority_token_present, pair_current)
 }
 
 /// Open the sole pair-fenced continuation lane for one already-issued CYW43
@@ -17938,6 +18074,116 @@ mod tests {
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = generation;
         command
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_network_boundary_classifies_only_exact_root_continuations() {
+        let command = network_priority_test_cyw43_command(17);
+        let prepared = DriverTaskRetainedRequestSnapshot {
+            state: DriverTaskRetainedRequestState::Prepared {
+                request: 41,
+                command,
+            },
+            command_fingerprint: 0x1234_5678,
+        };
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(Some(prepared)),
+            Cyw43SdioNetworkBoundaryParent::Prepared {
+                request: 41,
+                command_fingerprint: 0x1234_5678,
+            }
+        );
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(Some(DriverTaskRetainedRequestSnapshot {
+                state: DriverTaskRetainedRequestState::Issued {
+                    request: 41,
+                    command,
+                },
+                command_fingerprint: 0x1234_5678,
+            })),
+            Cyw43SdioNetworkBoundaryParent::Issued {
+                request: 41,
+                command_fingerprint: 0x1234_5678,
+            }
+        );
+
+        let mut wrong_parent = command;
+        wrong_parent.aux0 = 0;
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(Some(DriverTaskRetainedRequestSnapshot {
+                state: DriverTaskRetainedRequestState::Prepared {
+                    request: 42,
+                    command: wrong_parent,
+                },
+                command_fingerprint: 0x8765_4321,
+            })),
+            Cyw43SdioNetworkBoundaryParent::Invalid { request: 42 },
+            "an active non-continuation CYW43 command must not be adopted"
+        );
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(Some(DriverTaskRetainedRequestSnapshot {
+                state: DriverTaskRetainedRequestState::Invalid { request: 43 },
+                command_fingerprint: 0x1111_2222,
+            })),
+            Cyw43SdioNetworkBoundaryParent::Invalid { request: 43 }
+        );
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(Some(DriverTaskRetainedRequestSnapshot {
+                state: DriverTaskRetainedRequestState::Prepared {
+                    request: 44,
+                    command,
+                },
+                command_fingerprint: 0,
+            })),
+            Cyw43SdioNetworkBoundaryParent::Invalid { request: 44 },
+            "a missing immutable fingerprint cannot authorize a resume"
+        );
+        assert_eq!(
+            classify_cyw43_sdio_network_boundary_parent(None),
+            Cyw43SdioNetworkBoundaryParent::Inactive,
+            "no active parent is not an adoption candidate"
+        );
+        let exact = Cyw43SdioNetworkBoundaryParent::Prepared {
+            request: 41,
+            command_fingerprint: 0x1234_5678,
+        };
+        assert_eq!(
+            validate_cyw43_sdio_network_boundary_parent(
+                exact,
+                Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive),
+                false,
+                true,
+            ),
+            exact,
+            "only an inactive, token-free, current-pair boundary may resume"
+        );
+        for rejected in [
+            validate_cyw43_sdio_network_boundary_parent(
+                exact,
+                Some(Cyw43SdioNetworkPriorityLeasePhase::Closing),
+                false,
+                true,
+            ),
+            validate_cyw43_sdio_network_boundary_parent(
+                exact,
+                Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive),
+                true,
+                true,
+            ),
+            validate_cyw43_sdio_network_boundary_parent(
+                exact,
+                Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive),
+                false,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                rejected,
+                Cyw43SdioNetworkBoundaryParent::Invalid { request: 41 },
+                "Closing, leaked priority ownership, and pair recovery must reject adoption"
+            );
+        }
     }
 
     #[cfg(feature = "kernel")]
