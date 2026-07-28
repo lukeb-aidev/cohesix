@@ -121,9 +121,10 @@ const TCP_CONSOLE_SELFTEST_LOCAL_PORT: u16 = 31_341;
 const CONSOLE_SELFTEST_RECOVERY_DEADLINE_MS: u64 = 3_000;
 const CONSOLE_SELFTEST_RETRY_MS: u64 = 250;
 const DISCONNECT_DRAIN_DEADLINE_MS: u64 = 10_000;
+const DISCONNECT_PEER_CLOSE_GRACE_MS: u64 = 1_000;
 const DISCONNECT_CLOSE_DEADLINE_MS: u64 = 10_000;
 const CONSOLE_HANDOFF_PENDING_DEADLINE_MS: u64 =
-    DISCONNECT_DRAIN_DEADLINE_MS + DISCONNECT_CLOSE_DEADLINE_MS;
+    DISCONNECT_DRAIN_DEADLINE_MS + DISCONNECT_PEER_CLOSE_GRACE_MS + DISCONNECT_CLOSE_DEADLINE_MS;
 const BOOTINFO_NET_LOGGER_PREFIX_BUDGET: usize = 48;
 const BOOTINFO_NET_LOGGER_FRAME_LIMIT: usize = 192;
 #[cfg(feature = "net-outbound-probe")]
@@ -155,12 +156,14 @@ enum SelfTestLogSeverity {
 enum ConsoleDisconnectPhase {
     Idle,
     Draining,
+    PeerCloseWait,
     Closing,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ConsoleDisconnectAction {
     Wait,
+    StartPeerCloseWait,
     StartClose,
     ContinueClose,
     Complete,
@@ -172,6 +175,7 @@ fn console_disconnect_action(
     tcp_state: TcpState,
     application_output_drained: bool,
     tcp_send_queue_empty: bool,
+    peer_close_first: bool,
     now_ms: u64,
     phase_started_ms: u64,
 ) -> ConsoleDisconnectAction {
@@ -186,8 +190,28 @@ fn console_disconnect_action(
             ) {
                 ConsoleDisconnectAction::ContinueClose
             } else if application_output_drained && tcp_send_queue_empty {
-                ConsoleDisconnectAction::StartClose
+                if peer_close_first && tcp_state == TcpState::Established {
+                    ConsoleDisconnectAction::StartPeerCloseWait
+                } else {
+                    ConsoleDisconnectAction::StartClose
+                }
             } else if now_ms.saturating_sub(phase_started_ms) >= DISCONNECT_DRAIN_DEADLINE_MS {
+                ConsoleDisconnectAction::Abort
+            } else {
+                ConsoleDisconnectAction::Wait
+            }
+        }
+        ConsoleDisconnectPhase::PeerCloseWait => {
+            if matches!(tcp_state, TcpState::Closed | TcpState::TimeWait) {
+                ConsoleDisconnectAction::Complete
+            } else if matches!(
+                tcp_state,
+                TcpState::FinWait1 | TcpState::FinWait2 | TcpState::Closing | TcpState::LastAck
+            ) {
+                ConsoleDisconnectAction::ContinueClose
+            } else if tcp_state == TcpState::CloseWait {
+                ConsoleDisconnectAction::StartClose
+            } else if now_ms.saturating_sub(phase_started_ms) >= DISCONNECT_PEER_CLOSE_GRACE_MS {
                 ConsoleDisconnectAction::Abort
             } else {
                 ConsoleDisconnectAction::Wait
@@ -212,12 +236,12 @@ const fn arm_console_disconnect_phase_deadline(
 ) -> Option<u64> {
     match phase {
         ConsoleDisconnectPhase::Idle => None,
-        ConsoleDisconnectPhase::Draining | ConsoleDisconnectPhase::Closing => {
-            Some(match phase_started_ms {
-                Some(started_ms) => started_ms,
-                None => now_ms,
-            })
-        }
+        ConsoleDisconnectPhase::Draining
+        | ConsoleDisconnectPhase::PeerCloseWait
+        | ConsoleDisconnectPhase::Closing => Some(match phase_started_ms {
+            Some(started_ms) => started_ms,
+            None => now_ms,
+        }),
     }
 }
 
@@ -233,7 +257,10 @@ const fn console_disconnect_terminal_reason(
 }
 
 const fn console_output_admitted_during_disconnect(phase: ConsoleDisconnectPhase) -> bool {
-    !matches!(phase, ConsoleDisconnectPhase::Closing)
+    !matches!(
+        phase,
+        ConsoleDisconnectPhase::PeerCloseWait | ConsoleDisconnectPhase::Closing
+    )
 }
 
 const fn console_disconnect_application_queues_drained(
@@ -311,6 +338,32 @@ const fn console_handoff_authority_cleared(
         && !peer_present
         && inbound_queued == 0
         && !coalescer_pending
+}
+
+const fn console_socket_service_pending(
+    active_state: TcpState,
+    active_recv_queue: usize,
+    active_send_queue: usize,
+    standby_state: TcpState,
+    server_outbound_pending: bool,
+    coalescer_pending: bool,
+    disconnect_phase: ConsoleDisconnectPhase,
+) -> bool {
+    server_outbound_pending
+        || coalescer_pending
+        || active_recv_queue != 0
+        || active_send_queue != 0
+        || matches!(
+            active_state,
+            TcpState::SynReceived
+                | TcpState::CloseWait
+                | TcpState::FinWait1
+                | TcpState::FinWait2
+                | TcpState::Closing
+                | TcpState::LastAck
+        )
+        || !matches!(disconnect_phase, ConsoleDisconnectPhase::Idle)
+        || console_standby_pending_state(standby_state)
 }
 
 const fn self_test_enabled_for_backend(backend: NetBackend) -> bool {
@@ -7244,7 +7297,10 @@ impl<D: NetDevice> NetStack<D> {
                 allow_flush = false;
             }
 
-            if self.disconnect_phase == ConsoleDisconnectPhase::Closing {
+            if matches!(
+                self.disconnect_phase,
+                ConsoleDisconnectPhase::PeerCloseWait | ConsoleDisconnectPhase::Closing
+            ) {
                 allow_flush = false;
             }
 
@@ -7287,6 +7343,7 @@ impl<D: NetDevice> NetStack<D> {
                     socket.state(),
                     application_output_drained,
                     tcp_send_queue_empty,
+                    self.disconnect_reason == NetConsoleDisconnectReason::Quit,
                     now_ms,
                     self.disconnect_phase_started_ms.unwrap_or(now_ms),
                 );
@@ -7295,6 +7352,20 @@ impl<D: NetDevice> NetStack<D> {
                     console_disconnect_terminal_reason(action, self.disconnect_reason);
                 match action {
                     ConsoleDisconnectAction::Wait => {}
+                    ConsoleDisconnectAction::StartPeerCloseWait => {
+                        info!(
+                            "[net-console] quit peer-close wait conn={} state={:?} grace_ms={} app_drained={} inbound={} send_queue={}",
+                            self.active_client_id.unwrap_or(0),
+                            socket.state(),
+                            DISCONNECT_PEER_CLOSE_GRACE_MS,
+                            application_output_drained,
+                            inbound_queued,
+                            socket.send_queue()
+                        );
+                        self.disconnect_phase = ConsoleDisconnectPhase::PeerCloseWait;
+                        self.disconnect_phase_started_ms = Some(now_ms);
+                        activity = true;
+                    }
                     ConsoleDisconnectAction::StartClose => {
                         info!(
                             "[net-console] quit close start conn={} state={:?} app_drained={} inbound={} send_queue={}",
@@ -8255,6 +8326,20 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             .filter(|_| self.server.is_authenticated())
     }
 
+    fn console_service_pending(&self) -> bool {
+        let active = self.sockets.get::<TcpSocket>(self.tcp_handle);
+        let standby = self.sockets.get::<TcpSocket>(self.tcp_standby_handle);
+        console_socket_service_pending(
+            active.state(),
+            active.recv_queue(),
+            active.send_queue(),
+            standby.state(),
+            self.server.has_outbound(),
+            self.outbound.has_pending(),
+            self.disconnect_phase,
+        )
+    }
+
     fn inject_console_line(&mut self, _line: &str) {}
 
     fn reset(&mut self) {
@@ -8913,6 +8998,16 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn console_service_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.console_service_pending(),
+            Self::GenetDriverTask(stack) => stack.console_service_pending(),
+            Self::Cyw43DriverTask(stack) => stack.console_service_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_service_pending(),
+        }
+    }
+
     fn inject_console_line(&mut self, line: &str) {
         match self {
             Self::Rtl8139(stack) => stack.inject_console_line(line),
@@ -9046,6 +9141,7 @@ mod tests {
                 TcpState::Established,
                 true,
                 false,
+                false,
                 started_ms + 1,
                 started_ms,
             ),
@@ -9057,6 +9153,7 @@ mod tests {
                 TcpState::Established,
                 false,
                 true,
+                false,
                 started_ms + 1,
                 started_ms,
             ),
@@ -9068,6 +9165,7 @@ mod tests {
                 TcpState::Established,
                 true,
                 true,
+                false,
                 started_ms + 1,
                 started_ms,
             ),
@@ -9145,6 +9243,9 @@ mod tests {
             ConsoleDisconnectPhase::Draining
         ));
         assert!(!console_output_admitted_during_disconnect(
+            ConsoleDisconnectPhase::PeerCloseWait
+        ));
+        assert!(!console_output_admitted_during_disconnect(
             ConsoleDisconnectPhase::Closing
         ));
         assert_eq!(
@@ -9153,6 +9254,7 @@ mod tests {
                 TcpState::CloseWait,
                 false,
                 false,
+                true,
                 1,
                 0,
             ),
@@ -9164,6 +9266,7 @@ mod tests {
                 TcpState::CloseWait,
                 true,
                 true,
+                true,
                 1,
                 0,
             ),
@@ -9173,6 +9276,7 @@ mod tests {
             console_disconnect_action(
                 ConsoleDisconnectPhase::Draining,
                 TcpState::FinWait1,
+                true,
                 true,
                 true,
                 1,
@@ -9187,16 +9291,223 @@ mod tests {
             TcpState::LastAck,
         ] {
             assert_eq!(
-                console_disconnect_action(ConsoleDisconnectPhase::Closing, state, true, true, 1, 0,),
+                console_disconnect_action(
+                    ConsoleDisconnectPhase::Closing,
+                    state,
+                    true,
+                    true,
+                    true,
+                    1,
+                    0,
+                ),
                 ConsoleDisconnectAction::Wait
             );
         }
         for state in [TcpState::TimeWait, TcpState::Closed] {
             assert_eq!(
-                console_disconnect_action(ConsoleDisconnectPhase::Closing, state, true, true, 1, 0,),
+                console_disconnect_action(
+                    ConsoleDisconnectPhase::Closing,
+                    state,
+                    true,
+                    true,
+                    true,
+                    1,
+                    0,
+                ),
                 ConsoleDisconnectAction::Complete
             );
         }
+    }
+
+    #[test]
+    fn quit_waits_for_peer_fin_before_starting_local_close() {
+        let started_ms = 100;
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::Draining,
+                TcpState::Established,
+                true,
+                true,
+                true,
+                started_ms + 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::StartPeerCloseWait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::PeerCloseWait,
+                TcpState::Established,
+                true,
+                true,
+                true,
+                started_ms + DISCONNECT_PEER_CLOSE_GRACE_MS - 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Wait
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::PeerCloseWait,
+                TcpState::CloseWait,
+                true,
+                true,
+                true,
+                started_ms + 1,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::StartClose
+        );
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::PeerCloseWait,
+                TcpState::Established,
+                true,
+                true,
+                true,
+                started_ms + DISCONNECT_PEER_CLOSE_GRACE_MS,
+                started_ms,
+            ),
+            ConsoleDisconnectAction::Abort,
+            "a peer that never sends FIN must be aborted rather than re-enter simultaneous close"
+        );
+        assert_eq!(
+            console_disconnect_terminal_reason(
+                ConsoleDisconnectAction::Abort,
+                NetConsoleDisconnectReason::Quit,
+            ),
+            NetConsoleDisconnectReason::Error,
+            "a missing peer FIN is a forced recovery, not a graceful QUIT"
+        );
+    }
+
+    #[test]
+    fn smoltcp_quit_policy_observes_peer_fin_before_local_fin() {
+        let mut device = Loopback::new(Medium::Ethernet);
+        let address = IpAddress::Ipv4(Ipv4Address::new(127, 0, 0, 1));
+        let config = IfaceConfig::new(HardwareAddress::Ethernet(EthernetAddress([
+            0x02, 0, 0, 0, 0, 1,
+        ])));
+        let mut interface = Interface::new(config, &mut device, Instant::from_millis(0));
+        interface.update_ip_addrs(|addrs| {
+            addrs
+                .push(IpCidr::new(address, 8))
+                .expect("loopback address capacity");
+        });
+
+        let mut server_rx = [0u8; 256];
+        let mut server_tx = [0u8; 256];
+        let mut client_rx = [0u8; 256];
+        let mut client_tx = [0u8; 256];
+        let mut storage = [SocketStorage::EMPTY; 2];
+        let mut sockets = SocketSet::new(&mut storage[..]);
+        let server = sockets.add(TcpSocket::new(
+            TcpSocketBuffer::new(&mut server_rx[..]),
+            TcpSocketBuffer::new(&mut server_tx[..]),
+        ));
+        let client = sockets.add(TcpSocket::new(
+            TcpSocketBuffer::new(&mut client_rx[..]),
+            TcpSocketBuffer::new(&mut client_tx[..]),
+        ));
+
+        sockets
+            .get_mut::<TcpSocket>(server)
+            .listen(IpListenEndpoint::from(31_337))
+            .expect("server listen");
+        sockets
+            .get_mut::<TcpSocket>(client)
+            .connect(interface.context(), (address, 31_337), 49_152)
+            .expect("client connect");
+
+        for now_ms in 0..64 {
+            let _ = interface.poll(Instant::from_millis(now_ms), &mut device, &mut sockets);
+            if sockets.get::<TcpSocket>(server).state() == TcpState::Established
+                && sockets.get::<TcpSocket>(client).state() == TcpState::Established
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            sockets.get::<TcpSocket>(server).state(),
+            TcpState::Established
+        );
+        assert_eq!(
+            sockets.get::<TcpSocket>(client).state(),
+            TcpState::Established
+        );
+
+        sockets
+            .get_mut::<TcpSocket>(server)
+            .send_slice(b"OK QUIT\n")
+            .expect("server QUIT acknowledgement");
+        for now_ms in 64..128 {
+            let _ = interface.poll(Instant::from_millis(now_ms), &mut device, &mut sockets);
+            if sockets.get::<TcpSocket>(client).recv_queue() == b"OK QUIT\n".len()
+                && sockets.get::<TcpSocket>(server).send_queue() == 0
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            sockets.get::<TcpSocket>(server).send_queue(),
+            0,
+            "the QUIT acknowledgement must be peer-ACKed before close policy starts"
+        );
+        sockets
+            .get_mut::<TcpSocket>(client)
+            .recv(|payload| {
+                assert_eq!(payload, b"OK QUIT\n");
+                (payload.len(), ())
+            })
+            .expect("client reads QUIT acknowledgement");
+        sockets.get_mut::<TcpSocket>(client).close();
+
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::PeerCloseWait,
+                sockets.get::<TcpSocket>(server).state(),
+                true,
+                true,
+                true,
+                1,
+                0,
+            ),
+            ConsoleDisconnectAction::Wait,
+            "a queued peer FIN must be polled before the server can stage its own FIN"
+        );
+
+        for now_ms in 128..192 {
+            let _ = interface.poll(Instant::from_millis(now_ms), &mut device, &mut sockets);
+            if sockets.get::<TcpSocket>(server).state() == TcpState::CloseWait {
+                break;
+            }
+        }
+        let server_state = sockets.get::<TcpSocket>(server).state();
+        assert_eq!(server_state, TcpState::CloseWait);
+        assert_eq!(
+            console_disconnect_action(
+                ConsoleDisconnectPhase::PeerCloseWait,
+                server_state,
+                true,
+                true,
+                true,
+                2,
+                0,
+            ),
+            ConsoleDisconnectAction::StartClose
+        );
+        sockets.get_mut::<TcpSocket>(server).close();
+
+        for now_ms in 192..320 {
+            let _ = interface.poll(Instant::from_millis(now_ms), &mut device, &mut sockets);
+            if console_active_terminal_state(sockets.get::<TcpSocket>(server).state()) {
+                break;
+            }
+        }
+        assert!(
+            console_active_terminal_state(sockets.get::<TcpSocket>(server).state()),
+            "peer-first close must reach a terminal server state without the simultaneous-close stall"
+        );
     }
 
     #[test]
@@ -9208,6 +9519,7 @@ mod tests {
                 TcpState::Established,
                 false,
                 false,
+                false,
                 started_ms + DISCONNECT_DRAIN_DEADLINE_MS - 1,
                 started_ms,
             ),
@@ -9217,6 +9529,7 @@ mod tests {
             console_disconnect_action(
                 ConsoleDisconnectPhase::Draining,
                 TcpState::Established,
+                false,
                 false,
                 false,
                 started_ms + DISCONNECT_DRAIN_DEADLINE_MS,
@@ -9238,6 +9551,7 @@ mod tests {
                 TcpState::LastAck,
                 true,
                 true,
+                false,
                 started_ms + DISCONNECT_CLOSE_DEADLINE_MS - 1,
                 started_ms,
             ),
@@ -9249,6 +9563,7 @@ mod tests {
                 TcpState::LastAck,
                 true,
                 true,
+                false,
                 started_ms + DISCONNECT_CLOSE_DEADLINE_MS,
                 started_ms,
             ),
@@ -9269,6 +9584,7 @@ mod tests {
                 TcpState::Established,
                 false,
                 false,
+                false,
                 first_late_service_ms,
                 armed,
             ),
@@ -9281,7 +9597,50 @@ mod tests {
     fn console_standby_arms_only_after_active_shutdown_begins() {
         assert!(!console_standby_should_arm(ConsoleDisconnectPhase::Idle));
         assert!(console_standby_should_arm(ConsoleDisconnectPhase::Draining,));
+        assert!(console_standby_should_arm(
+            ConsoleDisconnectPhase::PeerCloseWait,
+        ));
         assert!(console_standby_should_arm(ConsoleDisconnectPhase::Closing,));
+    }
+
+    #[test]
+    fn console_service_weighting_requires_exact_socket_or_parser_work() {
+        assert!(!console_socket_service_pending(
+            TcpState::Established,
+            0,
+            0,
+            TcpState::Closed,
+            false,
+            false,
+            ConsoleDisconnectPhase::Idle,
+        ));
+        assert!(console_socket_service_pending(
+            TcpState::SynReceived,
+            0,
+            0,
+            TcpState::Closed,
+            false,
+            false,
+            ConsoleDisconnectPhase::Idle,
+        ));
+        assert!(console_socket_service_pending(
+            TcpState::Established,
+            1,
+            0,
+            TcpState::Closed,
+            false,
+            false,
+            ConsoleDisconnectPhase::Idle,
+        ));
+        assert!(console_socket_service_pending(
+            TcpState::Established,
+            0,
+            0,
+            TcpState::Established,
+            false,
+            false,
+            ConsoleDisconnectPhase::PeerCloseWait,
+        ));
     }
 
     #[test]
@@ -9311,6 +9670,13 @@ mod tests {
         }
 
         let started_ms = 41;
+        assert_eq!(
+            CONSOLE_HANDOFF_PENDING_DEADLINE_MS,
+            DISCONNECT_DRAIN_DEADLINE_MS
+                + DISCONNECT_PEER_CLOSE_GRACE_MS
+                + DISCONNECT_CLOSE_DEADLINE_MS,
+            "standby authority must outlive every legal active QUIT phase"
+        );
         assert!(!console_standby_pending_expired(
             Some(started_ms),
             started_ms + CONSOLE_HANDOFF_PENDING_DEADLINE_MS - 1,

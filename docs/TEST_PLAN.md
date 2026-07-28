@@ -692,7 +692,14 @@ CMD5, generic CMD52, and data CMD53 descriptors. It must prove that every
 request receives a separate 10-millisecond entry-inhibit fence and a fresh
 10-second watchdog armed only after that fence, including a response at the
 legal request edge after a long pre-issue wait. Data and short-busy requests
-must write `TIMEOUT_CONTROL=0x0e`. The owner may reserve two transfer attempts,
+must write `TIMEOUT_CONTROL=0x0e`. Before every COMMAND, the owner must W1C and
+read back the request-owned command/data/error status bits while excluding
+`CARD_INT`; a retained nonzero readback may retry only that W1C within the
+entry deadline, and expiry must report typed pre-issue stage 8 with zero command
+issues. Stage 8 containment must poison that SDIO owner generation, and a
+subsequent same-generation descriptor must reject with zero command issues
+until the ordinary pair reprobe establishes a replacement generation. The
+owner may reserve two transfer attempts,
 but a second issue is legal only after an entry-inhibit failure proves the first
 command was never written; command, response, data, busy, or later failures are
 issued-unknown and perform no same-generation replay. Each failed attempt gets
@@ -719,6 +726,7 @@ bounded preissue/issue owner quantum: SDHCI block-gap
 inspect/repair/verify, DMA-authority/idle snapshot, full immutable control-block
 staging, status clear, timeout, block size, block count, argument, transfer
 mode, exactly one COMMAND, and then exactly one BCM2835 DMA `ACTIVE` write.
+The status-clear step must include the same request-owned readback fence.
 That quantum must remain within the shared 256-operation contract and perform
 no post-issue completion snapshot. Stale pre-command
 `SPACE_AVAILABLE` cannot satisfy the fresh response or switch an immutable
@@ -839,9 +847,11 @@ ordinary DPC lane, perform zero Function 2 reads, ignore stale shared-aperture
 bytes, consume the event, and rearm the sole SDIO owner. A real
 `I_HMB_FRAME_IND` or validated retained frame hint remains mandatory for the
 fixed first read. The durable present-or-exact-consumed predicate must also be
-tested directly against a later verified same-generation consume observation:
-that receipt may satisfy a subsequent retained observation without replay,
-while a blind ring advance, stale generation, mismatched sequence, or recovery
+tested directly against verified same-generation consume observations for
+event N and then N+1: the live consumer watermark and still-valid retained slot
+must continue to authorize N without replay while both a future unconsumed
+event and a sequence outside the finite retained range reject. A blind ring
+advance, overwritten slot, stale generation, mismatched sequence, or recovery
 state must still fail closed. This direct state cut is not a permitted
 production interleaving between cached foreground completion and watermark
 refresh.
@@ -1224,11 +1234,13 @@ failure, result, and raw diagnostic records must enqueue or append to
 `/log/queen.log` without a raw/current-TCB UART write; tests must show the
 linked flush waits for the following operator turn and does not share a turn
 with a CYW43 operation. Ordinary linked EventPump coverage must prove the
-`Serial -> Dispatch -> Network -> LocalSeat -> Display` phase classes and the
+`Serial -> LocalSeat -> Dispatch -> Network -> Display` phase classes and the
 bounded CYW43 network weighting.
-`Serial` may perform one TX-first reciprocal-ring turn; `Dispatch` may consume
-one serial, buffered local-seat, or buffered network command without polling
-the NIC or flushing TCP. `Network` may perform exactly one ordinary NIC service
+`Serial` may perform one TX-first reciprocal-ring turn; `LocalSeat` then polls
+one retained USB keyboard turn so fresh physical input is buffered before the
+network quantum. `Dispatch` may consume one serial, buffered local-seat, or
+buffered network command without polling the NIC or flushing TCP. `Network` may
+perform exactly one ordinary NIC service
 or one retained GENET response flush and must leave any received command
 buffered for a later `Dispatch` turn. NIC polling, TCP flushing, and command
 dispatch must occupy distinct outer turns. A dispatched GENET command must
@@ -1238,17 +1250,26 @@ connection. Each later
 normally or sixteen while the display reports backlog pressure. A second
 buffered command stays behind the first cursor, and a changed or absent active
 connection rejects stale cursor work. A data-ready CYW43 connection must not
-create the GENET cursor. When an authenticated TCP session, a response flush,
-runtime/root RX backlog, a current valid pending or masked SDIO DPC event, or
-an exact retained CYW43 NetData/TX/fairness continuation is live, CYW43 may
-retain at most four successive `Network` outer turns. This bounded service is
-available before TCP authentication so raw DPC and retained owner work cannot
-be starved while establishing a connection. Every turn must still admit no
-more than one CYW43 physical operation, and the fourth must release to the
-physical-console rotation. Tests must prove idle, stale-epoch, poisoned,
-overrun, acknowledgement-failed, and inconsistent CYW43 DPC work plus GENET do
-not enter this burst, and that reboot, quarantine, or a pending
-physical-console response cancels it. CYW43 device
+create the GENET cursor. A response flush, exact socket/parser work,
+runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
+retained CYW43 NetData/TX/fairness continuation may retain `Network` for at most
+32 successive outer turns and 25 ms on the seL4 virtual counter, whichever
+comes first. Authentication without pending work must not extend the quantum.
+Tests must advance time between outer turns and prove that a quantum already at
+its deadline returns to `Serial` with zero additional NIC/SDIO operations.
+This bounded service is available before TCP authentication so raw DPC and
+retained owner work cannot be starved while establishing a connection. Every
+turn must still admit no more than one CYW43 physical operation, and either cap
+must release to `Serial` and `LocalSeat`. Tests must prove idle, stale-epoch,
+poisoned, overrun, acknowledgement-failed, and inconsistent CYW43 DPC work plus
+GENET do not enter the quantum. At `Network` entry, quarantine and an already
+owned physical response must skip NIC inspection and polling, open no CYW43
+quantum, consume no CYW43 turn, and return directly to `Serial`. The sole
+exception must be the exact network-origin reboot acknowledgement drain; after
+that required NIC service turn, or when a physical response becomes pending
+during an admitted operation, the next phase must be `Serial` rather than
+`Display`. `netstats` must expose quantum count, turns, maximum duration, and
+exit reasons. CYW43 device
 tests must also prove that a retained TX or unproved credit window withholds
 smoltcp's paired RX/TX token, preserves the copied RX frame, advances only the
 sole retained owner, and produces zero fabricated TX drops before the frame is
@@ -1257,20 +1278,24 @@ later delivered.
 The console socket pack must cover the maximum enabled profile: active and
 standby console acceptors, DHCP, two UDP self-test sockets, two TCP self-test
 sockets, and the optional outbound probe. All application close origins enter
-one `Draining`/`Closing` state machine. A standby acceptor may be armed only
-after that transition, may retain at most one unauthenticated peer for the
-20-second virtual-counter handoff deadline, and must never run the console
-parser or authentication server concurrently with the active socket. Tests
-must cover clean quit, peer EOF, authentication failure/timeout, receive error,
-inactivity timeout, early standby FIN/RST recycling, promotion only after the
-old socket and session authority are clear, and pair abort on
-network-generation or stack reset. Fresh Pi proof must include immediate
-sequential `.coh` connections plus a probe-then-authenticated connection on
-both selected WiFi and GENET; a delayed successful reconnect does not satisfy
-this gate.
-`LocalSeat` may perform one retained USB keyboard turn, and `Display` may
-perform at most one retained HDMI attach or pending-frame turn. Every retained
-phase must return before its successor.
+one `Draining`/`PeerCloseWait`/`Closing` state machine. Clean `QUIT` must drain
+`OK QUIT`, wait up to one second for the peer FIN, and close from `CloseWait`
+before standby promotion. If the active socket remains `Established` at grace
+expiry, the policy must force abort and promote that terminal result; it must
+never initiate a local FIN from `Established`. Tests must cover this timeout
+policy and actual smoltcp FIN/ACK ordering, as well as clean quit, peer EOF,
+authentication failure/timeout, receive error, inactivity timeout, early
+standby FIN/RST recycling, promotion only after the old socket and session
+authority are clear, and pair abort on network-generation or stack reset. A
+standby acceptor may be armed only after that transition, may retain at most one
+unauthenticated peer for the 21-second virtual-counter handoff deadline, and
+must never run the console parser or authentication server concurrently with
+the active socket. Fresh Pi proof must include immediate sequential `.coh`
+connections plus a probe-then-authenticated connection on both selected WiFi
+and GENET; a delayed successful reconnect does not satisfy this gate.
+`Display` may perform at most one retained HDMI attach or pending-frame turn.
+Every retained phase must return before its successor, and CYW43 quantum
+telemetry must remain zero on GENET.
 During
 bootstrap/recovery, only proved linked-runtime serial polling and flushing plus
 already-buffered local-seat bytes are permitted; generic/current-TCB UART

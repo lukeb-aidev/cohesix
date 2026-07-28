@@ -1494,6 +1494,24 @@ pub struct PumpMetrics {
     pub net_cyw43_tail_idle: u64,
     /// CYW43 tail-ingest polls stopped by service-budget exhaustion.
     pub net_cyw43_tail_budget_errors: u64,
+    /// Bounded CYW43 Network continuation quanta opened by the linked arbiter.
+    pub net_cyw43_service_quanta: u64,
+    /// CYW43 Network outer turns consumed across those bounded quanta.
+    pub net_cyw43_service_turns: u64,
+    /// CYW43 Network quanta that ended because exact work became idle.
+    pub net_cyw43_service_terminal_exits: u64,
+    /// CYW43 Network quanta that reached the fixed turn cap.
+    pub net_cyw43_service_turn_cap_exits: u64,
+    /// CYW43 Network quanta that reached the virtual-counter time cap.
+    pub net_cyw43_service_time_cap_exits: u64,
+    /// CYW43 Network quanta broken for a physical response.
+    pub net_cyw43_service_physical_exits: u64,
+    /// CYW43 Network quanta broken by reboot or quarantine.
+    pub net_cyw43_service_guard_exits: u64,
+    /// Largest completed CYW43 Network quantum in outer turns.
+    pub net_cyw43_service_max_turns: u64,
+    /// Largest completed CYW43 Network quantum duration in microseconds.
+    pub net_cyw43_service_max_elapsed_us: u64,
     /// Physical-console output records deferred behind active keyboard input.
     pub physical_console_output_deferred: u64,
     /// Deferred physical-console output records flushed during idle turns.
@@ -1924,7 +1942,9 @@ enum LinkedRuntimeServicePhase {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-const LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS: u8 = 4;
+const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u8 = 32;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
 
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
@@ -2407,6 +2427,10 @@ where
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_consecutive_turns: u8,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_network_quantum_started_ms: Option<u64>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_network_quantum_started_ticks: u64,
     #[cfg(feature = "kernel")]
     serial_root_uart_released_for_linked_runtime: bool,
     #[cfg(feature = "kernel")]
@@ -2580,6 +2604,10 @@ where
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_consecutive_turns: 0,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_network_quantum_started_ms: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_network_quantum_started_ticks: 0,
             #[cfg(feature = "kernel")]
             serial_root_uart_released_for_linked_runtime: false,
             #[cfg(feature = "kernel")]
@@ -2988,7 +3016,11 @@ where
                 self.queue_pending_console_output_for_linked_serial();
                 let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
                 self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
-                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                self.linked_runtime_service_phase = if self.local_seat.is_some() {
+                    LinkedRuntimeServicePhase::LocalSeat
+                } else {
+                    LinkedRuntimeServicePhase::Dispatch
+                };
                 self.serial_console_turn_active = false;
             }
             LinkedRuntimeServicePhase::Dispatch => {
@@ -3013,6 +3045,40 @@ where
                 );
             }
             LinkedRuntimeServicePhase::Network => {
+                #[cfg(feature = "net-console")]
+                if self.network_service_quarantined
+                    || (self.physical_console_response_pending()
+                        && !self.linked_runtime_network_reboot_ack_flush_due())
+                {
+                    self.cancel_linked_runtime_network_quantum();
+                    return;
+                }
+                #[cfg(feature = "net-console")]
+                let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected && self.linked_runtime_network_consecutive_turns != 0 {
+                    let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+                    if elapsed_us
+                        >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
+                    {
+                        // The virtual-counter cap is an admission fence, not
+                        // merely a post-operation accounting threshold. If the
+                        // outer loop resumes after the deadline, return to the
+                        // physical operator before another NIC/SDIO turn.
+                        self.finish_linked_runtime_network_quantum(true, elapsed_us);
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        return;
+                    }
+                }
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected && self.linked_runtime_network_consecutive_turns == 0 {
+                    self.linked_runtime_network_quantum_started_ms = Some(self.now_ms);
+                    self.linked_runtime_network_quantum_started_ticks =
+                        crate::arch::aarch64::timer::timer_counter_ticks();
+                    self.metrics.net_cyw43_service_quanta =
+                        self.metrics.net_cyw43_service_quanta.saturating_add(1);
+                }
                 // Admit the NIC child operation only. Any line it produces is
                 // retained by the network console and dispatched during the
                 // next dedicated Dispatch phase, after the NIC guard and
@@ -3020,29 +3086,40 @@ where
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
+                    if !cyw43_lane_selected {
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_network_quantum_started_ms = None;
+                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_service_phase =
+                            self.linked_runtime_network_followup_phase();
+                        return;
+                    }
                     self.linked_runtime_network_consecutive_turns = self
                         .linked_runtime_network_consecutive_turns
                         .saturating_add(1);
-                    if self.linked_runtime_cyw43_network_burst_due()
+                    self.metrics.net_cyw43_service_turns =
+                        self.metrics.net_cyw43_service_turns.saturating_add(1);
+                    let service_due = self.linked_runtime_cyw43_network_burst_due();
+                    let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+                    if service_due
                         && self.linked_runtime_network_consecutive_turns
-                            < LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS
+                            < LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                        && elapsed_us
+                            < LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
                     {
                         // A CYW43 op8 completion exposes exactly one copied
-                        // frame. Keep the NIC phase for a bounded number of
-                        // later outer EventPump turns while TCP is active or
-                        // the child/root RX queues are non-empty. Each turn
-                        // still owns at most one linked-runtime operation;
-                        // serial, USB, and HDMI resume after the fourth turn.
+                        // frame. Keep the NIC phase only while an exact
+                        // continuation, queue, or TCP response is pending.
+                        // Each outer turn still owns at most one linked-runtime
+                        // operation; the fixed turn/deadline cut returns to
+                        // serial and USB before another quantum.
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
                         return;
                     }
+                    self.finish_linked_runtime_network_quantum(service_due, elapsed_us);
                     self.linked_runtime_network_consecutive_turns = 0;
                 }
-                self.linked_runtime_service_phase = if self.local_seat.is_some() {
-                    LinkedRuntimeServicePhase::LocalSeat
-                } else {
-                    LinkedRuntimeServicePhase::Serial
-                };
+                self.linked_runtime_service_phase = self.linked_runtime_network_followup_phase();
             }
             LinkedRuntimeServicePhase::LocalSeat => {
                 // This phase may perform one USB linked-runtime operation. Any
@@ -3051,7 +3128,7 @@ where
                 // with the USB poll that delivered it.
                 self.poll_local_seat_backend_for_ingress();
                 self.poll_runtime(true, false, false);
-                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
             }
             LinkedRuntimeServicePhase::Display => {
                 // HDMI attach and frame submission share the display runtime
@@ -3078,6 +3155,108 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_network_reboot_ack_flush_due(&self) -> bool {
+        self.reboot_pending
+            && !self.reboot_ack_failed
+            && !self.reboot_ack_drain_observed
+            && self.reboot_ack_source == Some(ConsoleInputSource::Net)
+            && self.reboot_ack_net_conn_id.is_some()
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn cancel_linked_runtime_network_quantum(&mut self) {
+        if self.linked_runtime_network_consecutive_turns != 0 {
+            let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+            self.finish_linked_runtime_network_quantum(false, elapsed_us);
+        } else {
+            self.linked_runtime_network_quantum_started_ms = None;
+            self.linked_runtime_network_quantum_started_ticks = 0;
+        }
+        self.linked_runtime_network_consecutive_turns = 0;
+        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+    }
+
+    #[cfg(feature = "kernel")]
+    fn linked_runtime_network_followup_phase(&self) -> LinkedRuntimeServicePhase {
+        #[cfg(feature = "net-console")]
+        if self.network_service_quarantined || self.physical_console_response_pending() {
+            return LinkedRuntimeServicePhase::Serial;
+        }
+        #[cfg(not(feature = "net-console"))]
+        if self.physical_console_response_pending() {
+            return LinkedRuntimeServicePhase::Serial;
+        }
+        if self.local_seat.is_some() {
+            LinkedRuntimeServicePhase::Display
+        } else {
+            LinkedRuntimeServicePhase::Serial
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_network_quantum_elapsed_us(&self) -> u64 {
+        let elapsed_ms = self
+            .linked_runtime_network_quantum_started_ms
+            .map_or(0, |started_ms| self.now_ms.saturating_sub(started_ms));
+        let started_ticks = self.linked_runtime_network_quantum_started_ticks;
+        let finished_ticks = crate::arch::aarch64::timer::timer_counter_ticks();
+        let frequency_hz = crate::arch::aarch64::timer::timer_freq_hz();
+        if started_ticks == 0 || finished_ticks < started_ticks || frequency_hz == 0 {
+            return elapsed_ms.saturating_mul(1_000);
+        }
+        let elapsed_ticks = finished_ticks.saturating_sub(started_ticks);
+        let micros = u128::from(elapsed_ticks).saturating_mul(1_000_000) / u128::from(frequency_hz);
+        let counter_elapsed_us = core::cmp::min(micros, u128::from(u64::MAX)) as u64;
+        counter_elapsed_us.max(elapsed_ms.saturating_mul(1_000))
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn finish_linked_runtime_network_quantum(&mut self, service_due: bool, elapsed_us: u64) {
+        let turns = u64::from(self.linked_runtime_network_consecutive_turns);
+        self.metrics.net_cyw43_service_max_turns =
+            self.metrics.net_cyw43_service_max_turns.max(turns);
+        self.metrics.net_cyw43_service_max_elapsed_us = self
+            .metrics
+            .net_cyw43_service_max_elapsed_us
+            .max(elapsed_us);
+
+        if self.reboot_pending || self.network_service_quarantined {
+            self.metrics.net_cyw43_service_guard_exits =
+                self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
+        } else if self.physical_console_response_pending() {
+            self.metrics.net_cyw43_service_physical_exits = self
+                .metrics
+                .net_cyw43_service_physical_exits
+                .saturating_add(1);
+        } else if !service_due {
+            self.metrics.net_cyw43_service_terminal_exits = self
+                .metrics
+                .net_cyw43_service_terminal_exits
+                .saturating_add(1);
+        } else if elapsed_us >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000) {
+            self.metrics.net_cyw43_service_time_cap_exits = self
+                .metrics
+                .net_cyw43_service_time_cap_exits
+                .saturating_add(1);
+        } else {
+            self.metrics.net_cyw43_service_turn_cap_exits = self
+                .metrics
+                .net_cyw43_service_turn_cap_exits
+                .saturating_add(1);
+        }
+
+        self.linked_runtime_network_quantum_started_ms = None;
+        self.linked_runtime_network_quantum_started_ticks = 0;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_cyw43_lane_selected(&self) -> bool {
+        self.net.as_ref().is_some_and(|net| {
+            net.driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_cyw43_network_burst_due(&self) -> bool {
         if self.network_service_quarantined
             || self.reboot_pending
@@ -3092,8 +3271,8 @@ where
                 return false;
             }
             let counters = net.stats();
-            net.authenticated_console_conn_id().is_some()
-                || self.pending_net_flush.active()
+            self.pending_net_flush.active()
+                || net.console_service_pending()
                 || counters.wifi_rx_runtime_queue_count != 0
                 || counters.wifi_rx_pending_queue_count != 0
                 || crate::drivers::driver_task_net::cyw43_steady_network_work_pending(
@@ -17788,6 +17967,21 @@ where
                             self.metrics.net_cyw43_tail_idle,
                             self.metrics.net_cyw43_tail_budget_errors,
                         ));
+                        let line_cyw43_quantum = format_message(format_args!(
+                            "netstats: cyw43_quantum runs={} turns={} max_turns={} max_elapsed_us={}",
+                            self.metrics.net_cyw43_service_quanta,
+                            self.metrics.net_cyw43_service_turns,
+                            self.metrics.net_cyw43_service_max_turns,
+                            self.metrics.net_cyw43_service_max_elapsed_us,
+                        ));
+                        let line_cyw43_quantum_exits = format_message(format_args!(
+                            "netstats: cyw43_quantum_exit idle={} turn_cap={} time_cap={} physical={} guard={}",
+                            self.metrics.net_cyw43_service_terminal_exits,
+                            self.metrics.net_cyw43_service_turn_cap_exits,
+                            self.metrics.net_cyw43_service_time_cap_exits,
+                            self.metrics.net_cyw43_service_physical_exits,
+                            self.metrics.net_cyw43_service_guard_exits,
+                        ));
                         let line_policy = format_message(format_args!(
                             "netstats: proof_policy m26d_net_first={} physical_input_yield={}",
                             Self::yes_no(m26d_network_proof_prefers_tcp_over_physical_input(
@@ -17984,6 +18178,8 @@ where
                         self.emit_console_line(line_two.as_str());
                         self.emit_console_line(line_three.as_str());
                         self.emit_console_line(line_flush.as_str());
+                        self.emit_console_line(line_cyw43_quantum.as_str());
+                        self.emit_console_line(line_cyw43_quantum_exits.as_str());
                         self.emit_console_line(line_policy.as_str());
                         self.emit_console_line(line_local_seat.as_str());
                         self.emit_console_line(line_four.as_str());
@@ -21457,6 +21653,7 @@ mod tests {
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -21559,6 +21756,7 @@ mod tests {
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -23747,6 +23945,7 @@ mod tests {
         disconnect_requests: usize,
         active_conn_id: Option<u64>,
         authenticated_conn_id: Option<u64>,
+        console_service_pending: bool,
         console_output_drained: bool,
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
@@ -23779,6 +23978,7 @@ mod tests {
                 disconnect_requests: 0,
                 active_conn_id: None,
                 authenticated_conn_id: None,
+                console_service_pending: false,
                 console_output_drained: true,
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
@@ -23918,6 +24118,10 @@ mod tests {
 
         fn authenticated_console_conn_id(&self) -> Option<u64> {
             self.authenticated_conn_id
+        }
+
+        fn console_service_pending(&self) -> bool {
+            self.console_service_pending
         }
 
         fn console_listener_ready(&self) -> bool {
@@ -30072,7 +30276,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_tcp_backlog_receives_four_bounded_network_turns() {
+    fn linked_cyw43_tcp_backlog_receives_transaction_sized_network_quantum() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30081,6 +30285,7 @@ mod tests {
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -30101,7 +30306,7 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for completed_turns in 1..LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS {
+            for completed_turns in 1..LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
                 pump.poll();
                 assert_eq!(
                     pump.linked_runtime_service_phase,
@@ -30116,14 +30321,124 @@ mod tests {
                 "the bounded burst must return ownership to physical operator service"
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turn_cap_exits, 1);
+            assert_eq!(
+                pump.metrics.net_cyw43_service_max_turns,
+                u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+            );
         }
 
-        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS as usize);
+        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS as usize);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_pending_dpc_receives_four_bounded_network_turns_before_auth() {
+    fn linked_cyw43_network_quantum_has_virtual_counter_deadline() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 5);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.console_service_pending = true;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            for _ in 1..5 {
+                pump.poll();
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Network
+                );
+            }
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_time_cap_exits, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_max_elapsed_us, 25_000);
+        }
+
+        assert_eq!(net.polls, 5);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_elapsed_network_quantum_fences_next_nic_admission() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(1, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.console_service_pending = true;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 1);
+
+            let started_ms = pump
+                .linked_runtime_network_quantum_started_ms
+                .expect("the admitted CYW43 quantum has a start");
+            pump.now_ms = started_ms.saturating_add(LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS);
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "an elapsed quantum must fence the next NIC operation at entry"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_time_cap_exits, 1);
+        }
+
+        assert_eq!(
+            net.polls, 1,
+            "deadline expiry must not admit an extra NIC/SDIO turn"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_pending_dpc_receives_transaction_sized_quantum_before_auth() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30170,7 +30485,7 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for _ in 1..LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS {
+            for _ in 1..LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
                 pump.poll();
                 assert_eq!(
                     pump.linked_runtime_service_phase,
@@ -30182,16 +30497,16 @@ mod tests {
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
-                "DPC urgency must still return ownership after the fourth turn"
+                "DPC urgency must return ownership at the fixed transaction cap"
             );
         }
 
-        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_BURST_MAX_TURNS as usize);
+        assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS as usize);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_accepted_unauthenticated_peer_does_not_trigger_tcp_weighting() {
+    fn linked_cyw43_idle_authenticated_peer_does_not_extend_network_quantum() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30200,6 +30515,7 @@ mod tests {
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -30211,17 +30527,49 @@ mod tests {
         let mut wifi = FakeNet::new();
         wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         wifi.active_conn_id = Some(18);
-
+        wifi.authenticated_conn_id = Some(18);
         let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
         assert!(
             !pump.linked_runtime_cyw43_network_burst_due(),
-            "an accepted but unauthenticated peer cannot earn TCP weighting"
+            "authentication alone cannot keep an idle Network quantum alive"
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_network_burst_is_cyw43_backlog_only_and_quarantine_cancels() {
+    fn linked_cyw43_pending_unauthenticated_socket_work_extends_network_quantum() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(18);
+        wifi.console_service_pending = true;
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        assert!(
+            pump.linked_runtime_cyw43_network_burst_due(),
+            "an exact pending handshake or response must retain Network service"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_genet_network_turn_does_not_open_cyw43_quantum() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30258,7 +30606,22 @@ mod tests {
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
         }
         assert_eq!(genet.polls, 1);
+    }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_network_entry_obeys_physical_and_quarantine_guards() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::repeated(2, 1);
@@ -30283,6 +30646,15 @@ mod tests {
                 !pump.linked_runtime_cyw43_network_burst_due(),
                 "a physical-console response must cancel CYW43 weighting"
             );
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "an owned physical response must skip the NIC and return directly to serial"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
             pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
             pump.reboot_pending = true;
             assert!(
@@ -30299,8 +30671,66 @@ mod tests {
                 "quarantine must cancel a CYW43 burst before another NIC turn"
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+            pump.network_service_quarantined = false;
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            assert_eq!(
+                pump.linked_runtime_network_followup_phase(),
+                LinkedRuntimeServicePhase::Serial,
+                "a physical barrier observed after an admitted NIC operation must bypass display"
+            );
         }
         assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_network_origin_reboot_retains_ack_drain_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(23);
+        wifi.console_output_drained = false;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+            pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+            pump.reboot_pending = true;
+            pump.reboot_ack_source = Some(ConsoleInputSource::Net);
+            pump.reboot_ack_net_conn_id = Some(23);
+            pump.reboot_ack_deadline_ms = u64::MAX;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the physical barrier must own the turn immediately after the ACK flush"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 1);
+        }
+        assert_eq!(
+            wifi.polls, 1,
+            "a network-origin reboot must retain one ACK-drain NIC turn"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -30359,7 +30789,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn ordinary_linked_dispatch_routes_arrows_to_echo_before_later_display_phase() {
+    fn ordinary_linked_local_seat_precedes_dispatch_network_and_display() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -30396,7 +30826,26 @@ mod tests {
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_local_seat(&mut local_seat);
-            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::LocalSeat;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .expect("local seat remains attached")
+                    .keyboard_trace()
+                    .backend_poll_calls,
+                1
+            );
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .linked_hdmi_pending_work());
 
             pump.poll();
             assert_eq!(
@@ -30411,32 +30860,17 @@ mod tests {
                     .expect("local seat remains attached")
                     .keyboard_trace()
                     .backend_poll_calls,
-                0
-            );
-            assert!(pump
-                .local_seat
-                .as_ref()
-                .expect("local seat remains attached")
-                .linked_hdmi_pending_work());
-
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::LocalSeat
-            );
-            assert_eq!(
-                pump.local_seat
-                    .as_ref()
-                    .expect("local seat remains attached")
-                    .keyboard_trace()
-                    .backend_poll_calls,
-                0
+                1
             );
 
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Display
+            );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_quanta, 0,
+                "a non-CYW43 Network turn must not contaminate Wi-Fi telemetry"
             );
             assert_eq!(
                 pump.local_seat

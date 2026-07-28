@@ -70,8 +70,46 @@ DIAGNOSTIC_SETTLE_TIMEOUT_S = 30.0
 DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
 NETTEST_STARTED_MARKER = b"OK NETTEST detail=started"
 NETTEST_OBSERVATION_S = 17.0
+WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S = 240.0
+WIFI_DHCP_TERMINAL_TIMEOUT_S = 60.0
+WIFI_DHCP_POLL_INTERVAL_S = 5.0
+WIFI_SUPERVISOR_TERMINAL_MARKERS = (
+    b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready",
+    b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed",
+    b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=permanent",
+)
 U32_MAX = (1 << 32) - 1
 U64_MAX = (1 << 64) - 1
+WIFI_SUPERVISOR_PREFIX = b"CYW43_BOOTSTRAP_SUPERVISOR "
+WIFI_SUPERVISOR_HEADER_RE = re.compile(
+    rb"^CYW43_BOOTSTRAP_SUPERVISOR "
+    rb"attempt=(?P<attempt>[^ \r\n]+) "
+    rb"status=(?P<status>[^ \r\n]+)"
+)
+WIFI_SUPERVISOR_TERMINAL_RE = re.compile(
+    rb"^CYW43_BOOTSTRAP_SUPERVISOR "
+    rb"attempt=(?P<attempt>0|[1-9][0-9]*) "
+    rb"status=(?P<status>ready|failed|permanent) "
+    rb"backoff_ms=(?P<backoff_ms>0|[1-9][0-9]*) "
+    rb"next_attempt_ms=(?P<next_attempt_ms>0|[1-9][0-9]*) "
+    rb"serial=(?P<serial>ready|blocked) "
+    rb"local_seat=(?P<local_seat>enabled|disabled|ready) "
+    rb"recovery=full "
+    rb"console_seq=(?P<console_seq>0|[1-9][0-9]*) "
+    rb"telemetry_sinks=serial\+qlog\+hdmi "
+    rb"prompt_refresh=yes$"
+)
+NETSTATS_NETWORK_RE = re.compile(
+    rb"netstats: generation=(?P<generation>0|[1-9][0-9]*) "
+    rb"mode=(?P<mode>[^ \r\n]+) "
+    rb"policy=(?P<policy>[^ \r\n]+) "
+    rb"active=(?P<active>[^ \r\n]+) "
+    rb"standby=[^ \r\n]+ "
+    rb"addr_src=(?P<address_source>[^ \r\n]+) "
+    rb"ip=(?P<ip>[^ \r\n]+) "
+    rb"gateway=[^ \r\n]+ "
+    rb"dhcp=(?P<dhcp_phase>[^ \r\n]+)"
+)
 NETTEST_STARTED_RE = re.compile(
     rb"OKNETTESTdetail=startedrun_generation="
     rb"(?P<run_generation>[1-9][0-9]*)"
@@ -124,6 +162,15 @@ MENU_UNKNOWN = "unknown"
 
 class SerialMarkerTimeout(RuntimeError):
     """Raised when the expected serial marker does not arrive in time."""
+
+
+def remaining_before_deadline(deadline: float, *, label: str) -> float:
+    """Return positive time remaining before one absolute host deadline."""
+
+    remaining_s = deadline - time.monotonic()
+    if remaining_s <= 0:
+        raise SerialMarkerTimeout(f"timed out waiting for {label}")
+    return remaining_s
 
 
 class RedactingSerialController:
@@ -300,18 +347,41 @@ class RedactingSerialController:
                 seen.extend(chunk)
         return bytes(seen)
 
-    def synchronize_root_diagnostic_command(self, *, label: str) -> None:
+    def synchronize_root_diagnostic_command(
+        self,
+        *,
+        label: str,
+        deadline: float | None = None,
+    ) -> None:
         """Prove a fresh, complete root prompt before one diagnostic command."""
 
+        drain_s = DIAGNOSTIC_COMMAND_DRAIN_S
+        if deadline is not None:
+            drain_s = min(
+                drain_s,
+                remaining_before_deadline(
+                    deadline,
+                    label=f"diagnostic barrier before {label}",
+                ),
+            )
         self.drain_for(
-            DIAGNOSTIC_COMMAND_DRAIN_S,
+            drain_s,
             label=f"stale serial output before {label}",
         )
         self.send_line("", public_line="<clear-line>")
         self.send_line("ping")
+        ping_timeout_s = 10.0
+        if deadline is not None:
+            ping_timeout_s = min(
+                ping_timeout_s,
+                remaining_before_deadline(
+                    deadline,
+                    label=f"root ping before {label}",
+                ),
+            )
         ping_snapshot = self.read_until(
             (b"OK PING",),
-            10,
+            ping_timeout_s,
             label=f"root ping OK before {label}",
         )
         prompt_offset = ping_snapshot.rfind(ROOT_PROMPT_FULL)
@@ -320,9 +390,18 @@ class RedactingSerialController:
             b"OK PING",
         )
         if not prompt_follows_ping:
+            prompt_timeout_s = 10.0
+            if deadline is not None:
+                prompt_timeout_s = min(
+                    prompt_timeout_s,
+                    remaining_before_deadline(
+                        deadline,
+                        label=f"root prompt before {label}",
+                    ),
+                )
             self.read_until(
                 (ROOT_PROMPT_FULL,),
-                10,
+                prompt_timeout_s,
                 label=f"fresh full root prompt before {label}",
             )
 
@@ -388,6 +467,127 @@ def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
     compact_snapshot = b"".join(cleaned.split())
     compact_marker = b"".join(marker.split())
     return compact_marker in compact_snapshot
+
+
+def inspect_wifi_supervisor_evidence(
+    snapshot: bytes,
+    *,
+    reject_trailing_partial: bool = False,
+) -> tuple[tuple[int, str] | None, str | None]:
+    """Validate complete supervisor lines and return one production terminal."""
+
+    terminal: tuple[int, str] | None = None
+    for raw_line in snapshot.splitlines(keepends=True):
+        line_complete = raw_line.endswith(b"\n")
+        line = (
+            raw_line.removesuffix(b"\n").removesuffix(b"\r")
+            if line_complete
+            else raw_line
+        )
+        if not line.startswith(WIFI_SUPERVISOR_PREFIX):
+            continue
+        header = WIFI_SUPERVISOR_HEADER_RE.match(line)
+        if not line_complete:
+            if not reject_trailing_partial:
+                continue
+            if header is not None:
+                attempt_raw = header.group("attempt")
+                if (
+                    attempt_raw.isdigit()
+                    and not (
+                        len(attempt_raw) > 1 and attempt_raw.startswith(b"0")
+                    )
+                    and len(attempt_raw) <= 10
+                ):
+                    attempt = int(attempt_raw)
+                    if attempt <= U32_MAX and attempt > 1:
+                        return None, f"attempt-{attempt}-forbidden"
+            return None, "trailing-supervisor-fragment"
+        if header is None:
+            if any(
+                token in line
+                for token in (
+                    b"status=ready",
+                    b"status=failed",
+                    b"status=permanent",
+                )
+            ):
+                return None, "terminal-schema-invalid"
+            continue
+        attempt_raw = header.group("attempt")
+        if (
+            not attempt_raw.isdigit()
+            or (len(attempt_raw) > 1 and attempt_raw.startswith(b"0"))
+            or len(attempt_raw) > 10
+        ):
+            return None, "attempt-invalid"
+        attempt = int(attempt_raw)
+        if attempt > U32_MAX:
+            return None, "attempt-invalid"
+        if attempt > 1:
+            return None, f"attempt-{attempt}-forbidden"
+        status = header.group("status").decode("ascii", errors="replace")
+        if status not in {"ready", "failed", "permanent"}:
+            continue
+        match = WIFI_SUPERVISOR_TERMINAL_RE.fullmatch(line)
+        if match is None or attempt != 1:
+            return None, "terminal-schema-invalid"
+        numeric_fields = (
+            match.group("backoff_ms"),
+            match.group("next_attempt_ms"),
+            match.group("console_seq"),
+        )
+        if any(len(value) > 20 or int(value) > U64_MAX for value in numeric_fields):
+            return None, "terminal-numeric-field-invalid"
+        if int(match.group("backoff_ms")) != 0:
+            return None, "terminal-backoff-invalid"
+        candidate = (attempt, status)
+        if terminal is not None:
+            if terminal != candidate:
+                return None, "terminal-contradiction"
+            return None, "terminal-duplicate"
+        terminal = candidate
+    return terminal, None
+
+
+def parse_wifi_supervisor_terminal(snapshot: bytes) -> tuple[int, str] | None:
+    """Return one line-complete, exact production Wi-Fi terminal record."""
+
+    terminal, error = inspect_wifi_supervisor_evidence(snapshot)
+    return terminal if error is None else None
+
+
+def wifi_terminal_marker_offset(snapshot: bytes) -> int:
+    """Return the newest terminal-prefix offset, or ``-1`` when absent."""
+
+    return max(snapshot.rfind(marker) for marker in WIFI_SUPERVISOR_TERMINAL_MARKERS)
+
+
+def parse_netstats_network_status(
+    snapshot: bytes,
+) -> tuple[int, str, str, str, str, str, str] | None:
+    """Return one complete network-state line from a ``netstats`` response."""
+
+    matches = [
+        NETSTATS_NETWORK_RE.fullmatch(line.removesuffix(b"\r"))
+        for line in snapshot.splitlines()
+    ]
+    matches = [match for match in matches if match is not None]
+    if len(matches) != 1:
+        return None
+    match = matches[0]
+    generation = int(match.group("generation"))
+    if generation > U32_MAX:
+        return None
+    return (
+        generation,
+        match.group("mode").decode("ascii"),
+        match.group("policy").decode("ascii"),
+        match.group("active").decode("ascii"),
+        match.group("address_source").decode("ascii"),
+        match.group("ip").decode("ascii"),
+        match.group("dhcp_phase").decode("ascii"),
+    )
 
 
 def parse_nettest_started_run_generation(snapshot: bytes) -> int | None:
@@ -770,46 +970,218 @@ def reboot_from_root(
     )
 
 
+def wait_for_wifi_supervisor_terminal(
+    controller: RedactingSerialController,
+    initial_snapshot: bytes,
+    timeout_s: float,
+) -> tuple[str, bytes]:
+    """Wait passively until the single Wi-Fi bootstrap attempt is terminal."""
+
+    deadline = time.monotonic() + timeout_s
+    evidence = initial_snapshot
+    observed = b""
+    terminal, error = inspect_wifi_supervisor_evidence(evidence)
+    if error is not None:
+        raise RuntimeError(f"invalid CYW43 bootstrap supervisor evidence: {error}")
+    source = "boot-snapshot"
+    if terminal is None:
+        source = "serial-wait"
+        marker_offset = wifi_terminal_marker_offset(evidence)
+        if marker_offset < 0:
+            chunk = controller.read_until(
+                WIFI_SUPERVISOR_TERMINAL_MARKERS,
+                remaining_before_deadline(
+                    deadline,
+                    label="terminal CYW43 bootstrap supervisor status",
+                ),
+                label="terminal CYW43 bootstrap supervisor status",
+            )
+            observed += chunk
+            evidence += chunk
+            marker_offset = wifi_terminal_marker_offset(evidence)
+        if marker_offset >= 0 and b"\n" not in evidence[marker_offset:]:
+            chunk = controller.read_until(
+                (b"\n",),
+                remaining_before_deadline(
+                    deadline,
+                    label="complete CYW43 bootstrap supervisor line",
+                ),
+                label="complete CYW43 bootstrap supervisor line",
+            )
+            observed += chunk
+            evidence += chunk
+        terminal, error = inspect_wifi_supervisor_evidence(evidence)
+    if error is not None:
+        raise RuntimeError(f"invalid CYW43 bootstrap supervisor evidence: {error}")
+    if terminal is None:
+        raise RuntimeError(
+            "terminal CYW43 bootstrap marker did not contain one line-complete "
+            "current production supervisor record"
+        )
+    attempt, status = terminal
+    controller.note(
+        "wifi supervisor terminal "
+        f"attempt={attempt} status={status} source={source} "
+        "action=diagnostics-admitted"
+    )
+    return status, observed
+
+
+def issue_diagnostic_command(
+    controller: RedactingSerialController,
+    command: str,
+    label: str,
+    result_markers: tuple[bytes, ...],
+    *,
+    deadline: float | None = None,
+) -> bytes:
+    """Issue one diagnostic only after a fresh root-command boundary."""
+
+    controller.synchronize_root_diagnostic_command(label=label, deadline=deadline)
+    controller.send_line(command, reinforce_terminator=True)
+    result_timeout_s = 90.0
+    if deadline is not None:
+        result_timeout_s = remaining_before_deadline(
+            deadline,
+            label=f"result for {label}",
+        )
+    return controller.read_until(
+        result_markers,
+        result_timeout_s,
+        label=f"result for {label}",
+    )
+
+
+def wait_for_wifi_dhcp_bound(
+    controller: RedactingSerialController,
+    *,
+    timeout_s: float,
+) -> tuple[bool, list[str]]:
+    """Poll guarded ``netstats`` until the selected Wi-Fi lease is current."""
+
+    deadline = time.monotonic() + timeout_s
+    max_polls = max(1, int(timeout_s / WIFI_DHCP_POLL_INTERVAL_S) + 1)
+    for poll in range(1, max_polls + 1):
+        label = "netstats" if poll == 1 else f"netstats-dhcp-poll-{poll}"
+        try:
+            snapshot = issue_diagnostic_command(
+                controller,
+                "netstats",
+                label,
+                DIAGNOSTIC_RESULT_MARKERS["netstats"],
+                deadline=deadline,
+            )
+        except SerialMarkerTimeout as exc:
+            controller.note(
+                "wifi DHCP terminal result=timeout "
+                f"polls={poll} phase=guarded-netstats error={exc} "
+                "action=skip-premature-nettest"
+            )
+            return False, ["wifi-dhcp:terminal-timeout"]
+        if time.monotonic() >= deadline:
+            controller.note(
+                "wifi DHCP terminal result=timeout "
+                f"polls={poll} phase=guarded-netstats-complete "
+                "action=skip-premature-nettest"
+            )
+            return False, ["wifi-dhcp:terminal-timeout"]
+        if serial_marker_seen(
+            snapshot,
+            DIAGNOSTIC_RESULT_MARKERS["netstats"][1],
+        ):
+            controller.note(
+                "diagnostic terminal command='netstats' "
+                f"label={label!r} result=err action=skip-premature-nettest"
+            )
+            return False, [f"{label}:err"]
+
+        status = parse_netstats_network_status(snapshot)
+        if status is None:
+            controller.note(
+                "wifi DHCP poll "
+                f"poll={poll} status=invalid-or-missing "
+                "action=wait-before-nettest"
+            )
+        else:
+            (
+                generation,
+                mode,
+                policy,
+                active,
+                address_source,
+                ip,
+                dhcp_phase,
+            ) = status
+            bound = (
+                mode == "dhcp"
+                and policy == "wifi"
+                and active == "wifi"
+                and address_source == "dhcp-lease"
+                and ip != "0.0.0.0"
+                and dhcp_phase == "bound"
+            )
+            controller.note(
+                "wifi DHCP poll "
+                f"poll={poll} generation={generation} mode={mode} "
+                f"policy={policy} active={active} "
+                f"address_source={address_source} ip={ip} "
+                f"dhcp={dhcp_phase} "
+                f"terminal={'bound' if bound else 'no'}"
+            )
+            if bound:
+                return True, []
+
+        remaining_s = deadline - time.monotonic()
+        if remaining_s <= 0 or poll == max_polls:
+            controller.note(
+                "wifi DHCP terminal result=timeout "
+                f"polls={poll} action=skip-premature-nettest"
+            )
+            return False, ["wifi-dhcp:terminal-timeout"]
+        controller.drain_for(
+            min(WIFI_DHCP_POLL_INTERVAL_S, remaining_s),
+            label=f"wifi DHCP progress before poll {poll + 1}",
+        )
+    raise AssertionError("bounded Wi-Fi DHCP poll loop fell through")
+
+
 def run_diagnostics(
     controller: RedactingSerialController,
     lane: str,
     *,
     prompt_ready: bool,
+    boot_snapshot: bytes = b"",
+    wifi_supervisor_timeout_s: float = WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S,
+    wifi_dhcp_timeout_s: float = WIFI_DHCP_TERMINAL_TIMEOUT_S,
 ) -> bool:
     """Run every diagnostic and return whether all terminal results passed."""
 
-    commands = [
-        ("netstats", "netstats"),
-        ("nettest", "nettest"),
-        ("netstats", "netstats-final"),
-    ]
-    if lane == "wifi":
-        commands.extend(
-            [
-                ("wifi diag", "wifi diag"),
-            ]
-        )
-    commands.extend(
-        [
-            ("usb diag", "usb diag"),
-            ("usb probe-kbd", "usb probe-kbd"),
-            ("smp activity", "smp activity"),
-        ]
-    )
     usb_scored = True
     failures: list[str] = []
     nettest_started = False
     nettest_started_run_generation: int | None = None
     nettest_final_observed = False
     nettest_async_result: tuple[int, int, str] | None = None
+    supervisor_status: str | None = None
+    readiness_snapshot = boot_snapshot
+    if lane == "wifi":
+        supervisor_status, supervisor_snapshot = wait_for_wifi_supervisor_terminal(
+            controller,
+            boot_snapshot,
+            wifi_supervisor_timeout_s,
+        )
+        readiness_snapshot += supervisor_snapshot
     if prompt_ready:
         settle = controller.drain_for(
             8.0,
             label="post-root-prompt-settle-before-diagnostics",
         )
-        if not any(marker in settle for marker in DIAGNOSTIC_READY_MARKERS):
+        readiness_snapshot += settle
+        if not any(
+            marker in readiness_snapshot for marker in DIAGNOSTIC_READY_MARKERS
+        ):
             try:
-                controller.read_until(
+                readiness_snapshot += controller.read_until(
                     DIAGNOSTIC_READY_MARKERS,
                     DIAGNOSTIC_SETTLE_TIMEOUT_S,
                     label="root command readiness before diagnostics",
@@ -820,23 +1192,84 @@ def run_diagnostics(
                     "diagnostics serial_only_usb_unproven_after_command_ready_timeout "
                     f"error={exc}"
                 )
+    if lane == "wifi":
+        settled_terminal, settled_error = inspect_wifi_supervisor_evidence(
+            readiness_snapshot,
+            reject_trailing_partial=True,
+        )
+        if settled_error is not None:
+            supervisor_status = f"invalid-{settled_error}"
+            controller.note(
+                "wifi supervisor settled evidence "
+                f"result=fail reason={settled_error} "
+                "action=skip-unavailable-nettest"
+            )
+        elif settled_terminal is None or settled_terminal[1] != supervisor_status:
+            supervisor_status = "invalid-terminal-mismatch"
+            controller.note(
+                "wifi supervisor settled evidence "
+                "result=fail reason=terminal-mismatch "
+                "action=skip-unavailable-nettest"
+            )
+    if lane == "wifi":
+        if supervisor_status == "ready":
+            dhcp_bound, dhcp_failures = wait_for_wifi_dhcp_bound(
+                controller,
+                timeout_s=wifi_dhcp_timeout_s,
+            )
+            failures.extend(dhcp_failures)
+            commands = (
+                [
+                    ("nettest", "nettest"),
+                    ("netstats", "netstats-final"),
+                ]
+                if dhcp_bound
+                else [
+                    ("netstats", "netstats-final"),
+                ]
+            )
+        else:
+            failures.append(f"wifi-supervisor:{supervisor_status}")
+            controller.note(
+                "wifi supervisor terminal "
+                f"status={supervisor_status} "
+                "result=fail action=skip-unavailable-nettest"
+            )
+            commands = [
+                ("netstats", "netstats"),
+                ("netstats", "netstats-final"),
+            ]
+    else:
+        commands = [
+            ("netstats", "netstats"),
+            ("nettest", "nettest"),
+            ("netstats", "netstats-final"),
+        ]
+    if lane == "wifi":
+        commands.append(("wifi diag", "wifi diag"))
+    commands.extend(
+        [
+            ("usb diag", "usb diag"),
+            ("usb probe-kbd", "usb probe-kbd"),
+            ("smp activity", "smp activity"),
+        ]
+    )
     for command, label in commands:
         if command.startswith("usb ") and not usb_scored:
             controller.note(
                 f"diagnostics serial_only_usb_unscored command={command!r}"
             )
-        controller.synchronize_root_diagnostic_command(label=label)
-        controller.send_line(command, reinforce_terminator=True)
         try:
             result_markers = (
                 (NETTEST_STARTED_MARKER, b"ERR NETTEST")
                 if command == "nettest"
                 else DIAGNOSTIC_RESULT_MARKERS[command]
             )
-            command_snapshot = controller.read_until(
+            command_snapshot = issue_diagnostic_command(
+                controller,
+                command,
+                label,
                 result_markers,
-                90,
-                label=f"result for {label}",
             )
             error_marker = DIAGNOSTIC_RESULT_MARKERS[command][1]
             if serial_marker_seen(command_snapshot, error_marker):
@@ -1015,12 +1448,22 @@ def run() -> int:
                 menu_snapshot = first
 
         select_lane(controller, args.lane, menu_snapshot)
-        controller.read_until((b"[BUILD]",), args.boot_timeout_s, label="fresh build marker")
-        controller.read_until((ROOT_PROMPT,), args.boot_timeout_s, label="root prompt")
+        build_snapshot = controller.read_until(
+            (b"[BUILD]",),
+            args.boot_timeout_s,
+            label="fresh build marker",
+        )
+        root_snapshot = controller.read_until(
+            (ROOT_PROMPT,),
+            args.boot_timeout_s,
+            label="root prompt",
+        )
         if args.diagnostics and not run_diagnostics(
             controller,
             args.lane,
             prompt_ready=True,
+            boot_snapshot=build_snapshot + root_snapshot,
+            wifi_supervisor_timeout_s=args.boot_timeout_s,
         ):
             controller.note("complete result=diagnostic-failure exit=1")
             return 1

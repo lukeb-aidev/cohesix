@@ -910,6 +910,15 @@ generation and XID.
   floor, plus Linux's one-microsecond guard. This is 6 microseconds during
   startup and 1 microsecond at the 50-megahertz active clock. Raw
   `SDHCI_BUFFER` FIFO writes remain on Linux's separate no-delay access path.
+  Before programming ARGUMENT/TRANSFER_MODE/COMMAND, the retained owner W1C
+  clears the request-owned command/data/error status bits and reads
+  `INT_STATUS` back. A nonzero readback retries only that same W1C under the
+  existing 10-millisecond virtual-counter deadline; expiry reports typed
+  pre-issue stage 8 and issues no command. After bounded containment, that
+  uncleared request-owned edge poisons the current SDIO owner generation:
+  later same-generation descriptors reject before `COMMAND`, and only the
+  ordinary pair reprobe may establish a replacement generation. `CARD_INT` is
+  excluded from every request W1C and remains owned by the DPC lane.
   Every CMD5, CMD52, and CMD53 first receives a separate 10-millisecond
   pre-issue inhibit fence. The owner arms a fresh Linux-equivalent 10-second
   request watchdog only after that fence succeeds and immediately before the
@@ -1374,12 +1383,15 @@ generation and XID.
   accepts it while that exact sequence remains committed in the matching
   generation, or after the ordinary DPC has successfully consumed that exact
   event before the retained parent refreshes its watermark. The consumed-event
-  handoff is valid only when the generation is still healthy, the recorded
-  epoch and sequence match exactly, and the durable ring consumer equals that
-  sequence; a blind ring advance or stale consume record remains a generation
-  fault. A committed event widens only the requesting retained parent's
-  immutable DPC producer watermark through that event, once. An already
-  consumed event resumes at the post-probe FIFO check without replaying DPC or
+  handoff is valid only when the generation is still healthy, the
+  generation-bound consume proof equals the live durable ring consumer, the
+  retained slot still contains that exact valid source event, and the consumer
+  covers the sequence within the finite ring depth. Consuming the immediately
+  following event therefore preserves the still-verifiable predecessor, while
+  a blind ring advance, overwritten slot, future event, or stale consume proof
+  remains a generation fault. A committed event widens only the requesting
+  retained parent's immutable DPC producer watermark through that event, once.
+  An already consumed event resumes at the post-probe FIFO check without replaying DPC or
   admitting later unrelated interrupts. Only the ordinary CYW43 DPC cursor may
   read dongle status and Function 2, so the source probe is a lost-notification
   recovery turn, not a second receive path.
@@ -1388,10 +1400,11 @@ generation and XID.
   ordinary DPC deferred while a foreground source-probe transaction owns the
   reciprocal child. After the exact owner completion is replayed, the next
   scheduler iteration refreshes the parent watermark before DPC admission;
-  only then may the ordinary DPC consume the event. A same-generation exact
+  only then may the ordinary DPC consume the event. A same-generation bounded
   consumed receipt covers a later verified observation of that completed DPC,
   not permission for a competing receive path. Zero, stale, wrong-generation,
-  mismatched-consumer, and recovery-poisoned receipts still fail closed.
+  mismatched-consumer, overwritten, out-of-range, and recovery-poisoned
+  receipts still fail closed.
   The first terminal DPC cause is retained with its SDIO detail, result, fault
   frame, event sequence, action, and I/O phase so a later prompt poll or pair
   fence cannot relabel it as a generic bus-link failure. An exact contained
@@ -1850,43 +1863,65 @@ generation and XID.
   and a completed chunk forces one RX turn before another chunk so startup
   output cannot starve commands or reboot. Malformed or over-reported
   completions poison TX without replay while preserving fail-closed RX service.
-  The ordinary linked EventPump uses five retained phase classes: `Serial`,
-  `Dispatch`, `Network`, `LocalSeat`, and `Display`. `Serial` queues at most one
-  pending output record and admits one TX-first serial-ring turn. `Dispatch`
-  consumes at most one serial, buffered local-seat, or already-buffered network
-  command and performs no NIC poll or TCP flush. Dispatching a GENET command
-  retains its connection-owned response-flush cursor and returns. Each
-  `Network` turn performs exactly one ordinary NIC service or one retained GENET
-  TCP flush, then leaves any received command buffered for a later `Dispatch`
-  phase. A second buffered network command remains behind the active response
-  cursor, so NIC work, response flushing, and command dispatch never share one
-  outer turn. GENET and idle CYW43 service retain the ordinary phase rotation.
-  When the selected CYW43 path has an authenticated TCP session, a pending
-  response flush, non-empty runtime/root RX telemetry, a current valid pending
-  or masked SDIO DPC event, or an exact retained NetData/TX/fairness
-  continuation, `Network` may retain the next outer turn up to four consecutive
-  turns. Raw DPC and retained owner work receive this weighting before TCP
-  authentication so connection establishment cannot wait for an unrelated
-  serial/USB/display rotation after every child continuation. The predicate is
-  passive and rejects stale-epoch, poisoned, overrun, acknowledgement-failed,
-  or inconsistent DPC state. Every retained turn still admits at most one
-  CYW43 operation; the fourth turn must release the burst to the
-  physical-console phase rotation. `LocalSeat` performs one retained USB
-  keyboard turn, and `Display` performs at most one retained HDMI attach or
-  frame turn. Every phase returns to the outer loop before its successor; a
-  missing local seat returns from the bounded CYW43 burst to `Serial`.
+  The ordinary linked EventPump uses five retained phase classes in the fixed
+  order `Serial`, `LocalSeat`, `Dispatch`, `Network`, and `Display`. `Serial`
+  queues at most one pending output record and admits one TX-first serial-ring
+  turn. `LocalSeat` then performs one retained USB keyboard turn, so a newly
+  arrived key is visible before network weighting begins. `Dispatch` consumes
+  at most one serial, buffered local-seat, or already-buffered network command
+  and performs no NIC poll or TCP flush. Dispatching a GENET command retains its
+  connection-owned response-flush cursor and returns. Each `Network` turn
+  performs exactly one ordinary NIC service or one retained GENET TCP flush,
+  then leaves any received command buffered for a later `Dispatch` phase. A
+  second buffered network command remains behind the active response cursor, so
+  NIC work, response flushing, and command dispatch never share one outer turn.
+  GENET and idle CYW43 service retain the ordinary phase rotation.
+
+  A selected CYW43 path may retain `Network` only for an exact current
+  DPC/RX/TX/fairness continuation, a non-empty runtime/root queue, or actual TCP
+  socket/parser/response work. An authenticated but idle socket is not a
+  weighting reason. One continuation quantum is capped at both 32 separately
+  opened outer turns and 25 ms from the seL4 virtual counter. The time cap is
+  checked again at `Network` entry, so resuming an already-open quantum after
+  its deadline admits no additional NIC/SDIO operation. Reaching either bound
+  returns to `Serial` and `LocalSeat` before another quantum. At
+  `Network` entry, quarantine or an already-owned physical response skips NIC
+  inspection and service, opens no CYW43 quantum, and returns directly to
+  `Serial`. The sole physical-response exception is the exact network-origin
+  reboot acknowledgement drain, which may admit its required NIC service turn
+  before returning to `Serial`. A physical-response barrier raised by an
+  admitted NIC operation also returns directly to `Serial` rather than
+  proceeding through display work. Raw DPC and handshake work receive this
+  weighting before TCP authentication, and the predicate rejects stale-epoch,
+  poisoned, overrun, acknowledgement-failed, or inconsistent DPC state. Every
+  retained turn still admits at most one CYW43 operation. `netstats` reports
+  quantum count, turns, maximum turns/duration, and idle, turn-cap, time-cap,
+  physical, and guard exit counts; those CYW43 counters remain zero for GENET.
+  `Display` performs at most one retained HDMI attach or frame turn after the
+  Network phase. Every phase returns to the outer loop before its successor; a
+  missing local seat skips directly from `Serial` to `Dispatch` and from
+  `Network` back to `Serial`.
 
   The TCP console keeps exactly one parser, authentication server, and attached
   session authority. Once that active socket enters the single
-  `Draining`/`Closing` lane, one standby smoltcp acceptor may listen on the same
-  port and buffer at most one unauthenticated peer. It cannot parse,
-  authenticate, dispatch, or become active until the old socket is terminal
-  and all old session, peer, inbound, and outbound authority is cleared.
-  Promotion is bounded by the combined 20-second virtual-counter drain/close
-  deadline; early FIN/RST and non-promotable standby states are aborted and
-  recycled. Network-generation and stack resets abort both sockets. This
-  generic handoff is shared by CYW43 and GENET and does not introduce a second
-  console or boot path.
+  `Draining`/`PeerCloseWait`/`Closing` lane, one standby smoltcp acceptor may
+  listen on the same port and buffer at most one unauthenticated peer. For
+  `QUIT`, Cohesix first drains `OK QUIT` and its TCP send queue, then gives the
+  peer a bounded one-second grace to send FIN. A peer FIN moves the socket to
+  `CloseWait`, after which Cohesix sends its FIN through the ordinary
+  `LastAck`-to-`Closed` path. If the socket remains `Established` when the grace
+  expires, Cohesix aborts it and promotes the terminal result; it never starts
+  a local FIN from that state. This avoids the simultaneous-close path that can
+  hold the standby peer until the generic 10-second forced-abort deadline. The
+  standby cannot parse, authenticate, dispatch, or become active until the old
+  socket is terminal and all old session, peer, inbound, and outbound authority
+  is cleared. The standby pending-peer deadline is 21 seconds, covering the
+  active path's 10-second drain, one-second peer grace, and 10-second close
+  bounds. Early FIN/RST and non-promotable standby states are aborted and
+  recycled.
+  Network-generation and stack resets abort both sockets. This generic handoff
+  is shared by CYW43 and GENET and does not introduce a second console or boot
+  path.
 
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing

@@ -128,6 +128,16 @@ NETTEST_FAILURE_RESULT = (
     b"peer_assisted_ok=false result=fail\n"
 )
 NETSTATS_OK = b"OK NETSTATS\ncohesix>"
+NETSTATS_WIFI_PENDING = (
+    b"netstats: generation=4 mode=dhcp policy=wifi active=wifi standby=none "
+    b"addr_src=dhcp-pending ip=0.0.0.0 gateway=0.0.0.0 dhcp=selecting\n"
+    + NETSTATS_OK
+)
+NETSTATS_WIFI_BOUND = (
+    b"netstats: generation=4 mode=dhcp policy=wifi active=wifi standby=none "
+    b"addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 dhcp=bound\n"
+    + NETSTATS_OK
+)
 NETTEST_STATUS_PASS = (
     b"nettest: generation=14 run_generation=31 enabled=true running=false "
     b"verdict=pass tx_ok=true udp_echo_ok=true tcp_ok=true "
@@ -140,6 +150,24 @@ NETTEST_STATUS_FAILURE = (
 )
 NETSTATS_TERMINAL_PASS = NETTEST_STATUS_PASS + NETSTATS_OK
 NETSTATS_TERMINAL_FAILURE = NETTEST_STATUS_FAILURE + NETSTATS_OK
+
+
+def wifi_supervisor_record(
+    status: str,
+    *,
+    attempt: int = 1,
+    console_seq: int = 5,
+) -> bytes:
+    """Build one current production CYW43 supervisor wire record."""
+
+    return (
+        "CYW43_BOOTSTRAP_SUPERVISOR "
+        f"attempt={attempt} status={status} "
+        "backoff_ms=0 next_attempt_ms=12345 "
+        "serial=ready local_seat=enabled recovery=full "
+        f"console_seq={console_seq} "
+        "telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes\n"
+    ).encode()
 
 
 class FakeController:
@@ -155,6 +183,7 @@ class FakeController:
         self.drain_reads: list[bytes] = []
         self.redactions: list[tuple[str, str]] = []
         self.diagnostic_barriers: list[str] = []
+        self.diagnostic_deadlines: list[float | None] = []
 
     def note(self, text: str) -> None:
         self.notes.append(text)
@@ -198,8 +227,14 @@ class FakeController:
             return self.reads.pop(0)
         return b""
 
-    def synchronize_root_diagnostic_command(self, *, label: str) -> None:
+    def synchronize_root_diagnostic_command(
+        self,
+        *,
+        label: str,
+        deadline: float | None = None,
+    ) -> None:
         self.diagnostic_barriers.append(label)
+        self.diagnostic_deadlines.append(deadline)
 
 
 class TimeoutOnceController(FakeController):
@@ -420,6 +455,301 @@ def test_root_prompt_marker_accepts_tail_fragment() -> None:
     )
 
 
+def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
+    """Progress records cannot admit commands before Wi-Fi bootstrap is terminal."""
+
+    progress = (
+        b"CYW43_BOOTSTRAP_SUPERVISOR attempt=0 status=preflight\n"
+        b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing\n"
+    )
+
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(progress) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        progress + wifi_supervisor_record("ready")
+    ) == (1, "ready")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("failed")
+    ) == (1, "failed")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("permanent")
+    ) == (1, "permanent")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready", attempt=2)
+    ) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready\n"
+    ) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready").removesuffix(b"\n")
+    ) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready").removesuffix(b"\n") + b" garbage\n"
+    ) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready") + wifi_supervisor_record("ready")
+    ) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready") + wifi_supervisor_record("permanent")
+    ) is None
+
+    _, later_attempt_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
+        wifi_supervisor_record("ready") + wifi_supervisor_record("ready", attempt=2)
+    )
+    assert later_attempt_error == "attempt-2-forbidden"
+    _, contradiction_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
+        wifi_supervisor_record("ready") + wifi_supervisor_record("permanent")
+    )
+    assert contradiction_error == "terminal-contradiction"
+    trailing_retry = (
+        wifi_supervisor_record("ready")
+        + b"CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=ready"
+    )
+    assert pi4_serial_reboot.inspect_wifi_supervisor_evidence(trailing_retry) == (
+        (1, "ready"),
+        None,
+    )
+    _, trailing_retry_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
+        trailing_retry,
+        reject_trailing_partial=True,
+    )
+    assert trailing_retry_error == "attempt-2-forbidden"
+
+
+def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
+    """Wi-Fi commands start after bootstrap and nettest starts after a lease."""
+
+    class OrderedController(FakeController):
+        def __init__(self, reads: Iterable[bytes]) -> None:
+            super().__init__(reads)
+            self.events: list[str] = []
+
+        def read_until(
+            self,
+            markers: Iterable[bytes],
+            timeout_s: float,
+            *,
+            label: str,
+        ) -> bytes:
+            self.events.append(f"read:{label}")
+            return super().read_until(markers, timeout_s, label=label)
+
+        def synchronize_root_diagnostic_command(
+            self,
+            *,
+            label: str,
+            deadline: float | None = None,
+        ) -> None:
+            self.events.append(f"barrier:{label}")
+            super().synchronize_root_diagnostic_command(
+                label=label,
+                deadline=deadline,
+            )
+
+    controller = OrderedController(
+        [
+            b"\nCYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready",
+            (
+                b" backoff_ms=0 next_attempt_ms=12345 serial=ready "
+                b"local_seat=enabled recovery=full console_seq=5 "
+                b"telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes\n"
+            ),
+            (
+                b"[local-seat] usb keyboard command-ready "
+                b"action=enable-command-input\n"
+            ),
+            NETSTATS_WIFI_PENDING,
+            NETSTATS_WIFI_BOUND,
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK WIFI\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=True,
+        boot_snapshot=b"[BUILD]\ncohesix> ",
+    )
+
+    assert diagnostics_ok
+    assert controller.sent[:4] == [
+        "netstats",
+        "netstats",
+        "nettest",
+        "netstats",
+    ]
+    assert controller.diagnostic_barriers[:4] == [
+        "netstats",
+        "netstats-dhcp-poll-2",
+        "nettest",
+        "netstats-final",
+    ]
+    assert controller.events.index(
+        "read:terminal CYW43 bootstrap supervisor status"
+    ) < controller.events.index("barrier:netstats")
+    assert controller.events.index(
+        "read:complete CYW43 bootstrap supervisor line"
+    ) < controller.events.index("barrier:netstats")
+    assert (
+        "wifi DHCP poll poll=1 generation=4 mode=dhcp policy=wifi "
+        "active=wifi address_source=dhcp-pending ip=0.0.0.0 "
+        "dhcp=selecting terminal=no"
+    ) in controller.notes
+    assert (
+        "wifi DHCP poll poll=2 generation=4 mode=dhcp policy=wifi "
+        "active=wifi address_source=dhcp-lease ip=192.168.86.154 "
+        "dhcp=bound terminal=bound"
+    ) in controller.notes
+    assert (
+        pi4_serial_reboot.WIFI_DHCP_POLL_INTERVAL_S,
+        "wifi DHCP progress before poll 2",
+    ) in controller.drains
+
+
+def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
+    """A terminal bootstrap failure cannot inherit an older nettest verdict."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETSTATS_TERMINAL_PASS,
+            b"OK WIFI\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=True,
+        boot_snapshot=wifi_supervisor_record("failed") + b"cohesix> ",
+    )
+
+    assert not diagnostics_ok
+    assert "nettest" not in controller.sent
+    assert controller.sent[:2] == ["netstats", "netstats"]
+    assert "wifi-supervisor:failed" in controller.notes[-1]
+    assert any(
+        "action=skip-unavailable-nettest" in note for note in controller.notes
+    )
+
+
+def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> None:
+    """A forbidden retry observed during settle cannot inherit Ready."""
+
+    controller = FakeController(
+        [
+            NETSTATS_OK,
+            NETSTATS_OK,
+            b"OK WIFI\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+    controller.drain_reads.append(
+        b"\n"
+        + b"CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=ready"
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=True,
+        boot_snapshot=(
+            wifi_supervisor_record("ready")
+            + b"[local-seat] usb keyboard command-ready "
+            b"action=enable-command-input\ncohesix> "
+        ),
+    )
+
+    assert not diagnostics_ok
+    assert "nettest" not in controller.sent
+    assert controller.sent == [
+        "netstats",
+        "netstats",
+        "wifi diag",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert any(
+        "reason=attempt-2-forbidden" in note
+        and "action=skip-unavailable-nettest" in note
+        for note in controller.notes
+    )
+    assert "wifi-supervisor:invalid-attempt-2-forbidden" in controller.notes[-1]
+
+
+def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
+    """The absolute DHCP deadline fails closed without losing evidence."""
+
+    class DhcpResultTimeoutController(FakeController):
+        def __init__(self, reads: Iterable[bytes]) -> None:
+            super().__init__(reads)
+            self.dhcp_result_timeout_s: float | None = None
+
+        def read_until(
+            self,
+            markers: Iterable[bytes],
+            timeout_s: float,
+            *,
+            label: str,
+        ) -> bytes:
+            if label == "result for netstats" and self.dhcp_result_timeout_s is None:
+                self.dhcp_result_timeout_s = timeout_s
+                raise pi4_serial_reboot.SerialMarkerTimeout(
+                    "bounded DHCP result timeout"
+                )
+            return super().read_until(markers, timeout_s, label=label)
+
+    controller = DhcpResultTimeoutController(
+        [
+            NETSTATS_OK,
+            b"OK WIFI\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=False,
+        boot_snapshot=wifi_supervisor_record("ready"),
+        wifi_dhcp_timeout_s=0.5,
+    )
+
+    assert not diagnostics_ok
+    assert controller.sent == [
+        "netstats",
+        "netstats",
+        "wifi diag",
+        "usb diag",
+        "usb probe-kbd",
+        "smp activity",
+    ]
+    assert controller.dhcp_result_timeout_s is not None
+    assert 0 < controller.dhcp_result_timeout_s <= 0.5
+    assert controller.diagnostic_deadlines[0] is not None
+    assert controller.diagnostic_deadlines[1:] == [None, None, None, None, None]
+    assert any(
+        "wifi DHCP terminal result=timeout" in note
+        and "action=skip-premature-nettest" in note
+        for note in controller.notes
+    )
+    assert "wifi-dhcp:terminal-timeout" in controller.notes[-1]
+
+
 def test_diagnostic_barrier_rejects_prompt_tail_after_ping() -> None:
     """A split prompt after ping cannot authorize the diagnostic command."""
 
@@ -466,7 +796,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
-            b"OK NETSTATS\ncohesix>",
+            NETSTATS_WIFI_BOUND,
             (
                 NETTEST_RESULT.replace(b"generation=14", b"generation=13")
                 + NETTEST_STARTED
@@ -484,6 +814,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         controller,
         "wifi",
         prompt_ready=True,
+        boot_snapshot=wifi_supervisor_record("ready") + b"cohesix> ",
     )
 
     assert diagnostics_ok
@@ -597,6 +928,7 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
         "usb probe-kbd",
         "smp activity",
     ]
+    assert controller.diagnostic_deadlines == [None, None, None, None, None, None]
     assert controller.reads == []
 
 

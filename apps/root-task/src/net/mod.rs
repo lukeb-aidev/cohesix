@@ -1238,6 +1238,13 @@ pub trait NetPoller {
         None
     }
 
+    /// Return whether the TCP console has exact socket/parser work that needs
+    /// another network service turn. An idle authenticated connection must
+    /// return `false`.
+    fn console_service_pending(&self) -> bool {
+        false
+    }
+
     /// Inject a console line into the network transport (testing hook).
     fn inject_console_line(&mut self, _line: &str) {}
 

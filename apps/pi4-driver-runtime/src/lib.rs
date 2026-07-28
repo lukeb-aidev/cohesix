@@ -2536,6 +2536,7 @@ enum SdioExternalDmaRequestPhase {
     PreflightDmaSnapshot,
     PreflightDmaStage,
     ProgramClearStatus,
+    ProgramVerifyStatusClear,
     ProgramTimeout,
     ProgramBlockSize,
     ProgramBlockCount,
@@ -4603,6 +4604,7 @@ static CYW43_SDIO_PAIR_RESTART_REQUIRED: AtomicBool = AtomicBool::new(false);
 static CYW43_DPC_DEFERRED: AtomicBool = AtomicBool::new(false);
 static CYW43_DPC_WATERMARK_REFRESH_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CONSUMED_WATERMARK_PROOF: AtomicU64 = AtomicU64::new(0);
 static CYW43_ACTIVE_PARENT_SEQUENCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_LAST_FAULT_DETAIL: AtomicU32 = AtomicU32::new(FAULT_NONE as u32);
 static CYW43_LAST_FAULT_RESULT: AtomicU32 = AtomicU32::new(0);
@@ -6947,6 +6949,7 @@ fn reset_cyw43_sdio_pair_runtime_entry_state() {
     CYW43_DPC_DEFERRED.store(false, Ordering::Release);
     CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.store(0, Ordering::Release);
     CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.store(0, Ordering::Release);
+    CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(0, Ordering::Release);
     CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
     CYW43_LAST_FAULT_DETAIL.store(FAULT_NONE as u32, Ordering::Release);
     CYW43_LAST_FAULT_RESULT.store(0, Ordering::Release);
@@ -7370,6 +7373,7 @@ fn cyw43_complete_generation_reset(
     state.dpc_active_sequence = 0;
     state.dpc_last_consumed_epoch = 0;
     state.dpc_last_consumed_sequence = 0;
+    CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(0, Ordering::Release);
     // This exact completion was received over the sealed CYW43 -> SDIO child
     // link after the SDIO owner finished the card-reset turn. Treat it as the
     // authoritative proof that the persistent transport link remains usable
@@ -7411,6 +7415,7 @@ fn cyw43_complete_generation_commit(
     state.dpc_active_sequence = 0;
     state.dpc_last_consumed_epoch = 0;
     state.dpc_last_consumed_sequence = 0;
+    CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(0, Ordering::Release);
     state.dpc_owner_rearms = 0;
     state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
     state.recovery_required = false;
@@ -9892,6 +9897,7 @@ fn cyw43_runtime_init(
     // handed the producer ring to CYW43. No child operation is legal here.
     let recovery_required = state.recovery_required;
     state.reset();
+    CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(0, Ordering::Release);
     state.recovery_required = recovery_required;
     state.dpc_shared_epoch = previous_generation;
     CYW43_SDIO_BUS_LINK_SEQ.store(0, Ordering::Release);
@@ -11024,6 +11030,49 @@ fn cyw43_dpc_event_sequence_committed(generation: u32, event_sequence: u32) -> b
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_consumed_watermark_proof(generation: u32, consumer: u32) -> u64 {
+    (u64::from(generation) << 32) | u64::from(consumer)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_publish_dpc_consumed_watermark(generation: u32, consumer: u32) {
+    CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(
+        cyw43_dpc_consumed_watermark_proof(generation, consumer),
+        Ordering::Release,
+    );
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_event_sequence_consumed(generation: u32, event_sequence: u32) -> bool {
+    if generation == 0 {
+        return false;
+    }
+    let proof = CYW43_DPC_CONSUMED_WATERMARK_PROOF.load(Ordering::Acquire);
+    if (proof >> 32) as u32 != generation {
+        return false;
+    }
+    let consumed_watermark = proof as u32;
+    if consumed_watermark.wrapping_sub(event_sequence) >= DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH as u32
+    {
+        return false;
+    }
+    let base = DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+    let ring = dpc_event_ring_read_at(base);
+    if !ring.valid() || ring.epoch != generation || ring.consumer != consumed_watermark {
+        return false;
+    }
+    let slot = event_sequence.wrapping_sub(1) as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
+    let event = ring.entries[slot];
+    event.sequence == event_sequence && event.valid() && cyw43_dpc_event_has_source(event.flags)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_event_sequence_authorized(generation: u32, event_sequence: u32) -> bool {
+    cyw43_dpc_event_sequence_committed(generation, event_sequence)
+        || cyw43_dpc_event_sequence_consumed(generation, event_sequence)
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_capture_foreground_dpc_watermark_through(
     command_sequence: u32,
     event_sequence: u32,
@@ -11046,9 +11095,7 @@ fn cyw43_capture_foreground_dpc_watermark_through(
             ));
         }
         if !state.recovery_required
-            && state.dpc_last_consumed_epoch == state.dpc_shared_epoch
-            && state.dpc_last_consumed_sequence == event_sequence
-            && ring.consumer == event_sequence
+            && cyw43_dpc_event_sequence_consumed(state.dpc_shared_epoch, event_sequence)
         {
             // The SDIO owner signals the peer after committing the immutable
             // source event and publishes the child completion on a later
@@ -11385,6 +11432,7 @@ fn cyw43_runtime_service_dpc_event() -> bool {
             state.dpc_active_sequence = 0;
             state.dpc_last_consumed_epoch = state.dpc_shared_epoch;
             state.dpc_last_consumed_sequence = event.sequence;
+            cyw43_publish_dpc_consumed_watermark(state.dpc_shared_epoch, event.sequence);
             state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
             state.dpc_cursor.reset();
             state.rx_service_active = false;
@@ -13103,7 +13151,9 @@ fn sdio_retained_containment_finish(
     mut cursor: SdioExternalDmaRequestCursor,
 ) -> RuntimeCommandTurn {
     let contained = cursor.containment_dma_ok && cursor.containment_host_ok;
-    if contained {
+    let generation_fence = sdio_transfer_failure_stage(cursor.failure_result)
+        == SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR;
+    if contained && !generation_fence {
         match cursor.containment_resume {
             SdioRetainedContainmentResume::RetryRequest => {
                 cursor.pre_issue_attempt = 1;
@@ -13147,7 +13197,13 @@ fn sdio_retained_containment_finish(
     } else {
         DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED
     };
-    if cursor.issued || !contained {
+    if generation_fence || cursor.issued || !contained {
+        // An SDHCI request-status bit that survives the bounded W1C admission
+        // loop is not attributable to a future command, even when command
+        // issue itself was prevented and reset containment completed. Fence
+        // this owner generation so no later same-generation descriptor can
+        // consume the stale edge. CARD_INT remains outside the W1C mask and
+        // under the dedicated DPC lane's ownership.
         return sdio_retained_poison_begin(cursor);
     }
     cursor.phase = SdioExternalDmaRequestPhase::Failed;
@@ -14245,14 +14301,27 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                 cursor.phase = SdioExternalDmaRequestPhase::ProgramClearStatus;
             }
             SdioExternalDmaRequestPhase::ProgramClearStatus => {
-                io.write32(
-                    SDHCI_INT_STATUS,
-                    if sdio_request_uses_external_dma(identity) {
-                        SDHCI_INT_EXTERNAL_DMA_ACK_MASK
-                    } else {
-                        SDHCI_INT_COMMAND_DATA_CLEAR_MASK
-                    },
-                );
+                io.write32(SDHCI_INT_STATUS, sdhci_preissue_clear_mask(identity));
+                cursor.phase = SdioExternalDmaRequestPhase::ProgramVerifyStatusClear;
+            }
+            SdioExternalDmaRequestPhase::ProgramVerifyStatusClear => {
+                let pending = io.read32(SDHCI_INT_STATUS) & sdhci_preissue_clear_mask(identity);
+                if pending != 0 {
+                    if io.deadline_expired(&mut cursor.deadline) {
+                        let failure = sdio_transfer_interrupt_failure_result(
+                            SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR,
+                            pending,
+                        );
+                        return sdio_external_dma_fail_with(cursor, io, failure);
+                    }
+                    // W1C completion is the admission fence for this request:
+                    // never let a stale RESPONSE/DATA/ERROR edge authorize the
+                    // following command. CARD_INT is deliberately absent from
+                    // the request mask and remains owned by the DPC lane.
+                    io.write32(SDHCI_INT_STATUS, pending);
+                    sdio_external_dma_store_cursor(cursor);
+                    return RuntimeCommandTurn::Pending;
+                }
                 cursor.phase = SdioExternalDmaRequestPhase::ProgramTimeout;
             }
             SdioExternalDmaRequestPhase::ProgramTimeout => {
@@ -14762,6 +14831,7 @@ fn service_sdio_external_dma_command_turn_with_io<I: SdioTransferIo>(
         | SdioExternalDmaRequestPhase::PreflightDmaSnapshot
         | SdioExternalDmaRequestPhase::PreflightDmaStage
         | SdioExternalDmaRequestPhase::ProgramClearStatus
+        | SdioExternalDmaRequestPhase::ProgramVerifyStatusClear
         | SdioExternalDmaRequestPhase::ProgramTimeout
         | SdioExternalDmaRequestPhase::ProgramBlockSize
         | SdioExternalDmaRequestPhase::ProgramBlockCount
@@ -18087,6 +18157,8 @@ const fn sdio_command_waits_for_data_inhibit(flags: u16, has_data: bool) -> bool
 
 // Stage 1 is reserved for the entry wait before SDHCI_COMMAND is written.
 // A busy-response timeout after command issue is post-issue quiescence.
+// Stage 8 also precedes COMMAND, but an uncleared controller event invalidates
+// the request boundary and must recover the generation rather than replay it.
 const SDIO_TRANSFER_FAILURE_STAGE_INHIBIT: u32 = 1;
 const SDIO_TRANSFER_FAILURE_STAGE_COMMAND: u32 = 2;
 const SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT: u32 = 3;
@@ -18094,6 +18166,7 @@ const SDIO_TRANSFER_FAILURE_STAGE_DATA_END: u32 = 4;
 const SDIO_TRANSFER_FAILURE_STAGE_RESPONSE: u32 = 5;
 const SDIO_TRANSFER_FAILURE_STAGE_POST_ISSUE_QUIESCE: u32 = 6;
 const SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE: u32 = 7;
+const SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR: u32 = 8;
 
 const fn sdio_transfer_failure_result(stage: u32, status: u32) -> u32 {
     ((stage & 0xff) << 24) | (status & 0x00ff_ffff)
@@ -19526,6 +19599,7 @@ impl Cyw43ForegroundTraceEntry {
 struct Cyw43ForegroundTurnState {
     pending: bool,
     replay_index: u16,
+    replayed_count: u16,
     completed_count: u16,
     action_consumed: bool,
 }
@@ -19536,6 +19610,7 @@ impl Cyw43ForegroundTurnState {
         Self {
             pending: false,
             replay_index: 0,
+            replayed_count: 0,
             completed_count: 0,
             action_consumed: false,
         }
@@ -19548,6 +19623,7 @@ impl Cyw43ForegroundTurnState {
     fn begin_turn(&mut self) {
         self.pending = false;
         self.replay_index = 0;
+        self.replayed_count = 0;
         self.action_consumed = false;
     }
 
@@ -19564,6 +19640,7 @@ impl Cyw43ForegroundTurnState {
         }
         let replayed = self.replay_index;
         self.replay_index = self.replay_index.saturating_add(1);
+        self.replayed_count = self.replayed_count.saturating_add(1);
         Some(replayed)
     }
 }
@@ -19837,6 +19914,14 @@ impl Cyw43ForegroundTransaction {
             }
         }
         false
+    }
+
+    fn replayed_preissue_status_clear_failure(&self) -> Option<DriverTaskCompletionRecord> {
+        let replayed = usize::from(self.turn.replayed_count.min(self.turn.completed_count));
+        self.entries[..replayed]
+            .iter()
+            .map(|entry| entry.completion)
+            .find(|completion| cyw43_sdio_preissue_status_clear_failure(*completion))
     }
 
     fn snapshot_parent_input(
@@ -20327,13 +20412,32 @@ fn cyw43_poison_retained_generation(state: &mut Cyw43RuntimeState) {
     state.firmware_prep.poisoned = true;
 }
 
+fn cyw43_fence_preissue_status_clear_generation(state: &mut Cyw43RuntimeState) {
+    // The child proved that SDHCI_COMMAND was not written, so this is not an
+    // issued-unknown action. It nevertheless proved that the owner could not
+    // establish a clean request boundary. Invalidate every same-generation
+    // readiness fact and let the paired-runtime supervisor perform the sole
+    // cold recovery lane after the exact child terminal has reached its parent.
+    state.recovery_required = true;
+    state.initialized = false;
+    state.transport_ready = false;
+    state.firmware_released = false;
+    state.transport_detail = DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START;
+    state.backplane_window_valid = false;
+    state.invalidate_card_adoption_facts();
+    state.card_lane.poisoned = true;
+    state.f1_enable.poisoned = true;
+    state.backplane_attach.poisoned = true;
+    state.firmware_prep.poisoned = true;
+}
+
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_finish_turn(
     command: DriverTaskCommandRecord,
     turn: RuntimeCommandTurn,
 ) -> RuntimeCommandTurn {
-    let (same_parent, pending, issued_unknown, poisoned, result) = CYW43_FOREGROUND_TRANSACTION
-        .with_mut(|transaction| {
+    let (same_parent, pending, issued_unknown, poisoned, result, preissue_status_clear_failure) =
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.executing = false;
             (
                 transaction.parent == command,
@@ -20348,6 +20452,7 @@ fn cyw43_foreground_finish_turn(
                 } else {
                     0
                 },
+                transaction.replayed_preissue_status_clear_failure(),
             )
         });
     if !same_parent {
@@ -20370,6 +20475,31 @@ fn cyw43_foreground_finish_turn(
             FAULT_CYW43_TRANSPORT_BUS_LINK,
             result,
         ));
+    }
+    if let Some(completion) = preissue_status_clear_failure {
+        // Do not latch the pair restart while the child completion is merely
+        // polled and cached: that would make the runtime hold the parent before
+        // it can replay the exact terminal. Once replayed, discard any partial
+        // parent mutations, preserve the child's primitive telemetry, and
+        // fence both runtime images before another child claim can succeed.
+        let _ = cyw43_foreground_restore_baseline();
+        CYW43_RUNTIME_STATE.with_mut(cyw43_fence_preissue_status_clear_generation);
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
+        cyw43_record_last_fault_with_result(completion.detail, completion.result);
+        cyw43_record_last_fault_frame(completion.frame);
+        return match turn {
+            RuntimeCommandTurn::Complete(_) => turn,
+            RuntimeCommandTurn::Pending => RuntimeCommandTurn::Complete(
+                DriverTaskCompletionRecord::fault_with_result_and_frame(
+                    command.sequence,
+                    FAULT_CYW43_TRANSPORT_BUS_LINK,
+                    completion.result,
+                    completion.frame,
+                ),
+            ),
+        };
     }
     if poisoned {
         let _ = cyw43_foreground_restore_baseline();
@@ -21601,6 +21731,22 @@ const fn sdio_fault_telemetry_disposition_valid(flags: u16) -> bool {
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn cyw43_sdio_preissue_status_clear_failure(completion: DriverTaskCompletionRecord) -> bool {
+    completion.code == COMPLETION_FAULT
+        && matches!(
+            completion.detail,
+            FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED
+                | FAULT_SDIO_COMMAND_UNAVAILABLE
+                | FAULT_SDIO_HOST_CONFIG_FAILED
+        )
+        && sdio_transfer_failure_stage(completion.result)
+            == SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR
+        && completion.frame.offset == SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32
+        && completion.frame.len == SDIO_FAULT_TELEMETRY_BYTES
+        && sdio_fault_telemetry_disposition_valid(completion.frame.flags)
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_completion_matches(
     entry: Cyw43ForegroundTraceEntry,
     completion: DriverTaskCompletionRecord,
@@ -21648,7 +21794,7 @@ fn cyw43_foreground_completion_matches(
                 != 0 =>
         {
             cyw43_dpc_source_probe_completion_exact(completion, entry.command.sequence)
-                && cyw43_dpc_event_sequence_committed(descriptor.addr, completion.result)
+                && cyw43_dpc_event_sequence_authorized(descriptor.addr, completion.result)
         }
         DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET
         | DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT
@@ -23334,6 +23480,15 @@ const fn sdhci_external_dma_snapshot_ack_bits(status: u32) -> u32 {
     // error events, never SPACE_AVAIL or DATA_AVAIL, and leave CARD_INT owned
     // by the independent notification/DPC lane.
     status & SDHCI_INT_EXTERNAL_DMA_ACK_MASK & !SDHCI_INT_CARD_INT
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn sdhci_preissue_clear_mask(identity: SdioExternalDmaRequestIdentity) -> u32 {
+    (if sdio_request_uses_external_dma(identity) {
+        SDHCI_INT_EXTERNAL_DMA_ACK_MASK
+    } else {
+        SDHCI_INT_COMMAND_DATA_CLEAR_MASK
+    }) & !SDHCI_INT_CARD_INT
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -46492,6 +46647,7 @@ mod tests {
         payload_writes_while_dma_active: usize,
         transfer_mode_shadow: u32,
         transfer_mode_shadow_valid: bool,
+        int_status_w1c_failures_remaining: usize,
         command_status: u32,
         command_present_set: u32,
         command_present_clear: u32,
@@ -46550,6 +46706,7 @@ mod tests {
                 payload_writes_while_dma_active: 0,
                 transfer_mode_shadow: 0,
                 transfer_mode_shadow_valid: false,
+                int_status_w1c_failures_remaining: 0,
                 command_status: 0,
                 command_present_set: 0,
                 command_present_clear: 0,
@@ -46986,8 +47143,13 @@ mod tests {
             }
             self.record_write(offset, value);
             if offset == SDHCI_INT_STATUS {
-                let retained = self.register(offset) & !value;
-                self.set_register(offset, retained);
+                if self.int_status_w1c_failures_remaining != 0 {
+                    self.int_status_w1c_failures_remaining =
+                        self.int_status_w1c_failures_remaining.saturating_sub(1);
+                } else {
+                    let retained = self.register(offset) & !value;
+                    self.set_register(offset, retained);
+                }
             } else {
                 self.set_register(offset, value);
             }
@@ -47477,6 +47639,7 @@ mod tests {
         CYW43_DPC_DEFERRED.store(false, Ordering::Release);
         CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.store(0, Ordering::Release);
         CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE.store(0, Ordering::Release);
+        CYW43_DPC_CONSUMED_WATERMARK_PROOF.store(0, Ordering::Release);
         CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.store(false, Ordering::Release);
         TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0, Ordering::Release);
@@ -49517,6 +49680,158 @@ mod tests {
             CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.load(Ordering::Acquire),
             0,
         );
+    }
+
+    #[test]
+    fn forced_source_probe_completion_accepts_retained_consumed_watermark_range() {
+        let _guard = test_guard();
+        let generation = 0x4359_d0c1;
+        let parent_sequence = 0x4359_d0c2;
+        let owner_sequence = 0x8359_d0c3;
+        initialize_production_foreground_pair(generation);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = generation;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: generation,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut command = stage_sdio_descriptor_service_command(owner_sequence, descriptor);
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        command.aux1 = generation;
+        let mut entry = Cyw43ForegroundTraceEntry::empty();
+        entry.ticket = Cyw43ForegroundActionTicket {
+            parent_sequence,
+            generation,
+            owner_sequence,
+            ordinal: 0,
+            issued_turn_id: 1,
+        };
+        entry.command = command;
+        entry.descriptor = descriptor;
+        let completion = DriverTaskCompletionRecord::progress(owner_sequence, 1);
+
+        assert!(cyw43_foreground_completion_matches(entry, completion));
+        assert!(dpc_event_ring_advance_at(dpc_base, generation, 1));
+        assert!(
+            !cyw43_foreground_completion_matches(entry, completion),
+            "ring advance alone is not durable DPC-consume authority",
+        );
+
+        cyw43_publish_dpc_consumed_watermark(generation, 1);
+        assert!(cyw43_foreground_completion_matches(entry, completion));
+
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(2),
+        );
+        assert!(dpc_event_ring_advance_at(dpc_base, generation, 2));
+        cyw43_publish_dpc_consumed_watermark(generation, 2);
+        assert!(
+            cyw43_foreground_completion_matches(entry, completion),
+            "consuming N+1 must retain exact authority for retained source event N",
+        );
+        assert_eq!(
+            cyw43_capture_foreground_dpc_watermark_through(parent_sequence, 1),
+            Some(Cyw43ForegroundDpcWatermark::capture(parent_sequence, 2, 2,)),
+        );
+        assert!(!cyw43_dpc_event_sequence_consumed(
+            generation.wrapping_add(1),
+            1,
+        ));
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(3),
+        );
+        assert!(
+            !cyw43_dpc_event_sequence_consumed(generation, 3),
+            "a published but unconsumed future event is not watermark authority",
+        );
+        assert!(
+            !cyw43_dpc_event_sequence_consumed(generation, 4),
+            "an absent future event is not watermark authority",
+        );
+        assert!(!cyw43_foreground_completion_matches(
+            entry,
+            DriverTaskCompletionRecord::progress(owner_sequence, 4),
+        ));
+
+        let mut wrapped = DriverRuntimeDpcEventRing::empty(generation);
+        wrapped.producer = u32::MAX - 1;
+        wrapped.consumer = u32::MAX - 1;
+        assert!(dpc_event_ring_encode(
+            RuntimeRingWindow::dpc_at(dpc_base).expect("generated DPC ring window"),
+            wrapped,
+        ));
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(u32::MAX),
+        );
+        assert!(dpc_event_ring_advance_at(dpc_base, generation, u32::MAX));
+        cyw43_publish_dpc_consumed_watermark(generation, u32::MAX);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(0),
+        );
+        assert!(dpc_event_ring_advance_at(dpc_base, generation, 0));
+        cyw43_publish_dpc_consumed_watermark(generation, 0);
+        assert!(
+            cyw43_dpc_event_sequence_consumed(generation, u32::MAX),
+            "the bounded consumed range remains valid across sequence wrap",
+        );
+        assert!(
+            !cyw43_dpc_event_sequence_consumed(generation, 1),
+            "a post-wrap future sequence cannot alias the consumed range",
+        );
+        assert!(cyw43_foreground_completion_matches(
+            entry,
+            DriverTaskCompletionRecord::progress(owner_sequence, u32::MAX),
+        ));
     }
 
     #[test]
@@ -71570,6 +71885,93 @@ mod tests {
         assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
+    #[test]
+    fn preissue_status_clear_parent_fences_only_after_exact_cached_replay() {
+        let _guard = test_guard();
+        let generation = 0x4359_c201;
+        let parent = stage_production_transport_parent(generation, 0x4359_c210);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let child = drive_production_parent_until_first_child(parent);
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("transport parent publishes one immutable owner descriptor");
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG);
+
+        let failure_result = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR,
+            SDHCI_INT_RESPONSE,
+        );
+        let failure_frame = DriverFrameDescriptor {
+            offset: SDIO_FAULT_TELEMETRY_FRAME_OFFSET as u32,
+            len: SDIO_FAULT_TELEMETRY_BYTES,
+            flags: DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED,
+        };
+        let completion = DriverTaskCompletionRecord::fault_with_result_and_frame(
+            child.sequence,
+            FAULT_SDIO_HOST_CONFIG_FAILED,
+            failure_result,
+            failure_frame,
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let failure_offset = failure_frame.offset as usize;
+        assert!(owner_ring.write_u32(failure_offset, SDIO_FAULT_TELEMETRY_MAGIC));
+        assert!(owner_ring.write_u32(failure_offset + 4, SDIO_FAULT_TELEMETRY_VERSION,));
+        assert!(owner_ring.write_u32(
+            failure_offset + SDIO_FAULT_TELEMETRY_FAILURE_OFFSET,
+            failure_result,
+        ));
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+
+        assert_eq!(
+            service_command_turn(0, parent),
+            RuntimeCommandTurn::Pending,
+            "polling and caching the exact owner terminal must not hold its parent",
+        );
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert_eq!(transaction.turn.completed_count, 1);
+            assert_eq!(transaction.turn.replayed_count, 0);
+        });
+
+        let RuntimeCommandTurn::Complete(parent_terminal) = service_command_turn(0, parent) else {
+            panic!("replaying the exact stage-8 terminal must finish and fence its parent");
+        };
+        assert_eq!(parent_terminal.code, COMPLETION_FAULT);
+        assert!(CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert!(CYW43_DPC_DEFERRED.load(Ordering::Acquire));
+        assert!(!cyw43_foreground_transaction_active());
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.recovery_required);
+            assert!(!state.initialized);
+            assert!(!state.transport_ready);
+            assert!(!state.firmware_released);
+            assert!(!state.backplane_window_valid);
+        });
+        assert_eq!(
+            CYW43_LAST_FAULT_DETAIL.load(Ordering::Acquire),
+            u32::from(FAULT_SDIO_HOST_CONFIG_FAILED),
+        );
+        assert_eq!(
+            CYW43_LAST_FAULT_RESULT.load(Ordering::Acquire),
+            failure_result,
+        );
+        assert_eq!(cyw43_take_last_fault_frame(), failure_frame);
+        assert!(
+            !cyw43_sdio_child_claim(child.sequence.wrapping_add(1)),
+            "the pair fence must reject a later same-generation child before issue",
+        );
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     struct ProductionDpcDrainTrace {
         first_descriptor: DriverRuntimeSdioCommandDescriptor,
@@ -78770,6 +79172,147 @@ mod tests {
             assert_eq!(io.dma_started, 0);
             assert_eq!(io.sdhci_buffer_accesses, 0);
         }
+    }
+
+    #[test]
+    fn sdio_preissue_status_clear_requires_verified_readback_before_one_issue() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5301);
+        let descriptor = sdio_bus_link_cmd52_descriptor(false, 0, SDIO_CCCR_IORX, 0)
+            .expect("pre-issue W1C test descriptor");
+        let command = stage_sdio_descriptor_service_command(0x5306_00c1, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE | SDHCI_INT_CARD_INT);
+        io.int_status_w1c_failures_remaining = 1;
+        io.command_status = SDHCI_INT_RESPONSE;
+        io.command_response = 0x6d;
+
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.register(SDHCI_INT_STATUS), SDHCI_INT_CARD_INT);
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.phase),
+            SdioExternalDmaRequestPhase::ProgramVerifyStatusClear,
+        );
+
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(io.command_issue_count(), 1);
+        let completion = drive_sdio_retained_descriptor_for_test(command, descriptor, &mut io);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::frame_ready_at(
+                command.sequence,
+                CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+                1,
+            ),
+        );
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(io.register(SDHCI_INT_STATUS), SDHCI_INT_CARD_INT);
+        assert!(io.writes[..io.write_count]
+            .iter()
+            .filter(|write| write.offset == SDHCI_INT_STATUS)
+            .all(|write| write.value & SDHCI_INT_CARD_INT == 0));
+
+        reset_sdio_descriptor_seam_for_test();
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5301);
+        let command = stage_sdio_descriptor_service_command(0x5306_00c2, descriptor);
+        let mut stuck = TestSdioHostIo::new();
+        stuck.use_runtime_payload = true;
+        stuck.set_register(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE | SDHCI_INT_CARD_INT);
+        stuck.int_status_w1c_failures_remaining = usize::MAX;
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut stuck),
+            RuntimeCommandTurn::Pending,
+        );
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.external_dma_request.deadline = RuntimeDeadline::Iterations { remaining: 0 };
+        });
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut stuck),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            retained.phase,
+            SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
+        );
+        assert!(!retained.issued);
+        assert_eq!(
+            retained.failure_result,
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR,
+                SDHCI_INT_RESPONSE,
+            ),
+        );
+        let mut terminal = None;
+        for _ in 0..64 {
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                if matches!(
+                    state.external_dma_request.phase,
+                    SdioExternalDmaRequestPhase::ContainClockSettle1
+                        | SdioExternalDmaRequestPhase::ContainClockSettle2
+                ) {
+                    state.external_dma_request.settle_deadline =
+                        RuntimeDeadline::Iterations { remaining: 0 };
+                }
+            });
+            match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut stuck) {
+                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Complete(completion) => {
+                    terminal = Some(completion);
+                    break;
+                }
+            }
+        }
+        let completion = terminal.expect("stage-8 containment reaches its bounded poison terminal");
+        assert_eq!(completion.sequence, command.sequence);
+        assert_eq!(completion.code, COMPLETION_FAULT);
+        assert_eq!(completion.detail, FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED);
+        assert_eq!(
+            completion.result,
+            sdio_transfer_failure_result(
+                SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_STATUS_CLEAR,
+                SDHCI_INT_RESPONSE,
+            ),
+        );
+        assert_eq!(
+            completion.frame.flags,
+            DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED,
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.dpc_poisoned);
+            assert!(!state.dpc_activation_allowed);
+            assert!(state.card_irq_masked);
+        });
+        assert_eq!(stuck.command_issue_count(), 0);
+
+        let reissue =
+            stage_sdio_descriptor_service_command(command.sequence.wrapping_add(1), descriptor);
+        assert_eq!(
+            service_sdio_external_dma_command_turn_with_io(reissue, descriptor, &mut stuck),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                reissue.sequence,
+                FAULT_REJECTED_COMMAND,
+                DRIVER_RUNTIME_REJECT_SDIO_RETAINED_OWNER_IDENTITY_MISMATCH,
+            )),
+        );
+        assert_eq!(
+            stuck.command_issue_count(),
+            0,
+            "the poisoned owner generation must reject before SDHCI_COMMAND",
+        );
+        assert!(stuck.writes[..stuck.write_count]
+            .iter()
+            .filter(|write| write.offset == SDHCI_INT_STATUS)
+            .all(|write| write.value & SDHCI_INT_CARD_INT == 0));
     }
 
     #[test]

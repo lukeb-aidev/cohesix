@@ -388,6 +388,26 @@ log as optional corroboration, and fails closed on a missing, running,
 mismatched, incomplete, truncated, or failed final `netstats` verdict while
 still collecting the remaining diagnostics.
 
+For the Wi-Fi lane, that helper does not treat the first root prompt as
+bootstrap completion. It first waits without sending input for exactly one
+newline-complete current production `CYW43_BOOTSTRAP_SUPERVISOR` terminal
+record (`ready`, `failed`, or `permanent`). The record must carry canonical
+`attempt=1`, `backoff_ms`, `next_attempt_ms`, `serial`, `local_seat`,
+`recovery=full`, `console_seq`, `telemetry_sinks=serial+qlog+hdmi`, and
+`prompt_refresh=yes` fields. A truncated or malformed terminal, a duplicate or
+contradictory terminal, or any later attempt in the accumulated post-prompt
+settle evidence fails closed. After `ready`, guarded `netstats` polls must show
+the selected Wi-Fi/DHCP generation as
+`active=wifi addr_src=dhcp-lease ... dhcp=bound` before `nettest` is admitted.
+One absolute 60-second DHCP deadline covers every prompt barrier, command,
+result wait, and poll interval. Expiry is recorded as a diagnostic failure; the
+helper skips the premature `nettest`, establishes a fresh command boundary, and
+still captures final `netstats`, Wi-Fi, USB, and SMP diagnostics. An explicit
+`failed` or `permanent` supervisor terminal likewise fails closed and skips
+unavailable `nettest` work rather than accepting a stale prior verdict. These
+waits keep retained bootstrap output from colliding with serial commands. They
+do not alter the GENET diagnostic order or its existing timeouts.
+
 The production helper deliberately omits `wifi probe-ht`: the physical
 linked-runtime profile returns the exact typed refusal
 `ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required`
@@ -1597,36 +1617,53 @@ serial command, with no queue-tail restoration after an unknown result. A valid
 partial completion advances only the written prefix; its FIFO suffix receives a
 new action ticket. TX is limited to 128 bytes per action and alternates with RX
 after every completed chunk, so large startup output cannot hide a paced serial
-command. The ordinary linked EventPump uses separate `Serial`, `Dispatch`,
-`Network`, `LocalSeat`, and `Display` outer-turn classes. `Serial` admits one
-TX-first serial-ring turn. `Dispatch` consumes at most one serial, buffered
-local-seat, or already-buffered network command without polling the NIC. Each
-`Network` turn performs one NIC service and leaves any received command
-buffered for the next `Dispatch` turn; receiving a command and dispatching it
-therefore never share an outer turn. For wired GENET, the one `Network` service
-may instead be the next retained post-command TCP flush described above;
-dispatch itself performs none. GENET and idle CYW43 service follow the ordinary
-rotation. The selected, in-progress CYW43 path never uses the GENET cursor and
-may retain `Network` for at most four consecutive outer turns while
-authenticated TCP, response-flush, runtime/root RX backlog, a current valid
-pending or masked SDIO DPC event, or an exact retained
-NetData/TX/fairness continuation remains. Raw DPC and retained owner work are
+command. The ordinary linked EventPump uses the fixed `Serial`, `LocalSeat`,
+`Dispatch`, `Network`, and `Display` outer-turn order. `Serial` admits one
+TX-first serial-ring turn. `LocalSeat` then performs one retained USB keyboard
+turn, so new physical input is buffered before network weighting begins.
+`Dispatch` consumes at most one serial, buffered local-seat, or already-buffered
+network command without polling the NIC or flushing TCP. Each `Network` turn
+performs one NIC service and leaves any received command buffered for a later
+`Dispatch` turn. For wired GENET, that service may instead be one retained
+post-command TCP flush; polling, flushing, and command dispatch remain separate
+outer turns. GENET and idle CYW43 service follow the ordinary rotation.
+
+The selected CYW43 path never uses the GENET cursor and may retain `Network`
+only for an exact current DPC/RX/TX/fairness continuation, a nonempty
+runtime/root queue, or actual TCP socket, parser, or response work. An
+authenticated but idle socket is not a weighting reason. One continuation
+quantum is capped at both 32 separately opened outer turns and 25 milliseconds
+from the seL4 virtual counter. An already-open quantum rechecks the time cap
+before each `Network` admission, so a delayed resumption performs no extra
+NIC/SDIO operation. Reaching either cap returns to `Serial` and `LocalSeat`; a
+pending physical response, reboot, or quarantine also breaks the quantum after
+the current exact turn. Raw DPC and retained owner work remain
 eligible before authentication. The passive snapshot changes scheduling weight
 only, never issues or completes child work, and rejects stale-epoch, poisoned,
-overrun, acknowledgement-failed, or inconsistent DPC state. Every such turn
-still admits at most one CYW43 operation, and turn four must return to the
-bounded physical-console rotation. `LocalSeat` performs one retained USB
-keyboard turn, and `Display` performs at most one retained HDMI attach or
-pending-frame turn.
+overrun, acknowledgement-failed, or inconsistent DPC state. Every retained
+turn still admits at most one CYW43 operation. `netstats` exposes quantum
+counts, turns, maximum turns/duration, and idle, turn-cap, time-cap, physical,
+and guard exits; those counters remain zero for GENET. `Display` performs at
+most one retained HDMI attach or pending-frame turn. Without a local seat, the
+rotation skips directly from `Serial` to `Dispatch` and from `Network` back to
+`Serial`.
 
 The TCP console retains one parser/authentication/session authority. After its
-active socket enters the sole `Draining`/`Closing` lane, one standby smoltcp
-acceptor may buffer one unauthenticated peer but performs no console parsing or
-authentication. Promotion requires the old socket to be terminal and all old
-session, client, peer, inbound, and outbound state to be clear. The combined
-drain/close virtual-counter deadline is 20 seconds; early FIN/RST or another
-non-promotable standby state is aborted and recycled. A network-generation or
-stack reset aborts the pair. CYW43 and GENET use this same bounded handoff.
+active socket enters the sole `Draining`/`PeerCloseWait`/`Closing` lane, one
+standby smoltcp acceptor may buffer one unauthenticated peer but performs no
+console parsing or authentication. For `QUIT`, Cohesix first drains `OK QUIT`
+and the TCP send queue, then gives the peer one second to send FIN. Peer FIN
+moves the socket to `CloseWait`, after which Cohesix sends its FIN through the
+ordinary `LastAck`-to-`Closed` path. If the peer remains `Established` when the
+one-second grace expires, Cohesix aborts the active socket instead of issuing a
+local FIN from that state. The active path retains its 10-second drain and
+10-second close bounds around that grace, and the pending standby handoff uses
+the matching 21-second deadline. Promotion requires the old socket to be
+terminal and all old session, client, peer, inbound, and outbound state to be
+clear. Early
+FIN/RST or another non-promotable standby state is aborted and recycled. A
+network-generation or stack reset aborts the pair. CYW43 and GENET use this same
+bounded handoff.
 
 If a TX command already owns the shared ring slot, RX remains unallocated and
 cannot install a competing ticket or fingerprint. CYW43 likewise retains a
