@@ -35413,6 +35413,12 @@ mod tests {
         CYW43_LINK_UP.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
         let epoch_before = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        assert!(arm_cyw43_association_events_for_join_request(
+            epoch_before,
+            Some(1),
+            true,
+            true,
+        ));
         let event = test_cyw43_event_packet(CYW43_EVENT_DEAUTH_IND, CYW43_EVENT_STATUS_SUCCESS, 0);
         let token = test_rx_token(&event);
         let completion = DriverTaskCompletionRecord {
@@ -36079,6 +36085,12 @@ mod tests {
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
         CYW43_ASSOCIATED.store(1, Ordering::Release);
         CYW43_LINK_UP.store(1, Ordering::Release);
+        assert!(arm_cyw43_association_events_for_join_request(
+            CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            Some(1),
+            true,
+            true,
+        ));
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
             .expect("valid wifi credentials");
         let mut session =
@@ -39248,7 +39260,10 @@ mod tests {
         assert!(!session.progress.link_up);
         assert_eq!(session.progress.association_event, None);
         assert_eq!(session.progress.association_poll, 0);
-        assert_eq!(session.progress.last_assoc_event_type, CYW43_EVENT_ASSOC);
+        assert_eq!(
+            session.progress.last_assoc_event_type, 0,
+            "an unarmed association event is history only and cannot update current join state"
+        );
         assert_eq!(CYW43_ASSOCIATED.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_LINK_UP.load(Ordering::Acquire), 0);
         reset_cyw43_status_flags();
@@ -46558,8 +46573,16 @@ mod tests {
         let outcome = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, 1);
         assert!(outcome.activity);
         assert!(!cyw43_pending_rx_token_occupied());
-        assert_eq!(CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire), 0);
-        assert_eq!(CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_HOST_EAPOL_REQUIRED.load(Ordering::Acquire),
+            1,
+            "the required marker remains set until the retained M2 submit turn advances"
+        );
+        assert_eq!(
+            CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire),
+            0,
+            "preserving M1 without a session does not publish the active lane before M2 submission"
+        );
         assert_eq!(CYW43_HOST_EAPOL_M1.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_HOST_EAPOL_M2.load(Ordering::Acquire), 0);
         assert_eq!(
@@ -46874,7 +46897,10 @@ mod tests {
         assert_eq!(session.progress.data_rx, 0);
         assert!(!session.progress.associated);
         assert_eq!(session.progress.association_event, None);
-        assert_eq!(session.progress.last_assoc_event_type, CYW43_EVENT_ASSOC);
+        assert_eq!(
+            session.progress.last_assoc_event_type, 0,
+            "pre-poll routing cannot promote an unarmed event into current join state"
+        );
 
         drop(guard);
         reset_cyw43_status_flags();
@@ -46995,7 +47021,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        mark_cyw43_data_plane_ready_for_test();
+        mark_cyw43_gate8_ready_for_test(53);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let multicast = test_cyw43_ipv6_multicast_frame();
@@ -47068,7 +47094,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        mark_cyw43_data_plane_ready_for_test();
+        mark_cyw43_gate8_ready_for_test(59);
         let assigned_ip = [192, 168, 86, 154];
         CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes(assigned_ip), Ordering::Release);
 
@@ -47167,13 +47193,15 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_accepts_submit_before_deferred_credit_proof() {
+    fn cyw43_data_tx_accepts_submit_but_blocks_uncredited_response_token() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(1, Ordering::Release);
+        let generation = 41;
+        mark_cyw43_gate8_ready_for_test(generation);
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -47190,7 +47218,6 @@ mod tests {
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 1);
         assert_eq!(CYW43_TX_UNPROVEN_SEQ.load(Ordering::Acquire), 1);
 
-        mark_cyw43_data_plane_ready_for_test();
         let mut dev = Cyw43DriverTaskDevice::default();
         assert!(
             dev.transmit(Instant::from_millis(0)).is_none(),
@@ -47200,10 +47227,40 @@ mod tests {
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             test_rx_token(&test_cyw43_tcp_frame()),
         ));
-        let Some((rx, _tx)) = dev.receive(Instant::from_millis(0)) else {
-            panic!("WiFi RX must drain while a TX window is waiting for credit");
+        let fairness_poll = Cyw43PendingPromptPoll {
+            ticket_id: 0x4352_4544,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0x51),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: true,
+            child_reply_renewals: 0,
         };
-        assert_eq!(rx.len, test_cyw43_tcp_frame().len());
+        assert!(
+            complete_cyw43_data_tx_rx_fairness(
+                fairness_poll,
+                DriverTaskCompletionRecord::idle(0x51),
+            ),
+            "one exact child receive terminal must release the fresh-TX fence"
+        );
+        assert!(
+            dev.receive(Instant::from_millis(0)).is_none(),
+            "RX without covering credit cannot expose an unusable paired TxToken"
+        );
+        assert_eq!(
+            cyw43_pending_rx_queue_len(),
+            1,
+            "the uncredited response remains preserved for a later covering-credit turn"
+        );
         assert_eq!(
             CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
             CYW43_TX_UNPROVEN_KNOWN
@@ -47227,6 +47284,7 @@ mod tests {
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(1, Ordering::Release);
+        mark_cyw43_gate8_ready_for_test(61);
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -47242,6 +47300,9 @@ mod tests {
             CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
             CYW43_TX_UNPROVEN_KNOWN
         );
+        // This fixture covers paired-token credit admission; the exact
+        // post-TX receive-fairness terminal has dedicated tests below.
+        clear_cyw43_data_tx_rx_fairness();
 
         let credit_flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
             | (2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT);
@@ -47249,8 +47310,6 @@ mod tests {
             credit_flags,
             test_rx_token(&test_cyw43_tcp_frame())
         ));
-        mark_cyw43_data_plane_ready_for_test();
-
         let mut dev = Cyw43DriverTaskDevice::default();
         let (rx, tx) = dev
             .receive(Instant::from_millis(0))
@@ -47412,6 +47471,7 @@ mod tests {
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(1, Ordering::Release);
+        mark_cyw43_gate8_ready_for_test(43);
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -47423,6 +47483,9 @@ mod tests {
         );
         assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 1);
+        // Isolate deferred-credit admission from the independently covered
+        // exact post-TX receive-fairness terminal.
+        clear_cyw43_data_tx_rx_fairness();
 
         let credit_flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
             | (2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT);
@@ -47430,8 +47493,6 @@ mod tests {
             credit_flags,
             test_rx_token(&test_cyw43_tcp_frame())
         ));
-        mark_cyw43_data_plane_ready_for_test();
-
         let mut dev = Cyw43DriverTaskDevice::default();
         assert!(
             dev.transmit(Instant::from_millis(0)).is_some(),
@@ -47591,7 +47652,7 @@ mod tests {
             CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
             CYW43_TX_UNPROVEN_UNKNOWN
         );
-        mark_cyw43_data_plane_ready_for_test();
+        mark_cyw43_gate8_ready_for_test(47);
 
         let mut dev = Cyw43DriverTaskDevice::default();
         assert!(
@@ -48135,7 +48196,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_copied_rx_is_delivered_before_pending_data_tx_advances() {
+    fn cyw43_copied_rx_is_preserved_while_pending_data_tx_advances() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48155,17 +48216,26 @@ mod tests {
             b"queued-tcp-response",
         ));
 
-        let token = receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .expect("copied RX must not wait behind a multi-turn pending TX lease");
-        token.consume(|bytes| assert_eq!(bytes, b"tcp-ack"));
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "RX delivery is hardware-free and must retain TX for the next outer turn"
+            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+            "copied RX cannot return with an infallible paired TxToken while the TX slot is owned"
+        );
+        assert!(
+            cyw43_pending_rx_token_occupied(),
+            "the copied RX must remain available for a later safe paired-token turn"
+        );
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "the sole retained TX owner must advance during this outer turn"
         );
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
-            0,
-            "delivering copied RX must not issue or advance the CYW43 child"
+            1,
+            "the pending TX may issue exactly once while copied RX remains preserved"
+        );
+        assert!(
+            cyw43_data_tx_rx_fairness_required_for_generation(generation),
+            "the accepted TX terminal must require one exact receive poll before copied RX delivery"
         );
 
         reset_cyw43_status_flags();
