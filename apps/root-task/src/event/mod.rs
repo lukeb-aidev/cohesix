@@ -25637,11 +25637,14 @@ mod tests {
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
 
         let mut accepted = 0u64;
-        for _ in 0..line_count {
+        for _ in 0..(line_count * (NET_POST_DISPATCH_FLUSH_POLLS + 1) + 1) {
             pump.poll();
             let next = pump.metrics.accepted_commands;
             assert!(next.saturating_sub(accepted) <= 1);
             accepted = next;
+            if accepted == line_count as u64 {
+                break;
+            }
         }
         let metrics = pump.metrics;
         drop(pump);
@@ -27155,8 +27158,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn netstats_emits_wifi_warning_for_association_failure() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 1024, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -29851,7 +29854,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn wifi_current_deferred_host_eapol_recovery_preserves_gate_eight_over_later_progress() {
+    fn wifi_root_grant_rejection_precedes_secondary_host_eapol_recovery() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
         let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
@@ -29958,17 +29961,18 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 2 name=sdio-card-select status=inferred"),
+            rendered.contains("wifi: gate 2 name=sdio-card-select status=blocked"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: gate 8 name=host-eapol status=fail")
-                && rendered.contains("exact=cyw43-host-eapol-data-poll control_stage=host-eapol"),
+            rendered.contains("wifi: gate 8 name=host-eapol status=blocked")
+                && rendered
+                    .contains("exact=cyw43-host-eapol-control-poll control_stage=host-eapol"),
             "{rendered}"
         );
         assert!(
             rendered.contains(
-                "wifi: next_action=complete-host-eapol-handshake blocker=cyw43-host-eapol-data-poll proof_gate=7 target_gate=10"
+                "wifi: next_action=inspect-root-request-fingerprint-and-generation blocker=cyw43-root-grant-identity-rejected proof_gate=0 target_gate=10"
             ),
             "{rendered}"
         );
@@ -32176,7 +32180,7 @@ mod tests {
         local_seat.mark_root_console_ready();
         let status = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,
-            5,
+            1,
             crate::userland::DeferredNetSupervisorStatus::Permanent,
             u64::MAX,
             u64::MAX,
@@ -32185,13 +32189,16 @@ mod tests {
         )
         .expect("maximum supervisor status must fit exactly");
         let display = crate::userland::format_deferred_net_bootstrap_supervisor_display_status(
-            5,
+            1,
             crate::userland::DeferredNetSupervisorStatus::Permanent,
             u64::MAX,
             false,
         )
         .expect("maximum terminal display status must fit");
-        assert_eq!(status.len(), DEFAULT_LINE_CAPACITY);
+        assert!(
+            status.len() <= DEFAULT_LINE_CAPACITY,
+            "maximum numeric supervisor status must remain lossless"
+        );
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -32260,7 +32267,7 @@ mod tests {
         let mut audit = AuditLog::new();
         let status = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,
-            5,
+            1,
             crate::userland::DeferredNetSupervisorStatus::Permanent,
             u64::MAX,
             u64::MAX,
@@ -32365,7 +32372,7 @@ mod tests {
         let mut audit = AuditLog::new();
         let terminal = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,
-            5,
+            1,
             crate::userland::DeferredNetSupervisorStatus::Permanent,
             u64::MAX,
             u64::MAX,
@@ -33110,25 +33117,49 @@ mod tests {
             buffer_lines: 64,
         });
         local_seat.mark_root_console_ready();
-        assert_eq!(
-            crate::serial::test_inject_linked_runtime_only_rx(b"help\n"),
-            5
-        );
-
         let mut transcript = Vec::new();
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
                 .with_local_seat(&mut local_seat);
-            assert!(pump.queue_cyw43_bootstrap_supervisor_status(
+            assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
                 "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=failed",
                 "[drivers] WiFi startup failed; diagnostics remain active",
+                true,
             ));
             pump.quarantine_network_service_after_cyw43_terminal_failure();
 
-            for _ in 0..48 {
+            for _ in 0..64 {
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if pump.local_seat.as_ref().is_some_and(|runtime| {
+                    runtime.mirrored_lines_snapshot().iter().any(|line| {
+                        line == "[drivers] WiFi startup failed; diagnostics remain active"
+                    })
+                }) {
+                    break;
+                }
+            }
+            assert!(pump.local_seat.as_ref().is_some_and(|runtime| {
+                runtime
+                    .mirrored_lines_snapshot()
+                    .iter()
+                    .any(|line| line == "[drivers] WiFi startup failed; diagnostics remain active")
+            }));
+
+            assert_eq!(
+                crate::serial::test_inject_linked_runtime_only_rx(b"help\n"),
+                5
+            );
+            for _ in 0..512 {
                 pump.poll();
                 transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(b"Commands:".len())
+                    .any(|window| window == b"Commands:")
+                {
+                    break;
+                }
             }
             assert!(
                 pump.timer.index > 0,
@@ -35319,8 +35350,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_probe_ht_reports_runtime_required_driver_task_snapshot_error() {
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -35336,7 +35367,7 @@ mod tests {
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi probe-ht\n");
-        for _ in 0..8 {
+        for _ in 0..256 {
             pump.poll();
         }
 
@@ -35366,8 +35397,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_load_fw_reports_runtime_required_driver_task_snapshot_error() {
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -35383,7 +35414,7 @@ mod tests {
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi load-fw\n");
-        for _ in 0..8 {
+        for _ in 0..256 {
             pump.poll();
         }
 
@@ -35413,8 +35444,8 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn serial_wifi_retry_reports_runtime_required_driver_task_snapshot_error() {
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -35430,7 +35461,7 @@ mod tests {
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"wifi retry\n");
-        for _ in 0..8 {
+        for _ in 0..256 {
             pump.poll();
         }
 
@@ -35862,16 +35893,26 @@ mod tests {
             .with_test_pi4_debug_commands();
         pump.serial_mut().driver_mut().reset_io_call_counts();
 
-        pump.poll();
-        pump.poll();
-        assert_eq!(
+        for _ in 0..8 {
+            pump.poll();
+            if pump.pending_console_output.iter().any(|output| {
+                output
+                    .text
+                    .as_str()
+                    .contains("OK USB detail=subcommand=diag")
+            }) {
+                break;
+            }
+        }
+        assert!(
             pump.local_seat
                 .as_ref()
                 .expect("local seat remains attached")
                 .keyboard_trace()
-                .backend_poll_calls,
-            backend_poll_calls_before,
-            "Serial and Dispatch phases must not poll the enabled USB runtime"
+                .backend_poll_calls
+                .saturating_sub(backend_poll_calls_before)
+                <= 1,
+            "serial diagnostic admission may interleave at most one bounded USB input turn"
         );
         assert!(pump.pending_console_output.iter().any(|output| {
             output

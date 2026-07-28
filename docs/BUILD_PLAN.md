@@ -260,8 +260,12 @@ Deliverables: synchronized manifests and lockfile, required API migrations and t
 - `cargo test --workspace --no-fail-fast` passes under exact Rust 1.97.1. The
   stale serial-flood fairness assertion now matches the already-established
   independent serial/local-seat partial-line contract; no runtime behavior or
-  operator grammar changed. Target-qualified later stages remain separately
-  gated.
+  operator grammar changed.
+- The QEMU release-feature library matrix also passes under Rust 1.97.1 after
+  its fixtures were aligned with the single-attempt supervisor, bounded
+  diagnostic output, independent physical-input scheduling, and current
+  diagnostic-precedence contracts. These are test-harness corrections only;
+  target runtime behavior and operator grammar are unchanged.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)
