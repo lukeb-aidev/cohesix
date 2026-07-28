@@ -8321,7 +8321,43 @@ fn cyw43_host_eapol_accepted_action_pending() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_maintenance_accepted_action_pending() -> bool {
+    CYW43_MAINTENANCE_CURSOR
+        .lock()
+        .action
+        .is_some_and(|action| cyw43_child_action_accepted(action.request, action.issued))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_maintenance_accepted_action_pending_nonblocking() -> bool {
+    let Some(cursor) = CYW43_MAINTENANCE_CURSOR.try_lock() else {
+        // Event capture can run inside another policy owner. If maintenance is
+        // concurrently publishing its cursor, defer carrier transition rather
+        // than revoking a possibly issued op11 action.
+        return true;
+    };
+    cursor
+        .action
+        .is_some_and(|action| cyw43_child_action_accepted(action.request, action.issued))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_association_retry_owner_drain_pending(mode: Cyw43AssociationAuthMode) -> bool {
+    // Maintenance is serviced first by the ordinary host-EAPOL policy slice,
+    // including after an interleaved event completed the current physical
+    // request while the same immutable op11 logical owner remained live.
+    // Association backoff may begin only after that exact owner reaches its
+    // normal terminal. A semantic connection failure alone is not pair-recovery
+    // authority.
+    cyw43_maintenance_accepted_action_pending()
+        || mode == Cyw43AssociationAuthMode::HostEapol && cyw43_host_eapol_accepted_action_pending()
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_host_eapol_action_pending_nonblocking() -> bool {
+    if cyw43_maintenance_accepted_action_pending_nonblocking() {
+        return true;
+    }
     if cyw43_prompt_poll_owned_by_host_eapol() {
         return true;
     }
@@ -10490,12 +10526,11 @@ impl Cyw43AssociationSupervisor {
                 Cyw43AssociationPhase::Awaiting { .. } | Cyw43AssociationPhase::Connected
             )
         {
-            if observation.mode == Cyw43AssociationAuthMode::HostEapol
-                && cyw43_host_eapol_accepted_action_pending()
-            {
+            if cyw43_association_retry_owner_drain_pending(observation.mode) {
                 // A logical connection failure cannot revoke a different
-                // accepted host-EAPOL action. Drain that immutable ticket
-                // before starting the existing same-pair logical Join retry.
+                // accepted maintenance or host-EAPOL action. Let the canonical
+                // policy slice drain that immutable ticket before starting the
+                // existing same-pair logical Join retry.
                 return Cyw43AssociationServiceOutcome {
                     activity: true,
                     host_eapol_allowed: true,
@@ -10563,15 +10598,14 @@ impl Cyw43AssociationSupervisor {
                     };
                 }
                 if cyw43_association_attempt_deadline_expired(observation, since_ms, now_ms) {
-                    if observation.mode == Cyw43AssociationAuthMode::HostEapol
-                        && cyw43_host_eapol_accepted_action_pending()
-                    {
+                    if cyw43_association_retry_owner_drain_pending(observation.mode) {
                         // The absolute attempt deadline is authoritative, but
                         // teardown follows exact completion ownership. Resume
-                        // the retained host-EAPOL action one bounded operation
-                        // per later outer turn; the supervisor may suspend only
-                        // after that action has completed or faulted through
-                        // its normal generation-bound path.
+                        // the retained maintenance or host-EAPOL action one
+                        // bounded operation per later outer turn; the
+                        // supervisor may suspend only after that action has
+                        // completed or faulted through its normal
+                        // generation-bound path.
                         return Cyw43AssociationServiceOutcome {
                             activity: true,
                             host_eapol_allowed: true,
@@ -25388,6 +25422,8 @@ mod tests {
         AtomicU32::new(0),
         AtomicU32::new(0),
     ];
+    const CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET: usize =
+        crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES;
 
     struct Cyw43SupervisorTestHal;
 
@@ -25602,6 +25638,45 @@ mod tests {
                     offset: 0,
                     len: 0,
                     flags: 0,
+                },
+            };
+        }
+        DriverTaskCompletionRecord {
+            sequence: command.sequence,
+            code: DriverTaskCompletionCode::FrameReady.as_u16(),
+            detail: 0,
+            result: 0,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        }
+    }
+
+    unsafe fn cyw43_maintenance_interleaved_ring_test_service(
+        _selector: usize,
+        command: DriverTaskCommandRecord,
+    ) -> DriverTaskCompletionRecord {
+        let descriptor = crate::hal::driver_task::driver_task_ring_frame_bytes(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command.frame,
+        )
+        .and_then(decode_cyw43_descriptor)
+        .expect("maintenance interleave service receives a CYW43 descriptor");
+        assert_eq!(descriptor.op, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+        assert_eq!(descriptor.arg0, CYW43_WLC_GET_BSSID);
+        let turn = CYW43_MAINTENANCE_RING_TURNS.fetch_add(1, Ordering::AcqRel);
+        if turn == 0 {
+            return DriverTaskCompletionRecord {
+                sequence: command.sequence,
+                code: DriverTaskCompletionCode::FrameReady.as_u16(),
+                detail: DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME,
+                result: (CYW43_BDC_HEADER_BYTES + CYW43_BRCMF_EVENT_MIN_PACKET_LEN) as u32,
+                frame: DriverFrameDescriptor {
+                    offset: CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET as u32,
+                    len: (CYW43_BDC_HEADER_BYTES + CYW43_BRCMF_EVENT_MIN_PACKET_LEN) as u16,
+                    flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
                 },
             };
         }
@@ -32969,6 +33044,221 @@ mod tests {
             !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
             "a connection-attempt terminal cannot reset a healthy linked pair"
         );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_supervisor_drains_issued_bssid_owner_before_set_ssid_retry() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_maintenance_interleaved_ring_test_service,
+            )
+        );
+
+        let generation = 23;
+        let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+        CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
+        CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN
+            .store(cyw43_epoch_token(generation), Ordering::Release);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        assert!(arm_cyw43_association_events_for_join_request(
+            generation,
+            Some(66),
+            true,
+            true,
+        ));
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        *CYW43_HOST_EAPOL_SESSION.lock() =
+            Some(Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts"));
+        let mut supervisor =
+            Cyw43AssociationSupervisor::new(true, Some(credentials), generation, 10);
+        assert!(supervisor.service(Some(credentials), 10).activity);
+        assert_eq!(supervisor.phase, Cyw43AssociationPhase::Connected);
+
+        let set_ssid_failure =
+            test_cyw43_event_packet(CYW43_EVENT_SET_SSID, CYW43_EVENT_STATUS_NO_NETWORKS, 0);
+        let interleaved_frame = test_cyw43_bdc_event_frame(&set_ssid_failure);
+        let staged = crate::hal::driver_task::stage_driver_task_ring_payload_at(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET,
+            &interleaved_frame,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+        )
+        .expect("stage the interleaved SET_SSID event outside the command payload");
+        assert_eq!(
+            staged.offset as usize,
+            CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET
+        );
+        assert!(latch_cyw43_bssid_maintenance(
+            Cyw43MaintenanceBssidContext {
+                purpose: Cyw43MaintenanceBssidPurpose::PostAssociation,
+                station_mac: CYW43_DRIVER_TASK_MAC,
+                poll: 17,
+            },
+        ));
+        let (owner_descriptor, owner_digest) = {
+            let mut cursor = CYW43_MAINTENANCE_CURSOR.lock();
+            prepare_cyw43_maintenance_action(&mut cursor)
+                .expect("the exact BSSID maintenance action prepares");
+            let action = cursor.action.expect("BSSID action remains retained");
+            assert_eq!(action.kind, Cyw43MaintenanceKind::BssidProbe);
+            (action.descriptor, action.digest)
+        };
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let mut interleaved_observed = false;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            assert!(service_cyw43_maintenance_turn());
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if CYW43_ASSOCIATION_TERMINAL_FAILURE.load(Ordering::Acquire) != 0 {
+                interleaved_observed = true;
+                break;
+            }
+        }
+        assert!(
+            interleaved_observed,
+            "the issued BSSID owner must route the interleaved SET_SSID terminal"
+        );
+        let retained = CYW43_MAINTENANCE_CURSOR
+            .lock()
+            .action
+            .expect("interleaved delivery cannot retire the logical BSSID owner");
+        assert_eq!(retained.kind, Cyw43MaintenanceKind::BssidProbe);
+        assert_eq!(retained.descriptor, owner_descriptor);
+        assert_eq!(retained.digest, owner_digest);
+        assert!(retained.issued);
+        assert_eq!(
+            retained.request, None,
+            "the completed physical request is cleared while op11 remains live"
+        );
+        assert_eq!(CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            generation,
+            "event capture must defer logical carrier transition behind the issued owner"
+        );
+        let first_terminal = CYW43_BOOT_FIRST_ASSOCIATION_TERMINAL_EVENT
+            .lock()
+            .expect("the interleaved terminal remains boot-first evidence");
+        assert_eq!(first_terminal.generation, generation);
+        assert_eq!(first_terminal.event_type, CYW43_EVENT_SET_SSID);
+        assert_eq!(first_terminal.status, CYW43_EVENT_STATUS_NO_NETWORKS);
+        assert_eq!(
+            first_terminal.source_stage,
+            Cyw43MaintenanceKind::BssidProbe.stage()
+        );
+
+        begin_cyw43_outer_event_turn();
+        assert!(supervisor.claims_runtime_turn(Some(credentials), 11));
+        let deferred = supervisor.service(Some(credentials), 11);
+        assert!(deferred.activity);
+        assert!(!deferred.claimed_runtime_turn);
+        assert!(deferred.host_eapol_allowed);
+        assert_eq!(
+            supervisor.phase,
+            Cyw43AssociationPhase::Connected,
+            "association backoff must wait for the exact maintenance terminal"
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+
+        let mut reached_backoff = false;
+        let mut backoff_since_ms = 0;
+        let mut backoff_delay_ms = 0;
+        for turn in 1..=CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            let now_ms = 11 + u64::from(turn as u32);
+            let association = supervisor.service(Some(credentials), now_ms);
+            if !association.host_eapol_allowed {
+                let Cyw43AssociationPhase::Backoff {
+                    since_ms, delay_ms, ..
+                } = supervisor.phase
+                else {
+                    panic!("drained owner must enter the normal logical backoff");
+                };
+                reached_backoff = true;
+                backoff_since_ms = since_ms;
+                backoff_delay_ms = delay_ms;
+                break;
+            }
+            let slice = service_cyw43_host_eapol_slice_with_outcome(credentials, 1, now_ms);
+            assert!(slice.activity);
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if let Some(action) = CYW43_MAINTENANCE_CURSOR.lock().action {
+                assert_eq!(action.kind, Cyw43MaintenanceKind::BssidProbe);
+                assert_eq!(action.descriptor, owner_descriptor);
+                assert_eq!(action.digest, owner_digest);
+            }
+        }
+        assert!(
+            reached_backoff,
+            "the exact BSSID owner must drain before bounded association retry"
+        );
+        assert!(CYW43_MAINTENANCE_CURSOR.lock().action.is_none());
+        assert_eq!(
+            CYW43_MAINTENANCE_RING_TURNS.load(Ordering::Acquire),
+            2,
+            "one interleaved event and one exact terminal complete the same op11 owner"
+        );
+        assert_eq!(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), generation);
+        assert_eq!(
+            CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+            pair_scrub_epoch
+        );
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_context_replay_required());
+
+        begin_cyw43_outer_event_turn();
+        CYW43_OUTER_EVENT_TURN_CLAIMED.store(1, Ordering::Release);
+        let retry = supervisor.service(
+            Some(credentials),
+            backoff_since_ms.saturating_add(backoff_delay_ms),
+        );
+        assert!(retry.claimed_runtime_turn);
+        assert_eq!(
+            CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+            generation.wrapping_add(1),
+            "the retry advances only the logical association generation"
+        );
+        assert_eq!(
+            CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+            pair_scrub_epoch,
+            "the same-pair retry cannot restart the physical linked pair"
+        );
+        assert!(matches!(supervisor.phase, Cyw43AssociationPhase::Join(_)));
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_context_replay_required());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        drop(ring_guard);
         reset_cyw43_status_flags();
     }
 

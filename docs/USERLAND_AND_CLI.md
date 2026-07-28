@@ -78,7 +78,11 @@ evidence rather than being replaced by an unrelated driver's counters. Use
 `smp dump` only when investigating kernel scheduler state on a compatible debug
 profile before linked-UART cutover; the raw kernel text is UART-only. The
 explicit `smp activity` spelling remains accepted for scripts and older
-runbooks.
+runbooks. The `serial_rx_drop` and `serial_rx_backpressure` values in this
+report describe the root serial queue only. A zero value does not claim that
+the isolated serial runtime queue or the mini-UART hardware FIFO could not
+have overrun; paced serial acceptance still requires a complete command and
+response transcript.
 
 `test` is present in the shared parser but the target root console directs the
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
@@ -92,6 +96,11 @@ The positive run generation must match the admission ACK; another run on the
 same connection cannot satisfy the command.
 Targets and backend identity are emitted separately as `nettargets:` so the
 terminal verdict cannot be truncated by long target strings.
+`profile_backend` is the backend selected by the resolved manifest,
+`active_driver` is the physical or virtual driver selected for this boot, and
+the compatibility `backend` field is an alias of `active_driver`. In Pi Wi-Fi
+mode, for example, `profile_backend=bcmgenet-v5` and
+`active_driver=backend=cyw43` is the truthful combination.
 
 ### Shared console line protocol
 
@@ -102,6 +111,10 @@ rules are in
 [INTERFACES.md#target-console-contract](INTERFACES.md#target-console-contract).
 
 - Commands and frames are bounded by the selected manifest.
+- Serial and local-seat USB keyboard ingress retain independent partial-line
+  buffers. Completing or rejecting a line from one physical source does not
+  erase an unfinished line from the other; explicit session termination clears
+  both.
 - Successful commands begin with `OK <VERB>`; for a streaming command the
   acknowledgement is emitted before any payload. Refusals use
   `ERR <VERB> reason=<busy|quota|cut|policy>` when that refusal taxonomy

@@ -1553,7 +1553,7 @@ def test_gate_summary_tracks_smp_activity_net_state() -> None:
 
 
 def test_gate_summary_accepts_compact_smp_operator_liveness_snapshot() -> None:
-    """Current SMP snapshots close stale USB startup and serial-cleanliness state."""
+    """SMP snapshots close USB state but not end-to-end serial responsiveness."""
 
     events = normalizer.parse_events(
         [
@@ -1586,7 +1586,7 @@ def test_gate_summary_accepts_compact_smp_operator_liveness_snapshot() -> None:
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["SERIAL_CLEAN"] == "yes"
-    assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "no"
     assert record["USB_GATE"] == 10
     assert record["USB_BLOCKER"] == "none"
     assert record["USB_LOCAL_SEAT_STATE"] == "ready"
@@ -2114,7 +2114,7 @@ def test_gate_summary_splits_glued_serial_trace_segment() -> None:
 
     events = normalizer.parse_events(
         [
-            "cohesix> usb statusSERIAL_INPUT_TRACE stage=line-ready "
+            "cohesix> usb statusSERIAL_INPUT_TRACE stage=consume-line "
             "route=bcm2711-mini-uart line_len=10 rx_depth=0 partial_len=0",
         ]
     )
@@ -2122,6 +2122,24 @@ def test_gate_summary_splits_glued_serial_trace_segment() -> None:
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["SERIAL_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_gate_summary_rejects_zero_smp_root_queue_counters_as_serial_proof() -> None:
+    """Root queue health alone cannot prove isolated-runtime or UART delivery."""
+
+    events = normalizer.parse_events(
+        [
+            "[smp] activity pump now_ms=336580 input=local-seat lines=3 ok=1 "
+            "denied=1 ticks=66748 serial_rx_drop=0 serial_tx_drop=0 "
+            "utf8_drop=0 serial_budget_overruns=0 "
+            "serial_rx_backpressure=0 serial_tx_backpressure=0 "
+            "serial_pressure_source=uart-output",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+    assert record["SERIAL_CLEAN"] == "yes"
+    assert record["SERIAL_RESPONSIVE_PROOF"] == "no"
 
 
 def test_usb_command_ready_ignores_later_wifi_blockers() -> None:

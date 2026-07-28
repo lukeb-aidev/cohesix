@@ -297,9 +297,13 @@ class RedactingSerialController:
         *,
         public_line: str | None = None,
         reinforce_terminator: bool = False,
+        guard_root_terminator: bool = False,
     ) -> None:
         self.note(f"send {public_line if public_line is not None else line}")
-        for byte in serial_line_bytes(line):
+        for byte in serial_line_bytes(
+            line,
+            guard_root_terminator=guard_root_terminator,
+        ):
             self._serial.write(bytes([byte]))
             self._serial.flush()
             time.sleep(self._char_delay_s)
@@ -369,7 +373,7 @@ class RedactingSerialController:
             label=f"stale serial output before {label}",
         )
         self.send_line("", public_line="<clear-line>")
-        self.send_line("ping")
+        self.send_line("ping", guard_root_terminator=True)
         ping_timeout_s = 10.0
         if deadline is not None:
             ping_timeout_s = min(
@@ -444,10 +448,15 @@ def resolve_under_repo(repo: pathlib.Path, path: pathlib.Path) -> pathlib.Path:
     return path if path.is_absolute() else repo / path
 
 
-def serial_line_bytes(line: str) -> bytes:
+def serial_line_bytes(
+    line: str,
+    *,
+    guard_root_terminator: bool = False,
+) -> bytes:
     """Encode a serial command using the Pi 4 console's CR line discipline."""
 
-    return f"{line}{DEFAULT_LINE_TERMINATOR}".encode()
+    terminator_guard = " " if line and guard_root_terminator else ""
+    return f"{line}{terminator_guard}{DEFAULT_LINE_TERMINATOR}".encode()
 
 
 def serial_marker_seen(snapshot: bytes, marker: bytes) -> bool:
@@ -478,7 +487,7 @@ def inspect_wifi_supervisor_evidence(
 
     terminal: tuple[int, str] | None = None
     for raw_line in snapshot.splitlines(keepends=True):
-        line_complete = raw_line.endswith(b"\n")
+        line_complete = raw_line.endswith((b"\r", b"\n"))
         line = (
             raw_line.removesuffix(b"\n").removesuffix(b"\r")
             if line_complete
@@ -938,17 +947,21 @@ def reboot_from_root(
         controller.read_until((ROOT_PROMPT,), 5, label="root prompt after clear-line")
     except SerialMarkerTimeout as exc:
         controller.note(f"root clear-line prompt not observed; continuing error={exc}")
-    controller.send_line("ping")
+    controller.send_line("ping", guard_root_terminator=True)
     controller.read_until((b"OK PING",), 10, label="root ping OK")
     ticket = mint_ticket(repo, cohsh, ticket_config)
     controller.add_redaction(ticket, "<queen-ticket>")
-    controller.send_line(f"attach queen {ticket}", public_line="attach queen <ticket>")
+    controller.send_line(
+        f"attach queen {ticket}",
+        public_line="attach queen <ticket>",
+        guard_root_terminator=True,
+    )
     controller.read_until(
         (b"OK ATTACH", b"OK ATTAC", b"role=queen"),
         10,
         label="Queen attach OK",
     )
-    controller.send_line("reboot")
+    controller.send_line("reboot", guard_root_terminator=True)
     reboot_ack = controller.read_until(
         (b"OK REBOOT detail=scheduled",),
         10,
@@ -999,9 +1012,12 @@ def wait_for_wifi_supervisor_terminal(
             observed += chunk
             evidence += chunk
             marker_offset = wifi_terminal_marker_offset(evidence)
-        if marker_offset >= 0 and b"\n" not in evidence[marker_offset:]:
+        if marker_offset >= 0 and not any(
+            terminator in evidence[marker_offset:]
+            for terminator in (b"\r", b"\n")
+        ):
             chunk = controller.read_until(
-                (b"\n",),
+                (b"\r", b"\n"),
                 remaining_before_deadline(
                     deadline,
                     label="complete CYW43 bootstrap supervisor line",
@@ -1038,7 +1054,11 @@ def issue_diagnostic_command(
     """Issue one diagnostic only after a fresh root-command boundary."""
 
     controller.synchronize_root_diagnostic_command(label=label, deadline=deadline)
-    controller.send_line(command, reinforce_terminator=True)
+    controller.send_line(
+        command,
+        reinforce_terminator=True,
+        guard_root_terminator=True,
+    )
     result_timeout_s = 90.0
     if deadline is not None:
         result_timeout_s = remaining_before_deadline(

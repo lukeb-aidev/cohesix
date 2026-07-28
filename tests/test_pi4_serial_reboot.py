@@ -178,6 +178,7 @@ class FakeController:
         self.sent: list[str] = []
         self.public_sent: list[str] = []
         self.reinforced: list[bool] = []
+        self.root_terminator_guards: list[bool] = []
         self.notes: list[str] = []
         self.drains: list[tuple[float, str]] = []
         self.drain_reads: list[bytes] = []
@@ -197,10 +198,12 @@ class FakeController:
         *,
         public_line: str | None = None,
         reinforce_terminator: bool = False,
+        guard_root_terminator: bool = False,
     ) -> None:
         self.sent.append(line)
         self.public_sent.append(public_line if public_line is not None else line)
         self.reinforced.append(reinforce_terminator)
+        self.root_terminator_guards.append(guard_root_terminator)
 
     def read_until(
         self,
@@ -438,6 +441,20 @@ def test_serial_commands_use_cr_line_ending() -> None:
 
     assert pi4_serial_reboot.serial_line_bytes("netstats") == b"netstats\r"
     assert pi4_serial_reboot.serial_line_bytes("wifi diag") == b"wifi diag\r"
+    assert (
+        pi4_serial_reboot.serial_line_bytes(
+            "netstats",
+            guard_root_terminator=True,
+        )
+        == b"netstats \r"
+    )
+    assert (
+        pi4_serial_reboot.serial_line_bytes(
+            "",
+            guard_root_terminator=True,
+        )
+        == b"\r"
+    )
 
 
 def test_root_prompt_marker_accepts_tail_fragment() -> None:
@@ -466,6 +483,13 @@ def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
     assert pi4_serial_reboot.parse_wifi_supervisor_terminal(progress) is None
     assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
         progress + wifi_supervisor_record("ready")
+    ) == (1, "ready")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        wifi_supervisor_record("ready").removesuffix(b"\n") + b"\r"
+    ) == (1, "ready")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        b"CYW43_BOOTSTRAP_SUPERVISOR attempt=0 status=preflight\r\r\n"
+        + wifi_supervisor_record("ready")
     ) == (1, "ready")
     assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
         wifi_supervisor_record("failed")
@@ -767,6 +791,7 @@ def test_diagnostic_barrier_rejects_prompt_tail_after_ping() -> None:
 
     assert controller.sent == ["", "ping"]
     assert controller.public_sent == ["<clear-line>", "ping"]
+    assert controller.root_terminator_guards == [False, True]
     assert controller.reads == []
     assert controller.drains == [
         (
@@ -787,6 +812,7 @@ def test_diagnostic_barrier_accepts_full_prompt_following_ping() -> None:
     )
 
     assert controller.sent == ["", "ping"]
+    assert controller.root_terminator_guards == [False, True]
     assert controller.reads == []
 
 
@@ -1568,6 +1594,7 @@ def test_reboot_from_root_clears_line_and_pings_before_auth(monkeypatch: pytest.
 
     assert controller.sent == ["", "ping", "attach queen secret-ticket", "reboot"]
     assert controller.public_sent == ["<clear-line>", "ping", "attach queen <ticket>", "reboot"]
+    assert controller.root_terminator_guards == [False, True, True, True]
     assert controller.redactions == [("secret-ticket", "<queen-ticket>")]
     assert ROOT_MENU_SAVED in snapshot
 

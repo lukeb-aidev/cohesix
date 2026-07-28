@@ -2641,17 +2641,23 @@ pub fn map_cyw43_bootstrap_error(error: DriverTaskNetError) -> DefaultNetConsole
     convert_driver_error(error)
 }
 
-fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
-    match (config.backend, config.policy.interface) {
-        (NetBackend::BcmGenet, NetInterfacePolicy::Wifi) => "cyw43",
-        (NetBackend::BcmGenet, NetInterfacePolicy::Auto) if config.wifi_credentials.is_some() => {
-            "cyw43"
-        }
+fn active_driver_label_for(profile_backend: NetBackend, active_interface: &str) -> &'static str {
+    match (profile_backend, active_interface) {
+        (NetBackend::BcmGenet, "wifi") => "cyw43",
         (NetBackend::BcmGenet, _) => "bcmgenet-v5",
         (NetBackend::Rtl8139, _) => "rtl8139",
         #[cfg(feature = "net-backend-virtio")]
         (NetBackend::Virtio, _) => "virtio-net",
     }
+}
+
+fn configured_active_driver_label(config: &ConsoleNetConfig) -> &'static str {
+    let active_interface = match config.policy.interface {
+        NetInterfacePolicy::Wifi => "wifi",
+        NetInterfacePolicy::Auto if config.wifi_credentials.is_some() => "wifi",
+        NetInterfacePolicy::Auto | NetInterfacePolicy::Wired => "wired",
+    };
+    active_driver_label_for(config.backend, active_interface)
 }
 
 fn validate_net_console_config(
@@ -2936,13 +2942,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn active_driver_label(&self) -> &'static str {
-        match (self.backend, self.device.interface_label()) {
-            (NetBackend::BcmGenet, "wifi") => "cyw43",
-            (NetBackend::BcmGenet, _) => "bcmgenet-v5",
-            (NetBackend::Rtl8139, _) => "rtl8139",
-            #[cfg(feature = "net-backend-virtio")]
-            (NetBackend::Virtio, _) => "virtio-net",
-        }
+        active_driver_label_for(self.backend, self.device.interface_label())
     }
 
     fn console_listener_defer_reason(&self) -> Option<&'static str> {
@@ -8217,6 +8217,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.server.ingest_snapshot()
     }
 
+    fn buffered_console_lines_pending(&self) -> bool {
+        self.server.ingest_snapshot().queued != 0
+    }
+
     fn send_console_line(&mut self, line: &str) -> bool {
         if !self.stage_policy.allow_console_io
             || !console_output_admitted_during_disconnect(self.disconnect_phase)
@@ -8524,7 +8528,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
             running: self.self_test.running,
             run_generation: self.self_test.run_generation,
             last_result: self.self_test.last_result,
-            backend: self.backend.label(),
+            backend: self.active_driver_label(),
             udp_target: udp_target.primary,
             tcp_target: tcp_target.primary,
         }
@@ -8591,7 +8595,7 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         );
         NetStatusReport {
             profile_backend: self.backend.label(),
-            backend: self.backend.label(),
+            backend: active_driver,
             active_driver,
             mode: self.mode.as_str(),
             interface_policy: self.interface_policy.as_str(),
@@ -8975,6 +8979,16 @@ impl NetPoller for DefaultNetStack {
             Self::Cyw43DriverTask(stack) => stack.ingest_snapshot(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.ingest_snapshot(),
+        }
+    }
+
+    fn buffered_console_lines_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.buffered_console_lines_pending(),
+            Self::GenetDriverTask(stack) => stack.buffered_console_lines_pending(),
+            Self::Cyw43DriverTask(stack) => stack.buffered_console_lines_pending(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.buffered_console_lines_pending(),
         }
     }
 
@@ -9783,9 +9797,14 @@ mod tests {
         config.backend = NetBackend::BcmGenet;
         config.policy.interface = NetInterfacePolicy::Wired;
         assert_eq!(configured_active_driver_label(&config), "bcmgenet-v5");
+        assert_eq!(
+            active_driver_label_for(config.backend, "wired"),
+            "bcmgenet-v5"
+        );
 
         config.policy.interface = NetInterfacePolicy::Wifi;
         assert_eq!(configured_active_driver_label(&config), "cyw43");
+        assert_eq!(active_driver_label_for(config.backend, "wifi"), "cyw43");
 
         config.policy.interface = NetInterfacePolicy::Auto;
         config.wifi_credentials = None;

@@ -10756,27 +10756,14 @@ def summarize_driver_task_proofs(
 
 
 def line_has_serial_responsiveness(raw: str, fields: dict[str, str]) -> bool:
-    """Return whether a line proves serial echo/display responsiveness."""
+    """Return whether a line directly proves serial consume/echo responsiveness."""
 
-    if raw.startswith("[smp] activity pump "):
-        health_fields = (
-            "serial_rx_drop",
-            "serial_tx_drop",
-            "utf8_drop",
-            "serial_budget_overruns",
-            "serial_rx_backpressure",
-            "serial_tx_backpressure",
-        )
-        return (
-            fields.get("serial_pressure_source", "").lower() == "uart-output"
-            and all(parse_hex_int(fields.get(key)) == 0 for key in health_fields)
-        )
     return (
         raw.startswith("serial_echo")
         or "serial echo" in raw
         or (
             "serial_input_trace" in raw
-            and fields.get("stage") in {"consume-line", "line-ready"}
+            and fields.get("stage") == "consume-line"
         )
         or fields.get("serial_responsive") in {"1", "true", "yes"}
     )

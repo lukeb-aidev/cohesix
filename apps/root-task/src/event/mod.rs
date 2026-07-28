@@ -1498,8 +1498,14 @@ pub struct PumpMetrics {
     pub net_cyw43_service_quanta: u64,
     /// CYW43 Network outer turns consumed across those bounded quanta.
     pub net_cyw43_service_turns: u64,
+    /// Retained CYW43 Network bursts that yielded to the physical-operator
+    /// rotation at the fixed service stride.
+    pub net_cyw43_service_operator_yields: u64,
     /// CYW43 Network quanta that ended because exact work became idle.
     pub net_cyw43_service_terminal_exits: u64,
+    /// CYW43 Network quanta that ended because a complete TCP command became
+    /// ready for root dispatch.
+    pub net_cyw43_service_dispatch_exits: u64,
     /// CYW43 Network quanta that reached the fixed turn cap.
     pub net_cyw43_service_turn_cap_exits: u64,
     /// CYW43 Network quanta that reached the virtual-counter time cap.
@@ -1945,6 +1951,8 @@ enum LinkedRuntimeServicePhase {
 const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u8 = 32;
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS: u8 = 4;
 
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
@@ -3065,7 +3073,7 @@ where
                         // merely a post-operation accounting threshold. If the
                         // outer loop resumes after the deadline, return to the
                         // physical operator before another NIC/SDIO turn.
-                        self.finish_linked_runtime_network_quantum(true, elapsed_us);
+                        self.finish_linked_runtime_network_quantum(true, false, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
@@ -3099,14 +3107,44 @@ where
                         .saturating_add(1);
                     self.metrics.net_cyw43_service_turns =
                         self.metrics.net_cyw43_service_turns.saturating_add(1);
-                    let service_due = self.linked_runtime_cyw43_network_burst_due();
+                    let buffered_console_line = self
+                        .net
+                        .as_ref()
+                        .is_some_and(|net| net.buffered_console_lines_pending());
                     let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+                    if buffered_console_line {
+                        // A complete command is root-owned work now. End the
+                        // retained NIC burst and run the fixed physical
+                        // operator rotation before dispatching it. No further
+                        // CYW43/SDIO operation may be admitted first.
+                        self.finish_linked_runtime_network_quantum(false, true, elapsed_us);
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        return;
+                    }
+                    let service_due = self.linked_runtime_cyw43_network_burst_due();
                     if service_due
                         && self.linked_runtime_network_consecutive_turns
                             < LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
                         && elapsed_us
                             < LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
                     {
+                        if self
+                            .linked_runtime_network_consecutive_turns
+                            .is_multiple_of(LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS)
+                        {
+                            // Preserve the live quantum counter/start/deadline
+                            // while routing through the ordinary physical
+                            // operator phases. Serial, optional USB local-seat,
+                            // and Dispatch each retain their own outer turn, so
+                            // this cannot compose two physical operations.
+                            self.metrics.net_cyw43_service_operator_yields = self
+                                .metrics
+                                .net_cyw43_service_operator_yields
+                                .saturating_add(1);
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                            return;
+                        }
                         // A CYW43 op8 completion exposes exactly one copied
                         // frame. Keep the NIC phase only while an exact
                         // continuation, queue, or TCP response is pending.
@@ -3116,7 +3154,7 @@ where
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
                         return;
                     }
-                    self.finish_linked_runtime_network_quantum(service_due, elapsed_us);
+                    self.finish_linked_runtime_network_quantum(service_due, false, elapsed_us);
                     self.linked_runtime_network_consecutive_turns = 0;
                 }
                 self.linked_runtime_service_phase = self.linked_runtime_network_followup_phase();
@@ -3167,7 +3205,7 @@ where
     fn cancel_linked_runtime_network_quantum(&mut self) {
         if self.linked_runtime_network_consecutive_turns != 0 {
             let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
-            self.finish_linked_runtime_network_quantum(false, elapsed_us);
+            self.finish_linked_runtime_network_quantum(false, false, elapsed_us);
         } else {
             self.linked_runtime_network_quantum_started_ms = None;
             self.linked_runtime_network_quantum_started_ticks = 0;
@@ -3211,7 +3249,12 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    fn finish_linked_runtime_network_quantum(&mut self, service_due: bool, elapsed_us: u64) {
+    fn finish_linked_runtime_network_quantum(
+        &mut self,
+        service_due: bool,
+        dispatch_pending: bool,
+        elapsed_us: u64,
+    ) {
         let turns = u64::from(self.linked_runtime_network_consecutive_turns);
         self.metrics.net_cyw43_service_max_turns =
             self.metrics.net_cyw43_service_max_turns.max(turns);
@@ -3227,6 +3270,11 @@ where
             self.metrics.net_cyw43_service_physical_exits = self
                 .metrics
                 .net_cyw43_service_physical_exits
+                .saturating_add(1);
+        } else if dispatch_pending {
+            self.metrics.net_cyw43_service_dispatch_exits = self
+                .metrics
+                .net_cyw43_service_dispatch_exits
                 .saturating_add(1);
         } else if !service_due {
             self.metrics.net_cyw43_service_terminal_exits = self
@@ -17186,7 +17234,9 @@ where
             self.audit
                 .info("console: cleared partial input after blank line");
         }
-        self.local_line.clear();
+        if self.last_input_source == ConsoleInputSource::LocalSeat {
+            self.local_line.clear();
+        }
     }
 
     fn handle_console_error(&mut self, err: ConsoleError) -> bool {
@@ -17195,7 +17245,9 @@ where
                 self.audit
                     .info("console: cleared partial input after coalesced parse error");
             }
-            self.local_line.clear();
+            if self.last_input_source == ConsoleInputSource::LocalSeat {
+                self.local_line.clear();
+            }
             return false;
         };
         let message = format_message(format_args!("console error: {}", err));
@@ -17218,7 +17270,9 @@ where
             self.audit
                 .info("console: cleared partial input after parse error");
         }
-        self.local_line.clear();
+        if self.last_input_source == ConsoleInputSource::LocalSeat {
+            self.local_line.clear();
+        }
         true
     }
 
@@ -17263,13 +17317,6 @@ where
             #[cfg(feature = "kernel")]
             if !self.cyw43_bootstrap_operator_turn_is_active() && !linked_runtime_transport {
                 crate::serial::emit_serial_input_consume_trace(line.len());
-            }
-            if !self.local_line.is_empty() {
-                self.local_line.clear();
-                if !self.cyw43_bootstrap_operator_turn_is_active() {
-                    self.audit
-                        .info("console: cleared local-seat input before serial");
-                }
             }
             self.process_console_line(&line);
             if self.reboot_pending || self.physical_console_response_pending() {
@@ -17428,20 +17475,6 @@ where
                     .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
             {
                 burst_allowed = true;
-            }
-            #[cfg(feature = "kernel")]
-            let cleared_serial_line = if self.cyw43_bootstrap_operator_turn_is_active()
-                || crate::serial::serial_linked_runtime_transport_active()
-            {
-                self.serial.clear_partial_line_buffered_quiet()
-            } else {
-                self.serial.clear_partial_line()
-            };
-            #[cfg(not(feature = "kernel"))]
-            let cleared_serial_line = self.serial.clear_partial_line();
-            if cleared_serial_line && !self.cyw43_bootstrap_operator_turn_is_active() {
-                self.audit
-                    .info("console: cleared serial input before local-seat");
             }
             for (index, &byte) in chunk[..read].iter().enumerate() {
                 if self.consume_local_seat_escape_byte(byte) {
@@ -17968,15 +18001,17 @@ where
                             self.metrics.net_cyw43_tail_budget_errors,
                         ));
                         let line_cyw43_quantum = format_message(format_args!(
-                            "netstats: cyw43_quantum runs={} turns={} max_turns={} max_elapsed_us={}",
+                            "netstats: cyw43_quantum runs={} turns={} max_turns={} max_elapsed_us={} operator_yields={}",
                             self.metrics.net_cyw43_service_quanta,
                             self.metrics.net_cyw43_service_turns,
                             self.metrics.net_cyw43_service_max_turns,
                             self.metrics.net_cyw43_service_max_elapsed_us,
+                            self.metrics.net_cyw43_service_operator_yields,
                         ));
                         let line_cyw43_quantum_exits = format_message(format_args!(
-                            "netstats: cyw43_quantum_exit idle={} turn_cap={} time_cap={} physical={} guard={}",
+                            "netstats: cyw43_quantum_exit idle={} dispatch={} turn_cap={} time_cap={} physical={} guard={}",
                             self.metrics.net_cyw43_service_terminal_exits,
+                            self.metrics.net_cyw43_service_dispatch_exits,
                             self.metrics.net_cyw43_service_turn_cap_exits,
                             self.metrics.net_cyw43_service_time_cap_exits,
                             self.metrics.net_cyw43_service_physical_exits,
@@ -19346,11 +19381,31 @@ where
     fn end_session(&mut self, reason: &'static str) {
         if self.parser.clear_buffer() {
             let message = format_message(format_args!(
-                "console: cleared partial input on session end reason={reason}"
+                "console: cleared parser input on session end reason={reason}"
             ));
             self.audit.info(message.as_str());
         }
-        self.local_line.clear();
+        #[cfg(feature = "kernel")]
+        let cleared_serial = if crate::serial::serial_linked_runtime_transport_active() {
+            self.serial.clear_partial_line_buffered_quiet()
+        } else {
+            self.serial.clear_partial_line()
+        };
+        #[cfg(not(feature = "kernel"))]
+        let cleared_serial = self.serial.clear_partial_line();
+        if cleared_serial {
+            let message = format_message(format_args!(
+                "console: cleared serial partial input on session end reason={reason}"
+            ));
+            self.audit.info(message.as_str());
+        }
+        if !self.local_line.is_empty() {
+            self.local_line.clear();
+            let message = format_message(format_args!(
+                "console: cleared local-seat partial input on session end reason={reason}"
+            ));
+            self.audit.info(message.as_str());
+        }
         if self.session.is_none() && !self.tail_active {
             return;
         }
@@ -24082,7 +24137,10 @@ mod tests {
         }
 
         fn ingest_snapshot(&self) -> IngestSnapshot {
-            IngestSnapshot::default()
+            IngestSnapshot {
+                queued: u32::try_from(self.lines.len()).unwrap_or(u32::MAX),
+                ..IngestSnapshot::default()
+            }
         }
 
         fn send_console_line(&mut self, line: &str) -> bool {
@@ -26329,7 +26387,7 @@ mod tests {
                     || line.starts_with("nettest:")
             })
             .collect();
-        assert_eq!(diagnostic_lines.len(), 12, "{mirrored:?}");
+        assert_eq!(diagnostic_lines.len(), 14, "{mirrored:?}");
         assert!(
             mirrored.iter().any(|line| {
                 line.starts_with("netstats: rx_pkts=0 tx_pkts=0 rx_used=0 tx_used=0 polls=0")
@@ -26339,6 +26397,22 @@ mod tests {
         assert!(
             mirrored.iter().any(|line| {
                 line.starts_with("netstats: tcp_post_flush_polls=0 tcp_post_flush_exhaustions=0")
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored.iter().any(|line| {
+                line.starts_with(
+                    "netstats: cyw43_quantum runs=0 turns=0 max_turns=0 max_elapsed_us=0 operator_yields=0",
+                )
+            }),
+            "{mirrored:?}"
+        );
+        assert!(
+            mirrored.iter().any(|line| {
+                line.starts_with(
+                    "netstats: cyw43_quantum_exit idle=0 dispatch=0 turn_cap=0 time_cap=0 physical=0 guard=0",
+                )
             }),
             "{mirrored:?}"
         );
@@ -27094,11 +27168,26 @@ mod tests {
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
         let mut audit = AuditLog::new();
-        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let mut local_seat =
+            crate::local_seat::LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+                keyboard_device: "usb-kbd0",
+                display_device: "hdmi0",
+                line_bytes: 64,
+                buffer_lines: 8,
+            });
+        local_seat.enqueue_keyboard_bytes(b"he");
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_local_seat(&mut local_seat);
         pump.parser
             .push_byte(b'x')
             .expect("partial byte should be accepted");
+        pump.serial_mut().driver_mut().push_rx(b"pi");
+        pump.poll();
+        pump.poll();
+        assert_eq!(pump.local_line.as_str(), "he");
         pump.end_session("test");
+        assert!(pump.local_line.is_empty());
+        assert!(!pump.serial.clear_partial_line());
         {
             let driver = pump.serial_mut().driver_mut();
             driver.push_rx(b"help\n");
@@ -27665,10 +27754,10 @@ mod tests {
     }
 
     #[test]
-    fn physical_console_source_switches_clear_partial_input() {
-        let driver = LoopbackSerial::<512>::new();
-        let serial = SerialPort::<_, 512, 512, DEFAULT_LINE_CAPACITY>::new(driver);
-        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+    fn physical_console_sources_preserve_independent_partial_lines() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(64, 1);
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
         store.register(Role::Queen, "ticket").unwrap();
@@ -27690,30 +27779,63 @@ mod tests {
         pump.poll();
         assert_eq!(pump.local_line.as_str(), "pi");
 
-        pump.serial_mut().driver_mut().push_rx(b"help\n");
+        pump.serial_mut().driver_mut().push_rx(b"unknown-command\n");
         pump.poll();
-        assert!(pump.local_line.is_empty());
+        assert_eq!(pump.local_line.as_str(), "pi");
         assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
+        let mut transcript: Vec<u8> = pump
+            .serial_mut()
+            .driver_mut()
+            .drain_tx()
+            .into_iter()
+            .collect();
 
-        pump.serial_mut().driver_mut().push_rx(b"he");
+        pump.local_seat
+            .as_mut()
+            .expect("local-seat should be attached")
+            .enqueue_keyboard_bytes(b"ng\n");
+        for _ in 0..64 {
+            pump.poll();
+            transcript.extend(pump.serial_mut().driver_mut().drain_tx());
+            if transcript
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong")
+            {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
+
+        pump.serial_mut().driver_mut().push_rx(b"pi");
         pump.poll();
         pump.local_seat
             .as_mut()
             .expect("local-seat should be attached")
-            .enqueue_keyboard_bytes(b"ping\n");
-        pump.poll();
+            .enqueue_keyboard_bytes(b"unknown-command\n");
+        for _ in 0..64 {
+            pump.poll();
+            let _ = pump.serial_mut().driver_mut().drain_tx();
+            if pump.last_input_source == ConsoleInputSource::LocalSeat && pump.local_line.is_empty()
+            {
+                break;
+            }
+        }
+        pump.serial_mut().driver_mut().push_rx(b"ng\n");
+        let mut serial_completion = Vec::new();
+        for _ in 0..64 {
+            pump.poll();
+            serial_completion.extend(pump.serial_mut().driver_mut().drain_tx());
+            if serial_completion
+                .windows(b"OK PING reply=pong".len())
+                .any(|window| window == b"OK PING reply=pong")
+            {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(serial_completion).expect("serial output must be utf8");
+        assert!(rendered.contains("OK PING reply=pong"), "{rendered}");
         assert!(!pump.serial.clear_partial_line());
-        assert_eq!(pump.last_input_source, ConsoleInputSource::LocalSeat);
-
-        drop(pump);
-        assert!(audit
-            .entries
-            .iter()
-            .any(|entry| entry.as_str() == "console: cleared local-seat input before serial"));
-        assert!(audit
-            .entries
-            .iter()
-            .any(|entry| entry.as_str() == "console: cleared serial input before local-seat"));
     }
 
     #[cfg(feature = "kernel")]
@@ -30306,15 +30428,15 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for completed_turns in 1..LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
-                pump.poll();
-                assert_eq!(
-                    pump.linked_runtime_service_phase,
-                    LinkedRuntimeServicePhase::Network,
-                    "CYW43 backlog must retain the next bounded NIC turn after turn {completed_turns}"
+            let mut outer_turns = 0usize;
+            while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
+                assert!(
+                    outer_turns < 128,
+                    "bounded CYW43 quantum must reach its turn cap"
                 );
+                pump.poll();
+                outer_turns = outer_turns.saturating_add(1);
             }
-            pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
@@ -30326,9 +30448,175 @@ mod tests {
                 pump.metrics.net_cyw43_service_max_turns,
                 u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
             );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_operator_yields,
+                u64::from(
+                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                        / LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS
+                        - 1
+                ),
+                "operator strides must not weaken the fixed transaction cap"
+            );
         }
 
         assert_eq!(net.polls, LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS as usize);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_operator_stride_preserves_live_quantum_across_dispatch_rotation() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.counters.wifi_rx_runtime_queue_count = 37;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            for _ in 1..LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS {
+                pump.poll();
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Network
+                );
+            }
+            let quantum_start = pump
+                .linked_runtime_network_quantum_started_ms
+                .expect("the first CYW43 turn must open a retained quantum");
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ms,
+                Some(quantum_start)
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ms,
+                Some(quantum_start)
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ms,
+                Some(quantum_start)
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 5);
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
+        }
+
+        assert_eq!(
+            net.polls, 5,
+            "Serial and Dispatch stride turns must not submit another NIC operation"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_buffered_tcp_command_ends_network_burst_before_dispatch() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.console_service_pending = true;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 17)).is_ok());
+        assert!(net.buffered_console_lines_pending());
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "a complete TCP command must end the burst at the physical-operator boundary"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_dispatch_exits, 1);
+            assert_eq!(pump.metrics.net_cyw43_service_terminal_exits, 0);
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            assert_eq!(
+                pump.metrics.accepted_commands, 0,
+                "Serial must receive its dedicated turn before network dispatch"
+            );
+            pump.poll();
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+        }
+
+        assert_eq!(net.polls, 1);
+        assert!(net.lines.is_empty());
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -30361,7 +30649,7 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for _ in 1..5 {
+            for _ in 1..LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS {
                 pump.poll();
                 assert_eq!(
                     pump.linked_runtime_service_phase,
@@ -30371,13 +30659,38 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial
+                LinkedRuntimeServicePhase::Serial,
+                "the fourth NIC turn must yield to the physical operator"
+            );
+            assert_eq!(pump.linked_runtime_network_consecutive_turns, 4);
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the elapsed deadline must fence the fifth NIC admission"
             );
             assert_eq!(pump.metrics.net_cyw43_service_time_cap_exits, 1);
-            assert_eq!(pump.metrics.net_cyw43_service_max_elapsed_us, 25_000);
+            assert!(
+                pump.metrics.net_cyw43_service_max_elapsed_us >= 25_000,
+                "operator rotation time remains part of the retained deadline"
+            );
         }
 
-        assert_eq!(net.polls, 5);
+        assert_eq!(
+            net.polls, 4,
+            "the operator stride must not admit a fifth NIC operation after the deadline"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -30485,19 +30798,27 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for _ in 1..LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
-                pump.poll();
-                assert_eq!(
-                    pump.linked_runtime_service_phase,
-                    LinkedRuntimeServicePhase::Network,
-                    "one current DPC event must retain the bounded pre-auth Network burst"
+            let mut outer_turns = 0usize;
+            while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
+                assert!(
+                    outer_turns < 128,
+                    "bounded DPC quantum must reach its turn cap"
                 );
+                pump.poll();
+                outer_turns = outer_turns.saturating_add(1);
             }
-            pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
                 "DPC urgency must return ownership at the fixed transaction cap"
+            );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_operator_yields,
+                u64::from(
+                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                        / LINKED_RUNTIME_NETWORK_OPERATOR_STRIDE_TURNS
+                        - 1
+                )
             );
         }
 

@@ -737,6 +737,12 @@ generation and XID.
   owned by pending epoch E+1 even while reciprocal commands still traverse the
   old sealed link; the exact generation commit makes E+1 active without
   relabeling or reusing any E-owned fact.
+  The initial CMD/DATA software reset is terminal if its VCNT-scaled deadline
+  expires. Before publishing `SDIO_READY`, the owner W1C-clears request-owned
+  `INT_STATUS` bits and reads them back on a later retained turn, rewriting
+  only the still-observed non-`CARD_INT` subset until clear or deadline.
+  `CARD_INT` remains exclusively DPC-owned. Cohesix never publishes a ready
+  card while reset or request-status state is merely assumed to have settled.
   Same-command retries are admitted only for an entry-inhibit result proving
   the command register was never written. A CMD7 busy timeout is recorded as
   post-issue quiescence; command, response, busy, and later failure stages are
@@ -1787,7 +1793,12 @@ generation and XID.
   the control request cannot occupy the latency-sensitive M2-to-M3 lane. The
   host-EAPOL policy lane remains scheduled until that obligation has an exact
   success/failure terminal, and it fences only fresh NetData admission; it
-  cannot revoke an already-assigned op8 continuation.
+  cannot revoke an already-assigned op8 continuation. If an interleaved
+  `SET_SSID` failure arrives while the BSSID op11 owner is issued, association
+  retry first lets the maintenance lane drain that immutable owner to its
+  exact terminal. It then enters the existing logical same-pair backoff; the
+  semantic connection failure alone cannot request a physical CYW43/SDIO pair
+  restart or context replay.
   After a steady data TX reaches an accepted terminal, that same sole
   `NetData` op8 lane must complete one current-generation RX/DPC poll before a
   second fresh TX is admitted.
@@ -1880,11 +1891,17 @@ generation and XID.
   A selected CYW43 path may retain `Network` only for an exact current
   DPC/RX/TX/fairness continuation, a non-empty runtime/root queue, or actual TCP
   socket/parser/response work. An authenticated but idle socket is not a
-  weighting reason. One continuation quantum is capped at both 32 separately
-  opened outer turns and 25 ms from the seL4 virtual counter. The time cap is
-  checked again at `Network` entry, so resuming an already-open quantum after
-  its deadline admits no additional NIC/SDIO operation. Reaching either bound
-  returns to `Serial` and `LocalSeat` before another quantum. At
+  weighting reason. A complete TCP command retained by the ingest queue ends
+  the current Network burst so the ordinary physical-operator rotation reaches
+  `Dispatch` before another NIC operation. Raw or partial traffic cannot
+  retain Network indefinitely: after each four admitted CYW43 operations,
+  Cohesix runs `Serial`, optional `LocalSeat`, and `Dispatch`, then resumes the
+  same quantum with its original start, turn count, and deadline. One
+  continuation quantum is still capped at both 32 separately opened Network
+  turns and 25 ms from the seL4 virtual counter. The time cap is checked again
+  at `Network` entry, so resuming an already-open quantum after its deadline
+  admits no additional NIC/SDIO operation. Reaching either bound returns to
+  `Serial` and `LocalSeat` before another quantum. At
   `Network` entry, quarantine or an already-owned physical response skips NIC
   inspection and service, opens no CYW43 quantum, and returns directly to
   `Serial`. The sole physical-response exception is the exact network-origin
@@ -1895,8 +1912,9 @@ generation and XID.
   weighting before TCP authentication, and the predicate rejects stale-epoch,
   poisoned, overrun, acknowledgement-failed, or inconsistent DPC state. Every
   retained turn still admits at most one CYW43 operation. `netstats` reports
-  quantum count, turns, maximum turns/duration, and idle, turn-cap, time-cap,
-  physical, and guard exit counts; those CYW43 counters remain zero for GENET.
+  quantum count, turns, maximum turns/duration, operator yields, and idle,
+  dispatch, turn-cap, time-cap, physical, and guard exit counts; those CYW43
+  counters remain zero for GENET.
   `Display` performs at most one retained HDMI attach or frame turn after the
   Network phase. Every phase returns to the outer loop before its successor; a
   missing local seat skips directly from `Serial` to `Dispatch` and from

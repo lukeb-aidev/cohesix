@@ -959,8 +959,11 @@ impl Default for NetSelfTestReport {
 /// Summary of the active network policy and address state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NetStatusReport {
+    /// Backend selected by the resolved manifest profile.
     pub profile_backend: &'static str,
+    /// Compatibility alias for the active physical or virtual driver.
     pub backend: &'static str,
+    /// Active physical or virtual driver after interface-policy selection.
     pub active_driver: &'static str,
     pub mode: &'static str,
     pub interface_policy: &'static str,
@@ -1225,6 +1228,18 @@ pub trait NetPoller {
     /// Snapshot ingest metrics for observability providers.
     fn ingest_snapshot(&self) -> IngestSnapshot {
         IngestSnapshot::default()
+    }
+
+    /// Return whether a complete TCP console line is buffered for root
+    /// dispatch.
+    ///
+    /// This predicate is deliberately separate from socket service state:
+    /// once ingest has retained a complete command, the linked-runtime
+    /// scheduler must leave a CYW43 Network burst and route through the fixed
+    /// physical-operator phases to Dispatch before admitting another NIC
+    /// operation.
+    fn buffered_console_lines_pending(&self) -> bool {
+        self.ingest_snapshot().queued != 0
     }
 
     /// Return the active TCP console connection identifier, if any.
