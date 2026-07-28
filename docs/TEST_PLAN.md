@@ -509,15 +509,18 @@ current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
 The CYW43 software-closure gate is authorized by active Milestone 26d task
-`m26d-cyw43-hardware-free-closure`, restoring Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It exercises the host-testable
-production transaction data and state transitions (`begin_turn`, frontier
-reservation, retained submit, completion miss, continuation grant, immutable
+`m26d-cyw43-hardware-free-closure`, where the latency defect was discovered,
+and restores Reopened Milestone 26b tasks
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`. It exercises the host-testable production
+transaction data and state transitions (`begin_turn`, frontier reservation,
+retained submit, completion miss, continuation grant, immutable
 ticket/completion validation, completion commit, and cached replay). The host
 ring adapter executes the production sequence-last command publication, stable
 owner intake, sequence-last completion publication, and stable client read,
-stages the reciprocal owner descriptor, and obtains the completion from the real
-descriptor/controller service path rather than fabricating a direct result.
+stages the reciprocal owner descriptor, and obtains the completion from the
+real descriptor/controller service path rather than fabricating a direct
+result.
 Physical mapped addresses, cache-maintenance effects, seL4 notification
 send/receive, and target transaction entry/exit remain target-compile checked
 and require Pi proof. Under the ordinary EventPump, each
@@ -800,21 +803,40 @@ replay the CYW43 descriptor, replay both engines plus firmware/control context
 while both remain at bootstrap priority `255`, prove control-plane readiness,
 then lower SDIO and CYW43 in two separate outer turns. Descriptor or engine
 replay must not lower either child early, and each final lowering must consume a
-separate outer turn. Once both are lowered, a retained one-way request must use
-this exact outer-turn sequence: prepare one immutable sequence-zero record;
-boost the reciprocal bus owner when required; boost the primary child; commit
-the nonzero sequence as the issue boundary; publish exactly one retained
-authority edge; poll at most once for its matching completion per later turn;
-latch that completion; restore the primary child before the bus owner; and
-release the lease before returning the completion. For non-CYW43 runtimes that
-authority edge is one best-effort command-endpoint rendezvous. For every
-root-to-CYW43 generation, including zero, it is one exact 24-byte continuation
-grant followed on a separate turn by a reserved-root-badge notification
-scheduling hint; endpoint input is rejected. Tests must bind the lease to
-request, full command fingerprint, and pair generation, reject torn/stale
-identities, prove that prepare is invisible to the autonomous runtime, and
-prove neither commit nor authority publication can repeat after issued-unknown
-ownership. They must also reject a lease for a nonphysical profile,
+separate outer turn. Bootstrap and recovery must remain owner-first,
+per-action lanes at priority `255` and must never acquire the steady Network
+priority lease.
+
+Once both are lowered, non-CYW43 retained runtimes keep their request-bound
+outer-turn sequence: prepare one immutable sequence-zero record; boost the bus
+owner when required; boost the primary child; commit the nonzero sequence;
+publish one authority edge; poll once per later turn; latch completion; restore
+the primary before the bus owner; then release the lease. Selected steady WiFi
+has one narrower exception: an actionable `Network` quantum reserves the pair,
+boosts SDIO then CYW43 exactly once, and admits only exact root-to-CYW43 parents
+from that current pair generation. Those parents reuse the quantum lease but
+retain separate immutable request, command fingerprint, issue, grant,
+notification, and completion identities. Every outer EventPump turn still
+executes at most one CYW43/SDIO child physical operation.
+
+Closing the quantum must fence fresh pair work. An exact already-`Prepared` or
+already-`Issued` parent may drain alone, after which restore order is CYW43 then
+SDIO before terminal exit. Tests must reject a fresh parent during close,
+wrong-generation reuse, torn phase/reservation state, invalid active-parent
+state, and partial acquisition or restore. A clean partial acquisition must
+roll back the exact reservations; any state that cannot be rolled back
+completely must poison the lease and request pair recovery. Pair-epoch
+advance, quarantine, and reboot must either complete the same exact close/drain
+or enter pair recovery; none may silently clear or alias ownership. GENET must
+remain outside this state machine, retain its ordinary single-`Network`-turn
+rotation, and emit no WiFi priority-lease telemetry.
+
+For every root-to-CYW43 generation, including zero, the authority edge remains
+one exact 24-byte continuation grant followed on a separate turn by a
+reserved-root-badge notification scheduling hint; endpoint input is rejected.
+Tests must prove sequence-zero prepare is invisible to the autonomous runtime,
+and neither commit nor authority publication can repeat after issued-unknown
+ownership. The request-bound lane must still reject a nonphysical profile,
 zero/unpublished priority, or an already-bootstrap-priority runtime.
 After the one-way owner handoff deletes root's SDIO endpoint, delegated
 CYW43-to-SDIO foreground and DPC commands use the same exact grant authority
@@ -1269,7 +1291,14 @@ first. Authentication without pending work must not extend the quantum. Tests
 must prove the first five exact-work turns remain contiguous without a forced
 four-turn operator rotation. They must advance time between outer turns and
 prove that a quantum already at its deadline returns to `Serial` with zero
-additional NIC/SDIO operations.
+additional NIC/SDIO operations. An idle selected interface must not acquire the
+pair priority lease. The first actionable selected-WiFi turn must reserve and
+boost SDIO then CYW43 once; later exact current-generation parents in the same
+quantum must add no scheduler writes. Every quantum exit path must latch the
+fresh-work close fence. If an exact parent is active, the next admitted
+`Network` work may advance only that parent by one child physical operation
+before rechecking close; after it terminates, restore order must be CYW43 then
+SDIO and the EventPump must return to `Serial`.
 This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
@@ -1285,11 +1314,34 @@ network-origin reboot acknowledgement drain; after that required NIC service
 turn, or when a physical response becomes pending during an admitted operation,
 the next phase must be `Serial` rather than `Display`. `netstats` must expose
 quantum count, turns, maximum duration, zero-valued compatibility
-`operator_yields`, and exit reasons. CYW43 device
-tests must also prove that a retained TX or unproved credit window withholds
-smoltcp's paired RX/TX token, preserves the copied RX frame, advances only the
-sole retained owner, and produces zero fabricated TX drops before the frame is
-later delivered.
+`operator_yields`, and exit reasons. Selected WiFi must additionally emit:
+
+```text
+netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> generation=<n> active=<yes|no> close_pending=<yes|no>
+netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
+```
+
+The focused acceptance tests
+`cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
+`cyw43_sdio_network_priority_lease_closing_drains_exact_parent_and_blocks_fresh_pair_work`,
+`cyw43_sdio_network_priority_lease_partial_failure_is_rolled_back_or_poisoned`,
+and `cyw43_sdio_network_priority_lease_rejects_generation_aliases` must pass.
+Together they must prove exactly four scheduler writes for a clean quantum
+regardless of how many exact parents it covers (`SDIO boost`, `CYW43 boost`,
+`CYW43 restore`, `SDIO restore`), close-time fresh-work rejection and
+exact-parent drain, clean rollback versus poisoned recovery, current-generation
+binding, and GENET non-applicability. The WiFi `netstats` fixture must preserve
+both complete records at maximum counter widths and a quiescent clean sample
+must report `state=inactive active=no close_pending=no` and `failures=0` with
+`opens=closes=restores`; after steady traffic, `amortized_requests` must be
+nonzero. A recovery revocation is acceptable only with matching typed
+same-slice pair-recovery evidence. The GENET fixture must omit this WiFi-only
+line and keep all CYW43 quantum counters zero.
+
+CYW43 device tests must also prove that a retained TX or unproved credit window
+withholds smoltcp's paired RX/TX token, preserves the copied RX frame, advances
+only the sole retained owner, and produces zero fabricated TX drops before the
+frame is later delivered.
 
 The console socket pack must cover the maximum enabled profile: active and
 standby console acceptors, DHCP, two UDP self-test sockets, two TCP self-test

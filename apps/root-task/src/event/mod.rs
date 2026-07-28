@@ -201,6 +201,34 @@ fn format_message(args: fmt::Arguments<'_>) -> HeaplessString<DEFAULT_LINE_CAPAC
 }
 
 #[cfg(feature = "kernel")]
+fn format_cyw43_priority_lease_netstats(
+    lease: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot,
+) -> (
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+) {
+    let active = if lease.active() { "yes" } else { "no" };
+    let close_pending = if lease.close_pending() { "yes" } else { "no" };
+    let state = format_message(format_args!(
+        "netstats: cyw43_priority_lease state={} generation={} active={} close_pending={}",
+        lease.phase.as_str(),
+        lease.generation,
+        active,
+        close_pending,
+    ));
+    let counts = format_message(format_args!(
+        "netstats: cyw43_priority_lease_counts opens={} closes={} restores={} recovery_revocations={} amortized_requests={} failures={}",
+        lease.opens,
+        lease.closes,
+        lease.restores,
+        lease.recovery_revocations,
+        lease.amortized_requests,
+        lease.failures,
+    ));
+    (state, counts)
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone)]
 struct WifiLiveNetFrontier {
     active_driver: &'static str,
@@ -2509,6 +2537,18 @@ struct ConsoleContext {
     uart_slot: Option<seL4_CPtr>,
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_runtime_network_cancel_requires_pair_restart(
+    lease_finish: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
+    cannot_resume_exact_parent: bool,
+) -> bool {
+    cannot_resume_exact_parent
+        && matches!(
+            lease_finish,
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired { .. }
+        )
+}
+
 impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
     EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
@@ -3069,6 +3109,78 @@ where
                 #[cfg(feature = "net-console")]
                 let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
                 #[cfg(feature = "net-console")]
+                let cyw43_priority_lease_actionable = cyw43_lane_selected
+                    && (self.linked_runtime_cyw43_network_burst_due()
+                        || crate::hal::driver_task::active_driver_task_retained_request(
+                            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                        )
+                        .is_some());
+                #[cfg(feature = "net-console")]
+                let cyw43_priority_lease_drain_only = if cyw43_priority_lease_actionable {
+                    match crate::hal::driver_task::begin_cyw43_sdio_network_priority_lease() {
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::NotRequired
+                        | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::Opened {
+                            ..
+                        }
+                        | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::AlreadyOpen {
+                            ..
+                        } => false,
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::Busy => {
+                            if crate::hal::driver_task::active_driver_task_retained_request(
+                                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                            )
+                            .is_some()
+                            {
+                                // A prior bounded quantum may have closed
+                                // around one exact Prepared/Issued parent.
+                                // Resume only that request; no fresh parent may
+                                // borrow the closing generation lease.
+                                true
+                            } else {
+                                self.cancel_linked_runtime_network_quantum();
+                                return;
+                            }
+                        }
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired => {
+                            self.cancel_linked_runtime_network_quantum();
+                            return;
+                        }
+                    }
+                } else if cyw43_lane_selected {
+                    match Self::close_cyw43_sdio_network_priority_lease() {
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive => {
+                            false
+                        }
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
+                            self.linked_runtime_network_consecutive_turns = 0;
+                            self.linked_runtime_network_quantum_started_ms = None;
+                            self.linked_runtime_network_quantum_started_ticks = 0;
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                            return;
+                        }
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                            ..
+                        } => true,
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
+                            self.cancel_linked_runtime_network_quantum();
+                            return;
+                        }
+                    }
+                } else {
+                    match Self::close_cyw43_sdio_network_priority_lease() {
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive
+                        | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {}
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                            ..
+                        }
+                        | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
+                            self.cancel_linked_runtime_network_quantum();
+                            return;
+                        }
+                    }
+                    false
+                };
+                #[cfg(feature = "net-console")]
                 if cyw43_lane_selected && self.linked_runtime_network_consecutive_turns != 0 {
                     let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
                     if elapsed_us
@@ -3112,6 +3224,24 @@ where
                         .saturating_add(1);
                     self.metrics.net_cyw43_service_turns =
                         self.metrics.net_cyw43_service_turns.saturating_add(1);
+                    if cyw43_priority_lease_drain_only {
+                        let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+                        let _ = Self::close_cyw43_sdio_network_priority_lease();
+                        let turns = u64::from(self.linked_runtime_network_consecutive_turns);
+                        self.metrics.net_cyw43_service_max_turns =
+                            self.metrics.net_cyw43_service_max_turns.max(turns);
+                        self.metrics.net_cyw43_service_max_elapsed_us = self
+                            .metrics
+                            .net_cyw43_service_max_elapsed_us
+                            .max(elapsed_us);
+                        self.metrics.net_cyw43_service_guard_exits =
+                            self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_network_quantum_started_ms = None;
+                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        return;
+                    }
                     let buffered_console_line = self
                         .net
                         .as_ref()
@@ -3195,13 +3325,33 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn close_cyw43_sdio_network_priority_lease(
+    ) -> crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish {
+        let _ = crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close();
+        crate::hal::driver_task::finish_or_drain_cyw43_sdio_network_priority_lease()
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn cancel_linked_runtime_network_quantum(&mut self) {
-        if self.linked_runtime_network_consecutive_turns != 0 {
+        let lease_finish = if self.linked_runtime_network_consecutive_turns != 0 {
             let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
-            self.finish_linked_runtime_network_quantum(false, false, elapsed_us);
+            self.finish_linked_runtime_network_quantum(false, false, elapsed_us)
         } else {
+            let lease_finish = Self::close_cyw43_sdio_network_priority_lease();
             self.linked_runtime_network_quantum_started_ms = None;
             self.linked_runtime_network_quantum_started_ticks = 0;
+            lease_finish
+        };
+        if linked_runtime_network_cancel_requires_pair_restart(
+            lease_finish,
+            self.network_service_quarantined || self.reboot_pending,
+        ) {
+            // A quarantined stack must never be polled, and a reboot cannot
+            // promise another exact drain turn. Preserve issued-unknown
+            // ownership by escalating the already-fenced parent to the sole
+            // pair-recovery lane. An ordinary physical-console interruption
+            // leaves Closing intact so that exact parent can resume later.
+            crate::hal::driver_task::request_cyw43_sdio_pair_restart();
         }
         self.linked_runtime_network_consecutive_turns = 0;
         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
@@ -3247,7 +3397,8 @@ where
         service_due: bool,
         dispatch_pending: bool,
         elapsed_us: u64,
-    ) {
+    ) -> crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish {
+        let lease_finish = Self::close_cyw43_sdio_network_priority_lease();
         let turns = u64::from(self.linked_runtime_network_consecutive_turns);
         self.metrics.net_cyw43_service_max_turns =
             self.metrics.net_cyw43_service_max_turns.max(turns);
@@ -3288,6 +3439,7 @@ where
 
         self.linked_runtime_network_quantum_started_ms = None;
         self.linked_runtime_network_quantum_started_ticks = 0;
+        lease_finish
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -18021,6 +18173,13 @@ where
                             self.metrics.net_cyw43_service_physical_exits,
                             self.metrics.net_cyw43_service_guard_exits,
                         ));
+                        #[cfg(feature = "kernel")]
+                        let (line_cyw43_priority_lease, line_cyw43_priority_lease_counts) = {
+                            let lease =
+                                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot(
+                                );
+                            format_cyw43_priority_lease_netstats(lease)
+                        };
                         let line_policy = format_message(format_args!(
                             "netstats: proof_policy m26d_net_first={} physical_input_yield={}",
                             Self::yes_no(m26d_network_proof_prefers_tcp_over_physical_input(
@@ -18224,6 +18383,11 @@ where
                         self.emit_console_line(line_four.as_str());
                         self.emit_console_line(line_five.as_str());
                         if net_status_active_interface_is_wifi(&status) {
+                            #[cfg(feature = "kernel")]
+                            {
+                                self.emit_console_line(line_cyw43_priority_lease.as_str());
+                                self.emit_console_line(line_cyw43_priority_lease_counts.as_str());
+                            }
                             self.emit_console_line(line_wifi.as_str());
                             self.emit_console_line(line_wifi_rxq.as_str());
                             self.emit_console_line(line_wifi_generation.as_str());
@@ -20099,6 +20263,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     fn clear_wifi_driver_task_test_state() {
+        crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
@@ -20165,6 +20330,32 @@ mod tests {
         );
         assert!(rendered.len() < DEFAULT_LINE_CAPACITY);
         assert!(core::str::from_utf8(rendered.as_bytes()).is_ok());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_priority_lease_netstats_remain_parseable_at_maximum_counters() {
+        let (state, counts) = format_cyw43_priority_lease_netstats(
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot {
+                phase: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Restoring,
+                generation: u32::MAX,
+                opens: usize::MAX,
+                closes: usize::MAX,
+                restores: usize::MAX,
+                recovery_revocations: usize::MAX,
+                amortized_requests: usize::MAX,
+                failures: usize::MAX,
+            },
+        );
+
+        assert!(!state.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{state}");
+        assert!(!counts.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{counts}");
+        assert_eq!(
+            state.as_str(),
+            "netstats: cyw43_priority_lease state=restoring generation=4294967295 active=yes close_pending=yes"
+        );
+        assert!(counts.starts_with("netstats: cyw43_priority_lease_counts opens="));
+        assert!(counts.ends_with(&format!(" failures={}", usize::MAX)));
     }
 
     #[test]
@@ -26531,6 +26722,10 @@ mod tests {
             ),
             "{rendered}"
         );
+        assert!(
+            !rendered.contains("netstats: cyw43_priority_lease"),
+            "{rendered}"
+        );
         assert!(!rendered.contains("netstats: wifi_assoc="), "{rendered}");
     }
 
@@ -26655,8 +26850,10 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn netstats_emits_wifi_dhcp_bound_secure_counters() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 512, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        #[cfg(feature = "kernel")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 512, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let store: TicketTable<4> = TicketTable::new();
@@ -26738,6 +26935,20 @@ mod tests {
         assert!(
             rendered.contains(
                 "netstats: generation=0 mode=dhcp policy=wifi active=wifi standby=wired addr_src=dhcp-lease ip=192.168.50.23 gateway=192.168.50.1 dhcp=bound"
+            ),
+            "{rendered}"
+        );
+        #[cfg(feature = "kernel")]
+        assert!(
+            rendered.contains(
+                "netstats: cyw43_priority_lease state=inactive generation=0 active=no close_pending=no"
+            ),
+            "{rendered}"
+        );
+        #[cfg(feature = "kernel")]
+        assert!(
+            rendered.contains(
+                "netstats: cyw43_priority_lease_counts opens=0 closes=0 restores=0 recovery_revocations=0 amortized_requests=0 failures=0"
             ),
             "{rendered}"
         );
@@ -30986,6 +31197,40 @@ mod tests {
             );
         }
         assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_cancel_escalates_only_when_exact_parent_cannot_resume() {
+        use crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish;
+
+        let prepared = Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+            request: 41,
+            issued: false,
+        };
+        let issued = Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+            request: 42,
+            issued: true,
+        };
+        assert!(
+            linked_runtime_network_cancel_requires_pair_restart(prepared, true),
+            "quarantine/reboot must escalate a prepared exact parent instead of stranding the lease",
+        );
+        assert!(
+            linked_runtime_network_cancel_requires_pair_restart(issued, true),
+            "quarantine/reboot must preserve issued-unknown ownership through pair recovery",
+        );
+        assert!(
+            !linked_runtime_network_cancel_requires_pair_restart(prepared, false),
+            "an ordinary physical-console interruption must leave the exact parent drainable",
+        );
+        assert!(
+            !linked_runtime_network_cancel_requires_pair_restart(
+                Cyw43SdioNetworkPriorityLeaseFinish::Closed,
+                true,
+            ),
+            "a clean close needs no recovery",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -635,9 +635,11 @@ between connections is failed TCP liveness evidence.
 ### CYW43 Wi-Fi
 
 This runbook section exercises active Milestone 26d task
-`m26d-cyw43-hardware-free-closure` to restore Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
-production or acceptance lane.
+`m26d-cyw43-hardware-free-closure`, where the latency defect was discovered,
+to restore Reopened Milestone 26b tasks
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`. It does not authorize a second production,
+scheduling, or acceptance lane.
 
 Wi-Fi is the current research and evidence-closure lane. Source tests and a
 stage-only build do not establish live association or data-path readiness. The
@@ -935,15 +937,27 @@ that stops at `CYW43_BOOTSTRAP_SUPERVISOR ... status=begin`, shows client-first
 descriptor service, or depends on a legacy root-owned Wi-Fi path is failed
 bootstrap evidence.
 
-After both members reach their steady priorities, retained root-to-runtime work
-uses a request- and generation-bound scheduling lease. Separate ordinary
-EventPump turns prepare an immutable sequence-zero record, boost the reciprocal
-SDIO bus owner when required, boost the primary child, commit the nonzero
-sequence as the issue boundary, schedule the child, poll at most once for its
-matching completion per later turn, then restore the primary child before the
-bus owner and release the lease. The sequence-zero prepare cannot be observed
-by an autonomously polling child; the commit can and is therefore the
-issued-unknown boundary.
+Bootstrap and recovery remain owner-first, per-action episodes at priority
+`255`; neither uses the steady Network priority lease. After both members reach
+their steady priorities, an actionable selected-WiFi `Network` quantum acquires
+one pair-epoch-bound scheduling lease. HAL reserves both scheduling envelopes,
+then boosts SDIO and CYW43 exactly once before the first parent is admitted.
+Each exact current-generation root-to-CYW43 parent reuses that lease while
+retaining its own immutable sequence-zero prepare, nonzero issue commit, grant,
+notification, and completion state. The optimization removes repeated
+priority changes only: each later outer EventPump turn still admits at most one
+CYW43/SDIO child physical operation.
+
+Ending the quantum first closes admission to fresh pair parents. If one exact
+CYW43 parent is already `Prepared` or `Issued`, only that parent may drain;
+once it is terminal, HAL restores CYW43 and then SDIO before the terminal phase
+exit. A torn phase or reservation, pair-epoch change, invalid active parent,
+or failed restore poisons the lease and requests the existing pair-recovery
+lane. Quarantine and reboot must close or drain the same lease; an unprovable
+close is pair-recovery evidence, never authority to discard scheduling state.
+The sequence-zero prepare remains invisible to an autonomously polling child,
+and commit remains the issued-unknown boundary. GENET does not acquire or
+inspect this lease and its service rotation is unchanged.
 
 Every root-to-CYW43 descriptor, including generation zero, uses the shared
 continuation record and the reserved root badge on CYW43's bound notification.
@@ -1649,10 +1663,30 @@ and `LocalSeat`. Raw DPC and retained owner work remain
 eligible before authentication. The passive snapshot changes scheduling weight
 only, never issues or completes child work, and rejects stale-epoch, poisoned,
 overrun, acknowledgement-failed, or inconsistent DPC state. Every retained
-turn still admits at most one CYW43 operation. `netstats` exposes quantum
-counts, turns, maximum turns/duration, the zero-valued compatibility
-`operator_yields` count, and idle, turn-cap, time-cap, physical, and guard
-exits; those counters remain zero for GENET. `Display` performs at most one
+turn still admits at most one CYW43 operation. The first actionable turn opens
+one current-pair priority lease, boosts SDIO then CYW43, and exact parents reuse
+it until close. Close is a fresh-work fence; it drains only an exact active
+parent and restores CYW43 then SDIO before returning to `Serial`.
+
+Run `netstats` after WiFi readiness and again after the sequential `.coh`
+sample. Alongside the existing quantum records, selected WiFi must emit:
+
+```text
+netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> generation=<n> active=<yes|no> close_pending=<yes|no>
+netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
+```
+
+At a quiescent prompt, accept only `state=inactive active=no
+close_pending=no` and `failures=0`, equal `opens`, `closes`, and `restores`, and
+nonzero `amortized_requests` after steady traffic. A nonzero
+`recovery_revocations` requires the exact same-slice typed pair-recovery
+record; a poisoned, active, closing, or restoring terminal sample is not ready
+for latency or pressure proof. Repeated steady parents should increase
+`amortized_requests` without requiring one open/restore pair per parent.
+`netstats` also exposes quantum counts, turns, maximum turns/duration, the
+zero-valued compatibility `operator_yields` count, and idle, turn-cap,
+time-cap, physical, and guard exits. Those counters remain zero for GENET, and
+GENET omits the WiFi-only priority-lease records. `Display` performs at most one
 retained HDMI attach or pending-frame turn. Without a local seat, the rotation
 skips directly from `Serial` to `Dispatch` and from `Network` back to `Serial`.
 

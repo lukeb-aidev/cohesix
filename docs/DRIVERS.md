@@ -413,9 +413,11 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 ### SDIO and CYW43
 
 This as-built defect closure is authorized by active Milestone 26d task
-`m26d-cyw43-hardware-free-closure`, restoring Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
-ownership, bootstrap, recovery, or proof lane.
+`m26d-cyw43-hardware-free-closure`, where the latency defect was discovered,
+and restores Reopened Milestone 26b tasks
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`. It does not authorize a second ownership,
+bootstrap, recovery, scheduling, or proof lane.
 
 #### Sole pair-normalization and ordered pre-Join drain
 
@@ -781,15 +783,34 @@ generation and XID.
   bootstrap-priority transition; an absent restart context or a cutover
   precondition rejection remains terminal.
 - A retained one-way root-to-runtime request cannot rely on `seL4_Yield` to
-  schedule a child below the root task. HAL therefore advances a request- and
-  generation-bound scheduling lease through separate ordinary EventPump
-  turns. The first turn prepares the immutable ring record with sequence zero,
-  so an autonomously polling child cannot observe it. Later turns boost the
-  reciprocal SDIO owner when required, boost the primary child, commit the
-  nonzero sequence as the issue boundary, schedule the child, and poll the
-  matching completion once per turn. After that completion is latched, later
-  turns restore the primary child before the bus owner and release the lease
-  before exposing the completion to its caller.
+  schedule a child below the root task. Bootstrap and pair recovery therefore
+  keep their owner-first, per-action lane while both CYW43/SDIO children remain
+  at priority `255`; neither episode borrows the steady Network scheduling
+  lease. Non-CYW43 retained runtimes keep their existing request-bound
+  prepare/boost/commit/poll/restore lane.
+
+  Once the pair has reached its steady priorities, the selected-WiFi
+  `Network` phase opens one generation-bound pair scheduling lease for the
+  whole bounded Network quantum. HAL first reserves both scheduling envelopes,
+  then boosts the reciprocal SDIO owner and the CYW43 client exactly once
+  before admitting a physical parent. Exact root-to-CYW43 parents in that
+  current pair generation reuse those reservations while retaining their own
+  immutable request, grant, sequence, and completion state machines; they do
+  not repeat the four TCB-priority writes for every parent. This amortization
+  changes scheduling only. Each ordinary outer EventPump turn still admits at
+  most one CYW43/SDIO child physical operation.
+
+  Quantum close first changes the lease to `Closing`, which fences every fresh
+  pair parent. An exact already-`Prepared` or already-`Issued` CYW43 parent may
+  drain, and no other work may borrow the closing generation. Once that parent
+  is terminal, HAL restores CYW43 first and SDIO second, releases both
+  reservations, and only then permits the terminal EventPump exit. A torn
+  phase, reservation mismatch, pair-epoch change, invalid active parent, or
+  failed restore poisons the lease and requests the sole pair-recovery lane.
+  Quarantine and reboot must close or drain this same lease; if they cannot
+  prove that exact close, they also enter pair recovery rather than abandoning
+  priority ownership. GENET does not inspect, acquire, drain, or report this
+  lease and retains its ordinary single-`Network`-turn behavior.
 
   CYW43 descriptor commands use one durable root-continuation lane in every
   logical generation, including bootstrap generation zero. After sequence
@@ -899,16 +920,21 @@ generation and XID.
   `card_irq_rearms`.
   Request, full command fingerprint, and pair generation must match throughout;
   an issued-unknown request cannot be recommitted or granted again. Pair restart
-  clears an unresolved lease only after both runtimes are suspended and fenced.
+  revokes a poisoned Network scheduling lease only after both runtimes are
+  suspended, fenced, and their rings are reset.
   Non-CYW43 root-command phase order is `prepare -> boost bus -> boost primary
   -> commit -> endpoint wake -> poll -> [endpoint wake -> poll]* -> restore`.
-  Root-to-CYW43 phase order is `prepare -> boost bus -> boost primary -> commit
-  -> grant -> signal -> poll -> [grant-or-resignal -> signal -> poll]* ->
-  restore`, including generation zero. Delegated-owner phase order is
+  Bootstrap/recovery root-to-CYW43 work at priority `255` remains per-action:
+  `prepare -> commit -> grant -> signal -> poll -> [grant-or-resignal -> signal
+  -> poll]*`. Steady root-to-CYW43 work uses
+  `open pair quantum lease -> [prepare -> commit -> grant -> signal -> poll]*
+  -> close fence -> exact-parent drain if required -> restore CYW43 -> restore
+  SDIO`; the brackets may contain several exact current-generation parents
+  without a repeated priority transition. Delegated-owner phase order remains
   `submit+signal -> poll -> [grant+signal -> poll]*`. Every submission, grant,
-  signal, and poll is a separate child cursor turn. These are scheduling
-  admissions for one immutable operation, not private send/poll loops or
-  legacy driver fallbacks.
+  signal, poll, and physical owner action is a separate child cursor turn.
+  These are scheduling admissions for one immutable operation, not private
+  send/poll loops or legacy driver fallbacks.
 - Clearing a root-to-runtime transport also clears its cached progress magic,
   sequence, phase, and auxiliary word. Progress evidence is scoped to one
   transport generation; a rebound endpoint cannot inherit an earlier issued
@@ -1097,18 +1123,21 @@ generation and XID.
   linked-runtime equivalent of Linux constructing an immutable `mmc_request`
   before either host-thread or IRQ work can observe it.
   Root-to-CYW43 retained publication also treats sequence commit, not the
-  earlier scheduler-lease prepare turn, as the only input boundary. Prepare
-  publishes a zero-sequence command identity while the HAL acquires the
-  generated CYW43/SDIO priority lease. The parent descriptor has one canonical
-  cache-line-aligned slot at ring offset `1920`: after the maximum RX frame,
-  backplane word, and SDIO fault-telemetry writers, and before private SDPCM TX
-  at `2048`. Post-release parent payload uses the root TX shared slice
-  `4096..8192`; DPC RX begins at `8192`. These disjoint ranges close the
-  core-0/root versus core-3/runtime race without a timing assumption. In the
-  dedicated issue turn, HAL still refreshes the fingerprint-matched input and
-  zero-sequence command/completion records before committing the command
-  sequence last. No later retained turn restages over an active child, and the
-  old frame-offset descriptor is rejected rather than retained as a fallback.
+  earlier prepare turn, as the only input boundary. For steady selected WiFi,
+  the generation-bound Network priority lease is already open before prepare;
+  prepare publishes a zero-sequence command identity covered by that lease and
+  does not perform another pair boost. Bootstrap/recovery remain per-action at
+  priority `255` and do not borrow this steady lease. The parent descriptor has
+  one canonical cache-line-aligned slot at ring offset `1920`: after the
+  maximum RX frame, backplane word, and SDIO fault-telemetry writers, and before
+  private SDPCM TX at `2048`. Post-release parent payload uses the root TX
+  shared slice `4096..8192`; DPC RX begins at `8192`. These disjoint ranges
+  close the core-0/root versus core-3/runtime race without a timing assumption.
+  In the dedicated issue turn, HAL still refreshes the fingerprint-matched
+  input and zero-sequence command/completion records before committing the
+  command sequence last. No later retained turn restages over an active child,
+  and the old frame-offset descriptor is rejected rather than retained as a
+  fallback.
   Every payload-bearing CYW43 parent likewise uses the canonical shared-payload
   base at `4096`; the runtime and shared ABI reject the former ring-local
   payload lane.
@@ -1931,11 +1960,33 @@ generation and XID.
   proceeding through display work. Raw DPC and handshake work receive this
   weighting before TCP authentication, and the predicate rejects stale-epoch,
   poisoned, overrun, acknowledgement-failed, or inconsistent DPC state. Every
-  retained turn still admits at most one CYW43 operation. `netstats` reports
-  quantum count, turns, maximum turns/duration, operator yields, and idle,
-  dispatch, turn-cap, time-cap, physical, and guard exit counts; those CYW43
-  counters remain zero for GENET. The retained `operator_yields` compatibility
-  counter remains zero in this production lane.
+  retained turn still admits at most one CYW43 operation. Actionable selected
+  WiFi work opens the current-generation pair priority lease before the first
+  such turn, reserves and boosts SDIO then CYW43 once, and reuses it for exact
+  parents until the quantum closes. Close fences fresh pair work; an exact
+  active parent drains alone, then HAL restores CYW43 followed by SDIO before
+  the phase returns to a physical operator. A torn lease, generation change,
+  or unprovable quarantine/reboot close requests pair recovery.
+
+  `netstats` reports quantum count, turns, maximum turns/duration, operator
+  yields, and idle, dispatch, turn-cap, time-cap, physical, and guard exit
+  counts. On selected WiFi it also emits:
+
+  ```text
+  netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> generation=<n> active=<yes|no> close_pending=<yes|no>
+  netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
+  ```
+
+  The split keeps every field parseable even when counters reach their maximum
+  width. A clean terminal/idle sample has `state=inactive active=no
+  close_pending=no` and `failures=0`, equal open/close/restore counts, and no
+  recovery revocation unless the same evidence slice contains its exact typed
+  pair recovery. Once steady WiFi parents have run,
+  `amortized_requests` must be nonzero and may exceed `opens`, proving that
+  request identity was preserved while scheduler transitions were amortized.
+  The CYW43 quantum counters remain zero for GENET, and the WiFi-only priority
+  lease records are omitted on GENET. The retained `operator_yields`
+  compatibility counter remains zero in this production lane.
   `Display` performs at most one retained HDMI attach or frame turn after the
   Network phase. Every phase returns to the outer loop before its successor; a
   missing local seat skips directly from `Serial` to `Dispatch` and from

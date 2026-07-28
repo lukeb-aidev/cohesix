@@ -2984,6 +2984,157 @@ struct DriverTaskCommandSlot {
     result: AtomicUsize,
 }
 
+/// Root-owned scheduling lease spanning one bounded steady CYW43 Network quantum.
+///
+/// The lease reserves both linked-runtime scheduling envelopes once, then lets
+/// exact generation-bound CYW43 parent requests retain their existing
+/// request/grant/sequence state machines without four priority transitions per
+/// request. `Closing` is an admission fence: an already prepared or issued
+/// parent may drain, but no fresh pair request may borrow the lease.
+#[cfg(feature = "kernel")]
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkPriorityLeasePhase {
+    Inactive,
+    Acquiring,
+    Open,
+    Closing,
+    Restoring,
+    Poisoned,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioNetworkPriorityLeasePhase {
+    const fn as_u32(self) -> u32 {
+        self as u32
+    }
+
+    const fn from_u32(value: u32) -> Option<Self> {
+        match value {
+            0 => Some(Self::Inactive),
+            1 => Some(Self::Acquiring),
+            2 => Some(Self::Open),
+            3 => Some(Self::Closing),
+            4 => Some(Self::Restoring),
+            5 => Some(Self::Poisoned),
+            _ => None,
+        }
+    }
+
+    /// Stable diagnostic label for `netstats`.
+    #[must_use]
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inactive => "inactive",
+            Self::Acquiring => "acquiring",
+            Self::Open => "open",
+            Self::Closing => "closing",
+            Self::Restoring => "restoring",
+            Self::Poisoned => "poisoned",
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+struct Cyw43SdioNetworkPriorityLeaseState {
+    phase: AtomicU32,
+    generation: AtomicU32,
+    mask: AtomicUsize,
+    opens: AtomicUsize,
+    closes: AtomicUsize,
+    restores: AtomicUsize,
+    recovery_revocations: AtomicUsize,
+    amortized_requests: AtomicUsize,
+    failures: AtomicUsize,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioNetworkPriorityLeaseState {
+    const fn new() -> Self {
+        Self {
+            phase: AtomicU32::new(Cyw43SdioNetworkPriorityLeasePhase::Inactive.as_u32()),
+            generation: AtomicU32::new(0),
+            mask: AtomicUsize::new(0),
+            opens: AtomicUsize::new(0),
+            closes: AtomicUsize::new(0),
+            restores: AtomicUsize::new(0),
+            recovery_revocations: AtomicUsize::new(0),
+            amortized_requests: AtomicUsize::new(0),
+            failures: AtomicUsize::new(0),
+        }
+    }
+}
+
+/// Read-only lease telemetry kept outside the fixed driver-runtime ABI.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43SdioNetworkPriorityLeaseSnapshot {
+    pub(crate) phase: Cyw43SdioNetworkPriorityLeasePhase,
+    pub(crate) generation: u32,
+    pub(crate) opens: usize,
+    pub(crate) closes: usize,
+    pub(crate) restores: usize,
+    pub(crate) recovery_revocations: usize,
+    pub(crate) amortized_requests: usize,
+    pub(crate) failures: usize,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SdioNetworkPriorityLeaseSnapshot {
+    /// Whether the lease still owns, restores, or fences pair priority state.
+    #[must_use]
+    pub(crate) const fn active(self) -> bool {
+        !matches!(self.phase, Cyw43SdioNetworkPriorityLeasePhase::Inactive)
+    }
+
+    /// Whether fresh CYW43/SDIO parent admission is fenced.
+    #[must_use]
+    pub(crate) const fn close_pending(self) -> bool {
+        matches!(
+            self.phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Closing
+                | Cyw43SdioNetworkPriorityLeasePhase::Restoring
+                | Cyw43SdioNetworkPriorityLeasePhase::Poisoned
+        )
+    }
+}
+
+/// Outcome of opening the steady CYW43/SDIO scheduling lease.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkPriorityLeaseBegin {
+    /// This build/profile needs no retained priority transition.
+    NotRequired,
+    /// A new generation-bound lease is active.
+    Opened { generation: u32 },
+    /// The exact current-generation lease was already active.
+    AlreadyOpen { generation: u32 },
+    /// A request-bound owner or closing lease must finish first.
+    Busy,
+    /// State or scheduler truth was torn; pair recovery is now required.
+    RecoveryRequired,
+}
+
+/// Outcome of latching the no-fresh-work close fence.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkPriorityLeaseCloseRequest {
+    Inactive,
+    Requested,
+    AlreadyRequested,
+    RecoveryRequired,
+}
+
+/// Outcome of restoring or draining one closing Network priority lease.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkPriorityLeaseFinish {
+    Inactive,
+    DrainRequired { request: u32, issued: bool },
+    Closed,
+    RecoveryRequired,
+}
+
 #[cfg(all(test, feature = "kernel"))]
 static TEST_ROOT_GRANT_PUBLICATIONS: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(test, feature = "kernel"))]
@@ -3406,6 +3557,7 @@ const fn cyw43_sdio_pair_restart_progress(progress: DriverTaskRingProgressRecord
 #[must_use]
 pub fn cyw43_sdio_pair_restart_required() -> bool {
     if CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) != 0 {
+        poison_cyw43_sdio_network_priority_lease_if_owned();
         return true;
     }
     let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) else {
@@ -3420,6 +3572,7 @@ pub fn cyw43_sdio_pair_restart_required() -> bool {
         return false;
     }
     record_driver_task_ring_progress(slot, progress);
+    poison_cyw43_sdio_network_priority_lease_if_owned();
     CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
     true
 }
@@ -3432,6 +3585,7 @@ pub fn cyw43_sdio_pair_restart_required() -> bool {
 /// recovery supervisor consumes the sticky request after that lock is released.
 #[cfg(feature = "kernel")]
 pub fn request_cyw43_sdio_pair_restart() {
+    poison_cyw43_sdio_network_priority_lease_if_owned();
     CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
 }
 
@@ -3526,6 +3680,41 @@ pub(crate) fn reset_cyw43_sdio_pair_recovery_for_test() {
     CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_PENDING.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
+    let _ = DRIVER_TASK_SLOT_CYW43455
+        .retained_priority_boost_active
+        .compare_exchange(
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    let _ = DRIVER_TASK_SLOT_SDIO_HOST
+        .retained_priority_boost_active
+        .compare_exchange(
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            0,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        );
+    reset_cyw43_sdio_network_priority_lease_state(&CYW43_SDIO_NETWORK_PRIORITY_LEASE);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .opens
+        .store(0, Ordering::Release);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .closes
+        .store(0, Ordering::Release);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .restores
+        .store(0, Ordering::Release);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .recovery_revocations
+        .store(0, Ordering::Release);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .amortized_requests
+        .store(0, Ordering::Release);
+    CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .failures
+        .store(0, Ordering::Release);
     clear_cyw43_pair_terminal_drain();
     DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(0, Ordering::Release);
     DRIVER_TASK_TEST_STEADY_PRIORITY_CUTOVER_FAILURE_TCB.store(0, Ordering::Release);
@@ -3946,6 +4135,11 @@ static DRIVER_TASK_SLOT_VIRTIO_NET: DriverTaskCommandSlot = DriverTaskCommandSlo
 static DRIVER_TASK_SLOT_SDIO_HOST: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
 #[cfg(feature = "kernel")]
 static DRIVER_TASK_SLOT_PCIE_ROOT: DriverTaskCommandSlot = DriverTaskCommandSlot::new();
+#[cfg(feature = "kernel")]
+const CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN: usize = usize::MAX;
+#[cfg(feature = "kernel")]
+static CYW43_SDIO_NETWORK_PRIORITY_LEASE: Cyw43SdioNetworkPriorityLeaseState =
+    Cyw43SdioNetworkPriorityLeaseState::new();
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_PAIR_RESTART_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
@@ -5815,12 +6009,112 @@ fn reset_driver_task_retained_priority_lease_slot(slot: &DriverTaskCommandSlot) 
 }
 
 #[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SdioNetworkPriorityRequestCoverage {
+    NotApplicable,
+    Covered,
+    FailClosed,
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_priority_reservations_match(
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    mask: usize,
+) -> bool {
+    (mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY == 0
+        || cyw43_slot
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN)
+        && (mask & DRIVER_TASK_RETAINED_LEASE_BUS == 0
+            || sdio_slot
+                .retained_priority_boost_active
+                .load(Ordering::Acquire)
+                == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_priority_request_coverage_with(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    physical_pi: bool,
+    generation: u32,
+    closing_parent_resume: bool,
+) -> Cyw43SdioNetworkPriorityRequestCoverage {
+    if !physical_pi || !driver_task_retained_contract_owns_pair_recovery(contract) {
+        return Cyw43SdioNetworkPriorityRequestCoverage::NotApplicable;
+    }
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire));
+    let mask = lease.mask.load(Ordering::Acquire);
+    let quantum_token_present = cyw43_slot
+        .retained_priority_boost_active
+        .load(Ordering::Acquire)
+        == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+        || sdio_slot
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN;
+    if phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) {
+        return if quantum_token_present {
+            Cyw43SdioNetworkPriorityRequestCoverage::FailClosed
+        } else {
+            Cyw43SdioNetworkPriorityRequestCoverage::NotApplicable
+        };
+    }
+    let exact_cyw43_parent = contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        && command.aux1 == generation
+        && driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0);
+    let covered_phase = phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Open)
+        || (phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Closing) && closing_parent_resume);
+    if covered_phase
+        && exact_cyw43_parent
+        && lease.generation.load(Ordering::Acquire) == generation
+        && mask != 0
+        && cyw43_sdio_network_priority_reservations_match(cyw43_slot, sdio_slot, mask)
+    {
+        driver_task_counter_add(&lease.amortized_requests, 1);
+        Cyw43SdioNetworkPriorityRequestCoverage::Covered
+    } else {
+        Cyw43SdioNetworkPriorityRequestCoverage::FailClosed
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn retained_priority_lease_target_mask(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
-) -> usize {
+    closing_parent_resume: bool,
+) -> Option<usize> {
     if !physical_pi_driver_task_only_owner_state_active() {
-        return 0;
+        return Some(0);
+    }
+    let Some(cyw43_slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return None;
+    };
+    let Some(sdio_slot) = driver_task_slot_for_contract(SDIO_HOST_DRIVER_TASK_CONTRACT) else {
+        return None;
+    };
+    match cyw43_sdio_network_priority_request_coverage_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        cyw43_slot,
+        sdio_slot,
+        contract,
+        command,
+        true,
+        CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+        closing_parent_resume,
+    ) {
+        Cyw43SdioNetworkPriorityRequestCoverage::Covered => return Some(0),
+        Cyw43SdioNetworkPriorityRequestCoverage::FailClosed => {
+            request_cyw43_sdio_pair_restart();
+            return None;
+        }
+        Cyw43SdioNetworkPriorityRequestCoverage::NotApplicable => {}
     }
     let mut mask = 0usize;
     if driver_task_slot_for_contract(contract).is_some_and(|slot| {
@@ -5844,7 +6138,7 @@ fn retained_priority_lease_target_mask(
     {
         mask |= DRIVER_TASK_RETAINED_LEASE_BUS;
     }
-    mask
+    Some(mask)
 }
 
 #[cfg(feature = "kernel")]
@@ -5895,6 +6189,621 @@ fn set_driver_task_retained_priority(
         return false;
     }
     true
+}
+
+#[cfg(feature = "kernel")]
+fn reset_cyw43_sdio_network_priority_lease_state(lease: &Cyw43SdioNetworkPriorityLeaseState) {
+    lease.generation.store(0, Ordering::Relaxed);
+    lease.mask.store(0, Ordering::Relaxed);
+    lease.phase.store(
+        Cyw43SdioNetworkPriorityLeasePhase::Inactive.as_u32(),
+        Ordering::Release,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn poison_cyw43_sdio_network_priority_lease_state(lease: &Cyw43SdioNetworkPriorityLeaseState) {
+    let prior = lease.phase.swap(
+        Cyw43SdioNetworkPriorityLeasePhase::Poisoned.as_u32(),
+        Ordering::AcqRel,
+    );
+    if prior != Cyw43SdioNetworkPriorityLeasePhase::Poisoned.as_u32() {
+        driver_task_counter_add(&lease.failures, 1);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn poison_cyw43_sdio_network_priority_lease_if_owned() {
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .load(Ordering::Acquire),
+    );
+    let quantum_token_present = DRIVER_TASK_SLOT_CYW43455
+        .retained_priority_boost_active
+        .load(Ordering::Acquire)
+        == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+        || DRIVER_TASK_SLOT_SDIO_HOST
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN;
+    if phase != Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) || quantum_token_present {
+        poison_cyw43_sdio_network_priority_lease_state(&CYW43_SDIO_NETWORK_PRIORITY_LEASE);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn release_cyw43_sdio_network_priority_reservations(
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    mask: usize,
+) -> bool {
+    let mut released = true;
+    if mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0 {
+        released &= cyw43_slot
+            .retained_priority_boost_active
+            .compare_exchange(
+                CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
+    }
+    if mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0 {
+        released &= sdio_slot
+            .retained_priority_boost_active
+            .compare_exchange(
+                CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+                0,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok();
+    }
+    released
+}
+
+#[cfg(feature = "kernel")]
+fn restore_cyw43_sdio_network_priority_with<F>(
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    mask: usize,
+    primary_boosted: bool,
+    bus_boosted: bool,
+    set_priority: &mut F,
+) -> bool
+where
+    F: FnMut(DriverTaskContract, &DriverTaskCommandSlot, usize, bool) -> bool,
+{
+    let mut restored = true;
+    if primary_boosted && mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0 {
+        restored &= set_priority(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            cyw43_slot,
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            false,
+        );
+    }
+    if bus_boosted && mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0 {
+        restored &= set_priority(
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            sdio_slot,
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            false,
+        );
+    }
+    restored
+}
+
+#[cfg(feature = "kernel")]
+fn begin_cyw43_sdio_network_priority_lease_with<F, V>(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    generation: u32,
+    mut set_priority: F,
+    generation_is_current: V,
+) -> Cyw43SdioNetworkPriorityLeaseBegin
+where
+    F: FnMut(DriverTaskContract, &DriverTaskCommandSlot, usize, bool) -> bool,
+    V: Fn() -> bool,
+{
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire));
+    match phase {
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Open)
+            if lease.generation.load(Ordering::Acquire) == generation
+                && generation_is_current()
+                && lease.mask.load(Ordering::Acquire) != 0
+                && cyw43_sdio_network_priority_reservations_match(
+                    cyw43_slot,
+                    sdio_slot,
+                    lease.mask.load(Ordering::Acquire),
+                ) =>
+        {
+            return Cyw43SdioNetworkPriorityLeaseBegin::AlreadyOpen { generation };
+        }
+        Some(
+            Cyw43SdioNetworkPriorityLeasePhase::Open
+            | Cyw43SdioNetworkPriorityLeasePhase::Acquiring
+            | Cyw43SdioNetworkPriorityLeasePhase::Restoring
+            | Cyw43SdioNetworkPriorityLeasePhase::Poisoned,
+        )
+        | None => {
+            poison_cyw43_sdio_network_priority_lease_state(lease);
+            return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Closing) => {
+            return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) => {}
+    }
+    if !generation_is_current() {
+        return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+    }
+    if cyw43_slot.active.load(Ordering::Acquire) != 0
+        || sdio_slot.active.load(Ordering::Acquire) != 0
+    {
+        return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+    }
+    if !driver_task_steady_priority_is_active(cyw43_slot)
+        || !driver_task_steady_priority_is_active(sdio_slot)
+    {
+        driver_task_counter_add(&lease.failures, 1);
+        return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+    }
+    let cyw43_priority = cyw43_slot.steady_priority.load(Ordering::Acquire);
+    let sdio_priority = sdio_slot.steady_priority.load(Ordering::Acquire);
+    if cyw43_priority == 0
+        || cyw43_priority > PI4_BOUNDED_BOOTSTRAP_PRIORITY as usize
+        || sdio_priority == 0
+        || sdio_priority > PI4_BOUNDED_BOOTSTRAP_PRIORITY as usize
+    {
+        driver_task_counter_add(&lease.failures, 1);
+        return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+    }
+    let mut mask = 0usize;
+    if cyw43_priority < PI4_BOUNDED_BOOTSTRAP_PRIORITY as usize {
+        mask |= DRIVER_TASK_RETAINED_LEASE_PRIMARY;
+    }
+    if sdio_priority < PI4_BOUNDED_BOOTSTRAP_PRIORITY as usize {
+        mask |= DRIVER_TASK_RETAINED_LEASE_BUS;
+    }
+    if mask == 0 {
+        return Cyw43SdioNetworkPriorityLeaseBegin::NotRequired;
+    }
+    if lease
+        .phase
+        .compare_exchange(
+            Cyw43SdioNetworkPriorityLeasePhase::Inactive.as_u32(),
+            Cyw43SdioNetworkPriorityLeasePhase::Acquiring.as_u32(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+    }
+    lease.generation.store(generation, Ordering::Relaxed);
+    lease.mask.store(mask, Ordering::Relaxed);
+
+    let mut bus_reserved = false;
+    if mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0 {
+        if sdio_slot
+            .retained_priority_boost_active
+            .compare_exchange(
+                0,
+                CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            reset_cyw43_sdio_network_priority_lease_state(lease);
+            return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+        }
+        bus_reserved = true;
+    }
+    let mut primary_reserved = false;
+    if mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0 {
+        if cyw43_slot
+            .retained_priority_boost_active
+            .compare_exchange(
+                0,
+                CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+        {
+            let released = !bus_reserved
+                || sdio_slot
+                    .retained_priority_boost_active
+                    .compare_exchange(
+                        CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+                        0,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok();
+            if released {
+                reset_cyw43_sdio_network_priority_lease_state(lease);
+                return Cyw43SdioNetworkPriorityLeaseBegin::Busy;
+            }
+            poison_cyw43_sdio_network_priority_lease_state(lease);
+            return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+        }
+        primary_reserved = true;
+    }
+
+    let mut bus_boosted = false;
+    if bus_reserved {
+        if !set_priority(
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            sdio_slot,
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            true,
+        ) {
+            let released =
+                release_cyw43_sdio_network_priority_reservations(cyw43_slot, sdio_slot, mask);
+            if released {
+                driver_task_counter_add(&lease.failures, 1);
+                reset_cyw43_sdio_network_priority_lease_state(lease);
+            } else {
+                poison_cyw43_sdio_network_priority_lease_state(lease);
+            }
+            return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+        }
+        bus_boosted = true;
+    }
+    let mut primary_boosted = false;
+    if primary_reserved {
+        if !set_priority(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            cyw43_slot,
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN,
+            true,
+        ) {
+            let restored = restore_cyw43_sdio_network_priority_with(
+                cyw43_slot,
+                sdio_slot,
+                mask,
+                false,
+                bus_boosted,
+                &mut set_priority,
+            );
+            let released = restored
+                && release_cyw43_sdio_network_priority_reservations(cyw43_slot, sdio_slot, mask);
+            if released {
+                driver_task_counter_add(&lease.failures, 1);
+                reset_cyw43_sdio_network_priority_lease_state(lease);
+            } else {
+                poison_cyw43_sdio_network_priority_lease_state(lease);
+            }
+            return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+        }
+        primary_boosted = true;
+    }
+    if !generation_is_current() {
+        let restored = restore_cyw43_sdio_network_priority_with(
+            cyw43_slot,
+            sdio_slot,
+            mask,
+            primary_boosted,
+            bus_boosted,
+            &mut set_priority,
+        );
+        let released = restored
+            && release_cyw43_sdio_network_priority_reservations(cyw43_slot, sdio_slot, mask);
+        if released {
+            driver_task_counter_add(&lease.failures, 1);
+            reset_cyw43_sdio_network_priority_lease_state(lease);
+        } else {
+            poison_cyw43_sdio_network_priority_lease_state(lease);
+        }
+        return Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired;
+    }
+    driver_task_counter_add(&lease.opens, 1);
+    lease.phase.store(
+        Cyw43SdioNetworkPriorityLeasePhase::Open.as_u32(),
+        Ordering::Release,
+    );
+    Cyw43SdioNetworkPriorityLeaseBegin::Opened { generation }
+}
+
+#[cfg(feature = "kernel")]
+fn request_cyw43_sdio_network_priority_lease_close_with(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    generation: u32,
+) -> Cyw43SdioNetworkPriorityLeaseCloseRequest {
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire));
+    match phase {
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) => {
+            let quantum_token_present = cyw43_slot
+                .retained_priority_boost_active
+                .load(Ordering::Acquire)
+                == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+                || sdio_slot
+                    .retained_priority_boost_active
+                    .load(Ordering::Acquire)
+                    == CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN;
+            if quantum_token_present {
+                poison_cyw43_sdio_network_priority_lease_state(lease);
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+            } else {
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::Inactive
+            }
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Open) => {
+            let mask = lease.mask.load(Ordering::Acquire);
+            if mask == 0
+                || lease.generation.load(Ordering::Acquire) != generation
+                || !cyw43_sdio_network_priority_reservations_match(cyw43_slot, sdio_slot, mask)
+            {
+                poison_cyw43_sdio_network_priority_lease_state(lease);
+                return Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired;
+            }
+            if lease
+                .phase
+                .compare_exchange(
+                    Cyw43SdioNetworkPriorityLeasePhase::Open.as_u32(),
+                    Cyw43SdioNetworkPriorityLeasePhase::Closing.as_u32(),
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok()
+            {
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested
+            } else {
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+            }
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Closing) => {
+            let mask = lease.mask.load(Ordering::Acquire);
+            if mask != 0
+                && lease.generation.load(Ordering::Acquire) == generation
+                && cyw43_sdio_network_priority_reservations_match(cyw43_slot, sdio_slot, mask)
+            {
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::AlreadyRequested
+            } else {
+                poison_cyw43_sdio_network_priority_lease_state(lease);
+                Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+            }
+        }
+        Some(
+            Cyw43SdioNetworkPriorityLeasePhase::Acquiring
+            | Cyw43SdioNetworkPriorityLeasePhase::Restoring
+            | Cyw43SdioNetworkPriorityLeasePhase::Poisoned,
+        )
+        | None => {
+            poison_cyw43_sdio_network_priority_lease_state(lease);
+            Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn finish_or_drain_cyw43_sdio_network_priority_lease_with<F>(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    generation: u32,
+    active_request: Option<DriverTaskRetainedRequestState>,
+    mut set_priority: F,
+) -> Cyw43SdioNetworkPriorityLeaseFinish
+where
+    F: FnMut(DriverTaskContract, &DriverTaskCommandSlot, usize, bool) -> bool,
+{
+    match request_cyw43_sdio_network_priority_lease_close_with(
+        lease, cyw43_slot, sdio_slot, generation,
+    ) {
+        Cyw43SdioNetworkPriorityLeaseCloseRequest::Inactive => {
+            return Cyw43SdioNetworkPriorityLeaseFinish::Inactive;
+        }
+        Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested
+        | Cyw43SdioNetworkPriorityLeaseCloseRequest::AlreadyRequested => {}
+        Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired => {
+            return Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired;
+        }
+    }
+    match active_request {
+        Some(DriverTaskRetainedRequestState::Prepared { request, command })
+            if command.aux1 == generation
+                && driver_runtime_is_cyw43_root_continuation(
+                    command.arg0,
+                    command.arg1,
+                    command.aux0,
+                ) =>
+        {
+            return Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request,
+                issued: false,
+            };
+        }
+        Some(DriverTaskRetainedRequestState::Issued { request, command })
+            if command.aux1 == generation
+                && driver_runtime_is_cyw43_root_continuation(
+                    command.arg0,
+                    command.arg1,
+                    command.aux0,
+                ) =>
+        {
+            return Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request,
+                issued: true,
+            };
+        }
+        Some(
+            DriverTaskRetainedRequestState::Prepared { .. }
+            | DriverTaskRetainedRequestState::Issued { .. }
+            | DriverTaskRetainedRequestState::Invalid { .. },
+        ) => {
+            poison_cyw43_sdio_network_priority_lease_state(lease);
+            return Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired;
+        }
+        None => {}
+    }
+    if lease
+        .phase
+        .compare_exchange(
+            Cyw43SdioNetworkPriorityLeasePhase::Closing.as_u32(),
+            Cyw43SdioNetworkPriorityLeasePhase::Restoring.as_u32(),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        poison_cyw43_sdio_network_priority_lease_state(lease);
+        return Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired;
+    }
+    let mask = lease.mask.load(Ordering::Acquire);
+    let restored = restore_cyw43_sdio_network_priority_with(
+        cyw43_slot,
+        sdio_slot,
+        mask,
+        mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY != 0,
+        mask & DRIVER_TASK_RETAINED_LEASE_BUS != 0,
+        &mut set_priority,
+    );
+    if !restored || !release_cyw43_sdio_network_priority_reservations(cyw43_slot, sdio_slot, mask) {
+        poison_cyw43_sdio_network_priority_lease_state(lease);
+        return Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired;
+    }
+    driver_task_counter_add(&lease.restores, 1);
+    driver_task_counter_add(&lease.closes, 1);
+    reset_cyw43_sdio_network_priority_lease_state(lease);
+    Cyw43SdioNetworkPriorityLeaseFinish::Closed
+}
+
+/// Open or retain the sole generation-bound steady CYW43/SDIO priority lease.
+///
+/// The two scheduling writes are a bounded HAL configuration action, not
+/// driver operations. Both complete before the caller may admit one physical
+/// CYW43 parent turn, avoiding an extra EventPump/scheduler lap per TCB.
+#[cfg(feature = "kernel")]
+pub(crate) fn begin_cyw43_sdio_network_priority_lease() -> Cyw43SdioNetworkPriorityLeaseBegin {
+    if !physical_pi_driver_task_only_owner_state_active() {
+        return Cyw43SdioNetworkPriorityLeaseBegin::NotRequired;
+    }
+    let generation = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    let generation_is_current = || {
+        CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire) == generation
+            && CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+            && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+            && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0
+    };
+    let result = begin_cyw43_sdio_network_priority_lease_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        &DRIVER_TASK_SLOT_CYW43455,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        generation,
+        set_driver_task_retained_priority,
+        generation_is_current,
+    );
+    if result == Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired {
+        request_cyw43_sdio_pair_restart();
+    }
+    result
+}
+
+/// Fence fresh pair requests while preserving one exact retained parent drain.
+#[cfg(feature = "kernel")]
+pub(crate) fn request_cyw43_sdio_network_priority_lease_close(
+) -> Cyw43SdioNetworkPriorityLeaseCloseRequest {
+    let result = request_cyw43_sdio_network_priority_lease_close_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        &DRIVER_TASK_SLOT_CYW43455,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+    );
+    if result == Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired {
+        request_cyw43_sdio_pair_restart();
+    }
+    result
+}
+
+/// Drain an exact retained parent or restore both steady priorities now.
+///
+/// `DrainRequired` never admits a fresh request. EventPump may rotate through a
+/// physical operator phase, but it must resume only the returned request before
+/// calling this function again.
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_or_drain_cyw43_sdio_network_priority_lease(
+) -> Cyw43SdioNetworkPriorityLeaseFinish {
+    let active_request = active_driver_task_retained_request(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+    let result = finish_or_drain_cyw43_sdio_network_priority_lease_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        &DRIVER_TASK_SLOT_CYW43455,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+        active_request,
+        set_driver_task_retained_priority,
+    );
+    if result == Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired {
+        request_cyw43_sdio_pair_restart();
+    }
+    result
+}
+
+/// Snapshot the live Network scheduling lease without advancing it.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_network_priority_lease_snapshot() -> Cyw43SdioNetworkPriorityLeaseSnapshot
+{
+    Cyw43SdioNetworkPriorityLeaseSnapshot {
+        phase: Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+            CYW43_SDIO_NETWORK_PRIORITY_LEASE
+                .phase
+                .load(Ordering::Acquire),
+        )
+        .unwrap_or(Cyw43SdioNetworkPriorityLeasePhase::Poisoned),
+        generation: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .generation
+            .load(Ordering::Acquire),
+        opens: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .opens
+            .load(Ordering::Acquire),
+        closes: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .closes
+            .load(Ordering::Acquire),
+        restores: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .restores
+            .load(Ordering::Acquire),
+        recovery_revocations: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .recovery_revocations
+            .load(Ordering::Acquire),
+        amortized_requests: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .amortized_requests
+            .load(Ordering::Acquire),
+        failures: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .failures
+            .load(Ordering::Acquire),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn revoke_cyw43_sdio_network_priority_lease_after_pair_reset() {
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .load(Ordering::Acquire),
+    );
+    if phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) {
+        return;
+    }
+    let opens = CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .opens
+        .load(Ordering::Acquire);
+    let closes = CYW43_SDIO_NETWORK_PRIORITY_LEASE
+        .closes
+        .load(Ordering::Acquire);
+    if opens > closes {
+        driver_task_counter_add(&CYW43_SDIO_NETWORK_PRIORITY_LEASE.closes, 1);
+    }
+    driver_task_counter_add(&CYW43_SDIO_NETWORK_PRIORITY_LEASE.recovery_revocations, 1);
+    reset_cyw43_sdio_network_priority_lease_state(&CYW43_SDIO_NETWORK_PRIORITY_LEASE);
 }
 
 #[cfg(feature = "kernel")]
@@ -6017,6 +6926,7 @@ fn initialize_driver_task_retained_priority_lease(
     command: DriverTaskCommandRecord,
     request: usize,
     fingerprint: u32,
+    closing_parent_resume: bool,
 ) -> bool {
     if driver_task_retained_uses_root_grant(contract, command) {
         if !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
@@ -6025,7 +6935,10 @@ fn initialize_driver_task_retained_priority_lease(
             return false;
         }
     }
-    let mask = retained_priority_lease_target_mask(contract, command);
+    let Some(mask) = retained_priority_lease_target_mask(contract, command, closing_parent_resume)
+    else {
+        return false;
+    };
     let Some(task_key) = driver_task_contract_key(contract) else {
         return false;
     };
@@ -6098,6 +7011,7 @@ fn step_driver_task_retained_priority_lease(
     command: DriverTaskCommandRecord,
     request: usize,
     fingerprint: u32,
+    closing_parent_resume: bool,
 ) -> DriverTaskRetainedLeaseTurn {
     let mut phase = DriverTaskRetainedLeasePhase::from_usize(
         slot.retained_priority_lease_phase.load(Ordering::Acquire),
@@ -6109,6 +7023,7 @@ fn step_driver_task_retained_priority_lease(
             command,
             request,
             fingerprint,
+            closing_parent_resume,
         ) {
             fail_driver_task_retained_priority_lease(slot, contract);
             return DriverTaskRetainedLeaseTurn::Failed;
@@ -8709,6 +9624,11 @@ fn complete_cyw43_sdio_pair_restart_action(
             emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::IrqAcknowledged, "ready")
         }
         Cyw43SdioPairRestartAction::ResetCyw43Ring => {
+            // Both pair rings are now reset while both runtimes remain
+            // suspended. Any poisoned Network scheduling lease is therefore
+            // revoked by the recovery lane rather than restored as if the old
+            // generation were still runnable.
+            revoke_cyw43_sdio_network_priority_lease_after_pair_reset();
             emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::RingsReset, "ready")
         }
         Cyw43SdioPairRestartAction::ReplaySdioEngine => {
@@ -9314,6 +10234,7 @@ fn step_cyw43_sdio_pair_restart_with<E: Cyw43SdioPairRestartExecutor>(
 pub fn begin_cyw43_sdio_pair_restart(
 ) -> Result<Cyw43SdioPairRestartCursor, Cyw43SdioPairRestartFailure> {
     clear_cyw43_pair_terminal_drain();
+    poison_cyw43_sdio_network_priority_lease_if_owned();
     if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS
         .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -11809,6 +12730,31 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         && driver_task_ring_mode_uses_bounded_send(mode)
         && driver_task_ring_timeout_keeps_active(contract, command, mode)
         && slot.active_command_fingerprint.load(Ordering::Acquire) == command_fingerprint;
+    let closing_cyw43_parent_resume = mode == DriverTaskRingCommandMode::RetainedTurn
+        && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+            CYW43_SDIO_NETWORK_PRIORITY_LEASE
+                .phase
+                .load(Ordering::Acquire),
+        ) == Some(Cyw43SdioNetworkPriorityLeasePhase::Closing)
+        && same_request_resume;
+    if mode == DriverTaskRingCommandMode::RetainedTurn
+        && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+            CYW43_SDIO_NETWORK_PRIORITY_LEASE
+                .phase
+                .load(Ordering::Acquire),
+        ) == Some(Cyw43SdioNetworkPriorityLeasePhase::Closing)
+        && !closing_cyw43_parent_resume
+    {
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "network-priority-lease-closing",
+        );
+        return None;
+    }
     if slot.active.swap(1, Ordering::AcqRel) != 0 && !same_request_resume {
         if DriverTaskRetainedLeasePhase::from_usize(
             slot.retained_priority_lease_phase.load(Ordering::Acquire),
@@ -11961,6 +12907,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             command,
             request,
             command_fingerprint,
+            closing_cyw43_parent_resume,
         );
         match turn {
             DriverTaskRetainedLeaseTurn::CommitRing
@@ -16956,6 +17903,396 @@ mod tests {
         assert_eq!(
             SERIAL_DRIVER_TASK_CONTRACT.bootstrap_priority(DriverTaskRuntimeProfile::HostTest),
             SERIAL_DRIVER_TASK_CONTRACT.sel4_priority()
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    fn network_priority_test_slot(priority: usize) -> DriverTaskCommandSlot {
+        let slot = DriverTaskCommandSlot::new();
+        slot.tcb
+            .store(priority.saturating_add(1), Ordering::Release);
+        slot.steady_priority.store(priority, Ordering::Release);
+        slot.steady_priority_state.store(
+            DriverTaskSteadyPriorityState::Active.as_usize(),
+            Ordering::Release,
+        );
+        slot
+    }
+
+    #[cfg(feature = "kernel")]
+    fn network_priority_test_cyw43_command(generation: u32) -> DriverTaskCommandRecord {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = generation;
+        command
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions() {
+        let lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let cyw43 = network_priority_test_slot(160);
+        let sdio = network_priority_test_slot(200);
+        let generation = 17;
+        let command = network_priority_test_cyw43_command(generation);
+        let mut transitions = Vec::new();
+
+        assert_eq!(
+            begin_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                |contract, _, owner_token, boost| {
+                    assert_eq!(owner_token, CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN);
+                    transitions.push((contract.name, boost));
+                    true
+                },
+                || true,
+            ),
+            Cyw43SdioNetworkPriorityLeaseBegin::Opened { generation }
+        );
+        for _ in 0..3 {
+            assert_eq!(
+                cyw43_sdio_network_priority_request_coverage_with(
+                    &lease,
+                    &cyw43,
+                    &sdio,
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    command,
+                    true,
+                    generation,
+                    false,
+                ),
+                Cyw43SdioNetworkPriorityRequestCoverage::Covered
+            );
+        }
+        assert_eq!(
+            finish_or_drain_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                None,
+                |contract, _, owner_token, boost| {
+                    assert_eq!(owner_token, CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN);
+                    transitions.push((contract.name, boost));
+                    true
+                },
+            ),
+            Cyw43SdioNetworkPriorityLeaseFinish::Closed
+        );
+
+        assert_eq!(
+            transitions,
+            vec![
+                (SDIO_HOST_DRIVER_TASK_CONTRACT.name, true),
+                (CYW43_WIFI_DRIVER_TASK_CONTRACT.name, true),
+                (CYW43_WIFI_DRIVER_TASK_CONTRACT.name, false),
+                (SDIO_HOST_DRIVER_TASK_CONTRACT.name, false),
+            ],
+            "one Network quantum owns four scheduler writes regardless of request count"
+        );
+        assert_eq!(
+            cyw43.retained_priority_boost_active.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            sdio.retained_priority_boost_active.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(lease.opens.load(Ordering::Acquire), 1);
+        assert_eq!(lease.closes.load(Ordering::Acquire), 1);
+        assert_eq!(lease.restores.load(Ordering::Acquire), 1);
+        assert_eq!(lease.amortized_requests.load(Ordering::Acquire), 3);
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire)),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sdio_network_priority_lease_closing_drains_exact_parent_and_blocks_fresh_pair_work() {
+        let lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let cyw43 = network_priority_test_slot(160);
+        let sdio = network_priority_test_slot(200);
+        let generation = 23;
+        let mut transitions = Vec::new();
+        assert_eq!(
+            begin_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                |contract, _, _, boost| {
+                    transitions.push((contract.name, boost));
+                    true
+                },
+                || true,
+            ),
+            Cyw43SdioNetworkPriorityLeaseBegin::Opened { generation }
+        );
+        let command = network_priority_test_cyw43_command(generation);
+        assert_eq!(
+            finish_or_drain_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                Some(DriverTaskRetainedRequestState::Prepared {
+                    request: 31,
+                    command,
+                }),
+                |_, _, _, _| panic!("a retained parent must drain before restore"),
+            ),
+            Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request: 31,
+                issued: false,
+            }
+        );
+        assert_eq!(
+            finish_or_drain_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                Some(DriverTaskRetainedRequestState::Issued {
+                    request: 31,
+                    command,
+                }),
+                |_, _, _, _| panic!("an exact issued parent must drain before restore"),
+            ),
+            Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request: 31,
+                issued: true,
+            }
+        );
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire)),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Closing)
+        );
+        assert_eq!(lease.failures.load(Ordering::Acquire), 0);
+        assert_eq!(lease.amortized_requests.load(Ordering::Acquire), 0);
+        assert_eq!(
+            cyw43_sdio_network_priority_request_coverage_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                true,
+                generation,
+                false,
+            ),
+            Cyw43SdioNetworkPriorityRequestCoverage::FailClosed,
+            "Closing is an admission fence, not a fresh request lease"
+        );
+        assert_eq!(
+            cyw43_sdio_network_priority_request_coverage_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                true,
+                generation,
+                true,
+            ),
+            Cyw43SdioNetworkPriorityRequestCoverage::Covered,
+            "only the fingerprint-matched parent resume may borrow a Closing lease"
+        );
+        assert_eq!(
+            cyw43_sdio_network_priority_request_coverage_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                GENET_DRIVER_TASK_CONTRACT,
+                DriverTaskCommandRecord::service(
+                    0,
+                    DriverTaskBudgetGrant::from_contract(GENET_DRIVER_TASK_CONTRACT),
+                ),
+                true,
+                generation,
+                false,
+            ),
+            Cyw43SdioNetworkPriorityRequestCoverage::NotApplicable,
+            "GENET must remain outside CYW43/SDIO priority-lease state"
+        );
+        assert_eq!(
+            finish_or_drain_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                None,
+                |contract, _, _, boost| {
+                    transitions.push((contract.name, boost));
+                    true
+                },
+            ),
+            Cyw43SdioNetworkPriorityLeaseFinish::Closed
+        );
+        assert_eq!(transitions.len(), 4);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sdio_network_priority_lease_partial_failure_is_rolled_back_or_poisoned() {
+        let clean_lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let clean_cyw43 = network_priority_test_slot(160);
+        let clean_sdio = network_priority_test_slot(200);
+        let mut clean_transitions = Vec::new();
+        assert_eq!(
+            begin_cyw43_sdio_network_priority_lease_with(
+                &clean_lease,
+                &clean_cyw43,
+                &clean_sdio,
+                29,
+                |contract, _, _, boost| {
+                    clean_transitions.push((contract.name, boost));
+                    !(contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && boost)
+                },
+                || true,
+            ),
+            Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired
+        );
+        assert_eq!(
+            clean_transitions,
+            vec![
+                (SDIO_HOST_DRIVER_TASK_CONTRACT.name, true),
+                (CYW43_WIFI_DRIVER_TASK_CONTRACT.name, true),
+                (SDIO_HOST_DRIVER_TASK_CONTRACT.name, false),
+            ]
+        );
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(clean_lease.phase.load(Ordering::Acquire)),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive)
+        );
+        assert_eq!(
+            clean_cyw43
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            clean_sdio
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            0
+        );
+
+        let poisoned_lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let poisoned_cyw43 = network_priority_test_slot(160);
+        let poisoned_sdio = network_priority_test_slot(200);
+        assert_eq!(
+            begin_cyw43_sdio_network_priority_lease_with(
+                &poisoned_lease,
+                &poisoned_cyw43,
+                &poisoned_sdio,
+                31,
+                |contract, _, _, boost| { contract == SDIO_HOST_DRIVER_TASK_CONTRACT && boost },
+                || true,
+            ),
+            Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired
+        );
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+                poisoned_lease.phase.load(Ordering::Acquire)
+            ),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Poisoned)
+        );
+        assert_eq!(
+            poisoned_cyw43
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+        );
+        assert_eq!(
+            poisoned_sdio
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN
+        );
+        assert_eq!(
+            request_cyw43_sdio_network_priority_lease_close_with(
+                &poisoned_lease,
+                &poisoned_cyw43,
+                &poisoned_sdio,
+                31,
+            ),
+            Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sdio_network_priority_lease_rejects_generation_aliases() {
+        let lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let cyw43 = network_priority_test_slot(160);
+        let sdio = network_priority_test_slot(200);
+        let generation = 37;
+        let command = network_priority_test_cyw43_command(generation);
+        assert_eq!(
+            begin_cyw43_sdio_network_priority_lease_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation,
+                |_, _, _, _| true,
+                || true,
+            ),
+            Cyw43SdioNetworkPriorityLeaseBegin::Opened { generation }
+        );
+        assert_eq!(
+            cyw43_sdio_network_priority_request_coverage_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                true,
+                generation.wrapping_add(1),
+                false,
+            ),
+            Cyw43SdioNetworkPriorityRequestCoverage::FailClosed
+        );
+        let mut stale_command = command;
+        stale_command.aux1 = generation.wrapping_add(1);
+        assert_eq!(
+            cyw43_sdio_network_priority_request_coverage_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                stale_command,
+                true,
+                generation,
+                false,
+            ),
+            Cyw43SdioNetworkPriorityRequestCoverage::FailClosed
+        );
+        assert_eq!(
+            request_cyw43_sdio_network_priority_lease_close_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                generation.wrapping_add(1),
+            ),
+            Cyw43SdioNetworkPriorityLeaseCloseRequest::RecoveryRequired
+        );
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire)),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Poisoned)
         );
     }
 
