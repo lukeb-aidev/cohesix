@@ -3071,6 +3071,10 @@ where
         }
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if self.linked_runtime_cyw43_lane_selected() {
+            let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
+        }
         #[cfg(feature = "kernel")]
         if crate::serial::serial_linked_runtime_transport_active() {
             self.poll_with_linked_serial_runtime();
@@ -3724,6 +3728,7 @@ where
                 || counters.wifi_rx_runtime_queue_count != 0
                 || counters.wifi_rx_pending_queue_count != 0
                 || net_status_cyw43_association_turn_pending(&status)
+                || net_status_needs_host_eapol_burst(&status)
                 || crate::drivers::driver_task_net::cyw43_steady_network_work_pending(
                     net.driver_task_contract(),
                 )
@@ -12990,6 +12995,23 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_root_wake_line(
+        wake: crate::hal::driver_task::Cyw43RootWakeSnapshot,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: root rx_wake bound={} badge={} pending={} polls={} hits={} clears={} rechecks={} stale_clear_skips={} signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck",
+            Self::yes_no(wake.bound),
+            wake.badge,
+            Self::yes_no(wake.pending),
+            wake.polls,
+            wake.hits,
+            wake.clears,
+            wake.rechecks,
+            wake.stale_clear_skips,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_root_grant_prepared(
         grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
     ) -> bool {
@@ -13253,6 +13275,10 @@ where
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ) {
             let detail = Self::wifi_diag_root_grant_line(grant);
+            self.emit_console_line(detail.as_str());
+        }
+        if let Some(wake) = crate::hal::driver_task::cyw43_root_wake_snapshot() {
+            let detail = Self::wifi_diag_root_wake_line(wake);
             self.emit_console_line(detail.as_str());
         }
         let evidence_source = if live_net_supersedes_runtime {
@@ -24072,6 +24098,24 @@ mod tests {
             "{prepared}"
         );
         assert!(prepared.ends_with("exact=not-published"), "{prepared}");
+        let wake = KernelConsoleTestPump::wifi_diag_root_wake_line(
+            crate::hal::driver_task::Cyw43RootWakeSnapshot {
+                bound: true,
+                badge: 1,
+                pending: true,
+                polls: usize::MAX,
+                hits: usize::MAX,
+                clears: usize::MAX,
+                rechecks: usize::MAX,
+                stale_clear_skips: usize::MAX,
+            },
+        );
+        assert!(!wake.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{wake}");
+        assert!(wake.contains("bound=yes badge=1 pending=yes"), "{wake}");
+        assert!(
+            wake.ends_with("signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck"),
+            "{wake}"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -30955,6 +30999,7 @@ mod tests {
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -31444,6 +31489,52 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_host_eapol_pending_preopens_priority_lane() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.status.active_driver = "cyw43";
+        wifi.status.active_interface = "wifi";
+        wifi.status.address_source = "wifi-host-eapol-pending";
+        wifi.status.dhcp_phase = "host-eapol-pending";
+
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        assert!(
+            pump.linked_runtime_cyw43_network_burst_due(),
+            "pending host-EAPOL work must retain the bounded CYW43 Network quantum"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_priority_work_due(),
+            "pending host-EAPOL actionability must reach priority-lease admission"
+        );
+    }
+
+    #[cfg(feature = "net-console")]
+    #[test]
+    fn host_eapol_burst_status_excludes_required_terminal() {
+        let mut status = NetStatusReport {
+            active_interface: "wifi",
+            address_source: "wifi-host-eapol-pending",
+            ..NetStatusReport::default()
+        };
+        assert!(net_status_needs_host_eapol_burst(&status));
+
+        status.address_source = "wifi-host-eapol-required";
+        assert!(
+            !net_status_needs_host_eapol_burst(&status),
+            "the terminal required state cannot create scheduler busy polling"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_pending_unauthenticated_socket_work_extends_network_quantum() {
         struct LinkedRuntimeTestReset;
 
@@ -31481,10 +31572,18 @@ mod tests {
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
                 crate::serial::test_end_linked_runtime_only_transport();
             }
         }
 
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        let wake_before = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 root wake");
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
 
@@ -31499,10 +31598,21 @@ mod tests {
         genet.active_conn_id = Some(21);
         genet.authenticated_conn_id = Some(21);
         genet.counters.wifi_rx_runtime_queue_count = 37;
+        genet.status.active_driver = "genet";
+        genet.status.active_interface = "wired";
+        genet.status.address_source = "wifi-host-eapol-pending";
 
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut genet);
+            assert!(
+                !pump.linked_runtime_cyw43_network_burst_due(),
+                "a WiFi-shaped status label cannot bypass the GENET contract boundary"
+            );
+            assert!(
+                !pump.linked_runtime_cyw43_priority_work_due(),
+                "GENET must never acquire the CYW43 pair priority lease"
+            );
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
             pump.poll();
             assert_eq!(
@@ -31513,6 +31623,12 @@ mod tests {
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
         }
         assert_eq!(genet.polls, 1);
+        let wake_after = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 root wake remains inspectable");
+        assert_eq!(
+            wake_after, wake_before,
+            "GENET selection must not poll, hit, or mutate the inactive CYW43 wake"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

@@ -403,13 +403,13 @@ unavailable `nettest` work rather than accepting a stale prior verdict. These
 waits keep retained bootstrap output from colliding with serial commands. They
 do not alter the GENET diagnostic order or its existing timeouts.
 
-The production helper deliberately omits `wifi probe-ht`: the physical
-linked-runtime profile returns the exact typed refusal
+The production helper issues guarded, paced `wifi probe-ht` after `wifi diag`.
+The physical linked-runtime profile returns the exact typed refusal
 `ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required`
 because no root-owned live SDIO probe exists. Operators may issue the command
-manually to verify that boundary, but every command executed by the helper must
-return its ordinary successful terminal status; no `ERR` is relabelled as
-success.
+manually to verify that boundary. The helper records only that complete current
+refusal as informational; any other `ERR`, truncated terminal, or missing
+terminal remains a diagnostic failure.
 
 `usb diag` returns the compact cached ten-gate report; use `usb status` only
 when the additional counter detail is needed. A complete response includes

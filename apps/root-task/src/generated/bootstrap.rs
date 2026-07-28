@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "539fdc782bbce2c01b986ee68d2d0837061aa79900d63800fbfb496048d774e8";
+    "75e7c0b0395625ab517cdaa9f9117fdf31523b0c4f241ba4516297ca89f1a104";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -234,6 +234,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 1,
         dma_pages: 0,
         shared_buffer_pages: 4,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -250,6 +252,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 16,
         dma_pages: 128,
         shared_buffer_pages: 32,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -266,6 +270,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 0,
         dma_pages: 0,
         shared_buffer_pages: 16,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -282,6 +288,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 6,
         dma_pages: 64,
         shared_buffer_pages: 32,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -298,6 +306,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 0,
         dma_pages: 0,
         shared_buffer_pages: 64,
+        root_wake_notification_slot: 11,
+        root_wake_notification_badge: 1,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -314,6 +324,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 3,
         dma_pages: 10,
         shared_buffer_pages: 32,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -330,6 +342,8 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
         mmio_pages: 10,
         dma_pages: 0,
         shared_buffer_pages: 16,
+        root_wake_notification_slot: 0,
+        root_wake_notification_badge: 0,
         root_context_required: false,
         hardware_state_migrated: true,
     },
@@ -750,7 +764,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=0c716655fb26b840529d581b247fd66d2e1c4875ff9f4dc886de43bce1ba6777",
+    "manifest.sha256=d49fe9c60c4663625ab88baca2ba38977717c33db76cc114d018b37b018ac5a6",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

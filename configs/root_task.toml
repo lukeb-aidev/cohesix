@@ -107,6 +107,8 @@ ring-pages = 1
 mmio-pages = 0
 dma-pages = 0
 shared-buffer-pages = 64
+root-wake-notification-slot = 11
+root-wake-notification-badge = 1
 root-context-required = false
 hardware-state-migrated = true
 

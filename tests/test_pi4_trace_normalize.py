@@ -50,7 +50,7 @@ def descriptor_seal_suffix(hot_path: str) -> str:
         "valid" if hot_path in {"usb-keyboard", "cyw43-wifi", "sdio-host"} else "none"
     )
     return (
-        "descriptor_version=4 descriptor_seal=valid "
+        "descriptor_version=5 descriptor_seal=valid "
         f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
     )
 
@@ -85,7 +85,7 @@ def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=4",
+            " descriptor_version=5",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",

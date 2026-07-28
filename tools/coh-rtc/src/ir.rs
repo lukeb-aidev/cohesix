@@ -89,6 +89,8 @@ const DRIVER_RUNTIME_CYW43_SDIO_IRQ: u32 = 158;
 const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
 const DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT: u8 = 8;
 const DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT: u8 = 10;
+const DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT: u8 = 11;
+const DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE: u32 = 1;
 const DRIVER_RUNTIME_CYW43_SDIO_SHARED_OFFSET: u32 = 4096;
 const DRIVER_RUNTIME_CYW43_SDIO_SHARED_LEN: u32 = 32 * 1024;
 const DRIVER_RUNTIME_SDIO_DMA_PAGES: u16 = 10;
@@ -2458,6 +2460,8 @@ pub struct DriverRuntimeImageSpec {
     pub mmio_pages: u16,
     pub dma_pages: u16,
     pub shared_buffer_pages: u16,
+    pub root_wake_notification_slot: u8,
+    pub root_wake_notification_badge: u32,
     pub root_context_required: bool,
     pub hardware_state_migrated: bool,
 }
@@ -2530,6 +2534,22 @@ impl DriverRuntimeImagePolicy {
                         required
                     );
                 }
+            }
+            let Some(cyw43) = self
+                .images
+                .iter()
+                .find(|image| image.hot_path == "cyw43-wifi")
+            else {
+                bail!("root_task.driver_images.required missing hot path cyw43-wifi");
+            };
+            if cyw43.root_wake_notification_slot != DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT
+                || cyw43.root_wake_notification_badge != DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE
+            {
+                bail!(
+                    "root_task.driver_images.required cyw43-wifi root wake must use child slot {} and badge {}",
+                    DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT,
+                    DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE
+                );
             }
         }
         if self.irqs.len() > MAX_DRIVER_RUNTIME_IRQS {
@@ -2784,6 +2804,25 @@ impl DriverRuntimeImageSpec {
                 self.id
             );
         }
+        let root_wake_absent =
+            self.root_wake_notification_slot == 0 && self.root_wake_notification_badge == 0;
+        let root_wake_exact = self.root_wake_notification_slot
+            == DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT
+            && self.root_wake_notification_badge == DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE;
+        if !root_wake_absent && !root_wake_exact {
+            bail!(
+                "driver runtime image {} root wake must be absent or use child slot {} and badge {}",
+                self.id,
+                DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT,
+                DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE
+            );
+        }
+        if self.hot_path != "cyw43-wifi" && !root_wake_absent {
+            bail!(
+                "driver runtime image {} root wake is reserved for cyw43-wifi",
+                self.id
+            );
+        }
         Ok(())
     }
 }
@@ -2803,6 +2842,8 @@ impl Default for DriverRuntimeImageSpec {
             mmio_pages: 0,
             dma_pages: 0,
             shared_buffer_pages: 1,
+            root_wake_notification_slot: 0,
+            root_wake_notification_badge: 0,
             root_context_required: true,
             hardware_state_migrated: false,
         }
@@ -2968,6 +3009,16 @@ mod tests {
                 1
             },
             shared_buffer_pages: 1,
+            root_wake_notification_slot: if hot_path == "cyw43-wifi" {
+                super::DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT
+            } else {
+                0
+            },
+            root_wake_notification_badge: if hot_path == "cyw43-wifi" {
+                super::DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE
+            } else {
+                0
+            },
             root_context_required: true,
             hardware_state_migrated: false,
         }
@@ -3015,6 +3066,53 @@ mod tests {
             bus_links: vec![cyw43_sdio_link()],
         };
         policy.validate().expect("complete driver runtime table");
+    }
+
+    #[test]
+    fn required_cyw43_runtime_requires_exact_root_wake() {
+        let mut images: Vec<_> = super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+            .iter()
+            .copied()
+            .map(driver_runtime_image)
+            .collect();
+        let cyw43 = images
+            .iter_mut()
+            .find(|image| image.hot_path == "cyw43-wifi")
+            .expect("test table includes cyw43-wifi");
+        cyw43.root_wake_notification_slot = 0;
+        cyw43.root_wake_notification_badge = 0;
+        let policy = DriverRuntimeImagePolicy {
+            required: true,
+            images,
+            irqs: vec![sdio_irq()],
+            bus_links: vec![cyw43_sdio_link()],
+        };
+        let err = policy
+            .validate()
+            .expect_err("required CYW43 root wake rejected when absent");
+        assert!(err
+            .to_string()
+            .contains("cyw43-wifi root wake must use child slot 11 and badge 1"));
+    }
+
+    #[test]
+    fn root_wake_is_cyw43_only_and_requires_exact_pair() {
+        let mut non_cyw43 = driver_runtime_image("genet-nic");
+        non_cyw43.root_wake_notification_slot = super::DRIVER_RUNTIME_CYW43_ROOT_WAKE_SLOT;
+        non_cyw43.root_wake_notification_badge = super::DRIVER_RUNTIME_CYW43_ROOT_WAKE_BADGE;
+        let err = non_cyw43
+            .validate()
+            .expect_err("non-CYW43 root wake authority rejected");
+        assert!(err.to_string().contains("reserved for cyw43-wifi"));
+
+        let mut cyw43 = driver_runtime_image("cyw43-wifi");
+        cyw43.root_wake_notification_badge = 0;
+        let err = cyw43
+            .validate()
+            .expect_err("partial CYW43 root wake pair rejected");
+        assert!(err
+            .to_string()
+            .contains("root wake must be absent or use child slot 11 and badge 1"));
     }
 
     #[test]

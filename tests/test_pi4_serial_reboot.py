@@ -150,6 +150,9 @@ NETTEST_STATUS_FAILURE = (
 )
 NETSTATS_TERMINAL_PASS = NETTEST_STATUS_PASS + NETSTATS_OK
 NETSTATS_TERMINAL_FAILURE = NETTEST_STATUS_FAILURE + NETSTATS_OK
+WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL = (
+    pi4_serial_reboot.WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL + b"\ncohesix>"
+)
 
 
 def wifi_supervisor_record(
@@ -587,6 +590,7 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -644,6 +648,7 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
             NETSTATS_OK,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -674,6 +679,7 @@ def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> N
             NETSTATS_OK,
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -701,6 +707,7 @@ def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> N
         "netstats",
         "netstats",
         "wifi diag",
+        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -739,6 +746,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         [
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -758,6 +766,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         "netstats",
         "netstats",
         "wifi diag",
+        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -765,7 +774,14 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
     assert controller.dhcp_result_timeout_s is not None
     assert 0 < controller.dhcp_result_timeout_s <= 0.5
     assert controller.diagnostic_deadlines[0] is not None
-    assert controller.diagnostic_deadlines[1:] == [None, None, None, None, None]
+    assert controller.diagnostic_deadlines[1:] == [
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+    ]
     assert any(
         "wifi DHCP terminal result=timeout" in note
         and "action=skip-premature-nettest" in note
@@ -830,6 +846,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -849,17 +866,19 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "nettest",
         "netstats",
         "wifi diag",
+        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True]
+    assert controller.reinforced == [True, True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
         "netstats-final",
         "wifi diag",
+        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -873,6 +892,12 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "nettest terminal generation=14 run_generation=31 "
         "running=false result=pass source=netstats"
     ) in controller.notes
+    assert (
+        "diagnostic terminal command='wifi probe-ht' "
+        "label='wifi probe-ht' result=expected-refusal "
+        "reason=pi4-wifi-driver-task-runtime-required "
+        "action=record-informational"
+    ) in controller.notes
     assert "diagnostics complete result=pass" in controller.notes
     assert controller.drains == [
         (8.0, "post-root-prompt-settle-before-diagnostics"),
@@ -881,6 +906,39 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             "nettest terminal observation window",
         ),
     ]
+
+
+def test_wifi_probe_ht_wrong_error_fails_diagnostics() -> None:
+    """Only the exact linked-runtime refusal is informational."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready "
+            b"action=enable-command-input\n",
+            NETSTATS_WIFI_BOUND,
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK WIFI\ncohesix>",
+            b"ERR WIFI reason=busy detail=subcommand=probe-ht\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=True,
+        boot_snapshot=wifi_supervisor_record("ready") + b"cohesix> ",
+    )
+
+    assert not diagnostics_ok
+    assert (
+        "diagnostics complete result=fail failures=wifi probe-ht:err"
+        in controller.notes
+    )
 
 
 def test_diagnostics_accept_interleaved_result_marker() -> None:

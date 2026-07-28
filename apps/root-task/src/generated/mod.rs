@@ -218,6 +218,8 @@ pub struct DriverRuntimeImageSpec {
     pub mmio_pages: u16,
     pub dma_pages: u16,
     pub shared_buffer_pages: u16,
+    pub root_wake_notification_slot: u8,
+    pub root_wake_notification_badge: u32,
     pub root_context_required: bool,
     pub hardware_state_migrated: bool,
 }
@@ -691,7 +693,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.6";
 pub const MANIFEST_SHA256: &str =
-    "0c716655fb26b840529d581b247fd66d2e1c4875ff9f4dc886de43bce1ba6777";
+    "d49fe9c60c4663625ab88baca2ba38977717c33db76cc114d018b37b018ac5a6";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

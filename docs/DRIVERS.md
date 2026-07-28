@@ -332,6 +332,13 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   input or fatal status.
 - A USB byte, a HID endpoint, a keyboard-ready marker, and a usable command
   parser are separate gates.
+- After attach, re-enumeration, or interrupt-endpoint recovery, the USB runtime
+  treats key state as untrusted until a decoded all-zero idle/release report
+  establishes the baseline. A non-zero prefix is admissible only when decode
+  provenance proves a complete report-ID-prefixed boot report; ambiguous compact
+  windows cannot establish the baseline. Key or modifier reports before that
+  boundary are filtered; only a later make transition may enter the command
+  parser.
 - USB retained service has typed `Pending`, `Complete`, and `Failed` outcomes.
   A normal multi-turn `Pending` result preserves the immutable command ticket,
   command-ready evidence, and no-reply counters; only a terminal `Failed`
@@ -864,6 +871,28 @@ generation and XID.
   current. The retained op11 owner recovers its generation only from its exact
   HAL-retained command and rejects a stale terminal result before routing it;
   no private compatibility caller remains.
+
+  CYW43 runtime RX availability uses one separate compiler-declared
+  child-to-root notification object. HAL retains the unbound receive cap and
+  mints only a send-only badge-1 cap into CYW43 child CSpace slot 11; no other
+  runtime may declare that route. The runtime signals only when its private RX
+  queue transitions from empty to nonempty. While the CYW43 network lane is
+  selected, root polls the object once at the start of each ordinary EventPump
+  turn and retains a scheduling hint until an exact current-owner op8 terminal
+  reports queue depth zero. That op8 owner
+  captures the current wake-hit epoch. A newer already-consumed hit prevents
+  the older terminal from clearing the latch; otherwise root clears and
+  immediately re-polls once, so a pre-clear edge is re-latched and an edge
+  after the recheck stays kernel-latched for the next turn. Pair restart
+  suspends both linked children before draining the discarded wake and queue
+  state. GENET selection never polls or mutates the inactive CYW43 wake. This route
+  changes scheduling only: the immutable ring request, continuation grant,
+  pair generation, and terminal completion remain the sole operation
+  authority, and neither notification coalescing nor a wake badge can issue,
+  replay, or complete an RX poll. `wifi diag` reports the route's bound badge,
+  retained state, polls, hits, clears, rechecks, and stale-clear skips so the
+  next capture can distinguish a missing root wake from residual
+  one-operation-per-turn grant cadence.
 
   Delegated CYW43-to-SDIO work has a different authority path. Successful
   one-way owner handoff deletes and zeros root's SDIO endpoint authority, and
@@ -1965,12 +1994,18 @@ generation and XID.
 
   A selected CYW43 path may retain `Network` only for an exact current
   DPC/RX/TX/fairness continuation, including the bounded post-TX receive watch,
-  a non-empty runtime/root queue, or actual TCP socket/parser/response work. An
-  authenticated but idle socket is not a
-  weighting reason. A complete TCP command retained by the ingest queue ends
-  the current Network burst so the ordinary physical-operator rotation reaches
-  `Dispatch` before another NIC operation. Raw or partial traffic cannot
-  retain Network indefinitely. The sole contiguous continuation quantum is
+  a non-empty runtime/root queue, or actual TCP socket/parser/response work.
+  During Gate 8, exact `wifi-associating` and nonterminal
+  `wifi-host-eapol-pending` status are also actionable under that same bounded
+  quantum so the association-to-EAPOL transition cannot lose its scheduler
+  weighting before the one-operation host-EAPOL sequencer runs. Terminal
+  `wifi-host-eapol-required` does not retain the quantum, and the driver-task
+  contract check occurs before status inspection, so no WiFi-shaped label can
+  open this lane for GENET. An authenticated but idle socket is not a weighting
+  reason. A complete TCP command retained by the ingest queue ends the current
+  Network burst so the ordinary physical-operator rotation reaches `Dispatch`
+  before another NIC operation. Raw or partial traffic cannot retain Network
+  indefinitely. The sole contiguous continuation quantum is
   capped at both the compiler-declared CYW43 `max_ops_per_turn` service bound
   (currently 192 separately opened Network turns) and 25 ms from the seL4
   virtual counter. There is no fixed intra-quantum operator stride: splitting
@@ -2023,6 +2058,9 @@ generation and XID.
   The CYW43 quantum counters remain zero for GENET, and the WiFi-only priority
   lease records are omitted on GENET. The retained `operator_yields`
   compatibility counter remains zero in this production lane.
+  `wifi_trace_tx_retries` counts only an actual action retry or an unproved TX
+  credit. A `no-completion*` software scheduling deferral is a pending
+  transition and cannot inflate that retry counter.
   `Display` performs at most one retained HDMI attach or frame turn after the
   Network phase. Every phase returns to the outer loop before its successor; a
   missing local seat skips directly from `Serial` to `Dispatch` and from
@@ -2096,7 +2134,12 @@ generation and XID.
   acceptance requires `WIFI_GATE7_COMPLETE=yes`,
   `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`, `WIFI_GATE7_LAST=7e`, and
   `WIFI_GATE7_MISSING=none`. Firmware-supplicant or condensed secure summaries
-  cannot satisfy this host-EAPOL chain.
+  cannot satisfy this host-EAPOL chain. Gate `8e` is a post-secure BSSID
+  refresh. Until host-EAPOL reaches its secure terminal, `8e` remains pending
+  with the exact `host-eapol-prerequisite-pending` blocker. A terminal
+  host-EAPOL requirement fails `8e` as
+  `host-eapol-prerequisite-required` instead of advertising resumable work;
+  only after keys are secure may diagnostics name a pending BSSID owner.
 
 The July 19 pre-fix image (`df7196c7bc56`, image id
 `2fb39b8be336200d73082e0b00d265900da50041d24af31d28a7120d5264357d`)

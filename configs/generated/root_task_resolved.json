@@ -48,6 +48,8 @@
           "mmio-pages": 1,
           "dma-pages": 0,
           "shared-buffer-pages": 4,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -64,6 +66,8 @@
           "mmio-pages": 16,
           "dma-pages": 128,
           "shared-buffer-pages": 32,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -80,6 +84,8 @@
           "mmio-pages": 0,
           "dma-pages": 0,
           "shared-buffer-pages": 16,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -96,6 +102,8 @@
           "mmio-pages": 6,
           "dma-pages": 64,
           "shared-buffer-pages": 32,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -112,6 +120,8 @@
           "mmio-pages": 0,
           "dma-pages": 0,
           "shared-buffer-pages": 64,
+          "root-wake-notification-slot": 11,
+          "root-wake-notification-badge": 1,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -128,6 +138,8 @@
           "mmio-pages": 3,
           "dma-pages": 10,
           "shared-buffer-pages": 32,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         },
@@ -144,6 +156,8 @@
           "mmio-pages": 10,
           "dma-pages": 0,
           "shared-buffer-pages": 16,
+          "root-wake-notification-slot": 0,
+          "root-wake-notification-badge": 0,
           "root-context-required": false,
           "hardware-state-migrated": true
         }

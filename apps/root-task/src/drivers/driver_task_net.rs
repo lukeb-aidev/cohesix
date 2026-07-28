@@ -14,7 +14,7 @@
 #![allow(unsafe_code)]
 
 use core::fmt;
-use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
 use smoltcp::phy::{self, Device, DeviceCapabilities};
 use smoltcp::time::Instant;
@@ -4596,6 +4596,12 @@ static CYW43_HOST_EAPOL_PENDING_EVENTS: Mutex<
 > = Mutex::new(heapless::Deque::new());
 #[cfg(feature = "kernel")]
 static CYW43_PENDING_PROMPT_POLL: Mutex<Option<Cyw43PendingPromptPoll>> = Mutex::new(None);
+#[cfg(feature = "kernel")]
+static CYW43_ROOT_WAKE_OP8_TICKET: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_ROOT_WAKE_OP8_GENERATION: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_ROOT_WAKE_OP8_HIT_EPOCH: AtomicUsize = AtomicUsize::new(0);
 static SDIO_LINKED_RUNTIME_READY: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_LAST_RUNTIME_COMMAND_FAULT: Mutex<Option<Cyw43RuntimeCommandFaultStatus>> =
@@ -5379,6 +5385,7 @@ pub(crate) fn cyw43_steady_network_work_pending(contract: DriverTaskContract) ->
     let dpc_pending = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
         .is_some_and(|ring| cyw43_sdio_dpc_ring_work_pending(ring, expected_generation));
     dpc_pending
+        || crate::hal::driver_task::cyw43_root_wake_pending()
         || cyw43_net_data_pre_poll_continuation_pending(contract)
         || CYW43_PENDING_DATA_TX.lock().is_some()
         || !CYW43_PENDING_ARP_TX.lock().is_empty()
@@ -9173,6 +9180,18 @@ fn evaluate_cyw43_gate8(inputs: Cyw43Gate8Inputs) -> Cyw43Gate8Diagnostic {
     if subgates[3].status == Cyw43Gate8SubgateStatus::Pass {
         subgates[4] = if inputs.open_network || inputs.post_assoc_bssid_success {
             cyw43_gate8_record("8e-bssid-refresh", Cyw43Gate8SubgateStatus::Pass, "none")
+        } else if inputs.host_eapol_required {
+            cyw43_gate8_record(
+                "8e-bssid-refresh",
+                Cyw43Gate8SubgateStatus::Fail,
+                "host-eapol-prerequisite-required",
+            )
+        } else if !inputs.host_eapol_secure {
+            cyw43_gate8_record(
+                "8e-bssid-refresh",
+                Cyw43Gate8SubgateStatus::Pending,
+                "host-eapol-prerequisite-pending",
+            )
         } else if inputs.post_assoc_bssid_failure {
             cyw43_gate8_record(
                 "8e-bssid-refresh",
@@ -16093,8 +16112,11 @@ fn cyw43_data_path_trace_class(
     {
         return Cyw43DataPathTraceClass::Drop;
     }
-    if matches!(action, "retry" | "credit-unproven") || action.starts_with("no-completion") {
+    if matches!(action, "retry" | "credit-unproven") {
         return Cyw43DataPathTraceClass::TxRetry;
+    }
+    if action.starts_with("no-completion") {
+        return Cyw43DataPathTraceClass::PendingTransition;
     }
     if completion_code == DriverTaskCompletionCode::Fault.as_u16()
         || completion_code == DriverTaskCompletionCode::BudgetExhausted.as_u16()
@@ -20220,7 +20242,10 @@ fn cyw43_prompt_slice_active_descriptor_matches(
 
 #[cfg(feature = "kernel")]
 fn clear_cyw43_active_prompt_poll() {
-    *CYW43_PENDING_PROMPT_POLL.lock() = None;
+    let pending = CYW43_PENDING_PROMPT_POLL.lock().take();
+    if let Some(pending) = pending {
+        disarm_cyw43_root_wake_op8_epoch(pending);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -20798,7 +20823,7 @@ fn run_cyw43_owned_prompt_poll(
             if crate::hal::driver_task::active_driver_task_retained_request(contract).is_some() {
                 return None;
             }
-            Cyw43PendingPromptPoll {
+            let pending = Cyw43PendingPromptPoll {
                 ticket_id: CYW43_DATA_TX_NEXT_TICKET.fetch_add(1, Ordering::AcqRel),
                 owner,
                 generation: CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
@@ -20811,7 +20836,9 @@ fn run_cyw43_owned_prompt_poll(
                 ),
                 child_reply_latched: false,
                 child_reply_renewals: 0,
-            }
+            };
+            arm_cyw43_root_wake_op8_epoch(pending);
+            pending
         }
     };
     if pending.ticket_id == 0
@@ -20935,8 +20962,10 @@ fn run_cyw43_owned_prompt_poll(
             None,
         );
         latch_cyw43_prompt_poll_recovery(&pending, Some(completion));
+        disarm_cyw43_root_wake_op8_epoch(terminal_pending);
         return None;
     }
+    clear_cyw43_root_wake_after_exact_empty_rx_poll(contract, terminal_pending, completion);
     let _ = complete_cyw43_data_tx_rx_fairness(terminal_pending, completion);
     Some(completion)
 }
@@ -23015,6 +23044,72 @@ fn record_cyw43_runtime_completion(
     CYW43_SERVICE_LAST_SOURCE_FLAGS.store(u32::from(trace.source_flags), Ordering::Release);
     CYW43_SERVICE_LAST_PRE_SOURCE.store(trace.pre_source_result, Ordering::Release);
     CYW43_SERVICE_LAST_POST_SOURCE.store(trace.post_source_result, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+const fn cyw43_root_wake_clear_required(
+    op: u16,
+    completion_code: u16,
+    queue_depth: Option<u16>,
+) -> bool {
+    op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        && (completion_code == DriverTaskCompletionCode::Idle.as_u16()
+            || completion_code == DriverTaskCompletionCode::FrameReady.as_u16()
+            || completion_code == DriverTaskCompletionCode::Progress.as_u16())
+        && matches!(queue_depth, Some(0))
+}
+
+#[cfg(feature = "kernel")]
+fn arm_cyw43_root_wake_op8_epoch(pending: Cyw43PendingPromptPoll) {
+    if pending.descriptor.op != DRIVER_RUNTIME_CYW43_OP_RX_POLL || pending.ticket_id == 0 {
+        return;
+    }
+    CYW43_ROOT_WAKE_OP8_HIT_EPOCH.store(
+        crate::hal::driver_task::cyw43_root_wake_hit_epoch(),
+        Ordering::Relaxed,
+    );
+    CYW43_ROOT_WAKE_OP8_GENERATION.store(pending.generation, Ordering::Relaxed);
+    CYW43_ROOT_WAKE_OP8_TICKET.store(pending.ticket_id, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_root_wake_op8_hit_epoch(pending: Cyw43PendingPromptPoll) -> Option<usize> {
+    (pending.descriptor.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        && CYW43_ROOT_WAKE_OP8_TICKET.load(Ordering::Acquire) == pending.ticket_id
+        && CYW43_ROOT_WAKE_OP8_GENERATION.load(Ordering::Relaxed) == pending.generation)
+        .then(|| CYW43_ROOT_WAKE_OP8_HIT_EPOCH.load(Ordering::Relaxed))
+}
+
+#[cfg(feature = "kernel")]
+fn disarm_cyw43_root_wake_op8_epoch(pending: Cyw43PendingPromptPoll) {
+    if CYW43_ROOT_WAKE_OP8_TICKET
+        .compare_exchange(pending.ticket_id, 0, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        CYW43_ROOT_WAKE_OP8_GENERATION.store(0, Ordering::Relaxed);
+        CYW43_ROOT_WAKE_OP8_HIT_EPOCH.store(0, Ordering::Relaxed);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_root_wake_after_exact_empty_rx_poll(
+    contract: DriverTaskContract,
+    pending: Cyw43PendingPromptPoll,
+    completion: DriverTaskCompletionRecord,
+) {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        return;
+    }
+    let queue_depth =
+        cyw43_completion_rx_idle_trace(contract, completion).map(|trace| trace.queue_depth);
+    if cyw43_root_wake_clear_required(pending.descriptor.op, completion.code, queue_depth) {
+        if let Some(hit_epoch) = cyw43_root_wake_op8_hit_epoch(pending) {
+            let _ = crate::hal::driver_task::clear_and_recheck_cyw43_root_wake_after_empty_rx(
+                hit_epoch,
+            );
+        }
+    }
+    disarm_cyw43_root_wake_op8_epoch(pending);
 }
 
 #[cfg(feature = "kernel")]
@@ -26010,6 +26105,10 @@ mod tests {
 
     fn reset_cyw43_status_flags() {
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
+        crate::hal::driver_task::test_reset_cyw43_root_wake();
+        CYW43_ROOT_WAKE_OP8_TICKET.store(0, Ordering::Release);
+        CYW43_ROOT_WAKE_OP8_GENERATION.store(0, Ordering::Relaxed);
+        CYW43_ROOT_WAKE_OP8_HIT_EPOCH.store(0, Ordering::Relaxed);
         *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         *CYW43_DEFERRED_RECOVERY.lock() = None;
         *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
@@ -38302,7 +38401,7 @@ mod tests {
                 false,
                 false,
             ),
-            Cyw43DataPathTraceClass::TxRetry
+            Cyw43DataPathTraceClass::PendingTransition
         );
         assert_eq!(
             cyw43_data_path_trace_class(
@@ -38409,6 +38508,49 @@ mod tests {
         assert!(cyw43_data_path_trace_class_uses_milestone_gate(
             Cyw43DataPathTraceClass::Drop
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_no_completion_deferral_does_not_increment_tx_retry_trace() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let frame = test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let info = cyw43_trace_frame_info(&frame);
+
+        let deferred = cyw43_data_path_trace_class(
+            "tx-result",
+            "no-completion-active-tx",
+            info,
+            0,
+            None,
+            CYW43_DRIVER_TASK_MAC,
+            false,
+            true,
+        );
+        assert_eq!(deferred, Cyw43DataPathTraceClass::PendingTransition);
+        assert!(cyw43_data_path_trace_repeat_allowed(deferred));
+        assert_eq!(CYW43_DATA_TRACE_PENDING_COUNT.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_DATA_TRACE_TX_RETRY_COUNT.load(Ordering::Acquire), 0);
+
+        let retry = cyw43_data_path_trace_class(
+            "tx-result",
+            "credit-unproven",
+            info,
+            0,
+            None,
+            CYW43_DRIVER_TASK_MAC,
+            true,
+            true,
+        );
+        assert_eq!(retry, Cyw43DataPathTraceClass::TxRetry);
+        assert!(cyw43_data_path_trace_repeat_allowed(retry));
+        assert_eq!(CYW43_DATA_TRACE_PENDING_COUNT.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_DATA_TRACE_TX_RETRY_COUNT.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -40049,6 +40191,61 @@ mod tests {
         assert!(ring_poisoned.ring_poisoned);
         assert!(!ring_poisoned.client_sample_stale);
         assert!(ring_poisoned.poisoned);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_root_wake_is_a_wifi_only_steady_network_hint() {
+        reset_cyw43_status_flags();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            true, 3,
+        ));
+        assert!(crate::hal::driver_task::cyw43_root_wake_pending());
+        assert!(cyw43_steady_network_work_pending(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        assert!(!cyw43_steady_network_work_pending(
+            GENET_DRIVER_TASK_CONTRACT
+        ));
+
+        assert!(!crate::hal::driver_task::clear_and_recheck_cyw43_root_wake_after_empty_rx(3));
+        assert!(!crate::hal::driver_task::cyw43_root_wake_pending());
+        let snapshot = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("CYW43 root-wake slot exists");
+        assert!(!snapshot.pending);
+        assert_ne!(snapshot.clears, 0);
+        assert_eq!(snapshot.rechecks, 1);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal() {
+        let idle = DriverTaskCompletionCode::Idle.as_u16();
+        assert!(cyw43_root_wake_clear_required(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            idle,
+            Some(0),
+        ));
+        assert!(!cyw43_root_wake_clear_required(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            idle,
+            Some(1),
+        ));
+        assert!(!cyw43_root_wake_clear_required(
+            DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            idle,
+            Some(0),
+        ));
+        assert!(!cyw43_root_wake_clear_required(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            DriverTaskCompletionCode::Fault.as_u16(),
+            Some(0),
+        ));
+        assert!(!cyw43_root_wake_clear_required(
+            DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            idle,
+            None,
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -42433,6 +42630,57 @@ mod tests {
                 Cyw43Gate8SubgateStatus::Pending,
                 "post-key-maintenance-retry-pending",
             )
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn gate8_bssid_blocker_reports_host_eapol_prerequisite_before_owner() {
+        let ready = stable_cyw43_gate8_inputs_for_test(37);
+
+        let mut eapol_pending = ready;
+        eapol_pending.post_assoc_bssid_success = false;
+        eapol_pending.host_eapol_active = true;
+        eapol_pending.host_eapol_secure = false;
+        eapol_pending.host_eapol_work_pending = true;
+        assert_eq!(
+            evaluate_cyw43_gate8(eapol_pending).subgates[4],
+            cyw43_gate8_record(
+                "8e-bssid-refresh",
+                Cyw43Gate8SubgateStatus::Pending,
+                "host-eapol-prerequisite-pending",
+            )
+        );
+
+        let mut eapol_required = eapol_pending;
+        eapol_required.host_eapol_active = false;
+        eapol_required.host_eapol_required = true;
+        eapol_required.host_eapol_work_pending = false;
+        eapol_required.post_assoc_bssid_failure = true;
+        assert_eq!(
+            evaluate_cyw43_gate8(eapol_required).subgates[4],
+            cyw43_gate8_record(
+                "8e-bssid-refresh",
+                Cyw43Gate8SubgateStatus::Fail,
+                "host-eapol-prerequisite-required",
+            ),
+            "the host-EAPOL prerequisite must outrank an impossible pre-secure BSSID owner"
+        );
+        assert!(
+            !evaluate_cyw43_gate8(eapol_required).current_work_pending,
+            "terminal host-EAPOL failure cannot advertise resumable Gate 8 work"
+        );
+
+        let mut bssid_owner_pending = ready;
+        bssid_owner_pending.post_assoc_bssid_success = false;
+        assert_eq!(
+            evaluate_cyw43_gate8(bssid_owner_pending).subgates[4],
+            cyw43_gate8_record(
+                "8e-bssid-refresh",
+                Cyw43Gate8SubgateStatus::Pending,
+                "bssid-owner-terminal-pending",
+            ),
+            "BSSID-owner telemetry is valid only after secure keys make it issuable"
         );
     }
 

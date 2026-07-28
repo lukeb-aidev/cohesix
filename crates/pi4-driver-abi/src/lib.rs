@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 4;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 5;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -1529,6 +1529,10 @@ const _: () = {
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// Child CSpace slot containing each runtime's local notification receive cap.
 pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
+/// CYW43 child CSpace slot containing its send-only root RX-wake notification cap.
+pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
+/// Exact badge delivered to root for a CYW43 private RX queue empty-to-nonempty edge.
+pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE: u32 = 1;
 /// BCM2711 SDIO host interrupt used by the CYW43 card function.
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
@@ -3036,6 +3040,10 @@ pub struct DriverRuntimeInitDescriptor {
     pub resource_range_count: u16,
     /// Reserved for alignment and future fixed-layout fields.
     pub reserved0: u16,
+    /// Child CSpace slot containing a send-only root wake cap, or zero when absent.
+    pub root_wake_notification_slot: u32,
+    /// Exact badge on the root wake cap, or zero when absent.
+    pub root_wake_notification_badge: u32,
     /// [`DRIVER_RUNTIME_IDENTITY_MAGIC`] when root sealed this descriptor.
     pub identity_magic: u32,
     /// Stable driver-task key supplied in the runtime entry register.
@@ -3089,6 +3097,8 @@ impl DriverRuntimeInitDescriptor {
             bus_link_count: 0,
             resource_range_count: 0,
             reserved0: 0,
+            root_wake_notification_slot: 0,
+            root_wake_notification_badge: 0,
             identity_magic: 0,
             task_key: 0,
             artifact_hash: 0,
@@ -3182,6 +3192,7 @@ impl DriverRuntimeInitDescriptor {
             && (self.irq_count as usize) <= DRIVER_RUNTIME_INIT_MAX_IRQS
             && (self.bus_link_count as usize) <= DRIVER_RUNTIME_INIT_MAX_BUS_LINKS
             && (self.resource_range_count as usize) <= DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES
+            && self.root_wake_notification_valid()
             && if self.irq_count == 0 {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY) != 0
             } else {
@@ -3195,6 +3206,20 @@ impl DriverRuntimeInitDescriptor {
             && self.valid_resource_ranges()
             && self.valid_irqs()
             && self.valid_bus_links()
+    }
+
+    /// Returns true when the optional child-to-root wake authority is absent or exact.
+    ///
+    /// Only CYW43 may receive this capability. The fixed slot and badge prevent
+    /// descriptor-controlled authority from aliasing another child capability.
+    #[must_use]
+    pub const fn root_wake_notification_valid(self) -> bool {
+        (self.root_wake_notification_slot == 0 && self.root_wake_notification_badge == 0)
+            || (self.hot_path == HOT_PATH_CYW43_WIFI
+                && self.root_wake_notification_slot
+                    == DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT
+                && self.root_wake_notification_badge
+                    == DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE)
     }
 
     /// Returns true when populated resource ranges are valid.
@@ -3648,7 +3673,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 2);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 4);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 5);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -3778,6 +3803,39 @@ mod tests {
 
         descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE;
         assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn root_wake_notification_is_optional_exact_and_cyw43_only() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = HOT_PATH_CYW43_WIFI;
+        descriptor.role_bit = 1 << 4;
+        descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = DriverRuntimePageDescriptor::new(0x4000_0000);
+
+        assert!(descriptor.valid(), "generic zero wake pair remains valid");
+
+        descriptor.root_wake_notification_slot = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT;
+        descriptor.root_wake_notification_badge = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
+        assert!(descriptor.valid(), "exact CYW43 wake pair accepted");
+
+        descriptor.root_wake_notification_badge = 0;
+        assert!(!descriptor.valid(), "half-populated wake pair rejected");
+
+        descriptor.root_wake_notification_badge = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
+        descriptor.root_wake_notification_slot =
+            DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT + 1;
+        assert!(!descriptor.valid(), "wrong wake slot rejected");
+
+        descriptor.root_wake_notification_slot = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT;
+        descriptor.root_wake_notification_badge =
+            DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE + 1;
+        assert!(!descriptor.valid(), "wrong wake badge rejected");
+
+        descriptor.root_wake_notification_badge = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
+        descriptor.hot_path = HOT_PATH_GENET_NIC;
+        assert!(!descriptor.valid(), "non-CYW43 wake authority rejected");
     }
 
     #[test]

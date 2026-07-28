@@ -275,6 +275,8 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub mmio_pages: u16,")?;
     writeln!(mod_contents, "    pub dma_pages: u16,")?;
     writeln!(mod_contents, "    pub shared_buffer_pages: u16,")?;
+    writeln!(mod_contents, "    pub root_wake_notification_slot: u8,")?;
+    writeln!(mod_contents, "    pub root_wake_notification_badge: u32,")?;
     writeln!(mod_contents, "    pub root_context_required: bool,")?;
     writeln!(mod_contents, "    pub hardware_state_migrated: bool,")?;
     writeln!(mod_contents, "}}")?;
@@ -1413,7 +1415,7 @@ pub fn emit_rust(
     for image in &manifest.root_task.driver_images.images {
         writeln!(
             bootstrap_contents,
-            "    DriverRuntimeImageSpec {{ id: \"{}\", contract: \"{}\", hot_path: \"{}\", artifact: \"{}\", entry_symbol: \"{}\", code_pages: {}, stack_pages: {}, ipc_pages: {}, ring_pages: {}, mmio_pages: {}, dma_pages: {}, shared_buffer_pages: {}, root_context_required: {}, hardware_state_migrated: {} }},",
+            "    DriverRuntimeImageSpec {{ id: \"{}\", contract: \"{}\", hot_path: \"{}\", artifact: \"{}\", entry_symbol: \"{}\", code_pages: {}, stack_pages: {}, ipc_pages: {}, ring_pages: {}, mmio_pages: {}, dma_pages: {}, shared_buffer_pages: {}, root_wake_notification_slot: {}, root_wake_notification_badge: {}, root_context_required: {}, hardware_state_migrated: {} }},",
             escape_literal(&image.id),
             escape_literal(&image.contract),
             escape_literal(&image.hot_path),
@@ -1426,6 +1428,8 @@ pub fn emit_rust(
             image.mmio_pages,
             image.dma_pages,
             image.shared_buffer_pages,
+            image.root_wake_notification_slot,
+            image.root_wake_notification_badge,
             image.root_context_required,
             image.hardware_state_migrated,
         )?;

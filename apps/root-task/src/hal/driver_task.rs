@@ -1572,6 +1572,10 @@ pub const DRIVER_TASK_CHILD_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr = 3;
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_SDIO_BUS_NOTIFICATION_SLOT: sel4_sys::seL4_CPtr =
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
+/// Child CSpace slot used by CYW43 to signal a root-owned RX wake.
+#[cfg(feature = "kernel")]
+pub const DRIVER_TASK_CHILD_CYW43_ROOT_WAKE_SLOT: sel4_sys::seL4_CPtr =
+    pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr;
 /// Child CSpace slot used by USB to call the PCIe/VL805 bus-owner runtime.
 #[cfg(feature = "kernel")]
 pub const DRIVER_TASK_CHILD_PCIE_BUS_ENDPOINT_SLOT: sel4_sys::seL4_CPtr =
@@ -1748,6 +1752,10 @@ pub struct DriverTaskRuntimeImageSpec {
     pub root_context_required: bool,
     /// Whether the real hardware state has been moved into this runtime image.
     pub hardware_state_migrated: bool,
+    /// Child CSpace slot for the optional child-to-root RX wake notification.
+    pub root_wake_notification_slot: u8,
+    /// Badge minted on the optional child-to-root RX wake notification.
+    pub root_wake_notification_badge: u32,
 }
 
 impl DriverTaskRuntimeImageSpec {
@@ -1816,7 +1824,17 @@ impl DriverTaskRuntimeImageSpec {
             regions,
             root_context_required,
             hardware_state_migrated,
+            root_wake_notification_slot: 0,
+            root_wake_notification_badge: 0,
         }
+    }
+
+    /// Attach the compiler-declared child-to-root RX wake route.
+    #[must_use]
+    pub const fn with_root_wake_notification(mut self, slot: u8, badge: u32) -> Self {
+        self.root_wake_notification_slot = slot;
+        self.root_wake_notification_badge = badge;
+        self
     }
 
     /// Returns true only when this spec can back owner-state proof.
@@ -2160,6 +2178,10 @@ fn runtime_image_spec_from_generated(
         generated.shared_buffer_pages,
         generated.root_context_required,
         generated.hardware_state_migrated,
+    )
+    .with_root_wake_notification(
+        generated.root_wake_notification_slot,
+        generated.root_wake_notification_badge,
     )
 }
 
@@ -2925,6 +2947,14 @@ struct DriverTaskCommandSlot {
     retained_grant_id: AtomicU32,
     endpoint: AtomicUsize,
     root_notification: AtomicUsize,
+    root_wake_notification: AtomicUsize,
+    root_wake_badge: AtomicU32,
+    root_wake_latched: AtomicUsize,
+    root_wake_polls: AtomicUsize,
+    root_wake_hits: AtomicUsize,
+    root_wake_clears: AtomicUsize,
+    root_wake_rechecks: AtomicUsize,
+    root_wake_stale_clear_skips: AtomicUsize,
     ring_root_ptr: AtomicUsize,
     ring_frame_cap: AtomicUsize,
     shared_frame_count: AtomicUsize,
@@ -3354,6 +3384,14 @@ impl DriverTaskCommandSlot {
             retained_grant_id: AtomicU32::new(0),
             endpoint: AtomicUsize::new(0),
             root_notification: AtomicUsize::new(0),
+            root_wake_notification: AtomicUsize::new(0),
+            root_wake_badge: AtomicU32::new(0),
+            root_wake_latched: AtomicUsize::new(0),
+            root_wake_polls: AtomicUsize::new(0),
+            root_wake_hits: AtomicUsize::new(0),
+            root_wake_clears: AtomicUsize::new(0),
+            root_wake_rechecks: AtomicUsize::new(0),
+            root_wake_stale_clear_skips: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
             shared_frame_count: AtomicUsize::new(0),
@@ -3526,6 +3564,20 @@ pub(crate) struct DriverTaskRetainedGrantSnapshot {
     pub(crate) shared_grant_id: u32,
     pub(crate) consumed_grant_id: u32,
     pub(crate) exact: bool,
+}
+
+/// Passive root view of the CYW43 child-to-root RX wake route.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43RootWakeSnapshot {
+    pub(crate) bound: bool,
+    pub(crate) badge: u32,
+    pub(crate) pending: bool,
+    pub(crate) polls: usize,
+    pub(crate) hits: usize,
+    pub(crate) clears: usize,
+    pub(crate) rechecks: usize,
+    pub(crate) stale_clear_skips: usize,
 }
 
 #[cfg(feature = "kernel")]
@@ -5422,6 +5474,151 @@ pub fn publish_driver_task_root_notification(contract: DriverTaskContract, notif
         .store(notification, Ordering::Release);
 }
 
+/// Publish root's receive cap for the compiler-declared CYW43 RX wake route.
+///
+/// This notification is distinct from the child-bound continuation/IRQ
+/// notification. The CYW43 child receives only a send-only, badged cap, while
+/// root retains this unbound receive cap and polls it once per EventPump turn.
+#[cfg(feature = "kernel")]
+pub fn publish_driver_task_root_wake_notification(
+    contract: DriverTaskContract,
+    notification: usize,
+    badge: u32,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || notification == 0
+        || badge != pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
+    {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.root_wake_notification
+        .store(notification, Ordering::Release);
+    slot.root_wake_badge.store(badge, Ordering::Release);
+    slot.root_wake_latched.store(0, Ordering::Release);
+    true
+}
+
+#[cfg(all(feature = "kernel", test))]
+static TEST_CYW43_ROOT_WAKE_BADGE: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(feature = "kernel")]
+fn poll_cyw43_root_wake_badge(notification: usize) -> sel4_sys::seL4_Word {
+    #[cfg(test)]
+    {
+        let _ = notification;
+        TEST_CYW43_ROOT_WAKE_BADGE.swap(0, Ordering::AcqRel) as sel4_sys::seL4_Word
+    }
+    #[cfg(not(test))]
+    {
+        let mut badge = 0;
+        let _ = crate::sel4::poll(notification as sel4_sys::seL4_CPtr, &mut badge);
+        badge
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn poll_cyw43_root_wake_slot(slot: &DriverTaskCommandSlot, recheck: bool) -> bool {
+    let notification = slot.root_wake_notification.load(Ordering::Acquire);
+    let expected_badge = slot.root_wake_badge.load(Ordering::Acquire);
+    if notification == 0
+        || expected_badge != pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
+    {
+        return slot.root_wake_latched.load(Ordering::Acquire) != 0;
+    }
+    slot.root_wake_polls.fetch_add(1, Ordering::AcqRel);
+    if recheck {
+        slot.root_wake_rechecks.fetch_add(1, Ordering::AcqRel);
+    }
+    if poll_cyw43_root_wake_badge(notification) == sel4_sys::seL4_Word::from(expected_badge) {
+        slot.root_wake_latched.store(1, Ordering::Release);
+        slot.root_wake_hits.fetch_add(1, Ordering::AcqRel);
+    }
+    slot.root_wake_latched.load(Ordering::Acquire) != 0
+}
+
+/// Poll the unbound CYW43 child-to-root RX wake once and retain a scheduling
+/// hint until an exact op8 completion proves the runtime queue empty.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn poll_cyw43_root_wake_notification() -> bool {
+    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    poll_cyw43_root_wake_slot(slot, false)
+}
+
+/// Return whether a CYW43 RX wake remains actionable for root scheduling.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_root_wake_pending() -> bool {
+    driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        .and_then(slot_for_task_key)
+        .is_some_and(|slot| slot.root_wake_latched.load(Ordering::Acquire) != 0)
+}
+
+/// Return the wake-hit epoch captured by an exact CYW43 op8 owner.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_root_wake_hit_epoch() -> usize {
+    driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        .and_then(slot_for_task_key)
+        .map_or(0, |slot| slot.root_wake_hits.load(Ordering::Acquire))
+}
+
+/// Clear and immediately recheck the CYW43 RX scheduling hint after an exact
+/// op8 terminal reports an empty child queue.
+///
+/// A hit consumed after this op8 owner captured `expected_hit_epoch` prevents
+/// the older terminal from clearing newer work. Otherwise root clears the
+/// latch and immediately polls once: a pre-clear child edge is re-latched,
+/// while an edge after that poll remains kernel-pending for the next turn.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn clear_and_recheck_cyw43_root_wake_after_empty_rx(expected_hit_epoch: usize) -> bool {
+    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    if slot.root_wake_hits.load(Ordering::Acquire) != expected_hit_epoch {
+        slot.root_wake_stale_clear_skips
+            .fetch_add(1, Ordering::AcqRel);
+        return slot.root_wake_latched.load(Ordering::Acquire) != 0;
+    }
+    if slot.root_wake_latched.swap(0, Ordering::AcqRel) != 0 {
+        slot.root_wake_clears.fetch_add(1, Ordering::AcqRel);
+    }
+    poll_cyw43_root_wake_slot(slot, true)
+}
+
+/// Snapshot CYW43 root-wake telemetry without consuming notification state.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_root_wake_snapshot() -> Option<Cyw43RootWakeSnapshot> {
+    let task_key = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    let slot = slot_for_task_key(task_key)?;
+    Some(Cyw43RootWakeSnapshot {
+        bound: slot.root_wake_notification.load(Ordering::Acquire) != 0,
+        badge: slot.root_wake_badge.load(Ordering::Acquire),
+        pending: slot.root_wake_latched.load(Ordering::Acquire) != 0,
+        polls: slot.root_wake_polls.load(Ordering::Acquire),
+        hits: slot.root_wake_hits.load(Ordering::Acquire),
+        clears: slot.root_wake_clears.load(Ordering::Acquire),
+        rechecks: slot.root_wake_rechecks.load(Ordering::Acquire),
+        stale_clear_skips: slot.root_wake_stale_clear_skips.load(Ordering::Acquire),
+    })
+}
+
 /// Publish the root mapping of the fixed command/completion ring for a driver.
 #[cfg(feature = "kernel")]
 pub fn publish_driver_task_ring(contract: DriverTaskContract, ring_root_ptr: usize) {
@@ -5816,6 +6013,16 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     };
     slot.endpoint.store(0, Ordering::Release);
     slot.root_notification.store(0, Ordering::Release);
+    slot.root_wake_notification.store(0, Ordering::Release);
+    slot.root_wake_badge.store(0, Ordering::Release);
+    slot.root_wake_latched.store(0, Ordering::Release);
+    slot.root_wake_polls.store(0, Ordering::Release);
+    slot.root_wake_hits.store(0, Ordering::Release);
+    slot.root_wake_clears.store(0, Ordering::Release);
+    slot.root_wake_rechecks.store(0, Ordering::Release);
+    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
+    #[cfg(test)]
+    TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
     slot.ring_frame_cap.store(0, Ordering::Release);
     slot.ring_context.store(0, Ordering::Release);
@@ -8885,6 +9092,23 @@ fn advance_cyw43_sdio_pair_restart_epoch() -> u32 {
 }
 
 #[cfg(feature = "kernel")]
+fn reset_cyw43_root_wake_for_pair_restart(slot: &DriverTaskCommandSlot) {
+    let notification = slot.root_wake_notification.load(Ordering::Acquire);
+    let expected_badge = slot.root_wake_badge.load(Ordering::Acquire);
+    if notification != 0
+        && expected_badge == pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
+    {
+        // Both linked children are suspended before the restart ring is
+        // scrubbed, so one non-blocking poll deterministically drains the
+        // binary notification state for the discarded runtime queue.
+        let _ = poll_cyw43_root_wake_badge(notification);
+    }
+    if slot.root_wake_latched.swap(0, Ordering::AcqRel) != 0 {
+        slot.root_wake_clears.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if ring_root_ptr == 0 || slot.root_ring_writers.load(Ordering::Acquire) != 0 {
@@ -8908,6 +9132,7 @@ fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
     slot.last_progress_sequence.store(0, Ordering::Release);
     slot.last_progress_phase.store(0, Ordering::Release);
     slot.last_progress_aux0.store(0, Ordering::Release);
+    reset_cyw43_root_wake_for_pair_restart(slot);
     true
 }
 
@@ -14392,6 +14617,74 @@ pub(crate) fn test_publish_driver_task_root_notification(contract: DriverTaskCon
     true
 }
 
+/// Set the retained CYW43 root-wake hint without invoking a host seL4 syscall.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_set_cyw43_root_wake_pending(pending: bool) -> bool {
+    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.root_wake_latched
+        .store(usize::from(pending), Ordering::Release);
+    true
+}
+
+/// Configure an isolated host-test wake route and reset its telemetry.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_configure_cyw43_root_wake(pending: bool, hits: usize) -> bool {
+    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return false;
+    };
+    slot.root_wake_notification.store(1, Ordering::Release);
+    slot.root_wake_badge.store(
+        pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE,
+        Ordering::Release,
+    );
+    slot.root_wake_latched
+        .store(usize::from(pending), Ordering::Release);
+    slot.root_wake_polls.store(0, Ordering::Release);
+    slot.root_wake_hits.store(hits, Ordering::Release);
+    slot.root_wake_clears.store(0, Ordering::Release);
+    slot.root_wake_rechecks.store(0, Ordering::Release);
+    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
+    TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
+    true
+}
+
+/// Inject one kernel-latched wake badge into the host-test polling seam.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_inject_cyw43_root_wake() {
+    TEST_CYW43_ROOT_WAKE_BADGE.store(
+        pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE as usize,
+        Ordering::Release,
+    );
+}
+
+/// Reset only the host-test CYW43 root-wake route and telemetry.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_reset_cyw43_root_wake() {
+    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return;
+    };
+    let Some(slot) = slot_for_task_key(task_key) else {
+        return;
+    };
+    slot.root_wake_notification.store(0, Ordering::Release);
+    slot.root_wake_badge.store(0, Ordering::Release);
+    slot.root_wake_latched.store(0, Ordering::Release);
+    slot.root_wake_polls.store(0, Ordering::Release);
+    slot.root_wake_hits.store(0, Ordering::Release);
+    slot.root_wake_clears.store(0, Ordering::Release);
+    slot.root_wake_rechecks.store(0, Ordering::Release);
+    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
+    TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
+}
+
 /// Reset and inspect production root-grant actions in host ring tests.
 #[cfg(all(test, feature = "kernel"))]
 pub(crate) fn test_reset_root_grant_action_counts() {
@@ -19572,6 +19865,56 @@ mod tests {
         assert_eq!(slot.last_progress_phase.load(Ordering::Acquire), 0);
         assert_eq!(slot.last_progress_aux0.load(Ordering::Acquire), 0);
         assert!(latest_driver_task_ring_progress(contract).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_root_wake_clear_recheck_preserves_new_edges() {
+        assert!(test_configure_cyw43_root_wake(true, 5));
+        test_inject_cyw43_root_wake();
+        assert!(clear_and_recheck_cyw43_root_wake_after_empty_rx(5));
+        let rechecked = cyw43_root_wake_snapshot().expect("wake snapshot");
+        assert!(rechecked.pending);
+        assert_eq!(rechecked.hits, 6);
+        assert_eq!(rechecked.clears, 1);
+        assert_eq!(rechecked.rechecks, 1);
+
+        let polls_before_stale_clear = rechecked.polls;
+        assert!(clear_and_recheck_cyw43_root_wake_after_empty_rx(5));
+        let stale = cyw43_root_wake_snapshot().expect("wake snapshot");
+        assert!(stale.pending);
+        assert_eq!(stale.polls, polls_before_stale_clear);
+        assert_eq!(stale.stale_clear_skips, 1);
+        test_reset_cyw43_root_wake();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_root_wake_pair_restart_and_transport_clear_drop_stale_state() {
+        assert!(test_configure_cyw43_root_wake(true, 3));
+        test_inject_cyw43_root_wake();
+        let task_key =
+            driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT).expect("CYW43 task key");
+        let slot = slot_for_task_key(task_key).expect("CYW43 slot");
+        reset_cyw43_root_wake_for_pair_restart(slot);
+        assert!(!cyw43_root_wake_pending());
+        assert!(
+            !poll_cyw43_root_wake_notification(),
+            "pair restart must drain the discarded kernel wake"
+        );
+        assert_eq!(cyw43_root_wake_snapshot().expect("wake snapshot").hits, 3);
+
+        assert!(test_configure_cyw43_root_wake(true, 7));
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        let cleared = cyw43_root_wake_snapshot().expect("wake snapshot");
+        assert!(!cleared.bound);
+        assert!(!cleared.pending);
+        assert_eq!(cleared.badge, 0);
+        assert_eq!(cleared.polls, 0);
+        assert_eq!(cleared.hits, 0);
+        assert_eq!(cleared.clears, 0);
+        assert_eq!(cleared.rechecks, 0);
+        assert_eq!(cleared.stale_clear_skips, 0);
     }
 
     #[cfg(feature = "kernel")]
