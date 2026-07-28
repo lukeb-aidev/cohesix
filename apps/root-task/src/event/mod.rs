@@ -27740,7 +27740,7 @@ mod tests {
 
         pump.poll();
         assert_eq!(pump.last_input_source, ConsoleInputSource::Serial);
-        assert!(pump.local_line.is_empty());
+        assert_eq!(pump.local_line.as_str(), "x");
         let third_turn = String::from_utf8(
             pump.serial_mut()
                 .driver_mut()

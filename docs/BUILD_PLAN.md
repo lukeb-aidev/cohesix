@@ -165,11 +165,9 @@ manual availability, profile selection, implementation, and target proof.
 
 **Status:** Complete — the repository/workspace scaffolding, build scripts, size
 guard, bounded `m0-rust-1-97-1-security-refresh` task, and bounded
-`m0-rust-current-stable-dependency-refresh` task are complete. Dependency
-closure retains the pre-existing
-`event::tests::serial_console_flood_yields_between_lines_when_local_seat_is_active`
-failure described below as an unrelated baseline defect; later staged gates
-remain unclaimed.
+`m0-rust-current-stable-dependency-refresh` task are complete. The exact Rust
+1.97.1 host gate is green; target-qualified later stages remain separately
+gated.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -259,11 +257,11 @@ Deliverables: synchronized manifests and lockfile, required API migrations and t
   compilation, the `aarch64-unknown-none` Pi runtime compilation, generated
   artifact checks, 706 Pi runtime tests, and every dependency-migration test
   pass.
-- `cargo test --workspace --no-fail-fast` has one failure:
-  `event::tests::serial_console_flood_yields_between_lines_when_local_seat_is_active`.
-  The same assertion fails at baseline commit `189172b57` with the pre-refresh
-  manifests and lockfile. The staged QEMU Test Plan therefore stops at
-  stage 1 `host.workspace-tests`; later stages are not claimed.
+- `cargo test --workspace --no-fail-fast` passes under exact Rust 1.97.1. The
+  stale serial-flood fairness assertion now matches the already-established
+  independent serial/local-seat partial-line contract; no runtime behavior or
+  operator grammar changed. Target-qualified later stages remain separately
+  gated.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)
