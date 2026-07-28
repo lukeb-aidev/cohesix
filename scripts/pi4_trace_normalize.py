@@ -13160,10 +13160,13 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             wifi_gate8.generation,
             wifi_gate8.ready_line,
         )
-        wifi_dpc = summarize_wifi_dpc_proof(
-            post_ready_event_list,
-            expected_generation=wifi_gate8.generation,
-        )
+        # Gate 8's `generation` is the association/control transaction
+        # generation. `CYW43_SDIO_DPC generation` is the independently
+        # monotonic linked SDIO/CYW43 ring epoch (initially the manifest link
+        # epoch), so comparing the two domains fabricates a mismatch on real
+        # Pi boots. Freshness comes from accepting only a DPC sample emitted
+        # after the current atomic Gate 8 Ready edge.
+        wifi_dpc = summarize_wifi_dpc_proof(post_ready_event_list)
     elif gate8_protocol_seen:
         acceptance_event_list = []
         wifi_dpc = WifiDpcProof(reason="gate8-ready-missing")

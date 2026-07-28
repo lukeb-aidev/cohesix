@@ -12881,6 +12881,8 @@ where
             ("ring-poisoned", "live-ring", "restart-pair")
         } else if snapshot.client_sample_stale {
             ("ring-consumer-mismatch", "live-ring", "rerun-proof")
+        } else if snapshot.masked {
+            ("owner-rearm-pending", "live-ring", "service-sdio-owner")
         } else {
             ("current", "live-ring", "none")
         };
@@ -12902,14 +12904,33 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_sdio_dpc_rearm_line(
+        snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "CYW43_SDIO_DPC_REARM generation={} counter=client-signal-attempts count={} owner_irq={} action={}",
+            snapshot.generation,
+            snapshot.rearms,
+            if snapshot.masked { "masked" } else { "unmasked" },
+            if snapshot.masked {
+                "service-sdio-owner"
+            } else {
+                "none"
+            },
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
         let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
             return;
         };
         let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
         let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
+        let rearm = Self::wifi_sdio_dpc_rearm_line(snapshot);
         self.emit_console_line(accounting.as_str());
         self.emit_console_line(truth.as_str());
+        self.emit_console_line(rearm.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -23411,8 +23432,9 @@ mod tests {
         };
         let accounting = KernelConsoleTestPump::wifi_sdio_dpc_accounting_line(diagnostic);
         let truth = KernelConsoleTestPump::wifi_sdio_dpc_truth_line(diagnostic);
+        let rearm = KernelConsoleTestPump::wifi_sdio_dpc_rearm_line(diagnostic);
 
-        for line in [&accounting, &truth] {
+        for line in [&accounting, &truth, &rearm] {
             assert!(
                 !line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
                 "DPC telemetry must remain parseable: {line}"
@@ -23425,6 +23447,8 @@ mod tests {
         assert!(truth.ends_with(
             "sample_reason=ring-consumer-mismatch authority=live-ring action=rerun-proof"
         ));
+        assert!(rearm.contains("counter=client-signal-attempts count=4294967295 owner_irq=masked"));
+        assert!(rearm.ends_with("action=service-sdio-owner"));
     }
 
     #[cfg(feature = "kernel")]
@@ -32899,11 +32923,18 @@ mod tests {
         assert!(wifi.breadcrumb_suppression_observed);
         let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
         let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
+        let dpc_rearm = "CYW43_SDIO_DPC_REARM generation=9 counter=client-signal-attempts count=12 owner_irq=unmasked action=none";
         assert!(rendered.contains(dpc_line), "{rendered}");
         assert!(rendered.contains(dpc_truth), "{rendered}");
+        assert!(rendered.contains(dpc_rearm), "{rendered}");
         assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
         assert_eq!(
             rendered.matches("CYW43_SDIO_DPC_TRUTH ").count(),
+            1,
+            "{rendered}"
+        );
+        assert_eq!(
+            rendered.matches("CYW43_SDIO_DPC_REARM ").count(),
             1,
             "{rendered}"
         );

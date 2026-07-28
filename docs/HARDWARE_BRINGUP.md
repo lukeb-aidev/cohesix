@@ -1115,24 +1115,29 @@ configuration, enumeration, DPC activation, and generation commit are retained
 phase machines; generation commit resets the reciprocal ring before publishing
 state/health and writing the two interrupt-policy registers on separate turns.
 For data CMD53, the normalized host block count seals retained PIO for one or
-two blocks and external DMA for more than two. Both shapes use separate turns
-to inspect/repair/verify block-gap state, clear status, and program timeout,
-block size/count, argument, and transfer mode. External DMA retains the
-persistent idle interrupt policy. PIO alone programs a request-local policy
-that adds its direction-correct ready source. Only external DMA admits DMA
-authority and an idle snapshot and stages the full immutable chain. One
-deliberate issue turn publishes COMMAND; for external DMA it then starts the
-BCM2835 channel, matching `bcm2835_mmc_request()`. No setup or completion poll
-is folded into that issued action.
+two blocks and external DMA for more than two. Both shapes use one finite
+preissue/issue owner quantum, admitted by the shared 256-operation contract, to
+inspect/repair/verify block-gap state; clear status; and program timeout, block
+size/count, argument, transfer mode, and exactly one COMMAND. PIO alone
+programs a request-local policy that adds its direction-correct ready source.
+External DMA retains the persistent idle interrupt policy, admits DMA authority,
+proves the channel idle, stages the full immutable chain, and starts the
+BCM2835 channel after COMMAND in that same indivisible Linux-ordered quantum,
+matching `bcm2835_mmc_request()`. No completion poll follows issue in that
+quantum.
 
-After fresh response/R5 validation, retained PIO requires the
+After fresh response/R5 validation, retained PIO requires a fresh
 direction-correct ready edge plus matching `PRESENT_STATE` block ownership and
-moves at most one raw `SDHCI_BUFFER` word per later EventPump turn. An early
-ready edge without present-state ownership cannot authorize a later FIFO access
-without a fresh edge. External DMA lets peripheral DREQ control movement and
-consumes one immutable SDHCI/DMA snapshot per later turn. Both engines join
-response, exact payload movement, possibly coalesced `DATA_END`, and host
-quiescence. External DMA additionally requires terminal `CONBLK_AD == 0`, this
+moves exactly one complete normalized host block, 1-512 bytes and at most 128
+`SDHCI_BUFFER` accesses, in that owner quantum. It cannot cross into the next
+block, which requires another fresh ready edge. An early ready edge without
+present-state ownership cannot authorize a later FIFO access without a fresh
+edge. A terminal PIO snapshot restores ordinary interrupt policy before
+publishing completion in the same bounded quantum. External DMA lets peripheral
+DREQ control movement and consumes one immutable SDHCI/DMA snapshot per later
+turn. Both engines join response, exact payload movement, possibly coalesced
+`DATA_END`, and host quiescence. External DMA additionally requires terminal
+`CONBLK_AD == 0`, this
 request's `CS.INT`, and no DMA error; `CS.INT` is acknowledged with Linux's
 `INT | ACTIVE` W1C value. Its terminal control block carries Linux's `INT_EN`;
 `SDHCI_TRNS_DMA` remains clear because this is the external dmaengine path.
@@ -1302,9 +1307,10 @@ PMUCONTROL preserves Linux's little-endian `readl()`/modify/`writel()` semantics
 with one incrementing four-byte Function 1 CMD53 read followed by one
 incrementing four-byte Function 1 CMD53 write at the backplane-word address
 `0x8600`. Each child is sealed as retained PIO by its normalized one-block
-geometry, and its one raw FIFO word moves on a distinct outer turn under the
-generation-owned sequencer. There is no bytewise CMD52 update, alternate
-address, engine switch, fallback, or same-generation replay.
+geometry and moves its complete four-byte host block in one post-issue
+ready-edge owner quantum. The read and write remain separate immutable child
+requests under the generation-owned sequencer. There is no bytewise CMD52
+update, alternate address, engine switch, fallback, or same-generation replay.
 The cursor checkpoints after every completed phase, so unavailable ALP cannot
 consume the 1,024-entry foreground trace. Production timing permits about 200
 five-millisecond reads inside the absolute one-second window; a separate

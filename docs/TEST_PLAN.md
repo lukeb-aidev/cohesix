@@ -709,16 +709,18 @@ PIO must remove DMA-only `DMA_END` and `ADMA_ERROR`, add only the
 direction-correct `SPACE_AVAIL`/`DATA_AVAIL` source, and preserve that source
 across an interleaved CARD_INT policy rewrite without adding it to
 `SIGNAL_ENABLE`. `CARD_INT` is added only while that asynchronous source is
-armed. A later distinct PIO turn must restore ordinary interrupt policy.
-Terminal classification must still recognize every bit in broad `INT_STATUS`
-error mask `0xffff8000`.
+armed. The terminal PIO snapshot must restore ordinary interrupt policy before
+publishing completion in the same bounded terminal quantum. Terminal
+classification must still recognize every bit in broad `INT_STATUS` error mask
+`0xffff8000`.
 
-External-DMA lifecycle coverage must prove the exact Linux order: SDHCI
-block-gap inspect/repair/verify, DMA-authority/idle snapshot, full immutable
-control-block staging, status clear, timeout, block size, block count, argument,
-and transfer-mode programming each consume a distinct retained turn. One
-deliberate issue action publishes COMMAND and then one BCM2835 DMA `ACTIVE`
-write before even a delayed request-local response is acknowledged. Stale pre-command
+External-DMA lifecycle coverage must prove the exact Linux order within one
+bounded preissue/issue owner quantum: SDHCI block-gap
+inspect/repair/verify, DMA-authority/idle snapshot, full immutable control-block
+staging, status clear, timeout, block size, block count, argument, transfer
+mode, exactly one COMMAND, and then exactly one BCM2835 DMA `ACTIVE` write.
+That quantum must remain within the shared 256-operation contract and perform
+no post-issue completion snapshot. Stale pre-command
 `SPACE_AVAILABLE` cannot satisfy the fresh response or switch an immutable
 more-than-two-block request into PIO.
 Command/controller and R5 errors after COMMAND must show one DMA start, one
@@ -748,13 +750,15 @@ matching `PRESENT_STATE` source may authorize FIFO ownership. A stale or early
 ready edge without present-state ownership must move zero bytes and require a
 fresh edge, the opposite-direction ready source must remain untouched, and an
 R5 error coalesced with a ready edge must produce zero `SDHCI_BUFFER` accesses.
-Each later outer EventPump turn may read or write at most one raw 32-bit FIFO
-word. Completion must join exact payload movement, authoritative `DATA_END`,
-response, and host quiescence in every arrival order before a separate turn
-restores ordinary interrupt policy. Missing ready ownership, short payload,
-missing `DATA_END`, timeout, or controller error must enter common bounded host
-containment, poison the generation, and perform no engine switch or
-same-generation replay.
+Each fresh direction-owned ready edge may move exactly one complete normalized
+host block, 1-512 bytes and at most `ceil(block_bytes / 4) <= 128` FIFO
+accesses. The quantum must not cross into the next block, which requires
+another fresh edge. Completion must join exact payload movement, authoritative
+`DATA_END`, response, and host quiescence in every arrival order, and the
+terminal snapshot must restore ordinary interrupt policy before publishing
+completion. Missing ready ownership, short payload, missing `DATA_END`,
+timeout, or controller error must enter common bounded host containment, poison
+the generation, and perform no engine switch or same-generation replay.
 
 SDIO service-dispatch coverage must initialize the production runtime, submit
 every former non-descriptor raw/aux command shape, and prove each is rejected
@@ -904,9 +908,11 @@ The same real reciprocal seam must prove PMUCONTROL uses one incrementing,
 four-byte Function 1 CMD53 read followed by one incrementing, four-byte
 Function 1 CMD53 write at the backplane-word address `0x8600`. Both operations
 must be sealed as retained PIO by their normalized one-block geometry, validate
-R5 before FIFO access, and move the one raw word on its own outer EventPump
-turn. The write payload must be the little-endian read value with only
-`RES_RELOAD` added. Failure injected at either immutable child operation must
+R5 before FIFO access, and move the complete four-byte host block in one
+post-issue ready-edge owner quantum. The read and write remain separate
+immutable child requests. The write payload must be the little-endian read
+value with only `RES_RELOAD` added. Failure injected at either immutable child
+operation must
 terminate with `0x5333` or `0x5334`, perform no same-generation replay, and
 never select a bytewise CMD52 shape or another engine.
 
@@ -1353,12 +1359,17 @@ compile the separate runtime package for host and `aarch64-unknown-none`.
 
 SDIO runtime tests must prove the sole owner seals its engine from normalized
 host-block geometry: at most two blocks use retained PIO and more than two use
-external DMA. Every issued request remains in one immutable cursor, and each
-later owner continuation performs at most one retained snapshot or one raw
-`SDHCI_BUFFER` word. Common completion requires response/R5, exact payload
-movement, authoritative `DATA_END`, and host quiescence. PIO tests must prove
-direction-correct ready/present-state ownership, zero DMA accesses, and
-one-word-per-turn behavior. External-DMA tests must prove control blocks split
+external DMA. Every issued request remains in one immutable cursor. A
+preissue/issue owner quantum may batch the finite Linux-ordered setup and
+exactly one issue under the shared 256-operation contract; every later external
+DMA continuation performs at most one retained snapshot, while every fresh
+PIO-ready edge may move one complete normalized host block of at most 512 bytes
+and 128 FIFO accesses without crossing into a later block. Common completion
+requires response/R5, exact payload movement, authoritative `DATA_END`, and
+host quiescence. PIO tests must prove direction-correct
+ready/present-state ownership, zero DMA accesses, block-granular progress, and
+that every owner quantum remains within 256 modeled HAL operations.
+External-DMA tests must prove control blocks split
 only at admitted physical-page boundaries, COMMAND is followed by exactly one
 DMA activation, each later turn consumes one SDHCI/DMA snapshot, lone PIO-ready
 bits remain outside its W1C ownership, and request-local `DMA_END` cannot
@@ -1736,7 +1747,7 @@ The Pi 4 manifest defaults place both `bcmgenet-v5` and `cyw43455` on core `3`; 
 
 Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CYW43 firmware/NVRAM/SDPCM command records, direct-root-port xHCI keyboard polling, GENET RX/TX descriptor-ring service, and PCIe port read/write/flush helpers now compile in isolated runtime code before any root hardware execution; host coverage must keep proving those ring turns while preserving the fresh-Pi board-proof boundary.
 
-Current Wi-Fi acceptance also requires one exact `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n> rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n> ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot slice and `WIFI_DPC_PROOF=yes` from `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that bounded accounting grammar for normalizer compatibility and immediately follows it with `CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>`. Both lines must remain complete at maximum counter widths. The accounting `poisoned` value is the fail-closed aggregate of a live poisoned ring, a stale client sample, and client epoch errors; the companion line distinguishes those causes without weakening old-capture parsing. `wifi diag` emits the pair only after a stable, valid read of the admitted SDIO owner ring and a same-generation v10 CYW43 client-counter sample. The v10 `rearms` value counts generation-scoped owner-rearm signal attempts, not separately delivered wakes or hardware re-enables; the older source-asserted-empty episode counter remains separate and cannot satisfy Gate 10. Acceptance therefore also requires the stable live ring to report `masked=no`. It fails closed with `WIFI_DPC_REASON=no-activity` unless the current exact proof has both `captures > 0` and `published > 0`; it also fails when the accounting line is missing, poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero, captured and published totals differ, consumed and published totals differ, or the final IRQ service state is unrearmed. DPC failures are retained within one generation, but a prior supervisor attempt or superseded generation cannot poison the latest exact attempt's healthy accounting. Exploratory summaries and wired-only historical evidence remain readable without this Wi-Fi-only proof.
+Current Wi-Fi acceptance also requires one exact `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n> rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n> ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot slice and `WIFI_DPC_PROOF=yes` from `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that bounded accounting grammar for normalizer compatibility and immediately follows it with `CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n> sample_reason=<reason> authority=live-ring action=<action>` plus `CYW43_SDIO_DPC_REARM generation=<n> counter=client-signal-attempts count=<n> owner_irq=masked|unmasked action=<action>`. All three lines must remain complete at maximum counter widths. The accounting `poisoned` value is the fail-closed aggregate of a live poisoned ring, a stale client sample, and client epoch errors; the truth line distinguishes those causes without weakening old-capture parsing. `wifi diag` emits the three-line proof only after a stable, valid read of the admitted SDIO owner ring and a same-generation v10 CYW43 client-counter sample. The v10 `rearms` value counts generation-scoped owner-rearm signal attempts, not separately delivered wakes or hardware re-enables; the older source-asserted-empty episode counter remains separate and cannot satisfy Gate 10. The rearm line labels that metric explicitly, while a healthy masked final state renders `sample_reason=owner-rearm-pending action=service-sdio-owner` and `owner_irq=masked`. Acceptance therefore also requires the stable live ring to report `masked=no`. It fails closed with `WIFI_DPC_REASON=no-activity` unless the current exact proof has both `captures > 0` and `published > 0`; it also fails when the accounting line is missing, poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero, captured and published totals differ, consumed and published totals differ, or the final IRQ service state is unrearmed. The DPC diagnostic `generation` is the linked SDIO/CYW43 ring epoch, not Gate 8's association/control generation. The normalizer establishes freshness by requiring the sample after the current atomic Gate 8 Ready edge and must never compare those independent generation domains. DPC failures are retained within one ring generation, but a prior supervisor attempt or superseded association generation cannot poison the latest exact attempt's healthy accounting. Exploratory summaries and wired-only historical evidence remain readable without this Wi-Fi-only proof.
 
 ### Automated Stage 03 — QEMU or Pi transport regression
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`

@@ -427,7 +427,9 @@ use pi4_driver_abi::{
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
-    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
+    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES,
+    DRIVER_RUNTIME_SDIO_SERVICE_MAX_FRAMES, DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
 };
 /// Hardware driver instance covered by a scheduling contract.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14948,7 +14950,11 @@ pub const SDIO_HOST_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContrac
     class: DriverTaskClass::NetworkControl,
     authority: DriverTaskAuthority::DeviceOnly,
     isolation: DriverTaskIsolation::DedicatedSeL4Task,
-    budget: DriverTaskBudget::preemptible(256, 65_536, 64),
+    budget: DriverTaskBudget::preemptible(
+        DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS,
+        DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES,
+        DRIVER_RUNTIME_SDIO_SERVICE_MAX_FRAMES,
+    ),
     queue_depth: 64,
 };
 

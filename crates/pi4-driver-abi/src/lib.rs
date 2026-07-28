@@ -401,6 +401,14 @@ pub const DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US: u32 =
         + DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US
             * DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT
         + DRIVER_RUNTIME_CYW43_SDIO_CHILD_WAIT_MARGIN_US;
+/// Maximum HAL operations in one preemptible SDIO host service quantum.
+pub const DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS: u16 = 256;
+/// Maximum bytes admitted by the SDIO host contract in one service quantum.
+pub const DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES: u32 = 65_536;
+/// Maximum frames admitted by the SDIO host contract in one service quantum.
+pub const DRIVER_RUNTIME_SDIO_SERVICE_MAX_FRAMES: u16 = 64;
+/// One reciprocal CYW43-to-SDIO command owns exactly one typed request.
+pub const DRIVER_RUNTIME_SDIO_LINK_REQUEST_MAX_FRAMES: u16 = 1;
 /// SDIO bus-owner operation: poll interrupt status.
 pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 /// SDIO bus-owner operation: apply host-controller clock and bus-width state.
@@ -4677,6 +4685,10 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US, 220_000);
         assert_eq!(DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT, 2);
         assert_eq!(DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT, 2);
+        assert_eq!(DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS, 256);
+        assert_eq!(DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES, 65_536);
+        assert_eq!(DRIVER_RUNTIME_SDIO_SERVICE_MAX_FRAMES, 64);
+        assert_eq!(DRIVER_RUNTIME_SDIO_LINK_REQUEST_MAX_FRAMES, 1);
         assert_eq!(DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, 20_560_000);
     }
 }

@@ -936,30 +936,33 @@ generation and XID.
   request identity from the normalized SDHCI host block count: one or two host
   blocks use retained PIO, while more than two use the external BCM2835 DMA
   engine. This is one request path, owner, cursor, and recovery policy rather
-  than independently selectable lanes. Both engine shapes inspect, repair, and
-  verify block-gap state and separately clear status and program timeout, block
-  size, block count, argument, and transfer mode. External DMA retains the
-  persistent idle interrupt policy. PIO additionally programs a request-local
-  policy that adds only its direction-correct `SPACE_AVAIL` or `DATA_AVAIL`
-  source while the request is active. External DMA also admits DMA authority,
-  proves the channel idle, and stages the complete immutable control-block
-  chain.
+  than independently selectable lanes. Both engine shapes use one finite
+  preissue/issue owner quantum to inspect, repair, and verify block-gap state;
+  clear status; and program timeout, block size, block count, argument,
+  transfer mode, and exactly one COMMAND. That quantum is admitted by the
+  shared 256-operation contract and issues at most one request. External DMA
+  retains the persistent idle interrupt policy, admits DMA authority, proves
+  the channel idle, stages the complete immutable control-block chain, and then
+  publishes DMA RESET, control-block address, and ACTIVE in Linux order in the
+  same indivisible issue quantum. This matches how
+  `bcm2835_mmc_request()` hands the issued request to dmaengine and performs no
+  post-issue completion inspection in that quantum. PIO instead installs a
+  request-local policy containing only its direction-correct `SPACE_AVAIL` or
+  `DATA_AVAIL` source and never starts or inspects DMA.
 
-  One deliberate issue turn writes COMMAND. For external DMA, that same
-  indivisible issued action then publishes DMA RESET, control-block address, and
-  ACTIVE in Linux order, exactly as `bcm2835_mmc_request()` hands the issued
-  request to dmaengine without waiting for the response IRQ. PIO does not start
-  or inspect DMA; after validating the fresh response and R5, each later outer
-  turn may move at most one raw 32-bit word through `SDHCI_BUFFER`, and only
-  while the direction-correct ready edge and `PRESENT_STATE` prove ownership of
-  the current block. An early ready edge without matching present-state
-  ownership is consumed as a wakeup and cannot authorize later FIFO access
-  without a fresh edge.
+  After validating the fresh response and R5, each fresh direction-correct
+  ready edge paired with matching `PRESENT_STATE` ownership authorizes exactly
+  one complete normalized host block through `SDHCI_BUFFER`: 1-512 bytes and at
+  most 128 FIFO accesses. That owner quantum must not cross into the next block;
+  another block requires another fresh ready edge. An early ready edge without
+  matching present-state ownership is consumed as a wakeup and cannot authorize
+  later FIFO access without a fresh edge.
 
   Both engines independently join the exact response, complete payload
-  movement, possibly coalesced `DATA_END`, and host quiescence. PIO then
-  restores the ordinary interrupt policy on a later turn; external DMA never
-  changed that persistent base policy. External DMA additionally requires no
+  movement, possibly coalesced `DATA_END`, and host quiescence. A terminal PIO
+  snapshot restores the ordinary interrupt policy before publishing completion
+  in that same bounded terminal quantum; external DMA never changed that
+  persistent base policy. External DMA additionally requires no
   DMA error, `CONBLK_AD == 0`, and this request's `CS.INT`; it acknowledges that
   W1C edge with Linux's `INT | ACTIVE` value. Its final control block sets
   Linux's `INT_EN`, intermediate blocks do not, and a full store-completion
@@ -1111,11 +1114,13 @@ generation and XID.
   authority, constructs a control block, or starts/contains the DMA channel.
   It validates response/R5 before touching the FIFO, acknowledges only the
   direction-owned ready source after pairing it with live block ownership, and
-  moves one raw `SDHCI_BUFFER` word per outer EventPump turn. Completion still
-  requires the exact payload length, `DATA_END`, and quiescent SDHCI
-  command/data state. Timeout, controller error, short payload, missing
-  `DATA_END`, or lost ready ownership poisons the generation and enters the
-  common bounded host containment path without engine switching or replay.
+  moves exactly one complete normalized host block of at most 512 bytes and 128
+  FIFO accesses per fresh ready edge. It never crosses into a later block in
+  that owner quantum. Completion still requires the exact payload length,
+  `DATA_END`, and quiescent SDHCI command/data state. Timeout, controller error,
+  short payload, missing `DATA_END`, or lost ready ownership poisons the
+  generation and enters the common bounded host containment path without engine
+  switching or replay.
 - A failed owner transfer snapshots telemetry version 3 before command/data
   containment clears or resets either engine. Its stable prefix contains
   present state, interrupt status, response, host/power/clock state,
@@ -1211,8 +1216,9 @@ generation and XID.
   one incrementing four-byte Function 1 CMD53 read and one incrementing
   four-byte Function 1 CMD53 write at the backplane-word address `0x8600`.
   Each immutable child uses retained PIO under the normalized one-block
-  threshold and moves its one raw word on a distinct outer turn. The
-  generation-owned cursor is the sole sequencer. No bytewise CMD52 update,
+  threshold and moves its complete four-byte host block in one post-issue
+  ready-edge owner quantum. The read and write remain separate immutable child
+  requests under the generation-owned cursor. No bytewise CMD52 update,
   alternate address, engine switch, byte replay, or fallback is permitted.
 
   After SoCRAM preparation and before the first firmware CMD53, that same

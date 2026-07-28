@@ -13959,11 +13959,14 @@ def wifi_generation_gate10_lines(
     auth_generation: int | None = None,
     dpc_generation: int | None = None,
 ) -> list[str]:
-    """Return generation-tagged DHCP/nettest/TCP/DPC acceptance evidence."""
+    """Return pair-generation evidence plus the independent DPC link epoch."""
 
     tcp_accepts = 1 if tcp_counters else 0
     tcp_auth = 1 if tcp_counters else 0
     tcp_rx_bytes = 58 if tcp_counters else 0
+    resolved_dpc_generation = (
+        dpc_generation if dpc_generation is not None else 0x4359_5301
+    )
     lines = [
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
         "server=192.168.10.1 lease_s=3600",
@@ -13996,7 +13999,7 @@ def wifi_generation_gate10_lines(
             f"(generation={auth_generation if auth_generation is not None else generation} "
             "conn_id=1)",
             "CYW43_SDIO_DPC "
-            f"generation={dpc_generation if dpc_generation is not None else generation} "
+            f"generation={resolved_dpc_generation} "
             "captures=6 published=6 consumed=6 rearms=6 overruns=0 "
             "epoch_errors=0 sequence_errors=0 ack_failures=0 "
             "poisoned=no masked=no",
@@ -14147,8 +14150,8 @@ def test_wifi_gate10_requires_post_ready_matching_generation() -> None:
     assert stale["WIFI_BLOCKER"] == "dhcp-generation-proof-missing"
 
 
-def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth_dpc() -> None:
-    """Started-only nettest and stale TCP/DPC generations remain Gate-9 red."""
+def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth() -> None:
+    """Started-only nettest and stale TCP-auth generations remain Gate-9 red."""
 
     started = normalizer.summarize_gates(
         normalizer.parse_events(
@@ -14170,7 +14173,7 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth_dpc() -> None:
             ]
         )
     ).to_record()
-    stale_dpc = normalizer.summarize_gates(
+    independent_dpc_epoch = normalizer.summarize_gates(
         normalizer.parse_events(
             [
                 *wifi_gate8_transaction_lines(generation=9),
@@ -14183,9 +14186,9 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth_dpc() -> None:
     assert started["NETTEST_PROOF"] == "no"
     assert stale_auth["WIFI_GATE"] == 9
     assert stale_auth["COHSH_TCP_AUTH_PROOF"] == "no"
-    assert stale_dpc["WIFI_GATE"] == 9
-    assert stale_dpc["WIFI_DPC_PROOF"] == "no"
-    assert stale_dpc["WIFI_DPC_REASON"] == "generation-mismatch"
+    assert independent_dpc_epoch["WIFI_GATE"] == 10
+    assert independent_dpc_epoch["WIFI_DPC_PROOF"] == "yes"
+    assert independent_dpc_epoch["WIFI_DPC_GENERATION"] == 8
 
 
 def test_gate8_proof_rejects_pair_epoch_stitching_inside_one_snapshot() -> None:
