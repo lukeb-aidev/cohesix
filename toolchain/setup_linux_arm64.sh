@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-RUST_TOOLCHAIN_VERSION="1.93.1"
+RUST_TOOLCHAIN_VERSION="1.97.1"
 RUST_TARGET="aarch64-unknown-none"
 
 log() {
@@ -76,7 +76,8 @@ DEBIAN_FRONTEND=noninteractive "${APT_PREFIX[@]}" install -y "${PACKAGES[@]}"
 
 if ! command -v rustup >/dev/null 2>&1; then
   log "Installing rustup..."
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN_VERSION"
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+    -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN_VERSION"
   # shellcheck source=/dev/null
   source "$HOME/.cargo/env"
 else
@@ -85,7 +86,7 @@ else
 fi
 
 log "Ensuring Rust toolchain ${RUST_TOOLCHAIN_VERSION} is installed..."
-rustup toolchain install "$RUST_TOOLCHAIN_VERSION"
+rustup toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
 rustup override set "$RUST_TOOLCHAIN_VERSION"
 
 log "Ensuring rustfmt and clippy are installed for ${RUST_TOOLCHAIN_VERSION}..."

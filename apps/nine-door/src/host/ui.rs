@@ -277,29 +277,27 @@ pub fn match_ui_provider(path: &[String]) -> Option<UiProviderMatch> {
                 variant: UiVariant::Cbor,
             });
         }
-        [a, epoch, leaf] if a == "updates" && leaf == "manifest.cbor" => {
-            if validate_epoch(epoch).is_ok() {
-                return Some(UiProviderMatch {
-                    kind: UiProviderKind::UpdatesManifest,
-                    variant: UiVariant::Cbor,
-                });
-            }
+        [a, epoch, leaf]
+            if a == "updates" && leaf == "manifest.cbor" && validate_epoch(epoch).is_ok() =>
+        {
+            return Some(UiProviderMatch {
+                kind: UiProviderKind::UpdatesManifest,
+                variant: UiVariant::Cbor,
+            });
         }
-        [a, epoch, leaf] if a == "updates" && leaf == "status" => {
-            if validate_epoch(epoch).is_ok() {
-                return Some(UiProviderMatch {
-                    kind: UiProviderKind::UpdatesStatus,
-                    variant: UiVariant::Text,
-                });
-            }
+        [a, epoch, leaf] if a == "updates" && leaf == "status" && validate_epoch(epoch).is_ok() => {
+            return Some(UiProviderMatch {
+                kind: UiProviderKind::UpdatesStatus,
+                variant: UiVariant::Text,
+            });
         }
-        [a, epoch, leaf] if a == "updates" && leaf == "status.cbor" => {
-            if validate_epoch(epoch).is_ok() {
-                return Some(UiProviderMatch {
-                    kind: UiProviderKind::UpdatesStatus,
-                    variant: UiVariant::Cbor,
-                });
-            }
+        [a, epoch, leaf]
+            if a == "updates" && leaf == "status.cbor" && validate_epoch(epoch).is_ok() =>
+        {
+            return Some(UiProviderMatch {
+                kind: UiProviderKind::UpdatesStatus,
+                variant: UiVariant::Cbor,
+            });
         }
         _ => {}
     }

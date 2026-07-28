@@ -4280,11 +4280,10 @@ fn build_payload(
 
 fn build_sample(ops: usize, elapsed: Duration) -> PoolBenchSample {
     let elapsed_ms = elapsed.as_millis() as u64;
-    let ops_per_s = if elapsed_ms == 0 {
-        0
-    } else {
-        (ops as u64).saturating_mul(1000) / elapsed_ms
-    };
+    let ops_per_s = (ops as u64)
+        .saturating_mul(1000)
+        .checked_div(elapsed_ms)
+        .unwrap_or(0);
     PoolBenchSample {
         ops,
         elapsed_ms,

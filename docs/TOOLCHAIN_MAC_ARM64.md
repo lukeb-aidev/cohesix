@@ -13,7 +13,7 @@ not vendor, upstream seL4 build outputs.
 
 | Component | Current contract | Source of truth |
 | --- | --- | --- |
-| Rust | 1.93.1, `rustfmt`, `clippy`, `aarch64-unknown-none` | `rust-toolchain.toml` |
+| Rust | 1.97.1 minimal profile, `rustfmt`, `clippy`, `aarch64-unknown-none` | `rust-toolchain.toml` |
 | Host packages | Git, CMake, Ninja, LLVM 17, CPython 3.13, QEMU, coreutils, `jq`, protobuf, `repo`, GNU make, OpenSSL 3, and `pkgconf` | `toolchain/setup_macos_arm64.sh` |
 | AArch64 compiler | Official Arm GNU Toolchain 15.2.Rel1 macOS Arm64 archive; GCC 15.2.1; target `aarch64-none-elf` | `configs/sel4/profiles.toml` |
 | seL4 Python environment | Dedicated `out/toolchain/sel4-profile-venv`; two hash locks; exact 38-distribution closure | `configs/sel4/python-bootstrap.lock`, `configs/sel4/python-build-requirements.lock` |

@@ -66178,11 +66178,7 @@ mod tests {
             } else {
                 1
             };
-            mutated.block_size = if mutated.block_count == 0 {
-                0
-            } else {
-                len / mutated.block_count
-            };
+            mutated.block_size = len.checked_div(mutated.block_count).unwrap_or(0);
             assert_eq!(
                 service_sdio_external_dma_command_turn_with_io(command, mutated, &mut io),
                 RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(

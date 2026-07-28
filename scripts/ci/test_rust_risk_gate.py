@@ -164,7 +164,7 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
                 fake_home
                 / ".rustup"
                 / "toolchains"
-                / f"1.93.1-{host}"
+                / f"1.97.1-{host}"
                 / "bin"
             )
             fake_bin.mkdir(parents=True)

@@ -3,6 +3,7 @@
 # Copyright 2026 Lukas Bower
 
 [toolchain]
-channel = "1.93.1"
+channel = "1.97.1"
 components = ["clippy", "rustfmt"]
+profile = "minimal"
 targets = ["aarch64-unknown-none"]

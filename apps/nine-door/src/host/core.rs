@@ -4107,7 +4107,7 @@ impl MountTable {
         self.entries.retain(|entry| entry.mount != mount);
         self.entries.push(MountEntry { target, mount });
         self.entries
-            .sort_by(|a, b| b.mount.len().cmp(&a.mount.len()));
+            .sort_by_key(|entry| std::cmp::Reverse(entry.mount.len()));
         Ok(())
     }
 

@@ -562,10 +562,7 @@ fn spawn_tcp_server(
             let mut guard = sent_clone.lock().expect("tcp transcript lock");
             guard.push(line.to_owned());
         };
-        loop {
-            let Some(line) = read_frame(&mut reader) else {
-                break;
-            };
+        while let Some(line) = read_frame(&mut reader) {
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 continue;

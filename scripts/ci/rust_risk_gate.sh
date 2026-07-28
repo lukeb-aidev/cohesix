@@ -93,14 +93,14 @@ verify_bootstrap_file \
   "7e0b859852b0bab86736fd0a14f1706fa0681dd912469cc82d18f3dff5243de4"
 verify_bootstrap_file \
   "rust-toolchain.toml" \
-  "5b1a816f5e652e9e1ddd100ffc2cc8648a13fca72aa010e551a7053b405d8394"
+  "cb58ee367f2c5ad6da555b32d157da0543864a0464ca3e3299de3b050fd43163"
 
 if [[ -e ".cargo/config" ]]; then
   printf 'rust-risk gate refuses ambiguous .cargo/config alongside .cargo/config.toml\n' >&2
   exit 1
 fi
 
-pinned_toolchain="1.93.1"
+pinned_toolchain="1.97.1"
 rustup_path="${canonical_home}/.cargo/bin/rustup"
 if [[ ! -x "$rustup_path" ]]; then
   printf 'rust-risk gate requires canonical Rustup: %s\n' "$rustup_path" >&2

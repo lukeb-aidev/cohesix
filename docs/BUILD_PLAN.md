@@ -75,7 +75,7 @@ manual availability, profile selection, implementation, and target proof.
 <a id="Milestones"></a>
 | Milestone | Description | Status |
 |----------|-------------|------|
-| [0](#0) | Repository Skeleton & Toolchain | Complete |
+| [0](#0) | Repository Skeleton & Toolchain | Reopened |
 | [1](#1) | Boot Banner, Timer, & First IPC | Complete |
 | [2](#2) | NineDoor Minimal 9P | Complete |
 | [3](#3) | Queen/Worker MVP with Roles | Complete |
@@ -163,7 +163,10 @@ manual availability, profile selection, implementation, and target proof.
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — repo/workspace scaffolding, build scripts, and size guard are in place; keep regenerated artefacts in sync with toolchain outputs.
+**Status:** Reopened — the repository/workspace scaffolding, build scripts, and
+size guard remain complete; the bounded `m0-rust-1-97-1-security-refresh` task
+is active to replace the superseded Rust 1.93.1 compiler/Cargo baseline without
+changing product behavior.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -179,6 +182,34 @@ manual availability, profile selection, implementation, and target proof.
 - `qemu-system-aarch64 --version` reports the expected binary.
 - QEMU launchers log the selected accelerator and pass `-accel` with host-appropriate defaults or explicit overrides.
 - `scripts/ci/size_guard.sh out/rootfs.cpio` rejects oversized archives.
+
+```
+Title/ID: m0-rust-1-97-1-security-refresh
+Milestone: Milestone 0 — Repository Skeleton & Toolchain / Rust 1.97.1 security refresh
+Goal: Replace the superseded Rust 1.93.1 baseline with exact stable Rust 1.97.1 while preserving the existing host and `aarch64-unknown-none` build contracts.
+Inputs: rust-toolchain.toml, Cargo.toml, Cargo.lock, .github/workflows/ci.yml, toolchain/setup_macos_arm64.sh, toolchain/setup_linux_arm64.sh, scripts/ci/rust_risk_gate.sh, scripts/ci/test_rust_risk_gate.py, docs/TOOLCHAIN_MAC_ARM64.md, staged Test Plan gates.
+Changes:
+  - rust-toolchain.toml + setup scripts + CI — select exact Rust 1.97.1 with deterministic minimal-profile installation plus the declared rustfmt, clippy, and aarch64-unknown-none closure.
+  - scripts/ci/rust_risk_gate.sh + focused tests — bind risk scanning to the exact named Rust 1.97.1 toolchain and refreshed bootstrap-file digest.
+  - docs/TOOLCHAIN_MAC_ARM64.md — describe the refreshed as-built Rust contract.
+Commands:
+  - cargo fmt --all -- --check
+  - cargo clippy --workspace --all-targets -- -D warnings
+  - cargo check --workspace
+  - cargo test --workspace -- --test-threads=1
+  - cargo test -p rust-risk-audit
+  - python3 scripts/ci/test_rust_risk_gate.py
+  - scripts/ci/rust_risk_gate.sh --baseline docs/audit/rust_risk_baseline.toml
+  - cargo audit
+  - cargo deny check advisories
+  - scripts/check-generated.sh
+  - scripts/ci/check_test_plan.sh
+  - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m0-rust-1-97-1-qemu
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 1 --state-dir out/test-plan/m0-rust-1-97-1-pi4
+  - scripts/ci/test_plan_run.sh --target pi4 --stage 2 --state-dir out/test-plan/m0-rust-1-97-1-pi4
+Checks: the exact compiler, Cargo, rustfmt, Clippy, host standard library, and aarch64-unknown-none standard library resolve from Rust 1.97.1; all mandatory repository gates pass without product, protocol, authority, generated-artifact, or evidence-tier drift.
+Deliverables: synchronized exact toolchain pins and documentation plus host and bare-metal compile, lint, test, dependency, generated-artifact, risk-ratchet, and staged Test Plan evidence.
+```
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)
@@ -8402,7 +8433,7 @@ Changes:
   - apps/pi4-driver-runtime/src/lib.rs — replace convention-only shared mutation with mechanically enforced exclusivity, keep volatile and syscall operations inside narrow fixed-resource helpers, and preserve sequence-last publication, reciprocal notification, DPC, MMIO, and bounded-yield behavior.
   - apps/root-task/src/hal/driver_task.rs — consume completion and DPC commit words with acquire-before-body ordering, stable commit rechecks, and focused access-order tests.
   - crates/cargo-build-directive + the three consuming build scripts — centralize control-character rejection for dynamic Cargo directives and tested Rust-string-literal escaping; bind the helper source, manifest, dependency wiring, and historical absence into the exact scanner contract.
-  - tools/rust-risk-audit + docs/audit/rust_risk_baseline.toml + scripts/ci/rust_risk_gate.sh + scripts/ci/test_rust_risk_gate.py — retain the global production ratchet and add linked-runtime/HAL plus outside-component budgets replayed from exact commit `cf8f9ee30` only after every scanner-input path matches its raw `HEAD` blob and mode and the attested path set has no additions or omissions; count qualified/UFCS, raw-identifier, macro-indirected, and conditional unsafe-attribute syntax across repository-authored `apps/`, `crates/`, and `tools/` production sources; pin exact active and historical tuples; execute the scanner directly on the host after a hash-checked build in a fresh private target directory and Cargo home that re-extracts checksum-verified registry archives; resolve exact release `1.93.1` tools from the canonical OS-account Rustup home by named-toolchain lookup so directory overrides cannot supersede the pin; reject component relocation, baseline inflation, broad test-path hiding, workspace/package/Cargo target/dependency escapes, nested-package test relabeling, local proc-macro synthesis, source redirects, symlink/non-Rust includes, shadowable generated includes, unreviewed generated Rust, uncontracted build scripts/compiler wrappers or inputs, repository-controlled `cfg(test)` injection, Cargo runner/compiler/Rustup selectors, external Cargo configuration, inherited or redirected Git repository binding, replacement refs, clean filters, ignored extra sources, caller-supplied scanner artifacts, malformed metadata, and duplicate TOML keys.
+  - tools/rust-risk-audit + docs/audit/rust_risk_baseline.toml + scripts/ci/rust_risk_gate.sh + scripts/ci/test_rust_risk_gate.py — retain the global production ratchet and add linked-runtime/HAL plus outside-component budgets replayed from exact commit `cf8f9ee30` only after every scanner-input path matches its raw `HEAD` blob and mode and the attested path set has no additions or omissions; count qualified/UFCS, raw-identifier, macro-indirected, and conditional unsafe-attribute syntax across repository-authored `apps/`, `crates/`, and `tools/` production sources; pin exact active and historical tuples; execute the scanner directly on the host after a hash-checked build in a fresh private target directory and Cargo home that re-extracts checksum-verified registry archives; resolve the exact repository-selected tools from the canonical OS-account Rustup home by named-toolchain lookup so directory overrides cannot supersede the pin; reject component relocation, baseline inflation, broad test-path hiding, workspace/package/Cargo target/dependency escapes, nested-package test relabeling, local proc-macro synthesis, source redirects, symlink/non-Rust includes, shadowable generated includes, unreviewed generated Rust, uncontracted build scripts/compiler wrappers or inputs, repository-controlled `cfg(test)` injection, Cargo runner/compiler/Rustup selectors, external Cargo configuration, inherited or redirected Git repository binding, replacement refs, clean filters, ignored extra sources, caller-supplied scanner artifacts, malformed metadata, and duplicate TOML keys.
   - scripts/ci/due_diligence_gate.sh + scripts/ci/test_due_diligence_lifecycle.py — enforce a one-to-one finding/exception lifecycle, exact CSV/table schemas and arity, known severities/states, non-expired complete policy metadata, and cover fail-closed mismatches with focused fixtures.
   - docs/audit/findings.csv + docs/audit/EXCEPTIONS.md + docs/audit/BLOCKERS.md + docs/audit/CONTROL_TRACEABILITY.md + docs/audit/checklists/RELEASE_EVIDENCE_CHECKLIST.md — reconcile superseded `DD-2026-0016`/`DD-2026-0017` lifecycle drift and close `DD-2026-0018`/`EX-2026-0018` only after current global, linked-runtime/HAL, and outside-component counts are at or below their replay-derived budgets, focused concurrency/bounds/order tests pass, and clean detached-worktree evidence is bound to the immutable remediation commit.
 Commands:

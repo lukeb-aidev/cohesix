@@ -29,7 +29,7 @@ BREW_PACKAGES=(
     openssl@3
     pkgconf
 )
-RUST_TOOLCHAIN_VERSION="1.93.1"
+RUST_TOOLCHAIN_VERSION="1.97.1"
 RUST_TARGET="aarch64-unknown-none"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -396,7 +396,8 @@ fi
 
 if ! command -v rustup >/dev/null 2>&1; then
     echo "Installing rustup..."
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain "$RUST_TOOLCHAIN_VERSION"
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
+        -y --profile minimal --default-toolchain "$RUST_TOOLCHAIN_VERSION"
     # shellcheck source=/dev/null
     source "$HOME/.cargo/env"
 else
@@ -405,7 +406,7 @@ else
 fi
 
 echo "Ensuring Rust toolchain $RUST_TOOLCHAIN_VERSION is installed..."
-rustup toolchain install "$RUST_TOOLCHAIN_VERSION"
+rustup toolchain install "$RUST_TOOLCHAIN_VERSION" --profile minimal
 rustup override set "$RUST_TOOLCHAIN_VERSION"
 
 echo "Ensuring rustfmt and clippy are installed for $RUST_TOOLCHAIN_VERSION..."

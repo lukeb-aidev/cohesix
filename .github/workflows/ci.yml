@@ -36,7 +36,7 @@ env:
   RIPGREP_ARCHIVE_SHA256: 378e973289176ca0c6054054ee7f631a065874a352bf43f0fa60ef079b6ba715
   RIPGREP_VERSION: 15.1.0
   RUST_BACKTRACE: '1'
-  RUST_TOOLCHAIN: 1.93.1
+  RUST_TOOLCHAIN: 1.97.1
 
 jobs:
   source-integrity:
@@ -50,8 +50,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+      - name: Install Rust toolchain 1.97.1
+        uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
 
       - name: Install Python 3.13.14
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -138,8 +138,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+      - name: Install Rust toolchain 1.97.1
+        uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
         with:
           components: clippy, rustfmt
           targets: aarch64-unknown-none
@@ -273,8 +273,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install Rust toolchain 1.93.1
-        uses: dtolnay/rust-toolchain@841e5d09118f0311af26ce5ba303c1f15b358772 # 1.93.1
+      - name: Install Rust toolchain 1.97.1
+        uses: dtolnay/rust-toolchain@46511b1c83438f0dd37c02d843619ece5a4abb5b # 1.97.1
 
       - name: Cache dependency registries
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
