@@ -443,6 +443,8 @@ pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_SET_CONFIG_FAILED: u16 = 0
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED: u16 = 0x5518;
 /// SDIO engine-init detail: firmware SET_GPIO_STATE high did not complete successfully.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_RELEASE_HIGH_FAILED: u16 = 0x5519;
+/// SDIO engine-init detail: request-owned interrupt status did not clear before READY.
+pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED: u16 = 0x551a;
 /// Low-byte class for an SDIO WiFi pwrseq firmware-mailbox protocol failure.
 pub const DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_CLASS: u32 = 4;
 /// Shift applied to SDIO WiFi pwrseq firmware-mailbox protocol reason bits.

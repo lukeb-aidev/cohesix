@@ -118,6 +118,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED, DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED,
+    DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_ASSERT_LOW_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED,
     DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_GET_CONFIG_FAILED,
@@ -3428,6 +3429,30 @@ impl Cyw43BootstrapSupervisor {
             && active.frame == expected.frame
     }
 
+    fn retain_sdio_engine_terminal_diagnostic(&self, completion: DriverTaskCompletionRecord) {
+        retain_first_cyw43_deferred_recovery_diagnostic(
+            Cyw43DeferredRecovery {
+                generation: self.generation,
+                owner_generation: self.generation,
+                cause: Cyw43RecoveryCause::PairSignal,
+                descriptor: DriverRuntimeCyw43CommandDescriptor::empty(),
+                payload_digest: Cyw43PayloadDigest {
+                    first: 0,
+                    last: 0,
+                    xor: 0,
+                    sum: 0,
+                },
+                ticket_id: u64::from(completion.sequence),
+                detail: completion.detail,
+                result: completion.result,
+                sequence: completion.sequence,
+                terminal_observed: true,
+                turn_id: cyw43_outer_event_turn_id(),
+            },
+            "sdio-engine-init-failed",
+        );
+    }
+
     fn service_engine_turn(
         &mut self,
         contract: DriverTaskContract,
@@ -3585,6 +3610,7 @@ impl Cyw43BootstrapSupervisor {
             self.route_engine_generation_recovery(hot_path, "cyw43-engine-init-failed");
             return self.pending_outcome("cyw43-engine-init-failed", true);
         }
+        self.retain_sdio_engine_terminal_diagnostic(completion);
         self.arm_generation_recovery("sdio-engine-init-failed");
         self.pending_outcome("sdio-engine-init-failed", true)
     }
@@ -9867,7 +9893,7 @@ const fn cyw43_engine_init_retry_allowed(
 }
 
 #[cfg(feature = "kernel")]
-const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
+pub(crate) const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
     match detail {
         detail if detail == DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16 => {
             Some("resource-hot-path-mismatch")
@@ -9892,6 +9918,7 @@ const fn sdio_engine_init_detail_status(detail: u16) -> Option<&'static str> {
         }
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED => Some("reset-all-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_CMD_DATA_FAILED => Some("reset-cmd-data-failed"),
+        DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED => Some("status-clear-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_CLOCK_FAILED => Some("clock-failed"),
         DRIVER_RUNTIME_SDIO_INIT_DETAIL_INHIBIT_FAILED => Some("inhibit-failed"),
         _ => None,
@@ -41052,6 +41079,10 @@ mod tests {
             Some("wifi-pwrseq-release-high-failed")
         );
         assert_eq!(
+            sdio_engine_init_detail_status(DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED),
+            Some("status-clear-failed")
+        );
+        assert_eq!(
             sdio_engine_init_detail_status(
                 DRIVER_RUNTIME_RING_PROGRESS_RESOURCE_HOT_PATH_MISMATCH as u16,
             ),
@@ -41110,6 +41141,38 @@ mod tests {
             })),
             None
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_engine_terminal_is_retained_before_pair_recovery() {
+        let _guard = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.retain_sdio_engine_terminal_diagnostic(DriverTaskCompletionRecord {
+            sequence: 29,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED,
+            result: 0xfeed_0001,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        });
+
+        let diagnostic = cyw43_deferred_recovery_diagnostic().expect("exact SDIO engine terminal");
+        assert_eq!(diagnostic.subphase, "sdio-engine-init-failed");
+        assert_eq!(
+            diagnostic.completion_detail,
+            DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED
+        );
+        assert_eq!(diagnostic.completion_result, 0xfeed_0001);
+        assert_eq!(diagnostic.completion_sequence, 29);
+        assert!(diagnostic.terminal_observed);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

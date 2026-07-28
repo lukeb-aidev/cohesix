@@ -12290,12 +12290,23 @@ where
         } else {
             Self::wifi_deferred_recovery_completion_cause(recovery.completion_result)
         };
+        let status = if !recovery.terminal_observed {
+            "unobserved"
+        } else if recovery.subphase == "sdio-engine-init-failed" {
+            crate::drivers::driver_task_net::sdio_engine_init_detail_status(
+                recovery.completion_detail,
+            )
+            .unwrap_or("fault")
+        } else {
+            "runtime-terminal"
+        };
         format_message(format_args!(
-            "wifi: deferred_recovery completion observed={} sequence={} detail=0x{:04x} result=0x{:08x} cause={}",
+            "wifi: deferred_recovery completion observed={} sequence={} detail=0x{:04x} result=0x{:08x} status={} cause={}",
             Self::yes_no(recovery.terminal_observed),
             recovery.completion_sequence,
             recovery.completion_detail,
             recovery.completion_result,
+            status,
             cause,
         ))
     }
@@ -23358,7 +23369,19 @@ mod tests {
         assert!(lines[7].contains("completion_detail=0xffff"));
         assert!(lines[7].contains("completion_result=0xffffffff"));
         assert!(lines[7].contains("turn=18446744073709551615"));
-        assert!(lines[8].contains("result=0xffffffff cause=runtime-terminal"));
+        assert!(
+            lines[8].contains("result=0xffffffff status=runtime-terminal cause=runtime-terminal")
+        );
+        let sdio_terminal = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+            subphase: "sdio-engine-init-failed",
+            completion_detail: pi4_driver_abi::DRIVER_RUNTIME_SDIO_INIT_DETAIL_STATUS_CLEAR_FAILED,
+            ..recovery
+        };
+        let sdio_terminal_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(sdio_terminal);
+        assert!(sdio_terminal_line.contains(
+            "detail=0x551a result=0xffffffff status=status-clear-failed cause=runtime-terminal"
+        ));
         let mut unobserved = recovery;
         unobserved.terminal_observed = false;
         unobserved.completion_detail = 0;
@@ -23367,7 +23390,7 @@ mod tests {
         let unobserved_line =
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(unobserved);
         assert!(unobserved_line.contains(
-            "observed=no sequence=0 detail=0x0000 result=0x00000000 cause=none-unobserved"
+            "observed=no sequence=0 detail=0x0000 result=0x00000000 status=unobserved cause=none-unobserved"
         ));
         unobserved.completion_detail = 1;
         unobserved.completion_result = 0x5344_0007;
@@ -23375,7 +23398,7 @@ mod tests {
         let unobserved_candidate_line =
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(unobserved);
         assert!(unobserved_candidate_line.contains(
-            "observed=no sequence=3907 detail=0x0001 result=0x53440007 cause=none-unobserved"
+            "observed=no sequence=3907 detail=0x0001 result=0x53440007 status=unobserved cause=none-unobserved"
         ));
         assert_eq!(
             KernelConsoleTestPump::wifi_deferred_recovery_completion_cause(0x4450_0003),

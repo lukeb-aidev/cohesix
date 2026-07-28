@@ -737,12 +737,18 @@ generation and XID.
   owned by pending epoch E+1 even while reciprocal commands still traverse the
   old sealed link; the exact generation commit makes E+1 active without
   relabeling or reusing any E-owned fact.
-  The initial CMD/DATA software reset is terminal if its VCNT-scaled deadline
-  expires. Before publishing `SDIO_READY`, the owner W1C-clears request-owned
-  `INT_STATUS` bits and reads them back on a later retained turn, rewriting
-  only the still-observed non-`CARD_INT` subset until clear or deadline.
-  `CARD_INT` remains exclusively DPC-owned. Cohesix never publishes a ready
-  card while reset or request-status state is merely assumed to have settled.
+  Healthy cold initialization follows the Linux Pi 4 host order:
+  `RESET_ALL`, power, interrupt policy, status clear, and then clock
+  programming. It does not issue a redundant pre-clock CMD/DATA software
+  reset. A first clock-stability timeout may enter the one retained CMD/DATA
+  reset recovery edge; that reset must clear by its VCNT-scaled deadline, and
+  a second clock-stability timeout is terminal. Before publishing
+  `SDIO_READY`, the owner W1C-clears request-owned `INT_STATUS` bits and reads
+  them back on a later retained turn, rewriting only the still-observed
+  non-`CARD_INT` subset until clear or the distinct
+  `status-clear-failed` terminal. `CARD_INT` remains exclusively DPC-owned.
+  Cohesix never publishes a ready card while recovery-reset or request-status
+  state is merely assumed to have settled.
   Same-command retries are admitted only for an entry-inhibit result proving
   the command register was never written. A CMD7 busy timeout is recorded as
   post-issue quiescence; command, response, busy, and later failure stages are
