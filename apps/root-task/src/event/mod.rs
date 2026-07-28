@@ -2549,6 +2549,63 @@ const fn linked_runtime_network_cancel_requires_pair_restart(
         )
 }
 
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ClosingDrainDecision {
+    Continue,
+    Complete,
+    Dispatch,
+    Physical,
+    TurnCap,
+    TimeCap,
+    Recovery,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_closing_drain_decision(
+    before: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
+    after: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish,
+    buffered_console_line: bool,
+    physical_response_pending: bool,
+    turns: u16,
+    elapsed_us: u64,
+) -> Cyw43ClosingDrainDecision {
+    use crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::{
+        Closed, DrainRequired, Inactive, RecoveryRequired,
+    };
+
+    match (before, after) {
+        (
+            DrainRequired {
+                request: before_request,
+                issued: before_issued,
+            },
+            DrainRequired {
+                request: after_request,
+                issued: after_issued,
+            },
+        ) if before_request == after_request && (!before_issued || after_issued) => {
+            if physical_response_pending {
+                Cyw43ClosingDrainDecision::Physical
+            } else if buffered_console_line {
+                Cyw43ClosingDrainDecision::Dispatch
+            } else if elapsed_us >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
+            {
+                Cyw43ClosingDrainDecision::TimeCap
+            } else if turns >= LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS {
+                Cyw43ClosingDrainDecision::TurnCap
+            } else {
+                Cyw43ClosingDrainDecision::Continue
+            }
+        }
+        (DrainRequired { .. }, Closed) => Cyw43ClosingDrainDecision::Complete,
+        (DrainRequired { .. }, Inactive | RecoveryRequired | DrainRequired { .. }) => {
+            Cyw43ClosingDrainDecision::Recovery
+        }
+        _ => Cyw43ClosingDrainDecision::Recovery,
+    }
+}
+
 impl<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>
     EventPump<'a, D, T, I, V, RX, TX, LINE>
 where
@@ -3109,14 +3166,9 @@ where
                 #[cfg(feature = "net-console")]
                 let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
                 #[cfg(feature = "net-console")]
-                let cyw43_priority_lease_actionable = cyw43_lane_selected
-                    && (self.linked_runtime_cyw43_network_burst_due()
-                        || crate::hal::driver_task::active_driver_task_retained_request(
-                            crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                        )
-                        .is_some());
+                let cyw43_priority_lease_actionable = self.linked_runtime_cyw43_priority_work_due();
                 #[cfg(feature = "net-console")]
-                let cyw43_priority_lease_drain_only = if cyw43_priority_lease_actionable {
+                let cyw43_priority_lease_drain_owner = if cyw43_priority_lease_actionable {
                     match crate::hal::driver_task::begin_cyw43_sdio_network_priority_lease() {
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::NotRequired
                         | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::Opened {
@@ -3124,21 +3176,38 @@ where
                         }
                         | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::AlreadyOpen {
                             ..
-                        } => false,
+                        } => None,
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::Busy => {
-                            if crate::hal::driver_task::active_driver_task_retained_request(
-                                crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                            )
-                            .is_some()
-                            {
-                                // A prior bounded quantum may have closed
-                                // around one exact Prepared/Issued parent.
-                                // Resume only that request; no fresh parent may
-                                // borrow the closing generation lease.
-                                true
-                            } else {
-                                self.cancel_linked_runtime_network_quantum();
-                                return;
+                            match Self::close_cyw43_sdio_network_priority_lease() {
+                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                                    request,
+                                    issued,
+                                } => {
+                                    // A prior bounded quantum closed around
+                                    // this exact Prepared/Issued parent. The
+                                    // Closing lease rejects every fresh parent,
+                                    // so only this identity may receive the
+                                    // bounded drain slice below.
+                                    Some(
+                                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                                            request,
+                                            issued,
+                                        },
+                                    )
+                                }
+                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive
+                                | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
+                                    self.linked_runtime_network_consecutive_turns = 0;
+                                    self.linked_runtime_network_quantum_started_ms = None;
+                                    self.linked_runtime_network_quantum_started_ticks = 0;
+                                    self.linked_runtime_service_phase =
+                                        LinkedRuntimeServicePhase::Serial;
+                                    return;
+                                }
+                                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
+                                    self.cancel_linked_runtime_network_quantum();
+                                    return;
+                                }
                             }
                         }
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseBegin::RecoveryRequired => {
@@ -3149,7 +3218,7 @@ where
                 } else if cyw43_lane_selected {
                     match Self::close_cyw43_sdio_network_priority_lease() {
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive => {
-                            false
+                            None
                         }
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
                             self.linked_runtime_network_consecutive_turns = 0;
@@ -3158,9 +3227,9 @@ where
                             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                             return;
                         }
-                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                        drain @ crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
                             ..
-                        } => true,
+                        } => Some(drain),
                         crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
                             self.cancel_linked_runtime_network_quantum();
                             return;
@@ -3178,7 +3247,7 @@ where
                             return;
                         }
                     }
-                    false
+                    None
                 };
                 #[cfg(feature = "net-console")]
                 if cyw43_lane_selected && self.linked_runtime_network_consecutive_turns != 0 {
@@ -3224,9 +3293,34 @@ where
                         .saturating_add(1);
                     self.metrics.net_cyw43_service_turns =
                         self.metrics.net_cyw43_service_turns.saturating_add(1);
-                    if cyw43_priority_lease_drain_only {
+                    if let Some(drain_before) = cyw43_priority_lease_drain_owner {
                         let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
-                        let _ = Self::close_cyw43_sdio_network_priority_lease();
+                        let drain_after = Self::close_cyw43_sdio_network_priority_lease();
+                        let buffered_console_line = self
+                            .net
+                            .as_ref()
+                            .is_some_and(|net| net.buffered_console_lines_pending());
+                        let physical_response_pending = self.physical_console_response_pending();
+                        let decision = cyw43_closing_drain_decision(
+                            drain_before,
+                            drain_after,
+                            buffered_console_line,
+                            physical_response_pending,
+                            self.linked_runtime_network_consecutive_turns,
+                            elapsed_us,
+                        );
+                        if decision == Cyw43ClosingDrainDecision::Continue {
+                            // Linux finishes the current MMC request inside
+                            // one bounded request/DPC context. Cohesix must
+                            // preserve its one-operation-per-outer-turn ABI,
+                            // but those turns remain contiguous while Closing
+                            // rejects every fresh parent. This avoids inserting
+                            // a full Serial/Dispatch/display rotation between
+                            // the retained parent's prepare, issue, notify,
+                            // poll, and completion stages.
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                            return;
+                        }
                         let turns = u64::from(self.linked_runtime_network_consecutive_turns);
                         self.metrics.net_cyw43_service_max_turns =
                             self.metrics.net_cyw43_service_max_turns.max(turns);
@@ -3234,8 +3328,44 @@ where
                             .metrics
                             .net_cyw43_service_max_elapsed_us
                             .max(elapsed_us);
-                        self.metrics.net_cyw43_service_guard_exits =
-                            self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
+                        match decision {
+                            Cyw43ClosingDrainDecision::Complete => {
+                                self.metrics.net_cyw43_service_terminal_exits = self
+                                    .metrics
+                                    .net_cyw43_service_terminal_exits
+                                    .saturating_add(1);
+                            }
+                            Cyw43ClosingDrainDecision::Dispatch => {
+                                self.metrics.net_cyw43_service_dispatch_exits = self
+                                    .metrics
+                                    .net_cyw43_service_dispatch_exits
+                                    .saturating_add(1);
+                            }
+                            Cyw43ClosingDrainDecision::Physical => {
+                                self.metrics.net_cyw43_service_physical_exits = self
+                                    .metrics
+                                    .net_cyw43_service_physical_exits
+                                    .saturating_add(1);
+                            }
+                            Cyw43ClosingDrainDecision::TurnCap => {
+                                self.metrics.net_cyw43_service_turn_cap_exits = self
+                                    .metrics
+                                    .net_cyw43_service_turn_cap_exits
+                                    .saturating_add(1);
+                            }
+                            Cyw43ClosingDrainDecision::TimeCap => {
+                                self.metrics.net_cyw43_service_time_cap_exits = self
+                                    .metrics
+                                    .net_cyw43_service_time_cap_exits
+                                    .saturating_add(1);
+                            }
+                            Cyw43ClosingDrainDecision::Recovery => {
+                                self.metrics.net_cyw43_service_guard_exits =
+                                    self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
+                                crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+                            }
+                            Cyw43ClosingDrainDecision::Continue => {}
+                        }
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_started_ms = None;
                         self.linked_runtime_network_quantum_started_ticks = 0;
@@ -3257,7 +3387,7 @@ where
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
-                    let service_due = self.linked_runtime_cyw43_network_burst_due();
+                    let service_due = self.linked_runtime_cyw43_priority_work_due();
                     if service_due
                         && self.linked_runtime_network_consecutive_turns
                             < LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
@@ -3472,6 +3602,16 @@ where
                     net.driver_task_contract(),
                 )
         })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_cyw43_priority_work_due(&self) -> bool {
+        self.linked_runtime_cyw43_lane_selected()
+            && (self.linked_runtime_cyw43_network_burst_due()
+                || crate::hal::driver_task::active_driver_task_retained_request(
+                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+                .is_some())
     }
 
     /// Dispatch at most one network-console line already retained by the NIC
@@ -31197,6 +31337,94 @@ mod tests {
             );
         }
         assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_closing_lease_drains_exact_parent_contiguously() {
+        use crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::{
+            Closed, DrainRequired, Inactive,
+        };
+
+        let prepared = DrainRequired {
+            request: 41,
+            issued: false,
+        };
+        let issued = DrainRequired {
+            request: 41,
+            issued: true,
+        };
+        assert_eq!(
+            cyw43_closing_drain_decision(prepared, prepared, false, false, 1, 100),
+            Cyw43ClosingDrainDecision::Continue,
+            "an ABI-invisible Prepared parent must keep its bounded Network slice",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(prepared, issued, false, false, 2, 200),
+            Cyw43ClosingDrainDecision::Continue,
+            "the same parent may cross the one-way physical issue boundary",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(issued, Closed, false, false, 3, 300),
+            Cyw43ClosingDrainDecision::Complete,
+            "terminal restore must end the slice exactly once",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(
+                issued,
+                issued,
+                false,
+                false,
+                LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS,
+                300,
+            ),
+            Cyw43ClosingDrainDecision::TurnCap,
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(
+                issued,
+                issued,
+                false,
+                false,
+                3,
+                LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS * 1_000,
+            ),
+            Cyw43ClosingDrainDecision::TimeCap,
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(issued, issued, true, false, 3, 300),
+            Cyw43ClosingDrainDecision::Dispatch,
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(issued, issued, false, true, 3, 300),
+            Cyw43ClosingDrainDecision::Physical,
+            "physical operator service retains precedence over TCP dispatch",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(
+                issued,
+                DrainRequired {
+                    request: 42,
+                    issued: true,
+                },
+                false,
+                false,
+                3,
+                300,
+            ),
+            Cyw43ClosingDrainDecision::Recovery,
+            "Closing may never switch retained-parent identity",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(issued, prepared, false, false, 3, 300),
+            Cyw43ClosingDrainDecision::Recovery,
+            "an issued parent may never move backward to Prepared",
+        );
+        assert_eq!(
+            cyw43_closing_drain_decision(issued, Inactive, false, false, 3, 300),
+            Cyw43ClosingDrainDecision::Recovery,
+            "disappearing without a typed Closed terminal is torn state",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

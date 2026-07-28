@@ -564,10 +564,13 @@ prove all of the following:
   clear only after the complete retained Ready transaction linearizes.
   Partial, reordered, duplicate, mixed-generation, generation-regressing,
   cross-recovery, and changed-before-commit snapshots fail closed.
-- Transport attachment publishes `stabilizing`. The sole `attempt=1` outer boot
-  episode uses one absolute `now + 90,000 ms` Gate 8 deadline. Gate 8 is passive:
-  a logical subgate failure remains inside its bounded gate-local policy and
-  cannot request pair repair. Deadline exhaustion must retain the complete
+- Transport attachment publishes `stabilizing`. Initial Gate 8 publication in
+  the sole `attempt=1` outer boot episode uses one absolute
+  `now + 90,000 ms` deadline. Gate 8 is passive: a logical subgate failure
+  remains inside its bounded gate-local policy and cannot request pair repair.
+  A consumed-once typed pair repair and a material Ready retraction before Gate
+  10 retain that original deadline; Gate 10 alone arms a later fresh, bounded
+  steady-state recovery episode. Deadline exhaustion must retain the complete
   eight-line snapshot and adjacent
   `CYW43_GATE8_TERMINAL ... action=quarantine`, emit terminal
   `status=permanent`, and quarantine attached Wi-Fi while serial, local-seat,
@@ -598,10 +601,19 @@ prove all of the following:
   fresh logical generation on the unchanged pair epoch. Tests must prove both
   causes clear in the new generation and neither sets the pair-restart signal.
 - A fresh non-stable or different-generation observation retracts `ready` to
-  `stabilizing`, including a same-generation loss of owner/admission proof. The
-  old snapshot becomes non-authorizing and a later `ready` requires a complete
-  new snapshot. A delayed HDMI Ready/prompt, including bytes already handed to
-  the local-seat queue, is superseded by a canonical Stabilizing redraw.
+  `stabilizing` when it represents a material pair, generation,
+  control-program, carrier, security, handoff, recovery, rejoin, or
+  post-publication loss-invariant failure. The old snapshot becomes
+  non-authorizing and a later `ready` requires a complete new snapshot. A
+  delayed HDMI Ready/prompt, including bytes already handed to the local-seat
+  queue, is superseded by a canonical Stabilizing redraw. Conversely, bounded
+  same-pair/current-generation post-secure key maintenance must keep `ready`
+  and the exact data consumer published while 8a through 8f, secure carrier,
+  control program, handoff/publication token, and loss-free data-plane
+  invariants remain valid. Tests must prove GTK/EAPOL maintenance does not
+  create another Gate 8 deadline or interrupt DHCP/TCP, while generation,
+  carrier, publication-token, root-drop, and runtime-overflow failures still
+  retract.
 - Gate 8h stays pending until one idempotent root data-handoff commit is
   published for the current logical generation. Tests must prove that
   generation start alone cannot publish it; every attached non-recovery turn
@@ -820,16 +832,23 @@ notification, and completion identities. Every outer EventPump turn still
 executes at most one CYW43/SDIO child physical operation.
 
 Closing the quantum must fence fresh pair work. An exact already-`Prepared` or
-already-`Issued` parent may drain alone, after which restore order is CYW43 then
-SDIO before terminal exit. Tests must reject a fresh parent during close,
-wrong-generation reuse, torn phase/reservation state, invalid active-parent
-state, and partial acquisition or restore. A clean partial acquisition must
-roll back the exact reservations; any state that cannot be rolled back
-completely must poison the lease and request pair recovery. Pair-epoch
-advance, quarantine, and reboot must either complete the same exact close/drain
-or enter pair recovery; none may silently clear or alias ownership. GENET must
-remain outside this state machine, retain its ordinary single-`Network`-turn
-rotation, and emit no WiFi priority-lease telemetry.
+already-`Issued` parent may drain alone. Tests must prove that an ABI-invisible
+sequence-zero `Prepared` parent keeps an open quantum actionable and that a
+closing parent advances in successive bounded Network turns rather than one
+turn per physical-operator rotation. Every turn must admit at most one child
+physical operation and revalidate the same request plus a monotonic
+`Prepared`-to-`Issued` state. A time/turn cap or pending physical or buffered
+console response may yield, but the next admitted slice must resume only the
+same fenced parent. Restore order is CYW43 then SDIO after its exact terminal.
+Tests must reject a fresh or switched parent during close, issue-state
+regression, wrong-generation reuse, torn phase/reservation state, invalid
+active-parent state, and partial acquisition or restore. A clean partial
+acquisition must roll back the exact reservations; any state that cannot be
+rolled back completely must poison the lease and request pair recovery.
+Pair-epoch advance, quarantine, and reboot must either complete the same exact
+close/drain or enter pair recovery; none may silently clear or alias ownership.
+GENET must remain outside this state machine, retain its ordinary
+single-`Network`-turn rotation, and emit no WiFi priority-lease telemetry.
 
 For every root-to-CYW43 generation, including zero, the authority edge remains
 one exact 24-byte continuation grant followed on a separate turn by a
@@ -1284,10 +1303,20 @@ buffered command stays behind the first cursor, and a changed or absent active
 connection rejects stale cursor work. A data-ready CYW43 connection must not
 create the GENET cursor. A response flush, exact socket/parser work,
 runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
-retained CYW43 NetData/TX/fairness continuation may retain `Network` for at most
-the compiler-declared CYW43 `max_ops_per_turn` service bound (currently 192
-successive outer turns) and 25 ms on the seL4 virtual counter, whichever comes
-first. Authentication without pending work must not extend the quantum. Tests
+retained CYW43 NetData/TX/fairness continuation may retain `Network` for at
+most the compiler-declared CYW43 `max_ops_per_turn` service bound (currently
+192 successive outer turns) and 25 ms on the seL4 virtual counter, whichever
+comes first. The fairness predicate includes one generation-bound post-TX
+cursor. `RequiredPoll` must block fresh TX until an exact nonfault op8 terminal;
+`FrameReady` clears it, while an initially empty `Idle`/`Progress` terminal
+must release fresh TX and transition the same cursor to an eight-millisecond
+counter-deadlined receive watch. During the watch, the existing NetData op8
+lane remains weighted but copied RX, pending TX, ARP, maintenance, and control
+work take precedence. A frame, expiry, generation invalidation, or recovery
+must clear it. Tests must prove wrong request/generation and fault terminals
+cannot advance it, a new accepted TX rearms `RequiredPoll` without allocating
+a second cursor, and GENET never reads or reports this state. Authentication
+without pending work must not extend the quantum. Tests
 must prove the first five exact-work turns remain contiguous without a forced
 four-turn operator rotation. They must advance time between outer turns and
 prove that a quantum already at its deadline returns to `Serial` with zero
@@ -1295,10 +1324,16 @@ additional NIC/SDIO operations. An idle selected interface must not acquire the
 pair priority lease. The first actionable selected-WiFi turn must reserve and
 boost SDIO then CYW43 once; later exact current-generation parents in the same
 quantum must add no scheduler writes. Every quantum exit path must latch the
-fresh-work close fence. If an exact parent is active, the next admitted
-`Network` work may advance only that parent by one child physical operation
-before rechecking close; after it terminates, restore order must be CYW43 then
-SDIO and the EventPump must return to `Serial`.
+fresh-work close fence. An exact active parent, including an ABI-invisible
+sequence-zero `Prepared` parent, must prevent an open lease from closing between
+stages. If close has already fenced it, successive admitted `Network` turns may
+advance only that same parent, by at most one child physical operation per
+turn, while rechecking request identity and monotonic issue state after every
+turn. A cap or operator response may yield to `Serial` and `LocalSeat`, but the
+next Network slice must resume the same parent; request substitution,
+`Issued`-to-`Prepared` regression, or disappearance without a typed terminal
+must request pair recovery. After the exact parent terminates, restore order
+must be CYW43 then SDIO before the EventPump exits the slice.
 This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
@@ -1325,7 +1360,9 @@ The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
 `cyw43_sdio_network_priority_lease_closing_drains_exact_parent_and_blocks_fresh_pair_work`,
 `cyw43_sdio_network_priority_lease_partial_failure_is_rolled_back_or_poisoned`,
-and `cyw43_sdio_network_priority_lease_rejects_generation_aliases` must pass.
+`cyw43_sdio_network_priority_lease_rejects_generation_aliases`,
+`cyw43_rx_fairness_transitions_to_bounded_receive_watch`, and
+`cyw43_receive_path_drains_post_tx_fairness_before_queued_arp` must pass.
 Together they must prove exactly four scheduler writes for a clean quantum
 regardless of how many exact parents it covers (`SDIO boost`, `CYW43 boost`,
 `CYW43 restore`, `SDIO restore`), close-time fresh-work rejection and

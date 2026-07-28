@@ -519,11 +519,29 @@ static CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 // candidate/proof record; steady DHCP/TCP consumption stays closed until this
 // second publication boundary succeeds.
 static CYW43_GATE8_PUBLICATION_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
-// Exact data generation whose most recent accepted steady ETH_TX must be
-// followed by one terminal NetData RX_POLL before another fresh TX is admitted.
-// Linux keeps this RX/DPC condition runnable inside its bus-service loop;
-// Cohesix carries it explicitly across linked-runtime and EventPump turns.
-static CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
+// Linux leaves receive/DPC service runnable across the short interval between
+// an accepted TX and the peer's response. Cohesix represents that condition
+// with one generation-bound cursor on the existing NetData op8 lane: the first
+// exact terminal poll releases fresh TX, while a short counter-deadlined watch
+// keeps receive service weighted after an initially empty terminal.
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_RX_WATCH_MS: u64 = 8;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_RX_WATCH_FALLBACK_TERMINALS: usize = 4;
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DataTxRxFairnessPhase {
+    RequiredPoll,
+    Watching { deadline: Cyw43PollDeadline },
+}
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DataTxRxFairness {
+    generation: u32,
+    phase: Cyw43DataTxRxFairnessPhase,
+}
+#[cfg(feature = "kernel")]
+static CYW43_DATA_TX_RX_FAIRNESS: Mutex<Option<Cyw43DataTxRxFairness>> = Mutex::new(None);
 static CYW43_STALE_RX_PURGED_TOTAL: AtomicU32 = AtomicU32::new(0);
 static CYW43_STALE_RX_PURGE_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 static CYW43_STALE_RX_PURGED_LAST: AtomicU32 = AtomicU32::new(0);
@@ -1549,6 +1567,75 @@ impl Cyw43BootstrapSupervisor {
             && CYW43_CONTROL_PROGRAM_EPOCH_VALID.load(Ordering::Acquire) != 0
             && CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.load(Ordering::Acquire) == pair_scrub_epoch
             && cyw43_gate8_diagnostic() == snapshot
+    }
+
+    /// Return whether an accepted Ready generation still authorizes its
+    /// published data consumer while bounded same-pair maintenance runs.
+    ///
+    /// Initial publication and Gate 10 retain the stricter quiescent snapshot
+    /// contract above. Once published, Linux keeps carrier and the data plane
+    /// live during ordinary post-secure key maintenance. Cohesix does the same
+    /// only while the original pair/generation/control program, secure carrier,
+    /// handoff token, and loss-free consumer remain exact. The maintenance
+    /// owner keeps its own finite protocol deadline; any reauthentication,
+    /// recovery, rejoin, generation change, or data-loss invariant closes this
+    /// predicate without creating another boot attempt.
+    #[must_use]
+    pub fn gate8_generation_still_operational(&self, current: Cyw43Gate8Diagnostic) -> bool {
+        let (Some(generation), Some(accepted), Some(pair_scrub_epoch)) = (
+            self.gate8_generation,
+            self.gate8_snapshot,
+            self.ready_pair_scrub_epoch,
+        ) else {
+            return false;
+        };
+        let pair_before = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+        let generation_before = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        let expected_token = cyw43_epoch_token(generation);
+        let handoff = cyw43_data_handoff_diagnostic();
+        let prompt_generation_current = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .is_none_or(|pending| pending.generation == generation);
+        let logical_owner_current = CYW43_LOGICAL_CONTROL_OWNER
+            .lock()
+            .is_none_or(|owner| owner.generation == generation);
+
+        self.is_ready()
+            && self.generation == generation
+            && accepted.stable()
+            && accepted.generation == generation
+            && accepted.pair_scrub_epoch == pair_scrub_epoch
+            && current.generation == generation
+            && current.pair_scrub_epoch == pair_scrub_epoch
+            && pair_before == pair_scrub_epoch
+            && generation_before == generation
+            && current.subgates[..6]
+                .iter()
+                .all(|subgate| subgate.status == Cyw43Gate8SubgateStatus::Pass)
+            && !current
+                .subgates
+                .iter()
+                .any(|subgate| subgate.status == Cyw43Gate8SubgateStatus::Fail)
+            && CYW43_CONTROL_PROGRAM_EPOCH_VALID.load(Ordering::Acquire) != 0
+            && CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.load(Ordering::Acquire) == pair_scrub_epoch
+            && cyw43_data_plane_ready()
+            && CYW43_CONTROL_PLANE_READY.load(Ordering::Acquire) != 0
+            && cyw43_data_consumer_open_for_generation(generation)
+            && handoff.generation == generation
+            && handoff.commit_epoch_token == expected_token
+            && handoff.baseline_epoch_token == expected_token
+            && handoff.publication_epoch_token == expected_token
+            && handoff.committed
+            && handoff.consumer_open
+            && handoff.drop_epoch_token != expected_token
+            && handoff.root_rx_drops == handoff.baseline_root_rx_drops
+            && handoff.runtime_rx_overflow_episodes == handoff.baseline_runtime_rx_overflow_episodes
+            && handoff.postcommit_first_loss.is_none()
+            && prompt_generation_current
+            && logical_owner_current
+            && cyw43_gate8_diagnostic() == current
+            && CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == pair_before
+            && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation_before
     }
 
     /// Retract one formerly accepted Gate 8 generation before fresh reproof.
@@ -6857,7 +6944,7 @@ fn invalidate_cyw43_data_handoff() {
     CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.store(0, Ordering::Release);
-    CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_data_tx_rx_fairness();
     CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
     let mut baseline = CYW43_DATA_HANDOFF_BASELINE.lock();
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
@@ -6895,9 +6982,29 @@ fn cyw43_current_generation_data_consumer_open() -> bool {
 
 #[cfg(feature = "kernel")]
 fn cyw43_data_tx_rx_fairness_due_for_generation(generation: u32) -> bool {
-    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
-        && CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.load(Ordering::Acquire)
-            == cyw43_epoch_token(generation)
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
+        return false;
+    }
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != generation {
+        return false;
+    }
+    match cursor.phase {
+        Cyw43DataTxRxFairnessPhase::RequiredPoll => true,
+        Cyw43DataTxRxFairnessPhase::Watching { deadline } => {
+            if cyw43_poll_deadline_is_open(&deadline) {
+                true
+            } else {
+                // Retire only the expired root-local watch. This passive
+                // predicate never advances or replaces a retained HAL parent.
+                *slot = None;
+                false
+            }
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -6906,13 +7013,49 @@ fn cyw43_current_generation_data_tx_rx_fairness_due() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_data_tx_rx_fairness_required_for_generation(generation: u32) -> bool {
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
+        && CYW43_DATA_TX_RX_FAIRNESS.lock().is_some_and(|cursor| {
+            cursor.generation == generation
+                && cursor.phase == Cyw43DataTxRxFairnessPhase::RequiredPoll
+        })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_current_generation_data_tx_rx_fairness_required() -> bool {
+    cyw43_data_tx_rx_fairness_required_for_generation(
+        CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_rx_fairness_watching_for_generation(generation: u32) -> bool {
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
+        && CYW43_DATA_TX_RX_FAIRNESS.lock().is_some_and(|cursor| {
+            cursor.generation == generation
+                && matches!(
+                    cursor.phase,
+                    Cyw43DataTxRxFairnessPhase::Watching { deadline }
+                        if cyw43_poll_deadline_is_open(&deadline)
+                )
+        })
+}
+
+#[cfg(feature = "kernel")]
 fn arm_cyw43_data_tx_rx_fairness(generation: u32) {
     if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
         && cyw43_data_consumer_open_for_generation(generation)
     {
-        CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN
-            .store(cyw43_epoch_token(generation), Ordering::Release);
+        *CYW43_DATA_TX_RX_FAIRNESS.lock() = Some(Cyw43DataTxRxFairness {
+            generation,
+            phase: Cyw43DataTxRxFairnessPhase::RequiredPoll,
+        });
     }
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_data_tx_rx_fairness() {
+    *CYW43_DATA_TX_RX_FAIRNESS.lock() = None;
 }
 
 #[cfg(feature = "kernel")]
@@ -17409,7 +17552,7 @@ fn cyw43_tx_unproven_window_ready(contract: DriverTaskContract) -> bool {
 fn cyw43_fresh_tx_admission_ready(contract: DriverTaskContract) -> bool {
     contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
         || (!cyw43_logical_control_owner_active()
-            && !cyw43_current_generation_data_tx_rx_fairness_due()
+            && !cyw43_current_generation_data_tx_rx_fairness_required()
             && !cyw43_active_descriptor_blocks_fresh_net_poll(contract))
 }
 
@@ -19067,6 +19210,16 @@ fn cyw43_poll_deadline_open(deadline: &mut Cyw43PollDeadline) -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_poll_deadline_is_open(deadline: &Cyw43PollDeadline) -> bool {
+    match deadline {
+        Cyw43PollDeadline::Counter { start, cycles } => cyw43_counter_ticks()
+            .map(|current| current.wrapping_sub(*start) < *cycles)
+            .unwrap_or(false),
+        Cyw43PollDeadline::Polls { remaining } => *remaining != 0,
+    }
+}
+
+#[cfg(feature = "kernel")]
 const fn cyw43_poll_deadline_trace_fields(
     deadline: &Cyw43PollDeadline,
 ) -> (&'static str, u64, usize) {
@@ -19306,7 +19459,7 @@ fn fail_closed_cyw43_generation_recovery() {
     CYW43_HOST_EAPOL_REQUIRED.store(0, Ordering::Release);
     CYW43_HOST_EAPOL_SECURE.store(0, Ordering::Release);
     CYW43_OPEN_NETWORK_ACTIVE.store(0, Ordering::Release);
-    CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_data_tx_rx_fairness();
     CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -19812,13 +19965,15 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
                 return true;
             }
         }
-        if cyw43_current_generation_data_tx_rx_fairness_due() {
+        if cyw43_current_generation_data_tx_rx_fairness_required() {
             // A terminal steady TX arms one Linux-DPC-shaped receive
-            // observation. Copied root RX and queued ARP must not hide that
-            // durable condition: fresh TX stays fenced, and the existing sole
-            // NetData op8 owner receives the next otherwise-unclaimed child
-            // turn. Active maintenance/control work retains its established
-            // exact owner and completes before this fairness transaction.
+            // observation. Until that exact op8 terminal, copied root RX and
+            // queued ARP must not hide the durable condition: fresh TX stays
+            // fenced, and the existing sole NetData owner receives the next
+            // otherwise-unclaimed child turn. An empty terminal moves to the
+            // short receive watch, where ordinary root-work precedence resumes.
+            // Active maintenance/control work retains its established exact
+            // owner and completes before this required transaction.
             return !cyw43_maintenance_pending()
                 && !CYW43_HOST_EAPOL_SESSION
                     .lock()
@@ -20575,11 +20730,40 @@ fn complete_cyw43_data_tx_rx_fairness(
     {
         return false;
     }
-    let token = cyw43_epoch_token(pending.generation);
-    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == pending.generation
-        && CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN
-            .compare_exchange(token, 0, Ordering::AcqRel, Ordering::Acquire)
-            .is_ok()
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != pending.generation {
+        return false;
+    }
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(mut cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != pending.generation {
+        return false;
+    }
+    if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
+        *slot = None;
+        return true;
+    }
+    match cursor.phase {
+        Cyw43DataTxRxFairnessPhase::RequiredPoll => {
+            cursor.phase = Cyw43DataTxRxFairnessPhase::Watching {
+                deadline: cyw43_poll_deadline_from_millis_or_polls(
+                    CYW43_DATA_TX_RX_WATCH_MS,
+                    CYW43_DATA_TX_RX_WATCH_FALLBACK_TERMINALS,
+                ),
+            };
+            *slot = Some(cursor);
+        }
+        Cyw43DataTxRxFairnessPhase::Watching { mut deadline } => {
+            if cyw43_poll_deadline_open(&mut deadline) {
+                cursor.phase = Cyw43DataTxRxFairnessPhase::Watching { deadline };
+                *slot = Some(cursor);
+            } else {
+                *slot = None;
+            }
+        }
+    }
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -23767,11 +23951,13 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         defer_cyw43_precommit_data_frame(contract, flags, token);
         return None;
     }
-    if cyw43_current_generation_data_tx_rx_fairness_due() {
+    if cyw43_current_generation_data_tx_rx_fairness_required() {
         // Do not return copied RX with smoltcp's infallible paired TxToken
-        // while the post-TX fence is armed. Advance the existing sole NetData
-        // op8 cursor first, preserve any child-queued frame, and let a later
-        // device callback deliver it after the exact terminal clears the fence.
+        // while the required post-TX poll is armed. Advance the existing sole
+        // NetData op8 cursor first, preserve any child-queued frame, and let a
+        // later device callback deliver it after the exact terminal releases
+        // fresh TX. An empty terminal retains only the bounded receive watch;
+        // that phase follows the ordinary root-work fences below.
         let completion = poll_cyw43_driver_task_data_completion_for_owner(
             CYW43_DATA_RX_STEADY_POLL_FLAGS,
             Cyw43PromptPollOwner::NetData,
@@ -25945,7 +26131,7 @@ mod tests {
         CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.store(0, Ordering::Release);
-        CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.store(0, Ordering::Release);
+        clear_cyw43_data_tx_rx_fairness();
         *CYW43_RETAINED_PRE_RECOVERY_GATE8.lock() = None;
         CYW43_STALE_RX_PURGED_TOTAL.store(0, Ordering::Release);
         CYW43_STALE_RX_PURGE_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -42820,6 +43006,86 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn gate8_ready_continuity_keeps_bounded_post_secure_maintenance_online() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 23;
+        mark_cyw43_gate8_ready_for_test(generation);
+        let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+        let snapshot = cyw43_gate8_diagnostic();
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.phase = Cyw43BootstrapPhase::Complete;
+        supervisor.ready_generation = Some(0);
+        supervisor.ready_pair_scrub_epoch = Some(pair_scrub_epoch);
+        assert!(supervisor.mark_gate8_generation_stable(snapshot));
+        assert!(supervisor.gate8_generation_still_operational(snapshot));
+
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid wifi credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.progress.connection_epoch = generation;
+        session.progress.associated = true;
+        session.progress.link_up = true;
+        session.progress.secure_keys_ready = true;
+        session.bssid_refreshed_after_assoc = true;
+        begin_cyw43_group_gtk_install(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &mut session,
+            test_group_install_keys(),
+            &[0x5a; 113],
+            true,
+        )
+        .expect("begin post-secure group GTK transaction");
+        assert_eq!(
+            session
+                .pending_key_install
+                .as_ref()
+                .expect("post-secure GTK remains retained")
+                .stage,
+            "cyw43-host-eapol-post-secure-gtk",
+        );
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+        let maintenance = cyw43_gate8_diagnostic();
+        assert!(maintenance.subgates[..6]
+            .iter()
+            .all(|subgate| subgate.status == Cyw43Gate8SubgateStatus::Pass));
+        assert_eq!(
+            maintenance.subgates[6],
+            cyw43_gate8_record(
+                "8g-post-key-maintenance",
+                Cyw43Gate8SubgateStatus::Pending,
+                "host-eapol-owner-active",
+            ),
+        );
+        assert!(
+            !supervisor.gate8_generation_still_stable(),
+            "initial/Gate10 quiescence remains stricter than Ready continuity",
+        );
+        assert!(
+            supervisor.gate8_generation_still_operational(maintenance),
+            "same-generation post-secure control work keeps the published consumer online",
+        );
+        assert!(cyw43_current_generation_data_consumer_open());
+
+        CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(cyw43_epoch_token(generation), Ordering::Release);
+        assert!(
+            !supervisor.gate8_generation_still_operational(cyw43_gate8_diagnostic()),
+            "post-publication data loss remains a material continuity failure",
+        );
+
+        CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
+        *CYW43_HOST_EAPOL_SESSION.lock() = None;
+        CYW43_LINK_UP.store(0, Ordering::Release);
+        assert!(
+            !supervisor.gate8_generation_still_operational(cyw43_gate8_diagnostic()),
+            "carrier loss cannot hide behind the retained publication token",
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn gate8_commit_separates_pair_epoch_from_connection_generation_and_rejects_torn_snapshot() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -47102,7 +47368,7 @@ mod tests {
         );
         // Isolate paired-token credit admission from the separately tested
         // post-TX fairness poll.
-        CYW43_DATA_TX_RX_FAIRNESS_EPOCH_TOKEN.store(0, Ordering::Release);
+        clear_cyw43_data_tx_rx_fairness();
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let frame = test_cyw43_tcp_frame();
@@ -47997,7 +48263,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_rx_fairness_persists_until_exact_nonfault_terminal() {
+    fn cyw43_rx_fairness_transitions_to_bounded_receive_watch() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48045,14 +48311,96 @@ mod tests {
             DriverTaskCompletionRecord::idle(0x92),
         ));
         assert!(cyw43_data_tx_rx_fairness_due_for_generation(generation));
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(10_000, Ordering::Release);
         assert!(complete_cyw43_data_tx_rx_fairness(
             pending,
             DriverTaskCompletionRecord::idle(0x92),
         ));
         assert!(
-            cyw43_fresh_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-            "an exact queue-empty op8 terminal reopens the sole TX lane"
+            cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "the first exact empty terminal must retain the short receive watch"
         );
+        assert!(!cyw43_data_tx_rx_fairness_required_for_generation(
+            generation
+        ));
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
+        assert!(
+            cyw43_fresh_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "the first exact terminal reopens TX while the receive watch remains weighted"
+        );
+        assert!(queue_cyw43_arp_frame([0u8; 42]));
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "the watch must yield to queued root work after satisfying the required poll"
+        );
+        CYW43_PENDING_ARP_TX.lock().clear();
+
+        let watch_pending = Cyw43PendingPromptPoll {
+            request: Some(0x94),
+            ..pending
+        };
+        arm_cyw43_data_tx_rx_fairness(generation);
+        assert!(
+            cyw43_data_tx_rx_fairness_required_for_generation(generation),
+            "a TX accepted during the watch must rearm the same cursor as RequiredPoll"
+        );
+        CYW43_TEST_COUNTER_TICKS.store(11_000, Ordering::Release);
+        assert!(complete_cyw43_data_tx_rx_fairness(
+            watch_pending,
+            DriverTaskCompletionRecord::idle(0x94),
+        ));
+        let progress_pending = Cyw43PendingPromptPoll {
+            request: Some(0x95),
+            ..pending
+        };
+        CYW43_TEST_COUNTER_TICKS.store(12_000, Ordering::Release);
+        assert!(complete_cyw43_data_tx_rx_fairness(
+            progress_pending,
+            DriverTaskCompletionRecord::progress(0x95, 0),
+        ));
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
+
+        let frame_pending = Cyw43PendingPromptPoll {
+            request: Some(0x96),
+            ..pending
+        };
+        let mut frame_ready = DriverTaskCompletionRecord::idle(0x96);
+        frame_ready.code = DriverTaskCompletionCode::FrameReady.as_u16();
+        assert!(complete_cyw43_data_tx_rx_fairness(
+            frame_pending,
+            frame_ready,
+        ));
+        assert!(!cyw43_data_tx_rx_fairness_due_for_generation(generation));
+
+        arm_cyw43_data_tx_rx_fairness(generation);
+        assert!(cyw43_data_tx_rx_fairness_required_for_generation(
+            generation
+        ));
+        CYW43_TEST_COUNTER_TICKS.store(20_000, Ordering::Release);
+        assert!(complete_cyw43_data_tx_rx_fairness(
+            pending,
+            DriverTaskCompletionRecord::idle(0x92),
+        ));
+        CYW43_TEST_COUNTER_TICKS.store(28_001, Ordering::Release);
+        assert!(
+            !cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "the counter deadline must stop weighting an empty receive lane"
+        );
+        assert!(
+            !complete_cyw43_data_tx_rx_fairness(
+                watch_pending,
+                DriverTaskCompletionRecord::idle(0x94),
+            ),
+            "expiry must retire the sole cursor before another terminal can claim it"
+        );
+        assert!(!cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
 
         reset_cyw43_status_flags();
     }
@@ -48095,7 +48443,7 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
         let mut exact_request_seen = None;
-        let mut terminal_seen = false;
+        let mut required_terminal_seen = false;
         for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS.saturating_mul(2) {
             begin_cyw43_outer_event_turn();
             assert!(
@@ -48114,8 +48462,8 @@ mod tests {
                     exact_request_seen = pending.request;
                 }
             }
-            if !cyw43_data_tx_rx_fairness_due_for_generation(generation) {
-                terminal_seen = true;
+            if !cyw43_data_tx_rx_fairness_required_for_generation(generation) {
+                required_terminal_seen = true;
                 break;
             }
         }
@@ -48125,8 +48473,12 @@ mod tests {
             "the receive branch must retain one exact NetData request"
         );
         assert!(
-            terminal_seen,
-            "the exact Idle terminal must release the fence"
+            required_terminal_seen,
+            "the exact Idle terminal must release the fresh-TX fence"
+        );
+        assert!(
+            cyw43_data_tx_rx_fairness_watching_for_generation(generation),
+            "the same Idle terminal must retain a bounded receive watch"
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
         assert_eq!(
@@ -48143,7 +48495,7 @@ mod tests {
         assert!(receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none());
         assert!(
             CYW43_PENDING_ARP_TX.lock().is_empty(),
-            "only the later receive callback may stage the queued ARP"
+            "the watch must yield so the later receive callback can stage queued ARP"
         );
         assert!(CYW43_PENDING_DATA_TX.lock().is_some());
 

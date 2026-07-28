@@ -876,15 +876,12 @@ impl DeferredGate8Lifecycle {
         &mut self,
         attempt: u32,
         now_ms: u64,
-        accepted_proof_still_stable: bool,
+        accepted_generation_operational: bool,
         publication_receipt: Option<crate::drivers::driver_task_net::Cyw43Gate8PublicationReceipt>,
         diagnostic: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
     ) -> DeferredGate8Observation {
         if let Self::Ready { generation, .. } = *self {
-            if accepted_proof_still_stable
-                && diagnostic.stable()
-                && diagnostic.generation == generation
-            {
+            if accepted_generation_operational && diagnostic.generation == generation {
                 return DeferredGate8Observation::Ready;
             }
             self.enter_stabilizing(attempt, now_ms);
@@ -1856,7 +1853,7 @@ where
                 let observation = gate8_lifecycle.observe(
                     attempt,
                     stability_now_ms,
-                    bootstrap.gate8_generation_still_stable(),
+                    bootstrap.gate8_generation_still_operational(diagnostic),
                     publication_receipt,
                     diagnostic,
                 );
@@ -3487,6 +3484,59 @@ mod tests {
             lifecycle.enter_stabilizing(1, 60_000),
             150_000,
             "a later recovery after Gate10 starts a new bounded episode",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn gate8_late_post_secure_maintenance_preserves_ready_data_continuity() {
+        let stable = gate8_lifecycle_snapshot(
+            8,
+            12,
+            crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+            "none",
+        );
+        let mut maintenance = stable;
+        maintenance.subgates[6] = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+            token: "8g-post-key-maintenance",
+            status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+            blocker: "host-eapol-owner-active",
+        };
+        maintenance.subgates[7] = crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+            token: "8h-data-admission",
+            status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pending,
+            blocker: "8g-post-key-maintenance",
+        };
+        maintenance.current_work_pending = true;
+        let receipt = Some(gate8_lifecycle_publication_receipt(8, 12, 1, 0));
+        let mut lifecycle = super::DeferredGate8Lifecycle::new();
+
+        assert_eq!(
+            lifecycle.observe(1, 100, false, receipt, stable),
+            super::DeferredGate8Observation::Pending,
+        );
+        assert_eq!(
+            lifecycle.observe(1, 101, false, receipt, stable),
+            super::DeferredGate8Observation::Publish {
+                generation: 12,
+                publication_receipt: receipt.expect("receipt must be present"),
+            },
+        );
+        assert!(lifecycle.accept_ready(12));
+
+        assert_eq!(
+            lifecycle.observe(1, 180_000, true, None, maintenance),
+            super::DeferredGate8Observation::Ready,
+            "bounded same-pair post-secure maintenance keeps the published data lane ready",
+        );
+        assert_eq!(
+            lifecycle.deadline_ms(),
+            Some(90_100),
+            "maintenance does not create or renew a Gate 8 boot deadline",
         );
     }
 

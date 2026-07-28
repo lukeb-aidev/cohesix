@@ -465,13 +465,13 @@ required before claiming hardware repeatability.
 #### Ordered Gate 8 stability contract
 
 Transport and control-plane attachment enter `stabilizing`, not `ready`.
-Each outer supervisor attempt owns one fixed absolute Gate 8 deadline of
-90,000 milliseconds. Gate 8 is a passive proof surface: evaluating a subgate,
-observing a logical failure, or exhausting this deadline performs no HAL,
-runtime, SDIO, completion, retry, or pair-recovery mutation. Only an
-independently typed runtime/SDIO fault or issued-unknown physical operation may
-invoke the consumed-once pair repair, and that repair preserves the original
-deadline rather than manufacturing another stabilization window.
+Initial Gate 8 publication in each outer supervisor attempt owns one fixed
+absolute deadline of 90,000 milliseconds. Gate 8 is a passive proof surface:
+evaluating a subgate, observing a logical failure, or exhausting this deadline
+performs no HAL, runtime, SDIO, completion, retry, or pair-recovery mutation.
+Only an independently typed runtime/SDIO fault or issued-unknown physical
+operation may invoke the consumed-once pair repair, and that repair preserves
+the original deadline rather than manufacturing another stabilization window.
 
 One passive, immutable snapshot evaluates and publishes the eight subgates in
 this exact order:
@@ -588,13 +588,26 @@ The first deferred-recovery and terminal-drain diagnostics remain retained
 through every revocable snapshot/publication attempt and are cleared only
 after the complete 8a-through-8h plus Ready operator transaction is retained.
 
-`ready` is revocable. Any later fresh snapshot that is non-stable or has a
-different generation retracts `ready` to `stabilizing`, even when the logical
-generation number did not change. The old snapshot becomes non-authorizing
-immediately, and a complete new 8a-through-8h snapshot is required before
-another `ready`. A logical subgate failure remains visible and pending inside
-its owning gate-local policy until the original absolute deadline. Deadline
-exhaustion retains the complete eight-line snapshot plus an adjacent
+`ready` is revocable, but ordinary post-secure key maintenance is not carrier
+loss. While the accepted pair and generation remain current, 8a through 8f
+remain pass, the secure carrier and control program remain live, the exact
+handoff/publication token remains open, and no rejoin, recovery, root-RX loss,
+or runtime-overflow episode appears, bounded same-generation 8g work keeps
+`ready` and its data consumer published. Its retained protocol owner carries
+the finite timeout and typed failure transition; Gate 8 neither retracts the
+data lane nor starts another boot-policy deadline merely because a GTK or
+other post-secure maintenance transaction is active.
+
+Any pair, generation, control-program, association, link, key-security,
+handoff, recovery, rejoin, or post-publication loss invariant failure retracts
+`ready` to `stabilizing`. The old snapshot becomes non-authorizing immediately,
+and a complete new 8a-through-8h snapshot is required before another `ready`.
+Before Gate 10, that material retraction and any consumed-once pair repair
+retain the original absolute boot deadline. Gate 10 alone arms a later fresh,
+bounded steady-state recovery episode. A logical subgate failure remains
+visible and pending inside its owning gate-local policy until the applicable
+absolute deadline. Deadline exhaustion retains the complete eight-line
+snapshot plus an adjacent
 `CYW43_GATE8_TERMINAL ... action=quarantine` record, publishes terminal
 `status=permanent`, and quarantines the attached Wi-Fi network path without
 requesting pair repair. Serial, local-seat, HDMI diagnostics, authentication,
@@ -636,13 +649,20 @@ valid current-generation backlog remains queued for NetStack rather than being
 discarded or hidden by the new baseline.
 
 Every exact terminal that accepts a current-generation steady data TX arms one
-RX-fairness obligation. Before another fresh data TX is admitted, the existing
-sole `NetData` `RX_POLL`/DPC path must reach one exact non-fault `Idle`,
-`Progress`, or `FrameReady` terminal in that generation. Copied root RX, queued
-ARP, or another outbound frame cannot clear or bypass the obligation; a stale
-or fault terminal leaves it fenced under the existing recovery contract. This
-is Linux-shaped RX/DPC fairness across linked-runtime/EventPump turns, not a
-second poller or TX path.
+two-phase RX-fairness cursor on the existing sole `NetData` `RX_POLL`/DPC path.
+Its `RequiredPoll` phase withholds another fresh data TX until one exact
+non-fault `Idle`, `Progress`, or `FrameReady` terminal in that generation.
+Copied root RX, queued ARP, or another outbound frame cannot clear or bypass
+that obligation; a stale or fault terminal leaves it fenced under the existing
+recovery contract. `FrameReady` clears the cursor. An initially empty
+`Idle`/`Progress` terminal releases fresh TX but moves the same cursor to an
+eight-millisecond virtual-counter receive watch, because the peer ACK or next
+request can arrive just after the TX-triggered poll completes. The watch keeps
+the same op8 lane Network-weighted, allows fresh TX, and yields to copied RX,
+pending TX, ARP, maintenance, and control work. A received frame or the absolute
+deadline clears it; generation invalidation and recovery clear it as well. This
+is Linux-shaped RX/DPC availability across linked-runtime/EventPump turns, not
+a second poller, issuer, TX path, or GENET behavior.
 
 Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
 and retained-frontier records after association and maintenance state:
@@ -797,16 +817,24 @@ generation and XID.
   current pair generation reuse those reservations while retaining their own
   immutable request, grant, sequence, and completion state machines; they do
   not repeat the four TCB-priority writes for every parent. This amortization
-  changes scheduling only. Each ordinary outer EventPump turn still admits at
-  most one CYW43/SDIO child physical operation.
+  changes scheduling only. An active exact parent keeps the open quantum
+  actionable even while its sequence-zero `Prepared` descriptor is deliberately
+  absent from the shared ABI aperture. Each ordinary outer EventPump turn still
+  admits at most one CYW43/SDIO child physical operation.
 
   Quantum close first changes the lease to `Closing`, which fences every fresh
   pair parent. An exact already-`Prepared` or already-`Issued` CYW43 parent may
-  drain, and no other work may borrow the closing generation. Once that parent
-  is terminal, HAL restores CYW43 first and SDIO second, releases both
-  reservations, and only then permits the terminal EventPump exit. A torn
-  phase, reservation mismatch, pair-epoch change, invalid active parent, or
-  failed restore poisons the lease and requests the sole pair-recovery lane.
+  drain, and no other work may borrow the closing generation. Its bounded
+  drain turns remain contiguous rather than inserting a complete physical
+  operator rotation between prepare, issue, grant, notify, poll, and terminal
+  stages. Every turn revalidates the same request identity and the one-way
+  `Prepared`-to-`Issued` transition. A time/turn cap or pending physical or
+  buffered-console response may yield, but the next admitted Network slice
+  resumes only that fenced parent. Once that parent is terminal, HAL restores
+  CYW43 first and SDIO second, releases both reservations, and only then permits
+  the terminal EventPump exit. A torn phase, request switch or issue-state
+  regression, reservation mismatch, pair-epoch change, invalid active parent,
+  or failed restore poisons the lease and requests the sole pair-recovery lane.
   Quarantine and reboot must close or drain this same lease; if they cannot
   prove that exact close, they also enter pair recovery rather than abandoning
   priority ownership. GENET does not inspect, acquire, drain, or report this
@@ -1936,8 +1964,9 @@ generation and XID.
   GENET and idle CYW43 service retain the ordinary phase rotation.
 
   A selected CYW43 path may retain `Network` only for an exact current
-  DPC/RX/TX/fairness continuation, a non-empty runtime/root queue, or actual TCP
-  socket/parser/response work. An authenticated but idle socket is not a
+  DPC/RX/TX/fairness continuation, including the bounded post-TX receive watch,
+  a non-empty runtime/root queue, or actual TCP socket/parser/response work. An
+  authenticated but idle socket is not a
   weighting reason. A complete TCP command retained by the ingest queue ends
   the current Network burst so the ordinary physical-operator rotation reaches
   `Dispatch` before another NIC operation. Raw or partial traffic cannot
@@ -1963,10 +1992,17 @@ generation and XID.
   retained turn still admits at most one CYW43 operation. Actionable selected
   WiFi work opens the current-generation pair priority lease before the first
   such turn, reserves and boosts SDIO then CYW43 once, and reuses it for exact
-  parents until the quantum closes. Close fences fresh pair work; an exact
-  active parent drains alone, then HAL restores CYW43 followed by SDIO before
-  the phase returns to a physical operator. A torn lease, generation change,
-  or unprovable quarantine/reboot close requests pair recovery.
+  parents until the quantum closes. An exact active parent, including an
+  ABI-invisible sequence-zero `Prepared` parent, prevents an open lease from
+  closing between its stages. Close fences fresh pair work; an exact active
+  parent drains alone in successive bounded Network turns, with one physical
+  operation per turn and request/issue identity rechecked after every turn.
+  A cap or operator response may interrupt that slice without admitting a
+  different parent; the same identity resumes later. HAL restores CYW43
+  followed by SDIO only after the exact parent becomes terminal, before the
+  phase returns to a physical operator. A torn lease, request or issue-state
+  mismatch, generation change, or unprovable quarantine/reboot close requests
+  pair recovery.
 
   `netstats` reports quantum count, turns, maximum turns/duration, operator
   yields, and idle, dispatch, turn-cap, time-cap, physical, and guard exit
@@ -2015,12 +2051,14 @@ generation and XID.
 
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing
-  fingerprint; once TX completes, the mandatory RX fairness turn proceeds
-  normally. The CYW43 device also withholds smoltcp's paired RX/TX token while
-  that retained TX owner or its unproved credit window is active. The copied RX
-  frame remains queued until the paired token can stage a response without
-  silently reporting a dropped TX as success. There is no generic/current-TCB
-  UART fallback. If the bounded
+  fingerprint; once TX completes, the required RX fairness poll proceeds on the
+  same NetData owner. Its exact empty terminal releases fresh TX but retains the
+  short receive watch described above; the watch never creates a competing
+  cursor and ordinary queued root work retains precedence. The CYW43 device
+  also withholds smoltcp's paired RX/TX token while that retained TX owner or
+  its unproved credit window is active. The copied RX frame remains queued until
+  the paired token can stage a response without silently reporting a dropped TX
+  as success. There is no generic/current-TCB UART fallback. If the bounded
   linked TX queue cannot accept an operator response, EventPump retains the
   complete record instead of dropping or truncating it. The pending-console
   backlog reserves three records for response tails. Ordinary `Line` and
