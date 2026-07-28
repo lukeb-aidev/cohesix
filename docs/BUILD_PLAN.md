@@ -75,7 +75,7 @@ manual availability, profile selection, implementation, and target proof.
 <a id="Milestones"></a>
 | Milestone | Description | Status |
 |----------|-------------|------|
-| [0](#0) | Repository Skeleton & Toolchain | Reopened |
+| [0](#0) | Repository Skeleton & Toolchain | Complete |
 | [1](#1) | Boot Banner, Timer, & First IPC | Complete |
 | [2](#2) | NineDoor Minimal 9P | Complete |
 | [3](#3) | Queen/Worker MVP with Roles | Complete |
@@ -163,10 +163,8 @@ manual availability, profile selection, implementation, and target proof.
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
 
-**Status:** Reopened — the repository/workspace scaffolding, build scripts, and
-size guard remain complete; the bounded `m0-rust-1-97-1-security-refresh` task
-is active to replace the superseded Rust 1.93.1 compiler/Cargo baseline without
-changing product behavior.
+**Status:** Complete — the repository/workspace scaffolding, build scripts, size
+guard, and bounded `m0-rust-1-97-1-security-refresh` task are complete.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
