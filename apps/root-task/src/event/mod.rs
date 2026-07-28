@@ -210,9 +210,9 @@ fn format_cyw43_priority_lease_netstats(
     let active = if lease.active() { "yes" } else { "no" };
     let close_pending = if lease.close_pending() { "yes" } else { "no" };
     let state = format_message(format_args!(
-        "netstats: cyw43_priority_lease state={} generation={} active={} close_pending={}",
+        "netstats: cyw43_priority_lease state={} pair_epoch={} active={} close_pending={}",
         lease.phase.as_str(),
-        lease.generation,
+        lease.pair_epoch,
         active,
         close_pending,
     ));
@@ -20338,7 +20338,7 @@ mod tests {
         let (state, counts) = format_cyw43_priority_lease_netstats(
             crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot {
                 phase: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Restoring,
-                generation: u32::MAX,
+                pair_epoch: u32::MAX,
                 opens: usize::MAX,
                 closes: usize::MAX,
                 restores: usize::MAX,
@@ -20352,7 +20352,7 @@ mod tests {
         assert!(!counts.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{counts}");
         assert_eq!(
             state.as_str(),
-            "netstats: cyw43_priority_lease state=restoring generation=4294967295 active=yes close_pending=yes"
+            "netstats: cyw43_priority_lease state=restoring pair_epoch=4294967295 active=yes close_pending=yes"
         );
         assert!(counts.starts_with("netstats: cyw43_priority_lease_counts opens="));
         assert!(counts.ends_with(&format!(" failures={}", usize::MAX)));
@@ -26941,7 +26941,7 @@ mod tests {
         #[cfg(feature = "kernel")]
         assert!(
             rendered.contains(
-                "netstats: cyw43_priority_lease state=inactive generation=0 active=no close_pending=no"
+                "netstats: cyw43_priority_lease state=inactive pair_epoch=0 active=no close_pending=no"
             ),
             "{rendered}"
         );

@@ -1672,7 +1672,7 @@ Run `netstats` after WiFi readiness and again after the sequential `.coh`
 sample. Alongside the existing quantum records, selected WiFi must emit:
 
 ```text
-netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> generation=<n> active=<yes|no> close_pending=<yes|no>
+netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
 
