@@ -232,7 +232,7 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
     def test_private_cargo_home_reextracts_registry_sources(self) -> None:
         default_sha2 = next(
             (CANONICAL_HOME / ".cargo" / "registry" / "src").glob(
-                "*/sha2-0.10.9/src/lib.rs"
+                "*/sha2-0.11.0/src/lib.rs"
             )
         )
         with tempfile.TemporaryDirectory() as _temp_dir:
@@ -257,7 +257,7 @@ class RustRiskGateBootstrapTests(unittest.TestCase):
                     for bootstrap in system_temp.glob("cohesix-rust-risk.*")
                     if bootstrap not in existing_bootstraps
                     for path in bootstrap.glob(
-                        "cargo-home/registry/src/*/sha2-0.10.9/src/lib.rs"
+                        "cargo-home/registry/src/*/sha2-0.11.0/src/lib.rs"
                     )
                 )
                 if matches:
