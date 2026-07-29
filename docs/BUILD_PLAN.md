@@ -163,11 +163,12 @@ manual availability, profile selection, implementation, and target proof.
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
 
-**Status:** Complete — the repository/workspace scaffolding, build scripts, size
+**Status:** Reopened — the repository/workspace scaffolding, build scripts, size
 guard, bounded `m0-rust-1-97-1-security-refresh` task, and bounded
-`m0-rust-current-stable-dependency-refresh` task are complete. The exact Rust
-1.97.1 host gate is green; target-qualified later stages remain separately
-gated.
+`m0-rust-current-stable-dependency-refresh` task remain complete. The narrowly
+bounded `m0-toml-1-1-4-maintenance` task is active solely to qualify the TOML
+1.1.4 patch refresh and restore generated-doc embedding alignment; no product,
+protocol, authority, or target behavior change is authorized.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -235,6 +236,30 @@ Commands:
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m0-rust-current-stable-dependencies-qemu
 Checks: every direct crates.io dependency resolves to its current stable maintained release or has a documented target/contract blocker; the resolved graph has no unaddressed advisory regression; all mandatory repository gates pass without product, protocol, authority, no_std, generated-artifact, or evidence-tier drift.
 Deliverables: synchronized manifests and lockfile, required API migrations and tests, dependency/advisory evidence, generated-artifact verification, and staged Test Plan evidence.
+```
+
+```
+Title/ID: m0-toml-1-1-4-maintenance
+Milestone: Reopened Milestone 0 — Repository Skeleton & Toolchain / Current stable Rust dependency refresh
+Goal: Qualify the TOML 1.1.4 patch refresh and close the generated-policy hash embedding drift exposed by its focused regression run without changing Cohesix behavior.
+Inputs: Cargo.lock, the six direct TOML consumer manifests, exact Rust 1.97.1, coh-rtc generated policy/default artifacts, docs/USERLAND_AND_CLI.md, and dependency-policy checks.
+Changes:
+  - Cargo manifests + Cargo.lock — advance the six direct TOML consumers from 1.1.3 to 1.1.4 and retain the resolver-selected compatible transitive graph.
+  - docs/USERLAND_AND_CLI.md — restore the two embedded generated hashes to the authoritative coh-rtc snippets; do not change policy/default semantics.
+  - docs/BUILD_PLAN.md — record the bounded maintenance scope, exact resolved graph, and validation evidence.
+Commands:
+  - rustup show active-toolchain
+  - cargo metadata --locked --no-deps --format-version 1
+  - cargo fmt --all -- --check
+  - cargo check --locked -p coh -p cohsh -p swarmui -p coh-rtc -p rust-risk-audit -p security-nist
+  - cargo test --locked -p coh -p cohsh -p swarmui -p coh-rtc -p rust-risk-audit -p security-nist
+  - cargo clippy --locked -p coh -p cohsh -p swarmui -p coh-rtc -p rust-risk-audit -p security-nist --all-targets -- -D warnings
+  - python3 scripts/ci/check_swarmui_dependencies.py
+  - cargo audit
+  - cargo deny check advisories
+  - scripts/check-generated.sh
+Checks: all six affected packages compile and test under exact Rust 1.97.1; dependency/advisory policy remains green; generated artifacts and their embedded documentation blocks agree byte-for-byte.
+Deliverables: synchronized manifests, lockfile, generated-doc embedding, and bounded validation evidence with Milestone 0 returned to Complete.
 ```
 
 **M0 dependency-refresh evidence (2026-07-28)**
