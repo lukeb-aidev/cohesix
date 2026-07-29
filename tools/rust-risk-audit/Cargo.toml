@@ -14,4 +14,4 @@ serde = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 syn = { version = "3.0.3", features = ["full", "visit"] }
-toml = "1.1.3"
+toml = "1.1.4"

@@ -163,12 +163,11 @@ manual availability, profile selection, implementation, and target proof.
 ## Milestone 0 — Repository Skeleton & Toolchain <a id="0"></a> 
 [Milestones](#Milestones)
 
-**Status:** Reopened — the repository/workspace scaffolding, build scripts, size
-guard, bounded `m0-rust-1-97-1-security-refresh` task, and bounded
-`m0-rust-current-stable-dependency-refresh` task remain complete. The narrowly
-bounded `m0-toml-1-1-4-maintenance` task is active solely to qualify the TOML
-1.1.4 patch refresh and restore generated-doc embedding alignment; no product,
-protocol, authority, or target behavior change is authorized.
+**Status:** Complete — the repository/workspace scaffolding, build scripts, size
+guard, bounded `m0-rust-1-97-1-security-refresh` task, bounded
+`m0-rust-current-stable-dependency-refresh` task, and bounded
+`m0-toml-1-1-4-maintenance` closure are complete. The exact Rust 1.97.1 host
+gate remains green; target-qualified later stages remain separately gated.
 **Deliverables**
 - Cargo workspace initialised with crates for `root-task`, `nine-door`, and `worker-heart` plus shared utility crates.
 - `toolchain/setup_macos_arm64.sh` script checking for Homebrew dependencies, rustup, and QEMU - and installing if absent.
@@ -291,6 +290,24 @@ Deliverables: synchronized manifests, lockfile, generated-doc embedding, and bou
   diagnostic output, independent physical-input scheduling, and current
   diagnostic-precedence contracts. These are test-harness corrections only;
   target runtime behavior and operator grammar are unchanged.
+
+**M0 TOML maintenance evidence (2026-07-29)**
+- The six direct host consumers now resolve TOML `1.1.4`. The lockfile also
+  advances `displaydoc` to `0.2.7` and `tao-macros` to `0.1.4`; Tauri utilities
+  retain their independently compatible existing TOML `0.9.12` edge. A
+  `cargo update --dry-run -v` reports zero additional compatible updates and
+  preserves the five already documented parent-constrained exceptions.
+- The patch refresh changes no source API, protocol, authority, manifest, or
+  target behavior. `coh-rtc` output remains byte-identical. The focused test
+  run exposed two stale generated-policy hashes embedded in
+  `docs/USERLAND_AND_CLI.md` by the earlier `5e50c5c62` manifest regeneration;
+  those two embedded values now match the authoritative standalone snippets
+  without changing policy/default semantics.
+- Exact Rust/Cargo `1.97.1`, locked metadata, formatting, strict Clippy for all
+  affected targets, affected-package compilation and tests, SwarmUI dependency
+  policy, generated-artifact/test-plan/NIST guards, and diff checks pass.
+  `cargo audit` retains the same 17 allowed Tauri GTK3/urlpattern warnings with
+  no vulnerability failure, and `cargo deny check advisories` passes.
 
 ## Milestone 1 — Boot Banner, Timer, & First IPC <a id="1"></a> 
 [Milestones](#Milestones)
