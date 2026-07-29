@@ -86,7 +86,7 @@ fn parses_valid_dtb_header() {
 #[test]
 fn rejects_truncated_blob() {
     let blob = vec![0u8; 8];
-    assert_eq!(parse_dtb(&blob), Err(ParseError::TooShort));
+    assert!(matches!(parse_dtb(&blob), Err(ParseError::TooShort)));
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn rejects_out_of_bounds_sections() {
     write_be(8, &mut blob, 32); // size_dt_strings (overflows totalsize)
     write_be(32, &mut blob, 36); // size_dt_struct (overflows totalsize)
 
-    assert_eq!(parse_dtb(&blob), Err(ParseError::Bounds));
+    assert!(matches!(parse_dtb(&blob), Err(ParseError::Bounds)));
 }
 
 #[test]

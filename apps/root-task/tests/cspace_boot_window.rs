@@ -5,7 +5,8 @@
 
 #![cfg(feature = "kernel")]
 
-use core::mem::{self, MaybeUninit};
+use core::mem;
+use std::boxed::Box;
 use std::panic::{self, AssertUnwindSafe};
 
 use root_task::bootstrap::cspace::CSpaceWindow;
@@ -16,18 +17,17 @@ use root_task::sel4::BootInfoView;
 use sel4_sys::{self, seL4_BootInfo, seL4_SlotRegion};
 
 fn bootinfo_fixture() -> &'static seL4_BootInfo {
-    static mut BOOTINFO: MaybeUninit<seL4_BootInfo> = MaybeUninit::uninit();
-    unsafe {
-        let ptr = BOOTINFO.as_mut_ptr();
-        ptr.write(mem::zeroed());
-        let bootinfo = &mut *ptr;
-        bootinfo.initThreadCNodeSizeBits = 12;
-        bootinfo.empty = seL4_SlotRegion {
-            start: 0x40,
-            end: 0x80,
-        };
-        bootinfo
-    }
+    let mut bootinfo: seL4_BootInfo = unsafe {
+        // SAFETY: seL4_BootInfo is a plain C ABI record whose pointer and
+        // numeric fields all admit zero as a test-fixture baseline.
+        mem::zeroed()
+    };
+    bootinfo.initThreadCNodeSizeBits = 12;
+    bootinfo.empty = seL4_SlotRegion {
+        start: 0x40,
+        end: 0x80,
+    };
+    Box::leak(Box::new(bootinfo))
 }
 
 #[test]

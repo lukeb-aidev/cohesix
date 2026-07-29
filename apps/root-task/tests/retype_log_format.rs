@@ -3,11 +3,11 @@
 // Purpose: Defines tests for root-task retype_log_format.
 // Author: Lukas Bower
 
-#![cfg(feature = "kernel")]
+#![cfg(all(feature = "kernel", feature = "test-support"))]
 
 use root_task::bootstrap::cspace_sys::RetypeArgs;
 use root_task::caps::render_retype_log_line;
-use sel4_sys::{seL4_Error, seL4_ObjectType, seL4_Word};
+use sel4_sys::{seL4_InvalidArgument, seL4_ObjectType, seL4_Word};
 
 #[test]
 fn retype_log_line_is_numeric() {
@@ -21,7 +21,7 @@ fn retype_log_line_is_numeric() {
         0x20,
         1,
     );
-    let line = render_retype_log_line("pre", &args, Some(seL4_Error::seL4_InvalidArgument));
+    let line = render_retype_log_line("pre", &args, Some(seL4_InvalidArgument));
     let text = line.as_str();
     assert!(text.starts_with("[retype:pre]"));
     assert!(text.contains("ut=0x0000000000000091"));

@@ -19,19 +19,22 @@ fn guarded_ipc_reports_ep_not_ready() {
 
     let info = seL4_MessageInfo::new(0, 0, 0, 0);
 
-    assert_eq!(sel4::send_guarded(info), Err(IpcError::EpNotReady));
+    assert!(matches!(
+        sel4::send_guarded(info),
+        Err(IpcError::EpNotReady)
+    ));
 
     let mut mr0 = 0;
-    assert_eq!(
+    assert!(matches!(
         sel4::call_guarded(info, Some(&mut mr0), None, None, None),
         Err(IpcError::EpNotReady)
-    );
+    ));
 
     let mut badge = 0;
-    assert_eq!(
+    assert!(matches!(
         sel4::replyrecv_guarded(info, Some(&mut badge)),
         Err(IpcError::EpNotReady)
-    );
+    ));
 }
 
 #[test]

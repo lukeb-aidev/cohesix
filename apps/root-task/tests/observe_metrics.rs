@@ -3,6 +3,8 @@
 // Purpose: Validate ingest metrics counters and allocation-free hot paths.
 // Author: Lukas Bower
 
+#![cfg(not(feature = "kernel"))]
+
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
@@ -23,6 +25,8 @@ fn bump_alloc() {
     });
 }
 
+// SAFETY: every allocation operation is forwarded unchanged to `System`; the
+// thread-local counters observe calls without altering pointer/layout ownership.
 unsafe impl GlobalAlloc for CountingAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         bump_alloc();

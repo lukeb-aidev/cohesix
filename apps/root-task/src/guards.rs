@@ -145,7 +145,7 @@ mod tests {
     fn call_fn_checked_allows_text_target() {
         fn allowed() {}
 
-        let addr = allowed as usize;
+        let addr = allowed as *const () as usize;
         init_text_bounds(addr, addr + core::mem::size_of::<usize>());
 
         let mut invoked = false;
@@ -176,7 +176,7 @@ mod tests {
     fn call_fn_checked_supports_slice_arguments() {
         fn handler(_: &[usize]) {}
 
-        let addr = handler as usize;
+        let addr = handler as *const () as usize;
         init_text_bounds(addr, addr + core::mem::size_of::<usize>());
 
         let mut invoked = false;

@@ -238,25 +238,33 @@ fn install_init_ipc_buffer(
         "ipc-buffer",
     );
 
+    #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
     unsafe {
-        #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
-        {
-            sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
-            debug_assert!(
-                sel4_sys::tls_image_mut().is_some(),
-                "TLS base must resolve to an image after installation",
-            );
-        }
-
-        let mut breadcrumb = HeaplessString::<160>::new();
-        let _ = write!(breadcrumb, "ipc_ptr=0x{addr:016x}", addr = addr);
-        sel4_guard::uart_breadcrumb(
-            "IPCInstall.install_init_ipc_buffer",
-            "seL4_SetIPCBuffer",
-            breadcrumb.as_str(),
+        // SAFETY: bootstrap owns the root task's static TLS image exclusively
+        // and installs it once before any root-task IPC operation can run.
+        sel4_sys::tls_set_base(core::ptr::addr_of_mut!(TLS_IMAGE));
+        debug_assert!(
+            sel4_sys::tls_image_mut().is_some(),
+            "TLS base must resolve to an image after installation",
         );
+    }
+
+    let mut breadcrumb = HeaplessString::<160>::new();
+    let _ = write!(breadcrumb, "ipc_ptr=0x{addr:016x}", addr = addr);
+    sel4_guard::uart_breadcrumb(
+        "IPCInstall.install_init_ipc_buffer",
+        "seL4_SetIPCBuffer",
+        breadcrumb.as_str(),
+    );
+
+    #[cfg(target_os = "none")]
+    unsafe {
+        // SAFETY: the pointer is the non-null, page-aligned IPC buffer supplied
+        // by seL4 BootInfo, and its page is reserved for the root-task lifetime.
         sel4_sys::seL4_SetIPCBuffer(ipc_buffer_ptr.as_ptr());
     }
+    #[cfg(not(target_os = "none"))]
+    sel4_sys::seL4_SetIPCBuffer(ipc_buffer_ptr.as_ptr());
 
     let mut line = HeaplessString::<96>::new();
     let _ = write!(line, "[boot] ipcbuf installed early ptr=0x{addr:016x}");
@@ -785,11 +793,12 @@ const fn dtb_rejected_net_policy_reason(source: Pi4BootNetPolicySource) -> Optio
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-fn pi4_local_usb_boot_wifi_cooperation_reason(
+fn physical_pi_wifi_boot_supervisor_defer_reason(
+    physical_pi_owner: bool,
     hardware: generated::HardwareConfig,
     config: &crate::net::ConsoleNetConfig,
 ) -> Option<&'static str> {
-    if !hardware.local_seat.enabled || hardware.no_nic {
+    if !physical_pi_owner || hardware.no_nic {
         return None;
     }
     if !matches!(config.backend, crate::net::NetBackend::BcmGenet) {
@@ -797,16 +806,24 @@ fn pi4_local_usb_boot_wifi_cooperation_reason(
     }
 
     match config.policy.interface {
-        crate::net::NetInterfacePolicy::Wifi => Some("pi4-local-seat-explicit-wifi"),
+        crate::net::NetInterfacePolicy::Wifi => Some(if hardware.local_seat.enabled {
+            "pi4-local-seat-explicit-wifi"
+        } else {
+            "pi4-explicit-wifi"
+        }),
         crate::net::NetInterfacePolicy::Auto if config.wifi_credentials.is_some() => {
-            Some("pi4-local-seat-auto-wifi")
+            Some(if hardware.local_seat.enabled {
+                "pi4-local-seat-auto-wifi"
+            } else {
+                "pi4-auto-wifi"
+            })
         }
         crate::net::NetInterfacePolicy::Auto | crate::net::NetInterfacePolicy::Wired => None,
     }
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-fn pi4_local_usb_boot_wifi_defer_detail(reason: &str) -> HeaplessString<192> {
+fn physical_pi_wifi_boot_supervisor_defer_detail(reason: &str) -> HeaplessString<192> {
     let mut detail = heapless::String::<192>::new();
     let _ = write!(
         detail,
@@ -839,24 +856,6 @@ fn pi4_pre_root_net_bootstrap_selection(
         }
         crate::net::NetInterfacePolicy::Auto => Pi4PreRootNetBootstrapSelection::Wired,
     }
-}
-
-#[cfg(all(feature = "kernel", feature = "net-console"))]
-fn physical_pi_failed_net_bootstrap_should_defer(
-    physical_pi_owner: bool,
-    config: &crate::net::ConsoleNetConfig,
-    error: &crate::net::DefaultNetConsoleError,
-) -> bool {
-    let wifi_selected = matches!(
-        config.policy.interface,
-        crate::net::NetInterfacePolicy::Wifi
-    ) || (matches!(
-        config.policy.interface,
-        crate::net::NetInterfacePolicy::Auto
-    ) && config.wifi_credentials.is_some());
-    physical_pi_owner
-        && wifi_selected
-        && crate::net::cyw43_net_console_bootstrap_error_is_transient(error)
 }
 
 fn required_local_seat_probe_should_abort(
@@ -5109,9 +5108,11 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line("[net-console] disabled reason=no-root-ep err=0");
                 log::warn!("[net-console] skipped: root endpoint not ready");
                 (None, false, None, net_backend_label, None)
-            } else if let Some(reason) =
-                pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config)
-            {
+            } else if let Some(reason) = physical_pi_wifi_boot_supervisor_defer_reason(
+                crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+                hardware,
+                &config,
+            ) {
                 let mut line = heapless::String::<192>::new();
                 let _ = write!(
                     line,
@@ -5120,12 +5121,12 @@ fn bootstrap<P: Platform>(
                 boot_log::force_uart_line(line.as_str());
                 console.writeln_prefixed(line.as_str());
                 boot_log::force_uart_line(
-                    "[boot] wifi net-console deferred; serial/local-seat prompt starts before persistent Wi-Fi supervision",
+                    "[boot] wifi net-console deferred; operator prompt starts before persistent Wi-Fi supervision",
                 );
                 log::info!(
-                    "[net-console] Pi4 local-seat Wi-Fi net-console deferred to post-prompt persistent supervisor reason={reason}"
+                    "[net-console] Pi4 Wi-Fi net-console deferred to post-prompt persistent supervisor reason={reason}"
                 );
-                let detail = pi4_local_usb_boot_wifi_defer_detail(reason);
+                let detail = physical_pi_wifi_boot_supervisor_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
             } else {
                 match init_net_console(hal, config) {
@@ -5215,11 +5216,6 @@ fn bootstrap<P: Platform>(
                     Err(err) => {
                         let physical_pi_owner =
                             crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active();
-                        let retry_deferred = physical_pi_failed_net_bootstrap_should_defer(
-                            physical_pi_owner,
-                            &config,
-                            &err,
-                        );
                         let (reason, err_code) = match err {
                             NetConsoleError::NoDevice => ("no-device", "NoDevice"),
                             NetConsoleError::InvalidConfig(_) => {
@@ -5233,11 +5229,7 @@ fn bootstrap<P: Platform>(
                             "[net-console] disabled reason={reason} err={err_code}"
                         );
                         boot_log::force_uart_line(fail_line.as_str());
-                        if retry_deferred {
-                            boot_log::force_uart_line(
-                                "[boot] physical Pi Wi-Fi bootstrap transient failure; serial/local-seat continue and post-prompt supervisor will retry",
-                            );
-                        } else if physical_pi_owner {
+                        if physical_pi_owner {
                             boot_log::force_uart_line(
                                 "[boot] physical Pi net-console bootstrap permanent failure; continuing serial/local-seat diagnostics without retry",
                             );
@@ -5255,13 +5247,7 @@ fn bootstrap<P: Platform>(
                         let virtio_present = cfg!(feature = "net-backend-virtio")
                             && net_backend_label == "virtio-net"
                             && !matches!(err, NetConsoleError::NoDevice);
-                        (
-                            None,
-                            virtio_present,
-                            Some(detail),
-                            net_backend_label,
-                            retry_deferred.then_some(config),
-                        )
+                        (None, virtio_present, Some(detail), net_backend_label, None)
                     }
                 }
             }
@@ -7385,11 +7371,10 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 mod tests {
     use super::{
         bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
-        fault_ep_poll_budget_exhausted, format_net_console_init_detail,
-        physical_pi_failed_net_bootstrap_should_defer, preview_payload, ControlEndpoint,
-        FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource, StagedMessage,
-        StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES, MAX_HEX_LINES,
-        MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        fault_ep_poll_budget_exhausted, format_net_console_init_detail, preview_payload,
+        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
+        StagedMessage, StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES,
+        MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
     };
     use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
@@ -7720,50 +7705,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn physical_pi_routes_only_retryable_wifi_failures_to_userland_supervisor() {
-        let mut config = crate::net::ConsoleNetConfig::default();
-        config.backend = crate::net::NetBackend::BcmGenet;
-        config.policy.interface = crate::net::NetInterfacePolicy::Wifi;
-
-        let timing = crate::net::NetConsoleError::Init(crate::net::NetStackError::Driver(
-            crate::net::DefaultDriverError::DriverTaskNet(
-                crate::drivers::driver_task_net::DriverTaskNetError::RuntimeInit(
-                    "cyw43-alp-ready-timeout",
-                ),
-            ),
-        ));
-        assert!(physical_pi_failed_net_bootstrap_should_defer(
-            true, &config, &timing
-        ));
-        assert!(!physical_pi_failed_net_bootstrap_should_defer(
-            false, &config, &timing
-        ));
-
-        let permanent = crate::net::NetConsoleError::InvalidConfig("wifi-credentials-missing");
-        assert!(!physical_pi_failed_net_bootstrap_should_defer(
-            true, &config, &permanent
-        ));
-
-        config.policy.interface = crate::net::NetInterfacePolicy::Wired;
-        assert!(!physical_pi_failed_net_bootstrap_should_defer(
-            true, &config, &timing
-        ));
-
-        config.policy.interface = crate::net::NetInterfacePolicy::Auto;
-        config.wifi_credentials = None;
-        assert!(!physical_pi_failed_net_bootstrap_should_defer(
-            true, &config, &timing
-        ));
-        config.wifi_credentials =
-            Some(crate::net::WifiCredentials::new("cohesix", "passphrase").expect("valid creds"));
-        assert!(physical_pi_failed_net_bootstrap_should_defer(
-            true, &config, &timing
-        ));
-    }
-
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
-    #[test]
-    fn pi4_local_usb_boot_marks_explicit_wifi_net_console_cooperative() {
+    fn pi4_wifi_supervisor_defers_explicit_wifi_with_or_without_local_seat() {
         let mut hardware = crate::generated::hardware_config();
         hardware.local_seat.enabled = true;
         hardware.no_nic = false;
@@ -7772,14 +7714,24 @@ mod tests {
         config.policy.interface = crate::net::NetInterfacePolicy::Wifi;
 
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
             Some("pi4-local-seat-explicit-wifi")
         );
+        hardware.local_seat.enabled = false;
+        assert_eq!(
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
+            Some("pi4-explicit-wifi")
+        );
+        assert_eq!(
+            super::physical_pi_wifi_boot_supervisor_defer_reason(false, hardware, &config),
+            None,
+            "non-Pi profiles must retain their selected network constructor",
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi4_local_usb_boot_marks_auto_wifi_cooperative_only_with_credentials() {
+    fn pi4_wifi_supervisor_defers_auto_wifi_only_with_credentials() {
         let mut hardware = crate::generated::hardware_config();
         hardware.local_seat.enabled = true;
         hardware.no_nic = false;
@@ -7788,7 +7740,7 @@ mod tests {
         config.policy.interface = crate::net::NetInterfacePolicy::Auto;
 
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
             None
         );
 
@@ -7796,14 +7748,19 @@ mod tests {
             Some(crate::net::WifiCredentials::new("cohesix", "passphrase").unwrap());
 
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
             Some("pi4-local-seat-auto-wifi")
         );
+        hardware.local_seat.enabled = false;
+        assert_eq!(
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
+            Some("pi4-auto-wifi")
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi4_local_usb_boot_does_not_mark_wired_net_console_cooperative() {
+    fn pi4_wifi_supervisor_does_not_defer_wired_net_console() {
         let mut hardware = crate::generated::hardware_config();
         hardware.local_seat.enabled = true;
         hardware.no_nic = false;
@@ -7812,14 +7769,19 @@ mod tests {
         config.policy.interface = crate::net::NetInterfacePolicy::Wired;
 
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
+            None
+        );
+        hardware.local_seat.enabled = false;
+        assert_eq!(
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
             None
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi4_local_usb_boot_keeps_wired_immediate_with_stale_wifi_credentials() {
+    fn pi4_wifi_supervisor_keeps_wired_immediate_with_stale_wifi_credentials() {
         let mut hardware = crate::generated::hardware_config();
         hardware.local_seat.enabled = true;
         hardware.no_nic = false;
@@ -7830,16 +7792,17 @@ mod tests {
             Some(crate::net::WifiCredentials::new("cohesix", "passphrase").unwrap());
 
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_cooperation_reason(hardware, &config),
+            super::physical_pi_wifi_boot_supervisor_defer_reason(true, hardware, &config),
             None
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn pi4_local_usb_boot_wifi_defer_detail_is_machine_parseable() {
+    fn physical_pi_wifi_boot_supervisor_defer_detail_is_machine_parseable() {
         assert_eq!(
-            super::pi4_local_usb_boot_wifi_defer_detail("pi4-local-seat-explicit-wifi").as_str(),
+            super::physical_pi_wifi_boot_supervisor_defer_detail("pi4-local-seat-explicit-wifi")
+                .as_str(),
             "wifi-net-console-pending-before-root-console:pi4-local-seat-explicit-wifi"
         );
     }

@@ -1990,6 +1990,45 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+/// Current CYW43 generation whose level-triggered work must be resumed.
+///
+/// The root-wake hit cursor remains an edge-urgency hint. This identity is the
+/// durable scheduler state: it survives consumption of that edge until the
+/// driver publishes exact idle for the same connection generation and pair
+/// epoch within the same completed physical SDIO lifetime.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LinkedRuntimeCyw43DurableResume {
+    generation: u32,
+    pair_epoch: u64,
+    physical_lifetime_epoch: u32,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl LinkedRuntimeCyw43DurableResume {
+    const fn from_snapshot(
+        snapshot: crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot,
+    ) -> Option<Self> {
+        if !snapshot.ordinary_network_admissible() {
+            return None;
+        }
+        Some(Self {
+            generation: snapshot.generation(),
+            pair_epoch: snapshot.pair_epoch(),
+            physical_lifetime_epoch: snapshot.physical_lifetime_epoch(),
+        })
+    }
+
+    const fn matches(
+        self,
+        snapshot: crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot,
+    ) -> bool {
+        self.generation == snapshot.generation()
+            && self.pair_epoch == snapshot.pair_epoch()
+            && self.physical_lifetime_epoch == snapshot.physical_lifetime_epoch()
+    }
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u16 =
     crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -2487,6 +2526,10 @@ where
     linked_runtime_cyw43_rx_admission_pending: bool,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_rx_observed_hit_epoch: usize,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_cyw43_durable_resume: Option<LinkedRuntimeCyw43DurableResume>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_cyw43_operator_rotation_pending: Option<LinkedRuntimeCyw43DurableResume>,
     #[cfg(feature = "kernel")]
     serial_root_uart_released_for_linked_runtime: bool,
     #[cfg(feature = "kernel")]
@@ -2802,6 +2845,10 @@ where
             linked_runtime_cyw43_rx_admission_pending: false,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_cyw43_rx_observed_hit_epoch: 0,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_cyw43_durable_resume: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_cyw43_operator_rotation_pending: None,
             #[cfg(feature = "kernel")]
             serial_root_uart_released_for_linked_runtime: false,
             #[cfg(feature = "kernel")]
@@ -2914,6 +2961,7 @@ where
         {
             self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
             self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+            self.clear_linked_runtime_cyw43_scheduler_state();
         }
         let net_session = matches!(self.session_origin, Some(ConsoleInputSource::Net))
             || self.session_net_conn_id.is_some();
@@ -3212,6 +3260,18 @@ where
                 self.queue_pending_console_output_for_linked_serial();
                 let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
                 self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
+                #[cfg(feature = "net-console")]
+                {
+                    self.refresh_linked_runtime_cyw43_durable_resume();
+                    if serial_rx_activity
+                        || self.physical_console_response_pending()
+                        || self.physical_console_input_pending_for_output()
+                        || self.linked_local_seat_usb_input_pending()
+                        || self.linked_local_seat_usb_recovery_pending()
+                    {
+                        self.require_linked_runtime_cyw43_operator_rotation();
+                    }
+                }
                 self.linked_runtime_service_phase = if self
                     .linked_runtime_cyw43_rx_admission_can_follow_serial(serial_rx_activity)
                 {
@@ -3239,7 +3299,16 @@ where
                 #[cfg(not(feature = "net-console"))]
                 let network_input = false;
                 self.poll_runtime(true, serial_input || local_input, false);
-                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                #[cfg(feature = "net-console")]
+                {
+                    self.refresh_linked_runtime_cyw43_durable_resume();
+                }
+                self.linked_runtime_service_phase =
+                    if self.finish_linked_runtime_cyw43_operator_rotation_after_dispatch() {
+                        LinkedRuntimeServicePhase::Network
+                    } else {
+                        LinkedRuntimeServicePhase::Serial
+                    };
                 self.maybe_emit_serial_input_idle_trace(
                     serial_input || local_input || network_input,
                 );
@@ -3258,14 +3327,41 @@ where
                     return;
                 }
                 #[cfg(feature = "net-console")]
-                if self.physical_console_response_pending()
-                    && !self.linked_runtime_network_reboot_ack_flush_due()
+                let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected
+                    && !crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+                        .ordinary_network_admissible()
                 {
+                    // Missing, active, failed, or recovery-owned physical
+                    // lifetime state belongs exclusively to the bootstrap
+                    // supervisor. Retract every ordinary scheduler token
+                    // before touching the priority lease or polling the NIC.
+                    self.clear_linked_runtime_cyw43_scheduler_state();
                     self.cancel_linked_runtime_network_quantum();
                     return;
                 }
                 #[cfg(feature = "net-console")]
-                let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
+                if self.physical_console_response_pending()
+                    && !self.linked_runtime_network_reboot_ack_flush_due()
+                {
+                    self.require_linked_runtime_cyw43_operator_rotation();
+                    self.cancel_linked_runtime_network_quantum();
+                    return;
+                }
+                #[cfg(feature = "net-console")]
+                if self
+                    .linked_runtime_cyw43_operator_rotation_pending
+                    .is_some()
+                {
+                    // A bounded CYW43 quantum, complete TCP command, or
+                    // physical operator event already returned ownership to
+                    // Serial. Do not reopen Network until Serial, optional USB
+                    // ingress, and Dispatch have each received their bounded
+                    // service turn.
+                    self.cancel_linked_runtime_network_quantum();
+                    return;
+                }
                 #[cfg(feature = "net-console")]
                 let cyw43_priority_lease_actionable = self.linked_runtime_cyw43_priority_work_due();
                 #[cfg(feature = "net-console")]
@@ -3391,6 +3487,7 @@ where
                         // physical operator before another NIC/SDIO turn.
                         self.finish_linked_runtime_network_quantum(true, false, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
+                        self.require_linked_runtime_cyw43_operator_rotation();
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
@@ -3414,6 +3511,7 @@ where
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
+                    self.refresh_linked_runtime_cyw43_durable_resume();
                     if !cyw43_lane_selected {
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_started_ms = None;
@@ -3491,29 +3589,34 @@ where
                                     .metrics
                                     .net_cyw43_service_dispatch_exits
                                     .saturating_add(1);
+                                self.require_linked_runtime_cyw43_operator_rotation();
                             }
                             Cyw43RetainedDrainDecision::Physical => {
                                 self.metrics.net_cyw43_service_physical_exits = self
                                     .metrics
                                     .net_cyw43_service_physical_exits
                                     .saturating_add(1);
+                                self.require_linked_runtime_cyw43_operator_rotation();
                             }
                             Cyw43RetainedDrainDecision::TurnCap => {
                                 self.metrics.net_cyw43_service_turn_cap_exits = self
                                     .metrics
                                     .net_cyw43_service_turn_cap_exits
                                     .saturating_add(1);
+                                self.require_linked_runtime_cyw43_operator_rotation();
                             }
                             Cyw43RetainedDrainDecision::TimeCap => {
                                 self.metrics.net_cyw43_service_time_cap_exits = self
                                     .metrics
                                     .net_cyw43_service_time_cap_exits
                                     .saturating_add(1);
+                                self.require_linked_runtime_cyw43_operator_rotation();
                             }
                             Cyw43RetainedDrainDecision::Recovery => {
                                 self.metrics.net_cyw43_service_guard_exits =
                                     self.metrics.net_cyw43_service_guard_exits.saturating_add(1);
                                 crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+                                self.clear_linked_runtime_cyw43_scheduler_state();
                             }
                             Cyw43RetainedDrainDecision::Continue => {}
                         }
@@ -3535,6 +3638,7 @@ where
                         // CYW43/SDIO operation may be admitted first.
                         self.finish_linked_runtime_network_quantum(false, true, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
+                        self.require_linked_runtime_cyw43_operator_rotation();
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
@@ -3560,6 +3664,9 @@ where
                     }
                     self.finish_linked_runtime_network_quantum(service_due, false, elapsed_us);
                     self.linked_runtime_network_consecutive_turns = 0;
+                    if service_due {
+                        self.require_linked_runtime_cyw43_operator_rotation();
+                    }
                 }
                 self.linked_runtime_service_phase = self.linked_runtime_network_followup_phase();
             }
@@ -3614,6 +3721,15 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn cancel_linked_runtime_network_quantum(&mut self) {
+        if self.network_service_quarantined || self.reboot_pending {
+            self.clear_linked_runtime_cyw43_scheduler_state();
+        } else if self.physical_console_response_pending()
+            || self.physical_console_input_pending_for_output()
+            || self.linked_local_seat_usb_input_pending()
+            || self.linked_local_seat_usb_recovery_pending()
+        {
+            self.require_linked_runtime_cyw43_operator_rotation();
+        }
         let lease_finish = if self.linked_runtime_network_consecutive_turns != 0 {
             let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
             self.finish_linked_runtime_network_quantum(false, false, elapsed_us)
@@ -3733,10 +3849,131 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn network_contract_service_admissible(
+        contract: crate::hal::driver_task::DriverTaskContract,
+    ) -> bool {
+        contract != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+            || crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+                .ordinary_network_admissible()
+    }
+
+    #[cfg(all(not(feature = "kernel"), feature = "net-console"))]
+    const fn network_contract_service_admissible(
+        _contract: crate::hal::driver_task::DriverTaskContract,
+    ) -> bool {
+        true
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn clear_linked_runtime_cyw43_rx_admission(&mut self) {
         self.linked_runtime_cyw43_rx_admission_pending = false;
         self.linked_runtime_cyw43_rx_observed_hit_epoch =
             crate::hal::driver_task::cyw43_root_wake_hit_epoch();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn clear_linked_runtime_cyw43_scheduler_state(&mut self) {
+        self.clear_linked_runtime_cyw43_rx_admission();
+        self.linked_runtime_cyw43_durable_resume = None;
+        self.linked_runtime_cyw43_operator_rotation_pending = None;
+    }
+
+    /// Reconcile the durable scheduler level with one passive driver snapshot.
+    ///
+    /// A changed generation, pair epoch, or physical lifetime invalidates the
+    /// old resume token immediately. Exact idle clears only the sampled
+    /// identity; work for a current identity remains retained even after the
+    /// notification-edge cursor has been consumed.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn refresh_linked_runtime_cyw43_durable_resume(&mut self) {
+        if self.network_service_quarantined
+            || self.reboot_pending
+            || !self.linked_runtime_cyw43_lane_selected()
+        {
+            self.clear_linked_runtime_cyw43_scheduler_state();
+            return;
+        }
+        let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+        debug_assert_eq!(
+            snapshot.more_work(),
+            snapshot.reason_mask() != 0,
+            "CYW43 work snapshot reason mask is the durable-work authority"
+        );
+        let Some(resume) = LinkedRuntimeCyw43DurableResume::from_snapshot(snapshot) else {
+            // Recovery is still visible to the supervisor through the passive
+            // snapshot, but it can never become ordinary Network authority.
+            self.clear_linked_runtime_cyw43_scheduler_state();
+            return;
+        };
+        let resume_identity_changed = self
+            .linked_runtime_cyw43_durable_resume
+            .is_some_and(|retained| !retained.matches(snapshot));
+        let fence_identity_changed = self
+            .linked_runtime_cyw43_operator_rotation_pending
+            .is_some_and(|retained| !retained.matches(snapshot));
+        if resume_identity_changed || fence_identity_changed {
+            // The old identity's fairness fence cannot constrain a new
+            // connection generation, post-restart pair, or physical lifetime.
+            self.linked_runtime_cyw43_operator_rotation_pending = None;
+        }
+        if snapshot.more_work() {
+            self.linked_runtime_cyw43_durable_resume = Some(resume);
+            return;
+        }
+
+        if resume_identity_changed {
+            // The passive snapshot is always for the driver's current
+            // identity. Invalidate the stale resume and its WiFi-only
+            // operator fence together at the lifecycle boundary.
+            debug_assert!(self
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+        }
+        self.linked_runtime_cyw43_durable_resume = None;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn require_linked_runtime_cyw43_operator_rotation(&mut self) {
+        if self.linked_runtime_cyw43_lane_selected()
+            && !self.network_service_quarantined
+            && !self.reboot_pending
+        {
+            let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+            let Some(rotation) = LinkedRuntimeCyw43DurableResume::from_snapshot(snapshot) else {
+                self.clear_linked_runtime_cyw43_scheduler_state();
+                return;
+            };
+            self.linked_runtime_cyw43_operator_rotation_pending = Some(rotation);
+        }
+    }
+
+    /// Finish the physical-operator fence only after Dispatch.
+    ///
+    /// Serial always precedes this point and LocalSeat does too when present.
+    /// If their work still owns a response/input boundary, retain the fence and
+    /// start another bounded physical rotation instead of reopening Network.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn finish_linked_runtime_cyw43_operator_rotation_after_dispatch(&mut self) -> bool {
+        if self
+            .linked_runtime_cyw43_operator_rotation_pending
+            .is_none()
+        {
+            return true;
+        }
+        if self.physical_console_response_pending()
+            || self.physical_console_input_pending_for_output()
+            || self.linked_local_seat_usb_input_pending()
+            || self.linked_local_seat_usb_recovery_pending()
+        {
+            return false;
+        }
+        self.linked_runtime_cyw43_operator_rotation_pending = None;
+        true
+    }
+
+    #[cfg(all(feature = "kernel", not(feature = "net-console")))]
+    const fn finish_linked_runtime_cyw43_operator_rotation_after_dispatch(&mut self) -> bool {
+        true
     }
 
     /// Convert one newly consumed child RX wake into one EventPump admission.
@@ -3753,10 +3990,17 @@ where
             || self.reboot_pending
             || !self.linked_runtime_cyw43_lane_selected()
         {
-            self.clear_linked_runtime_cyw43_rx_admission();
+            self.clear_linked_runtime_cyw43_scheduler_state();
             return;
         }
 
+        self.refresh_linked_runtime_cyw43_durable_resume();
+        if !crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+            .ordinary_network_admissible()
+        {
+            self.clear_linked_runtime_cyw43_scheduler_state();
+            return;
+        }
         let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
         let hit_epoch = crate::hal::driver_task::cyw43_root_wake_hit_epoch();
         if !crate::hal::driver_task::cyw43_root_wake_pending() {
@@ -3783,15 +4027,24 @@ where
         &self,
         serial_rx_activity: bool,
     ) -> bool {
-        self.linked_runtime_cyw43_rx_admission_pending
+        crate::drivers::driver_task_net::cyw43_service_work_snapshot().ordinary_network_admissible()
+            && (self.linked_runtime_cyw43_rx_admission_pending
+                || self.linked_runtime_cyw43_durable_resume.is_some())
             && self.linked_runtime_cyw43_lane_selected()
             && !self.network_service_quarantined
             && !self.reboot_pending
+            && self
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none()
             && !self.physical_console_response_pending()
             && !serial_rx_activity
             && !self.physical_console_input_pending_for_output()
             && !self.linked_local_seat_usb_input_pending()
             && !self.linked_local_seat_usb_recovery_pending()
+            && !self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending())
     }
 
     #[cfg(all(feature = "kernel", not(feature = "net-console")))]
@@ -3821,6 +4074,11 @@ where
             {
                 return false;
             }
+            if !crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+                .ordinary_network_admissible()
+            {
+                return false;
+            }
             let counters = net.stats();
             let status = net.status_report();
             self.pending_net_flush.active()
@@ -3838,7 +4096,10 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn linked_runtime_cyw43_priority_work_due(&self) -> bool {
         self.linked_runtime_cyw43_lane_selected()
+            && crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+                .ordinary_network_admissible()
             && (self.linked_runtime_cyw43_network_burst_due()
+                || self.linked_runtime_cyw43_durable_resume.is_some()
                 || crate::hal::driver_task::active_driver_task_retained_request(
                     crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
                 )
@@ -4597,15 +4858,27 @@ where
         #[cfg(feature = "net-console")]
         let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
         #[cfg(feature = "net-console")]
+        let cyw43_network_service_fenced = service_network
+            && !self.cyw43_bootstrap_operator_turn_is_active()
+            && !self.network_service_quarantined
+            && self.net.as_ref().is_some_and(|net| {
+                !Self::network_contract_service_admissible(net.driver_task_contract())
+            });
+        #[cfg(feature = "net-console")]
         let net_poll = if !service_network
             || self.cyw43_bootstrap_operator_turn_is_active()
             || self.network_service_quarantined
+            || cyw43_network_service_fenced
         {
             // Bootstrap and linked-pair recovery retain sole CYW43 ownership.
             // The independently owned serial route, buffered local-seat bytes,
             // timer/IPC service, and reboot dispatch continue below. An attached
             // NetStack must not re-enter the same HAL during supervision or
             // after its recovery budget quarantines a poisoned generation.
+            #[cfg(feature = "kernel")]
+            if cyw43_network_service_fenced {
+                self.clear_linked_runtime_cyw43_scheduler_state();
+            }
             None
         } else if let Some(net) = self.net.as_mut() {
             let status_before = net.status_report();
@@ -4631,85 +4904,113 @@ where
             );
             let mut activity = false;
             let mut net_budget = DriverServiceBudget::new(net_contract).ok();
+            let mut cyw43_service_fenced = false;
             // Host-EAPOL pending/required has no DHCP/data progress yet; once
             // the root console is available, yield those SDIO polls to active
             // keyboards. The same contract rule applies to all NIC data paths:
             // active serial/USB input or pending serial output owns this
             // event-pump turn.
             if !yield_for_physical_input {
-                if let Some(budget) = net_budget.as_mut() {
-                    let result = if flush_turn {
-                        net.flush_tcp_with_budget(self.now_ms, budget)
-                    } else {
-                        net.poll_with_budget(self.now_ms, budget)
-                    };
-                    match result {
-                        Ok(polled) => activity = polled,
-                        Err(err) => {
-                            let message = format_message(format_args!(
-                                "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
-                                net_contract.name,
-                                err.reason(),
-                                net_contract.max_service_us(),
-                            ));
-                            self.audit.denied(message.as_str());
+                cyw43_service_fenced = !Self::network_contract_service_admissible(net_contract);
+                if !cyw43_service_fenced {
+                    if let Some(budget) = net_budget.as_mut() {
+                        let result = if flush_turn {
+                            net.flush_tcp_with_budget(self.now_ms, budget)
+                        } else {
+                            net.poll_with_budget(self.now_ms, budget)
+                        };
+                        match result {
+                            Ok(polled) => activity = polled,
+                            Err(err) => {
+                                let message = format_message(format_args!(
+                                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                                    net_contract.name,
+                                    err.reason(),
+                                    net_contract.max_service_us(),
+                                ));
+                                self.audit.denied(message.as_str());
+                            }
                         }
-                    }
-                    if flush_turn {
-                        self.metrics.net_post_dispatch_flush_polls =
-                            self.metrics.net_post_dispatch_flush_polls.saturating_add(1);
-                        self.pending_net_flush.remaining_turns =
-                            self.pending_net_flush.remaining_turns.saturating_sub(1);
-                        if !activity {
-                            self.pending_net_flush = PendingNetFlush::default();
-                        } else if self.pending_net_flush.remaining_turns == 0 {
-                            self.metrics.net_post_dispatch_flush_exhaustions = self
-                                .metrics
-                                .net_post_dispatch_flush_exhaustions
-                                .saturating_add(1);
-                            self.pending_net_flush = PendingNetFlush::default();
+                        if flush_turn {
+                            self.metrics.net_post_dispatch_flush_polls =
+                                self.metrics.net_post_dispatch_flush_polls.saturating_add(1);
+                            self.pending_net_flush.remaining_turns =
+                                self.pending_net_flush.remaining_turns.saturating_sub(1);
+                            if !activity {
+                                self.pending_net_flush = PendingNetFlush::default();
+                            } else if self.pending_net_flush.remaining_turns == 0 {
+                                self.metrics.net_post_dispatch_flush_exhaustions = self
+                                    .metrics
+                                    .net_post_dispatch_flush_exhaustions
+                                    .saturating_add(1);
+                                self.pending_net_flush = PendingNetFlush::default();
+                            }
                         }
                     }
                 }
             }
             let telemetry = net.telemetry();
             let mut buffered: HeaplessVec<ConsoleLine, 1> = HeaplessVec::new();
-            if !flush_turn && !yield_for_physical_input && !suppress_console_input {
+            if !cyw43_service_fenced
+                && !flush_turn
+                && !yield_for_physical_input
+                && !suppress_console_input
+            {
                 let _ = net.drain_console_lines_bounded(self.now_ms, 1, &mut |line| {
                     let _ = buffered.push(line);
                 });
             }
             let ingest_snapshot: IngestSnapshot = net.ingest_snapshot();
-            Some((activity, telemetry, buffered, conn_id, ingest_snapshot))
+            Some((
+                activity,
+                telemetry,
+                buffered,
+                conn_id,
+                ingest_snapshot,
+                cyw43_service_fenced,
+            ))
         } else {
             None
         };
 
         #[cfg(feature = "net-console")]
-        if let Some((activity, telemetry, buffered, conn_id, _ingest_snapshot)) = net_poll {
-            self.net_conn_id = conn_id;
-            if NET_DIAG_FEATURED {
-                self.log_net_diag(telemetry);
-            } else if activity {
-                let message = format_message(format_args!(
-                    "net: poll link_up={} tx_drops={}",
-                    telemetry.link_up, telemetry.tx_drops
-                ));
-                self.audit.info(message.as_str());
-            }
-            let ingest_snapshot = _ingest_snapshot;
-            for line in buffered {
-                if !suppress_console_input {
-                    self.handle_network_line(line.text);
+        if let Some((
+            activity,
+            telemetry,
+            buffered,
+            conn_id,
+            _ingest_snapshot,
+            cyw43_service_fenced,
+        )) = net_poll
+        {
+            if cyw43_service_fenced {
+                #[cfg(feature = "kernel")]
+                self.clear_linked_runtime_cyw43_scheduler_state();
+            } else {
+                self.net_conn_id = conn_id;
+                if NET_DIAG_FEATURED {
+                    self.log_net_diag(telemetry);
+                } else if activity {
+                    let message = format_message(format_args!(
+                        "net: poll link_up={} tx_drops={}",
+                        telemetry.link_up, telemetry.tx_drops
+                    ));
+                    self.audit.info(message.as_str());
                 }
+                let ingest_snapshot = _ingest_snapshot;
+                for line in buffered {
+                    if !suppress_console_input {
+                        self.handle_network_line(line.text);
+                    }
+                }
+                #[cfg(not(feature = "kernel"))]
+                let _ = ingest_snapshot;
+                #[cfg(feature = "kernel")]
+                if let Some(bridge) = self.ninedoor.as_mut() {
+                    bridge.update_ingest_snapshot(ingest_snapshot);
+                }
+                self.drain_net_console_events();
             }
-            #[cfg(not(feature = "kernel"))]
-            let _ = ingest_snapshot;
-            #[cfg(feature = "kernel")]
-            if let Some(bridge) = self.ninedoor.as_mut() {
-                bridge.update_ingest_snapshot(ingest_snapshot);
-            }
-            self.drain_net_console_events();
         }
 
         #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -13095,20 +13396,27 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_root_wake_line(
+    fn wifi_diag_root_wake_lines(
         wake: crate::hal::driver_task::Cyw43RootWakeSnapshot,
-    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
-        format_message(format_args!(
-            "wifi: root rx_wake bound={} badge={} pending={} polls={} hits={} clears={} rechecks={} stale_clear_skips={} signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck",
+    ) -> (
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+    ) {
+        let state = format_message(format_args!(
+            "wifi: root rx_wake bound={} badge={} pending={} signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck",
             Self::yes_no(wake.bound),
             wake.badge,
             Self::yes_no(wake.pending),
+        ));
+        let counters = format_message(format_args!(
+            "wifi: root rx_wake_counters polls={} hits={} clears={} rechecks={} stale_clear_skips={}",
             wake.polls,
             wake.hits,
             wake.clears,
             wake.rechecks,
             wake.stale_clear_skips,
-        ))
+        ));
+        (state, counters)
     }
 
     #[cfg(feature = "kernel")]
@@ -13378,8 +13686,9 @@ where
             self.emit_console_line(detail.as_str());
         }
         if let Some(wake) = crate::hal::driver_task::cyw43_root_wake_snapshot() {
-            let detail = Self::wifi_diag_root_wake_line(wake);
-            self.emit_console_line(detail.as_str());
+            let (state, counters) = Self::wifi_diag_root_wake_lines(wake);
+            self.emit_console_line(state.as_str());
+            self.emit_console_line(counters.as_str());
         }
         let evidence_source = if live_net_supersedes_runtime {
             "live-net-status"
@@ -14355,6 +14664,12 @@ where
     ) {
         let live_net_frontier = self.wifi_live_net_frontier();
         let current_generation = crate::drivers::driver_task_net::cyw43_connection_generation();
+        let physical_lifetime =
+            crate::drivers::driver_task_net::cyw43_owner_physical_lifetime_snapshot();
+        let physical_lifetime_ready = Self::wifi_physical_lifetime_gate_ready(
+            physical_lifetime,
+            crate::drivers::driver_task_net::cyw43_bound_physical_lifetime_current(),
+        );
         let gate8 = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
         let pair_recovery_active = crate::drivers::driver_task_net::cyw43_recovery_required();
         let gate8_frontier = gate8
@@ -14493,14 +14808,15 @@ where
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_prep_complete);
-        let power_ready = gate8_prerequisites_ready
-            || live_net_channel_ready
-            || firmware_ready
-            || snapshot.is_some_and(|snapshot| {
-                matches!(snapshot.power_state, WifiPowerState::On)
-                    && matches!(snapshot.reset_state, WifiResetState::Deasserted)
-            })
-            || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready);
+        let power_ready = physical_lifetime_ready
+            && (gate8_prerequisites_ready
+                || live_net_channel_ready
+                || firmware_ready
+                || snapshot.is_some_and(|snapshot| {
+                    matches!(snapshot.power_state, WifiPowerState::On)
+                        && matches!(snapshot.reset_state, WifiResetState::Deasserted)
+                })
+                || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready));
         let card_selected = gate8_prerequisites_ready
             || live_net_channel_ready
             || firmware_prep_complete
@@ -14861,10 +15177,23 @@ where
             ));
             self.emit_console_line(prerequisite.as_str());
         }
+        let physical_lifetime_line = format_message(format_args!(
+            "wifi: gate 1 owner_lifetime lifetime_begun={} lifetime_completed={} lifetime_failed={} lifetime_active={} source=sdio-owner",
+            physical_lifetime.map_or(0, |lifetime| lifetime.begun_epoch),
+            physical_lifetime.map_or(0, |lifetime| lifetime.completed_epoch),
+            physical_lifetime.map_or(0, |lifetime| lifetime.failed_epoch),
+            physical_lifetime.map_or("unknown", |lifetime| {
+                Self::yes_no(lifetime.active())
+            }),
+        ));
+        self.emit_console_line(physical_lifetime_line.as_str());
         self.emit_wifi_gate_line(
             1,
             "runtime-power-reset",
-            if runtime_bootstrap_failed || cyw43_sdio_pair_restart_blocks_gate_one {
+            if runtime_bootstrap_failed
+                || cyw43_sdio_pair_restart_blocks_gate_one
+                || !physical_lifetime_ready
+            {
                 "blocked"
             } else {
                 Self::wifi_startup_gate_status(1, direct_proof_gate, failing_gate)
@@ -14879,12 +15208,18 @@ where
                     "runtime-resource-admission"
                 } else if cyw43_sdio_pair_restart_blocks_gate_one {
                     "cyw43-sdio-pair-restart"
+                } else if !physical_lifetime_ready {
+                    "sdio-physical-lifetime"
                 } else {
                     "none"
                 },
                 source,
             ),
-            "sdio-card-select",
+            if physical_lifetime_ready {
+                "sdio-card-select"
+            } else {
+                "run-canonical-pair-transaction"
+            },
         );
         self.emit_wifi_gate_line(
             2,
@@ -15296,6 +15631,21 @@ where
         } else {
             "blocked"
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_physical_lifetime_gate_ready(
+        lifetime: Option<pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord>,
+        supervisor_bound_epoch_current: bool,
+    ) -> bool {
+        supervisor_bound_epoch_current
+            && lifetime.is_some_and(|lifetime| {
+                lifetime.valid()
+                    && lifetime.begun_epoch != 0
+                    && lifetime.completed_epoch == lifetime.begun_epoch
+                    && lifetime.failed_epoch != lifetime.begun_epoch
+                    && !lifetime.active()
+            })
     }
 
     #[cfg(feature = "kernel")]
@@ -20735,6 +21085,10 @@ mod tests {
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(None);
+        crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
+            None,
+        );
         crate::hal::driver_task::test_clear_driver_task_ring_progress_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         );
@@ -20750,6 +21104,11 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         clear_wifi_driver_task_test_state();
+        // Scheduling tests model the post-bootstrap EventPump. The completed
+        // lifetime is a prerequisite now, not an incidental global leftover.
+        crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
+            Some(1),
+        );
         WifiDriverTaskProgressTestGuard { _guard: guard }
     }
 
@@ -22502,7 +22861,7 @@ mod tests {
             ));
             for turn in 1..=(CONSOLE_OUTPUT_BACKLOG_LINES + 8) {
                 let status = format!(
-                    "CYW43_BOOTSTRAP_TURN attempt=1 turn={turn} stage=cyw43-baseline-normalization-begin operation=true repeat={turn}"
+                    "CYW43_BOOTSTRAP_TURN attempt=1 turn={turn} stage=cyw43-cold-physical-lifetime-begin operation=true repeat={turn}"
                 );
                 let _ = pump.queue_cyw43_bootstrap_operator_line(status.as_str());
             }
@@ -22543,7 +22902,7 @@ mod tests {
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| {
-                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt"
+                    line == "[drivers] WiFi starting one CYW43/SDIO physical lifetime"
                 }));
             pump.physical_response_barrier = PhysicalResponseBarrier::Idle;
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
@@ -22554,7 +22913,7 @@ mod tests {
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| {
-                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt"
+                    line == "[drivers] WiFi starting one CYW43/SDIO physical lifetime"
                 }));
 
             pump.now_ms = 9_999;
@@ -22566,7 +22925,7 @@ mod tests {
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| {
-                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt (still working)"
+                    line == "[drivers] WiFi starting one CYW43/SDIO physical lifetime (still working)"
                 }));
             pump.now_ms = 10_000;
             for _ in 0..4 {
@@ -22579,7 +22938,7 @@ mod tests {
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| {
-                    line == "[drivers] WiFi normalizing the CYW43/SDIO pair for a consistent first attempt (still working)"
+                    line == "[drivers] WiFi starting one CYW43/SDIO physical lifetime (still working)"
                 }));
         }
     }
@@ -24198,7 +24557,7 @@ mod tests {
             "{prepared}"
         );
         assert!(prepared.ends_with("exact=not-published"), "{prepared}");
-        let wake = KernelConsoleTestPump::wifi_diag_root_wake_line(
+        let (wake, wake_counters) = KernelConsoleTestPump::wifi_diag_root_wake_lines(
             crate::hal::driver_task::Cyw43RootWakeSnapshot {
                 bound: true,
                 badge: 1,
@@ -24215,6 +24574,20 @@ mod tests {
         assert!(
             wake.ends_with("signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck"),
             "{wake}"
+        );
+        assert!(
+            !wake_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{wake_counters}"
+        );
+        assert!(
+            wake_counters.starts_with(
+                "wifi: root rx_wake_counters polls=18446744073709551615 hits=18446744073709551615"
+            ),
+            "{wake_counters}"
+        );
+        assert!(
+            wake_counters.ends_with("stale_clear_skips=18446744073709551615"),
+            "{wake_counters}"
         );
     }
 
@@ -26019,6 +26392,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn cyw43_post_dispatch_work_is_retained_for_a_later_outer_turn() {
+        #[cfg(feature = "kernel")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -26064,6 +26439,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn cyw43_post_dispatch_does_not_spin_through_idle_flush_polls() {
+        #[cfg(feature = "kernel")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -26103,6 +26480,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn cyw43_data_ready_skips_private_tail_when_tcp_flush_is_idle() {
+        #[cfg(feature = "kernel")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -26137,6 +26516,8 @@ mod tests {
     #[cfg(feature = "net-console")]
     #[test]
     fn cyw43_data_ready_gets_one_outer_network_poll_without_private_tail() {
+        #[cfg(feature = "kernel")]
+        let _progress_guard = wifi_driver_task_progress_test_guard();
         let driver = LoopbackSerial::<16>::new();
         let serial = SerialPort::<_, 16, 16, 32>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -29758,6 +30139,53 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn wifi_gate_one_requires_one_completed_supervisor_bound_physical_lifetime() {
+        let completed = pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 9,
+            completed_epoch: 9,
+            ..pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        };
+        let active = pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 9,
+            ..pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        };
+        let failed = pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 9,
+            failed_epoch: 9,
+            ..pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        };
+        let invalid = pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord {
+            magic: 0,
+            ..completed
+        };
+
+        assert!(!KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            None, true,
+        ));
+        assert!(!KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            Some(active),
+            true,
+        ));
+        assert!(!KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            Some(failed),
+            true,
+        ));
+        assert!(!KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            Some(invalid),
+            true,
+        ));
+        assert!(!KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            Some(completed),
+            false,
+        ));
+        assert!(KernelConsoleTestPump::wifi_physical_lifetime_gate_ready(
+            Some(completed),
+            true,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn wifi_nested_sdio_fault_uses_only_same_operation_progress_gate() {
         let transport_fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-transport-init",
@@ -30349,6 +30777,9 @@ mod tests {
     #[test]
     fn wifi_pair_restart_with_stale_sdio_engine_marker_reports_unknown_owner_intake() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
+            None,
+        );
         let cyw43 = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         let sdio = crate::hal::driver_task::SDIO_HOST_DRIVER_TASK_CONTRACT;
         crate::hal::driver_task::test_record_driver_task_ring_progress_snapshot(
@@ -30390,6 +30821,12 @@ mod tests {
         assert!(
             rendered.contains(
                 "wifi: prerequisite name=cyw43-sdio-pair-restart status=blocked owner_intake=unknown cyw43_phase=cyw43-sdio-pair-restart-required sdio_last_phase=command-observed next=inspect-prior-cyw43-sdio-owner-frontier-and-restart-cause"
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 1 owner_lifetime lifetime_begun=0 lifetime_completed=0 lifetime_failed=0 lifetime_active=unknown source=sdio-owner"
             ),
             "{rendered}"
         );
@@ -30516,6 +30953,12 @@ mod tests {
 
         assert!(
             !rendered.contains("prerequisite name=cyw43-sdio-pair-restart"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi: gate 1 owner_lifetime lifetime_begun=1 lifetime_completed=1 lifetime_failed=0 lifetime_active=no source=sdio-owner"
+            ),
             "{rendered}"
         );
         assert!(
@@ -31157,17 +31600,25 @@ mod tests {
         net.active_conn_id = Some(17);
         net.authenticated_conn_id = Some(17);
         net.counters.wifi_rx_runtime_queue_count = 37;
+        let mut outer_turns = 0usize;
 
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            let mut outer_turns = 0usize;
-            while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
+            while pump.metrics.net_cyw43_service_turn_cap_exits == 0
+                && pump.metrics.net_cyw43_service_time_cap_exits == 0
+            {
                 assert!(
                     outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
-                    "bounded CYW43 quantum must reach its turn cap"
+                    "bounded CYW43 quantum must reach a declared turn or time cap: phase={:?} consecutive={} service_turns={} terminal_exits={} guard_exits={} time_exits={}",
+                    pump.linked_runtime_service_phase,
+                    pump.linked_runtime_network_consecutive_turns,
+                    pump.metrics.net_cyw43_service_turns,
+                    pump.metrics.net_cyw43_service_terminal_exits,
+                    pump.metrics.net_cyw43_service_guard_exits,
+                    pump.metrics.net_cyw43_service_time_cap_exits,
                 );
                 pump.poll();
                 outer_turns = outer_turns.saturating_add(1);
@@ -31178,10 +31629,16 @@ mod tests {
                 "the bounded burst must return ownership to physical operator service"
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
-            assert_eq!(pump.metrics.net_cyw43_service_turn_cap_exits, 1);
             assert_eq!(
-                pump.metrics.net_cyw43_service_max_turns,
-                u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+                pump.metrics
+                    .net_cyw43_service_turn_cap_exits
+                    .saturating_add(pump.metrics.net_cyw43_service_time_cap_exits),
+                1,
+                "one bounded terminal must end the Network quantum"
+            );
+            assert!(
+                pump.metrics.net_cyw43_service_max_turns
+                    <= u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
             );
             assert_eq!(
                 pump.metrics.net_cyw43_service_operator_yields, 0,
@@ -31194,16 +31651,37 @@ mod tests {
                     .max_ops_per_turn,
                 "the scheduler turn cap must track compiler-declared CYW43 authority"
             );
-            assert_eq!(
-                outer_turns,
-                usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+            assert!(outer_turns != 0);
+            assert!(outer_turns <= usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS));
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_some(),
+                "the transaction cap must retain Network work behind an operator fence"
             );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "Serial must receive the first post-quantum operator turn"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "Dispatch completes the bounded operator rotation when no physical work remains"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
         }
 
-        assert_eq!(
-            net.polls,
-            usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
-            "each outer EventPump turn may admit exactly one Network poll"
+        assert!(
+            net.polls <= outer_turns && outer_turns.saturating_sub(net.polls) <= 1,
+            "each admitted outer turn must either perform one Network poll or terminate the quantum at its pre-poll cap"
         );
     }
 
@@ -31305,6 +31783,11 @@ mod tests {
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
             assert_eq!(pump.metrics.net_cyw43_service_dispatch_exits, 1);
             assert_eq!(pump.metrics.net_cyw43_service_terminal_exits, 0);
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_some(),
+                "a buffered complete command must fence durable Network re-admission"
+            );
 
             pump.poll();
             assert_eq!(
@@ -31320,6 +31803,11 @@ mod tests {
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Network
+            );
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "Dispatch may reopen Network only after the command received its bounded turn"
             );
         }
 
@@ -31454,7 +31942,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_pending_dpc_receives_transaction_sized_quantum_before_auth() {
+    fn linked_cyw43_pending_dpc_receives_bounded_quantum_before_auth() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -31502,10 +31990,12 @@ mod tests {
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
             let mut outer_turns = 0usize;
-            while pump.metrics.net_cyw43_service_turn_cap_exits == 0 {
+            while pump.metrics.net_cyw43_service_turn_cap_exits == 0
+                && pump.metrics.net_cyw43_service_time_cap_exits == 0
+            {
                 assert!(
                     outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
-                    "bounded DPC quantum must reach its turn cap"
+                    "bounded DPC quantum must reach either its turn or virtual-time cap"
                 );
                 pump.poll();
                 outer_turns = outer_turns.saturating_add(1);
@@ -31519,11 +32009,18 @@ mod tests {
                 pump.metrics.net_cyw43_service_operator_yields, 0,
                 "DPC urgency must not reintroduce the removed four-turn stride"
             );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turn_cap_exits
+                    + pump.metrics.net_cyw43_service_time_cap_exits,
+                1,
+                "exactly one bounded cap must terminate the DPC quantum"
+            );
         }
 
-        assert_eq!(
+        assert!(
+            net.polls != 0 && net.polls <= usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+            "DPC service must make progress without exceeding the transaction cap: {} polls",
             net.polls,
-            usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
         );
     }
 
@@ -31672,6 +32169,9 @@ mod tests {
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
                 crate::hal::driver_task::test_reset_cyw43_root_wake();
                 crate::serial::test_end_linked_runtime_only_transport();
             }
@@ -31728,6 +32228,408 @@ mod tests {
             );
         }
         assert_eq!(wifi.polls, 1);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_durable_level_survives_consumed_edge_until_exact_idle() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(41, 7, 3, 1),
+        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(6, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+            assert_eq!(
+                pump.linked_runtime_cyw43_durable_resume,
+                Some(LinkedRuntimeCyw43DurableResume {
+                    generation: 41,
+                    pair_epoch: 7,
+                    physical_lifetime_epoch: 3,
+                })
+            );
+
+            pump.poll();
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "the first Network turn must consume only the edge cursor"
+            );
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "the unchanged durable level must keep bounded Network service admitted"
+            );
+            assert!(pump.linked_runtime_cyw43_durable_resume.is_some());
+
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(41, 7, 3, 0),
+            ));
+            pump.poll();
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_none(),
+                "exact idle for the same identity must retire durable resume"
+            );
+            assert_ne!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "an idle identity must leave the retained Network burst"
+            );
+        }
+        assert_eq!(wifi.polls, 2);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_generation_change_invalidates_resume_and_operator_fence() {
+        struct SnapshotReset;
+
+        impl Drop for SnapshotReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let _reset = SnapshotReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(51, 11, 5, 1),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        pump.require_linked_runtime_cyw43_operator_rotation();
+        assert!(pump.linked_runtime_cyw43_durable_resume.is_some());
+        assert!(pump
+            .linked_runtime_cyw43_operator_rotation_pending
+            .is_some());
+
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(52, 12, 6, 0),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        assert!(
+            pump.linked_runtime_cyw43_durable_resume.is_none(),
+            "the old generation/pair resume must not cross restart identity"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_operator_rotation_pending
+                .is_none(),
+            "the stale identity's WiFi-only operator fence must be invalidated too"
+        );
+
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(53, 13, 7, 1),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        pump.require_linked_runtime_cyw43_operator_rotation();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(54, 14, 8, 2),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        assert_eq!(
+            pump.linked_runtime_cyw43_durable_resume,
+            Some(LinkedRuntimeCyw43DurableResume {
+                generation: 54,
+                pair_epoch: 14,
+                physical_lifetime_epoch: 8,
+            }),
+            "new-identity work must replace rather than inherit stale resume state"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_operator_rotation_pending
+                .is_none(),
+            "new-identity work must not inherit the old generation's fairness fence"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_physical_lifetime_change_invalidates_resume_and_operator_fence() {
+        struct SnapshotReset;
+
+        impl Drop for SnapshotReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let _reset = SnapshotReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(55, 15, 9, 1),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        pump.require_linked_runtime_cyw43_operator_rotation();
+        assert!(pump.linked_runtime_cyw43_durable_resume.is_some());
+        assert!(pump
+            .linked_runtime_cyw43_operator_rotation_pending
+            .is_some());
+
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test_with_bound_lifetime(
+                55, 15, 10, 9, 1,
+            ),
+        ));
+        pump.refresh_linked_runtime_cyw43_durable_resume();
+        assert!(
+            pump.linked_runtime_cyw43_durable_resume.is_none(),
+            "work under an unbound replacement lifetime must not create a new resume token"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_operator_rotation_pending
+                .is_none(),
+            "a fairness fence must not cross a physical SDIO lifetime boundary"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_epoch_zero_work_never_admits_an_ordinary_network_turn() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(56, 16, 0, 1),
+        ));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.counters.wifi_rx_pending_queue_count = 1;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+            pump.linked_runtime_cyw43_rx_admission_pending = true;
+            pump.refresh_linked_runtime_cyw43_durable_resume();
+            pump.require_linked_runtime_cyw43_operator_rotation();
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_none()
+                    && pump
+                        .linked_runtime_cyw43_operator_rotation_pending
+                        .is_none(),
+                "epoch-zero work must retract both retained Network identities"
+            );
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_can_follow_serial(false),
+                "a stale edge cursor must not bypass the physical-lifetime fence"
+            );
+
+            pump.poll_linked_runtime_cyw43_rx_admission();
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "epoch-zero state must not consume and convert a wake edge"
+            );
+            let wake = crate::hal::driver_task::cyw43_root_wake_snapshot()
+                .expect("configured CYW43 wake route remains inspectable");
+            assert_eq!(wake.polls, 0);
+            assert_eq!(wake.hits, 0);
+            assert!(
+                !wake.pending,
+                "EventPump must leave the kernel-latched edge unconsumed"
+            );
+            assert!(
+                !pump.linked_runtime_cyw43_network_burst_due()
+                    && !pump.linked_runtime_cyw43_priority_work_due(),
+                "root queues cannot manufacture Network authority without a completed lifetime"
+            );
+
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll_with_linked_serial_runtime();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the final Network-entry guard must fail closed to the physical operator"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+        }
+        assert_eq!(
+            wifi.polls, 0,
+            "no NIC, CYW43, or SDIO child turn may run for epoch-zero work"
+        );
+        assert!(
+            crate::hal::driver_task::poll_cyw43_root_wake_notification(),
+            "the untouched wake edge remains available to the later valid owner"
+        );
+        let wake = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 wake route remains inspectable");
+        assert_eq!(wake.polls, 1);
+        assert_eq!(wake.hits, 1);
+        assert!(wake.pending);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_lifetime_fence_covers_direct_runtime_entries_without_affecting_genet() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(57, 17, 0, 1),
+        ));
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(1);
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+            let stale = LinkedRuntimeCyw43DurableResume {
+                generation: 56,
+                pair_epoch: 16,
+                physical_lifetime_epoch: 9,
+            };
+            pump.linked_runtime_cyw43_rx_admission_pending = true;
+            pump.linked_runtime_cyw43_durable_resume = Some(stale);
+            pump.linked_runtime_cyw43_operator_rotation_pending = Some(stale);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(1),
+                remaining_turns: 1,
+            };
+
+            pump.poll_runtime(false, false, true);
+            pump.poll_pre_root_network();
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending
+                    && pump.linked_runtime_cyw43_durable_resume.is_none()
+                    && pump
+                        .linked_runtime_cyw43_operator_rotation_pending
+                        .is_none(),
+                "the central NIC fence must retract stale scheduler state"
+            );
+
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::recovery_for_test(
+                    58, 18, 10,
+                ),
+            ));
+            pump.poll_runtime(false, false, true);
+            pump.poll_pre_root_network();
+        }
+        assert_eq!(
+            wifi.polls, 0,
+            "neither direct runtime entry may poll CYW43 without healthy lifetime authority"
+        );
+        assert_eq!(
+            wifi.tcp_flushes, 0,
+            "the same central fence must reject a retained CYW43 TCP flush",
+        );
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut genet = FakeNet::new();
+        genet.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        genet.active_conn_id = Some(2);
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut genet);
+            pump.poll_runtime(false, false, true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(2),
+                remaining_turns: 1,
+            };
+            pump.poll_pre_root_network();
+        }
+        assert_eq!(
+            genet.polls, 1,
+            "an invalid inactive CYW43 snapshot must not alter the GENET control lane"
+        );
+        assert_eq!(genet.tcp_flushes, 1);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -31916,12 +32818,24 @@ mod tests {
                 "real local-seat input must retain precedence after the Serial turn"
             );
             assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_some(),
+                "queued USB input must fence direct durable Network re-admission"
+            );
 
             let wake_before_quarantine =
                 crate::hal::driver_task::cyw43_root_wake_snapshot().expect("wake snapshot");
             pump.network_service_quarantined = true;
             pump.poll();
             assert!(!pump.linked_runtime_cyw43_rx_admission_pending);
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_none()
+                    && pump
+                        .linked_runtime_cyw43_operator_rotation_pending
+                        .is_none(),
+                "quarantine must invalidate all WiFi-only scheduler state"
+            );
             let wake_after_quarantine =
                 crate::hal::driver_task::cyw43_root_wake_snapshot().expect("wake snapshot");
             assert_eq!(
@@ -31948,6 +32862,9 @@ mod tests {
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
                 crate::hal::driver_task::test_reset_cyw43_root_wake();
                 crate::serial::test_end_linked_runtime_only_transport();
             }
@@ -31958,6 +32875,9 @@ mod tests {
             false, 0,
         ));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(61, 13, 9, 1),
+        ));
         let wake_before = crate::hal::driver_task::cyw43_root_wake_snapshot()
             .expect("configured CYW43 root wake");
         crate::serial::test_begin_linked_runtime_only_transport();
@@ -31989,6 +32909,17 @@ mod tests {
                 !pump.linked_runtime_cyw43_priority_work_due(),
                 "GENET must never acquire the CYW43 pair priority lease"
             );
+            pump.linked_runtime_cyw43_durable_resume = Some(LinkedRuntimeCyw43DurableResume {
+                generation: 60,
+                pair_epoch: 12,
+                physical_lifetime_epoch: 4,
+            });
+            pump.linked_runtime_cyw43_operator_rotation_pending =
+                Some(LinkedRuntimeCyw43DurableResume {
+                    generation: 60,
+                    pair_epoch: 12,
+                    physical_lifetime_epoch: 4,
+                });
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
             pump.poll();
             assert_eq!(
@@ -32000,6 +32931,13 @@ mod tests {
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_pending,
                 "GENET must never arm the CYW43-only edge admission cursor"
+            );
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_none()
+                    && pump
+                        .linked_runtime_cyw43_operator_rotation_pending
+                        .is_none(),
+                "GENET selection must invalidate rather than observe or mutate CYW43 scheduler state"
             );
         }
         assert_eq!(genet.polls, 1);
@@ -35362,6 +36300,9 @@ mod tests {
     #[test]
     fn serial_wifi_diag_reports_cached_driver_task_failure_without_hal_debug_handle() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
+            None,
+        );
         crate::hal::driver_task::publish_wifi_driver_task_bootstrap_failure(
             crate::hal::driver_task::DriverTaskBootstrapFailure {
                 task_key: crate::hal::driver_task::DRIVER_TASK_KEY_SDIO_HOST,
@@ -35407,6 +36348,10 @@ mod tests {
         );
         assert!(
             rendered.contains("wifi: prerequisite name=runtime-resource-admission status=fail contract=sdio-host fault_detail=driver-runtime-sdio-dma-mmio-not-covered next=runtime-power-reset"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("wifi: gate 1 owner_lifetime lifetime_begun=0 lifetime_completed=0 lifetime_failed=0 lifetime_active=unknown source=sdio-owner"),
             "{rendered}"
         );
         assert!(

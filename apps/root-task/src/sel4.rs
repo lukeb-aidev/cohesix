@@ -10,8 +10,12 @@
 
 #[cfg(all(test, not(target_os = "none")))]
 use crate::rust_alloc::boxed::Box;
+#[cfg(any(
+    all(feature = "kernel", target_arch = "aarch64", sel4_config_printing),
+    all(feature = "kernel", target_arch = "aarch64", sel4_config_debug_build)
+))]
+use core::arch::asm;
 use core::{
-    arch::asm,
     convert::TryInto,
     fmt,
     fmt::Write,
@@ -21,13 +25,13 @@ use core::{
     ptr::{self, NonNull},
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
-use spin::{Mutex as SpinMutex, Once as SpinOnce};
+use spin::Mutex as SpinMutex;
+#[cfg(all(feature = "kernel", target_os = "none"))]
+use spin::Once as SpinOnce;
 
 use crate::bootstrap::bootinfo_snapshot::{BootInfoState, BootinfoWindow};
 use crate::bootstrap::cspace_sys;
 use crate::bootstrap::ipcbuf_view::IpcBufView;
-#[cfg(feature = "kernel")]
-use crate::bootstrap::ktry;
 use crate::bootstrap::log as boot_log;
 use crate::bootstrap::sel4_guard;
 use crate::bootstrap::DevicePtPoolConfig;
@@ -1317,7 +1321,7 @@ static DEBUG_UART_CAPTURE: SpinMutex<HeaplessVec<u8, DEBUG_UART_CAPTURE_LEN>> =
     SpinMutex::new(HeaplessVec::new());
 
 /// Emits a byte to the debug UART in host builds without touching MMIO.
-#[cfg(all(not(feature = "kernel")))]
+#[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_char_raw(byte: u8) {
     #[cfg(test)]
@@ -1331,7 +1335,7 @@ pub fn debug_put_char_raw(byte: u8) {
 }
 
 /// Emits a byte slice to the debug UART in host builds without touching MMIO.
-#[cfg(all(not(feature = "kernel")))]
+#[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_bytes_raw(bytes: &[u8]) {
     for &byte in bytes {
@@ -1340,7 +1344,7 @@ pub fn debug_put_bytes_raw(bytes: &[u8]) {
 }
 
 /// Emits a line (with CRLF) to the debug UART in host builds without touching MMIO.
-#[cfg(all(not(feature = "kernel")))]
+#[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub fn debug_put_line_raw(line: &[u8]) {
     debug_put_bytes_raw(line);
@@ -1348,14 +1352,14 @@ pub fn debug_put_line_raw(line: &[u8]) {
 }
 
 /// Emits bytes without an extra UART lock in host builds.
-#[cfg(all(not(feature = "kernel")))]
+#[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub(crate) fn debug_put_bytes_unlocked(bytes: &[u8]) {
     debug_put_bytes_raw(bytes);
 }
 
 /// Emits a line without an extra UART lock in host builds.
-#[cfg(all(not(feature = "kernel")))]
+#[cfg(not(feature = "kernel"))]
 #[inline(always)]
 pub(crate) fn debug_put_line_unlocked(line: &[u8]) {
     debug_put_line_raw(line);
@@ -2217,7 +2221,9 @@ pub fn cnode_copy_depth(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (dest_root, dest_index, src_root, src_index, rights);
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights,
+        );
         seL4_NoError
     }
 }
@@ -2519,7 +2525,9 @@ pub fn cnode_mint_depth(
 
     #[cfg(not(target_os = "none"))]
     {
-        let _ = (dest_root, dest_index, src_root, src_index, rights, badge);
+        let _ = (
+            dest_root, dest_index, dest_depth, src_root, src_index, src_depth, rights, badge,
+        );
         seL4_NoError
     }
 }
@@ -2551,7 +2559,7 @@ pub fn cnode_mint_checked(
                 badge,
             )
         };
-        ktry("cnode.mint", rc as i32)
+        crate::bootstrap::ktry("cnode.mint", rc as i32)
     }
 
     #[cfg(not(target_os = "none"))]
@@ -2811,16 +2819,26 @@ pub fn bootinfo_debug_dump(view: &BootInfoView) {
 
 #[inline(always)]
 pub fn debug_dump_scheduler() {
+    #[cfg(target_os = "none")]
+    // SAFETY: This is the seL4 debug scheduler syscall and takes no user
+    // pointers or capability arguments.
     unsafe {
         sel4_sys::seL4_DebugDumpScheduler();
     }
+    #[cfg(not(target_os = "none"))]
+    sel4_sys::seL4_DebugDumpScheduler();
 }
 
 #[inline(always)]
 pub fn debug_dump_cpu_info() {
+    #[cfg(target_os = "none")]
+    // SAFETY: This is the seL4 debug CPU-info syscall and takes no user
+    // pointers or capability arguments.
     unsafe {
         sel4_sys::seL4_DebugDumpCPUInfo();
     }
+    #[cfg(not(target_os = "none"))]
+    sel4_sys::seL4_DebugDumpCPUInfo();
 }
 
 const BOOTINFO_WINDOW_CANARY_PRE: u64 = 0xd00d_f00d_5a5a_cafe;
@@ -5459,11 +5477,14 @@ impl<'a> KernelEnv<'a> {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.tcb.bind.ok");
             }
+            #[cfg(target_os = "none")]
             // SAFETY: This method is only used for the current root TCB; after a successful
             // kernel bind, the root task must update the local libsel4 IPC buffer pointer.
             unsafe {
                 sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
             }
+            #[cfg(not(target_os = "none"))]
+            sel4_sys::seL4_SetIPCBuffer(buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
             // SAFETY: `buffer_vaddr` names the mapped IPC buffer frame installed above.
             let view = unsafe { IpcBufView::new(buffer_vaddr as *const u8, buffer_frame) };
             self.ipcbuf_view = Some(view);

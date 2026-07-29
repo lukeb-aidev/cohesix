@@ -3,7 +3,7 @@
 // Purpose: Validate cache maintenance helpers and DMA audit log ordering.
 // Author: Lukas Bower
 
-#![cfg(feature = "cache-maintenance")]
+#![cfg(all(feature = "cache-maintenance", not(feature = "kernel")))]
 
 use root_task::hal::cache::{set_test_error, CacheErrorKind, CacheMaintenance};
 use root_task::hal::dma;

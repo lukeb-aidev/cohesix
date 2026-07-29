@@ -3,23 +3,26 @@
 // Purpose: Defines tests for root-task cnode_bad_params.
 // Author: Lukas Bower
 
-#![cfg(feature = "kernel")]
+#![cfg(all(feature = "kernel", target_os = "none"))]
 
 use core::mem::{self, MaybeUninit};
 
-use root_task::bootstrap::cspace::{BootInfoView, CSpaceCtx};
+use root_task::bootstrap::cspace::CSpaceCtx;
 use root_task::cspace::CSpace;
 use root_task::sel4::{
     self, seL4_CNode_Mint, seL4_CapInitThreadCNode, seL4_CapInitThreadTCB,
-    seL4_CapRights_ReadWrite, seL4_NoError, seL4_SlotRegion,
+    seL4_CapRights_ReadWrite, seL4_NoError, BootInfoView,
 };
+use sel4_sys::seL4_SlotRegion;
 
-#[cfg(target_os = "none")]
 fn bootinfo_fixture() -> &'static sel4::BootInfo {
     static mut BOOTINFO: MaybeUninit<sel4::BootInfo> = MaybeUninit::uninit();
 
     unsafe {
-        let ptr = BOOTINFO.as_mut_ptr();
+        // SAFETY: this target-only fixture owns the static BootInfo storage,
+        // initializes it before publishing a reference, and never mutates it
+        // after setup.
+        let ptr = core::ptr::addr_of_mut!(BOOTINFO).cast::<sel4::BootInfo>();
         ptr.write(mem::zeroed());
         let bootinfo = &mut *ptr;
         bootinfo.initThreadCNodeSizeBits = 12;
@@ -40,7 +43,6 @@ fn bootinfo_fixture() -> &'static sel4::BootInfo {
     }
 }
 
-#[cfg(target_os = "none")]
 fn ctx_fixture() -> CSpaceCtx {
     let bootinfo = bootinfo_fixture();
     let cspace = CSpace::from_bootinfo(bootinfo);
@@ -48,13 +50,15 @@ fn ctx_fixture() -> CSpaceCtx {
     CSpaceCtx::new(view, cspace)
 }
 
-#[cfg(target_os = "none")]
 #[test]
 fn zero_depth_mint_is_rejected() {
     let mut ctx = ctx_fixture();
     assert_eq!(ctx.smoke_copy_init_tcb(), Ok(()));
 
     let err = unsafe {
+        // SAFETY: the syscall receives only scalar capability selectors from
+        // the validated fixture; the deliberately invalid depth is a kernel
+        // error-path input and does not expose host memory.
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free,
@@ -71,7 +75,6 @@ fn zero_depth_mint_is_rejected() {
     assert_ne!(err, seL4_NoError);
 }
 
-#[cfg(target_os = "none")]
 #[test]
 fn guard_depth_mint_succeeds() {
     let mut ctx = ctx_fixture();
@@ -84,6 +87,8 @@ fn guard_depth_mint_succeeds() {
     assert_ne!(canonical_depth, init_bits);
 
     let err = unsafe {
+        // SAFETY: the validated fixture owns the destination slot and all
+        // syscall arguments are scalar capabilities/depths.
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(1),
@@ -100,6 +105,8 @@ fn guard_depth_mint_succeeds() {
     assert_eq!(err, seL4_NoError);
 
     let legacy_err = unsafe {
+        // SAFETY: as above, the deliberately legacy depth exercises a kernel
+        // rejection path without passing any memory pointer.
         seL4_CNode_Mint(
             seL4_CapInitThreadCNode,
             ctx.first_free.saturating_add(2),

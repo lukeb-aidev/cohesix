@@ -477,8 +477,8 @@ GET_GPIO_CONFIG/polarity, output-low, power-off, 2 ms wait, power-up, 10 ms
 wait, release-high, startup-clock, 10 ms wait, and finalize phases one turn at
 a time. Pending turns publish no completion or owner notification, wait phases
 must not repeat physical writes, firmware GPIO success requires the returned
-zero GPIO token, and generation reset must remain poisoned/masked with no
-pending epoch until the terminal phase. Each GET_CONFIG, SET_CONFIG,
+zero GPIO token, and only the pair transaction's `ReplaySdioEngine` may enter
+this cursor or publish a physical-lifetime terminal. Each GET_CONFIG, SET_CONFIG,
 ASSERT_LOW, and RELEASE_HIGH firmware-property operation must post exactly
 once, retain the DMA request page across later reply-poll turns, use a
 virtual-counter deadline, and publish distinct begin/done progress plus an
@@ -522,11 +522,10 @@ same-generation replay, root-owned SDIO, or a legacy fallback.
 
 The CYW43 software-closure gate is authorized by active Milestone 26d task
 `m26d-cyw43-hardware-free-closure`, where the latency defect was discovered,
-and restores Reopened Milestone 26b tasks
-`m26b-wifi-sdio-notification-dpc-closure` and
-`m26b-net-control-priority`. It exercises the host-testable production
-transaction data and state transitions (`begin_turn`, frontier reservation,
-retained submit, completion miss, continuation grant, immutable
+and restores Reopened Milestone 26b task
+`m26b-wifi-sdio-notification-dpc-closure`. It exercises the host-testable
+production transaction data and state transitions (`begin_turn`, frontier
+reservation, retained submit, completion miss, continuation grant, immutable
 ticket/completion validation, completion commit, and cached replay). The host
 ring adapter executes the production sequence-last command publication, stable
 owner intake, sequence-last completion publication, and stable client read,
@@ -727,10 +726,11 @@ issues. After COMMAND, a delayed-response adversary must withhold the current
 response register value until the request owner W1C-acknowledges its immutable
 `RESPONSE` edge. The owner must then read the current response exactly once,
 preserve a coalesced `CARD_INT`, complete the CMD52 from that response, and
-issue no second command. Stage 8 containment must poison that SDIO owner generation, and a
-subsequent same-generation descriptor must reject with zero command issues
-until the ordinary pair reprobe establishes a replacement generation. The
-owner may reserve two transfer attempts,
+issue no second command. Stage 8 containment must poison that SDIO owner
+generation, and every subsequent ordinary descriptor must reject with zero
+command issues until the canonical root pair transaction scrubs the owner and
+`ReplaySdioEngine` establishes a replacement physical lifetime. The owner may
+reserve two transfer attempts,
 but a second issue is legal only after an entry-inhibit failure proves the first
 command was never written; command, response, data, busy, or later failures are
 issued-unknown and perform no same-generation replay. Each failed attempt gets
@@ -809,9 +809,14 @@ that retained event, and without a latched bit it advances a retained masked
 rearm. State, health, `INT_ENABLE`, `SIGNAL_ENABLE`, ring/disposition, IRQ
 acknowledgement, and signal phases must remain separate; the level route cannot
 rearm early. Subsequent dongle/FIFO source reads must occur only through the
-retained CYW43 DPC, one admitted operation per later turn. Generation-commit
-coverage must prove reciprocal-ring reset precedes state/health publication and
-the separately written interrupt-policy registers.
+retained CYW43 DPC, one admitted operation per later turn. SDIO descriptor
+opcodes 8 (`GENERATION_RESET`) and 10 (`GENERATION_COMMIT`) are retired and
+reserved: coverage must prove both are invalid as ordinary descriptors yet
+produce their stable site-typed rejection before SDHCI, DMA, mailbox,
+power-sequence, ring mutation, or retained-owner cursor activity. It must also
+prove poison rejects otherwise valid ordinary descriptors until the canonical
+pair-entry scrub. CYW43 network op8 `RX_POLL` and op10 `CONTROL_POLL` remain
+separate active operations and are not covered by this retirement.
 
 Terminal-fault coverage must decode the immutable 116-byte version-3 frame and
 preserve its existing 68-byte prefix. Before containment changes either engine,
@@ -823,13 +828,63 @@ terminal registers rather than post-reset state.
 
 Initial shared-core coverage must prove the exact owner-first phases:
 register SDIO service, replay the SDIO descriptor, register CYW43 service,
-replay the CYW43 descriptor, replay both engines plus firmware/control context
-while both remain at bootstrap priority `255`, prove control-plane readiness,
-then lower SDIO and CYW43 in two separate outer turns. Descriptor or engine
-replay must not lower either child early, and each final lowering must consume a
-separate outer turn. Bootstrap and recovery must remain owner-first,
-per-action lanes at priority `255` and must never acquire the steady Network
-priority lease.
+replay the CYW43 descriptor, prove the SDIO prerequisites, hand the mailbox to
+SDIO, and enter the canonical pair transaction directly. No preliminary SDIO
+or CYW43 engine command may issue. The transaction must preserve all 22
+SDIO-before-CYW43 actions, replay the SDIO engine exactly once, replay CYW43,
+and hand off the producer ring. Only after the restart completes may root
+register the SDIO owner, begin context replay, program firmware/control, prove
+control-plane readiness, and lower SDIO and CYW43 in two separate outer turns.
+Descriptor or engine replay must not lower either child early, and each final
+lowering must consume a separate outer turn. Bootstrap and recovery must remain
+owner-first, per-action lanes at priority `255` and must never acquire the
+steady Network priority lease.
+
+Physical-Pi selection coverage must prove every valid Wi-Fi selection,
+explicit Wi-Fi or `Auto` with credentials, routes to the persistent post-prompt
+supervisor with or without a local seat and never calls the pre-root network
+constructor. Wired selection and `Auto` without credentials must not enter that
+supervisor. Generic root network engine-init coverage must prove GENET emits its
+network-init command and every CYW43 contract is rejected; CYW43 engine replay
+may occur only as `ReplayCyw43Engine` inside the canonical pair transaction.
+
+Cross-layer physical-lifetime coverage must drive the production cold
+supervisor through every retained yield and prove exactly one owner-published
+`begun_epoch`, followed by either the matching `completed_epoch` or matching
+`failed_epoch`. It must prove pair-ring reset preserves only the exact 16-byte
+`DriverRuntimeSdioPhysicalLifetimeRecord` and zeroes every command, completion,
+DPC, grant, continuation, fault-telemetry, and cumulative-counter byte outside
+it. Restart must immediately publish `failed_epoch = begun_epoch` for an active
+lifetime before clearing volatile state, including when its runtime cursor is
+already missing. A later replacement lifetime must advance the epoch without
+erasing the record's previous failed epoch, and no root or CYW43 client may
+write the record. The passive bounded Gate 1 owner-lifetime line must carry
+these fields without truncation:
+
+```text
+wifi: gate 1 owner_lifetime lifetime_begun=<u32> lifetime_completed=<u32> lifetime_failed=<u32> lifetime_active=<yes|no|unknown> source=sdio-owner
+```
+
+The following causal Gate 1 status line must also remain untruncated through
+its `dependency`, `source`, and `next` fields.
+
+The exact completed epoch established during `ReplaySdioEngine` and returned
+by the completed pair transaction must bind the supervisor before context
+replay. Gate 1 must require a valid inactive record whose nonzero
+`begun_epoch == completed_epoch`, whose `failed_epoch != begun_epoch`, and
+whose begun epoch equals that supervisor-bound expected epoch. Gate 8 mark,
+Gate 8 publication commit, operational Gate 8 continuity, and Gate 10
+acceptance must each reject when that owner epoch is absent, active, failed, or
+changed. The passive
+`Cyw43ServiceWorkSnapshot` and EventPump durable-resume identity must include
+the same epoch with connection generation and pair epoch; changing only the
+physical epoch must invalidate both durable Network resume and any pending
+operator fence without admitting Wi-Fi work under the replacement identity.
+
+Pair-restart `ReplaySdioEngine` and `ReplayCyw43Engine` non-ready completions
+must survive the failure fence byte-for-byte and populate the corresponding
+retained engine-init diagnostic. A generic `engine-replay-failed` without the
+exact completion is a test failure.
 
 Once both are lowered, non-CYW43 retained runtimes keep their request-bound
 outer-turn sequence: prepare one immutable sequence-zero record; boost the bus
@@ -1055,10 +1110,12 @@ low-speed card without `4BLS`, a card without SHS, a changed request or
 generation, and an enumerated-card flag without matching completed lane proof.
 Every rejection clears derived width/speed/multi-block authority, poisons the
 generation, performs no FBR or firmware operation, and cannot resume or replay
-in-generation. Recovery coverage must run reset, retained card adoption, and
-exact commit end to end, proving that adoption is owned by pending epoch E+1
-before commit and remains valid when E+1 becomes active. Zero request or
-generation identity must fail before the first CCCR read.
+in that physical lifetime. Recovery coverage must run the canonical root pair
+transaction through its sole `ReplaySdioEngine` lifetime and then drive fresh
+retained card adoption end to end. It must prove no discarded card fact or
+descriptor owner crosses the scrub and that adoption belongs only to the
+completed replacement lifetime. Zero request or generation identity must fail
+before the first CCCR read.
 
 The first read must validate the request's writable bits while allowing only
 the asynchronous availability bits to differ. Boundary tests must prove the
@@ -1078,15 +1135,16 @@ GPFSEL3/GPPUPPDN2 words and the expected masked values.
 
 The production pull-up-clear turn must perform exactly one child-runtime SDIO
 operation: Function 1 CMD52, `SBSDIO_FUNC1_SDIOPULLUP=0`. It must return before
-the first ChipCommon action and advance only after the exact completion. Full
-initial-attach and generation-reprobe traces must contain exactly one such
-descriptor per generation; the reprobe admission test must accept only value
-zero and reject reads or every alternate value. A stale owner must be rejected
-without I/O, and a failed or issued-unknown clear must poison the generation and
-prevent same-generation replay. The reciprocal descriptor-ring/controller test
-must also prove that the SDIO owner claims the exact clear once before issue,
-rejects a duplicate without controller I/O, and admits one new claim only after
-the pending generation changes. A production-chain test must carry the action
+the first ChipCommon action and advance only after the exact completion. Each
+fresh attach in one completed physical lifetime must contain exactly one such
+descriptor. A stale owner must be rejected without I/O, and a failed or
+issued-unknown clear must poison that lifetime and prevent replay. The
+reciprocal descriptor-ring/controller test must also prove that the SDIO owner
+claims the exact clear once before issue and rejects a duplicate without
+controller I/O. A later clear is legal only after the canonical pair
+transaction scrubs both runtimes and `ReplaySdioEngine` establishes a
+replacement lifetime; there is no pending-generation reprobe allowlist. A
+production-chain test must carry the action
 from the CYW43 transport cursor through `service_command_turn`, the reciprocal
 descriptor ring, and the real SDIO controller seam, including terminal poison
 with no second controller issue. Legacy `BACKPLANE_PULLUP_SKIPPED` and
@@ -1111,7 +1169,22 @@ Failure-cut tests must reject stale completions, forbid same-generation replay a
 issued-unknown ownership, and resume or fail deterministically at every
 retained action. EventPump/NetStack tests must prove Wi-Fi urgency is retained
 across later turns rather than implemented as private pre-root, EAPOL,
-tail-ingest, TCP-flush, hot-dispatch, or smoltcp device bursts. They must also
+tail-ingest, TCP-flush, hot-dispatch, or smoltcp device bursts. A root-wake hit
+must act only as edge urgency: consume it on the first admitted Network turn,
+leave the current-physical-lifetime/generation/pair durable work level armed,
+and continue bounded Network service without another notification until an
+exact same-identity idle snapshot clears it. Coverage must exercise every
+reason-mask class, coalesced/lost/repeated notifications, stale idle snapshots,
+physical-lifetime changes, pair and connection generation changes, quarantine,
+reboot, and selected-NIC change.
+A complete TCP command, physical response/input, turn cap, and time cap must
+retain unfinished Wi-Fi work behind a fence and prove `Serial`, optional
+`LocalSeat`, and `Dispatch` each receive their bounded turn before Network
+re-admission. A queued USB report and a buffered complete network command must
+not be bypassed. GENET must neither sample nor retain the CYW43 snapshot and
+must leave the CYW43 urgency, durable-resume, and operator-fence counters/state
+untouched. The passive `rx_wake` state and `rx_wake_counters` records must
+remain separate and untruncated at maximum counter values. Tests must also
 stage a child-invisible sequence-zero
 NetData request at the Gate 8 handoff, prove the next outer turn decodes it
 through HAL's immutable retained identity and advances it beyond `Inactive`,
@@ -1314,6 +1387,15 @@ USB recovery retain their operator precedence; quarantine and reboot clear the
 local cursor without a NIC turn or wake poll. The same injected wake under
 GENET must leave its ordinary phase result, CYW43 wake counters, and CYW43
 quantum counters unchanged.
+
+The central `network_contract_service_admissible` check must fence both direct
+EventPump service entries, ordinary `poll_runtime` and pre-root
+`poll_pre_root_network`. Coverage must prove the check runs before Network
+service and again immediately before either CYW43 polling or retained TCP
+flushing. Missing, active, failed, or replaced physical epochs and
+recovery-active snapshots must clear the Wi-Fi wake and durable-resume tokens
+and admit neither operation; the same cases must leave GENET service unchanged.
+
 `Serial` may perform one TX-first reciprocal-ring turn; `LocalSeat` then polls
 one retained USB keyboard turn so fresh physical input is buffered before the
 network quantum. `Dispatch` may consume one serial, buffered local-seat, or
@@ -1559,7 +1641,27 @@ The focused adversarial cases include
 `sdio_owner_clamps_drifted_descriptor_to_linux_request_watchdog`,
 `sdio_linux_inhibit_fence_does_not_consume_issued_request_watchdog`,
 `sdio_runtime_rejects_all_legacy_nondescriptor_commands`,
-`sdio_attach_and_generation_reset_stay_masked_until_typed_dpc_activation`,
+`sdio_retired_generation_operations_typed_reject_before_mmio`,
+`sdio_poison_rejects_ordinary_descriptors_until_canonical_pair_scrub`,
+`canonical_pair_entry_scrub_clears_owner_poison_without_starting_another_lifetime`,
+`sdio_physical_lifetime_completes_once_for_one_low_high_cycle`,
+`sdio_pair_restart_immediately_fails_the_active_power_lifetime`,
+`sdio_pair_restart_uses_the_durable_active_epoch_when_the_cursor_is_lost`,
+`sdio_physical_lifetime_failure_survives_runtime_restart_and_later_success`,
+`ring_scrub_preserves_only_the_sdio_physical_lifetime_record`,
+`runtime_engine_init_command_has_no_cyw43_root_init_lane`,
+`genet_engine_init_uses_only_the_genet_net_init_command`,
+`gate8_and_gate10_reject_missing_active_failed_or_replaced_physical_lifetimes`,
+`cyw43_service_snapshot_rejects_invalid_physical_lifetime_metadata`,
+`wifi_gate_one_requires_one_completed_supervisor_bound_physical_lifetime`,
+`linked_cyw43_physical_lifetime_change_invalidates_resume_and_operator_fence`,
+`cyw43_durable_work_requires_one_completed_non_recovery_physical_lifetime`,
+`linked_cyw43_epoch_zero_work_never_admits_an_ordinary_network_turn`,
+`cyw43_lifetime_fence_covers_direct_runtime_entries_without_affecting_genet`,
+`pi4_wifi_supervisor_defers_explicit_wifi_with_or_without_local_seat`,
+`pi4_wifi_supervisor_defers_auto_wifi_only_with_credentials`,
+`pi4_wifi_supervisor_does_not_defer_wired_net_console`,
+`pi4_wifi_supervisor_keeps_wired_immediate_with_stale_wifi_credentials`,
 `sdio_fault_telemetry_v3_distinguishes_dma_terminal_states`,
 `firmware_prep_live_contract_crosses_real_controller_once_per_outer_turn`,
 `firmware_prep_live_contract_failure_cuts_are_terminal_and_never_replayed`,
@@ -1573,11 +1675,9 @@ The focused adversarial cases include
 `sdio_descriptor_rejects_unrepresentable_cmd53_byte_mode_before_issue`,
 `sdio_wifi_power_sequence_advances_one_bounded_action_per_turn`,
 `sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal`,
-`sdio_generation_reset_keeps_epoch_uncommitted_while_pwrseq_pending`,
 `sdio_retained_bootstrap_cmd52_and_card_commands_issue_once_without_private_polls`,
 `sdio_retained_host_config_runs_recovery_and_set_ios_across_outer_turns`,
 `sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn`,
-`sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication`,
 `firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one`,
 `cyw43_linked_f2_tx_uses_cached_window_without_per_packet_iorx`,
 `cyw43_linked_control_and_eapol_tx_use_one_cached_window_f2_issue`,
@@ -1772,13 +1872,15 @@ configured routing targets, not delivery proof. Serial and qlog preserve the
 raw `CYW43_BOOTSTRAP_SUPERVISOR` schema; when HDMI is present and its bounded
 FIFO or bounded terminal reserve admits the transition, it preserves only the
 concise typed `[drivers] WiFi ...` rendering on a later `Display` turn.
-During an active Wi-Fi attempt, the physical display must show the baseline
-pair-normalization frontier and must not remain unchanged for more than five
-virtual-time seconds: an unchanged frontier emits a bounded `still working`
-heartbeat. Fill the routine serial bootstrap backlog in the focused EventPump
-test and prove that it cannot starve this display lane. An authenticated serial
-response tail may preempt display only until its bounded ACK/ERR/END plus prompt
-sequence completes.
+During an active Wi-Fi attempt, the first physical display frontier must be
+exactly `[drivers] WiFi starting one CYW43/SDIO physical lifetime` and must not
+remain unchanged for more than five virtual-time seconds: its bounded heartbeat
+adds `(still working)`. Tests must reject the retired baseline-normalization
+wording because it concealed the distinction between physical-lifetime
+construction and later pair/control progress. Fill the routine serial bootstrap
+backlog in the focused EventPump test and prove that it cannot starve this
+display lane. An authenticated serial response tail may preempt display only
+until its bounded ACK/ERR/END plus prompt sequence completes.
 
 CYW43/SDIO runtime foreground coverage must prove the correct authority path,
 not only software state transitions. Non-CYW43 root-to-runtime commands use an

@@ -14,7 +14,7 @@ use sel4_sys::{self, seL4_CNode, seL4_CPtr, seL4_CapRights};
 fn encode_slot_applies_guard_shift() {
     let init_bits = 13u8;
     let encoded = encode_slot(0x1, init_bits);
-    let expected_shift = (sel4_sys::seL4_WordBits - u32::from(init_bits)) as usize;
+    let expected_shift = (sel4_sys::seL4_WordBits - sel4_sys::seL4_Word::from(init_bits)) as usize;
     assert_eq!(encoded, 0x1 << expected_shift);
 }
 
@@ -24,7 +24,11 @@ fn cnode_copy_uses_selected_style() {
     let init_bits = 13u8;
     let dst_slot: seL4_CPtr = 0x20;
     let src_slot: seL4_CPtr = 0x10;
-    let mut bootinfo: sel4_sys::seL4_BootInfo = unsafe { core::mem::zeroed() };
+    let mut bootinfo: sel4_sys::seL4_BootInfo = unsafe {
+        // SAFETY: seL4_BootInfo is a plain C ABI record whose pointer and
+        // numeric fields all admit zero as a test-fixture baseline.
+        core::mem::zeroed()
+    };
     bootinfo.initThreadCNodeSizeBits = init_bits as _;
     bootinfo.empty.start = 0x10;
     bootinfo.empty.end = 0x80;

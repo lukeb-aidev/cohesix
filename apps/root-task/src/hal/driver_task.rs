@@ -28,17 +28,18 @@ use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot, DriverRuntimeDpcEventRing,
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
-    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
-    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
-    DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
-    DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
-    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DriverRuntimeSdioPhysicalLifetimeRecord, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
+    DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_DPC_EVENT_RING_BYTES, DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH,
+    DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET, DRIVER_RUNTIME_ENGINE_INIT_AUX,
+    DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
     DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
@@ -422,6 +423,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
     DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+    DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES, DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SERIAL_IRQ,
     DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
     DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
@@ -2835,6 +2837,39 @@ impl DriverTaskRingView {
         })
     }
 
+    fn read_sdio_physical_lifetime(&self) -> Option<DriverRuntimeSdioPhysicalLifetimeRecord> {
+        let base = usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET);
+        let read = || {
+            Some(DriverRuntimeSdioPhysicalLifetimeRecord {
+                magic: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioPhysicalLifetimeRecord, magic),
+                )?,
+                begun_epoch: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioPhysicalLifetimeRecord,
+                        begun_epoch
+                    ),
+                )?,
+                completed_epoch: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioPhysicalLifetimeRecord,
+                        completed_epoch
+                    ),
+                )?,
+                failed_epoch: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioPhysicalLifetimeRecord,
+                        failed_epoch
+                    ),
+                )?,
+            })
+        };
+        let first = read()?;
+        driver_task_shared_load_barrier();
+        let second = read()?;
+        DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(first, second)
+    }
+
     fn read_dpc_ring(&self) -> Option<DriverRuntimeDpcEventRing> {
         let base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         let version_len =
@@ -2917,6 +2952,28 @@ impl DriverTaskRingView {
         let mut offset = 0usize;
         while offset < DRIVER_TASK_RING_PAGE_BYTES {
             if self.window.write_u32(offset, 0).is_err() {
+                return false;
+            }
+            offset = offset.saturating_add(core::mem::size_of::<u32>());
+        }
+        true
+    }
+
+    fn zero_except(&self, preserved_offset: usize, preserved_len: usize) -> bool {
+        let Some(preserved_end) = preserved_offset.checked_add(preserved_len) else {
+            return false;
+        };
+        if preserved_offset & (core::mem::size_of::<u32>() - 1) != 0
+            || preserved_len & (core::mem::size_of::<u32>() - 1) != 0
+            || preserved_end > DRIVER_TASK_RING_PAGE_BYTES
+        {
+            return false;
+        }
+        let mut offset = 0usize;
+        while offset < DRIVER_TASK_RING_PAGE_BYTES {
+            if (offset < preserved_offset || offset >= preserved_end)
+                && self.window.write_u32(offset, 0).is_err()
+            {
                 return false;
             }
             offset = offset.saturating_add(core::mem::size_of::<u32>());
@@ -9152,8 +9209,76 @@ fn reset_cyw43_root_wake_for_pair_restart(slot: &DriverTaskCommandSlot) {
     }
 }
 
+/// Return a passive, stable copy of the SDIO owner's physical WiFi lifetime.
+///
+/// This never resumes a child, advances a request, or writes the shared ring.
 #[cfg(feature = "kernel")]
-fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
+#[must_use]
+pub fn driver_task_sdio_physical_lifetime_snapshot(
+) -> Option<DriverRuntimeSdioPhysicalLifetimeRecord> {
+    let slot = driver_task_slot_for_contract(SDIO_HOST_DRIVER_TASK_CONTRACT)?;
+    if slot.root_ring_writers.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let offset = usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET);
+    driver_task_ring_invalidate_root_range(
+        ring_root_ptr.checked_add(offset)?,
+        usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES),
+    );
+    ring.read_sdio_physical_lifetime()
+}
+
+#[cfg(feature = "kernel")]
+const fn sdio_physical_lifetime_transition_epoch(
+    before: DriverRuntimeSdioPhysicalLifetimeRecord,
+    after: DriverRuntimeSdioPhysicalLifetimeRecord,
+) -> Option<u32> {
+    let Some(expected) = before.next_epoch() else {
+        return None;
+    };
+    if !after.valid()
+        || after.active()
+        || after.begun_epoch != expected
+        || after.completed_epoch != expected
+        || after.failed_epoch == expected
+    {
+        return None;
+    }
+    let expected_failure_history = if before.active() {
+        before.begun_epoch
+    } else {
+        before.failed_epoch
+    };
+    if after.failed_epoch != expected_failure_history {
+        return None;
+    }
+    Some(expected)
+}
+
+/// Return whether the SDIO owner still reports one exact completed lifetime.
+///
+/// This passive comparison never issues driver work and is suitable only for
+/// invalidating stale higher-level state.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_sdio_physical_lifetime_epoch_current(epoch: u32) -> bool {
+    epoch != 0
+        && driver_task_sdio_physical_lifetime_snapshot().is_some_and(|record| {
+            record.valid()
+                && !record.active()
+                && record.begun_epoch == epoch
+                && record.completed_epoch == epoch
+                && record.failed_epoch != epoch
+        })
+}
+
+#[cfg(feature = "kernel")]
+fn reset_cyw43_sdio_restart_ring(
+    slot: &DriverTaskCommandSlot,
+    preserve_sdio_physical_lifetime: bool,
+) -> bool {
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if ring_root_ptr == 0 || slot.root_ring_writers.load(Ordering::Acquire) != 0 {
         return false;
@@ -9161,7 +9286,15 @@ fn reset_cyw43_sdio_restart_ring(slot: &DriverTaskCommandSlot) -> bool {
     let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
         return false;
     };
-    if !ring.zero() {
+    let reset = if preserve_sdio_physical_lifetime {
+        ring.zero_except(
+            usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET),
+            usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES),
+        )
+    } else {
+        ring.zero()
+    };
+    if !reset {
         return false;
     }
     driver_task_ring_clean_root_range(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
@@ -9185,7 +9318,7 @@ fn prepare_cyw43_sdio_restart_slot(context: Cyw43SdioRuntimeRestartContext) -> b
     let Some(slot) = slot_for_task_key(context.task_key) else {
         return false;
     };
-    if !reset_cyw43_sdio_restart_ring(slot) {
+    if !reset_cyw43_sdio_restart_ring(slot, context.hot_path == DriverTaskHotPath::SdioHost) {
         return false;
     }
     slot.endpoint
@@ -9239,6 +9372,8 @@ pub enum Cyw43SdioPairRestartFailureKind {
     ContextMissing,
     /// The permitted virtual counter was unavailable.
     CounterUnavailable,
+    /// The owner-written physical-lifetime record was unavailable or invalid.
+    PhysicalLifetimeUnavailable,
     /// The aggregate deadline or a retained poll bound expired.
     DeadlineExpired,
     /// One exact restart operation failed.
@@ -9252,6 +9387,7 @@ pub struct Cyw43SdioPairRestartFailure {
     kind: Cyw43SdioPairRestartFailureKind,
     action: &'static str,
     status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
 }
 
 #[cfg(feature = "kernel")]
@@ -9273,6 +9409,13 @@ impl Cyw43SdioPairRestartFailure {
     pub const fn status(self) -> &'static str {
         self.status
     }
+
+    /// Return the exact terminal runtime completion that caused an engine
+    /// replay failure, when the child runtime produced one.
+    #[must_use]
+    pub const fn completion(self) -> Option<DriverTaskCompletionRecord> {
+        self.completion
+    }
 }
 
 /// Result of one retained CYW43/SDIO pair-restart outer turn.
@@ -9291,6 +9434,8 @@ pub enum Cyw43SdioPairRestartTurn {
     Complete {
         /// Newly published pair epoch.
         epoch: u32,
+        /// Exact SDIO-owner lifetime completed by `ReplaySdioEngine`.
+        physical_lifetime_epoch: u32,
     },
     /// The deterministic outer failure fence reached a terminal state.
     Failed(Cyw43SdioPairRestartFailure),
@@ -9384,6 +9529,8 @@ pub struct Cyw43SdioPairRestartCursor {
     delay_start: u64,
     first_member_succeeded: bool,
     cyw43_engine_completion: Option<DriverTaskCompletionRecord>,
+    physical_lifetime_before: DriverRuntimeSdioPhysicalLifetimeRecord,
+    physical_lifetime_epoch: u32,
     published_epoch: u32,
     owns_global_latch: bool,
     released: bool,
@@ -9502,6 +9649,7 @@ enum Cyw43SdioPairRestartOperationOutcome {
     Pending,
     Value(u32),
     Completion(DriverTaskCompletionRecord),
+    FailedCompletion(DriverTaskCompletionRecord),
     Failed,
 }
 
@@ -9512,6 +9660,10 @@ trait Cyw43SdioPairRestartExecutor {
         cursor: &mut Cyw43SdioPairRestartCursor,
         operation: Cyw43SdioPairRestartOperation,
     ) -> Cyw43SdioPairRestartOperationOutcome;
+
+    fn physical_lifetime_snapshot(&mut self) -> Option<DriverRuntimeSdioPhysicalLifetimeRecord> {
+        driver_task_sdio_physical_lifetime_snapshot()
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -9811,7 +9963,7 @@ fn replay_cyw43_sdio_restart_engine_once(
         {
             Cyw43SdioPairRestartOperationOutcome::Completion(completion)
         }
-        Some(_) => Cyw43SdioPairRestartOperationOutcome::Failed,
+        Some(completion) => Cyw43SdioPairRestartOperationOutcome::FailedCompletion(completion),
         None => Cyw43SdioPairRestartOperationOutcome::Pending,
     }
 }
@@ -9978,6 +10130,38 @@ fn current_cyw43_sdio_pair_restart_action(
 }
 
 #[cfg(feature = "kernel")]
+fn bind_cyw43_sdio_pair_physical_lifetime(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    after: DriverRuntimeSdioPhysicalLifetimeRecord,
+) -> bool {
+    if cursor.physical_lifetime_epoch != 0 {
+        return false;
+    }
+    let Some(epoch) =
+        sdio_physical_lifetime_transition_epoch(cursor.physical_lifetime_before, after)
+    else {
+        return false;
+    };
+    cursor.physical_lifetime_epoch = epoch;
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_pair_physical_lifetime_current(
+    cursor: &Cyw43SdioPairRestartCursor,
+    record: Option<DriverRuntimeSdioPhysicalLifetimeRecord>,
+) -> bool {
+    cursor.physical_lifetime_epoch != 0
+        && record.is_some_and(|record| {
+            record.valid()
+                && !record.active()
+                && record.begun_epoch == cursor.physical_lifetime_epoch
+                && record.completed_epoch == cursor.physical_lifetime_epoch
+                && record.failed_epoch != cursor.physical_lifetime_epoch
+        })
+}
+
+#[cfg(feature = "kernel")]
 fn release_cyw43_sdio_pair_restart_latch(cursor: &mut Cyw43SdioPairRestartCursor) {
     if cursor.owns_global_latch && !cursor.released {
         CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
@@ -9992,6 +10176,17 @@ fn enter_cyw43_sdio_pair_restart_failure(
     kind: Cyw43SdioPairRestartFailureKind,
     status: &'static str,
 ) {
+    enter_cyw43_sdio_pair_restart_failure_with_completion(cursor, action, kind, status, None);
+}
+
+#[cfg(feature = "kernel")]
+fn enter_cyw43_sdio_pair_restart_failure_with_completion(
+    cursor: &mut Cyw43SdioPairRestartCursor,
+    action: Cyw43SdioPairRestartAction,
+    kind: Cyw43SdioPairRestartFailureKind,
+    status: &'static str,
+    completion: Option<DriverTaskCompletionRecord>,
+) {
     CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.store(0, Ordering::Release);
     CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
     cursor.substep = 0;
@@ -10001,6 +10196,7 @@ fn enter_cyw43_sdio_pair_restart_failure(
             kind,
             action: action.as_str(),
             status,
+            completion,
         },
         failed_action: action,
         phase: Cyw43SdioPairRestartFencePhase::CloseCyw43Root,
@@ -10089,12 +10285,25 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
             action: "invalid-action-index",
             status: "invalid-action-index",
+            completion: None,
         };
         cursor.mode = Cyw43SdioPairRestartCursorMode::Failed(failure);
         release_cyw43_sdio_pair_restart_latch(cursor);
         return Cyw43SdioPairRestartTurn::Failed(failure);
     };
     let action_label = action.as_str();
+    if cursor.physical_lifetime_epoch != 0
+        && action != Cyw43SdioPairRestartAction::ReplaySdioEngine
+        && !cyw43_sdio_pair_physical_lifetime_current(cursor, executor.physical_lifetime_snapshot())
+    {
+        enter_cyw43_sdio_pair_restart_failure(
+            cursor,
+            action,
+            Cyw43SdioPairRestartFailureKind::ActionFailed,
+            "physical-lifetime-invalidated",
+        );
+        return step_fenced_cyw43_sdio_pair_restart(cursor, Some(now), executor);
+    }
     if matches!(
         action,
         Cyw43SdioPairRestartAction::WaitSdioRecvReady
@@ -10125,7 +10334,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             },
             Cyw43SdioCardIntTurn::Complete { operation } => {
                 if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                    Cyw43SdioPairRestartTurn::Complete { epoch }
+                    Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    }
                 } else {
                     Cyw43SdioPairRestartTurn::Pending {
                         action: action_label,
@@ -10232,6 +10444,18 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         Cyw43SdioPairRestartAction::MaskCardInterrupt => unreachable!(),
     };
     let outcome = executor.execute(cursor, operation);
+    if cursor.physical_lifetime_epoch != 0
+        && action != Cyw43SdioPairRestartAction::ReplaySdioEngine
+        && !cyw43_sdio_pair_physical_lifetime_current(cursor, executor.physical_lifetime_snapshot())
+    {
+        enter_cyw43_sdio_pair_restart_failure(
+            cursor,
+            action,
+            Cyw43SdioPairRestartFailureKind::ActionFailed,
+            "physical-lifetime-invalidated",
+        );
+        return pending_cyw43_sdio_pair_restart_turn(action_label, operation);
+    }
     let succeeded = matches!(
         outcome,
         Cyw43SdioPairRestartOperationOutcome::Complete
@@ -10252,7 +10476,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             let pair_succeeded = cursor.first_member_succeeded && succeeded;
             if pair_succeeded {
                 if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    return Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    };
                 }
             } else {
                 enter_cyw43_sdio_pair_restart_failure(
@@ -10278,7 +10505,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                     == CYW43_SDIO_PAIR_RESTART_NOTIFICATION_DRAIN_CAP.saturating_mul(2)
                 {
                     if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                        return Cyw43SdioPairRestartTurn::Complete { epoch };
+                        return Cyw43SdioPairRestartTurn::Complete {
+                            epoch,
+                            physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                        };
                     }
                 }
             }
@@ -10289,7 +10519,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         | Cyw43SdioPairRestartAction::ReplayCyw43Descriptor => match outcome {
             Cyw43SdioPairRestartOperationOutcome::Complete => {
                 if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    return Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    };
                 }
             }
             Cyw43SdioPairRestartOperationOutcome::Pending => {
@@ -10309,7 +10542,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                     cursor.substep = 1;
                 } else if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action)
                 {
-                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    return Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    };
                 }
             } else {
                 enter_cyw43_sdio_pair_restart_failure(
@@ -10323,15 +10559,40 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         Cyw43SdioPairRestartAction::ReplaySdioEngine
         | Cyw43SdioPairRestartAction::ReplayCyw43Engine => match outcome {
             Cyw43SdioPairRestartOperationOutcome::Completion(completion) => {
+                if action == Cyw43SdioPairRestartAction::ReplaySdioEngine
+                    && !executor.physical_lifetime_snapshot().is_some_and(|record| {
+                        bind_cyw43_sdio_pair_physical_lifetime(cursor, record)
+                    })
+                {
+                    enter_cyw43_sdio_pair_restart_failure(
+                        cursor,
+                        action,
+                        Cyw43SdioPairRestartFailureKind::ActionFailed,
+                        "physical-lifetime-transition-invalid",
+                    );
+                    return pending_cyw43_sdio_pair_restart_turn(action_label, operation);
+                }
                 if action == Cyw43SdioPairRestartAction::ReplayCyw43Engine {
                     cursor.cyw43_engine_completion = Some(completion);
                 }
                 if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    return Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    };
                 }
             }
             Cyw43SdioPairRestartOperationOutcome::Pending => {
                 cursor.poll_count = cursor.poll_count.saturating_add(1);
+            }
+            Cyw43SdioPairRestartOperationOutcome::FailedCompletion(completion) => {
+                enter_cyw43_sdio_pair_restart_failure_with_completion(
+                    cursor,
+                    action,
+                    Cyw43SdioPairRestartFailureKind::ActionFailed,
+                    "engine-replay-failed",
+                    Some(completion),
+                );
             }
             _ => enter_cyw43_sdio_pair_restart_failure(
                 cursor,
@@ -10349,7 +10610,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
                         cursor.published_epoch = epoch;
                         if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action)
                         {
-                            return Cyw43SdioPairRestartTurn::Complete { epoch };
+                            return Cyw43SdioPairRestartTurn::Complete {
+                                epoch,
+                                physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                            };
                         }
                     } else {
                         enter_cyw43_sdio_pair_restart_failure(
@@ -10379,7 +10643,10 @@ fn step_running_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
         _ => {
             if succeeded {
                 if let Some(epoch) = complete_cyw43_sdio_pair_restart_action(cursor, action) {
-                    return Cyw43SdioPairRestartTurn::Complete { epoch };
+                    return Cyw43SdioPairRestartTurn::Complete {
+                        epoch,
+                        physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+                    };
                 }
             } else {
                 enter_cyw43_sdio_pair_restart_failure(
@@ -10421,6 +10688,7 @@ fn step_fenced_cyw43_sdio_pair_restart<E: Cyw43SdioPairRestartExecutor>(
             kind: Cyw43SdioPairRestartFailureKind::ActionFailed,
             action: "failure-fence",
             status: "invalid-fence-state",
+            completion: None,
         };
         return Cyw43SdioPairRestartTurn::Failed(failure);
     };
@@ -10598,9 +10866,10 @@ fn step_cyw43_sdio_pair_restart_with<E: Cyw43SdioPairRestartExecutor>(
     executor: &mut E,
 ) -> Cyw43SdioPairRestartTurn {
     match cursor.mode {
-        Cyw43SdioPairRestartCursorMode::Complete { epoch } => {
-            Cyw43SdioPairRestartTurn::Complete { epoch }
-        }
+        Cyw43SdioPairRestartCursorMode::Complete { epoch } => Cyw43SdioPairRestartTurn::Complete {
+            epoch,
+            physical_lifetime_epoch: cursor.physical_lifetime_epoch,
+        },
         Cyw43SdioPairRestartCursorMode::Failed(failure) => {
             Cyw43SdioPairRestartTurn::Failed(failure)
         }
@@ -10653,6 +10922,7 @@ pub fn begin_cyw43_sdio_pair_restart(
             kind: Cyw43SdioPairRestartFailureKind::AlreadyInProgress,
             action: "begin",
             status: "already-in-progress",
+            completion: None,
         });
     }
     CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
@@ -10667,6 +10937,7 @@ pub fn begin_cyw43_sdio_pair_restart(
             kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
             action: "begin",
             status: "cyw43-context-missing",
+            completion: None,
         });
     };
     let Some(sdio) = cyw43_sdio_runtime_restart_context(DriverTaskHotPath::SdioHost) else {
@@ -10679,6 +10950,22 @@ pub fn begin_cyw43_sdio_pair_restart(
             kind: Cyw43SdioPairRestartFailureKind::ContextMissing,
             action: "begin",
             status: "sdio-context-missing",
+            completion: None,
+        });
+    };
+    let Some(physical_lifetime_before) = driver_task_sdio_physical_lifetime_snapshot()
+        .filter(|record| record.next_epoch().is_some())
+    else {
+        CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.store(0, Ordering::Release);
+        emit_cyw43_sdio_pair_restart_status(
+            Cyw43SdioPairRestartPhase::Start,
+            "physical-lifetime-unavailable",
+        );
+        return Err(Cyw43SdioPairRestartFailure {
+            kind: Cyw43SdioPairRestartFailureKind::PhysicalLifetimeUnavailable,
+            action: "begin",
+            status: "physical-lifetime-unavailable",
+            completion: None,
         });
     };
     let Some(deadline) = Cyw43SdioPairRestartDeadline::new(CYW43_SDIO_PAIR_RESTART_ENVELOPE_US)
@@ -10692,6 +10979,7 @@ pub fn begin_cyw43_sdio_pair_restart(
             kind: Cyw43SdioPairRestartFailureKind::CounterUnavailable,
             action: "begin",
             status: "counter-unavailable",
+            completion: None,
         });
     };
     emit_cyw43_sdio_pair_restart_status(Cyw43SdioPairRestartPhase::Start, "begin");
@@ -10708,6 +10996,8 @@ pub fn begin_cyw43_sdio_pair_restart(
         delay_start: 0,
         first_member_succeeded: false,
         cyw43_engine_completion: None,
+        physical_lifetime_before,
+        physical_lifetime_epoch: 0,
         published_epoch: 0,
         owns_global_latch: true,
         released: false,
@@ -17574,6 +17864,62 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ring_scrub_preserves_only_the_sdio_physical_lifetime_record() {
+        let mut storage = Box::new(AlignedDriverTaskRing(
+            [0xa5a5_5a5a; DRIVER_TASK_RING_PAGE_BYTES / 4],
+        ));
+        let ring = DriverTaskRingView::new(storage.0.as_mut_ptr() as usize)
+            .expect("aligned test ring is admitted");
+        let lifetime = DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 8,
+            completed_epoch: 8,
+            failed_epoch: 7,
+            ..DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        };
+        let lifetime_offset = usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET);
+        let lifetime_len = usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES);
+        let lifetime_words = [
+            lifetime.magic,
+            lifetime.begun_epoch,
+            lifetime.completed_epoch,
+            lifetime.failed_epoch,
+        ];
+        assert_eq!(
+            lifetime_len,
+            core::mem::size_of::<DriverRuntimeSdioPhysicalLifetimeRecord>(),
+        );
+        for (index, word) in lifetime_words.into_iter().enumerate() {
+            ring.window
+                .write_u32(lifetime_offset + index * core::mem::size_of::<u32>(), word)
+                .expect("physical lifetime word fits reserved ring slot");
+        }
+
+        assert!(ring.zero_except(lifetime_offset, lifetime_len));
+        assert_eq!(ring.read_sdio_physical_lifetime(), Some(lifetime));
+
+        let lifetime_end = lifetime_offset + lifetime_len;
+        for word_offset in (0..DRIVER_TASK_RING_PAGE_BYTES).step_by(core::mem::size_of::<u32>()) {
+            let actual = ring
+                .read_u32(word_offset)
+                .expect("every aligned word remains addressable");
+            let expected = if (lifetime_offset..lifetime_end).contains(&word_offset) {
+                lifetime_words[(word_offset - lifetime_offset) / core::mem::size_of::<u32>()]
+            } else {
+                0
+            };
+            for byte_index in 0..core::mem::size_of::<u32>() {
+                assert_eq!(
+                    actual.to_ne_bytes()[byte_index],
+                    expected.to_ne_bytes()[byte_index],
+                    "ring byte {} survived outside the physical lifetime record",
+                    word_offset + byte_index,
+                );
+            }
+        }
+    }
+
     #[test]
     fn builtin_driver_task_contracts_are_valid_and_dedicated() {
         for contract in BUILTIN_DRIVER_TASK_CONTRACTS {
@@ -17883,6 +18229,8 @@ mod tests {
             delay_start: 0,
             first_member_succeeded: false,
             cyw43_engine_completion: None,
+            physical_lifetime_before: DriverRuntimeSdioPhysicalLifetimeRecord::empty(),
+            physical_lifetime_epoch: 0,
             published_epoch: 0,
             owns_global_latch: false,
             released: true,
@@ -17895,8 +18243,10 @@ mod tests {
         fail_running_at: Option<usize>,
         running_calls: usize,
         failure_injected: bool,
+        failed_engine_completion: Option<(Cyw43SdioPairMember, DriverTaskCompletionRecord)>,
         pending_operation: Option<Cyw43SdioPairRestartOperation>,
         pending_remaining: usize,
+        physical_lifetime: DriverRuntimeSdioPhysicalLifetimeRecord,
     }
 
     #[cfg(feature = "kernel")]
@@ -17907,14 +18257,26 @@ mod tests {
                 fail_running_at: None,
                 running_calls: 0,
                 failure_injected: false,
+                failed_engine_completion: None,
                 pending_operation: None,
                 pending_remaining: 0,
+                physical_lifetime: DriverRuntimeSdioPhysicalLifetimeRecord::empty(),
             }
         }
 
         fn failure_at(index: usize) -> Self {
             Self {
                 fail_running_at: Some(index),
+                ..Self::success()
+            }
+        }
+
+        fn engine_failure(
+            member: Cyw43SdioPairMember,
+            completion: DriverTaskCompletionRecord,
+        ) -> Self {
+            Self {
+                failed_engine_completion: Some((member, completion)),
                 ..Self::success()
             }
         }
@@ -17939,6 +18301,15 @@ mod tests {
             if running {
                 let call = self.running_calls;
                 self.running_calls = self.running_calls.saturating_add(1);
+                if let Cyw43SdioPairRestartOperation::ReplayEngine(member) = operation {
+                    if let Some((failed_member, completion)) = self.failed_engine_completion {
+                        if member == failed_member {
+                            return Cyw43SdioPairRestartOperationOutcome::FailedCompletion(
+                                completion,
+                            );
+                        }
+                    }
+                }
                 if !self.failure_injected && self.fail_running_at == Some(call) {
                     self.failure_injected = true;
                     return Cyw43SdioPairRestartOperationOutcome::Failed;
@@ -17956,6 +18327,11 @@ mod tests {
                     let mut completion = DriverTaskCompletionRecord::progress(1, 1);
                     if member == Cyw43SdioPairMember::Sdio {
                         completion.detail = DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY;
+                        self.physical_lifetime = DriverRuntimeSdioPhysicalLifetimeRecord {
+                            begun_epoch: 1,
+                            completed_epoch: 1,
+                            ..DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+                        };
                     }
                     Cyw43SdioPairRestartOperationOutcome::Completion(completion)
                 }
@@ -17964,6 +18340,12 @@ mod tests {
                 }
                 _ => Cyw43SdioPairRestartOperationOutcome::Complete,
             }
+        }
+
+        fn physical_lifetime_snapshot(
+            &mut self,
+        ) -> Option<DriverRuntimeSdioPhysicalLifetimeRecord> {
+            Some(self.physical_lifetime)
         }
     }
 
@@ -18000,7 +18382,10 @@ mod tests {
         let mut executor = RetainedPairRestartTestExecutor::success();
         assert_eq!(
             drive_retained_pair_restart_test(&mut cursor, &mut executor),
-            Cyw43SdioPairRestartTurn::Complete { epoch: 7 }
+            Cyw43SdioPairRestartTurn::Complete {
+                epoch: 7,
+                physical_lifetime_epoch: 1,
+            }
         );
 
         let mut actions = Vec::new();
@@ -18118,6 +18503,77 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn assert_pair_restart_engine_failure_completion_survives_fence(
+        member: Cyw43SdioPairMember,
+        expected_action: &'static str,
+        completion: DriverTaskCompletionRecord,
+    ) {
+        let mut cursor = retained_pair_restart_test_cursor();
+        let mut executor = RetainedPairRestartTestExecutor::engine_failure(member, completion);
+        let Cyw43SdioPairRestartTurn::Failed(failure) =
+            drive_retained_pair_restart_test(&mut cursor, &mut executor)
+        else {
+            panic!("terminal engine completion did not fail the pair restart");
+        };
+        assert_eq!(
+            failure.kind(),
+            Cyw43SdioPairRestartFailureKind::ActionFailed
+        );
+        assert_eq!(failure.action(), expected_action);
+        assert_eq!(failure.status(), "failed-fenced");
+        assert_eq!(failure.completion(), Some(completion));
+        let preserved = failure
+            .completion()
+            .expect("engine failure completion exists");
+        assert_eq!(preserved.sequence, completion.sequence);
+        assert_eq!(preserved.code, completion.code);
+        assert_eq!(preserved.detail, completion.detail);
+        assert_eq!(preserved.result, completion.result);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_pair_restart_preserves_sdio_engine_failure_completion_through_fence() {
+        let completion = DriverTaskCompletionRecord {
+            sequence: 0x8100_0042,
+            code: DriverTaskCompletionCode::Fault.as_u16(),
+            detail: 0x1042,
+            result: 0xdead_beef,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert_pair_restart_engine_failure_completion_survives_fence(
+            Cyw43SdioPairMember::Sdio,
+            "replay-sdio-engine",
+            completion,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_pair_restart_preserves_cyw43_engine_failure_completion_through_fence() {
+        let completion = DriverTaskCompletionRecord {
+            sequence: 0x8200_0084,
+            code: DriverTaskCompletionCode::Progress.as_u16(),
+            detail: 0x2084,
+            result: 0xcafe_f00d,
+            frame: DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        };
+        assert_pair_restart_engine_failure_completion_survives_fence(
+            Cyw43SdioPairMember::Cyw43,
+            "replay-cyw43-engine",
+            completion,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn retained_pair_restart_pending_runtime_poll_consumes_separate_outer_turns() {
         let mut cursor = retained_pair_restart_test_cursor();
@@ -18170,6 +18626,7 @@ mod tests {
             );
             assert_eq!(failure.action(), expected_action);
             assert_eq!(failure.status(), "failed-fenced");
+            assert_eq!(failure.completion(), None);
             let fence: Vec<_> = executor
                 .calls
                 .iter()

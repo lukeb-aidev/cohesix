@@ -27,7 +27,7 @@ thread_local! {
 
 fn with_active<R>(f: impl FnOnce(&mut RecordingHandlers) -> R) -> R {
     ACTIVE_HANDLER.with(|slot| {
-        let mut guard = slot.borrow_mut();
+        let guard = slot.borrow();
         let ptr = guard
             .as_ref()
             .copied()
@@ -232,7 +232,7 @@ pub fn build_message(
         payload.push(word).expect("payload respects kernel bound");
     }
     let copy = payload.iter().copied().collect::<Vec<_>>();
-    let info = seL4_MessageInfo::new(0x77, 0, 0, payload.len() as u8);
+    let info = seL4_MessageInfo::new(0x77, 0, 0, payload.len() as sel4_sys::seL4_Word);
     let message = BootstrapMessage {
         badge: 0xAA55AA55AA55AA55,
         info,

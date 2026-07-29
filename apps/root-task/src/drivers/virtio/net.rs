@@ -9658,7 +9658,7 @@ mod tests {
     use super::*;
     use core::fmt::Write as FmtWrite;
     use core::sync::atomic::{AtomicUsize, Ordering};
-    use heapless::{String as HeaplessString, Vec as HeaplessVec};
+    use heapless::String as HeaplessString;
 
     fn make_fake_mmio(magic: u32, version: u32, device_id: u32) -> (NonNull<u8>, Box<[u32; 4]>) {
         let mut backing = Box::new([0u32; 4]);

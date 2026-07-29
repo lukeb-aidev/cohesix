@@ -8,11 +8,15 @@
 use root_task::bootstrap::ipcbuf_view::IpcBufView;
 use sel4_sys::seL4_CapNull;
 
-static mut IPCBUF_BACKING: [u8; IpcBufView::PAGE_LEN] = [0u8; IpcBufView::PAGE_LEN];
+static IPCBUF_BACKING: [u8; IpcBufView::PAGE_LEN] = [0u8; IpcBufView::PAGE_LEN];
 
 #[test]
 fn ipcbuf_prefix_is_clamped_to_page() {
-    let view = unsafe { IpcBufView::new(IPCBUF_BACKING.as_ptr(), seL4_CapNull) };
+    let view = unsafe {
+        // SAFETY: the immutable static backing spans one complete IPC page and
+        // remains valid for the view's entire process lifetime.
+        IpcBufView::new(IPCBUF_BACKING.as_ptr(), seL4_CapNull)
+    };
     let oversized = view.prefix(1 << 20);
     assert_eq!(oversized.len(), IpcBufView::PAGE_LEN);
 

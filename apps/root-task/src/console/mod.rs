@@ -18,7 +18,7 @@ pub use cohsh_core::{
     Command, CommandParser, ConsoleError, SmpMode, MAX_LINE_LEN, MAX_ROLE_LEN, MAX_TICKET_LEN,
 };
 
-#[cfg(feature = "kernel")]
+#[cfg(all(feature = "kernel", sel4_config_debug_build))]
 use crate::affinity;
 use crate::platform::Platform;
 #[cfg(feature = "kernel")]
@@ -223,14 +223,15 @@ impl CohesixConsole {
                 self.emit_line("network commands not available on root console")
             }
             Command::CacheLog { count } => {
-                let count = usize::from(count.unwrap_or(64));
                 #[cfg(all(feature = "kernel", target_os = "none"))]
                 {
+                    let count = usize::from(count.unwrap_or(64));
                     crate::hal::cache::write_recent_ops(self, count);
                     self.console.flush();
                 }
                 #[cfg(not(target_os = "none"))]
                 {
+                    let _ = count;
                     self.emit_line("cachelog unavailable on host targets");
                 }
             }

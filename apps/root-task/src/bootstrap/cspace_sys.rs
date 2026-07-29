@@ -18,7 +18,9 @@ use crate::sel4::{self, BootInfoExt};
 use core::convert::TryFrom;
 use core::fmt;
 use core::ops::Range;
-use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode, seL4_EndpointObject};
+#[cfg(target_os = "none")]
+use sel4_sys::seL4_EndpointObject;
+use sel4_sys::{self as sys, seL4_CNode, seL4_CapInitThreadCNode};
 
 #[cfg(target_os = "none")]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -250,7 +252,9 @@ pub fn cnode_copy_raw_single(
         src_slot: sys::seL4_Word,
         style: TupleStyle,
     ) -> sys::seL4_Error {
+        #[cfg(target_os = "none")]
         let dst_index = dst_slot as sys::seL4_Word;
+        #[cfg(target_os = "none")]
         let src_index = src_slot as sys::seL4_Word;
         let depth_word = se_l4_wordbits_word();
         let rights = sys::seL4_CapRights::new(1, 1, 1, 1);
@@ -1061,6 +1065,7 @@ pub fn untyped_retype_encoded(
 
     #[cfg(not(target_os = "none"))]
     {
+        let _ = (ut, num_objects);
         host_trace::record(host_trace::HostRetypeTrace {
             root: dst_root,
             node_index: index as sys::seL4_Word,
@@ -1961,7 +1966,9 @@ pub use bits_as_u8 as super_bits_as_u8_for_test;
 pub mod canonical {
     #[cfg(not(target_os = "none"))]
     use super::host_trace;
-    use super::{debug_log, sel4, slot_index, sys, RootPath};
+    #[cfg(target_os = "none")]
+    use super::slot_index;
+    use super::{debug_log, sel4, sys, RootPath};
 
     #[inline(always)]
     fn build_root_path(slot: u32, bi: &sys::seL4_BootInfo) -> RootPath {

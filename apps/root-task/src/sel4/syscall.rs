@@ -176,7 +176,12 @@ pub(super) unsafe fn poll(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_Messag
 }
 
 pub(super) unsafe fn yield_now() {
+    #[cfg(target_os = "none")]
+    // SAFETY: Yield performs the side-effect-only seL4 scheduling syscall and
+    // does not dereference user memory.
     unsafe {
         seL4_Yield();
     }
+    #[cfg(not(target_os = "none"))]
+    seL4_Yield();
 }

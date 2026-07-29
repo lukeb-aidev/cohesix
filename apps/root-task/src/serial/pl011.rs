@@ -348,8 +348,13 @@ mod tests {
         let mut uart = Pl011::new(base);
 
         uart.rx_cached = Some(b'\r');
-        regs.fr = 0;
-        regs.dr = b'c' as u32;
+        // SAFETY: `regs` is the test-owned stand-in for one mapped PL011 page;
+        // volatile stores model hardware register updates observed through the
+        // driver's raw MMIO pointer.
+        unsafe {
+            write_volatile(addr_of_mut!(regs.fr), 0);
+            write_volatile(addr_of_mut!(regs.dr), u32::from(b'c'));
+        }
 
         let mut buf = [0u8; 8];
         let len = uart.read_line(&mut buf);

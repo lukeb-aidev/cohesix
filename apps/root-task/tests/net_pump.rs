@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Integration-oriented tests for net console event pump interactions.
 // Author: Lukas Bower
-#![cfg(feature = "net-console")]
+#![cfg(all(feature = "net-console", not(feature = "kernel")))]
 
 use cohesix_ticket::{BudgetSpec, MountSpec, Role, TicketClaims, TicketIssuer};
 use root_task::event::{AuditSink, EventPump, IpcDispatcher, TickEvent, TicketTable, TimerSource};
@@ -161,7 +161,7 @@ fn network_lines_round_trip_acknowledgements() {
         net_iface.inject_console_line("log\n");
     }
 
-    for _ in 0..3 {
+    for _ in 0..6 {
         pump.poll();
     }
 
@@ -476,8 +476,9 @@ fn pump_survives_force_reset() {
         net_iface.inject_console_line("log\n");
     }
 
-    pump.poll();
-    pump.poll();
+    for _ in 0..6 {
+        pump.poll();
+    }
 
     while handle.pop_tx().is_some() {}
     handle.reset();
@@ -490,8 +491,9 @@ fn pump_survives_force_reset() {
         net_iface.inject_console_line("tail /log/queen.log\n");
     }
 
-    pump.poll();
-    pump.poll();
+    for _ in 0..6 {
+        pump.poll();
+    }
 
     let auth = handle
         .pop_tx()

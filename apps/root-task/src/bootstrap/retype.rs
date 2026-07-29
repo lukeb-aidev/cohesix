@@ -13,6 +13,7 @@ use sel4_sys::{self as sys, seL4_CapTableObject, seL4_EndpointObject};
 use super::cspace::first_endpoint_retype;
 use super::cspace::{slot_in_empty_window, CSpaceCtx, DestCNode};
 use super::cspace_sys::{tuple_style, tuple_style_label, TupleStyle};
+#[cfg(not(any(test, feature = "ffi_shim")))]
 use super::ffi::raw_untyped_retype;
 use crate::bootstrap::bootinfo_snapshot::BootInfoState;
 use crate::bootstrap::log::force_uart_line;
@@ -25,9 +26,6 @@ use crate::sel4::{
 };
 #[cfg(feature = "canonical_cspace")]
 use crate::sel4_view;
-#[cfg(any(test, feature = "ffi_shim"))]
-use spin::Mutex;
-
 const DEFAULT_RETYPE_LIMIT: u32 = 512;
 const PROGRESS_INTERVAL: u32 = 64;
 

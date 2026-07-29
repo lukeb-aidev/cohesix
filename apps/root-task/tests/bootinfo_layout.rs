@@ -126,7 +126,7 @@ fn bootinfo_extra_range_respects_kernel_frame_layout() {
     let snapshot = BootInfoSnapshot::from_view(&view).expect("snapshot must succeed");
     assert_eq!(snapshot.extra_end, snapshot.post_canary_addr());
 
-    drop(leaked_backing);
+    let _ = leaked_backing;
 }
 
 #[test]
@@ -173,6 +173,6 @@ fn snapshot_view_uses_compact_extra_layout() {
         &leaked_snapshot[header_bytes.len()..]
     );
 
-    drop(leaked_snapshot);
-    drop(leaked_source);
+    let _ = leaked_snapshot;
+    let _ = leaked_source;
 }

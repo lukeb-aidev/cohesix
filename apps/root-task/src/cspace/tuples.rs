@@ -70,12 +70,20 @@ pub fn make_retype_tuple(canonical_root: seL4_CPtr, init_bits: u8) -> RetypeTupl
 
 fn debug_puts(message: &str) {
     for &byte in message.as_bytes() {
-        // SAFETY: `seL4_DebugPutChar` is the kernel debug console syscall and
-        // accepts any byte value without dereferencing user memory.
-        unsafe {
-            seL4_DebugPutChar(byte);
-        }
+        debug_put_char(byte);
     }
+}
+
+#[inline(always)]
+fn debug_put_char(byte: u8) {
+    #[cfg(target_os = "none")]
+    // SAFETY: `seL4_DebugPutChar` is the kernel debug console syscall and
+    // accepts any byte value without dereferencing user memory.
+    unsafe {
+        seL4_DebugPutChar(byte);
+    }
+    #[cfg(not(target_os = "none"))]
+    seL4_DebugPutChar(byte);
 }
 
 fn debug_hex(label: &str, value: seL4_Word) {
@@ -85,11 +93,7 @@ fn debug_hex(label: &str, value: seL4_Word) {
 }
 
 fn heartbeat(tag: u8) {
-    // SAFETY: `seL4_DebugPutChar` is used as a byte-oriented diagnostic
-    // heartbeat and does not depend on any borrowed memory.
-    unsafe {
-        seL4_DebugPutChar(tag);
-    }
+    debug_put_char(tag);
 }
 
 /// Retype a single endpoint object into the supplied slot using canonical arguments.

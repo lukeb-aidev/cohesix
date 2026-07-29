@@ -220,9 +220,12 @@ pub fn console_main() -> ! {
 
 /// Emits a heartbeat byte to the seL4 debug console for diagnostics.
 pub fn heartbeat(byte: u8) {
+    #[cfg(target_os = "none")]
     // SAFETY: `seL4_DebugPutChar` is a byte-oriented kernel debug syscall and
     // does not dereference user memory.
     unsafe {
         seL4_DebugPutChar(byte);
     }
+    #[cfg(not(target_os = "none"))]
+    seL4_DebugPutChar(byte);
 }

@@ -7,6 +7,7 @@
 #![cfg(feature = "kernel")]
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "none")]
 use core::alloc::{GlobalAlloc, Layout};
 use core::ops::Range;
 #[cfg(target_os = "none")]
@@ -15,7 +16,9 @@ use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(target_os = "none")]
 use linked_list_allocator::LockedHeap;
 
-use crate::bootstrap::{log as boot_log, no_alloc};
+#[cfg(target_os = "none")]
+use crate::bootstrap::log as boot_log;
+use crate::bootstrap::no_alloc;
 
 /// Statically reserved heap span used during bootstrap.
 pub const HEAP_BYTES: usize = 2 * 1024 * 1024;

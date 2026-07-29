@@ -6,10 +6,11 @@
 #![cfg(feature = "kernel")]
 
 use root_task::sel4::{self, is_boot_reserved_slot, SlotAllocator};
+use sel4_sys::seL4_SlotRegion;
 
 #[test]
 fn slot_allocator_skips_reserved_entries() {
-    let region = sel4::seL4_SlotRegion { start: 0, end: 32 };
+    let region = seL4_SlotRegion { start: 0, end: 32 };
     let mut allocator = SlotAllocator::new(sel4::seL4_CapInitThreadCNode, region, 6);
 
     for _ in region.start..region.end {
@@ -25,7 +26,7 @@ fn slot_allocator_skips_reserved_entries() {
 
 #[test]
 fn slot_allocator_exhaustion_reports_none() {
-    let region = sel4::seL4_SlotRegion { start: 64, end: 68 };
+    let region = seL4_SlotRegion { start: 64, end: 68 };
     let mut allocator = SlotAllocator::new(sel4::seL4_CapInitThreadCNode, region, 8);
 
     for _ in 0..(region.end - region.start) {

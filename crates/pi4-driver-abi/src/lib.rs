@@ -197,7 +197,7 @@ pub const DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING: u32 = 0x5344_0002;
 pub const DRIVER_RUNTIME_REJECT_OUTER_GENERATION: u32 = 0x5344_0003;
 /// An active CYW43 control cursor was presented with another logical parent.
 pub const DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH: u32 = 0x5344_0004;
-/// Generation reset reached the retained transfer lane instead of its power cursor.
+/// A caller attempted the retired SDIO generation-reset operation.
 pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING: u32 = 0x5344_0005;
 /// A command did not match the active immutable SDIO request identity.
 pub const DRIVER_RUNTIME_REJECT_SDIO_RETAINED_OWNER_IDENTITY_MISMATCH: u32 = 0x5344_0006;
@@ -209,7 +209,7 @@ pub const DRIVER_RUNTIME_REJECT_SDIO_PULLUP_ADMISSION: u32 = 0x5344_0008;
 pub const DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE: u32 = 0x5344_0009;
 /// DPC activation did not match the admitted live generation and notification state.
 pub const DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION: u32 = 0x5344_000a;
-/// Generation commit lost its exact poisoned old-generation admission state.
+/// A caller attempted the retired SDIO generation-commit operation.
 pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION: u32 = 0x5344_000b;
 /// Maximum reciprocal SDIO actions retained by one immutable CYW43 parent command.
 ///
@@ -415,11 +415,17 @@ pub const DRIVER_RUNTIME_SDIO_OP_POLL_IRQ: u16 = 5;
 pub const DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG: u16 = 6;
 /// SDIO bus-owner operation: issue a bounded raw card command with no data phase.
 pub const DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND: u16 = 7;
-/// SDIO bus-owner operation: recover an issued-unknown CYW43 generation.
+/// Reserved wire value for the retired in-place CYW43 generation-reset operation.
+///
+/// The descriptor validator rejects this value. Physical recovery belongs only
+/// to the canonical root-owned pair restart and cannot enter the SDIO MMIO lane.
 pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET: u16 = 8;
 /// SDIO bus-owner operation: activate post-release CARD_INT/DPC service.
 pub const DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE: u16 = 9;
-/// SDIO bus-owner operation: admit a reset generation after card re-enumeration.
+/// Reserved wire value for the retired in-place CYW43 generation-commit operation.
+///
+/// The descriptor validator rejects this value. The canonical pair binds the
+/// completed physical-lifetime epoch directly; there is no runtime commit lane.
 pub const DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT: u16 = 10;
 /// SDIO engine-init detail: SDIO host reached ready state.
 pub const DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY: u16 = 0x5500;
@@ -508,6 +514,16 @@ pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
 pub const DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET: u16 = 1920;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
+/// Fixed offset of the SDIO owner's physical WiFi lifetime record.
+///
+/// The record occupies the reserved gap immediately after the generic runtime
+/// progress marker and before the CYW43/SDIO DPC event ring. Only the isolated
+/// SDIO owner writes this record.
+pub const DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET: u16 = 144;
+/// Bytes in the SDIO owner's physical WiFi lifetime record.
+pub const DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES: u16 = 16;
+/// Magic value for an initialized SDIO physical WiFi lifetime record.
+pub const DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_MAGIC: u32 = 0x5344_4c46;
 /// Fixed offset of the retained-command continuation grant.
 ///
 /// The command record occupies bytes `0..40` and the completion record begins
@@ -1556,6 +1572,126 @@ pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
 /// the reciprocal SDIO-to-CYW43 DPC badge, and reserved root authority.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
 
+/// SDIO-owner identity for complete physical WiFi power lifetimes.
+///
+/// `begun_epoch` is the sequence-last commit word for a new lifetime. The SDIO
+/// owner advances it exactly once before the first WL_ON/power-sequence
+/// operation. Exactly one of `completed_epoch` or `failed_epoch` may then equal
+/// the current begun epoch. Older terminal epochs remain intact so a later
+/// successful lifetime does not erase the most recent failure. Higher layers
+/// may use a stable completed epoch only to reject stale lifecycle state. This
+/// passive record never authorizes or advances a command or continuation.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSdioPhysicalLifetimeRecord {
+    /// Fixed [`DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_MAGIC`] discriminator.
+    pub magic: u32,
+    /// Most recent strictly monotonic physical lifetime begun by SDIO.
+    pub begun_epoch: u32,
+    /// Most recent physical lifetime that reached its ready terminal.
+    pub completed_epoch: u32,
+    /// Most recent physical lifetime that reached or was fenced as failed.
+    pub failed_epoch: u32,
+}
+
+impl DriverRuntimeSdioPhysicalLifetimeRecord {
+    /// Initialized record before the first physical lifetime.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_MAGIC,
+            begun_epoch: 0,
+            completed_epoch: 0,
+            failed_epoch: 0,
+        }
+    }
+
+    /// Byte-zero form produced by initial command-ring construction.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self {
+            magic: 0,
+            begun_epoch: 0,
+            completed_epoch: 0,
+            failed_epoch: 0,
+        }
+    }
+
+    /// Whether this is the byte-zero initial ring form.
+    #[must_use]
+    pub const fn is_zeroed(self) -> bool {
+        self.magic == 0
+            && self.begun_epoch == 0
+            && self.completed_epoch == 0
+            && self.failed_epoch == 0
+    }
+
+    /// Whether fields describe one internally consistent owner history.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_MAGIC {
+            return false;
+        }
+        if self.begun_epoch == 0 {
+            return self.completed_epoch == 0 && self.failed_epoch == 0;
+        }
+        if self.completed_epoch > self.begun_epoch
+            || self.failed_epoch > self.begun_epoch
+            || (self.completed_epoch != 0 && self.completed_epoch == self.failed_epoch)
+        {
+            return false;
+        }
+        true
+    }
+
+    /// Whether the most recent begun lifetime has no terminal yet.
+    #[must_use]
+    pub const fn active(self) -> bool {
+        self.valid()
+            && self.begun_epoch != 0
+            && self.completed_epoch != self.begun_epoch
+            && self.failed_epoch != self.begun_epoch
+    }
+
+    /// Strictly monotonic next epoch, or `None` after exhausting `u32`.
+    #[must_use]
+    pub const fn next_epoch(self) -> Option<u32> {
+        if !self.valid() || self.begun_epoch == u32::MAX {
+            None
+        } else {
+            Some(self.begun_epoch + 1)
+        }
+    }
+
+    /// Accept two identical, valid volatile samples as a stable snapshot.
+    ///
+    /// A byte-zero initial command ring is normalized to [`Self::empty`].
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub const fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        let first = if first.is_zeroed() {
+            Self::empty()
+        } else {
+            first
+        };
+        let second = if second.is_zeroed() {
+            Self::empty()
+        } else {
+            second
+        };
+        if first.magic == second.magic
+            && first.begun_epoch == second.begun_epoch
+            && first.completed_epoch == second.completed_epoch
+            && first.failed_epoch == second.failed_epoch
+            && first.valid()
+        {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
 /// Durable authority for exactly one retained-command continuation quantum.
 ///
 /// `grant_id` is the sequence-last commit word. Producers publish zero there,
@@ -1769,6 +1905,18 @@ pub const DRIVER_RUNTIME_DPC_EVENT_RING_VERSION: u16 = 2;
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET: u16 = 160;
 /// Fixed bytes reserved for the DPC event ring before the payload window.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_BYTES: u16 = 96;
+const _: () = {
+    assert!(
+        DRIVER_RUNTIME_RING_PROGRESS_OFFSET + DRIVER_RUNTIME_RING_PROGRESS_BYTES
+            == DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET
+    );
+    assert!(
+        DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET + DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES
+            == DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
+    );
+    assert!(core::mem::size_of::<DriverRuntimeSdioPhysicalLifetimeRecord>() == 16);
+    assert!(core::mem::align_of::<DriverRuntimeSdioPhysicalLifetimeRecord>() == 4);
+};
 /// Fixed number of producer entries in the bounded DPC event ring.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH: usize = 4;
 /// DPC event-ring flag: the producer observed bounded overflow pressure.
@@ -2256,13 +2404,9 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ
             || self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
             || self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND
-            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET
-            || self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT
             || self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let host_config = self.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG;
         let card_command = self.op == DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND;
-        let generation_reset = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_RESET;
-        let generation_commit = self.op == DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT;
         let dpc_activate = self.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE;
         let known_response = self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
             || self.response_kind == DRIVER_RUNTIME_SDIO_RESP_OCR
@@ -2278,12 +2422,7 @@ impl DriverRuntimeSdioCommandDescriptor {
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
             1
-        } else if host_config
-            || card_command
-            || generation_reset
-            || generation_commit
-            || dpc_activate
-        {
+        } else if host_config || card_command || dpc_activate {
             0
         } else if self.block_count != 0 {
             (self.block_count as u32).saturating_mul(self.block_size as u32)
@@ -2300,12 +2439,7 @@ impl DriverRuntimeSdioCommandDescriptor {
         known_op
             && known_response
             && self.function <= 7
-            && (host_config
-                || card_command
-                || generation_reset
-                || generation_commit
-                || dpc_activate
-                || self.addr < (1 << 17))
+            && (host_config || card_command || dpc_activate || self.addr < (1 << 17))
             && (!host_config
                 || (self.function == 0
                     && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
@@ -2319,26 +2453,6 @@ impl DriverRuntimeSdioCommandDescriptor {
                 || (self.function == 0
                     && self.data_offset == 0
                     && self.len <= 63
-                    && self.block_size == 0
-                    && self.block_count == 0
-                    && self.flags == 0
-                    && self.reserved == 0))
-            && (!generation_reset
-                || (self.function == 0
-                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
-                    && self.addr != 0
-                    && self.data_offset == 0
-                    && self.len == 0
-                    && self.block_size == 0
-                    && self.block_count == 0
-                    && self.flags == 0
-                    && self.reserved == 0))
-            && (!generation_commit
-                || (self.function == 0
-                    && self.response_kind == DRIVER_RUNTIME_SDIO_RESP_NONE
-                    && self.addr != 0
-                    && self.data_offset == 0
-                    && self.len == 0
                     && self.block_size == 0
                     && self.block_count == 0
                     && self.flags == 0
@@ -2364,8 +2478,6 @@ impl DriverRuntimeSdioCommandDescriptor {
                             && self.block_count <= 511))))
             && (host_config
                 || card_command
-                || generation_reset
-                || generation_commit
                 || dpc_activate
                 || (effective_len != 0 && (ring_payload || shared_payload)))
     }
@@ -3695,6 +3807,63 @@ mod tests {
     }
 
     #[test]
+    fn sdio_physical_lifetime_record_occupies_reserved_gap_and_rejects_torn_samples() {
+        assert_eq!(
+            DRIVER_RUNTIME_RING_PROGRESS_OFFSET + DRIVER_RUNTIME_RING_PROGRESS_BYTES,
+            DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET
+                + DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES,
+            DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
+        );
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSdioPhysicalLifetimeRecord>(),
+            16
+        );
+
+        let empty = DriverRuntimeSdioPhysicalLifetimeRecord::empty();
+        assert!(empty.valid());
+        assert!(!empty.active());
+        assert_eq!(empty.next_epoch(), Some(1));
+        assert_eq!(
+            DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(
+                DriverRuntimeSdioPhysicalLifetimeRecord::zeroed(),
+                DriverRuntimeSdioPhysicalLifetimeRecord::zeroed(),
+            ),
+            Some(empty),
+        );
+
+        let active = DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 1,
+            ..empty
+        };
+        assert!(active.valid());
+        assert!(active.active());
+        assert_eq!(
+            DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(empty, active),
+            None,
+            "a changed sequence-last begun epoch is not a stable snapshot",
+        );
+
+        let completed = DriverRuntimeSdioPhysicalLifetimeRecord {
+            completed_epoch: 1,
+            ..active
+        };
+        assert!(completed.valid());
+        assert!(!completed.active());
+        assert_eq!(completed.next_epoch(), Some(2));
+
+        let mut impossible = completed;
+        impossible.failed_epoch = 1;
+        assert!(!impossible.valid());
+        assert_eq!(
+            DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(impossible, impossible),
+            None,
+        );
+    }
+
+    #[test]
     fn dpc_event_ring_accepts_every_known_state_flag() {
         let mut ring = DriverRuntimeDpcEventRing::empty(7);
         for flag in [
@@ -4397,7 +4566,7 @@ mod tests {
     }
 
     #[test]
-    fn sdio_command_descriptor_validates_generation_reset_without_payload() {
+    fn sdio_command_descriptor_reserves_but_rejects_retired_generation_reset() {
         assert_eq!(
             core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>(),
             24
@@ -4415,23 +4584,16 @@ mod tests {
             reserved: 0,
             timeout_us: 1_000,
         };
-        assert!(descriptor.valid());
-
+        assert!(!descriptor.valid());
         descriptor.addr = 0;
         assert!(!descriptor.valid());
         descriptor.addr = 0x4359_5302;
         descriptor.len = 1;
         assert!(!descriptor.valid());
-        descriptor.len = 0;
-        descriptor.data_offset = DRIVER_RUNTIME_RING_FRAME_OFFSET;
-        assert!(!descriptor.valid());
-        descriptor.data_offset = 0;
-        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
-        assert!(!descriptor.valid());
     }
 
     #[test]
-    fn sdio_command_descriptor_validates_generation_commit_without_payload() {
+    fn sdio_command_descriptor_reserves_but_rejects_retired_generation_commit() {
         let mut descriptor = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_GENERATION_COMMIT,
             function: 0,
@@ -4445,15 +4607,11 @@ mod tests {
             reserved: 0,
             timeout_us: 1_000,
         };
-        assert!(descriptor.valid());
-
+        assert!(!descriptor.valid());
         descriptor.addr = 0;
         assert!(!descriptor.valid());
         descriptor.addr = 0x4359_5302;
         descriptor.function = 1;
-        assert!(!descriptor.valid());
-        descriptor.function = 0;
-        descriptor.flags = DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
         assert!(!descriptor.valid());
     }
 

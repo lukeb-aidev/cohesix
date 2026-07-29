@@ -10,14 +10,21 @@ use std::boxed::Box;
 
 use root_task::bootstrap::cspace::CSpaceCtx;
 use root_task::bootstrap::phases::{self, BootstrapPhase, BootstrapSequencer};
-use root_task::bootstrap::state;
 use root_task::cspace::CSpace;
 use root_task::sel4::BootInfoView;
 use sel4_sys::{self, seL4_BootInfo, seL4_SlotRegion};
 
-fn bootinfo_fixture(bits: u8, empty_start: u32, empty_end: u32) -> &'static seL4_BootInfo {
-    let mut bootinfo: seL4_BootInfo = unsafe { mem::zeroed() };
-    bootinfo.initThreadCNodeSizeBits = bits as sel4_sys::seL4_Word;
+fn bootinfo_fixture(
+    bits: u8,
+    empty_start: sel4_sys::seL4_CPtr,
+    empty_end: sel4_sys::seL4_CPtr,
+) -> &'static seL4_BootInfo {
+    let mut bootinfo: seL4_BootInfo = unsafe {
+        // SAFETY: seL4_BootInfo is a plain C ABI record whose pointer and
+        // numeric fields all admit zero as a test-fixture baseline.
+        mem::zeroed()
+    };
+    bootinfo.initThreadCNodeSizeBits = bits;
     bootinfo.empty = seL4_SlotRegion {
         start: empty_start,
         end: empty_end,
@@ -27,7 +34,6 @@ fn bootinfo_fixture(bits: u8, empty_start: u32, empty_end: u32) -> &'static seL4
 
 #[test]
 fn sequencer_matches_bootstrap_order() {
-    state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
     for phase in phases::ordering() {
         sequencer
@@ -40,7 +46,6 @@ fn sequencer_matches_bootstrap_order() {
 
 #[test]
 fn sequencer_rejects_reordering() {
-    state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
     sequencer
         .advance(BootstrapPhase::CSpaceCanonicalise)
@@ -53,7 +58,6 @@ fn sequencer_rejects_reordering() {
 fn bootinfo_validation_rejects_bad_windows() {
     let bootinfo = bootinfo_fixture(4, 0x40, 0x60);
     let view = BootInfoView::new(bootinfo).expect("bootinfo fixture must be valid");
-    state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
     sequencer
         .advance(BootstrapPhase::CSpaceCanonicalise)
@@ -76,7 +80,6 @@ fn bootinfo_validation_bounds_init_bits() {
 
     let zero_bits = bootinfo_fixture(0, 0x10, 0x20);
     let view = BootInfoView::new(zero_bits).expect("bootinfo view must construct");
-    state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
     sequencer
         .advance(BootstrapPhase::CSpaceCanonicalise)
@@ -92,7 +95,7 @@ fn bootinfo_validation_bounds_init_bits() {
 
 #[test]
 fn slot_allocator_skips_reserved_range() {
-    let reserved_end = sel4_sys::seL4_NumInitialCaps as u32;
+    let reserved_end = sel4_sys::seL4_NumInitialCaps as sel4_sys::seL4_CPtr;
     let bootinfo = bootinfo_fixture(12, reserved_end - 1, reserved_end + 4);
     let view = BootInfoView::new(bootinfo).expect("bootinfo fixture must be valid");
     let cspace = CSpace::from_bootinfo(bootinfo);
@@ -110,7 +113,6 @@ fn ipc_install_allows_retypes_to_proceed() {
     let bootinfo = bootinfo_fixture(12, empty_start, empty_end);
     let view = BootInfoView::new(bootinfo).expect("bootinfo fixture must be valid");
 
-    state::reset_for_tests();
     let mut sequencer = BootstrapSequencer::new();
     sequencer
         .advance(BootstrapPhase::CSpaceCanonicalise)
