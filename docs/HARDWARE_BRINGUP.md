@@ -1383,11 +1383,14 @@ foreground trace or retained-deadline table. A poisoned or stale generation
 performs no same-command replay; ARM execution and firmware release are
 published only after their exact irreversible child completions.
 
-Typed control and EAPOL/data transmission retain `Pending` across the pure local
-Function 2 cursor-begin turn. LOW/MID/HIGH backplane-window writes, the fresh
-`IORx` readiness sample, and the single Function 2 CMD53 each require a later
-outer turn; cursor construction cannot report terminal `Idle` before any card
-operation occurs.
+Typed control and EAPOL/data transmission uses the generation-local backplane
+window cache established by the serialized CYW43/DPC owner. A normal cache hit
+submits the single Function 2 CMD53 child in the same parent invocation. A
+genuine cache miss retains `Pending` across exactly LOW/MID/HIGH CMD52 children
+and then F2, one child per outer turn. It never samples `IORx` per packet:
+Function 2 readiness is proved once during release and again only through the
+existing recovery/re-enumeration lane. A pending cold-window child cannot
+report terminal `Idle`.
 
 After Function 2 becomes ready, the current source expresses the pinned Linux
 BCM43455 post-F2 lifecycle as separately retained operations. The exact
@@ -1523,7 +1526,10 @@ operator mode rather than repeating bootstrap-only turns. Paced serial and
 local-seat commands remain dispatchable: `netstats`, `nettest`, `wifi diag`,
 `wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced
-error rather than being swallowed by the failed bootstrap. Only
+error rather than being swallowed by the failed bootstrap. In the ordinary
+linked-runtime rotation, quarantine consumes neither the CYW43 root-wake
+notification nor a NIC turn; it skips directly to one bounded independent HDMI
+`Display` turn when local-seat is attached, then returns to `Serial`. Only
 same-generation Gate 10 plus attached address/TCP network-ready proof closes
 bootstrap and authorizes a later independently signalled steady-state
 runtime-recovery episode. That episode has one fresh consumed-once pair repair,
@@ -1828,6 +1834,11 @@ descriptor does not prove command readiness. `Ready to use` requires DHCP bound
 plus TCP-listener readiness but does not prove the stronger end-to-end
 `tcp_ready` predicate. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
+After attach or endpoint recovery, decoded held-key/modifier traffic is health
+telemetry only until a decoded all-zero release establishes a fresh baseline.
+The runtime reports first-report pending during that guard, and root invalidates
+stale first-report, first-byte, parser, and HDMI command-ready latches while
+keeping the endpoint and ordinary serial/HDMI service available.
 
 Before constructing the EventPump, Pi root completes the current synchronous
 PCIe HAL prerequisite as local bookkeeping and authority setup for the retained

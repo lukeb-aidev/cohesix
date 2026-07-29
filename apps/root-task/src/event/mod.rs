@@ -3072,7 +3072,7 @@ where
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        if self.linked_runtime_cyw43_lane_selected() {
+        if !self.network_service_quarantined && self.linked_runtime_cyw43_lane_selected() {
             let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
         }
         #[cfg(feature = "kernel")]
@@ -3236,9 +3236,20 @@ where
             }
             LinkedRuntimeServicePhase::Network => {
                 #[cfg(feature = "net-console")]
-                if self.network_service_quarantined
-                    || (self.physical_console_response_pending()
-                        && !self.linked_runtime_network_reboot_ack_flush_due())
+                if self.network_service_quarantined {
+                    // Quarantine fences every CYW43 status, notification, and
+                    // child-service turn, but it must not fence the independent
+                    // local-seat display owner. Serial, USB ingress, and
+                    // Dispatch already ran earlier in this fixed rotation; let
+                    // one bounded Display turn run before returning to Serial.
+                    self.cancel_linked_runtime_network_quantum();
+                    self.linked_runtime_service_phase =
+                        self.linked_runtime_network_followup_phase();
+                    return;
+                }
+                #[cfg(feature = "net-console")]
+                if self.physical_console_response_pending()
+                    && !self.linked_runtime_network_reboot_ack_flush_due()
                 {
                     self.cancel_linked_runtime_network_quantum();
                     return;
@@ -3618,7 +3629,7 @@ where
     #[cfg(feature = "kernel")]
     fn linked_runtime_network_followup_phase(&self) -> LinkedRuntimeServicePhase {
         #[cfg(feature = "net-console")]
-        if self.network_service_quarantined || self.physical_console_response_pending() {
+        if self.physical_console_response_pending() {
             return LinkedRuntimeServicePhase::Serial;
         }
         #[cfg(not(feature = "net-console"))]
@@ -31705,6 +31716,88 @@ mod tests {
             );
         }
         assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn quarantined_cyw43_skips_wake_and_nic_but_preserves_display_rotation() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::hal::driver_task::test_reset_cyw43_root_wake();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        let wake_before = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 wake remains inspectable");
+        let _reset = LinkedRuntimeTestReset;
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.counters.wifi_rx_runtime_queue_count = 1;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.network_service_quarantined = true;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "quarantine must skip the poisoned NIC without skipping independent HDMI"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_quanta, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .expect("local seat remains attached")
+                .linked_hdmi_pending_work());
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "one bounded Display turn must return to the physical serial owner"
+            );
+        }
+
+        assert_eq!(
+            wifi.polls, 0,
+            "a quarantined CYW43 stack must never receive a NIC poll"
+        );
+        let wake_after = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 wake remains inspectable");
+        assert_eq!(
+            wake_after, wake_before,
+            "quarantine must not consume or latch a poisoned-generation wake"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

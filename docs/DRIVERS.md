@@ -338,7 +338,11 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   provenance proves a complete report-ID-prefixed boot report; ambiguous compact
   windows cannot establish the baseline. Key or modifier reports before that
   boundary are filtered; only a later make transition may enter the command
-  parser.
+  parser. A successfully decoded held-key or modifier report still counts as
+  endpoint-health telemetry, but cannot publish first-report or command-input
+  readiness while the attach/recovery idle guard is closed. Recovery re-arms
+  the endpoint and explicitly invalidates any old first-report/first-byte
+  readiness until a fresh safe idle baseline arrives.
 - USB retained service has typed `Pending`, `Complete`, and `Failed` outcomes.
   A normal multi-turn `Pending` result preserves the immutable command ticket,
   command-ready evidence, and no-reply counters; only a terminal `Failed`
@@ -1400,11 +1404,13 @@ generation and XID.
   raw-spin retry. Post-release write readiness likewise does not re-prime F2
   within the same generation; an ambiguous issued transfer poisons that
   generation, and pair recovery owns the only retained replay.
-  Typed `CONTROL_FRAME` and `ETH_TX`/EAPOL parents remain `Pending` across the
-  pure local F2 cursor-begin turn; local identity initialization is not a false
-  terminal `Idle`. Backplane LOW, MID, and HIGH writes, the fresh `IORx` sample,
-  and the sole Function 2 CMD53 then consume separate later turns with at most
-  one reciprocal owner operation each.
+  Typed `CONTROL_FRAME` and `ETH_TX`/EAPOL parents use the serialized
+  generation-local CHIPCOMMON window cache. A cache hit publishes the sole
+  Function 2 CMD53 child immediately, without a private cursor-begin turn or
+  per-packet `IORx` sample. A genuine cache miss remains `Pending` across exact
+  LOW, MID, and HIGH CMD52 children before a later F2 child, with at most one
+  reciprocal owner operation per outer turn. Initialization/recovery owns the
+  only F2-readiness polling.
 - Post-F2 configuration preserves the pinned Linux BCM43455 lifecycle as
   explicit retained phases. The Linux-ordered register work is
   `HOSTINTMASK`, watermark, `DEVICE_CTL` read-modify-write with `F2WM`,
@@ -1639,7 +1645,11 @@ generation and XID.
   proof before rendering later gates, so a stale formerly healthy stack cannot
   overrule the new fault. Quarantine closes any network-origin session and its
   stream/cursor authority locally, so later serial input cannot inherit
-  authentication from an unreachable TCP peer.
+  authentication from an unreachable TCP peer. The fixed linked-runtime
+  rotation skips both the quarantined NIC phase and its child-to-root RX wake
+  poll, then advances to one independent bounded `Display` turn when a local
+  seat is attached before returning to `Serial`; failed Wi-Fi therefore cannot
+  freeze HDMI feedback for a still-live USB console.
   A non-retryable failure during bootstrap or runtime recovery, including a
   completion that lacks ready-generation proof, emits one permanent terminal
   status and enters the same quarantined ordinary-operator mode; it cannot
@@ -2205,11 +2215,14 @@ the consumed-once pair-repair bound or the absolute Gate 8 deadline, that no
 automatic attempt 2 is admitted, and that only same-generation Gate 10 plus
 attached address/TCP network-ready proof authorizes a fresh repair in a later
 independent steady-state runtime-recovery episode.
-Production-chain coverage additionally drives both control and EAPOL TX through
-the exact five children (three window CMD52 writes, fresh IORx CMD52 read, and
-one F2 CMD53 write), drives the 18-child post-F2 release through real DPC
-activation, and lets a real DPC event consume owner-backed status/F2/empty
-confirmation work before a later queue-only foreground poll. The real DPC
+Production-chain coverage additionally drives normal control and EAPOL TX
+through exactly one cached-window F2 CMD53 child. A separate cold-cache proof
+drives exactly three LOW/MID/HIGH CMD52 writes followed by F2, with no
+per-packet IORx child. Function 2 readiness remains an initialization/recovery
+proof, matching Linux brcmfmac's enable-once/data-lane split. The suite drives
+the 20-child post-F2 release through real DPC activation and lets a real DPC
+event consume owner-backed status/F2/empty confirmation work before a later
+queue-only foreground poll. The real DPC
 chain routes every retained SDIO phase through the production pending-command
 gate, coalesces an IRQ with the badge-256 signal after grant publication,
 proves that the interrupt receives only one service quantum and the preserved

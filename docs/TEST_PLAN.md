@@ -1003,11 +1003,12 @@ an issued-unknown action, or repeating a terminal failure must perform no
 child I/O. `firmware_execution_started` and `firmware_released` must remain
 false until the exact RESETCTRL-clear and DPC-activation completions,
 respectively.
-Production-chain coverage must additionally drive control and EAPOL TX through
-three backplane-window CMD52 writes, one fresh IORx CMD52 read, and one F2
-CMD53 write; drive all 18 post-F2 release children into real retained DPC
-activation; and drive one DPC event through owner-backed status, F2 read,
-empty-confirmation, and post-status work before foreground queue consumption.
+Production-chain coverage must additionally drive normal control and EAPOL TX
+through one cached-window F2 CMD53 child, drive a genuine cache miss through
+exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
+drive all 20 post-F2 release children into real retained DPC activation, and
+drive one DPC event through owner-backed status, F2 read, empty-confirmation,
+and post-status work before foreground queue consumption.
 Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
 zero SDIO-owner operations. Pre-issue terminal, post-issue unknown,
 stale-generation, action-fingerprint, timeout, and continuation-grant cuts must
@@ -1184,6 +1185,9 @@ status, explicit network quarantine, no later supervisor driver turn, and
 ordinary operator liveness. High-impact
 `preflight`, `begin`, `recovery`, `stabilizing`, `ready`, `failed`, and
 `permanent` transitions must retain an HDMI rendering in their original order.
+After quarantine, the ordinary linked-runtime phase test must also inject a
+pending CYW43 root wake plus HDMI work and prove that the wake and NIC remain
+untouched while one bounded `Display` turn remains reachable before `Serial`.
 Serial and qlog must contain the exact machine record byte-for-byte; each HDMI
 line must begin `[drivers] WiFi` and contain no
 `CYW43_BOOTSTRAP_SUPERVISOR`. Coverage must delay display long enough to fill
@@ -1515,9 +1519,11 @@ bounded four-byte-padded PIO byte tail. The full-aperture proof must begin with
 the production `FIRMWARE_CHUNK` parent, publish and consume the sequence-last
 reciprocal ring plus acknowledged grants, and drive the real retained
 controller; manually fabricated child descriptors or completions do not count.
-Function 2 TX coverage must prove IORx readiness, backplane-window selection,
-and CMD53 issue consume separate outer turns, and that timeout never toggles
-IOEx, changes the sealed engine, or selects another lane in place. Control
+Function 2 TX coverage must prove IORx readiness remains an exact
+release/recovery boundary, a current cached backplane window emits only one F2
+CMD53 child, and a mismatched cache emits exact LOW/MID/HIGH/F2 children on
+separate outer turns without IORx. Timeout never toggles IOEx, changes the
+sealed engine, or selects another lane in place. Control
 exchange coverage must retain Linux's separate absolute 2.5-second TX and
 reply windows. It must hold an exact Function 2 child through terminal
 completion without abandoning or reissuing it, apply that completion before
@@ -1550,9 +1556,10 @@ The focused adversarial cases include
 `sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn`,
 `sdio_retained_generation_commit_resets_ring_before_state_and_policy_publication`,
 `firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one`,
-`cyw43_linked_f2_tx_window_iorx_and_cmd53_each_consume_separate_outer_turns`,
-`cyw43_linked_control_and_eapol_tx_retain_pure_begin_until_exact_f2_issue`,
+`cyw43_linked_f2_tx_uses_cached_window_without_per_packet_iorx`,
+`cyw43_linked_control_and_eapol_tx_use_one_cached_window_f2_issue`,
 `control_and_eapol_tx_cross_reciprocal_ring_and_retained_sdio_owner`,
+`control_tx_cold_window_crosses_exact_three_writes_then_f2`,
 `release_post_f2_crosses_exact_linux_order_to_real_dpc_activation`,
 `production_dpc_event_drains_real_owner_rx_before_foreground_poll`,
 `production_control_and_rx_polls_consume_only_dpc_owned_queue`,
@@ -2316,6 +2323,11 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     also requires `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`,
     `USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no` so parser
     admission cannot hide missing first-report or post-ready busy evidence. A
+    decoded held-key/modifier report while the attach/recovery idle guard is
+    closed must remain `FIRST_REPORT_PENDING`; recovery must revoke stale
+    first-report, first-byte, parser, and HDMI command-ready latches until a
+    fresh decoded all-zero release reopens them. Endpoint-health counters may
+    advance during that interval but cannot substitute for readiness. A
     replay miss reports the first missing translated May/U-Boot/Linux behavior
     through `*_OLDGOOD_MISSING`; gate 10 without replay remains triage evidence
     only. USB replay requires distinct ordered endpoint, interrupt-IN,

@@ -4849,9 +4849,7 @@ impl LocalSeatRuntime {
                         );
                         return LocalSeatServiceTurn::Complete;
                     }
-                    if completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
-                        || local_seat_usb_first_report_pending_endpoint_armed(completion)
-                    {
+                    if completion.detail == DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY {
                         record_linked_local_seat_usb_detail(Some(completion));
                         LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
                         LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
@@ -4870,6 +4868,23 @@ impl LocalSeatRuntime {
                         }
                         self.record_keyboard_post_first_byte_clean_poll(completion.result);
                         return LocalSeatServiceTurn::Complete;
+                    }
+                    if local_seat_usb_first_report_pending_endpoint_armed(completion) {
+                        // Endpoint-armed and command-ready are deliberately
+                        // separate proofs. The runtime returns PENDING while
+                        // its attach/recovery idle guard suppresses input, so a
+                        // prior READY/first-byte latch must not reopen parser
+                        // ingress or Gates 9/10 before a fresh safe release.
+                        let stale_report = LINKED_LOCAL_SEAT_USB_FIRST_REPORT_READY_LOGGED
+                            .swap(false, Ordering::AcqRel);
+                        let stale_byte = LINKED_LOCAL_SEAT_USB_FIRST_BYTE_READY_LOGGED
+                            .swap(false, Ordering::AcqRel);
+                        LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.store(true, Ordering::Release);
+                        LINKED_LOCAL_SEAT_USB_ENUMERATION_PENDING.store(false, Ordering::Release);
+                        if stale_report || stale_byte || self.hdmi_keyboard_command_ready_latched {
+                            self.invalidate_linked_usb_command_ready("first-report-rebaseline");
+                        }
+                        self.release_pending_linked_hdmi_prompt_if_keyboard_ready();
                     }
                     if local_seat_usb_keyboard_enumeration_progress(completion) {
                         publish_local_seat_usb_enumeration_progress(contract, completion);
@@ -10903,7 +10918,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn physical_pi_usb_command_ready_accepts_armed_first_report_queue_without_keypress() {
+    fn physical_pi_usb_command_ready_retains_proven_report_across_armed_queue_without_keypress() {
         let one_queue_no_event = 1
             | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE)
                 << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT);
@@ -11210,6 +11225,20 @@ mod tests {
         assert!(!local_seat_usb_first_report_requires_reenumeration(
             pending_armed
         ));
+        assert!(!local_seat_usb_command_ready_state(
+            LocalSeatUsbCommandReadyState {
+                prompt_safe_ready: true,
+                first_report_ready: false,
+                first_report_fresh: false,
+                first_byte_ready: false,
+                clean_polls: LINKED_LOCAL_SEAT_USB_PROMPT_READY_CLEAN_POLLS,
+                post_first_byte_pressure: false,
+            },
+        ));
+        assert!(
+            !local_seat_hdmi_prompt_release_ready(false, true),
+            "an armed endpoint cannot release the prompt while first-report proof is pending",
+        );
 
         let ready = crate::hal::driver_task::DriverTaskCompletionRecord {
             sequence: 10,

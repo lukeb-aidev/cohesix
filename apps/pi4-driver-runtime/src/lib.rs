@@ -1850,8 +1850,7 @@ const CYW43_F2_TX_PHASE_IDLE: u8 = 0;
 const CYW43_F2_TX_PHASE_WINDOW_LOW: u8 = 1;
 const CYW43_F2_TX_PHASE_WINDOW_MID: u8 = 2;
 const CYW43_F2_TX_PHASE_WINDOW_HIGH: u8 = 3;
-const CYW43_F2_TX_PHASE_WAIT_IORX: u8 = 4;
-const CYW43_F2_TX_PHASE_COMMAND_READY: u8 = 5;
+const CYW43_F2_TX_PHASE_COMMAND_READY: u8 = 4;
 const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 const CYW43_RX_IRQ_PRESERVE_NONE: u16 = 0;
 const CYW43_RX_IRQ_PRESERVE_SDPCM_NEXT_FRAME: u16 = 1;
@@ -16610,6 +16609,10 @@ fn service_cyw43_linked_tx_command_turn(
                 && !state.sdpcm_tx_write_ambiguous
         });
     Some(if retained_prepare {
+        // A cache hit submits F2 immediately. A cold cache submits its first
+        // LOW child immediately, then retains only the next private
+        // LOW/MID/HIGH phase after each exact completion. Neither path exposes
+        // an intermediate terminal Idle result to root.
         RuntimeCommandTurn::Pending
     } else {
         RuntimeCommandTurn::Complete(completion)
@@ -27706,64 +27709,48 @@ enum Cyw43RetainedCmd52WriteOutcome {
     Failed,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Cyw43RetainedCmd52ReadOutcome {
-    Pending,
-    Applied(u8),
-    Failed,
-}
-
-fn cyw43_sdio_cmd52_read_retained(function: u8, addr: u32) -> Cyw43RetainedCmd52ReadOutcome {
-    #[cfg(target_os = "none")]
+#[cfg(any(target_os = "none", test))]
+fn cyw43_sdio_cmd52_write_retained_via_bus_link(
+    function: u8,
+    addr: u32,
+    value: u8,
+) -> Cyw43RetainedCmd52WriteOutcome {
+    if !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, 1)
+        || !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value)
     {
-        if !cyw43_uses_sdio_bus_link()
-            || !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, 1)
-        {
-            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
-            return Cyw43RetainedCmd52ReadOutcome::Failed;
-        }
-        let sequence = cyw43_sdio_bus_link_next_sequence();
-        let Some(command) = sdio_bus_link_cmd52_descriptor_command(sequence, false, function, addr)
-        else {
-            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
-            return Cyw43RetainedCmd52ReadOutcome::Failed;
-        };
-        match sdio_bus_link_call(command) {
-            Cyw43BusLinkOutcome::Pending => Cyw43RetainedCmd52ReadOutcome::Pending,
-            Cyw43BusLinkOutcome::Complete(completion)
-                if completion.sequence == sequence
-                    && completion.code == COMPLETION_FRAME_READY
-                    && completion.frame.offset as usize == CYW43_SDIO_BUS_LINK_DATA_OFFSET
-                    && completion.frame.len == 1 =>
-            {
-                driver_task_shared_invalidate_range(
-                    DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
-                    1,
-                );
-                driver_task_shared_load_barrier();
-                read_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET)
-                    .map_or(Cyw43RetainedCmd52ReadOutcome::Failed, |value| {
-                        Cyw43RetainedCmd52ReadOutcome::Applied(value)
-                    })
-            }
-            Cyw43BusLinkOutcome::Complete(completion) => {
-                if completion.code != COMPLETION_FAULT {
-                    cyw43_record_last_fault_with_result(
-                        FAULT_CYW43_TRANSPORT_BUS_LINK,
-                        cyw43_sdio_bus_link_command_result(command),
-                    );
-                }
-                Cyw43RetainedCmd52ReadOutcome::Failed
-            }
-            Cyw43BusLinkOutcome::Failed => Cyw43RetainedCmd52ReadOutcome::Failed,
-        }
+        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+        return Cyw43RetainedCmd52WriteOutcome::Failed;
     }
-    #[cfg(not(target_os = "none"))]
-    {
-        cyw43_sdio_cmd52_read(function, addr).map_or(
-            Cyw43RetainedCmd52ReadOutcome::Failed,
-            Cyw43RetainedCmd52ReadOutcome::Applied,
-        )
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
+        1,
+    );
+    let sequence = cyw43_sdio_bus_link_next_sequence();
+    let Some(command) = sdio_bus_link_cmd52_descriptor_command(sequence, true, function, addr)
+    else {
+        cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
+        return Cyw43RetainedCmd52WriteOutcome::Failed;
+    };
+    match sdio_bus_link_call(command) {
+        Cyw43BusLinkOutcome::Pending => Cyw43RetainedCmd52WriteOutcome::Pending,
+        Cyw43BusLinkOutcome::Complete(completion)
+            if completion.sequence == sequence
+                && completion.code == COMPLETION_PROGRESS
+                && completion.result == 1 =>
+        {
+            Cyw43RetainedCmd52WriteOutcome::Applied
+        }
+        Cyw43BusLinkOutcome::Complete(completion) => {
+            if completion.code != COMPLETION_FAULT {
+                cyw43_record_last_fault_with_result(
+                    FAULT_CYW43_TRANSPORT_BUS_LINK,
+                    cyw43_sdio_bus_link_command_result(command),
+                );
+            }
+            Cyw43RetainedCmd52WriteOutcome::Failed
+        }
+        Cyw43BusLinkOutcome::Failed => Cyw43RetainedCmd52WriteOutcome::Failed,
     }
 }
 
@@ -27774,54 +27761,17 @@ fn cyw43_sdio_cmd52_write_retained(
 ) -> Cyw43RetainedCmd52WriteOutcome {
     #[cfg(target_os = "none")]
     {
-        if !cyw43_uses_sdio_bus_link()
-            || !sdio_bus_link_payload_bounds(CYW43_SDIO_BUS_LINK_DATA_OFFSET, 1)
-            || !write_sdio_bus_payload_byte(CYW43_SDIO_BUS_LINK_DATA_OFFSET, value)
-        {
+        if !cyw43_uses_sdio_bus_link() {
             cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
             return Cyw43RetainedCmd52WriteOutcome::Failed;
         }
-        driver_task_shared_store_barrier();
-        driver_task_shared_clean_range(
-            DRIVER_TASK_SDIO_BUS_RING_VADDR + CYW43_SDIO_BUS_LINK_DATA_OFFSET,
-            1,
-        );
-        let sequence = cyw43_sdio_bus_link_next_sequence();
-        let Some(command) = sdio_bus_link_cmd52_descriptor_command(sequence, true, function, addr)
-        else {
-            cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
-            return Cyw43RetainedCmd52WriteOutcome::Failed;
-        };
-        match sdio_bus_link_call(command) {
-            Cyw43BusLinkOutcome::Pending => Cyw43RetainedCmd52WriteOutcome::Pending,
-            Cyw43BusLinkOutcome::Complete(completion)
-                if completion.sequence == sequence
-                    && completion.code == COMPLETION_PROGRESS
-                    && completion.result == 1 =>
-            {
-                Cyw43RetainedCmd52WriteOutcome::Applied
-            }
-            Cyw43BusLinkOutcome::Complete(completion) => {
-                if completion.code != COMPLETION_FAULT {
-                    cyw43_record_last_fault_with_result(
-                        FAULT_CYW43_TRANSPORT_BUS_LINK,
-                        cyw43_sdio_bus_link_command_result(command),
-                    );
-                }
-                Cyw43RetainedCmd52WriteOutcome::Failed
-            }
-            Cyw43BusLinkOutcome::Failed => Cyw43RetainedCmd52WriteOutcome::Failed,
-        }
+        return cyw43_sdio_cmd52_write_retained_via_bus_link(function, addr, value);
     }
     #[cfg(not(target_os = "none"))]
     {
         #[cfg(test)]
         if TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
-            return if cyw43_sdio_cmd52_write(function, addr, value) {
-                Cyw43RetainedCmd52WriteOutcome::Applied
-            } else {
-                Cyw43RetainedCmd52WriteOutcome::Failed
-            };
+            return cyw43_sdio_cmd52_write_retained_via_bus_link(function, addr, value);
         }
         if sdio_execute_transfer(
             SDIO_CMD52,
@@ -28581,13 +28531,20 @@ fn cyw43_linked_f2_tx_prepare_turn(
         state.f2_tx_len = frame.len;
         state.f2_tx_sdpcm_seq = state.sdpcm_seq;
         state.f2_tx_boot_control = boot_control_frame;
+        let window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+        if state.backplane_window_valid && state.backplane_window == window {
+            state.f2_tx_phase = CYW43_F2_TX_PHASE_COMMAND_READY;
+            return true;
+        }
         state.backplane_window_valid = false;
         state.f2_tx_phase = CYW43_F2_TX_PHASE_WINDOW_LOW;
-        return false;
-    }
-    if !cyw43_f2_tx_prepare_identity_matches(state, frame, boot_control_frame) {
+    } else if !cyw43_f2_tx_prepare_identity_matches(state, frame, boot_control_frame) {
         cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
         return false;
+    }
+
+    if state.f2_tx_phase == CYW43_F2_TX_PHASE_COMMAND_READY {
+        return true;
     }
     let (low, mid, high) = cyw43_backplane_window_register_bytes(CYW43_CHIPCOMMON_BASE);
     let (register, value, next_phase) = match state.f2_tx_phase {
@@ -28595,25 +28552,11 @@ fn cyw43_linked_f2_tx_prepare_turn(
         CYW43_F2_TX_PHASE_WINDOW_MID => {
             (SBSDIO_FUNC1_SBADDRMID, mid, CYW43_F2_TX_PHASE_WINDOW_HIGH)
         }
-        CYW43_F2_TX_PHASE_WINDOW_HIGH => {
-            (SBSDIO_FUNC1_SBADDRHIGH, high, CYW43_F2_TX_PHASE_WAIT_IORX)
-        }
-        CYW43_F2_TX_PHASE_WAIT_IORX => {
-            return match cyw43_sdio_cmd52_read_retained(0, SDIO_CCCR_IORX) {
-                Cyw43RetainedCmd52ReadOutcome::Pending => false,
-                Cyw43RetainedCmd52ReadOutcome::Applied(iordy) if iordy & SDIO_FUNC_READY_2 != 0 => {
-                    cyw43_clear_last_fault();
-                    state.f2_tx_phase = CYW43_F2_TX_PHASE_COMMAND_READY;
-                    false
-                }
-                Cyw43RetainedCmd52ReadOutcome::Applied(_) => false,
-                Cyw43RetainedCmd52ReadOutcome::Failed => {
-                    state.recovery_required = true;
-                    false
-                }
-            };
-        }
-        CYW43_F2_TX_PHASE_COMMAND_READY => return true,
+        CYW43_F2_TX_PHASE_WINDOW_HIGH => (
+            SBSDIO_FUNC1_SBADDRHIGH,
+            high,
+            CYW43_F2_TX_PHASE_COMMAND_READY,
+        ),
         _ => {
             cyw43_f2_tx_prepare_reset(state);
             state.recovery_required = true;
@@ -28625,10 +28568,11 @@ fn cyw43_linked_f2_tx_prepare_turn(
         Cyw43RetainedCmd52WriteOutcome::Pending => false,
         Cyw43RetainedCmd52WriteOutcome::Applied => {
             state.f2_tx_phase = next_phase;
-            if next_phase == CYW43_F2_TX_PHASE_WAIT_IORX {
+            if next_phase == CYW43_F2_TX_PHASE_COMMAND_READY {
                 state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
                 state.backplane_window_valid = true;
             }
+            cyw43_clear_last_fault();
             false
         }
         Cyw43RetainedCmd52WriteOutcome::Failed => {
@@ -28712,9 +28656,9 @@ fn cyw43_function2_execute_tx_transfer_once(
     } else {
         let result = cyw43_tx_transfer_failure_result(sdio_last_transfer_failure());
         if result == Cyw43TxTransferResult::DeferredForDpc {
-            // The DPC may alter both the Function-1 backplane window and IORx
-            // readiness. Keep the logical SDPCM frame but force its normal
-            // setup children to run again after the source is consumed.
+            // The DPC may alter the Function-1 backplane window. Keep the
+            // logical SDPCM frame; the next admitted parent rechecks the shared
+            // cache after the DPC source is consumed.
             cyw43_f2_tx_prepare_reset(state);
         }
         result
@@ -34481,7 +34425,13 @@ fn usb_keyboard_pending_result(state: &mut UsbRuntimeState) -> u32 {
 }
 
 const fn usb_keyboard_has_first_valid_report(state: &UsbRuntimeState) -> bool {
-    state.keyboard_valid_report_events != 0 || state.keyboard_first_report_optional
+    // Decode health and command-input readiness are different proofs. A held
+    // key or ambiguous modifier window can decode successfully while the
+    // attach/recovery guard is still suppressing every byte. Keep the
+    // child-to-root readiness result pending until a provenance-safe idle
+    // baseline has opened that guard.
+    !state.keyboard_attach_awaiting_idle
+        && (state.keyboard_valid_report_events != 0 || state.keyboard_first_report_optional)
 }
 
 const fn usb_keyboard_report_status_counts_as_valid_report(status: u8) -> bool {
@@ -60117,8 +60067,7 @@ mod tests {
     #[test]
     fn cyw43_control_exchange_seals_parent_before_first_dpc_arbitration() {
         let _guard = test_guard();
-        reset_runtime_for_test();
-        init_cyw43_engine_for_test();
+        initialize_production_foreground_pair(1);
         arm_cyw43_control_exchange_for_test(11);
         let _production_mode = ProductionForegroundModeGuard::enter();
         let cmd = 0x17;
@@ -60200,11 +60149,30 @@ mod tests {
         assert_eq!(
             service_command_turn(0, parent),
             RuntimeCommandTurn::Pending,
-            "the same seal survives a private op11 phase before its first SDIO child",
+            "the same seal survives publication of the first exact Function-2 child",
         );
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        let owner_command = RuntimeRingWindow::sdio_owner()
+            .and_then(|ring| runtime_ring_read_command_stable(&ring))
+            .expect("the sealed parent publishes one stable owner command");
+        let owner_descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("the sealed parent publishes one stable owner descriptor");
+        assert_eq!(
+            CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+            owner_command.sequence,
+        );
+        assert_eq!(owner_descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE);
+        assert_eq!(owner_descriptor.function, 2);
+        assert_eq!(owner_descriptor.addr, BACKPLANE_32BIT_FLAG);
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(state.control_exchange.active());
             assert_eq!(state.control_exchange.expected_id, id);
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert!(transaction.parent_input_sealed);
+            assert_eq!(transaction.parent, parent);
+            assert_eq!(transaction.parent_descriptor, descriptor);
         });
         assert!(
             !CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire),
@@ -67990,11 +67958,10 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_linked_f2_tx_window_iorx_and_cmd53_each_consume_separate_outer_turns() {
+    fn cyw43_linked_f2_tx_uses_cached_window_without_per_packet_iorx() {
         let _guard = test_guard();
         reset_runtime_for_test();
         reset_test_sdio_transfer_log();
-        test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
         let mut state = Cyw43RuntimeState::new();
         state.initialized = true;
         state.transport_ready = true;
@@ -68002,6 +67969,8 @@ mod tests {
         state.dpc_link_ready = true;
         state.dpc_shared_epoch = 0x4359_f201;
         state.sdpcm_seq = 7;
+        state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+        state.backplane_window_valid = true;
         let frame = DriverFrameDescriptor {
             offset: CYW43_SDPCM_TX_OFFSET as u32,
             len: 64,
@@ -68011,43 +67980,61 @@ mod tests {
             write_ring_byte(frame.offset as usize + index, index as u8);
         }
 
-        let expected_phases = [
-            CYW43_F2_TX_PHASE_WINDOW_LOW,
-            CYW43_F2_TX_PHASE_WINDOW_MID,
-            CYW43_F2_TX_PHASE_WINDOW_HIGH,
-            CYW43_F2_TX_PHASE_WAIT_IORX,
-            CYW43_F2_TX_PHASE_COMMAND_READY,
-        ];
-        for expected_phase in expected_phases {
-            let operations_before = test_sdio_transfer_total_count();
-            assert!(!cyw43_linked_f2_tx_prepare_turn(&mut state, frame, false));
-            assert_eq!(state.f2_tx_phase, expected_phase);
-            assert!(
-                test_sdio_transfer_total_count() <= operations_before + 1,
-                "phase {expected_phase} exceeded one reciprocal action"
-            );
-        }
-        let operations_before = test_sdio_transfer_total_count();
         assert_eq!(
             cyw43_function2_execute_tx_transfer_once(&mut state, frame, frame.len, 0, false, false,),
             Cyw43TxTransferResult::Submitted
         );
-        assert_eq!(test_sdio_transfer_total_count(), operations_before + 1);
         assert_eq!(state.f2_tx_phase, CYW43_F2_TX_PHASE_IDLE);
         assert_eq!(
             test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52),
-            4,
-            "LOW/MID/HIGH plus one IORx sample"
+            0,
+            "a steady cache hit must not emit window or IORx commands"
         );
         assert_eq!(
             test_sdio_transfer_count(|record| record.cmd == SDIO_CMD53),
             1,
-            "the F2 payload is issued only after a later ready turn"
+            "the steady packet lane contains only the Function 2 payload"
         );
+
+        reset_test_sdio_transfer_log();
+        state.backplane_window = 0;
+        state.backplane_window_valid = true;
+        for (index, expected_phase) in [
+            CYW43_F2_TX_PHASE_WINDOW_MID,
+            CYW43_F2_TX_PHASE_WINDOW_HIGH,
+            CYW43_F2_TX_PHASE_COMMAND_READY,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            assert_eq!(
+                cyw43_function2_execute_tx_transfer_once(
+                    &mut state, frame, frame.len, 0, false, false,
+                ),
+                Cyw43TxTransferResult::NotAttempted,
+            );
+            assert_eq!(state.f2_tx_phase, expected_phase);
+            assert_eq!(
+                test_sdio_transfer_total_count(),
+                index + 1,
+                "each cold-window phase consumes one card operation",
+            );
+        }
+        assert_eq!(
+            cyw43_function2_execute_tx_transfer_once(&mut state, frame, frame.len, 0, false, false,),
+            Cyw43TxTransferResult::Submitted,
+        );
+        assert_eq!(
+            test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52),
+            3,
+            "a genuine cache miss programs LOW/MID/HIGH exactly once"
+        );
+        assert_eq!(test_sdio_cmd52_read_count(0, SDIO_CCCR_IORX), 0);
+        assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
     }
 
     #[test]
-    fn cyw43_linked_control_and_eapol_tx_retain_pure_begin_until_exact_f2_issue() {
+    fn cyw43_linked_control_and_eapol_tx_use_one_cached_window_f2_issue() {
         let _guard = test_guard();
         for (case, op) in [
             DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
@@ -68075,6 +68062,8 @@ mod tests {
                 state.control_startup_status_drained = true;
                 state.sdpcm_seq = 17 + case as u8;
                 state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(2);
+                state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+                state.backplane_window_valid = true;
             });
             stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
                 op,
@@ -68088,40 +68077,10 @@ mod tests {
                 reserved: 0,
             });
             reset_test_sdio_transfer_log();
-            test_sdio_cmd52_read_iorx_response(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
             let sequence = 690 + case as u32;
             let command = cyw43_descriptor_command(sequence);
 
-            // Constructing the retained F2 identity is an ordinary outer
-            // turn, even though it performs no owner operation. It must not
-            // be mistaken for terminal Idle by the root controller.
-            assert_eq!(
-                service_command_turn(0, command),
-                RuntimeCommandTurn::Pending
-            );
-            assert_eq!(test_sdio_transfer_total_count(), 0);
-            CYW43_RUNTIME_STATE.with_ref(|state| {
-                assert_eq!(state.f2_tx_phase, CYW43_F2_TX_PHASE_WINDOW_LOW);
-            });
-
-            let mut terminal = None;
-            for outer_turn in 1..=8 {
-                let operations_before = test_sdio_transfer_total_count();
-                let turn = service_command_turn(0, command);
-                assert!(
-                    test_sdio_transfer_total_count() <= operations_before + 1,
-                    "typed TX case {case} outer turn {outer_turn} exceeded one reciprocal operation",
-                );
-                match turn {
-                    RuntimeCommandTurn::Pending => {}
-                    RuntimeCommandTurn::Complete(completion) => {
-                        terminal = Some(completion);
-                        break;
-                    }
-                }
-            }
-
-            let completion = terminal.expect("typed TX reaches one exact terminal F2 issue");
+            let completion = service_command(0, command);
             assert_eq!(completion.sequence, sequence);
             assert_eq!(completion.code, COMPLETION_PROGRESS);
             assert_eq!(
@@ -68134,8 +68093,8 @@ mod tests {
             );
             assert_eq!(
                 test_sdio_transfer_count(|record| record.cmd == SDIO_CMD52),
-                4,
-                "LOW/MID/HIGH plus one IORx sample"
+                0,
+                "steady control/data TX must trust the current cached window"
             );
             assert_eq!(
                 test_sdio_cmd53_transfer_count(2, true),
@@ -73976,6 +73935,8 @@ mod tests {
                 state.control_startup_status_drained = true;
                 state.sdpcm_seq = 17 + case as u8;
                 state.sdpcm_seq_max = state.sdpcm_seq.wrapping_add(2);
+                state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+                state.backplane_window_valid = true;
             });
             stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
                 op,
@@ -73992,47 +73953,22 @@ mod tests {
             let parent = cyw43_descriptor_command(parent_sequence);
             let _production_mode = ProductionForegroundModeGuard::enter();
             let mut io = production_owner_io();
-            let trace = drive_production_foreground_parent::<5, _>(
+            let trace = drive_production_foreground_parent::<1, _>(
                 parent,
                 generation,
                 &mut io,
-                |index, _, descriptor, io| {
-                    if index == 3 {
-                        assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD52_READ);
-                        assert_eq!(descriptor.function, 0);
-                        assert_eq!(descriptor.addr, SDIO_CCCR_IORX);
-                        io.command_response = u32::from(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
-                    }
-                    ProductionOwnerCut::Continue
-                },
+                |_, _, _, _| ProductionOwnerCut::Continue,
             );
             drop(_production_mode);
 
-            assert_eq!(trace.child_count, 5);
-            assert_eq!(trace.terminal_parent_polls, 5);
+            assert_eq!(trace.child_count, 1);
+            assert_eq!(trace.terminal_parent_polls, 1);
             assert!(trace.parent_turns > trace.owner_turns);
-            for (index, register) in [
-                SBSDIO_FUNC1_SBADDRLOW,
-                SBSDIO_FUNC1_SBADDRMID,
-                SBSDIO_FUNC1_SBADDRHIGH,
-            ]
-            .into_iter()
-            .enumerate()
-            {
-                let descriptor = trace.children[index].descriptor;
-                assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE);
-                assert_eq!(descriptor.function, 1);
-                assert_eq!(descriptor.addr, register);
-            }
-            let iorx = trace.children[3].descriptor;
-            assert_eq!(iorx.op, DRIVER_RUNTIME_SDIO_OP_CMD52_READ);
-            assert_eq!(iorx.function, 0);
-            assert_eq!(iorx.addr, SDIO_CCCR_IORX);
-            let function2 = trace.children[4].descriptor;
+            let function2 = trace.children[0].descriptor;
             assert_eq!(function2.op, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE);
             assert_eq!(function2.function, 2);
             assert_eq!(function2.addr, BACKPLANE_32BIT_FLAG);
-            assert_eq!(io.command_issue_count(), 5);
+            assert_eq!(io.command_issue_count(), 1);
             let completion = trace.completion.expect("TX parent completes");
             assert!(!trace.issued_unknown);
             assert_eq!(completion.sequence, parent_sequence);
@@ -74057,6 +73993,89 @@ mod tests {
                 assert_eq!(state.sdpcm_seq, 18 + case as u8);
             });
         }
+    }
+
+    #[test]
+    fn control_tx_cold_window_crosses_exact_three_writes_then_f2() {
+        let _guard = test_guard();
+        let generation = 0x4359_f210;
+        initialize_production_foreground_pair(generation);
+        let payload_offset = cyw43_runtime_payload_offset();
+        let payload = [0x07, 0x01, 0x00, 0x00];
+        stage_bytes(usize::from(payload_offset), &payload);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.firmware_released = true;
+            state.dpc_link_ready = true;
+            state.control_startup_status_drained = true;
+            state.sdpcm_seq = 17;
+            state.sdpcm_seq_max = 19;
+            state.backplane_window = 0;
+            state.backplane_window_valid = true;
+        });
+        stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: 0,
+            target_addr: 0,
+            payload_offset,
+            payload_len: payload.len() as u16,
+            total_len: payload.len() as u32,
+            arg0: 0,
+            arg1: 0,
+            reserved: 0,
+        });
+        let parent_sequence = 0x4359_f230;
+        let parent = cyw43_descriptor_command(parent_sequence);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let mut io = production_owner_io();
+        let trace = drive_production_foreground_parent::<4, _>(
+            parent,
+            generation,
+            &mut io,
+            |_, _, _, _| ProductionOwnerCut::Continue,
+        );
+        drop(_production_mode);
+
+        assert_eq!(trace.child_count, 4);
+        assert_eq!(trace.terminal_parent_polls, 4);
+        for (index, register) in [
+            SBSDIO_FUNC1_SBADDRLOW,
+            SBSDIO_FUNC1_SBADDRMID,
+            SBSDIO_FUNC1_SBADDRHIGH,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let descriptor = trace.children[index].descriptor;
+            assert_eq!(descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE);
+            assert_eq!(descriptor.function, 1);
+            assert_eq!(descriptor.addr, register);
+        }
+        let function2 = trace.children[3].descriptor;
+        assert_eq!(function2.op, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE);
+        assert_eq!(function2.function, 2);
+        assert_eq!(function2.addr, BACKPLANE_32BIT_FLAG);
+        assert!(
+            trace.children[..trace.child_count]
+                .iter()
+                .all(|child| child.descriptor.op != DRIVER_RUNTIME_SDIO_OP_CMD52_READ),
+            "cold F2 setup must not restore the removed per-packet IORx sample",
+        );
+        assert_eq!(io.command_issue_count(), 4);
+        assert_eq!(
+            trace.completion,
+            Some(DriverTaskCompletionRecord::progress(
+                parent_sequence,
+                (CYW43_SDPCM_HEADER_BYTES + payload.len()) as u32,
+            )),
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.backplane_window_valid);
+            assert_eq!(
+                state.backplane_window,
+                CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK,
+            );
+            assert_eq!(state.f2_tx_phase, CYW43_F2_TX_PHASE_IDLE);
+        });
     }
 
     #[test]
@@ -74337,6 +74356,8 @@ mod tests {
             state.control_startup_status_drained = true;
             state.sdpcm_seq = initial_sdpcm_sequence;
             state.sdpcm_seq_max = initial_sdpcm_sequence.wrapping_add(2);
+            state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
         });
         let initial_ticks = 10_000u64;
         TEST_RUNTIME_TIMER_COUNTER_TICKS.store(initial_ticks, Ordering::Release);
@@ -74401,12 +74422,6 @@ mod tests {
                 sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
                     .expect("the child descriptor is sequence-last stable");
             configure_production_owner_child(&mut io, child_descriptor);
-            if child_descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
-                && child_descriptor.function == 0
-                && child_descriptor.addr == SDIO_CCCR_IORX
-            {
-                io.command_response = u32::from(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
-            }
             child_count = child_count.saturating_add(1);
             let function2_tx = child_descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
                 && child_descriptor.function == 2
@@ -74489,7 +74504,7 @@ mod tests {
             )),
             "the exact physical TX is applied before the unchanged deadline becomes a post-TX fault",
         );
-        assert_eq!(child_count, 5);
+        assert_eq!(child_count, 1);
         assert_eq!(
             function2_tx_children, 1,
             "the immutable control frame has one physical Function-2 write",
@@ -74763,12 +74778,9 @@ mod tests {
                 .expect("post-probe control TX publishes one stable owner descriptor");
         assert_ne!(control_tx_child.sequence, probe_child.sequence);
         assert_eq!(control_tx_child.aux1, generation);
-        assert_eq!(control_tx_descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,);
-        assert_eq!(control_tx_descriptor.function, 1);
-        assert_eq!(
-            control_tx_descriptor.addr, SBSDIO_FUNC1_SBADDRLOW,
-            "the single normal TX lane restarts the Function-2 window sequence",
-        );
+        assert_eq!(control_tx_descriptor.op, DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE);
+        assert_eq!(control_tx_descriptor.function, 2);
+        assert_eq!(control_tx_descriptor.addr, BACKPLANE_32BIT_FLAG);
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(
                 state.control_exchange.phase,
@@ -81547,6 +81559,16 @@ mod tests {
         assert!(!usb_keyboard_report_status_counts_as_valid_report(
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER
         ));
+
+        let mut state = UsbRuntimeState::new();
+        state.keyboard_attach_awaiting_idle = true;
+        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY;
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert_eq!(state.keyboard_valid_report_events, 1);
+        assert!(
+            !usb_keyboard_has_first_valid_report(&state),
+            "a decoded-but-filtered held key is health telemetry, not input readiness"
+        );
     }
 
     #[test]
@@ -81566,6 +81588,11 @@ mod tests {
         assert_eq!(
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY
+        );
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(
+            !usb_keyboard_has_first_valid_report(&state),
+            "a held attach key must keep first-report readiness pending"
         );
 
         assert_eq!(
@@ -81589,6 +81616,8 @@ mod tests {
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE
         );
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(usb_keyboard_has_first_valid_report(&state));
 
         assert_eq!(
             usb_keyboard_report_payload_to_frame_at(&mut state, &a, 0),
@@ -81631,6 +81660,11 @@ mod tests {
             state.keyboard_last_report_status,
             DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_DECODED_EMPTY
         );
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(
+            !usb_keyboard_has_first_valid_report(&state),
+            "an ambiguous modifier window must not open command input"
+        );
 
         let idle = [0u8; USB_BOOT_REPORT_BYTES];
         assert_eq!(
@@ -81638,6 +81672,8 @@ mod tests {
             0
         );
         assert!(!state.keyboard_attach_awaiting_idle);
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(usb_keyboard_has_first_valid_report(&state));
 
         let a = [0, 0, 0x04, 0, 0, 0, 0, 0];
         assert_eq!(
@@ -81796,6 +81832,7 @@ mod tests {
     #[test]
     fn usb_control_report_idle_payload_counts_as_first_report_proof() {
         let mut state = UsbRuntimeState::new();
+        state.keyboard_attach_awaiting_idle = true;
         let idle = [0u8; USB_BOOT_REPORT_BYTES];
 
         assert_eq!(
@@ -81811,7 +81848,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_no_idle_report_quirk_counts_as_readiness_not_report() {
+    fn usb_keyboard_no_idle_report_quirk_waits_for_safe_release_before_input_ready() {
         let mut state = UsbRuntimeState::new();
         let apple_keyboard = UsbEnumerationDevice {
             vendor_id: USB_VENDOR_ID_APPLE,
@@ -81831,8 +81868,9 @@ mod tests {
         assert!(usb_keyboard_control_poll_allowed(&state));
 
         state.keyboard_first_report_optional = true;
+        state.keyboard_attach_awaiting_idle = true;
         state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NONE;
-        assert!(usb_keyboard_has_first_valid_report(&state));
+        assert!(!usb_keyboard_has_first_valid_report(&state));
         assert!(!usb_keyboard_control_poll_allowed(&state));
         assert_eq!(state.keyboard_valid_report_events, 0);
         assert_eq!(
@@ -81842,8 +81880,14 @@ mod tests {
             u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_NO_IDLE_REPORT)
         );
 
-        state.keyboard_valid_report_events = 1;
-        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        let idle = [0u8; USB_BOOT_REPORT_BYTES];
+        assert_eq!(
+            usb_keyboard_report_payload_to_frame_at(&mut state, &idle, 0),
+            0
+        );
+        assert!(!state.keyboard_attach_awaiting_idle);
+        assert!(usb_keyboard_note_valid_report_status(&mut state));
+        assert!(usb_keyboard_has_first_valid_report(&state));
         assert_eq!(
             (usb_keyboard_pending_result(&mut state)
                 >> DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
@@ -87884,6 +87928,71 @@ mod tests {
     }
 
     #[test]
+    fn usb_poll_keeps_first_report_pending_until_attach_idle_guard_opens() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 1;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_reports_queued = USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_transfer_events = 1;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_last_report_status =
+                DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY;
+            state.keyboard_attach_awaiting_idle = true;
+        });
+        let poll = DriverTaskCommandRecord {
+            sequence: 96,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            service_usb_keyboard(poll),
+            DriverTaskCompletionRecord::progress_with_detail(
+                96,
+                DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+                0x0100_0000
+                    | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY)
+                        << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                    | USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+            )
+        );
+
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.keyboard_attach_awaiting_idle = false;
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+        });
+        assert_eq!(
+            service_usb_keyboard(DriverTaskCommandRecord {
+                sequence: 97,
+                ..poll
+            }),
+            DriverTaskCompletionRecord::progress_with_detail(
+                97,
+                DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY,
+                0x0100_0000
+                    | (u32::from(DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE)
+                        << DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT)
+                    | USB_KEYBOARD_STEADY_INTERRUPT_QUEUE_DEPTH as u32
+            )
+        );
+    }
+
+    #[test]
     fn usb_keyboard_poll_does_not_reset_healthy_steady_queue_without_recovery_aux() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -88125,7 +88234,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_recovery_aux_rearms_collapsed_idle_queue_to_steady_depth() {
+    fn usb_keyboard_recovery_aux_rearms_queue_then_waits_for_safe_idle_baseline() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -88201,7 +88310,7 @@ mod tests {
         assert_eq!(completion.code, COMPLETION_PROGRESS);
         assert_eq!(
             completion.detail,
-            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
         );
         assert_eq!(
             completion.result & 0xff,
@@ -88227,6 +88336,7 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_QUEUE_COLLAPSE
         );
         USB_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.keyboard_attach_awaiting_idle);
             assert_eq!(state.keyboard_endpoint_recoveries, 1);
             assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
             assert_eq!(
@@ -88314,7 +88424,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_keyboard_recovery_aux_recovers_full_no_event_queue() {
+    fn usb_keyboard_recovery_aux_recovers_full_queue_then_rebaselines_input() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
@@ -88393,7 +88503,7 @@ mod tests {
         assert_eq!(completion.code, COMPLETION_PROGRESS);
         assert_eq!(
             completion.detail,
-            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY
+            DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING
         );
         assert_eq!(
             completion.result & 0xff,
@@ -88419,6 +88529,7 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_REASON_FULL_QUEUE_NO_EVENT
         );
         USB_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.keyboard_attach_awaiting_idle);
             assert_eq!(state.keyboard_endpoint_recoveries, 1);
             assert_eq!(state.keyboard_endpoint_recovery_failures, 0);
             assert_eq!(state.keyboard_transfer_events, 0);
