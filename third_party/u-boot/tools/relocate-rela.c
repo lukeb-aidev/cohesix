@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0+ OR BSD-2-Clause
 /*
+ * Author: Lukas Bower
+ * Purpose: Keep the vendored U-Boot relocation host tool format-safe across macOS ABIs.
+ * Copyright 2026 Lukas Bower
+ */
+/*
  * Copyright 2013 Freescale Semiconductor, Inc.
  *
  * 64-bit and little-endian target only until we need to support a different
@@ -173,7 +178,7 @@ static int decode_elf64(FILE *felf, char **argv)
 
 	ret = fseek(felf, section_header_base, SEEK_SET);
 	if (ret) {
-		fprintf(stderr, "%s: Can't set pointer to section header: %x/%lx\n",
+		fprintf(stderr, "%s: Can't set pointer to section header: %x/%" PRIx64 "\n",
 			argv[0], ret, section_header_base);
 		free(sh_table);
 		fclose(felf);
@@ -182,7 +187,7 @@ static int decode_elf64(FILE *felf, char **argv)
 
 	size = fread(sh_table, 1, section_header_size, felf);
 	if (size != section_header_size) {
-		fprintf(stderr, "%s: Can't read section header: %lx/%lx\n",
+		fprintf(stderr, "%s: Can't read section header: %zx/%" PRIx64 "\n",
 			argv[0], size, section_header_size);
 		free(sh_table);
 		fclose(felf);
@@ -191,7 +196,7 @@ static int decode_elf64(FILE *felf, char **argv)
 
 	sh_index = le16_to_cpu(header.e_shstrndx);
 	sh_size = le64_to_cpu(sh_table[sh_index].sh_size);
-	debug("e_shstrndx %x, sh_size %lx\n", sh_index, sh_size);
+	debug("e_shstrndx %x, sh_size %" PRIx64 "\n", sh_index, sh_size);
 
 	sh_str = malloc(sh_size);
 	if (!sh_str) {
@@ -219,7 +224,7 @@ static int decode_elf64(FILE *felf, char **argv)
 
 	size = fread(sh_str, 1, sh_size, felf);
 	if (size != sh_size) {
-		fprintf(stderr, "%s: Can't read section: %lx/%lx\n",
+		fprintf(stderr, "%s: Can't read section: %zx/%" PRIx64 "\n",
 			argv[0], size, sh_size);
 		free(sh_str);
 		free(sh_table);
@@ -315,7 +320,7 @@ static int decode_elf32(FILE *felf, char **argv)
 
 	ret = fseek(felf, section_header_base, SEEK_SET);
 	if (ret) {
-		fprintf(stderr, "%s: Can't set pointer to section header: %x/%lx\n",
+		fprintf(stderr, "%s: Can't set pointer to section header: %x/%" PRIx64 "\n",
 			argv[0], ret, section_header_base);
 		free(sh_table);
 		fclose(felf);
@@ -324,7 +329,7 @@ static int decode_elf32(FILE *felf, char **argv)
 
 	size = fread(sh_table, 1, section_header_size, felf);
 	if (size != section_header_size) {
-		fprintf(stderr, "%s: Can't read section header: %lx/%lx\n",
+		fprintf(stderr, "%s: Can't read section header: %zx/%" PRIx64 "\n",
 			argv[0], size, section_header_size);
 		free(sh_table);
 		fclose(felf);
@@ -333,7 +338,7 @@ static int decode_elf32(FILE *felf, char **argv)
 
 	sh_index = elf16_to_cpu(header.e_shstrndx);
 	sh_size = elf32_to_cpu(sh_table[sh_index].sh_size);
-	debug("e_shstrndx %x, sh_size %lx\n", sh_index, sh_size);
+	debug("e_shstrndx %x, sh_size %" PRIx32 "\n", sh_index, sh_size);
 
 	sh_str = malloc(sh_size);
 	if (!sh_str) {
@@ -361,7 +366,7 @@ static int decode_elf32(FILE *felf, char **argv)
 
 	size = fread(sh_str, 1, sh_size, felf);
 	if (size != sh_size) {
-		fprintf(stderr, "%s: Can't read section: %lx/%x\n",
+		fprintf(stderr, "%s: Can't read section: %zx/%" PRIx32 "\n",
 			argv[0], size, sh_size);
 		free(sh_str);
 		free(sh_table);

@@ -1,4 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0+
+# Author: Lukas Bower
+# Purpose: Keep the vendored U-Boot host-tool build warning-clean for Cohesix.
+# Copyright 2026 Lukas Bower
 #
 # (C) Copyright 2000-2006
 # Wolfgang Denk, DENX Software Engineering, wd@denx.de.
@@ -209,8 +212,6 @@ HOSTLDLIBS_fit_info := $(HOSTLDLIBS_mkimage)
 HOSTLDLIBS_fit_check_sign := $(HOSTLDLIBS_mkimage)
 HOSTLDLIBS_fdt_add_pubkey := $(HOSTLDLIBS_mkimage)
 HOSTLDLIBS_preload_check_sign := $(HOSTLDLIBS_mkimage)
-HOSTLDLIBS_preload_check_sign += \
-	$(shell pkg-config --libs libssl libcrypto 2> /dev/null || echo "-lssl -lcrypto")
 
 hostprogs-$(CONFIG_EXYNOS5250) += mkexynosspl
 hostprogs-$(CONFIG_EXYNOS5420) += mkexynosspl

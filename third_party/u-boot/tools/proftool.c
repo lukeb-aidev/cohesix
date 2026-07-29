@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0+
 /*
+ * Author: Lukas Bower
+ * Purpose: Keep the vendored U-Boot profiling host tool warning-clean on macOS.
+ * Copyright 2026 Lukas Bower
+ */
+/*
  * Copyright 2023 Google LLC
  * Written by Simon Glass <sjg@chromium.org>
  */
@@ -36,8 +41,8 @@
 #define _DEBUG	0
 
 /* from linux/kernel.h */
-#define __ALIGN_MASK(x, mask)	(((x) + (mask)) & ~(mask))
-#define ALIGN(x, a)		__ALIGN_MASK((x), (typeof(x))(a) - 1)
+#define TRACE_ALIGN_MASK(x, mask)	(((x) + (mask)) & ~(mask))
+#define TRACE_ALIGN(x, a)		TRACE_ALIGN_MASK((x), (typeof(x))(a) - 1)
 
 /**
  * container_of - cast a member of a structure out to the containing structure
@@ -820,7 +825,7 @@ static int add_str(struct twriter *tw, const char *name)
 	if (tw->str_ptr > abuf_size(&tw->str_buf)) {
 		int new_size;
 
-		new_size = ALIGN(tw->str_ptr, 4096);
+		new_size = TRACE_ALIGN(tw->str_ptr, 4096);
 		if (!abuf_realloc(&tw->str_buf, new_size))
 			return -1;
 	}
@@ -953,7 +958,7 @@ static int start_page(struct twriter *tw, ulong timestamp)
 	int ret;
 
 	/* move to start of next page */
-	start = ALIGN(tw->ptr, TRACE_PAGE_SIZE);
+	start = TRACE_ALIGN(tw->ptr, TRACE_PAGE_SIZE);
 	ret = fseek(tw->fout, start, SEEK_SET);
 	if (ret < 0) {
 		fprintf(stderr, "Cannot seek to page start\n");
@@ -986,7 +991,7 @@ static int finish_page(struct twriter *tw)
 	ret = pop_len(tw, "page");
 	if (ret < 0)
 		return ret;
-	end = ALIGN(tw->ptr, TRACE_PAGE_SIZE);
+	end = TRACE_ALIGN(tw->ptr, TRACE_PAGE_SIZE);
 
 	/*
 	 * Write a byte so that the data actually makes to the file, in the case
@@ -1532,7 +1537,7 @@ static int write_flyrecord(struct twriter *tw, enum out_format_t out_format,
 	      start_ofs, len);
 
 	/* trace data */
-	start = ALIGN(start_ofs, TRACE_PAGE_SIZE);
+	start = TRACE_ALIGN(start_ofs, TRACE_PAGE_SIZE);
 	tw->ptr += tputq(fout, start);
 
 	/* use a placeholder for the size */

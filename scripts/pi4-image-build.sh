@@ -1158,7 +1158,6 @@ resolve_gnu_make() {
 configure_u_boot_openssl_env() {
     local prefix=""
     local -a candidates=()
-    local pkg_config_libs=""
     local pkg_config_cflags=""
 
     if command -v brew >/dev/null 2>&1; then
@@ -1182,9 +1181,7 @@ configure_u_boot_openssl_env() {
         [[ -d "${prefix}/lib/pkgconfig" ]] && prepend_path_var PKG_CONFIG_PATH "${prefix}/lib/pkgconfig"
         [[ -d "${prefix}/lib64/pkgconfig" ]] && prepend_path_var PKG_CONFIG_PATH "${prefix}/lib64/pkgconfig"
         pkg_config_cflags="$(PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}" pkg-config --cflags libssl libcrypto 2>/dev/null || true)"
-        pkg_config_libs="$(PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}" pkg-config --libs libssl libcrypto 2>/dev/null || true)"
         [[ -n "${pkg_config_cflags}" ]] && append_env_flag HOSTCFLAGS "${pkg_config_cflags}"
-        [[ -n "${pkg_config_libs}" ]] && append_env_flag HOSTLDLIBS "${pkg_config_libs}"
         log "Using OpenSSL from ${prefix} for Pi4 U-Boot host tools"
         return 0
     done

@@ -1,5 +1,10 @@
 /* SPDX-License-Identifier: GPL-2.0+ */
 /*
+ * Author: Lukas Bower
+ * Purpose: Keep the vendored U-Boot image host tools portable on the Cohesix macOS build host.
+ * Copyright 2026 Lukas Bower
+ */
+/*
  * (C) Copyright 2013
  *
  * Written by Guilherme Maciel Ferreira <guilherme.maciel.ferreira@gmail.com>
@@ -274,14 +279,14 @@ int rockchip_copy_image(int fd, struct image_tool_params *mparams);
  *  b) we need a API call to get the respective section symbols */
 #if defined(__MACH__)
 #include <mach-o/getsect.h>
-#include <mach-o/dyld.h>
+#include <mach-o/ldsyms.h>
 
 #define INIT_SECTION(name)  do {					\
 		unsigned long name ## _len;				\
-		char *__cat(pstart_, name) = getsectdata("__DATA",	\
-			#name, &__cat(name, _len));			\
-		__cat(pstart_, name) += _dyld_get_image_vmaddr_slide(0);\
-		char *__cat(pstop_, name) = __cat(pstart_, name) +	\
+		uint8_t *__cat(pstart_, name) =			\
+			getsectiondata(&_mh_execute_header, "__DATA",	\
+				#name, &__cat(name, _len));		\
+		uint8_t *__cat(pstop_, name) = __cat(pstart_, name) +	\
 			__cat(name, _len);				\
 		__cat(__start_, name) = (void *)__cat(pstart_, name);	\
 		__cat(__stop_, name) = (void *)__cat(pstop_, name);	\
