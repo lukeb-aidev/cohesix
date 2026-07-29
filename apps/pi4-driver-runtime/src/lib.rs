@@ -476,8 +476,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_SDIO_RESP_SHORT, DRIVER_RUNTIME_SDIO_RESP_SHORT_BUSY,
     DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES, DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SDIO_TRANSFER_ATTEMPT_LIMIT,
-    DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
-    DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
+    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX,
+    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
+    DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_CONNECTION,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_ENABLE,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CLEAR_RESET,
     DRIVER_RUNTIME_USB_HUB_PORT_STATUS_FLAG_CONNECTED,
@@ -4713,19 +4714,9 @@ const MINI_UART_IO_OFFSET: usize = 0x40;
 #[cfg(target_os = "none")]
 const MINI_UART_IER_OFFSET: usize = 0x44;
 #[cfg(target_os = "none")]
-const MINI_UART_IIR_OFFSET: usize = 0x48;
-#[cfg(target_os = "none")]
-const MINI_UART_LCR_OFFSET: usize = 0x4c;
-#[cfg(target_os = "none")]
-const MINI_UART_MCR_OFFSET: usize = 0x50;
-#[cfg(target_os = "none")]
 const MINI_UART_LSR_OFFSET: usize = 0x54;
-#[cfg(target_os = "none")]
-const MINI_UART_CNTL_OFFSET: usize = 0x60;
-#[cfg(target_os = "none")]
-const AUX_ENABLES_OFFSET: usize = 0x04;
-#[cfg(target_os = "none")]
 const MINI_UART_LSR_RX_READY: u32 = 1;
+const MINI_UART_LSR_RX_OVERRUN: u32 = 1 << 1;
 #[cfg(target_os = "none")]
 const MINI_UART_LSR_TX_EMPTY: u32 = 1 << 5;
 #[cfg(target_os = "none")]
@@ -4734,13 +4725,21 @@ const MINI_UART_LSR_TX_IDLE: u32 = 1 << 6;
 const MINI_UART_TX_SPIN_LIMIT: usize = 65_536;
 const MINI_UART_RX_DRAIN_LIMIT: usize = 128;
 const MINI_UART_RX_QUEUE_CAPACITY: usize = 512;
+#[cfg(target_os = "none")]
+const MINI_UART_IER_RX_INTERRUPT: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SerialRuntimeRxQueue {
     bytes: [u8; MINI_UART_RX_QUEUE_CAPACITY],
     head: usize,
     len: usize,
-    drops: u32,
+    irq_wakes: u32,
+    irq_acks: u32,
+    irq_ack_failures: u32,
+    hardware_overrun_events: u32,
+    queue_full_events: u32,
+    received_bytes: u32,
+    irq_ack_pending: bool,
 }
 
 impl SerialRuntimeRxQueue {
@@ -4749,7 +4748,13 @@ impl SerialRuntimeRxQueue {
             bytes: [0; MINI_UART_RX_QUEUE_CAPACITY],
             head: 0,
             len: 0,
-            drops: 0,
+            irq_wakes: 0,
+            irq_acks: 0,
+            irq_ack_failures: 0,
+            hardware_overrun_events: 0,
+            queue_full_events: 0,
+            received_bytes: 0,
+            irq_ack_pending: false,
         }
     }
 
@@ -4759,13 +4764,17 @@ impl SerialRuntimeRxQueue {
 
     fn push(&mut self, byte: u8) -> bool {
         if self.len == MINI_UART_RX_QUEUE_CAPACITY {
-            self.drops = self.drops.saturating_add(1);
             return false;
         }
         let tail = (self.head + self.len) % MINI_UART_RX_QUEUE_CAPACITY;
         self.bytes[tail] = byte;
         self.len += 1;
+        self.received_bytes = self.received_bytes.saturating_add(1);
         true
+    }
+
+    const fn full(&self) -> bool {
+        self.len == MINI_UART_RX_QUEUE_CAPACITY
     }
 
     fn pop(&mut self) -> Option<u8> {
@@ -4777,6 +4786,81 @@ impl SerialRuntimeRxQueue {
         self.len -= 1;
         Some(byte)
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct SerialRxDrainOutcome {
+    bytes: usize,
+    source_pending: bool,
+    hardware_overrun: bool,
+}
+
+fn serial_drain_source_to_queue<Status, Read>(
+    queue: &mut SerialRuntimeRxQueue,
+    limit: usize,
+    mut read_status: Status,
+    mut read_byte: Read,
+) -> SerialRxDrainOutcome
+where
+    Status: FnMut() -> u32,
+    Read: FnMut() -> u8,
+{
+    let mut outcome = SerialRxDrainOutcome::default();
+    while outcome.bytes < limit {
+        let status = read_status();
+        outcome.hardware_overrun |= status & MINI_UART_LSR_RX_OVERRUN != 0;
+        if status & MINI_UART_LSR_RX_READY == 0 {
+            break;
+        }
+        if queue.full() {
+            queue.queue_full_events = queue.queue_full_events.saturating_add(1);
+            outcome.source_pending = true;
+            break;
+        }
+        let byte = read_byte();
+        let queued = queue.push(byte);
+        debug_assert!(
+            queued,
+            "capacity was checked before consuming mini-UART data"
+        );
+        outcome.bytes = outcome.bytes.saturating_add(1);
+    }
+    if outcome.hardware_overrun {
+        queue.hardware_overrun_events = queue.hardware_overrun_events.saturating_add(1);
+    }
+    outcome
+}
+
+fn serial_record_irq_ack(queue: &mut SerialRuntimeRxQueue, acked: bool) {
+    queue.irq_ack_pending = !acked;
+    if acked {
+        queue.irq_acks = queue.irq_acks.saturating_add(1);
+    } else {
+        queue.irq_ack_failures = queue.irq_ack_failures.saturating_add(1);
+    }
+}
+
+fn serial_service_irq_with<Drain, Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    badge: u32,
+    mut drain: Drain,
+    mut ack: Ack,
+) -> bool
+where
+    Drain: FnMut(&mut SerialRuntimeRxQueue) -> SerialRxDrainOutcome,
+    Ack: FnMut() -> bool,
+{
+    if badge != DRIVER_RUNTIME_SERIAL_IRQ_BADGE {
+        return false;
+    }
+    queue.irq_wakes = queue.irq_wakes.saturating_add(1);
+    let drained = drain(queue);
+    if drained.source_pending {
+        queue.irq_ack_pending = true;
+        return true;
+    }
+    serial_record_irq_ack(queue, ack());
+    true
 }
 
 /// Shared-buffer descriptor passed over the pointer-free driver-task ring.
@@ -7243,6 +7327,7 @@ fn descriptor_valid_ref(descriptor: &DriverRuntimeInitDescriptor) -> bool {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeNotificationRoute {
     Unavailable,
+    Serial,
     SdioOwner,
     Cyw43Client,
 }
@@ -8582,17 +8667,43 @@ fn descriptor_sdio_irq(
         .then_some(irq)
 }
 
+fn descriptor_serial_irq(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverRuntimeIrqDescriptor> {
+    if descriptor.hot_path != HOT_PATH_SERIAL_CONSOLE
+        || descriptor.irq_count != 1
+        || descriptor.bus_link_count != 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
+    {
+        return None;
+    }
+    let irq = descriptor.irqs[0];
+    (irq.valid()
+        && irq.irq == DRIVER_RUNTIME_SERIAL_IRQ
+        && irq.badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE
+        && irq.handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && irq.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL)
+        .then_some(irq)
+}
+
 fn runtime_notification_route(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> RuntimeNotificationRoute {
-    let Some(_link) = descriptor_notification_dpc_link(descriptor) else {
-        return RuntimeNotificationRoute::Unavailable;
-    };
     match descriptor.hot_path {
-        HOT_PATH_SDIO_HOST if descriptor_sdio_irq(descriptor).is_some() => {
+        HOT_PATH_SERIAL_CONSOLE if descriptor_serial_irq(descriptor).is_some() => {
+            RuntimeNotificationRoute::Serial
+        }
+        HOT_PATH_SDIO_HOST
+            if descriptor_notification_dpc_link(descriptor).is_some()
+                && descriptor_sdio_irq(descriptor).is_some() =>
+        {
             RuntimeNotificationRoute::SdioOwner
         }
-        HOT_PATH_CYW43_WIFI => RuntimeNotificationRoute::Cyw43Client,
+        HOT_PATH_CYW43_WIFI if descriptor_notification_dpc_link(descriptor).is_some() => {
+            RuntimeNotificationRoute::Cyw43Client
+        }
         _ => RuntimeNotificationRoute::Unavailable,
     }
 }
@@ -9673,9 +9784,12 @@ fn service_engine_init(command: DriverTaskCommandRecord) -> Option<DriverTaskCom
 
 fn service_serial(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
     if command.aux0 == SERIAL_RUNTIME_AUX_INIT {
-        SERIAL_RUNTIME_RX_QUEUE.with_mut(SerialRuntimeRxQueue::reset);
-        serial_init_mini_uart();
-        return DriverTaskCompletionRecord::progress(command.sequence, 1);
+        let descriptor = RUNTIME_DESCRIPTOR.load();
+        return if serial_runtime_initialize(&descriptor) {
+            DriverTaskCompletionRecord::progress(command.sequence, 1)
+        } else {
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+        };
     }
     if command.aux0 == DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX && command.frame.len == 0 {
         return serial_tx_idle_completion(command.sequence, serial_mini_uart_tx_idle());
@@ -9696,10 +9810,8 @@ fn service_serial(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecor
     if !command.frame.in_ring_payload() {
         return DriverTaskCompletionRecord::fault(command.sequence, FAULT_REJECTED_COMMAND);
     }
-    serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
     let limit = serial_frame_budget_limit(command.budget, command.frame.len);
     let written = serial_write_frame(command.frame, limit);
-    serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
     if written == 0 {
         DriverTaskCompletionRecord::idle(command.sequence)
     } else {
@@ -11529,6 +11641,9 @@ const fn runtime_notification_service_badge(
     let service_badge = badge
         & !(DRIVER_RUNTIME_RESERVED_ROOT_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE);
     match route {
+        RuntimeNotificationRoute::Serial if service_badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE => {
+            Some(service_badge)
+        }
         RuntimeNotificationRoute::SdioOwner if service_badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE => {
             Some(service_badge)
         }
@@ -11537,7 +11652,8 @@ const fn runtime_notification_service_badge(
         {
             Some(service_badge)
         }
-        RuntimeNotificationRoute::SdioOwner
+        RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::SdioOwner
         | RuntimeNotificationRoute::Cyw43Client
         | RuntimeNotificationRoute::Unavailable => None,
     }
@@ -11548,6 +11664,13 @@ const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge:
     let root_badge = badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
     let badge = badge & !DRIVER_RUNTIME_RESERVED_ROOT_BADGE;
     match route {
+        RuntimeNotificationRoute::Serial => {
+            if root_badge == 0 && (badge == 0 || badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE) {
+                badge
+            } else {
+                0
+            }
+        }
         RuntimeNotificationRoute::SdioOwner => {
             if badge == 0
                 || badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE
@@ -11608,6 +11731,7 @@ fn service_cyw43_persistent_source_once() -> bool {
 #[cfg(target_os = "none")]
 fn service_runtime_persistent_source_once(route: RuntimeNotificationRoute, badge: u32) -> bool {
     match route {
+        RuntimeNotificationRoute::Serial => serial_runtime_service_notification(badge),
         RuntimeNotificationRoute::SdioOwner => sdio_runtime_service_notification(badge),
         RuntimeNotificationRoute::Cyw43Client => service_cyw43_persistent_source_once(),
         RuntimeNotificationRoute::Unavailable => false,
@@ -45676,102 +45800,176 @@ const fn sdio_host_control_readback_matches(readback: u8, requested: u8) -> bool
 }
 
 #[cfg(target_os = "none")]
-fn serial_init_mini_uart() {
-    // SAFETY: The serial runtime image maps the declared BCM2711 auxiliary UART
-    // MMIO page at `DRIVER_TASK_DEVICE_MMIO_VADDR`. All offsets below are
-    // within that page and mirror the root-task mini-UART driver's conservative
-    // polled setup.
+fn serial_set_mini_uart_rx_irq(enabled: bool) {
+    // SAFETY: Descriptor admission gives the serial runtime exclusive access
+    // to the mapped mini-UART page. MU_IER is inside that page and only the RX
+    // interrupt bit is enabled for this single-lane receive design.
     unsafe {
-        let enables = core::ptr::read_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + AUX_ENABLES_OFFSET) as *const u32,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + AUX_ENABLES_OFFSET) as *mut u32,
-            enables | 0x1,
-        );
         core::ptr::write_volatile(
             (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IER_OFFSET) as *mut u32,
-            0,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_CNTL_OFFSET) as *mut u32,
-            0,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LCR_OFFSET) as *mut u32,
-            0x3,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_MCR_OFFSET) as *mut u32,
-            0,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IIR_OFFSET) as *mut u32,
-            0xc6,
-        );
-        core::ptr::write_volatile(
-            (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_CNTL_OFFSET) as *mut u32,
-            0x3,
+            if enabled {
+                MINI_UART_IER_RX_INTERRUPT
+            } else {
+                0
+            },
         );
     }
 }
 
 #[cfg(not(target_os = "none"))]
-fn serial_init_mini_uart() {}
+fn serial_set_mini_uart_rx_irq(_enabled: bool) {}
+
+fn serial_runtime_takeover_with<Drain, SetIrq, Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    mut drain: Drain,
+    mut set_irq: SetIrq,
+    mut ack: Ack,
+) -> bool
+where
+    Drain: FnMut(&mut SerialRuntimeRxQueue) -> SerialRxDrainOutcome,
+    SetIrq: FnMut(bool),
+    Ack: FnMut() -> bool,
+{
+    queue.reset();
+    // Root proved the configured UART idle on the preceding outer turn, then
+    // irrevocably released MMIO ownership. Preserve bytes that arrived across
+    // that handoff: do not reset line control or clear either hardware FIFO.
+    let initial = drain(queue);
+    if initial.source_pending {
+        return false;
+    }
+    set_irq(true);
+    let acked = ack();
+    serial_record_irq_ack(queue, acked);
+    if !acked {
+        set_irq(false);
+    }
+    acked
+}
+
+fn serial_runtime_initialize(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    let Some(irq) = descriptor_serial_irq(descriptor) else {
+        return false;
+    };
+    SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
+        serial_runtime_takeover_with(
+            queue,
+            |queue| {
+                #[cfg(target_os = "none")]
+                {
+                    serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT)
+                }
+                #[cfg(not(target_os = "none"))]
+                {
+                    let _ = queue;
+                    SerialRxDrainOutcome::default()
+                }
+            },
+            serial_set_mini_uart_rx_irq,
+            || runtime_irq_handler_ack(irq.handler_slot),
+        )
+    })
+}
 
 #[cfg(target_os = "none")]
-fn serial_preserve_rx_into_runtime_queue(limit: usize) -> usize {
+fn serial_preserve_rx_into_runtime_queue(limit: usize) -> SerialRxDrainOutcome {
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| serial_drain_hardware_to_queue(queue, limit))
 }
 
 #[cfg(not(target_os = "none"))]
-fn serial_preserve_rx_into_runtime_queue(_limit: usize) -> usize {
-    0
+fn serial_preserve_rx_into_runtime_queue(_limit: usize) -> SerialRxDrainOutcome {
+    SerialRxDrainOutcome::default()
 }
 
 #[cfg(target_os = "none")]
-fn serial_drain_hardware_to_queue(queue: &mut SerialRuntimeRxQueue, limit: usize) -> usize {
-    let mut read = 0usize;
-    while read < limit {
-        // SAFETY: The serial runtime image maps exactly the declared UART MMIO
-        // page at `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_LSR offset is within
-        // that page and is read-only for this polling check.
-        let lsr = unsafe {
-            core::ptr::read_volatile(
-                (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
-            )
-        };
-        if lsr & MINI_UART_LSR_RX_READY == 0 {
-            break;
-        }
-        // SAFETY: MU_IO returns one received byte when MU_LSR reports data
-        // ready; the write target is inside the fixed shared ring payload.
-        let byte = unsafe {
-            core::ptr::read_volatile(
-                (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *const u32,
-            ) as u8
-        };
-        if !queue.push(byte) {
-            break;
-        }
-        read = read.saturating_add(1);
+fn serial_drain_hardware_to_queue(
+    queue: &mut SerialRuntimeRxQueue,
+    limit: usize,
+) -> SerialRxDrainOutcome {
+    serial_drain_source_to_queue(
+        queue,
+        limit,
+        || {
+            // SAFETY: The serial runtime image maps exactly the declared UART MMIO
+            // page at `DRIVER_TASK_DEVICE_MMIO_VADDR`; the MU_LSR offset is within
+            // that page and is read-only for this owner-local IRQ drain.
+            unsafe {
+                core::ptr::read_volatile(
+                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_LSR_OFFSET) as *const u32,
+                )
+            }
+        },
+        || {
+            // SAFETY: MU_IO returns one received byte when MU_LSR reports data
+            // ready. The capacity check runs before this closure, so consuming
+            // a byte cannot overflow or silently discard software state.
+            unsafe {
+                core::ptr::read_volatile(
+                    (DRIVER_TASK_DEVICE_MMIO_VADDR + MINI_UART_IO_OFFSET) as *const u32,
+                ) as u8
+            }
+        },
+    )
+}
+
+fn serial_runtime_service_notification(badge: u32) -> bool {
+    SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
+        serial_service_irq_with(
+            queue,
+            badge,
+            |queue| {
+                #[cfg(target_os = "none")]
+                {
+                    serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT)
+                }
+                #[cfg(not(target_os = "none"))]
+                {
+                    let _ = queue;
+                    SerialRxDrainOutcome::default()
+                }
+            },
+            || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
+        )
+    })
+}
+
+fn serial_retry_pending_irq_with<Drain, Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    mut drain: Drain,
+    mut ack: Ack,
+) -> bool
+where
+    Drain: FnMut(&mut SerialRuntimeRxQueue) -> SerialRxDrainOutcome,
+    Ack: FnMut() -> bool,
+{
+    if !queue.irq_ack_pending {
+        return true;
     }
-    read
+    let drained = drain(queue);
+    if drained.source_pending {
+        return false;
+    }
+    let acked = ack();
+    serial_record_irq_ack(queue, acked);
+    acked
+}
+
+#[cfg(target_os = "none")]
+fn serial_retry_pending_irq_after_queue_drain() -> bool {
+    SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
+        serial_retry_pending_irq_with(
+            queue,
+            |queue| serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT),
+            || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
+        )
+    })
 }
 
 #[cfg(target_os = "none")]
 fn serial_read_frame(limit: usize) -> usize {
     let limit = limit.min(MAX_DRIVER_TASK_FRAME_BYTES);
-    let mut read =
-        SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| serial_drain_queue_to_frame(queue, limit));
-    if read >= limit {
-        return read;
-    }
-    read += SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
-        let remaining = limit.saturating_sub(read);
-        serial_drain_hardware_to_queue(queue, remaining);
-        serial_drain_queue_to_frame(queue, remaining)
-    });
+    let read = SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| serial_drain_queue_to_frame(queue, limit));
+    let _ = serial_retry_pending_irq_after_queue_drain();
     read
 }
 
@@ -45807,7 +46005,7 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
     let uart = DRIVER_TASK_DEVICE_MMIO_VADDR as *mut u32;
     for index in 0..(frame.len as usize).min(limit) {
         if index != 0 && index % 8 == 0 {
-            serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
+            let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
         }
         // SAFETY: The frame descriptor is validated by `service_serial`, the
         // ring page is mapped at `DRIVER_TASK_RING_VADDR`, and byte reads stay
@@ -45827,7 +46025,7 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
         }
         written = written.saturating_add(1);
     }
-    serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
+    let _ = serial_preserve_rx_into_runtime_queue(MINI_UART_RX_DRAIN_LIMIT);
     written
 }
 
@@ -47906,9 +48104,14 @@ mod tests {
 
     #[test]
     fn generated_notification_dpc_topology_routes_both_peers() {
+        let serial = descriptor_for(HOT_PATH_SERIAL_CONSOLE, ROLE_SERIAL);
         let client = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
         let owner = descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO);
 
+        assert_eq!(
+            runtime_notification_route(&serial),
+            RuntimeNotificationRoute::Serial
+        );
         assert_eq!(
             runtime_notification_route(&client),
             RuntimeNotificationRoute::Cyw43Client
@@ -47927,6 +48130,16 @@ mod tests {
         malformed.irqs[0].handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
         assert_eq!(
             runtime_notification_route(&malformed),
+            RuntimeNotificationRoute::Unavailable
+        );
+
+        let mut poll_only_serial = serial;
+        poll_only_serial.irq_count = 0;
+        poll_only_serial.irqs[0] = DriverRuntimeIrqDescriptor::empty();
+        poll_only_serial.flags &= !DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+        poll_only_serial.flags |= DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        assert_eq!(
+            runtime_notification_route(&poll_only_serial),
             RuntimeNotificationRoute::Unavailable
         );
     }
@@ -50997,6 +51210,194 @@ mod tests {
     }
 
     #[test]
+    fn serial_runtime_warm_takeover_drains_rx_before_enabling_irq() {
+        use std::cell::RefCell;
+
+        let events = RefCell::new(Vec::new());
+        let mut queue = SerialRuntimeRxQueue::new();
+        assert!(queue.push(b's'));
+
+        assert!(serial_runtime_takeover_with(
+            &mut queue,
+            |queue| {
+                events.borrow_mut().push("drain-existing-rx");
+                assert!(
+                    queue.push(b'w'),
+                    "warm-handoff byte must be preserved without FIFO reset"
+                );
+                SerialRxDrainOutcome {
+                    bytes: 1,
+                    source_pending: false,
+                    hardware_overrun: false,
+                }
+            },
+            |enabled| {
+                events.borrow_mut().push(if enabled {
+                    "enable-rx-irq"
+                } else {
+                    "disable-rx-irq"
+                });
+            },
+            || {
+                events.borrow_mut().push("ack-handler");
+                true
+            },
+        ));
+
+        assert_eq!(
+            events.into_inner(),
+            ["drain-existing-rx", "enable-rx-irq", "ack-handler"],
+            "takeover must preserve the root-configured FIFOs and drain RX before IRQ unmask"
+        );
+        assert_eq!(queue.pop(), Some(b'w'));
+        assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn serial_irq_drain_preserves_order_and_records_overrun_telemetry() {
+        use std::cell::Cell;
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        let source = *b"irq-driven-serial";
+        let cursor = Cell::new(0usize);
+        let outcome = serial_drain_source_to_queue(
+            &mut queue,
+            source.len(),
+            || {
+                if cursor.get() < source.len() {
+                    MINI_UART_LSR_RX_READY
+                        | if cursor.get() == 0 {
+                            MINI_UART_LSR_RX_OVERRUN
+                        } else {
+                            0
+                        }
+                } else {
+                    0
+                }
+            },
+            || {
+                let index = cursor.get();
+                cursor.set(index + 1);
+                source[index]
+            },
+        );
+
+        assert_eq!(outcome.bytes, source.len());
+        assert!(!outcome.source_pending);
+        assert!(outcome.hardware_overrun);
+        assert_eq!(queue.hardware_overrun_events, 1);
+        assert_eq!(queue.received_bytes, source.len() as u32);
+        for byte in source {
+            assert_eq!(queue.pop(), Some(byte));
+        }
+        assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
+    fn serial_irq_queue_full_never_consumes_an_unqueueable_uart_byte() {
+        use std::cell::Cell;
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        for byte in 0..MINI_UART_RX_QUEUE_CAPACITY {
+            assert!(queue.push(byte as u8));
+        }
+        let reads = Cell::new(0u32);
+        let outcome = serial_drain_source_to_queue(
+            &mut queue,
+            1,
+            || MINI_UART_LSR_RX_READY,
+            || {
+                reads.set(reads.get() + 1);
+                0xff
+            },
+        );
+
+        assert_eq!(outcome.bytes, 0);
+        assert!(outcome.source_pending);
+        assert_eq!(reads.get(), 0);
+        assert_eq!(queue.len, MINI_UART_RX_QUEUE_CAPACITY);
+        assert_eq!(queue.queue_full_events, 1);
+    }
+
+    #[test]
+    fn serial_irq_badge_is_exact_and_deferred_ack_retries_after_queue_space() {
+        let mut queue = SerialRuntimeRxQueue::new();
+        let mut ack_calls = 0u32;
+        assert!(!serial_service_irq_with(
+            &mut queue,
+            DRIVER_RUNTIME_SERIAL_IRQ_BADGE ^ 1,
+            |_| panic!("wrong badge must not inspect the UART"),
+            || panic!("wrong badge must not acknowledge the IRQ"),
+        ));
+
+        assert!(serial_service_irq_with(
+            &mut queue,
+            DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+            |queue| {
+                assert!(queue.push(b'x'));
+                SerialRxDrainOutcome {
+                    bytes: 1,
+                    source_pending: false,
+                    hardware_overrun: false,
+                }
+            },
+            || {
+                ack_calls += 1;
+                false
+            },
+        ));
+        assert_eq!(ack_calls, 1);
+        assert_eq!(queue.irq_wakes, 1);
+        assert_eq!(queue.irq_ack_failures, 1);
+        assert!(queue.irq_ack_pending);
+        assert_eq!(queue.pop(), Some(b'x'));
+
+        assert!(serial_retry_pending_irq_with(
+            &mut queue,
+            |_| SerialRxDrainOutcome::default(),
+            || {
+                ack_calls += 1;
+                true
+            },
+        ));
+        assert_eq!(ack_calls, 2);
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+    }
+
+    #[test]
+    fn serial_runtime_init_rejects_poll_only_descriptor() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_SERIAL_CONSOLE, ROLE_SERIAL);
+        descriptor.irq_count = 0;
+        descriptor.irqs[0] = DriverRuntimeIrqDescriptor::empty();
+        descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        RUNTIME_DESCRIPTOR.store(descriptor);
+
+        let command = DriverTaskCommandRecord {
+            sequence: 0x5345_5249,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_SERIAL_CONSOLE,
+            arg1: ROLE_SERIAL,
+            aux0: SERIAL_RUNTIME_AUX_INIT,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            service_serial(command),
+            DriverTaskCompletionRecord::fault(command.sequence, FAULT_DEVICE_UNAVAILABLE)
+        );
+        assert_eq!(
+            runtime_notification_route(&descriptor),
+            RuntimeNotificationRoute::Unavailable
+        );
+    }
+
+    #[test]
     fn serial_tx_idle_probe_distinguishes_fifo_acceptance_from_wire_drain() {
         let sequence = 0x5345_5244;
         assert_eq!(
@@ -52403,6 +52804,20 @@ mod tests {
         }
         descriptor.resource_range_count = range_index as u16;
         match hot_path {
+            HOT_PATH_SERIAL_CONSOLE => {
+                descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+                descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+                descriptor.irq_count = 1;
+                descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
+                    irq: DRIVER_RUNTIME_SERIAL_IRQ,
+                    badge: DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+                    handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+                    notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+                    flags: 0,
+                    reserved: 0,
+                };
+            }
             HOT_PATH_USB_KEYBOARD => {
                 descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
                 descriptor.bus_link_count = 1;

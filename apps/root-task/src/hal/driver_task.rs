@@ -421,7 +421,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
-    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SERIAL_IRQ,
+    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
     DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG, DRIVER_RUNTIME_USB_ENUMERATE_AUX,
     DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
 };
@@ -8370,9 +8372,9 @@ pub fn driver_runtime_init_descriptor_bytes(
 }
 
 #[cfg(feature = "kernel")]
-const BCM2711_SDIO_RUNTIME_IRQ: u32 = 158;
+const BCM2711_SDIO_RUNTIME_IRQ: u32 = DRIVER_RUNTIME_SDIO_IRQ;
 #[cfg(feature = "kernel")]
-const BCM2711_SDIO_RUNTIME_IRQ_BADGE: u32 = BCM2711_SDIO_RUNTIME_IRQ + 1;
+const BCM2711_SDIO_RUNTIME_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
 
 #[cfg(feature = "kernel")]
 fn generated_cyw43_sdio_runtime_topology_sealed(
@@ -8382,13 +8384,20 @@ fn generated_cyw43_sdio_runtime_topology_sealed(
 ) -> bool {
     let policy = crate::generated::driver_runtime_image_policy();
     if !policy.required
-        || policy.irqs.len() != 1
+        || policy.irqs.len() != 2
         || policy.bus_links.len() != 1
         || descriptor.bus_link_count != 1
     {
         return false;
     }
-    let generated_irq = policy.irqs[0];
+    let Some(generated_irq) = policy
+        .irqs
+        .iter()
+        .copied()
+        .find(|irq| irq.hot_path == DriverTaskHotPath::SdioHost.as_str())
+    else {
+        return false;
+    };
     let generated_link = policy.bus_links[0];
     if generated_irq.hot_path != DriverTaskHotPath::SdioHost.as_str()
         || generated_irq.irq != BCM2711_SDIO_RUNTIME_IRQ
@@ -8489,12 +8498,47 @@ fn generated_cyw43_sdio_runtime_topology_sealed(
 }
 
 #[cfg(feature = "kernel")]
+fn generated_serial_runtime_irq_sealed(descriptor: &DriverRuntimeInitDescriptor) -> bool {
+    let policy = crate::generated::driver_runtime_image_policy();
+    if !policy.required || policy.irqs.len() != 2 || descriptor.bus_link_count != 0 {
+        return false;
+    }
+    let mut matches = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == DriverTaskHotPath::SerialConsole.as_str());
+    let Some(generated_irq) = matches.next() else {
+        return false;
+    };
+    if matches.next().is_some()
+        || generated_irq.irq != DRIVER_RUNTIME_SERIAL_IRQ
+        || generated_irq.badge != DRIVER_RUNTIME_SERIAL_IRQ_BADGE
+        || u32::from(generated_irq.handler_slot) != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        || u32::from(generated_irq.notification_slot) != DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        || generated_irq.trigger != crate::generated::DriverRuntimeIrqTrigger::Level
+    {
+        return false;
+    }
+    let irq = descriptor.irqs[0];
+    descriptor.irq_count == 1
+        && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND != 0
+        && descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY == 0
+        && irq.irq == generated_irq.irq
+        && irq.badge == generated_irq.badge
+        && irq.handler_slot == u32::from(generated_irq.handler_slot)
+        && irq.notification_slot == u32::from(generated_irq.notification_slot)
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL
+}
+
+#[cfg(feature = "kernel")]
 fn driver_runtime_descriptor_expected_bus_link_sealed(
     hot_path: DriverTaskHotPath,
     task_key: u32,
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
     match hot_path {
+        DriverTaskHotPath::SerialConsole => generated_serial_runtime_irq_sealed(descriptor),
         DriverTaskHotPath::UsbKeyboard => descriptor.has_sealed_pointer_free_bus_link(
             task_key,
             DriverTaskHotPath::PcieRoot.as_u32(),
@@ -16991,6 +17035,37 @@ mod tests {
         assert!(!wifi_bootstrap_failure_should_replace(Some(sdio), cyw43));
         assert!(!wifi_bootstrap_failure_should_replace(Some(sdio), sdio));
     }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn serial_runtime_descriptor_seal_requires_exact_irq_authority() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.irq_count = 1;
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
+        descriptor.irqs[0] = pi4_driver_abi::DriverRuntimeIrqDescriptor {
+            irq: DRIVER_RUNTIME_SERIAL_IRQ,
+            badge: DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
+            handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+            notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+            flags: 0,
+            reserved: 0,
+        };
+        assert!(generated_serial_runtime_irq_sealed(&descriptor));
+
+        let mut poll_only = descriptor;
+        poll_only.flags |= DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
+        assert!(!generated_serial_runtime_irq_sealed(&poll_only));
+
+        let mut wrong_badge = descriptor;
+        wrong_badge.irqs[0].badge ^= 1;
+        assert!(!generated_serial_runtime_irq_sealed(&wrong_badge));
+
+        let mut bus_link = descriptor;
+        bus_link.bus_link_count = 1;
+        assert!(!generated_serial_runtime_irq_sealed(&bus_link));
+    }
+
     #[cfg(feature = "kernel")]
     use core::sync::atomic::Ordering;
 

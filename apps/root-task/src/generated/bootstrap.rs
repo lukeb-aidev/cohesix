@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "75e7c0b0395625ab517cdaa9f9117fdf31523b0c4f241ba4516297ca89f1a104";
+    "d74971849d211cf1d0b25daeeccaff46bb9f16d2f08cd6c8a186e5a5620b3820";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -349,14 +349,24 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
     },
 ];
 
-pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 1] = [DriverRuntimeIrqSpec {
-    hot_path: "sdio-host",
-    irq: 158,
-    badge: 159,
-    handler_slot: 4,
-    notification_slot: 3,
-    trigger: DriverRuntimeIrqTrigger::Level,
-}];
+pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 2] = [
+    DriverRuntimeIrqSpec {
+        hot_path: "serial-console",
+        irq: 125,
+        badge: 126,
+        handler_slot: 4,
+        notification_slot: 3,
+        trigger: DriverRuntimeIrqTrigger::Level,
+    },
+    DriverRuntimeIrqSpec {
+        hot_path: "sdio-host",
+        irq: 158,
+        badge: 159,
+        handler_slot: 4,
+        notification_slot: 3,
+        trigger: DriverRuntimeIrqTrigger::Level,
+    },
+];
 
 pub const DRIVER_RUNTIME_BUS_LINKS: [DriverRuntimeBusLinkSpec; 1] = [DriverRuntimeBusLinkSpec {
     channel: "cyw43-sdio",
@@ -764,7 +774,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=d49fe9c60c4663625ab88baca2ba38977717c33db76cc114d018b37b018ac5a6",
+    "manifest.sha256=fb62b38622b289d3f9cd3bcd7171f270b3d45849f9e556f46d8fde381b423561",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

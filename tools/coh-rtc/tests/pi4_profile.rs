@@ -105,13 +105,25 @@ fn pi4_uboot_profile_emits_network_policy() {
     let irqs = manifest["root_task"]["driver_images"]["irqs"]
         .as_array()
         .expect("driver runtime IRQ topology");
-    assert_eq!(irqs.len(), 1);
-    assert_eq!(irqs[0]["hot-path"], "sdio-host");
-    assert_eq!(irqs[0]["irq"], 158);
-    assert_eq!(irqs[0]["badge"], 159);
-    assert_eq!(irqs[0]["handler-slot"], 4);
-    assert_eq!(irqs[0]["notification-slot"], 3);
-    assert_eq!(irqs[0]["trigger"], "level");
+    assert_eq!(irqs.len(), 2);
+    let serial_irq = irqs
+        .iter()
+        .find(|irq| irq["hot-path"] == "serial-console")
+        .expect("serial-console IRQ topology");
+    assert_eq!(serial_irq["irq"], 125);
+    assert_eq!(serial_irq["badge"], 126);
+    assert_eq!(serial_irq["handler-slot"], 4);
+    assert_eq!(serial_irq["notification-slot"], 3);
+    assert_eq!(serial_irq["trigger"], "level");
+    let sdio_irq = irqs
+        .iter()
+        .find(|irq| irq["hot-path"] == "sdio-host")
+        .expect("SDIO IRQ topology");
+    assert_eq!(sdio_irq["irq"], 158);
+    assert_eq!(sdio_irq["badge"], 159);
+    assert_eq!(sdio_irq["handler-slot"], 4);
+    assert_eq!(sdio_irq["notification-slot"], 3);
+    assert_eq!(sdio_irq["trigger"], "level");
 
     let bus_links = manifest["root_task"]["driver_images"]["bus_links"]
         .as_array()

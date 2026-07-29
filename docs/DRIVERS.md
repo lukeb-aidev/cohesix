@@ -317,6 +317,22 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
 - Emergency serial must remain usable when an isolated runtime fails to start.
 - Emergency ownership is diagnostic and must not be counted as migrated
   steady-state ownership.
+- The Pi 4 profile declares mini-UART IRQ `125`, badge `126`, child handler
+  slot `4`, and local notification slot `3` as one level-triggered HAL-owned
+  lane. HAL must bind that notification to the serial child TCB before resume;
+  an IRQ bind, cap-mint, notification-bind, descriptor-seal, initial-ACK, or
+  runtime-init failure is terminal for migrated serial service and never
+  enables a polling fallback.
+- The serial child drains at most 128 hardware bytes per notification into one
+  512-byte queue before acknowledging the IRQ. Queue capacity is checked before
+  reading `MU_IO`; a full queue retains the masked IRQ until a root read frees
+  space, the same child drains the remaining source, and the deferred ACK
+  succeeds. At the one-way root-to-child ownership handoff, the child preserves
+  root's active line/FIFO configuration and drains RX before enabling and
+  acknowledging its IRQ; it must not clear a byte that arrived after root's
+  preceding idle sample. TX may preserve RX bytes from the same sole child
+  owner while it holds the CPU, but it does not create a second hardware owner
+  or boot path.
 - Input, output, and recovery loops remain bounded; a stalled device cannot
   monopolize the event pump.
 
@@ -883,15 +899,25 @@ generation and XID.
   queue transitions from empty to nonempty. While the CYW43 network lane is
   selected, root polls the object once at the start of each ordinary EventPump
   turn and retains a scheduling hint until an exact current-owner op8 terminal
-  reports queue depth zero. That op8 owner
+  reports queue depth zero. Each newly consumed wake-hit epoch also arms one
+  EventPump admission cursor. Outside an already-active `Network` turn, that
+  cursor returns first to `Serial`; when that bounded serial turn finds no real
+  serial input/response or USB input/recovery owner, it hands directly to
+  `Network` instead of traversing idle `LocalSeat`, `Dispatch`, and `Display`
+  work. A queued WiFi HDMI status is retained but resumes only after this
+  bounded admission; physical response, reboot, and fatal-output barriers
+  remain authoritative. The cursor is consumed only when the existing CYW43
+  `Network` lane is actually admitted. A still-latched level with the same hit
+  epoch cannot arm it again, and quarantine, reboot, or selection of another
+  NIC clears the cursor without polling or issuing CYW43 work. That op8 owner
   captures the current wake-hit epoch. A newer already-consumed hit prevents
   the older terminal from clearing the latch; otherwise root clears and
   immediately re-polls once, so a pre-clear edge is re-latched and an edge
   after the recheck stays kernel-latched for the next turn. Pair restart
   suspends both linked children before draining the discarded wake and queue
-  state. GENET selection never polls or mutates the inactive CYW43 wake. This route
-  changes scheduling only: the immutable ring request, continuation grant,
-  pair generation, and terminal completion remain the sole operation
+  state. GENET selection never polls or mutates the inactive CYW43 wake. This
+  route changes scheduling only: the immutable ring request, continuation
+  grant, pair generation, and terminal completion remain the sole operation
   authority, and neither notification coalescing nor a wake badge can issue,
   replay, or complete an RX poll. `wifi diag` reports the route's bound badge,
   retained state, polls, hits, clears, rechecks, and stale-clear skips so the
@@ -1988,8 +2014,11 @@ generation and XID.
   and a completed chunk forces one RX turn before another chunk so startup
   output cannot starve commands or reboot. Malformed or over-reported
   completions poison TX without replay while preserving fail-closed RX service.
-  The ordinary linked EventPump uses five retained phase classes in the fixed
-  order `Serial`, `LocalSeat`, `Dispatch`, `Network`, and `Display`. `Serial`
+  The ordinary quiescent linked EventPump uses five retained phase classes in
+  the fixed order `Serial`, `LocalSeat`, `Dispatch`, `Network`, and `Display`.
+  The sole phase-admission exception is the selected-CYW43 new-RX-edge cursor
+  described above; it changes only which existing phase follows the serial
+  operator boundary and creates no new driver or operation owner. `Serial`
   queues at most one pending output record and admits one TX-first serial-ring
   turn. `LocalSeat` then performs one retained USB keyboard turn, so a newly
   arrived key is visible before network weighting begins. `Dispatch` consumes

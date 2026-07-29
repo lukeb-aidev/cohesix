@@ -2483,6 +2483,10 @@ where
     linked_runtime_network_quantum_started_ms: Option<u64>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_quantum_started_ticks: u64,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_cyw43_rx_admission_pending: bool,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    linked_runtime_cyw43_rx_observed_hit_epoch: usize,
     #[cfg(feature = "kernel")]
     serial_root_uart_released_for_linked_runtime: bool,
     #[cfg(feature = "kernel")]
@@ -2794,6 +2798,10 @@ where
             linked_runtime_network_quantum_started_ms: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_quantum_started_ticks: 0,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_cyw43_rx_admission_pending: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            linked_runtime_cyw43_rx_observed_hit_epoch: 0,
             #[cfg(feature = "kernel")]
             serial_root_uart_released_for_linked_runtime: false,
             #[cfg(feature = "kernel")]
@@ -3072,9 +3080,7 @@ where
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        if !self.network_service_quarantined && self.linked_runtime_cyw43_lane_selected() {
-            let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
-        }
+        self.poll_linked_runtime_cyw43_rx_admission();
         #[cfg(feature = "kernel")]
         if crate::serial::serial_linked_runtime_transport_active() {
             self.poll_with_linked_serial_runtime();
@@ -3206,7 +3212,11 @@ where
                 self.queue_pending_console_output_for_linked_serial();
                 let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
                 self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
-                self.linked_runtime_service_phase = if self.local_seat.is_some() {
+                self.linked_runtime_service_phase = if self
+                    .linked_runtime_cyw43_rx_admission_can_follow_serial(serial_rx_activity)
+                {
+                    LinkedRuntimeServicePhase::Network
+                } else if self.local_seat.is_some() {
                     LinkedRuntimeServicePhase::LocalSeat
                 } else {
                     LinkedRuntimeServicePhase::Dispatch
@@ -3397,6 +3407,10 @@ where
                 // retained by the network console and dispatched during the
                 // next dedicated Dispatch phase, after the NIC guard and
                 // reciprocal-ring ownership have been released.
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected {
+                    self.consume_linked_runtime_cyw43_rx_admission();
+                }
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
@@ -3716,6 +3730,81 @@ where
         self.net.as_ref().is_some_and(|net| {
             net.driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
         })
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn clear_linked_runtime_cyw43_rx_admission(&mut self) {
+        self.linked_runtime_cyw43_rx_admission_pending = false;
+        self.linked_runtime_cyw43_rx_observed_hit_epoch =
+            crate::hal::driver_task::cyw43_root_wake_hit_epoch();
+    }
+
+    /// Convert one newly consumed child RX wake into one EventPump admission.
+    ///
+    /// The kernel notification remains a coalesced level until exact empty op8
+    /// proof. Only a change in the hit epoch may arm this one-shot scheduler
+    /// cursor, so the retained level cannot repeatedly bypass physical
+    /// operators. A fresh edge observed outside `Serial`/`Network` first
+    /// returns to `Serial`; that turn may then hand directly to `Network` when
+    /// no real serial or USB input/recovery work owns the boundary.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn poll_linked_runtime_cyw43_rx_admission(&mut self) {
+        if self.network_service_quarantined
+            || self.reboot_pending
+            || !self.linked_runtime_cyw43_lane_selected()
+        {
+            self.clear_linked_runtime_cyw43_rx_admission();
+            return;
+        }
+
+        let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
+        let hit_epoch = crate::hal::driver_task::cyw43_root_wake_hit_epoch();
+        if !crate::hal::driver_task::cyw43_root_wake_pending() {
+            self.linked_runtime_cyw43_rx_admission_pending = false;
+            self.linked_runtime_cyw43_rx_observed_hit_epoch = hit_epoch;
+            return;
+        }
+        if hit_epoch == self.linked_runtime_cyw43_rx_observed_hit_epoch {
+            return;
+        }
+
+        self.linked_runtime_cyw43_rx_observed_hit_epoch = hit_epoch;
+        self.linked_runtime_cyw43_rx_admission_pending = true;
+        if !matches!(
+            self.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial | LinkedRuntimeServicePhase::Network
+        ) {
+            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_cyw43_rx_admission_can_follow_serial(
+        &self,
+        serial_rx_activity: bool,
+    ) -> bool {
+        self.linked_runtime_cyw43_rx_admission_pending
+            && self.linked_runtime_cyw43_lane_selected()
+            && !self.network_service_quarantined
+            && !self.reboot_pending
+            && !self.physical_console_response_pending()
+            && !serial_rx_activity
+            && !self.physical_console_input_pending_for_output()
+            && !self.linked_local_seat_usb_input_pending()
+            && !self.linked_local_seat_usb_recovery_pending()
+    }
+
+    #[cfg(all(feature = "kernel", not(feature = "net-console")))]
+    const fn linked_runtime_cyw43_rx_admission_can_follow_serial(
+        &self,
+        _serial_rx_activity: bool,
+    ) -> bool {
+        false
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn consume_linked_runtime_cyw43_rx_admission(&mut self) {
+        self.linked_runtime_cyw43_rx_admission_pending = false;
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -31578,6 +31667,282 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_new_rx_edge_runs_serial_then_network_before_idle_display() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "a new CYW43 RX edge must run Serial first and admit Network next"
+            );
+            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+            assert_eq!(
+                pump.metrics.local_seat_hdmi_pump_turns, 0,
+                "ordinary display work must not precede the new RX admission"
+            );
+
+            pump.poll();
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "the edge cursor must be consumed by the first admitted Network turn"
+            );
+        }
+        assert_eq!(wifi.polls, 1);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_new_rx_edge_returns_each_idle_phase_to_serial() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+
+        for phase in [
+            LinkedRuntimeServicePhase::LocalSeat,
+            LinkedRuntimeServicePhase::Dispatch,
+            LinkedRuntimeServicePhase::Display,
+        ] {
+            assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+                false, 0,
+            ));
+            crate::hal::driver_task::test_inject_cyw43_root_wake();
+            pump.linked_runtime_service_phase = phase;
+            pump.linked_runtime_cyw43_rx_admission_pending = false;
+            pump.linked_runtime_cyw43_rx_observed_hit_epoch = 0;
+
+            pump.poll_linked_runtime_cyw43_rx_admission();
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "new CYW43 RX edge from {phase:?} must return to Serial first"
+            );
+            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+        }
+
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        pump.pending_cyw43_bootstrap_hdmi_terminal_milestone =
+            Some(PendingCyw43BootstrapHdmiMilestone {
+                text: format_message(format_args!("[drivers] WiFi ready")),
+                releases_console_ready: true,
+            });
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+        pump.linked_runtime_cyw43_rx_admission_pending = false;
+        pump.linked_runtime_cyw43_rx_observed_hit_epoch = 0;
+
+        pump.poll_linked_runtime_cyw43_rx_admission();
+
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial,
+            "a new edge must retain the two-turn Serial -> Network admission bound"
+        );
+        assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+        assert!(
+            pump.pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .is_some(),
+            "preempted high-impact HDMI status must remain queued"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_observed_wake_level_does_not_rearm_or_bypass_local_seat() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            true, 7,
+        ));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_cyw43_rx_observed_hit_epoch = 7;
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::LocalSeat;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "the retained wake level must not behave like another edge"
+            );
+            assert!(!pump.linked_runtime_cyw43_rx_admission_pending);
+            assert_eq!(
+                crate::hal::driver_task::cyw43_root_wake_hit_epoch(),
+                7,
+                "a level-only poll must not manufacture a hit"
+            );
+        }
+        assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_rx_admission_honors_input_and_clears_on_guards() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::hal::driver_task::test_reset_cyw43_root_wake();
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            false, 0,
+        ));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        assert_eq!(local_seat.enqueue_keyboard_bytes(b"x"), 1);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut wifi)
+                .with_local_seat(&mut local_seat);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat,
+                "real local-seat input must retain precedence after the Serial turn"
+            );
+            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+
+            let wake_before_quarantine =
+                crate::hal::driver_task::cyw43_root_wake_snapshot().expect("wake snapshot");
+            pump.network_service_quarantined = true;
+            pump.poll();
+            assert!(!pump.linked_runtime_cyw43_rx_admission_pending);
+            let wake_after_quarantine =
+                crate::hal::driver_task::cyw43_root_wake_snapshot().expect("wake snapshot");
+            assert_eq!(
+                wake_after_quarantine.polls, wake_before_quarantine.polls,
+                "quarantine must clear local admission without polling the wake"
+            );
+
+            pump.network_service_quarantined = false;
+            pump.linked_runtime_cyw43_rx_admission_pending = true;
+            pump.reboot_pending = true;
+            pump.poll();
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "reboot must discard the WiFi-only admission cursor"
+            );
+        }
+        assert_eq!(wifi.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_genet_network_turn_does_not_open_cyw43_quantum() {
         struct LinkedRuntimeTestReset;
 
@@ -31632,6 +31997,10 @@ mod tests {
                 "GENET must retain the ordinary single-Network-turn rotation"
             );
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "GENET must never arm the CYW43-only edge admission cursor"
+            );
         }
         assert_eq!(genet.polls, 1);
         let wake_after = crate::hal::driver_task::cyw43_root_wake_snapshot()

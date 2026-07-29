@@ -164,6 +164,14 @@
       ],
       "irqs": [
         {
+          "hot-path": "serial-console",
+          "irq": 125,
+          "badge": 126,
+          "handler-slot": 4,
+          "notification-slot": 3,
+          "trigger": "level"
+        },
+        {
           "hot-path": "sdio-host",
           "irq": 158,
           "badge": 159,

@@ -1529,6 +1529,10 @@ const _: () = {
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// Child CSpace slot containing each runtime's local notification receive cap.
 pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
+/// BCM2711 auxiliary mini-UART interrupt used by the isolated serial runtime.
+pub const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
+/// Nonzero notification badge bound to [`DRIVER_RUNTIME_SERIAL_IRQ`].
+pub const DRIVER_RUNTIME_SERIAL_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ + 1;
 /// CYW43 child CSpace slot containing its send-only root RX-wake notification cap.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
 /// Exact badge delivered to root for a CYW43 private RX queue empty-to-nonempty edge.

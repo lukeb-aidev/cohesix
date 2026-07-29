@@ -424,6 +424,17 @@ or a relaxed host-EAPOL `wsec_key` gate.
 Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` exposes those as machine-checkable hardware proof fields.
 
 Dedicated-driver-task closure is stricter than contract declaration: `DRIVER_TASK_DEDICATED` must cover the required active roles, `DRIVER_TASK_COMPATIBILITY` must be `0`, `DRIVER_TASK_DEDICATED_READY=yes` must be present, `DRIVER_TASK_FAILED_COUNT=0` must be present, serial, USB/local-seat, display, selected network, selected-role SDIO (`DRIVER_TASK_SDIO_DEDICATED=yes`) for Wi-Fi, and PCIe role booleans must all be `yes`, and substrate/capset/fault/revoke/scheduling/per-driver-affinity/VSpace plus pointer-free IPC, owner-state proof, sealed runtime descriptor proof, and active-network identity fields must all be `yes` when `scripts/pi4_gate_proof.sh --require-driver-task-proof` is used. Physical Pi bootstrap is limited to the selected generated isolated runtime hardware contracts; RTL8139 and virtio-net remain QEMU compatibility contract coverage only. Owner-state proof requires one `DRIVER_TASK_OWNER_STATE ... hot_path=<exact> owner_state=driver-owned descriptor=present descriptor_version=5 descriptor_seal=valid artifact_hash=nonzero root_pointer=no` line for each current acceptance hot path: `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network path (`genet-nic` for wired or `cyw43-wifi` plus `sdio-host` for Wi-Fi). The canonical sealed descriptor fragment is `DRIVER_TASK_OWNER_STATE ... descriptor=present descriptor_version=5 descriptor_seal=valid`. Split clients must carry `bus_link_seal=valid` for USB-to-PCIe or CYW43-to-SDIO while non-split roles report `bus_link_seal=none`. Aggregate owner-state text, inferred hot paths, inactive-network hot paths, truthy aliases such as `owner_state=yes`, or pre-seal `descriptor=present root_pointer=no` logs without descriptor-seal fields must fail current closure.
+Pi serial migration proof additionally requires
+`DRIVER_TASK_IRQ_TOPOLOGY contract=serial irq=125 badge=126 handler_slot=4 notification_slot=3 trigger=level status=bound proof_effect=irq-rx-ready`
+and `DRIVER_TASK_NOTIFICATION_BOUND contract=serial ... source=generated-serial-irq-topology`
+before serial runtime init. A serial `poll-fallback`, `status=failed`,
+`DRIVER_TASK_NOTIFICATION_BIND_DEFERRED contract=serial`, descriptor without
+the exact IRQ, or physical input accepted only after slow character pacing is
+acceptance-red. Focused tests must prove queue capacity is checked before
+`MU_IO`, a full queue defers ACK without dropping the pending hardware byte,
+later root consumption drains and acknowledges the same source, warm takeover
+does not clear either root-configured FIFO and drains handoff RX before IRQ
+enable/ACK, and an unrelated notification badge cannot service serial RX.
 
 For `scripts/pi4_gate_proof.sh --require-driver-task-proof`, SDIO dedication is
 mandatory for Wi-Fi and full-ready closure, but a wired-only
@@ -1291,7 +1302,18 @@ failure, result, and raw diagnostic records must enqueue or append to
 linked flush waits for the following operator turn and does not share a turn
 with a CYW43 operation. Ordinary linked EventPump coverage must prove the
 `Serial -> LocalSeat -> Dispatch -> Network -> Display` phase classes and the
-bounded CYW43 network weighting.
+bounded CYW43 network weighting. Selected-CYW43 edge-admission coverage must
+inject one empty-to-nonempty root wake from `Display`, `LocalSeat`, and
+`Dispatch`, prove that `Serial` owns the first bounded turn and `Network` is
+admitted on the next turn when no physical input/recovery owner is pending, and
+prove that the admitted turn still uses the sole existing CYW43 owner. A queued
+WiFi HDMI status may be preempted but must remain queued. Keeping the
+notification level latched without incrementing its hit epoch must not re-arm
+the admission or skip another physical phase. Real serial/local-seat input and
+USB recovery retain their operator precedence; quarantine and reboot clear the
+local cursor without a NIC turn or wake poll. The same injected wake under
+GENET must leave its ordinary phase result, CYW43 wake counters, and CYW43
+quantum counters unchanged.
 `Serial` may perform one TX-first reciprocal-ring turn; `LocalSeat` then polls
 one retained USB keyboard turn so fresh physical input is buffered before the
 network quantum. `Dispatch` may consume one serial, buffered local-seat, or
@@ -1407,8 +1429,9 @@ and GENET; a delayed successful reconnect does not satisfy this gate.
 Every retained phase must return before its successor, and CYW43 quantum
 telemetry must remain zero on GENET.
 During
-bootstrap/recovery, only proved linked-runtime serial polling and flushing plus
-already-buffered local-seat bytes are permitted; generic/current-TCB UART
+bootstrap/recovery, only proved linked-runtime serial IRQ preservation, bounded
+software-queue polling, and flushing plus already-buffered local-seat bytes are
+permitted; generic/current-TCB UART
 fallback, USB backend polling, HDMI/echo re-entry, and network polling must
 remain absent. Accepting reboot must fence all later physical and network
 command intake and may discard only nonessential `BackgroundLine` records whose
@@ -2457,7 +2480,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:d49fe9c60c4663625ab88baca2ba38977717c33db76cc114d018b37b018ac5a6`
+- `configs/generated/root_task_resolved.json` — `sha256:fb62b38622b289d3f9cd3bcd7171f270b3d45849f9e556f46d8fde381b423561`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

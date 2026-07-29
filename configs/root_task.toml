@@ -145,6 +145,14 @@ root-context-required = false
 hardware-state-migrated = true
 
 [[root_task.driver_images.irqs]]
+hot-path = "serial-console"
+irq = 125
+badge = 126
+handler-slot = 4
+notification-slot = 3
+trigger = "level"
+
+[[root_task.driver_images.irqs]]
 hot-path = "sdio-host"
 irq = 158
 badge = 159

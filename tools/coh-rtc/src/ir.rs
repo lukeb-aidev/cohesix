@@ -85,6 +85,9 @@ const MAX_DRIVER_RUNTIME_IRQS: usize = 16;
 const MAX_DRIVER_RUNTIME_BUS_LINKS: usize = 8;
 const DRIVER_RUNTIME_CHILD_CSPACE_SLOTS: u8 = 16;
 const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u8 = 3;
+const DRIVER_RUNTIME_IRQ_HANDLER_SLOT: u8 = 4;
+const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
+const DRIVER_RUNTIME_SERIAL_BADGE: u32 = 126;
 const DRIVER_RUNTIME_CYW43_SDIO_IRQ: u32 = 158;
 const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
 const DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT: u8 = 8;
@@ -2562,9 +2565,9 @@ impl DriverRuntimeImagePolicy {
         let mut irq_sources = BTreeSet::new();
         for irq in &self.irqs {
             irq.validate(&hot_paths)?;
-            if !irq_sources.insert((irq.hot_path.as_str(), irq.irq)) {
+            if !irq_sources.insert(irq.irq) {
                 bail!(
-                    "duplicate driver runtime IRQ {} for hot path {}",
+                    "duplicate physical driver runtime IRQ {} including hot path {}",
                     irq.irq,
                     irq.hot_path
                 );
@@ -2585,12 +2588,29 @@ impl DriverRuntimeImagePolicy {
             }
         }
         if self.required {
+            let has_serial_irq = self
+                .irqs
+                .iter()
+                .any(DriverRuntimeIrqSpec::is_serial_console_irq);
+            if !has_serial_irq {
+                bail!("root_task.driver_images.required missing serial-console IRQ 125 topology");
+            }
             let has_sdio_irq = self
                 .irqs
                 .iter()
                 .any(DriverRuntimeIrqSpec::is_cyw43_sdio_irq);
             if !has_sdio_irq {
                 bail!("root_task.driver_images.required missing SDIO IRQ 158 topology");
+            }
+            if self.irqs.len() != 2
+                || self
+                    .irqs
+                    .iter()
+                    .any(|irq| !irq.is_serial_console_irq() && !irq.is_cyw43_sdio_irq())
+            {
+                bail!(
+                    "root_task.driver_images.required IRQ topology must contain exactly serial-console IRQ 125 and SDIO IRQ 158"
+                );
             }
             let has_cyw43_sdio_link = self
                 .bus_links
@@ -2651,6 +2671,16 @@ impl DriverRuntimeIrqSpec {
         self.hot_path == "sdio-host"
             && self.irq == DRIVER_RUNTIME_CYW43_SDIO_IRQ
             && self.badge == DRIVER_RUNTIME_CYW43_SDIO_BADGE
+            && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
+            && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.trigger == DriverRuntimeIrqTrigger::Level
+    }
+
+    fn is_serial_console_irq(&self) -> bool {
+        self.hot_path == "serial-console"
+            && self.irq == DRIVER_RUNTIME_SERIAL_IRQ
+            && self.badge == DRIVER_RUNTIME_SERIAL_BADGE
+            && self.handler_slot == DRIVER_RUNTIME_IRQ_HANDLER_SLOT
             && self.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
             && self.trigger == DriverRuntimeIrqTrigger::Level
     }
@@ -3029,7 +3059,18 @@ mod tests {
             hot_path: "sdio-host".to_owned(),
             irq: super::DRIVER_RUNTIME_CYW43_SDIO_IRQ,
             badge: super::DRIVER_RUNTIME_CYW43_SDIO_BADGE,
-            handler_slot: 4,
+            handler_slot: super::DRIVER_RUNTIME_IRQ_HANDLER_SLOT,
+            notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DriverRuntimeIrqTrigger::Level,
+        }
+    }
+
+    fn serial_irq() -> DriverRuntimeIrqSpec {
+        DriverRuntimeIrqSpec {
+            hot_path: "serial-console".to_owned(),
+            irq: super::DRIVER_RUNTIME_SERIAL_IRQ,
+            badge: super::DRIVER_RUNTIME_SERIAL_BADGE,
+            handler_slot: super::DRIVER_RUNTIME_IRQ_HANDLER_SLOT,
             notification_slot: super::DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
             trigger: DriverRuntimeIrqTrigger::Level,
         }
@@ -3062,7 +3103,7 @@ mod tests {
                 .copied()
                 .map(driver_runtime_image)
                 .collect(),
-            irqs: vec![sdio_irq()],
+            irqs: vec![serial_irq(), sdio_irq()],
             bus_links: vec![cyw43_sdio_link()],
         };
         policy.validate().expect("complete driver runtime table");
@@ -3084,7 +3125,7 @@ mod tests {
         let policy = DriverRuntimeImagePolicy {
             required: true,
             images,
-            irqs: vec![sdio_irq()],
+            irqs: vec![serial_irq(), sdio_irq()],
             bus_links: vec![cyw43_sdio_link()],
         };
         let err = policy
@@ -3164,7 +3205,7 @@ mod tests {
                 .filter(|hot_path| *hot_path != "pcie-root")
                 .map(driver_runtime_image)
                 .collect(),
-            irqs: vec![sdio_irq()],
+            irqs: vec![serial_irq(), sdio_irq()],
             bus_links: vec![cyw43_sdio_link()],
         };
         let err = policy.validate().expect_err("missing pcie-root rejected");
@@ -3181,7 +3222,7 @@ mod tests {
         let missing_irq = DriverRuntimeImagePolicy {
             required: true,
             images,
-            irqs: Vec::new(),
+            irqs: vec![serial_irq()],
             bus_links: vec![cyw43_sdio_link()],
         };
         let err = missing_irq
@@ -3200,13 +3241,93 @@ mod tests {
                 .copied()
                 .map(driver_runtime_image)
                 .collect(),
-            irqs: vec![sdio_irq()],
+            irqs: vec![serial_irq(), sdio_irq()],
             bus_links: vec![invalid_link],
         };
         let err = invalid_dpc
             .validate()
             .expect_err("unbounded generated DPC shape rejected");
         assert!(err.to_string().contains("bounded reciprocal DPC contract"));
+    }
+
+    #[test]
+    fn driver_runtime_policy_requires_exact_serial_irq_topology() {
+        let required_policy = |irqs: Vec<DriverRuntimeIrqSpec>| DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+            irqs,
+            bus_links: vec![cyw43_sdio_link()],
+        };
+
+        let err = required_policy(vec![sdio_irq()])
+            .validate()
+            .expect_err("missing serial IRQ rejected");
+        assert!(err
+            .to_string()
+            .contains("missing serial-console IRQ 125 topology"));
+
+        for (case, malformed) in [
+            ("irq", {
+                let mut irq = serial_irq();
+                irq.irq += 1;
+                irq
+            }),
+            ("badge", {
+                let mut irq = serial_irq();
+                irq.badge += 1;
+                irq
+            }),
+            ("handler", {
+                let mut irq = serial_irq();
+                irq.handler_slot += 1;
+                irq
+            }),
+            ("notification", {
+                let mut irq = serial_irq();
+                irq.notification_slot += 2;
+                irq
+            }),
+            ("trigger", {
+                let mut irq = serial_irq();
+                irq.trigger = DriverRuntimeIrqTrigger::Edge;
+                irq
+            }),
+        ] {
+            let err = required_policy(vec![malformed, sdio_irq()])
+                .validate()
+                .expect_err("malformed serial IRQ rejected");
+            assert!(
+                err.to_string()
+                    .contains("missing serial-console IRQ 125 topology"),
+                "{case}: {err}"
+            );
+        }
+    }
+
+    #[test]
+    fn driver_runtime_policy_rejects_duplicate_physical_irq_owners() {
+        let mut duplicate = serial_irq();
+        duplicate.hot_path = "usb-keyboard".to_owned();
+        let policy = DriverRuntimeImagePolicy {
+            required: true,
+            images: super::REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS
+                .iter()
+                .copied()
+                .map(driver_runtime_image)
+                .collect(),
+            irqs: vec![serial_irq(), duplicate, sdio_irq()],
+            bus_links: vec![cyw43_sdio_link()],
+        };
+        let err = policy
+            .validate()
+            .expect_err("one physical IRQ cannot have two runtime owners");
+        assert!(err
+            .to_string()
+            .contains("duplicate physical driver runtime IRQ 125"));
     }
 
     #[test]
@@ -3224,7 +3345,7 @@ mod tests {
                     .copied()
                     .map(driver_runtime_image)
                     .collect(),
-                irqs: vec![sdio_irq()],
+                irqs: vec![serial_irq(), sdio_irq()],
                 bus_links: vec![invalid_link],
             };
 

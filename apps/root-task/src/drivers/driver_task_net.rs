@@ -31945,7 +31945,12 @@ mod tests {
             DriverTaskHotPath::SdioHost => {
                 descriptor.flags |= pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
                 descriptor.irq_count = 1;
-                let generated_irq = policy.irqs[0];
+                let generated_irq = policy
+                    .irqs
+                    .iter()
+                    .copied()
+                    .find(|irq| irq.hot_path == DriverTaskHotPath::SdioHost.as_str())
+                    .expect("generated SDIO IRQ topology");
                 descriptor.irqs[0] = pi4_driver_abi::DriverRuntimeIrqDescriptor {
                     irq: generated_irq.irq,
                     badge: generated_irq.badge,
