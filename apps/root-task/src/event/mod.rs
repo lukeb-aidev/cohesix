@@ -341,8 +341,6 @@ const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
 const NET_DIAG_STUCK_MS: u64 = 3_000;
 #[cfg(feature = "net-console")]
-const M26D_NET_PROOF_OVERRIDES_PHYSICAL_INPUT: bool = true;
-#[cfg(feature = "net-console")]
 // Network-origin NineDoor commands may enqueue multiple TCP response segments.
 // Retain a bounded cursor so each later Network phase performs at most one
 // flush operation without monopolising the outer event pump.
@@ -748,12 +746,6 @@ fn net_status_yields_to_physical_input(
     suppress_console_input: bool,
     network_data_yields_to_input: bool,
 ) -> bool {
-    if !physical_input_active
-        && !suppress_console_input
-        && m26d_network_proof_prefers_tcp_over_physical_input(status)
-    {
-        return false;
-    }
     let should_yield_before = net_status_should_yield_to_physical_input(status);
     let host_eapol_pending_before = net_status_needs_host_eapol_burst(status);
     let service_under_physical_pressure = net_status_needs_physical_pressure_service(status);
@@ -766,14 +758,6 @@ fn net_status_yields_to_physical_input(
         && !suppress_console_input
         && !service_under_physical_pressure
         && (should_yield_before || network_data_yields_to_input)
-}
-
-#[cfg(feature = "net-console")]
-fn m26d_network_proof_prefers_tcp_over_physical_input(status: &NetStatusReport) -> bool {
-    M26D_NET_PROOF_OVERRIDES_PHYSICAL_INPUT
-        && (net_status_linked_runtime_data_ready(status)
-            || net_status_cyw43_dhcp_pending(status)
-            || net_status_needs_host_eapol_burst(status))
 }
 
 #[cfg(feature = "net-console")]
@@ -1537,12 +1521,8 @@ pub struct PumpMetrics {
     pub net_cyw43_service_quanta: u64,
     /// CYW43 Network outer turns consumed across those bounded quanta.
     pub net_cyw43_service_turns: u64,
-    /// Retained CYW43 Network bursts that used the removed intra-quantum
-    /// operator stride.
-    ///
-    /// This compatibility counter remains zero for the production lane. The
-    /// virtual-counter admission fence and typed terminal exits now bound the
-    /// sole contiguous Network quantum.
+    /// Retained CYW43 Network quanta that admitted a probe-only Serial turn
+    /// without closing the exact priority lease or changing its parent.
     pub net_cyw43_service_operator_yields: u64,
     /// CYW43 Network quanta that ended because exact work became idle.
     pub net_cyw43_service_terminal_exits: u64,
@@ -2036,6 +2016,24 @@ const LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS: u16 =
         .max_ops_per_turn;
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
+/// Scheduling-only checkpoint cadence expressed in the CYW43 contract's
+/// declared operation-per-frame tranche.
+///
+/// This does not grant child authority: `max_ops_per_turn` remains the hard
+/// quantum cap and each outer EventPump turn still admits at most one child
+/// operation.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS: u16 = {
+    let contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+    match contract
+        .budget
+        .max_ops_per_turn
+        .checked_div(contract.budget.max_frames_per_turn)
+    {
+        Some(operations_per_frame) if operations_per_frame != 0 => operations_per_frame,
+        Some(_) | None => 1,
+    }
+};
 
 /// Outcome of one serial ownership-cutover EventPump turn.
 #[cfg(feature = "kernel")]
@@ -2081,10 +2079,21 @@ const fn serial_linked_runtime_cutover_action(
 }
 
 #[cfg(feature = "kernel")]
+const fn ordinary_eventpump_serial_cutover_required(
+    physical_owner_state_active: bool,
+    linked_runtime_active: bool,
+    attach_failed: bool,
+) -> bool {
+    physical_owner_state_active && !linked_runtime_active && !attach_failed
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
     line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
         || line.as_bytes().starts_with(b"wifi: gate 8 subgate=")
+        || line.as_bytes().starts_with(b"wifi: deferred_recovery ")
         || line.as_bytes().starts_with(b"CYW43_GATE8_TERMINAL ")
+        || cyw43_pair_recovery_signalled_turn(line)
         || line
             .as_bytes()
             .starts_with(b"[net-console] deferred failed detail=")
@@ -2114,6 +2123,11 @@ fn cyw43_bootstrap_turn_attempt_and_stage(line: &str) -> Option<(u32, &str)> {
         }
     }
     Some((attempt?, stage?))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pair_recovery_signalled_turn(line: &str) -> bool {
+    cyw43_bootstrap_turn_attempt_and_stage(line) == Some((1, "cyw43-pair-recovery-signalled"))
 }
 
 #[cfg(feature = "kernel")]
@@ -3126,6 +3140,21 @@ where
             return;
         }
         #[cfg(feature = "kernel")]
+        if ordinary_eventpump_serial_cutover_required(
+            crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active(),
+            crate::serial::serial_linked_runtime_transport_active(),
+            crate::serial::serial_runtime_attach_failed(),
+        ) {
+            // WiFi's deferred supervisor already advances this same cutover.
+            // Wired/GENET and failed-network boots use the ordinary EventPump,
+            // so they must also finish the one manifest-declared serial lane
+            // instead of leaving the emergency root-UART owner active forever.
+            // The helper performs at most one root-UART or linked-runtime
+            // operation and owns this complete outer turn.
+            let _ = self.poll_serial_linked_runtime_cutover_after_prompt();
+            return;
+        }
+        #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         self.poll_linked_runtime_cyw43_rx_admission();
@@ -3182,10 +3211,6 @@ where
             self.serial.poll_io();
             self.consume_local_seat(LocalSeatConsumePhase::PriorityFollowup, false);
             self.pump_local_seat_display_after_local_input();
-            #[cfg(feature = "net-console")]
-            if self.m26d_network_oracle_service_due() {
-                self.poll_runtime(false, false, true);
-            }
             self.serial.flush_tx();
             return;
         }
@@ -3558,16 +3583,15 @@ where
                             }
                         };
                         if decision == Cyw43RetainedDrainDecision::Continue {
-                            // Linux finishes the current MMC request inside
-                            // one bounded request/DPC context. Cohesix must
-                            // preserve its one-operation-per-outer-turn ABI,
-                            // but those turns remain contiguous while either
-                            // Closing or the exact active HAL fingerprint
-                            // rejects every fresh parent. This avoids inserting
-                            // a full Serial/Dispatch/display rotation between
-                            // the retained parent's prepare, issue, notify,
-                            // poll, and completion stages.
-                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                            // Keep the exact retained parent and priority lease
+                            // open while sampling Serial at a fixed scheduler
+                            // stride. An idle probe returns directly to Network;
+                            // only observed physical work opens the ordinary
+                            // LocalSeat/Dispatch rotation.
+                            if !self.route_linked_runtime_cyw43_operator_probe() {
+                                self.linked_runtime_service_phase =
+                                    LinkedRuntimeServicePhase::Network;
+                            }
                             return;
                         }
                         let turns = u64::from(self.linked_runtime_network_consecutive_turns);
@@ -3653,13 +3677,12 @@ where
                         // frame. Keep the NIC phase only while an exact
                         // continuation, queue, or TCP response is pending.
                         // One root turn still owns at most one linked-runtime
-                        // operation. The contract-derived turn bound is large
-                        // enough for the split CYW43/SDIO retained transaction,
-                        // while the virtual-counter admission fence, complete
-                        // command exit, and physical-response guard return to
-                        // serial and USB without an arbitrary mid-transaction
-                        // operator rotation.
-                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                        // operation. Probe-only Serial checkpoints preserve the
+                        // open immutable parent, while the independent fixed
+                        // turn and virtual-counter caps remain hard fences.
+                        if !self.route_linked_runtime_cyw43_operator_probe() {
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+                        }
                         return;
                     }
                     self.finish_linked_runtime_network_quantum(service_due, false, elapsed_us);
@@ -3771,6 +3794,29 @@ where
         } else {
             LinkedRuntimeServicePhase::Serial
         }
+    }
+
+    /// Admit one probe-only Serial turn without closing the current CYW43
+    /// priority lease or discarding its immutable retained parent.
+    ///
+    /// Serial decides the next phase: an idle probe returns directly to the
+    /// same Network quantum, while observed serial/USB work opens the ordinary
+    /// physical-operator rotation before another NIC operation.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn route_linked_runtime_cyw43_operator_probe(&mut self) -> bool {
+        if self.linked_runtime_network_consecutive_turns == 0
+            || !self
+                .linked_runtime_network_consecutive_turns
+                .is_multiple_of(LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS)
+        {
+            return false;
+        }
+        self.metrics.net_cyw43_service_operator_yields = self
+            .metrics
+            .net_cyw43_service_operator_yields
+            .saturating_add(1);
+        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        true
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -4029,7 +4075,9 @@ where
     ) -> bool {
         crate::drivers::driver_task_net::cyw43_service_work_snapshot().ordinary_network_admissible()
             && (self.linked_runtime_cyw43_rx_admission_pending
-                || self.linked_runtime_cyw43_durable_resume.is_some())
+                || self.linked_runtime_cyw43_durable_resume.is_some()
+                || (self.linked_runtime_network_consecutive_turns != 0
+                    && self.linked_runtime_cyw43_priority_work_due()))
             && self.linked_runtime_cyw43_lane_selected()
             && !self.network_service_quarantined
             && !self.reboot_pending
@@ -4471,6 +4519,55 @@ where
         self.retain_cyw43_bootstrap_operator_lines_preflighted(lines)
     }
 
+    /// Retain the exact recovery cause before the following generation poison.
+    ///
+    /// This is a passive output transaction: it reads only the caller's
+    /// snapshots and never performs HAL, SDIO, or child-runtime work. Keeping
+    /// the typed identity and the pair-recovery stage in one ordered batch
+    /// ensures teardown cannot erase the only causal record visible on serial.
+    #[cfg(feature = "kernel")]
+    pub(crate) fn queue_cyw43_pair_recovery_diagnostic_transaction(
+        &mut self,
+        recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+        live_generation: u32,
+        pair_recovery_line: &str,
+    ) -> bool {
+        if !cyw43_pair_recovery_signalled_turn(pair_recovery_line) {
+            return false;
+        }
+        if let Some(frontier) = crate::drivers::driver_task_net::cyw43_bootstrap_display_frontier(
+            "cyw43-pair-recovery-signalled",
+        ) {
+            self.cyw43_bootstrap_hdmi_progress
+                .observe(1, frontier, self.now_ms);
+        }
+        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 5>::new();
+        if let Some(recovery) = recovery {
+            for line in [
+                Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
+                Self::wifi_diag_deferred_recovery_identity_line(recovery),
+                Self::wifi_diag_deferred_recovery_completion_line(recovery),
+                Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            ] {
+                if lines.push(line).is_err() {
+                    return false;
+                }
+            }
+        } else if lines
+            .push(format_message(format_args!(
+                "wifi: deferred_recovery retained=no cause=missing-before-pair-recovery action=preserve-stage"
+            )))
+            .is_err()
+        {
+            return false;
+        }
+        let mut stage = HeaplessString::new();
+        if stage.push_str(pair_recovery_line).is_err() || lines.push(stage).is_err() {
+            return false;
+        }
+        self.queue_cyw43_bootstrap_operator_lines_atomic(lines.as_slice(), 0)
+    }
+
     /// Preflight one proof batch, take a caller-owned final decision cut, and
     /// retain the complete batch without another mutable operation between the
     /// decision and append.
@@ -4807,17 +4904,6 @@ where
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         self.poll_runtime(true, false, true);
-    }
-
-    #[cfg(feature = "net-console")]
-    fn m26d_network_oracle_service_due(&self) -> bool {
-        if self.network_service_quarantined {
-            return false;
-        }
-        self.net.as_ref().is_some_and(|net| {
-            let status = net.status_report();
-            m26d_network_proof_prefers_tcp_over_physical_input(&status)
-        })
     }
 
     fn poll_runtime(
@@ -19000,15 +19086,7 @@ where
                             format_cyw43_priority_lease_netstats(lease)
                         };
                         let line_policy = format_message(format_args!(
-                            "netstats: proof_policy m26d_net_first={} physical_input_yield={}",
-                            Self::yes_no(m26d_network_proof_prefers_tcp_over_physical_input(
-                                &status
-                            )),
-                            if m26d_network_proof_prefers_tcp_over_physical_input(&status) {
-                                "synthetic-only"
-                            } else {
-                                "enabled"
-                            },
+                            "netstats: proof_policy m26d_net_first=no physical_input_yield=enabled"
                         ));
                         let line_local_seat = if let Some(runtime) = self.local_seat.as_ref() {
                             let display = runtime.display_trace();
@@ -23331,6 +23409,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn ordinary_eventpump_finishes_serial_cutover_for_every_physical_network_selection() {
+        assert!(
+            ordinary_eventpump_serial_cutover_required(true, false, false),
+            "the ordinary wired/GENET pump must finish the same serial cutover as WiFi"
+        );
+        assert!(
+            !ordinary_eventpump_serial_cutover_required(true, true, false),
+            "an active linked serial owner must never be attached twice"
+        );
+        assert!(
+            !ordinary_eventpump_serial_cutover_required(false, false, false),
+            "QEMU and host compatibility pumps retain their profile-specific console lane"
+        );
+        assert!(
+            !ordinary_eventpump_serial_cutover_required(true, false, true),
+            "a terminal serial attach must not starve GENET, USB, or HDMI service"
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn serial_cutover_separates_uart_descriptor_drain_and_release_turns() {
         assert_eq!(
             serial_linked_runtime_cutover_action(true, false, false, true, false),
@@ -27090,7 +27189,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn m26d_network_proof_preserves_local_echo_with_host_eapol_input() {
+    fn host_eapol_pressure_preserves_local_echo() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -27126,7 +27225,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn m26d_network_proof_preserves_local_echo_with_ready_network_input() {
+    fn ready_wired_network_yields_to_local_echo() {
         let driver = LoopbackSerial::<32>::new();
         let serial = SerialPort::<_, 32, 32, 64>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -27154,17 +27253,19 @@ mod tests {
         pump.poll();
         drop(pump);
 
-        assert_eq!(net.polls, 1);
+        assert_eq!(
+            net.polls, 0,
+            "physical local-seat input retains declared priority over a ready wired data turn"
+        );
     }
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn m26d_network_proof_yields_only_outside_live_network_windows() {
+    fn physical_input_priority_has_no_live_network_proof_override() {
         let mut status = NetStatusReport::default();
         status.address_source = "wifi-host-eapol-pending";
         status.dhcp_phase = "host-eapol-pending";
 
-        assert!(m26d_network_proof_prefers_tcp_over_physical_input(&status));
         assert!(net_status_yields_to_physical_input(
             &status, true, true, false, true
         ));
@@ -27173,9 +27274,6 @@ mod tests {
         ));
 
         let failed_below_init = NetStatusReport::default();
-        assert!(!m26d_network_proof_prefers_tcp_over_physical_input(
-            &failed_below_init
-        ));
         assert!(net_status_yields_to_physical_input(
             &failed_below_init,
             true,
@@ -27598,9 +27696,8 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "netstats: proof_policy m26d_net_first=yes physical_input_yield=synthetic-only"
-            ),
+            rendered
+                .contains("netstats: proof_policy m26d_net_first=no physical_input_yield=enabled"),
             "{rendered}"
         );
         assert!(
@@ -27890,9 +27987,8 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains(
-                "netstats: proof_policy m26d_net_first=yes physical_input_yield=synthetic-only"
-            ),
+            rendered
+                .contains("netstats: proof_policy m26d_net_first=no physical_input_yield=enabled"),
             "{rendered}"
         );
         assert!(!rendered.contains("netstats: genet_rx_hw="), "{rendered}");
@@ -30630,6 +30726,112 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_pair_recovery_retains_typed_cause_before_generation_scrub() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+            cause: "issued-owner-unknown",
+            subphase: "cyw43-host-eapol-control-poll",
+            generation: 17,
+            owner_generation: 17,
+            descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
+            descriptor_flags: 0x0003,
+            descriptor_target_addr: 0,
+            descriptor_payload_offset: 0,
+            descriptor_payload_len: 0,
+            descriptor_total_len: 0,
+            descriptor_arg0: 0,
+            descriptor_arg1: 0,
+            ticket_id: 0x1122_3344_5566_7788,
+            completion_detail: 0x5310,
+            completion_result: 0x4359_0008,
+            completion_sequence: 1_345,
+            terminal_observed: true,
+            turn_id: 701,
+            gate: 8,
+        };
+        crate::drivers::driver_task_net::test_record_cyw43_deferred_recovery_diagnostic(recovery);
+
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(256, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let pair_recovery =
+            "CYW43_BOOTSTRAP_TURN attempt=1 turn=702 stage=cyw43-pair-recovery-signalled operation=false repeat=1";
+
+        assert!(pump.queue_cyw43_pair_recovery_diagnostic_transaction(
+            Some(recovery),
+            recovery.generation,
+            pair_recovery,
+        ));
+        let expected = [
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(recovery, recovery.generation),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
+        ];
+        let retained: Vec<&str> = pump
+            .pending_cyw43_bootstrap_serial_milestones
+            .iter()
+            .map(|line| line.as_str())
+            .collect();
+        assert_eq!(retained.len(), 5);
+        for (actual, expected) in retained.iter().take(4).zip(expected.iter()) {
+            assert_eq!(*actual, expected.as_str());
+        }
+        assert_eq!(retained[4], pair_recovery);
+
+        // Model the next PoisonGeneration teardown after the output
+        // transaction is already retained. The causal snapshot and its queued
+        // wire record must both survive that state scrub.
+        crate::drivers::driver_task_net::test_fail_closed_cyw43_generation_recovery();
+        assert_eq!(
+            crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic(),
+            Some(recovery),
+        );
+
+        let mut transcript = Vec::new();
+        for _ in 0..256 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if pump.pending_cyw43_bootstrap_serial_milestones.is_empty()
+                && !pump.serial.tx_pending()
+            {
+                break;
+            }
+        }
+        assert!(pump.pending_cyw43_bootstrap_serial_milestones.is_empty());
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        let mut previous = None;
+        for expected_line in expected
+            .iter()
+            .map(|line| line.as_str())
+            .chain(core::iter::once(pair_recovery))
+        {
+            let offset = rendered
+                .find(expected_line)
+                .unwrap_or_else(|| panic!("missing retained recovery line: {expected_line}"));
+            if let Some(previous) = previous {
+                assert!(previous < offset, "{rendered}");
+            }
+            previous = Some(offset);
+        }
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn stale_gate8_recovery_is_history_not_current_failure() {
@@ -31601,17 +31803,25 @@ mod tests {
         net.authenticated_conn_id = Some(17);
         net.counters.wifi_rx_runtime_queue_count = 37;
         let mut outer_turns = 0usize;
+        let service_turns;
+        let operator_probes;
 
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            let outer_turn_bound = usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+                + usize::from(
+                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                        / LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS,
+                )
+                + 1;
 
             while pump.metrics.net_cyw43_service_turn_cap_exits == 0
                 && pump.metrics.net_cyw43_service_time_cap_exits == 0
             {
                 assert!(
-                    outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+                    outer_turns < outer_turn_bound,
                     "bounded CYW43 quantum must reach a declared turn or time cap: phase={:?} consecutive={} service_turns={} terminal_exits={} guard_exits={} time_exits={}",
                     pump.linked_runtime_service_phase,
                     pump.linked_runtime_network_consecutive_turns,
@@ -31640,19 +31850,40 @@ mod tests {
                 pump.metrics.net_cyw43_service_max_turns
                     <= u64::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
             );
-            assert_eq!(
-                pump.metrics.net_cyw43_service_operator_yields, 0,
-                "the production lane has no forced intra-quantum operator rotation"
+            assert!(
+                pump.metrics.net_cyw43_service_operator_yields != 0
+                    && pump.metrics.net_cyw43_service_operator_yields
+                        <= u64::from(
+                            LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                                / LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS,
+                        ),
+                "durable pressure must admit bounded probe-only Serial turns"
             );
             assert_eq!(
                 LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS,
                 crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
                     .budget
                     .max_ops_per_turn,
-                "the scheduler turn cap must track compiler-declared CYW43 authority"
+                "compiler-declared child max_ops remains the hard quantum cap"
+            );
+            let contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+            let declared_operations_per_frame = match contract
+                .budget
+                .max_ops_per_turn
+                .checked_div(contract.budget.max_frames_per_turn)
+            {
+                Some(operations_per_frame) if operations_per_frame != 0 => operations_per_frame,
+                Some(_) | None => 1,
+            };
+            assert_eq!(
+                LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS,
+                declared_operations_per_frame,
+                "the scheduling-only probe cadence must remain derived from the declared CYW43 operation-per-frame tranche"
             );
             assert!(outer_turns != 0);
-            assert!(outer_turns <= usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS));
+            assert!(outer_turns < outer_turn_bound);
+            service_turns = pump.metrics.net_cyw43_service_turns;
+            operator_probes = pump.metrics.net_cyw43_service_operator_yields;
             assert!(
                 pump.linked_runtime_cyw43_operator_rotation_pending
                     .is_some(),
@@ -31679,15 +31910,28 @@ mod tests {
                 .is_none());
         }
 
+        assert_eq!(
+            net.polls,
+            usize::try_from(service_turns).expect("bounded CYW43 service-turn count"),
+            "each admitted Network turn must issue exactly one NIC operation"
+        );
         assert!(
-            net.polls <= outer_turns && outer_turns.saturating_sub(net.polls) <= 1,
-            "each admitted outer turn must either perform one Network poll or terminate the quantum at its pre-poll cap"
+            net.polls != 0 && net.polls <= usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+            "the compiler-declared max_ops value must remain the hard cap"
+        );
+        let non_network_turns = outer_turns.saturating_sub(net.polls);
+        let operator_probes =
+            usize::try_from(operator_probes).expect("bounded operator-probe count");
+        assert!(
+            non_network_turns == operator_probes
+                || non_network_turns == operator_probes.saturating_add(1),
+            "only probe-only Serial turns and an optional pre-admission deadline fence may interrupt the retained quantum"
         );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_quantum_has_no_forced_four_turn_operator_rotation() {
+    fn linked_cyw43_idle_operator_probe_preserves_quantum_composition_state() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -31715,13 +31959,8 @@ mod tests {
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
-            for completed_turns in 1..=5 {
+            for completed_turns in 1..=LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS {
                 pump.poll();
-                assert_eq!(
-                    pump.linked_runtime_service_phase,
-                    LinkedRuntimeServicePhase::Network,
-                    "exact CYW43 work must stay contiguous after turn {completed_turns}"
-                );
                 assert_eq!(
                     pump.linked_runtime_network_consecutive_turns,
                     completed_turns
@@ -31730,14 +31969,182 @@ mod tests {
                     pump.metrics.net_cyw43_service_turns,
                     u64::from(completed_turns)
                 );
+                let expected_phase =
+                    if completed_turns == LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS {
+                        LinkedRuntimeServicePhase::Serial
+                    } else {
+                        LinkedRuntimeServicePhase::Network
+                    };
+                assert_eq!(
+                    pump.linked_runtime_service_phase, expected_phase,
+                    "the fixed stride alone may admit the probe-only Serial turn"
+                );
             }
             assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
-            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+            let retained_start = pump.linked_runtime_network_quantum_started_ms;
+            let retained_ticks = pump.linked_runtime_network_quantum_started_ticks;
+            // Host FakeNet leaves the physical lease Inactive. This is
+            // composition evidence that the EventPump probe does not touch
+            // lease telemetry; the exact Open/Closing parent identities are
+            // exercised by the dedicated closing-lease and boundary-parent
+            // tests in this module.
+            let lease_before =
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+            let network_turns_before_probe = pump.metrics.net_cyw43_service_turns;
+
+            pump.poll();
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "an idle Serial probe must return directly to retained Network work"
+            );
+            assert_eq!(
+                pump.linked_runtime_network_consecutive_turns,
+                LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS,
+                "an idle probe is not a child operation"
+            );
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ms, retained_start,
+                "the retained EventPump quantum start must survive the probe"
+            );
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ticks, retained_ticks,
+                "the hard virtual-counter fence must remain rooted at the original quantum"
+            );
+            assert_eq!(
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot(),
+                lease_before,
+                "the probe composition must not invoke lease telemetry transitions"
+            );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, network_turns_before_probe,
+                "probe-only Serial service must never issue a second NIC operation"
+            );
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_none(),
+                "an idle probe must not open the full physical-operator rotation"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_network_consecutive_turns,
+                LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS + 1
+            );
         }
 
         assert_eq!(
-            net.polls, 5,
-            "five outer EventPump turns must perform exactly five Network polls"
+            net.polls,
+            usize::from(LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS + 1),
+            "one declared operation-per-frame tranche plus its resumed turn must each issue one NIC operation"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_operator_probe_completes_serial_command_under_durable_pressure() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.counters.wifi_rx_runtime_queue_count = 37;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            for _ in 1..LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS {
+                pump.poll();
+                assert_eq!(
+                    pump.linked_runtime_service_phase,
+                    LinkedRuntimeServicePhase::Network
+                );
+            }
+            assert_eq!(
+                crate::serial::test_inject_linked_runtime_only_rx(b"ping\n"),
+                5
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the declared operation-per-frame tranche must expose one Serial probe"
+            );
+            let network_turns_before_serial = pump.metrics.net_cyw43_service_turns;
+            let retained_start = pump.linked_runtime_network_quantum_started_ms;
+
+            pump.poll();
+
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "observed serial work must open the ordinary physical-operator path"
+            );
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_some(),
+                "physical work must fence durable Network re-admission"
+            );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, network_turns_before_serial,
+                "the Serial probe must not issue a second NIC operation"
+            );
+            assert_eq!(
+                pump.linked_runtime_network_quantum_started_ms, retained_start,
+                "physical work must be detected within the same retained EventPump quantum"
+            );
+
+            let mut transcript = Vec::new();
+            for _ in 0..64 {
+                pump.poll();
+                transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+                if transcript
+                    .windows(b"OK PING reply=pong".len())
+                    .any(|window| window == b"OK PING reply=pong")
+                {
+                    break;
+                }
+            }
+            assert!(
+                transcript
+                    .windows(b"OK PING reply=pong".len())
+                    .any(|window| window == b"OK PING reply=pong"),
+                "the serial command ticket must complete under durable Network pressure"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, network_turns_before_serial,
+                "the physical response must complete before another NIC operation"
+            );
+            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 1);
+        }
+
+        assert_eq!(
+            net.polls,
+            usize::from(LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS),
+            "durable pressure must remain fenced until serial completion"
         );
     }
 
@@ -31869,12 +32276,19 @@ mod tests {
                 pump.metrics.net_cyw43_service_max_elapsed_us >= 25_000,
                 "the retained quantum must end at the virtual-counter deadline"
             );
-            assert_eq!(pump.metrics.net_cyw43_service_operator_yields, 0);
+            assert!(
+                pump.metrics.net_cyw43_service_operator_yields != 0,
+                "the virtual-time fence must survive an admitted probe-only Serial turn"
+            );
             admitted_turns = pump.metrics.net_cyw43_service_turns;
+            let admitted_turns =
+                usize::try_from(admitted_turns).expect("bounded service-turn count");
+            let operator_probes = usize::try_from(pump.metrics.net_cyw43_service_operator_yields)
+                .expect("bounded operator-probe count");
             assert_eq!(
-                usize::try_from(admitted_turns).expect("bounded service-turn count"),
+                admitted_turns.saturating_add(operator_probes),
                 outer_turns,
-                "the deadline must close the quantum on its final admitted Network turn"
+                "only probe-only Serial turns may advance the outer loop before the deadline"
             );
         }
         assert_eq!(
@@ -31990,11 +32404,17 @@ mod tests {
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
 
             let mut outer_turns = 0usize;
+            let outer_turn_bound = usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS)
+                + usize::from(
+                    LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
+                        / LINKED_RUNTIME_NETWORK_OPERATOR_PROBE_STRIDE_TURNS,
+                )
+                + 1;
             while pump.metrics.net_cyw43_service_turn_cap_exits == 0
                 && pump.metrics.net_cyw43_service_time_cap_exits == 0
             {
                 assert!(
-                    outer_turns < usize::from(LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS),
+                    outer_turns < outer_turn_bound,
                     "bounded DPC quantum must reach either its turn or virtual-time cap"
                 );
                 pump.poll();
@@ -32005,9 +32425,9 @@ mod tests {
                 LinkedRuntimeServicePhase::Serial,
                 "DPC urgency must return ownership at the fixed transaction cap"
             );
-            assert_eq!(
-                pump.metrics.net_cyw43_service_operator_yields, 0,
-                "DPC urgency must not reintroduce the removed four-turn stride"
+            assert!(
+                pump.metrics.net_cyw43_service_operator_yields != 0,
+                "DPC pressure must retain bounded physical-operator probes"
             );
             assert_eq!(
                 pump.metrics.net_cyw43_service_turn_cap_exits

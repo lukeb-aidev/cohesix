@@ -28,10 +28,45 @@ hide `buffer-full`, or convert a benchmark shortcut into production behavior.
 | --- | --- |
 | Current QEMU Test Plan | Stages 01-05 pass under `out/test-plan/m26d-repository-gates-qemu`. This qualifies the current QEMU regression environment, not a mixed-load numerical baseline. |
 | Focused seL4 15 QEMU read microbenchmarks | The retained M26d provenance ledger records status-suite runs and their exact artifacts. Telemetry was skipped because the selected run exposed no discoverable worker entries. These results qualify only the measured status read path. See [M26D_SEL4_15_PROVENANCE.md](audit/M26D_SEL4_15_PROVENANCE.md). |
-| seL4 16 refresh | Fresh v16 source, five-profile, direct external Pi-source, root-task target-check, and linked QEMU `--no-run` validation passed on 2026-07-23. No v16 numerical benchmark or booted target-qualified Test Plan result is accepted yet. The v15 results above remain a historical comparator; they must not be relabeled as v16 evidence. |
+| seL4 16 refresh | Fresh v16 source, five-profile, direct external Pi-source, root-task target-check, and linked QEMU `--no-run` validation passed on 2026-07-23. The exact `a94903514f72...` Pi image now supplies the transport-specific hardware comparison below, but it does not qualify the later source candidate. The v15 results above remain a historical comparator and must not be relabeled as v16 Pi evidence. |
 | Historical Pi 4 wired GENET | M26c retains a coherent GENET Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. It is accepted historical target readiness, not current-tree throughput proof. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). |
-| Current Pi 4 source | Pi-qualified offline Stages 01-02 pass under `out/test-plan/m26d-repository-gates-pi4`. No current-tree live Pi benchmark is qualified. |
-| Current Pi 4 Wi-Fi | Rebuild, flash/readback, current-image association, EAPOL, DHCP, ARP, raw TCP, authenticated `cohsh`, and repeatability revalidation remain pending. Any older Wi-Fi performance result is diagnostic or historical. |
+| Current Pi 4 source candidate | Hardware-free and offline source checks do not qualify live performance. The candidate after exact image `a94903514f72...` has not been measured on Pi hardware; it still requires an exact rebuild/readback, repeated first-pair Wi-Fi boots, TCP/`cohsh`, pressure, pcap, and unchanged GENET control. |
+| Exact `a949` Pi 4 Wi-Fi | Five powered warm reboots passed Gate 8a-8h on their first pair, but the power-off boot consumed recovery after first-pair failure and was correctly rejected. The measured TCP flow was clean, while latency and the no-retry pressure result materially failed the accepted envelope. This is diagnostic hardware evidence, not cold-repeatability or performance qualification. |
+| Exact `a949` Pi 4 GENET control | The same-image wired control completed 8,983 of 8,983 pressure operations with zero errors and approximately 1.2-ms request-to-first-payload latency. It qualifies the common TCP/console/REST/gateway stack as the control for this comparison, not the later source candidate or Wi-Fi capacity. |
+
+### Exact `a949` Pi 4 Wi-Fi/GENET Comparison (2026-07-30)
+
+This group measures source commit
+`190786fac51acf9a84b8db0650e316a3b48347ba` in exact read-back image
+`a94903514f72b5f2ac26a7565a4cf89951abaf945b318200468e48fa0135e51b`.
+The later source candidate is not this image and has no measured performance
+result. The figures below therefore remain bound to `a949`; they are a
+transport comparison and defect baseline, not evidence that the candidate has
+reached its target.
+
+| Evidence | Pi Wi-Fi / CYW43 | Pi wired / GENET control |
+| --- | --- | --- |
+| Boot frontier | The power-off boot lost its first-pair owner, consumed the sole recovery allowance, and was correctly rejected as `supervisor-in-attempt-recovery-used`. Five subsequent powered warm reboots were 5/5 first-pair Gate 8a-8h successes with zero recovery. This does not close the cold failure. | One wired/DHCP boot supplied the unchanged common-stack control. |
+| First-connection `.coh` | `boot_v0.coh` 2.524 s; `tcp_basic.coh` 2.633 s; `smp_parity.coh` 3.074 s. | The same scripts completed in 0.597 s, 0.079 s, and 0.019 s. |
+| Link setup and latency | Ping averaged approximately 160.7 ms; SYN-to-SYN/ACK was 202-213 ms. | DHCP DORA completed in 8.133 ms; ping averaged 0.440 ms; SYN-to-SYN/ACK was 0.351 ms. |
+| Request to first payload | Mean 314.653 ms, p95 407.430 ms, maximum 572.289 ms; approximately 2.9 sequential requests/s. | Mean 1.232 ms, p95 1.464 ms; measured goodput 165.164 kbit/s. |
+| No-retry mid/high pressure | 309 of 824 operations succeeded; 515 timed out. | 8,983 of 8,983 operations succeeded with zero errors. |
+| Paired-capture TCP quality | The persistent flow was clean: no sequence gap, out-of-order segment, reset, zero window, SACK, or SYN retry. That clean transport does not excuse the application timeouts or latency failure. | One retransmission accompanied an approximately 252-ms `CAT` stall, with no reset, reconnect, sustained loss, or material flow defect. |
+
+Artifacts:
+
+- Wi-Fi: `out/bench/pi4-wifi-a949-20260729T212254Z`.
+- GENET: `out/bench/pi4-genet-a949-20260729T214633Z`.
+
+GENET used the same smoltcp console, REST harness, and hive gateway and therefore
+isolates the material delay to the CYW43 linked-runtime/HAL cadence rather than
+the common TCP/application stack. The mandatory next-image floor is at least a
+tenfold Wi-Fi improvement: request-to-first-payload p95 at or below 40 ms and
+at least 29 successful sequential requests/s. The aggressive stretch target is
+p95 at or below 10 ms and at least 100 successful sequential requests/s. Both
+targets additionally require zero packet loss, reconnects, and benchmark
+timeouts, complete cold first-pair repeatability, and unchanged GENET control
+performance. Source and model results alone cannot satisfy these thresholds.
 
 ### M26d QEMU Gateway Cache/Coalescing Revalidation (2026-07-16)
 

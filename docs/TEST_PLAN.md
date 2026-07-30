@@ -881,6 +881,15 @@ the same epoch with connection generation and pair epoch; changing only the
 physical epoch must invalidate both durable Network resume and any pending
 operator fence without admitting Wi-Fi work under the replacement identity.
 
+Cold-publication tests must prove a separate typed
+initial-physical-lifetime provenance lifecycle. Only successful completion of a
+pair transaction owned as `ColdBootstrap` may mint the one-shot token; a
+pre-handoff recovery that happens to produce the same numeric pair/lifetime
+epoch or replay state must not. Every recovery request, pair-transaction
+failure, unfinished cursor drop, and replay terminal must revoke it. A recovery
+request arriving during the cold cursor must remain visible and supersede a
+later successful completion rather than being cleared or minting authority.
+
 Pair-restart `ReplaySdioEngine` and `ReplayCyw43Engine` non-ready completions
 must survive the failure fence byte-for-byte and populate the corresponding
 retained engine-init diagnostic. A generic `engine-replay-failed` without the
@@ -918,12 +927,34 @@ GENET must remain outside this state machine, retain its ordinary
 single-`Network`-turn rotation, and emit no WiFi priority-lease telemetry.
 
 For every root-to-CYW43 generation, including zero, the authority edge remains
-one exact 24-byte continuation grant followed on a separate turn by a
-reserved-root-badge notification scheduling hint; endpoint input is rejected.
-Tests must prove sequence-zero prepare is invisible to the autonomous runtime,
-and neither commit nor authority publication can repeat after issued-unknown
-ownership. The request-bound lane must still reject a nonphysical profile,
-zero/unpublished priority, or an already-bootstrap-priority runtime.
+one exact 24-byte continuation grant plus a reserved-root-badge notification
+scheduling hint; endpoint input is rejected. Under an exact already-open steady
+CYW43 lease, ordered prepare, sequence-last commit, grant publication,
+`Issued`, and signal share one administrative service turn with signal last.
+The exact fresh physical bootstrap lifetime must preserve its separate
+sequence-zero staging turn, then may combine commit, grant, `Issued`, and signal
+on the next turn only while the one-shot token minted by successful completion
+of the typed initial-physical-lifetime transaction remains live for that owned
+initial replay. Both pair slots must still prove `Bootstrap` at effective
+priority `255`, and Network lease/reservation state must be empty. Numeric epoch
+or replay values never authorize this lane, and recovery request/failure,
+unfinished cursor, or replay terminal must revoke the token. Tests must prove sequence-zero prepare is
+invisible to the autonomous runtime, and neither commit nor authority
+publication can repeat after issued-unknown ownership. On a stable completion
+miss, that same software-only HAL operation must publish the monotonic
+replacement after exact acknowledgement or re-signal the exact unconsumed
+grant, keep `Issued` durable, and signal last. A matching late completion must
+suppress both publication and signal. Two grant snapshots may differ only by
+the consumer's legal `consumed_grant_id: 0 -> current` acknowledgement, which
+must pass one bounded confirmation read; reverse acknowledgement, a skipped or
+foreign consumed id, or immutable-body drift must fail closed. Only the
+initial split lane may persist
+`GrantRequired(id=0)` followed by `Granted(id=1)`; recurrent
+`GrantRequired`, nonzero-id `GrantRequired`, or non-initial `Granted` must fail
+closed rather than creating a later grant-only operation.
+The request-bound lanes must still reject a nonphysical profile, GENET, stale
+identity, non-bootstrap cold state, active recovery, or torn
+lease/reservation state.
 After the one-way owner handoff deletes root's SDIO endpoint, delegated
 CYW43-to-SDIO foreground and DPC commands use the same exact grant authority
 shape and a distinct badge-256 notification scheduling hint. Tests must
@@ -933,17 +964,21 @@ generation, and a monotonic nonzero grant id sequence-last; let the owner publis
 `consumed_grant_id` irrevocably before spending one quantum; re-signal an
 unacknowledged id without replacement; publish a new id only after exact
 acknowledgement; classify the exact acknowledged predecessor as a
-non-authorizing wait while its replacement is unpublished; and fail closed on
-torn, stale, mutated, wrong-generation, mismatched-consumed, replayed, aliased,
-or exhausted-id state. The notification is only a wake hint. Both foreground
-and DPC paths must alternate separately admitted `Poll -> Grant -> Poll` turns,
-with no acknowledgement poll or second child/service/HAL operation composed
-into the grant turn.
+transient non-authorizing state within the same stable-miss producer operation,
+never a persisted grant-only turn; and fail closed on torn, stale, mutated,
+wrong-generation, mismatched-consumed, replayed, aliased, or exhausted-id
+state. The notification is only a wake hint. For both
+foreground and DPC producers, a stable completion miss must publish the
+acknowledged replacement or re-signal the exact unconsumed grant in that same
+software-only producer operation, with durable bytes before signal. A matching
+late completion suppresses both. The later owner slice consumes at most one
+exact grant and performs at most one physical action.
 An event's source/frame-length hint must be copied into the DPC cursor only on
-the first admission of that exact sequence. Later grant and completion turns
-must not reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed
-F2 read and create an endless same-frame drain. A different sequence while one
-is active must poison the generation rather than merge event identities.
+the first admission of that exact sequence. Later stable
+completion-miss/rearm producer operations and exact-grant owner turns must not
+reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed F2 read
+and create an endless same-frame drain. A different sequence while one is
+active must poison the generation rather than merge event identities.
 Production-chain coverage must also drive queue-empty hintless op10
 `CONTROL_POLL` and op8 `RX_POLL` commands through the real reciprocal
 `DPC_ACTIVATE` owner ring, exact source-event watermark, ordinary DPC
@@ -951,9 +986,11 @@ controller seam, and post-probe FIFO read. It must prove an association event
 and a data frame are delivered, an event/probe race coalesces without a second
 acknowledgement, stale work is rejected without mutating the replacement
 generation, malformed current and issued-unknown completions poison without
-replay, and a non-hintless empty poll remains queue-only. Every child
-submission, grant, completion poll, DPC action, and post-probe read must consume
-a separate outer turn; no foreground Function 1 or Function 2 receive is
+replay, and a non-hintless empty poll remains queue-only. A forced empty poll
+may combine only its software `Queue -> SourceProbe` transition with the probe
+as the turn's single new physical action. Grant, completion/event replay, DPC
+action, and post-probe read remain later bounded work; no turn may add a second
+physical action, and no foreground Function 1 or Function 2 receive is
 permitted. A zero-status `SOURCE_PENDING` event must inspect status through the
 ordinary DPC lane, perform zero Function 2 reads, ignore stale shared-aperture
 bytes, consume the event, and rearm the sole SDIO owner. A real
@@ -985,9 +1022,11 @@ issued-unknown cut must fence the pair without advancing the event.
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
 pull-up clear, LOW/MID/HIGH window programming, the first ChipCommon read, and
-completion. Each child submission, continuation grant, child completion poll,
-retained deadline observation, and pull-up-clear operation must consume its own
-outer EventPump turn.
+completion. Each child submission or stable completion-poll/rearm producer
+operation, each later exact-grant owner action, each retained deadline
+observation, and the pull-up-clear operation must consume its own outer
+EventPump turn. Grant rearm therefore adds no grant-only producer turn, while
+the exact owner action remains separately admitted.
 The terminal child poll and terminal deadline observation must return before a
 following action can issue. Tests must hold ALP unavailable for more than 1,024
 exact reads under a still-live virtual-counter deadline, then make it available,
@@ -1388,6 +1427,16 @@ local cursor without a NIC turn or wake poll. The same injected wake under
 GENET must leave its ordinary phase result, CYW43 wake counters, and CYW43
 quantum counters unchanged.
 
+Ordinary post-prompt EventPump coverage must also prove that the same
+linked-serial cutover advances for every physical-network selection, including
+GENET, rather than depending on WiFi supervision. A failed attach must preserve
+the emergency root console without starving USB, display, or selected-network
+service. Runtime serial tests must coalesce the notification edge, leave the
+mini-UART RX level asserted, and prove that a later bounded service turn still
+drains the byte. The pre- and post-service samples must share one byte grant;
+after exhaustion only line status may be read and IRQ acknowledgement must stay
+pending.
+
 The central `network_contract_service_admissible` check must fence both direct
 EventPump service entries, ordinary `poll_runtime` and pre-root
 `poll_pre_root_network`. Coverage must prove the check runs before Network
@@ -1415,19 +1464,26 @@ runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX/fairness continuation may retain `Network` for at
 most the compiler-declared CYW43 `max_ops_per_turn` service bound (currently
 192 successive outer turns) and 25 ms on the seL4 virtual counter, whichever
-comes first. The fairness predicate includes one generation-bound post-TX
-cursor. `RequiredPoll` must block fresh TX until an exact nonfault op8 terminal;
+comes first. The fairness predicate includes the active `RequiredPoll` phase
+but excludes passive post-TX `Watching`. `RequiredPoll` must block fresh TX
+until an exact nonfault op8 terminal;
 `FrameReady` clears it, while an initially empty `Idle`/`Progress` terminal
 must release fresh TX and transition the same cursor to an eight-millisecond
-counter-deadlined receive watch. During the watch, the existing NetData op8
-lane remains weighted but copied RX, pending TX, ARP, maintenance, and control
-work take precedence. A frame, expiry, generation invalidation, or recovery
-must clear it. Tests must prove wrong request/generation and fault terminals
+counter-deadlined receive watch. The watch is a passive deadline and must
+neither weight Network nor manufacture an op8 source probe. A frame, expiry,
+generation invalidation, or recovery must clear it. Tests must prove wrong
+request/generation and fault terminals
 cannot advance it, a new accepted TX rearms `RequiredPoll` without allocating
-a second cursor, and GENET never reads or reports this state. Authentication
-without pending work must not extend the quantum. Tests
-must prove the first five exact-work turns remain contiguous without a forced
-four-turn operator rotation. They must advance time between outer turns and
+a second cursor, and GENET never reads or reports this state. Root must set
+`RX_HINTLESS_FIRSTREAD` only for active `RequiredPoll`, a proved
+current-generation root wake, or a live DPC-ring level. A forced empty op8/op10
+may combine software `Queue -> SourceProbe` with the probe as that turn's single
+new physical action, while cached completion/event replay remains a later turn.
+Ordinary empty polls remain queue-only. Authentication without pending work
+must not extend the quantum. Tests must prove that every third admitted Network
+operation performs one probe-only Serial turn, that an idle probe resumes the
+same quantum, and that real input exits through the normal operator rotation.
+They must advance time between outer turns and
 prove that a quantum already at its deadline returns to `Serial` with zero
 additional NIC/SDIO operations. An idle selected interface must not acquire the
 pair priority lease. The first actionable selected-WiFi turn must reserve and
@@ -1457,10 +1513,12 @@ return directly to `Serial`. The sole exception must be the exact
 network-origin reboot acknowledgement drain; after that required NIC service
 turn, or when a physical response becomes pending during an admitted operation,
 the next phase must be `Serial` rather than `Display`. `netstats` must expose
-quantum count, turns, maximum duration, zero-valued compatibility
-`operator_yields`, and exit reasons. Selected WiFi must additionally emit:
+quantum count, turns, maximum duration, `operator_yields`, and exit reasons;
+`operator_yields` counts every-third-operation Serial probes and may be nonzero
+only for selected CYW43. Selected WiFi must additionally emit:
 
 ```text
+netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
 netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
@@ -1469,10 +1527,27 @@ The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
 `cyw43_sdio_network_priority_lease_closing_drains_exact_parent_and_blocks_fresh_pair_work`,
 `cyw43_sdio_network_priority_lease_partial_failure_is_rolled_back_or_poisoned`,
-`cyw43_sdio_network_priority_lease_rejects_generation_aliases`,
+`retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases`,
+`cyw43_cold_bootstrap_publication_requires_exact_fresh_lifetime_truth`,
+`cold_bootstrap_stages_invisibly_then_reaches_first_lifetime_publication`,
+`pair_restart_completion_mints_only_owned_cold_epoch_provenance`,
+`recovery_request_during_cold_cursor_survives_and_supersedes_completion`,
+`cold_epoch_provenance_is_revoked_by_failure_and_unfinished_drop`,
+`cyw43_pending_request_before_context_replay_routes_recovery_without_waiting`,
+`consumed_root_grant_rearm_publishes_and_signals_last_in_one_operation`,
+`unconsumed_root_grant_is_issued_before_signal_without_republication`,
+`concurrent_root_grant_ack_between_snapshots_advances_without_recovery`,
+`root_grant_observer_rejects_reverse_or_mutated_snapshots`,
+`delegated_completion_miss_rearms_exact_grant_and_signals_last`,
+`completion_during_grant_observation_suppresses_publish_and_signal`,
+`reciprocal_sdio_child_miss_rearms_owner_in_the_same_parent_slice`,
+`reciprocal_multiphase_child_rearms_on_miss_without_a_grant_only_turn`,
+`completion_after_same_slice_rearm_never_reissues_owner_action`,
 `cyw43_rx_fairness_transitions_to_bounded_receive_watch`, and
 `cyw43_receive_path_drains_post_tx_fairness_before_queued_arp` must pass.
-Together they must prove exactly four scheduler writes for a clean quantum
+Together they must prove the exact policy line
+`m26d_net_first=no physical_input_yield=enabled` and exactly four scheduler
+writes for a clean quantum
 regardless of how many exact parents it covers (`SDIO boost`, `CYW43 boost`,
 `CYW43 restore`, `SDIO restore`), close-time fresh-work rejection and
 exact-parent drain, clean rollback versus poisoned recovery, current-generation
@@ -1483,6 +1558,37 @@ must report `state=inactive active=no close_pending=no` and `failures=0` with
 nonzero. A recovery revocation is acceptable only with matching typed
 same-slice pair-recovery evidence. The GENET fixture must omit this WiFi-only
 line and keep all CYW43 quantum counters zero.
+
+The 2026-07-30 hardware baseline for this performance gate is deliberately
+non-passing. Its power-off boot required pair recovery before Gate 8a-8h, while
+the following five powered warm boots passed on the first pair. Its clean WiFi
+TCP flow averaged about 315 ms request-to-first-payload, reached about 407 ms at
+p95, sustained about 2.9 sequential commands/s, and completed only 309 of 824
+pressure operations; the same shared stack over GENET measured about 1.23 ms
+and completed 8,983 of 8,983. These figures locate the material defect in CYW43
+linked-runtime/HAL cadence and do not prove a tenfold repair.
+
+The source-shape test must preserve Linux `brcmfmac`'s relevant performance
+invariants without importing its private workqueue or host lock: durable
+DPC/pending state, ordered RX-first bounded drain, `BRCMF_RXBOUND=50`,
+`BRCMF_TXBOUND=20`, `BRCMF_TXMINMAX=1` while RX remains pending, a 2,048-entry
+TX queue, 32-KiB aggregation, and block-mode CMD53. Cohesix must prove its
+translation through the existing 50-frame RX bound, credits/glom, 32-KiB shared
+aperture, 512-byte Function 2 blocks, multi-block CMD53, and external DMA. Its
+scheduler form remains one bounded EventPump Network quantum with serial
+probes, exact grants, one HAL owner, and one linked SDIO runtime issuer; no test
+may pass by adding a private physical drain loop.
+
+Fresh exact-image acceptance must pair five first-pair WiFi boots with one
+GENET control and then run the same sequential request and no-retry pressure
+workloads. The mandatory tenfold floor is WiFi
+request-to-first-payload p95 at most 40 ms and at least 29 sequential
+requests/s. The aggressive low-overhead target is p95 at most 10 ms and at
+least 100 requests/s. The pcap must show no loss, sequence gap, out-of-order
+delivery, reset, zero window, SACK recovery block, SYN retry, or reconnect, and
+the pressure run must have zero timeout masking. GENET latency and throughput
+must remain within its control baseline. Until a rebuilt/read-back image
+produces this evidence, both thresholds remain targets rather than results.
 
 CYW43 device tests must also prove that a retained TX or unproved credit window
 withholds smoltcp's paired RX/TX token, preserves the copied RX frame, advances
@@ -1892,12 +1998,32 @@ cannot accumulate authority, and repeated doorbells never republish, mutate,
 or replay the command.
 
 Every root-to-CYW43 generation, including zero, instead advances only through
-the stable acknowledged exact shared grant. Root publishes or re-signals the
-grant and sends the reserved-root-badge notification in separate outer turns;
-the notification is a coalescing scheduling hint and cannot grant authority.
-Tests must reject endpoint input, stale-sequence, changed-action,
-changed-generation, changed-flags, consumed or mutated grants, and prove an
-issued action cannot be replayed.
+the stable acknowledged exact shared grant. For an exact current-generation
+parent under an already `Open`, matching CYW43 Network priority lease, tests
+must prove that HAL performs prepare, sequence-last ring commit, exact grant
+publication, `Issued`, and reserved-root-badge signal in one ordered
+administrative service turn. Signal must be last, issued-unknown state must be
+latched before commit, and the turn must perform no physical action. The fresh
+cold-bootstrap test must prove the first zero-sequence stage remains a separate
+turn and that only a one-shot token minted by successful completion of the
+typed initial-physical-lifetime transaction collapses the final three
+publication steps, producing two operations rather than four. Numeric pair or
+physical-lifetime epochs and replay state must not authorize the lane.
+Recovery request/failure, unfinished cursor drop, and replay terminal must
+revoke the token; recovery, nonmatching, closing, and stale publications fail
+closed without using it. On a stable incomplete completion read, that same
+software-only HAL operation must publish one monotonic replacement after exact
+acknowledgement or re-signal the exact unconsumed grant, keep `Issued` durable,
+and signal last. A matching late completion must suppress both grant and signal.
+Only the initial split lane may persist `GrantRequired(id=0)` followed by
+`Granted(id=1)`. Recurrent `GrantRequired`, nonzero-id `GrantRequired`, or
+non-initial `Granted` is invalid and must fail closed rather than create
+another producer turn. GENET must be unable to acquire, inspect, or execute any
+of these CYW43 paths. The notification remains a coalescing scheduling hint and
+cannot grant authority. Tests must reject
+endpoint input, stale-sequence, changed-action, changed-generation,
+changed-flags, exhausted id, consumed or mutated grants, and prove an issued
+action cannot be replayed.
 
 For delegated CYW43-to-SDIO commands, tests must prove there is no usable
 endpoint after handoff and that only the stable acknowledged shared grant can
@@ -1906,11 +2032,13 @@ complete action fingerprint, and the independently retained SDIO generation;
 its nonzero id is published last and must exceed the last consumed id. The
 consumer acknowledgement is irrevocable, an unacknowledged id may only be
 re-signalled, and the producer may publish the next id only after observing the
-exact acknowledgement. The production foreground and DPC cursors must each
-show one poll, one later grant action, and one later poll, never two operations
-in one turn. HAL must mint the CYW43 send cap from the SDIO owner's bound
-notification with send-only rights and badge 256; it must not copy the owner
-endpoint.
+exact acknowledgement. On a stable completion miss, the production foreground
+and DPC producer must publish that next grant or re-signal the unconsumed grant
+in the same software-only operation, with durable bytes before signal; a
+matching late completion suppresses both. The later owner slice must consume at
+most one exact grant and perform at most one physical action. HAL must mint the
+CYW43 send cap from the SDIO owner's bound notification with send-only rights
+and badge 256; it must not copy the owner endpoint.
 
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
 badge 2, and the SDIO IRQ delivers badge 159. Badge 2 and badge 159 are
@@ -1932,17 +2060,15 @@ The production reciprocal-ring/controller test must also schedule CYW43 far
 enough ahead that the initial command signal and first-grant signal are both
 published before SDIO intake and collapse to one badge-256 wake—or that the
 only edge is consumed before the grant becomes observable. The delegated owner
-must then show distinct `CheckWake`, `CheckGrant`, `Service` or `Wait`, and
-`Execute` outer turns. A CARD_INT pending at `CheckWake` must receive exactly
-one service turn before grant admission; a later CARD_INT may follow at most
-one already-admitted owner quantum and must be observed at the next
-`CheckWake`. `CheckGrant` may perform one stable grant read but no device
-operation. Immediately before blocking, `Wait` must recheck the durable shared
-grant so a publication between the empty probe and receive advances to a later
-`Execute` turn without needing a second notification edge; the recheck itself
-performs no owner I/O, and the consumed grant cannot replay. `Execute` must
-perform ACK-before-I/O and at most one owner quantum without another poll. The
-actual card-init `HOST_CONFIG` producer must
+must then show one bounded software-admission slice: `CheckWake`, stable
+exact-grant read, ACK, and one `Execute` may coalesce in that slice, but it must
+perform ACK-before-I/O and at most one physical owner action. Empty state enters
+`Wait`, whose durable grant recheck performs no owner I/O and cannot require a
+second notification edge. A CARD_INT pending at `CheckWake` must be
+service-first: it consumes the slice's sole physical action and leaves the exact
+grant unconsumed for a later slice. A later CARD_INT may follow at most one
+already-admitted owner quantum and must be observed at the next `CheckWake`.
+The consumed grant cannot replay. The actual card-init `HOST_CONFIG` producer must
 cross the production reciprocal ring and retained owner cursor under this
 ordering. Telemetry must distinguish the post-generation-admission
 one-shot `sdio-owner-command-admitted` marker from generic root engine-init
@@ -1967,11 +2093,15 @@ root grant and must reject endpoint continuation. Delegated initial intake must
 use the coalescing badge-256 notification and sequence-last ring command. After
 `Pending`, only an exact root or delegated shared grant for the retained intake
 may grant the next foreground quantum; the notification only schedules a later
-grant check. A missed poll can schedule only the matching later wake/grant
-action and cannot recommit the command sequence. Pending-command
-DPC arbitration, reciprocal SDIO child-ring submission, every shared grant, and
-every reciprocal completion poll must each consume separately released retained
-quanta, with no private yield/resignal/poll loop. The real root reciprocal-ring
+grant check. A stable completion miss must publish or re-signal only the
+matching exact grant and signal last in that same producer operation; it cannot
+recommit the command sequence, and a matching late completion suppresses the
+grant and signal. Pending-command DPC arbitration, reciprocal SDIO child-ring
+submission, and stable completion-poll/rearm remain bounded retained work. The
+SDIO owner's software wake/grant/ACK states may coalesce around its one
+physical action, but no slice may consume more than one exact grant, execute
+two physical actions, or form a private yield/resignal/poll loop. The real root
+reciprocal-ring
 tests must cut the logical connection epoch once while a CYW43 command is
 `Prepared` and once after it is `Issued`. Every active command, exact grant,
 and completion in both cuts must retain the cursor's original request and

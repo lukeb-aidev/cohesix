@@ -806,6 +806,18 @@ struct DeferredGate8TerminalPending {
     feature = "kernel",
     feature = "net-console"
 ))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DeferredCyw43RecoveryDiagnosticPending {
+    recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+    live_generation: u32,
+    operator_line: HeaplessString<DEFAULT_LINE_CAPACITY>,
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredGate8Observation {
     Pending,
@@ -1629,12 +1641,29 @@ where
     let mut gate8_lifecycle = DeferredGate8Lifecycle::new();
     let mut terminal_mode = None;
     let mut gate8_terminal_pending: Option<DeferredGate8TerminalPending> = None;
+    let mut recovery_diagnostic_pending: Option<DeferredCyw43RecoveryDiagnosticPending> = None;
     let mut wifi_operation_started = false;
     let mut serial_retry = DeferredSerialRouteRetry::new(crate::hal::timebase().now_ms());
     let mut turn_status = DeferredCyw43TurnStatus::new();
     let mut supervisor_phase = DeferredCyw43SupervisorPhase::Operator;
 
     'supervisor: loop {
+        if let Some(pending) = recovery_diagnostic_pending.as_ref() {
+            if !pump.queue_cyw43_pair_recovery_diagnostic_transaction(
+                pending.recovery,
+                pending.live_generation,
+                pending.operator_line.as_str(),
+            ) {
+                // This output-only turn releases retained serial capacity. Do
+                // not enter generation poison until the complete causal batch
+                // has a teardown-independent home.
+                pump.poll_cyw43_bootstrap_supervisor_event_turn();
+                sel4::yield_now();
+                continue;
+            }
+            recovery_diagnostic_pending = None;
+        }
+
         if let Some(mut pending) = gate8_terminal_pending {
             // Capacity and formatting are proven without mutation before the
             // final typed-recovery probe. If that probe is clear, the explicit
@@ -2079,7 +2108,7 @@ where
                 );
                 crate::log_buffer::append_log_line(line.as_str());
                 if let Some(repeat) = turn_status.observe(stage) {
-                    let mut operator_line = HeaplessString::<192>::new();
+                    let mut operator_line = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
                     let _ = write!(
                         operator_line,
                         "CYW43_BOOTSTRAP_TURN attempt={} turn={} stage={} operation={} repeat={}",
@@ -2088,7 +2117,25 @@ where
                     // `with_deferred_net_hal` has returned, so this only queues
                     // bytes for the independent linked serial runtime. The next
                     // outer EventPump turn performs the actual flush.
-                    if !pump.queue_cyw43_bootstrap_operator_line(operator_line.as_str()) {
+                    if stage == "cyw43-pair-recovery-signalled" {
+                        let recovery =
+                            crate::drivers::driver_task_net::cyw43_deferred_recovery_diagnostic();
+                        let live_generation =
+                            crate::drivers::driver_task_net::cyw43_association_diagnostic()
+                                .generation;
+                        let pending = DeferredCyw43RecoveryDiagnosticPending {
+                            recovery,
+                            live_generation,
+                            operator_line,
+                        };
+                        if !pump.queue_cyw43_pair_recovery_diagnostic_transaction(
+                            pending.recovery,
+                            pending.live_generation,
+                            pending.operator_line.as_str(),
+                        ) {
+                            recovery_diagnostic_pending = Some(pending);
+                        }
+                    } else if !pump.queue_cyw43_bootstrap_operator_line(operator_line.as_str()) {
                         turn_status.retry_last();
                     }
                 }

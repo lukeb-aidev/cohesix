@@ -3231,7 +3231,6 @@ const fn cyw43_dpc_backplane_write32_payload(value: u32) -> [u8; 4] {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcTurnRoute {
     Quarantine,
-    GrantChild,
     PollChild,
     CompleteEvent,
     AdvanceState,
@@ -3243,7 +3242,6 @@ struct Cyw43DpcChild {
     active: bool,
     issued_unknown: bool,
     continuation_grant_required: bool,
-    continuation_grant_publish: bool,
     generation: u32,
     grant_id: u32,
     expected_sequence: u32,
@@ -3265,7 +3263,6 @@ impl Cyw43DpcChild {
             active: false,
             issued_unknown: false,
             continuation_grant_required: false,
-            continuation_grant_publish: false,
             generation: 0,
             grant_id: 0,
             expected_sequence: 0,
@@ -3398,10 +3395,8 @@ impl Cyw43DpcCursor {
 }
 
 const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
-    if cursor.child.issued_unknown {
+    if cursor.child.issued_unknown || cursor.child.continuation_grant_required {
         Cyw43DpcTurnRoute::Quarantine
-    } else if cursor.child.active && cursor.child.continuation_grant_required {
-        Cyw43DpcTurnRoute::GrantChild
     } else if cursor.child.active {
         Cyw43DpcTurnRoute::PollChild
     } else if matches!(cursor.action, Cyw43DpcAction::None) {
@@ -4791,6 +4786,11 @@ where
         );
         outcome.bytes = outcome.bytes.saturating_add(1);
     }
+    if !outcome.source_pending && outcome.bytes == limit {
+        let status = read_status();
+        outcome.hardware_overrun |= status & MINI_UART_LSR_RX_OVERRUN != 0;
+        outcome.source_pending = status & MINI_UART_LSR_RX_READY != 0;
+    }
     if outcome.hardware_overrun {
         queue.hardware_overrun_events = queue.hardware_overrun_events.saturating_add(1);
     }
@@ -5413,6 +5413,118 @@ fn runtime_continuation_grant_plan_at_poll(
         runtime_continuation_grant_producer_state_at(base, command, generation, current)
     };
     runtime_continuation_grant_plan_after_poll(current, observed)
+}
+
+/// Publish or re-signal the exact next delegated owner grant in the same
+/// producer slice that observed a completion miss.
+///
+/// A new grant is committed sequence-last before `signal`; an unconsumed exact
+/// grant is only re-signalled. The local cursor advances before the doorbell,
+/// making the doorbell the final externally visible producer action. Invalid
+/// identity, acknowledgement, or grant-ID state fails closed without a wake.
+#[cfg(any(target_os = "none", test))]
+fn runtime_apply_delegated_continuation_rearm_plan_with_signal<Signal>(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    current_grant_id: &mut u32,
+    plan: RuntimeContinuationGrantPlan,
+    mut signal: Signal,
+) -> bool
+where
+    Signal: FnMut(u32),
+{
+    let next_grant_id = match plan {
+        RuntimeContinuationGrantPlan::Publish(grant_id) => {
+            if !publish_runtime_continuation_grant_at(base, command, generation, grant_id) {
+                return false;
+            }
+            grant_id
+        }
+        RuntimeContinuationGrantPlan::Resignal(grant_id) => grant_id,
+        RuntimeContinuationGrantPlan::Invalid => return false,
+    };
+    *current_grant_id = next_grant_id;
+    signal(command.sequence);
+    true
+}
+
+#[cfg(test)]
+fn runtime_rearm_delegated_continuation_after_miss_with_signal<Signal>(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    current_grant_id: &mut u32,
+    signal: Signal,
+) -> bool
+where
+    Signal: FnMut(u32),
+{
+    let plan =
+        runtime_continuation_grant_plan_at_poll(base, command, generation, *current_grant_id);
+    runtime_apply_delegated_continuation_rearm_plan_with_signal(
+        base,
+        command,
+        generation,
+        current_grant_id,
+        plan,
+        signal,
+    )
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeDelegatedCompletionMissOutcome {
+    LateCompletion(DriverTaskCompletionRecord),
+    Rearmed,
+    Invalid,
+}
+
+/// Recheck the exact terminal around the stable grant observation and
+/// immediately before the completion-miss rearm linearization point.
+///
+/// A stable matching completion suppresses both grant publication and the
+/// doorbell, including one that arrives while the grant state is observed.
+/// Only a still-missing completion can enter the ordered publish-or-resignal
+/// path below. A completion after the second probe races after this producer's
+/// linearization point; exact grant consumption and terminal handling remain
+/// idempotent and cannot authorize a second physical owner action.
+#[cfg(any(target_os = "none", test))]
+fn runtime_delegated_completion_miss_rearm_with_signal<Probe, Signal>(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    generation: u32,
+    current_grant_id: &mut u32,
+    mut probe_late_completion: Probe,
+    signal: Signal,
+) -> RuntimeDelegatedCompletionMissOutcome
+where
+    Probe: FnMut() -> Option<DriverTaskCompletionRecord>,
+    Signal: FnMut(u32),
+{
+    if let Some(completion) = probe_late_completion() {
+        return RuntimeDelegatedCompletionMissOutcome::LateCompletion(completion);
+    }
+    let plan =
+        runtime_continuation_grant_plan_at_poll(base, command, generation, *current_grant_id);
+    if matches!(plan, RuntimeContinuationGrantPlan::Invalid) {
+        return RuntimeDelegatedCompletionMissOutcome::Invalid;
+    }
+    if let Some(completion) = probe_late_completion() {
+        return RuntimeDelegatedCompletionMissOutcome::LateCompletion(completion);
+    }
+    if runtime_apply_delegated_continuation_rearm_plan_with_signal(
+        base,
+        command,
+        generation,
+        current_grant_id,
+        plan,
+        signal,
+    ) {
+        RuntimeDelegatedCompletionMissOutcome::Rearmed
+    } else {
+        RuntimeDelegatedCompletionMissOutcome::Invalid
+    }
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -6186,11 +6298,12 @@ const fn runtime_command_loop_route(
     }
 }
 
-/// One scheduled state in the retained delegated SDIO owner arbiter.
+/// One state in the retained delegated SDIO owner arbiter.
 ///
-/// Polling, exact-grant admission, persistent-source service, and physical
-/// owner execution are deliberately different states so no outer turn can
-/// combine a retained poll with a device operation.
+/// Wake polling, exact-grant admission, and the condition-before-sleep recheck
+/// are software-only phases. They may collapse into one scheduled child slice;
+/// persistent-source service and foreground owner execution remain mutually
+/// exclusive physical outcomes of that slice.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeRetainedOwnerPhase {
@@ -6208,10 +6321,11 @@ enum RuntimeRetainedOwnerPhase {
 /// Ring sequence commit is the initial issue boundary. A later matching
 /// endpoint message cannot replace or replay that intake. Root-owned retained
 /// non-CYW43 commands use the exact endpoint rendezvous. Root and delegated
-/// CYW43 work instead advance through `RuntimeRetainedOwnerPhase`: one outer
-/// turn checks the combined wake source, a later turn checks the immutable
-/// grant, and only a separately admitted turn may service CARD_INT or execute
-/// the owner action.
+/// CYW43 work instead advance through `RuntimeRetainedOwnerPhase`: the combined
+/// wake source is sampled first, then the immutable grant is checked and
+/// acknowledged before at most one foreground owner action. A CARD_INT winner
+/// consumes the slice as service work and leaves the foreground grant durable
+/// for a later slice.
 /// The wake is a coalescing scheduling hint; the generation-bound grant is the
 /// only counted foreground authority.
 #[cfg(any(target_os = "none", test))]
@@ -6519,6 +6633,14 @@ enum RuntimeRetainedWaitRecheck {
     Execute(DriverRuntimeContinuationGrant),
 }
 
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeRetainedSoftwareAdvance {
+    Service(u32),
+    Wait(RuntimeRetainedGrantProbe),
+    Execute(DriverRuntimeContinuationGrant),
+}
+
 /// Inspect the delegated SDIO continuation condition exactly once before a
 /// retained receive.
 ///
@@ -6555,12 +6677,11 @@ fn probe_runtime_retained_continuation_grant(
 
 /// Re-read the durable continuation condition immediately before sleeping.
 ///
-/// `CheckGrant` and `Wait` are distinct scheduler turns. The producer can
-/// publish and signal the next exact grant between them. seL4 preserves a
-/// signal that races after this recheck, while this stable shared-memory read
-/// observes a publication that raced before it. A ready decision only freezes
-/// the immutable grant for a later `Execute` turn; it never authorizes
-/// same-turn physical I/O.
+/// The producer can publish and signal the next exact grant after the first
+/// stable probe. seL4 preserves a signal that races after this recheck, while
+/// this stable shared-memory read observes a publication that raced before it.
+/// A ready decision freezes the immutable grant for acknowledgement before one
+/// physical owner action in the current child slice.
 #[cfg(any(target_os = "none", test))]
 fn recheck_runtime_retained_continuation_grant_before_wait(
     gate: &RuntimePendingCommandGate,
@@ -6629,6 +6750,39 @@ const fn runtime_retained_owner_phase_after_grant(
         RuntimeRetainedGrantProbe::Inactive
         | RuntimeRetainedGrantProbe::Empty
         | RuntimeRetainedGrantProbe::Rejected(_) => RuntimeRetainedOwnerPhase::Wait,
+    }
+}
+
+/// Collapse the retained owner's software-only wake and grant phases.
+///
+/// The combined notification poll is the CARD_INT arbitration point. If a
+/// service source was already pending, it wins and no grant is consumed. In
+/// the foreground case this helper performs only immutable shared-memory
+/// inspection; the caller must still validate/consume the exact grant, commit
+/// its acknowledgement, and only then execute at most one physical action.
+#[cfg(any(target_os = "none", test))]
+fn runtime_retained_owner_software_advance_after_wake(
+    gate: &mut RuntimePendingCommandGate,
+    retained: &mut RuntimeCommandIntake,
+    wake: RuntimeWake,
+    base: usize,
+) -> RuntimeRetainedSoftwareAdvance {
+    let next_phase = runtime_retained_owner_phase_after_wake(gate, Some(retained), wake);
+    gate.set_delegated_owner_phase(next_phase);
+    if let RuntimeRetainedOwnerPhase::Service(badge) = next_phase {
+        return RuntimeRetainedSoftwareAdvance::Service(badge);
+    }
+
+    let probe = probe_runtime_retained_continuation_grant(gate, Some(*retained), base);
+    let next_phase = runtime_retained_owner_phase_after_grant(probe);
+    gate.set_delegated_owner_phase(next_phase);
+    match next_phase {
+        RuntimeRetainedOwnerPhase::Execute(grant) => RuntimeRetainedSoftwareAdvance::Execute(grant),
+        RuntimeRetainedOwnerPhase::Wait => RuntimeRetainedSoftwareAdvance::Wait(probe),
+        RuntimeRetainedOwnerPhase::Inactive
+        | RuntimeRetainedOwnerPhase::CheckWake
+        | RuntimeRetainedOwnerPhase::CheckGrant
+        | RuntimeRetainedOwnerPhase::Service(_) => RuntimeRetainedSoftwareAdvance::Wait(probe),
     }
 }
 
@@ -6769,7 +6923,8 @@ fn poll_runtime_command_or_notification(last_sequence: u32) -> RuntimeWake {
     // SAFETY: Root installs the command endpoint in slot 2 and binds the
     // generated local notification to this TCB. This single nonblocking poll
     // is the retained-owner arbitration linearization point: a CARD_INT that
-    // is pending here wins before the separately scheduled owner action.
+    // is pending here wins before any exact-granted foreground owner action in
+    // this child slice.
     let tag = unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
     runtime_wake_from_received_tag(tag, badge, last_sequence)
 }
@@ -9609,12 +9764,7 @@ fn service_serial(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecor
         return serial_tx_idle_completion(command.sequence, serial_mini_uart_tx_idle());
     }
     if command.frame.len == 0 {
-        let limit = command
-            .budget
-            .max_bytes
-            .min(MAX_DRIVER_TASK_FRAME_BYTES as u32)
-            .min(MINI_UART_RX_DRAIN_LIMIT as u32) as usize;
-        let read = serial_read_frame(limit);
+        let read = serial_read_frame(command.budget);
         return if read == 0 {
             DriverTaskCompletionRecord::idle(command.sequence)
         } else {
@@ -9668,6 +9818,13 @@ fn serial_frame_budget_limit(budget: DriverTaskBudgetGrant, frame_len: u16) -> u
     (budget.max_ops as usize)
         .min(budget.max_bytes as usize)
         .min(frame_len as usize)
+        .min(MAX_DRIVER_TASK_FRAME_BYTES)
+}
+
+fn serial_rx_budget_limit(budget: DriverTaskBudgetGrant) -> usize {
+    (budget.max_ops as usize)
+        .min(budget.max_frames as usize)
+        .min(budget.max_bytes as usize)
         .min(MAX_DRIVER_TASK_FRAME_BYTES)
 }
 
@@ -11312,11 +11469,6 @@ fn cyw43_runtime_service_dpc_event() -> bool {
 
             if cursor.child.active {
                 if cursor.child.continuation_grant_required {
-                    if cyw43_dpc_child_grant_once(&mut cursor) {
-                        state.dpc_cursor = cursor;
-                        should_defer_local = true;
-                        return true;
-                    }
                     state.dpc_cursor = cursor;
                     cyw43_dpc_quarantine_transport(
                         state,
@@ -17133,80 +17285,94 @@ fn cyw43_prompt_poll_command_turn(
         state.prompt_poll = cursor;
     }
 
-    match cursor.phase {
-        Cyw43PromptPollPhase::Idle => {
-            cyw43_prompt_poll_poison_generation(state, command.sequence, command.sequence)
-        }
-        Cyw43PromptPollPhase::Queue => {
-            if state.rx_queue_count != 0
-                || desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
-            {
-                return cyw43_prompt_poll_queue_completion(state, desc, command);
-            }
-            if !cyw43_prompt_poll_source_probe_ready(state) {
+    loop {
+        match cursor.phase {
+            Cyw43PromptPollPhase::Idle => {
                 return cyw43_prompt_poll_poison_generation(
                     state,
                     command.sequence,
-                    cursor.generation,
-                );
-            }
-            cursor.phase = Cyw43PromptPollPhase::SourceProbe;
-            state.prompt_poll = cursor;
-            RuntimeCommandTurn::Pending
-        }
-        Cyw43PromptPollPhase::SourceProbe => {
-            // A naturally delivered DPC event may have filled the strict FIFO
-            // while the prompt probe was waiting for its next root grant. It
-            // wins without publishing or replaying another owner action.
-            if state.rx_queue_count != 0 {
-                return cyw43_prompt_poll_queue_completion(state, desc, command);
-            }
-            if !cyw43_prompt_poll_source_probe_ready(state) {
-                return cyw43_prompt_poll_poison_generation(
-                    state,
                     command.sequence,
-                    cursor.generation,
                 );
             }
-            let activation =
-                cyw43_activate_sdio_dpc_via_bus_link_with_probe(cursor.generation, true);
-            if let Some(event_sequence) = activation.and_then(|(owner_sequence, completion)| {
-                cyw43_dpc_source_probe_completion_exact(completion, owner_sequence)
-                    .then_some(completion.result)
-            }) {
-                // The first exact completion poll is itself this turn's child
-                // action and therefore restores the foreground baseline. Wait
-                // for the later cached local replay to publish the immutable
-                // source event. At that point the transaction is terminal and
-                // runtime_main can service the ordinary DPC cursor without a
-                // later baseline restore erasing its FIFO progress.
-                if !cyw43_foreground_action_suspended() {
-                    CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE
-                        .store(event_sequence, Ordering::Release);
-                    CYW43_DPC_WATERMARK_REFRESH_SEQUENCE.store(command.sequence, Ordering::Release);
+            Cyw43PromptPollPhase::Queue => {
+                if state.rx_queue_count != 0
+                    || desc.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
+                {
+                    return cyw43_prompt_poll_queue_completion(state, desc, command);
                 }
-                cursor.phase = Cyw43PromptPollPhase::PostProbe;
+                if !cyw43_prompt_poll_source_probe_ready(state) {
+                    return cyw43_prompt_poll_poison_generation(
+                        state,
+                        command.sequence,
+                        cursor.generation,
+                    );
+                }
+                // Queue inspection is software-only. Advance directly into the
+                // source-probe phase so the command's initial admission can
+                // submit at most one reciprocal owner action without spending
+                // a no-I/O continuation grant first.
+                cursor.phase = Cyw43PromptPollPhase::SourceProbe;
                 state.prompt_poll = cursor;
-                return RuntimeCommandTurn::Pending;
+                continue;
             }
-            if cyw43_foreground_action_suspended() {
-                // Submission, grant, exact completion polling, and
-                // issued-unknown containment each consume one outer turn. The
-                // foreground transaction owns the immutable child ticket.
-                state.prompt_poll = cursor;
-                return RuntimeCommandTurn::Pending;
+            Cyw43PromptPollPhase::SourceProbe => {
+                // A naturally delivered DPC event may have filled the strict
+                // FIFO before this source-probe action. It wins without
+                // publishing or replaying another owner action.
+                if state.rx_queue_count != 0 {
+                    return cyw43_prompt_poll_queue_completion(state, desc, command);
+                }
+                if !cyw43_prompt_poll_source_probe_ready(state) {
+                    return cyw43_prompt_poll_poison_generation(
+                        state,
+                        command.sequence,
+                        cursor.generation,
+                    );
+                }
+                let activation =
+                    cyw43_activate_sdio_dpc_via_bus_link_with_probe(cursor.generation, true);
+                if let Some(event_sequence) = activation.and_then(|(owner_sequence, completion)| {
+                    cyw43_dpc_source_probe_completion_exact(completion, owner_sequence)
+                        .then_some(completion.result)
+                }) {
+                    // The first exact completion poll is itself this slice's
+                    // owner action and therefore restores the foreground
+                    // baseline. A later exact grant locally replays the cached
+                    // completion without another physical action, publishes
+                    // the immutable source event, and advances to PostProbe.
+                    // Keeping that replay separate prevents a subsequent
+                    // baseline restore from erasing DPC FIFO progress.
+                    if !cyw43_foreground_action_suspended() {
+                        CYW43_DPC_WATERMARK_REFRESH_EVENT_SEQUENCE
+                            .store(event_sequence, Ordering::Release);
+                        CYW43_DPC_WATERMARK_REFRESH_SEQUENCE
+                            .store(command.sequence, Ordering::Release);
+                    }
+                    cursor.phase = Cyw43PromptPollPhase::PostProbe;
+                    state.prompt_poll = cursor;
+                    return RuntimeCommandTurn::Pending;
+                }
+                if cyw43_foreground_action_suspended() {
+                    // Submission, grant, exact completion polling, and
+                    // issued-unknown containment each consume one owner slice.
+                    // The foreground transaction owns the immutable child
+                    // ticket. Cached replay is software-only in its later
+                    // admitted slice.
+                    state.prompt_poll = cursor;
+                    return RuntimeCommandTurn::Pending;
+                }
+                let result = activation
+                    .map(|(_, completion)| cyw43_dpc_activation_failure_result(completion))
+                    .unwrap_or(cursor.generation);
+                return cyw43_prompt_poll_poison_generation(state, command.sequence, result);
             }
-            let result = activation
-                .map(|(_, completion)| cyw43_dpc_activation_failure_result(completion))
-                .unwrap_or(cursor.generation);
-            cyw43_prompt_poll_poison_generation(state, command.sequence, result)
-        }
-        Cyw43PromptPollPhase::PostProbe => {
-            // runtime_main can reach this phase only after every source event
-            // admitted by the exact refreshed watermark has completed. Return
-            // one FIFO head or one typed idle result; physical RX remains DPC
-            // owned in both cases.
-            cyw43_prompt_poll_queue_completion(state, desc, command)
+            Cyw43PromptPollPhase::PostProbe => {
+                // runtime_main can reach this phase only after every source
+                // event admitted by the exact refreshed watermark has
+                // completed. Return one FIFO head or one typed idle result;
+                // physical RX remains DPC owned in both cases.
+                return cyw43_prompt_poll_queue_completion(state, desc, command);
+            }
         }
     }
 }
@@ -18911,7 +19077,6 @@ const CYW43_SDIO_BUS_LINK_SEQUENCE_VALUE_MASK: u32 = !CYW43_SDIO_BUS_LINK_SEQUEN
 enum Cyw43ForegroundFrontierRoute {
     Cached,
     Submit,
-    Grant,
     Poll,
     Defer,
     Poison,
@@ -18949,14 +19114,12 @@ const fn cyw43_foreground_frontier_route(
     poisoned: bool,
     issued_unknown: bool,
 ) -> Cyw43ForegroundFrontierRoute {
-    if poisoned || issued_unknown || !identity_matches {
+    if poisoned || issued_unknown || continuation_grant_required || !identity_matches {
         Cyw43ForegroundFrontierRoute::Poison
     } else if replay_index < completed_count {
         Cyw43ForegroundFrontierRoute::Cached
     } else if action_consumed {
         Cyw43ForegroundFrontierRoute::Defer
-    } else if frontier_valid && frontier_submitted && continuation_grant_required {
-        Cyw43ForegroundFrontierRoute::Grant
     } else if frontier_valid && frontier_submitted {
         Cyw43ForegroundFrontierRoute::Poll
     } else {
@@ -19227,7 +19390,6 @@ struct Cyw43ForegroundTransaction {
     frontier_valid: bool,
     frontier_submitted: bool,
     frontier_continuation_grant_required: bool,
-    frontier_continuation_grant_publish: bool,
     frontier_grant_id: u32,
     frontier_started_ticks: u64,
     frontier_timeout_cycles: u64,
@@ -19285,7 +19447,6 @@ impl Cyw43ForegroundTransaction {
             frontier_valid: false,
             frontier_submitted: false,
             frontier_continuation_grant_required: false,
-            frontier_continuation_grant_publish: false,
             frontier_grant_id: 0,
             frontier_started_ticks: 0,
             frontier_timeout_cycles: 0,
@@ -19321,7 +19482,6 @@ impl Cyw43ForegroundTransaction {
         self.frontier_valid = false;
         self.frontier_submitted = false;
         self.frontier_continuation_grant_required = false;
-        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -19347,7 +19507,6 @@ impl Cyw43ForegroundTransaction {
         self.frontier_valid = false;
         self.frontier_submitted = false;
         self.frontier_continuation_grant_required = false;
-        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -19546,7 +19705,6 @@ impl Cyw43ForegroundTransaction {
     fn retain_frontier_submit(&mut self, started_ticks: u64, timeout_cycles: u64) {
         self.frontier_submitted = true;
         self.frontier_continuation_grant_required = false;
-        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = started_ticks;
         self.frontier_timeout_cycles = timeout_cycles;
@@ -19559,18 +19717,9 @@ impl Cyw43ForegroundTransaction {
         self.turn.action_consumed = true;
     }
 
-    fn retain_frontier_wait(&mut self, grant_id: u32, publish: bool) {
-        self.frontier_grant_id = grant_id;
-        self.frontier_continuation_grant_required = true;
-        self.frontier_continuation_grant_publish = publish;
-        self.turn.pending = true;
-    }
-
-    fn retain_frontier_grant(&mut self, grant_id: u32) {
+    fn retain_frontier_rearmed(&mut self, grant_id: u32) {
         self.frontier_grant_id = grant_id;
         self.frontier_continuation_grant_required = false;
-        self.frontier_continuation_grant_publish = false;
-        self.turn.action_consumed = true;
         self.turn.pending = true;
     }
 
@@ -19592,7 +19741,6 @@ impl Cyw43ForegroundTransaction {
         self.frontier_valid = false;
         self.frontier_submitted = false;
         self.frontier_continuation_grant_required = false;
-        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -20892,7 +21040,6 @@ fn cyw43_dpc_child_submit_claimed_once(
         active: true,
         issued_unknown: false,
         continuation_grant_required: false,
-        continuation_grant_publish: false,
         generation,
         grant_id: 0,
         expected_sequence: command.sequence,
@@ -20923,41 +21070,64 @@ fn cyw43_dpc_child_submit_claimed_once(
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_dpc_child_grant_once(cursor: &mut Cyw43DpcCursor) -> bool {
-    let child = cursor.child;
-    if !child.active
-        || child.issued_unknown
-        || !child.continuation_grant_required
-        || child.generation == 0
-        || child.command.sequence != child.expected_sequence
-        || child.command.aux1 != child.generation
-        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
-        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != child.expected_sequence
-        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
-    {
-        return false;
+fn cyw43_dpc_child_accept_exact(
+    cursor: &mut Cyw43DpcCursor,
+    mut completion: DriverTaskCompletionRecord,
+) -> Cyw43DpcChildPoll {
+    publish_runtime_progress(
+        cursor.child.expected_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    if completion.code == COMPLETION_FAULT {
+        completion.frame = cyw43_copy_sdio_fault_telemetry(completion.frame)
+            .unwrap_or_else(DriverFrameDescriptor::empty);
+    } else if !cyw43_dpc_child_completion_matches(cursor.child, completion) {
+        cyw43_record_last_fault_with_result(
+            FAULT_CYW43_TRANSPORT_BUS_LINK,
+            cursor.child.command_result,
+        );
+        let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
+        cursor.child = Cyw43DpcChild::empty();
+        return Cyw43DpcChildPoll::TerminalMalformed;
     }
-    let grant_id = child.grant_id;
-    if grant_id == 0 {
-        return false;
-    }
-    if child.continuation_grant_publish
-        && !publish_runtime_continuation_grant_at(
-            DRIVER_TASK_SDIO_BUS_RING_VADDR,
-            child.command,
-            child.generation,
-            grant_id,
+    if completion.code != COMPLETION_FAULT && cursor.child.read_frame.len != 0 {
+        if !sdio_bus_link_payload_bounds(
+            completion.frame.offset as usize,
+            completion.frame.len as usize,
+        ) {
+            cyw43_record_last_fault_with_result(
+                FAULT_CYW43_TRANSPORT_BUS_LINK,
+                cursor.child.command_result,
+            );
+            let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
+            cursor.child = Cyw43DpcChild::empty();
+            return Cyw43DpcChildPoll::TerminalMalformed;
+        }
+        let copy_len = usize::from(cursor.child.read_frame.len);
+        if sdio_bus_link_copy_from_owner_payload(
+            completion.frame.offset as usize,
+            cursor.child.read_frame,
+            copy_len,
         )
-    {
-        return false;
+        .is_none()
+        {
+            cyw43_record_last_fault_with_result(
+                FAULT_CYW43_TRANSPORT_BUS_LINK,
+                cursor.child.command_result,
+            );
+            let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
+            cursor.child = Cyw43DpcChild::empty();
+            return Cyw43DpcChildPoll::TerminalMalformed;
+        }
     }
-    cursor.child.grant_id = grant_id;
-    cursor.child.continuation_grant_required = false;
-    cursor.child.continuation_grant_publish = false;
-    // The exact grant is visible before this wake hint. SDIO validates and
-    // acknowledges the immutable generation-bound ID before spending it.
-    runtime_signal_sdio_owner_doorbell(child.command.sequence);
-    true
+    CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    if !cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence) {
+        cursor.child = Cyw43DpcChild::empty();
+        return Cyw43DpcChildPoll::TerminalMalformed;
+    }
+    cursor.child = Cyw43DpcChild::empty();
+    Cyw43DpcChildPoll::Exact(completion)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -20968,62 +21138,20 @@ fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
     if !cursor.child.active {
         return Cyw43DpcChildPoll::Pending;
     }
+    if cursor.child.continuation_grant_required
+        || cursor.child.generation == 0
+        || cursor.child.command.sequence != cursor.child.expected_sequence
+        || cursor.child.command.aux1 != cursor.child.generation
+        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire)
+            != cursor.child.expected_sequence
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    {
+        return Cyw43DpcChildPoll::TerminalMalformed;
+    }
     let child = Cyw43SdioChildState::new(cursor.child.expected_sequence);
-    if let Cyw43SdioChildCompletion::Exact(mut completion) = cyw43_sdio_child_poll_exact(child) {
-        publish_runtime_progress(
-            cursor.child.expected_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-        );
-        if completion.code == COMPLETION_FAULT {
-            completion.frame = cyw43_copy_sdio_fault_telemetry(completion.frame)
-                .unwrap_or_else(DriverFrameDescriptor::empty);
-        } else if !cyw43_dpc_child_completion_matches(cursor.child, completion) {
-            cyw43_record_last_fault_with_result(
-                FAULT_CYW43_TRANSPORT_BUS_LINK,
-                cursor.child.command_result,
-            );
-            let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
-            cursor.child = Cyw43DpcChild::empty();
-            return Cyw43DpcChildPoll::TerminalMalformed;
-        }
-        if completion.code != COMPLETION_FAULT && cursor.child.read_frame.len != 0 {
-            if !sdio_bus_link_payload_bounds(
-                completion.frame.offset as usize,
-                completion.frame.len as usize,
-            ) {
-                cyw43_record_last_fault_with_result(
-                    FAULT_CYW43_TRANSPORT_BUS_LINK,
-                    cursor.child.command_result,
-                );
-                let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
-                cursor.child = Cyw43DpcChild::empty();
-                return Cyw43DpcChildPoll::TerminalMalformed;
-            }
-            let copy_len = usize::from(cursor.child.read_frame.len);
-            if sdio_bus_link_copy_from_owner_payload(
-                completion.frame.offset as usize,
-                cursor.child.read_frame,
-                copy_len,
-            )
-            .is_none()
-            {
-                cyw43_record_last_fault_with_result(
-                    FAULT_CYW43_TRANSPORT_BUS_LINK,
-                    cursor.child.command_result,
-                );
-                let _ = cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence);
-                cursor.child = Cyw43DpcChild::empty();
-                return Cyw43DpcChildPoll::TerminalMalformed;
-            }
-        }
-        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-        if !cyw43_sdio_child_release_exact_or_restart(cursor.child.expected_sequence) {
-            cursor.child = Cyw43DpcChild::empty();
-            return Cyw43DpcChildPoll::TerminalMalformed;
-        }
-        cursor.child = Cyw43DpcChild::empty();
-        return Cyw43DpcChildPoll::Exact(completion);
+    if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
+        return cyw43_dpc_child_accept_exact(cursor, completion);
     }
     cursor.child.fallback_polls = cursor.child.fallback_polls.saturating_add(1);
     let now = runtime_timer_counter_ticks();
@@ -21034,6 +21162,9 @@ fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
             cursor.child.fallback_polls >= CYW43_DPC_CHILD_FALLBACK_POLLS
         };
     if timed_out {
+        if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
+            return cyw43_dpc_child_accept_exact(cursor, completion);
+        }
         publish_runtime_progress(
             cursor.child.expected_sequence,
             pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_WAIT_TIMEOUT,
@@ -21050,26 +21181,25 @@ fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
         }
         return Cyw43DpcChildPoll::IssuedUnknown;
     }
-    match runtime_continuation_grant_plan_at_poll(
+    let command = cursor.child.command;
+    let generation = cursor.child.generation;
+    match runtime_delegated_completion_miss_rearm_with_signal(
         DRIVER_TASK_SDIO_BUS_RING_VADDR,
-        cursor.child.command,
-        cursor.child.generation,
-        cursor.child.grant_id,
+        command,
+        generation,
+        &mut cursor.child.grant_id,
+        || match cyw43_sdio_child_poll_exact(child) {
+            Cyw43SdioChildCompletion::Exact(completion) => Some(completion),
+            Cyw43SdioChildCompletion::Waiting => None,
+        },
+        runtime_signal_sdio_owner_doorbell,
     ) {
-        RuntimeContinuationGrantPlan::Publish(grant_id) => {
-            cursor.child.grant_id = grant_id;
-            cursor.child.continuation_grant_publish = true;
+        RuntimeDelegatedCompletionMissOutcome::LateCompletion(completion) => {
+            cyw43_dpc_child_accept_exact(cursor, completion)
         }
-        RuntimeContinuationGrantPlan::Resignal(grant_id) => {
-            cursor.child.grant_id = grant_id;
-            cursor.child.continuation_grant_publish = false;
-        }
-        RuntimeContinuationGrantPlan::Invalid => {
-            return Cyw43DpcChildPoll::TerminalMalformed;
-        }
+        RuntimeDelegatedCompletionMissOutcome::Rearmed => Cyw43DpcChildPoll::Pending,
+        RuntimeDelegatedCompletionMissOutcome::Invalid => Cyw43DpcChildPoll::TerminalMalformed,
     }
-    cursor.child.continuation_grant_required = true;
-    Cyw43DpcChildPoll::Pending
 }
 
 const fn cyw43_sdio_dpc_service_deferred(child_active: bool) -> bool {
@@ -21466,47 +21596,50 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
-    let entry = transaction.frontier;
-    if !cyw43_foreground_retained_owner_generation_is_current(transaction) {
-        cyw43_foreground_abandon_stale_transaction(transaction);
-        return false;
-    }
-    if !transaction.frontier_ticket_valid()
-        || !transaction.frontier_submitted
-        || !transaction.frontier_continuation_grant_required
-        || !cyw43_foreground_published_frontier_is_immutable(transaction)
-        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
-        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != entry.command.sequence
-        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+fn cyw43_foreground_accept_exact_completion(
+    transaction: &mut Cyw43ForegroundTransaction,
+    entry: Cyw43ForegroundTraceEntry,
+    mut completion: DriverTaskCompletionRecord,
+) -> Option<DriverTaskCompletionRecord> {
+    if !cyw43_foreground_completion_matches(entry, completion)
+        || !cyw43_sdio_child_release_exact(entry.command.sequence)
     {
-        cyw43_foreground_poison_active_frontier(transaction);
-        return false;
-    }
-    let grant_id = transaction.frontier_grant_id;
-    if grant_id == 0 {
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         transaction.poisoned = true;
         transaction.turn.pending = false;
-        return false;
+        return None;
     }
-    if transaction.frontier_continuation_grant_publish
-        && !publish_runtime_continuation_grant_at(
-            DRIVER_TASK_SDIO_BUS_RING_VADDR,
-            entry.command,
-            entry.ticket.generation,
-            grant_id,
-        )
-    {
+    let progress_sequence =
+        cyw43_sdio_owner_progress_sequence(cyw43_active_parent_sequence(), entry.command.sequence);
+    publish_runtime_progress(
+        progress_sequence,
+        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
+        DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    );
+    if completion.code == COMPLETION_FAULT {
+        if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
+            completion.frame = frame;
+        }
+        cyw43_record_last_fault_with_result(completion.detail, completion.result);
+        cyw43_record_last_fault_frame(completion.frame);
+    }
+    CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    if !cyw43_foreground_capture_completion_payload(transaction, completion) {
         transaction.poisoned = true;
         transaction.turn.pending = false;
-        return false;
+        return None;
     }
-    transaction.retain_frontier_grant(grant_id);
-    // The exact grant is sequence-last and globally visible. The notification
-    // is a lossless scheduling edge; a coalesced duplicate cannot advance the
-    // retained owner command without a fresh grant ID.
-    runtime_signal_sdio_owner_doorbell(entry.command.sequence);
-    true
+    if !transaction.commit_frontier_completion(completion) {
+        transaction.poisoned = true;
+        transaction.turn.pending = false;
+        return None;
+    }
+    // The completion poll is the one reciprocal operation admitted for this
+    // outer turn. Retain the parent so the next turn restores its baseline,
+    // replays this exact cached child locally, and only then may submit the
+    // following child action.
+    Some(completion)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -21529,51 +21662,8 @@ fn cyw43_foreground_poll_frontier(
         return None;
     }
     let child = Cyw43SdioChildState::new(entry.command.sequence);
-    if let Cyw43SdioChildCompletion::Exact(mut completion) = cyw43_sdio_child_poll_exact(child) {
-        if !cyw43_foreground_completion_matches(entry, completion)
-            || !cyw43_sdio_child_release_exact(entry.command.sequence)
-        {
-            CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
-            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-            transaction.poisoned = true;
-            transaction.turn.pending = false;
-            return None;
-        }
-        let progress_sequence = cyw43_sdio_owner_progress_sequence(
-            cyw43_active_parent_sequence(),
-            entry.command.sequence,
-        );
-        publish_runtime_progress(
-            progress_sequence,
-            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_SDIO_OWNER_REPLY,
-            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-        );
-        if completion.code == COMPLETION_FAULT {
-            if let Some(frame) = cyw43_copy_sdio_fault_telemetry(completion.frame) {
-                completion.frame = frame;
-            }
-            cyw43_record_last_fault_with_result(completion.detail, completion.result);
-            cyw43_record_last_fault_frame(completion.frame);
-        }
-        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-        if !cyw43_foreground_capture_completion_payload(transaction, completion) {
-            transaction.poisoned = true;
-            transaction.turn.pending = false;
-            return None;
-        }
-        if !transaction.commit_frontier_completion(completion) {
-            transaction.poisoned = true;
-            transaction.turn.pending = false;
-            return None;
-        }
-        // The completion poll is the one reciprocal operation admitted for
-        // this outer turn. Retain the parent so the next turn restores its
-        // baseline, replays this exact cached child locally, and only then may
-        // submit the following child action. Clearing `pending` here lets a
-        // straight-line multi-action helper attempt child N+1 in this turn;
-        // its deliberate one-action rejection is then indistinguishable from
-        // a physical SDIO failure.
-        return Some(completion);
+    if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
+        return cyw43_foreground_accept_exact_completion(transaction, entry, completion);
     }
     transaction.frontier_polls = transaction.frontier_polls.saturating_add(1);
     let now = runtime_timer_counter_ticks();
@@ -21586,6 +21676,9 @@ fn cyw43_foreground_poll_frontier(
         transaction.frontier_polls >= CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS as u32
     };
     if timed_out {
+        if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
+            return cyw43_foreground_accept_exact_completion(transaction, entry, completion);
+        }
         let progress_sequence = cyw43_sdio_owner_progress_sequence(
             cyw43_active_parent_sequence(),
             entry.command.sequence,
@@ -21605,26 +21698,38 @@ fn cyw43_foreground_poll_frontier(
         cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, result);
         transaction.issued_unknown = true;
         transaction.frontier_continuation_grant_required = false;
-        transaction.frontier_continuation_grant_publish = false;
     } else {
-        // A completion miss consumed this outer turn. The following turn may
-        // publish exactly one durable continuation grant; it must not poll the
-        // owner again until that grant has woken and admitted one SDIO quantum.
-        let (grant_id, publish) = match runtime_continuation_grant_plan_at_poll(
+        // The completion poll is this outer turn's only reciprocal operation.
+        // Publish or re-signal the next exact owner grant in this same slice:
+        // grant sequence-last, then the coalescing doorbell last. The next
+        // parent turn may poll again, but cannot spend another SDIO owner
+        // action itself.
+        if transaction.frontier_continuation_grant_required {
+            cyw43_foreground_poison_active_frontier(transaction);
+            return None;
+        }
+        match runtime_delegated_completion_miss_rearm_with_signal(
             DRIVER_TASK_SDIO_BUS_RING_VADDR,
             entry.command,
             entry.ticket.generation,
-            transaction.frontier_grant_id,
+            &mut transaction.frontier_grant_id,
+            || match cyw43_sdio_child_poll_exact(child) {
+                Cyw43SdioChildCompletion::Exact(completion) => Some(completion),
+                Cyw43SdioChildCompletion::Waiting => None,
+            },
+            runtime_signal_sdio_owner_doorbell,
         ) {
-            RuntimeContinuationGrantPlan::Publish(grant_id) => (grant_id, true),
-            RuntimeContinuationGrantPlan::Resignal(grant_id) => (grant_id, false),
-            RuntimeContinuationGrantPlan::Invalid => {
-                transaction.poisoned = true;
-                transaction.turn.pending = false;
+            RuntimeDelegatedCompletionMissOutcome::LateCompletion(completion) => {
+                return cyw43_foreground_accept_exact_completion(transaction, entry, completion);
+            }
+            RuntimeDelegatedCompletionMissOutcome::Rearmed => {
+                transaction.retain_frontier_rearmed(transaction.frontier_grant_id);
+            }
+            RuntimeDelegatedCompletionMissOutcome::Invalid => {
+                cyw43_foreground_poison_active_frontier(transaction);
                 return None;
             }
-        };
-        transaction.retain_frontier_wait(grant_id, publish);
+        }
     }
     if timed_out {
         transaction.turn.pending = true;
@@ -21764,7 +21869,6 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 Cyw43ForegroundFrontierRoute::Cached => {}
                 Cyw43ForegroundFrontierRoute::Poison
                 | Cyw43ForegroundFrontierRoute::Submit
-                | Cyw43ForegroundFrontierRoute::Grant
                 | Cyw43ForegroundFrontierRoute::Poll
                 | Cyw43ForegroundFrontierRoute::Defer => {
                     transaction.poisoned = true;
@@ -21837,13 +21941,6 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         ) {
             Cyw43ForegroundFrontierRoute::Submit => {
                 if cyw43_foreground_submit_frontier(transaction) {
-                    Cyw43BusLinkOutcome::Pending
-                } else {
-                    Cyw43BusLinkOutcome::Failed
-                }
-            }
-            Cyw43ForegroundFrontierRoute::Grant => {
-                if cyw43_foreground_grant_frontier(transaction) {
                     Cyw43BusLinkOutcome::Pending
                 } else {
                     Cyw43BusLinkOutcome::Failed
@@ -45202,6 +45299,7 @@ fn serial_runtime_service_notification(badge: u32) -> bool {
     })
 }
 
+#[cfg(test)]
 fn serial_retry_pending_irq_with<Drain, Ack>(
     queue: &mut SerialRuntimeRxQueue,
     mut drain: Drain,
@@ -45223,27 +45321,88 @@ where
     acked
 }
 
+fn serial_owner_rx_turn_with<Sample, Copy, Ack>(
+    queue: &mut SerialRuntimeRxQueue,
+    grant: usize,
+    mut sample: Sample,
+    mut copy: Copy,
+    mut ack: Ack,
+) -> usize
+where
+    Sample: FnMut(&mut SerialRuntimeRxQueue, usize) -> SerialRxDrainOutcome,
+    Copy: FnMut(&mut SerialRuntimeRxQueue, usize) -> usize,
+    Ack: FnMut() -> bool,
+{
+    let grant = grant.min(MAX_DRIVER_TASK_FRAME_BYTES);
+    let mut remaining = grant;
+
+    // Treat the IRQ as a wake hint, not as the only authority to observe RX.
+    // Root explicitly requests this owner-local receive turn, so level-sample
+    // the UART before copying the ordered software queue. This recovers bytes
+    // even when the bound notification was coalesced or missed.
+    if remaining != 0 {
+        let drained = sample(queue, remaining);
+        debug_assert!(
+            drained.bytes <= remaining,
+            "serial RX sampler must honor the caller's remaining grant"
+        );
+        remaining = remaining.saturating_sub(drained.bytes);
+    }
+
+    // Every explicit receive turn closes with the same owner's rearm
+    // handshake. Mark it pending before freeing queue space, then re-sample so
+    // a full queue or a byte racing the first sample cannot be acknowledged
+    // while the hardware source remains asserted. Software-queue copying has
+    // the same frame bound, while only UART bytes consume this turn's shared
+    // pre/post hardware-sampling grant.
+    queue.irq_ack_pending = true;
+    let read = copy(queue, grant);
+    debug_assert!(
+        read <= grant,
+        "serial RX frame copy must honor the caller's frame grant"
+    );
+
+    // An exhausted grant admits one read-only LSR level check so the source is
+    // never acknowledged blindly. It does not admit another UART byte or the
+    // handler ACK; both remain owned by the next explicit root turn.
+    if remaining == 0 {
+        let _ = sample(queue, 0);
+        queue.irq_ack_pending = true;
+        return read;
+    }
+
+    let drained = sample(queue, remaining);
+    debug_assert!(
+        drained.bytes <= remaining,
+        "serial RX resample must honor the caller's remaining grant"
+    );
+    remaining = remaining.saturating_sub(drained.bytes);
+    if drained.source_pending || remaining == 0 {
+        queue.irq_ack_pending = true;
+        return read;
+    }
+    serial_record_irq_ack(queue, ack());
+    read
+}
+
 #[cfg(target_os = "none")]
-fn serial_retry_pending_irq_after_queue_drain() -> bool {
+fn serial_read_frame(budget: DriverTaskBudgetGrant) -> usize {
+    let grant = serial_rx_budget_limit(budget);
     SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| {
-        serial_retry_pending_irq_with(
+        serial_owner_rx_turn_with(
             queue,
-            |queue| serial_drain_hardware_to_queue(queue, MINI_UART_RX_DRAIN_LIMIT),
+            grant,
+            |queue, remaining| {
+                serial_drain_hardware_to_queue(queue, remaining.min(MINI_UART_RX_DRAIN_LIMIT))
+            },
+            serial_drain_queue_to_frame,
             || runtime_irq_handler_ack(DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT),
         )
     })
 }
 
-#[cfg(target_os = "none")]
-fn serial_read_frame(limit: usize) -> usize {
-    let limit = limit.min(MAX_DRIVER_TASK_FRAME_BYTES);
-    let read = SERIAL_RUNTIME_RX_QUEUE.with_mut(|queue| serial_drain_queue_to_frame(queue, limit));
-    let _ = serial_retry_pending_irq_after_queue_drain();
-    read
-}
-
 #[cfg(not(target_os = "none"))]
-fn serial_read_frame(_limit: usize) -> usize {
+fn serial_read_frame(_budget: DriverTaskBudgetGrant) -> usize {
     0
 }
 
@@ -45394,7 +45553,7 @@ pub fn runtime_main(task_key: usize) -> ! {
         pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_RUNTIME_RECV_READY,
         task_key_marker,
     );
-    loop {
+    'runtime: loop {
         if runtime_command_poll_due(pending_intake.is_some()) {
             let publish_ring_read_begin = !ring_read_progress_published;
             pending_intake =
@@ -45476,237 +45635,267 @@ pub fn runtime_main(task_key: usize) -> ! {
             if pending_command_gate.grant_generation().is_some() {
                 // Linux's host request and DPC work both use a durable condition
                 // plus a coalescing scheduler hint. Cohesix preserves that model
-                // across seL4 turns explicitly:
+                // in one bounded child slice:
                 //
                 //   CheckWake -> Service or CheckGrant -> Wait or Execute.
                 //
-                // Each state consumes one outer turn. CARD_INT pending at
-                // CheckWake is the arbitration winner. An interrupt arriving
+                // CARD_INT pending at CheckWake is the arbitration winner and
+                // spends the slice as service work. An interrupt arriving
                 // after that linearization point remains latched and may be
                 // delayed by at most the one already-admitted owner quantum.
-                // No notification history is counted continuation authority.
-                match pending_command_gate.delegated_owner_phase() {
-                    RuntimeRetainedOwnerPhase::CheckWake => {
-                        let wake = runtime_pending_wake_for_route(
-                            notification_route,
-                            poll_runtime_command_or_notification(last_sequence),
-                        );
-                        let next_phase = runtime_retained_owner_phase_after_wake(
-                            &mut pending_command_gate,
-                            pending_intake.as_mut(),
-                            wake,
-                        );
-                        pending_command_gate.set_delegated_owner_phase(next_phase);
-                        // The nonblocking combined poll is this outer turn's
-                        // retained action. A later turn performs service or
-                        // grant admission, never both here.
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    RuntimeRetainedOwnerPhase::CheckGrant => {
-                        let root_grant = pending_command_gate.root_grant_active();
-                        let grant_probe = probe_runtime_retained_continuation_grant(
-                            &pending_command_gate,
-                            pending_intake,
-                            DRIVER_TASK_RING_VADDR,
-                        );
-                        if let Some(intake) = pending_intake {
-                            match grant_probe {
-                                RuntimeRetainedGrantProbe::Empty => publish_runtime_progress(
+                // No notification history is counted continuation authority,
+                // and software coalescing never admits a second physical
+                // operation.
+                'retained_owner: loop {
+                    let root_grant = pending_command_gate.root_grant_active();
+                    let advance = match pending_command_gate.delegated_owner_phase() {
+                        RuntimeRetainedOwnerPhase::CheckWake => {
+                            let wake = runtime_pending_wake_for_route(
+                                notification_route,
+                                poll_runtime_command_or_notification(last_sequence),
+                            );
+                            let Some(retained) = pending_intake.as_mut() else {
+                                pending_command_gate.complete();
+                                runtime_yield_current_tcb();
+                                continue 'runtime;
+                            };
+                            runtime_retained_owner_software_advance_after_wake(
+                                &mut pending_command_gate,
+                                retained,
+                                wake,
+                                DRIVER_TASK_RING_VADDR,
+                            )
+                        }
+                        RuntimeRetainedOwnerPhase::CheckGrant => {
+                            let Some(retained) = pending_intake.as_mut() else {
+                                pending_command_gate.complete();
+                                runtime_yield_current_tcb();
+                                continue 'runtime;
+                            };
+                            runtime_retained_owner_software_advance_after_wake(
+                                &mut pending_command_gate,
+                                retained,
+                                RuntimeWake::None,
+                                DRIVER_TASK_RING_VADDR,
+                            )
+                        }
+                        RuntimeRetainedOwnerPhase::Wait => {
+                            let recheck = recheck_runtime_retained_continuation_grant_before_wait(
+                                &pending_command_gate,
+                                pending_intake,
+                                DRIVER_TASK_RING_VADDR,
+                            );
+                            match recheck {
+                                RuntimeRetainedWaitRecheck::Execute(grant) => {
+                                    pending_command_gate.set_delegated_owner_phase(
+                                        RuntimeRetainedOwnerPhase::Execute(grant),
+                                    );
+                                    RuntimeRetainedSoftwareAdvance::Execute(grant)
+                                }
+                                RuntimeRetainedWaitRecheck::Rejected(grant) => {
+                                    if let Some(intake) = pending_intake {
+                                        publish_runtime_progress(
+                                            intake.command.sequence,
+                                            if root_grant {
+                                                DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+                                            } else {
+                                                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED
+                                            },
+                                            grant.grant_id,
+                                        );
+                                    }
+                                    let wake = runtime_pending_wake_for_route(
+                                        notification_route,
+                                        wait_runtime_command_or_notification(last_sequence),
+                                    );
+                                    if wake == RuntimeWake::None {
+                                        runtime_yield_current_tcb();
+                                        continue 'runtime;
+                                    }
+                                    let Some(retained) = pending_intake.as_mut() else {
+                                        pending_command_gate.complete();
+                                        runtime_yield_current_tcb();
+                                        continue 'runtime;
+                                    };
+                                    runtime_retained_owner_software_advance_after_wake(
+                                        &mut pending_command_gate,
+                                        retained,
+                                        wake,
+                                        DRIVER_TASK_RING_VADDR,
+                                    )
+                                }
+                                RuntimeRetainedWaitRecheck::Block => {
+                                    let wake = runtime_pending_wake_for_route(
+                                        notification_route,
+                                        wait_runtime_command_or_notification(last_sequence),
+                                    );
+                                    if wake == RuntimeWake::None {
+                                        runtime_yield_current_tcb();
+                                        continue 'runtime;
+                                    }
+                                    let Some(retained) = pending_intake.as_mut() else {
+                                        pending_command_gate.complete();
+                                        runtime_yield_current_tcb();
+                                        continue 'runtime;
+                                    };
+                                    runtime_retained_owner_software_advance_after_wake(
+                                        &mut pending_command_gate,
+                                        retained,
+                                        wake,
+                                        DRIVER_TASK_RING_VADDR,
+                                    )
+                                }
+                            }
+                        }
+                        RuntimeRetainedOwnerPhase::Service(badge) => {
+                            RuntimeRetainedSoftwareAdvance::Service(badge)
+                        }
+                        RuntimeRetainedOwnerPhase::Execute(grant) => {
+                            RuntimeRetainedSoftwareAdvance::Execute(grant)
+                        }
+                        RuntimeRetainedOwnerPhase::Inactive => {
+                            pending_command_gate
+                                .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckWake);
+                            continue 'retained_owner;
+                        }
+                    };
+
+                    match advance {
+                        RuntimeRetainedSoftwareAdvance::Wait(grant_probe) => {
+                            if let Some(intake) = pending_intake {
+                                match grant_probe {
+                                    RuntimeRetainedGrantProbe::Empty => publish_runtime_progress(
+                                        intake.command.sequence,
+                                        if root_grant {
+                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN
+                                        } else {
+                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN
+                                        },
+                                        pending_command_gate.last_grant_id,
+                                    ),
+                                    RuntimeRetainedGrantProbe::Rejected(grant) => {
+                                        publish_runtime_progress(
+                                            intake.command.sequence,
+                                            if root_grant {
+                                                DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
+                                            } else {
+                                                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED
+                                            },
+                                            grant.grant_id,
+                                        );
+                                    }
+                                    RuntimeRetainedGrantProbe::Inactive
+                                    | RuntimeRetainedGrantProbe::Ready(_) => {}
+                                }
+                            }
+                            // The first stable probe was empty or rejected.
+                            // Recheck once immediately before the blocking
+                            // receive; a ready publication resumes in this same
+                            // child slice without needing a second signal.
+                            continue 'retained_owner;
+                        }
+                        RuntimeRetainedSoftwareAdvance::Service(badge) => {
+                            pending_command_gate
+                                .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
+                            if foreground_watermark_refresh_fault.is_some() {
+                                // Preserve the durable notification without
+                                // inspecting a ring whose formerly accepted
+                                // front event violated its immutable
+                                // source-probe contract.
+                                CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                                runtime_yield_current_tcb();
+                                continue 'runtime;
+                            }
+                            let _ = service_runtime_notification(badge);
+                            // Exactly one persistent-source device quantum ran.
+                            // Never inspect or spend foreground authority in
+                            // the same child slice.
+                            runtime_yield_current_tcb();
+                            continue 'runtime;
+                        }
+                        RuntimeRetainedSoftwareAdvance::Execute(grant) => {
+                            if let Some(intake) = pending_intake {
+                                publish_runtime_progress(
                                     intake.command.sequence,
                                     if root_grant {
-                                        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_WAIT_BEGIN
+                                        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
                                     } else {
-                                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_WAIT_BEGIN
+                                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY
                                     },
-                                    pending_command_gate.last_grant_id,
-                                ),
-                                RuntimeRetainedGrantProbe::Rejected(grant) => {
-                                    publish_runtime_progress(
-                                        intake.command.sequence,
-                                        if root_grant {
-                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
-                                        } else {
-                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED
-                                        },
-                                        grant.grant_id,
-                                    );
-                                }
-                                RuntimeRetainedGrantProbe::Ready(grant) => {
-                                    publish_runtime_progress(
-                                        intake.command.sequence,
-                                        if root_grant {
-                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
-                                        } else {
-                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY
-                                        },
-                                        grant.grant_id,
-                                    );
-                                }
-                                RuntimeRetainedGrantProbe::Inactive => {}
-                            }
-                        }
-                        pending_command_gate.set_delegated_owner_phase(
-                            runtime_retained_owner_phase_after_grant(grant_probe),
-                        );
-                        // The stable exact-grant read is this turn's retained
-                        // poll. Freeze its immutable value and hand off before
-                        // acknowledgement or physical I/O.
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    RuntimeRetainedOwnerPhase::Wait => {
-                        let root_grant = pending_command_gate.root_grant_active();
-                        match recheck_runtime_retained_continuation_grant_before_wait(
-                            &pending_command_gate,
-                            pending_intake,
-                            DRIVER_TASK_RING_VADDR,
-                        ) {
-                            RuntimeRetainedWaitRecheck::Execute(grant) => {
-                                if let Some(intake) = pending_intake {
-                                    publish_runtime_progress(
-                                        intake.command.sequence,
-                                        if root_grant {
-                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_READY
-                                        } else {
-                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_READY
-                                        },
-                                        grant.grant_id,
-                                    );
-                                }
-                                pending_command_gate.set_delegated_owner_phase(
-                                    RuntimeRetainedOwnerPhase::Execute(grant),
-                                );
-                                // Freeze the exact grant, then hand off. The
-                                // next outer turn acknowledges it before one
-                                // owner quantum; this recheck performs no
-                                // physical I/O.
-                                runtime_yield_current_tcb();
-                                continue;
-                            }
-                            RuntimeRetainedWaitRecheck::Rejected(grant) => {
-                                if let Some(intake) = pending_intake {
-                                    publish_runtime_progress(
-                                        intake.command.sequence,
-                                        if root_grant {
-                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_REJECTED
-                                        } else {
-                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_REJECTED
-                                        },
-                                        grant.grant_id,
-                                    );
-                                }
-                            }
-                            RuntimeRetainedWaitRecheck::Block => {}
-                        }
-                        let wake = runtime_pending_wake_for_route(
-                            notification_route,
-                            wait_runtime_command_or_notification(last_sequence),
-                        );
-                        let next_phase = runtime_retained_owner_phase_after_wake(
-                            &mut pending_command_gate,
-                            pending_intake.as_mut(),
-                            wake,
-                        );
-                        pending_command_gate.set_delegated_owner_phase(next_phase);
-                        // A wake only schedules the next arbitration phase.
-                        // It never also releases a physical owner action.
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    RuntimeRetainedOwnerPhase::Service(badge) => {
-                        pending_command_gate
-                            .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
-                        if foreground_watermark_refresh_fault.is_some() {
-                            // Preserve the durable notification without
-                            // inspecting a ring whose formerly accepted front
-                            // event violated its immutable source-probe
-                            // contract.
-                            CYW43_DPC_DEFERRED.store(true, Ordering::Release);
-                            runtime_yield_current_tcb();
-                            continue;
-                        }
-                        let _ = service_runtime_notification(badge);
-                        // Exactly one persistent-source device quantum ran.
-                        // Check the immutable foreground grant only after the
-                        // required peer scheduling handoff.
-                        runtime_yield_current_tcb();
-                        continue;
-                    }
-                    RuntimeRetainedOwnerPhase::Execute(grant) => {
-                        let root_grant = pending_command_gate.root_grant_active();
-                        let Some(retained) = pending_intake.as_mut() else {
-                            pending_command_gate.complete();
-                            runtime_yield_current_tcb();
-                            continue;
-                        };
-                        let gate_before_grant = pending_command_gate;
-                        let route = runtime_retained_owner_prepare_execute(
-                            &mut pending_command_gate,
-                            retained,
-                            grant,
-                        );
-                        match route {
-                            RuntimePendingWakeRoute::ContinueForeground => {
-                                if !acknowledge_runtime_continuation_grant_at(
-                                    DRIVER_TASK_RING_VADDR,
                                     grant.grant_id,
-                                ) {
-                                    // ACK-before-I/O failed. Restore the exact
-                                    // pre-admission state and re-read producer
-                                    // truth on a later turn; no physical action
-                                    // has run.
-                                    pending_command_gate = gate_before_grant;
+                                );
+                            }
+                            let Some(retained) = pending_intake.as_mut() else {
+                                pending_command_gate.complete();
+                                runtime_yield_current_tcb();
+                                continue 'runtime;
+                            };
+                            let gate_before_grant = pending_command_gate;
+                            let route = runtime_retained_owner_prepare_execute(
+                                &mut pending_command_gate,
+                                retained,
+                                grant,
+                            );
+                            match route {
+                                RuntimePendingWakeRoute::ContinueForeground => {
+                                    if !acknowledge_runtime_continuation_grant_at(
+                                        DRIVER_TASK_RING_VADDR,
+                                        grant.grant_id,
+                                    ) {
+                                        // ACK-before-I/O failed. Restore the
+                                        // exact pre-admission state and re-read
+                                        // producer truth in a later slice; no
+                                        // physical action has run.
+                                        pending_command_gate = gate_before_grant;
+                                        pending_command_gate.set_delegated_owner_phase(
+                                            RuntimeRetainedOwnerPhase::CheckGrant,
+                                        );
+                                        publish_runtime_progress(
+                                            retained.command.sequence,
+                                            if root_grant {
+                                                DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
+                                            } else {
+                                                pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED
+                                            },
+                                            grant.grant_id,
+                                        );
+                                        runtime_yield_current_tcb();
+                                        continue 'runtime;
+                                    }
                                     pending_command_gate.set_delegated_owner_phase(
-                                        RuntimeRetainedOwnerPhase::CheckGrant,
+                                        RuntimeRetainedOwnerPhase::Inactive,
                                     );
                                     publish_runtime_progress(
                                         retained.command.sequence,
                                         if root_grant {
-                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACK_FAILED
+                                            DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
                                         } else {
-                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACK_FAILED
+                                            pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED
                                         },
                                         grant.grant_id,
                                     );
-                                    runtime_yield_current_tcb();
-                                    continue;
+                                    // Fall through. The already-validated ACK
+                                    // releases exactly one owner quantum below.
+                                    break 'retained_owner;
                                 }
-                                pending_command_gate
-                                    .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Inactive);
-                                publish_runtime_progress(
-                                    retained.command.sequence,
-                                    if root_grant {
-                                        DRIVER_RUNTIME_RING_PROGRESS_ROOT_GRANT_ACCEPTED
-                                    } else {
-                                        pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_SDIO_OWNER_GRANT_ACCEPTED
-                                    },
-                                    grant.grant_id,
-                                );
-                                // Fall through. This outer turn performs only
-                                // the one newly admitted owner quantum below.
-                            }
-                            RuntimePendingWakeRoute::ServiceNotification(badge) => {
-                                pending_command_gate.set_delegated_owner_phase(
-                                    RuntimeRetainedOwnerPhase::Service(badge),
-                                );
-                                runtime_yield_current_tcb();
-                                continue;
-                            }
-                            RuntimePendingWakeRoute::Rejected => {
-                                pending_command_gate.set_delegated_owner_phase(
-                                    RuntimeRetainedOwnerPhase::CheckGrant,
-                                );
-                                runtime_yield_current_tcb();
-                                continue;
+                                RuntimePendingWakeRoute::ServiceNotification(badge) => {
+                                    // An already-observed service source still
+                                    // wins even if the exact grant was ready.
+                                    // It consumes no grant and runs alone.
+                                    pending_command_gate.set_delegated_owner_phase(
+                                        RuntimeRetainedOwnerPhase::Service(badge),
+                                    );
+                                    continue 'retained_owner;
+                                }
+                                RuntimePendingWakeRoute::Rejected => {
+                                    pending_command_gate.set_delegated_owner_phase(
+                                        RuntimeRetainedOwnerPhase::CheckGrant,
+                                    );
+                                    runtime_yield_current_tcb();
+                                    continue 'runtime;
+                                }
                             }
                         }
-                    }
-                    RuntimeRetainedOwnerPhase::Inactive => {
-                        pending_command_gate
-                            .set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckWake);
-                        runtime_yield_current_tcb();
-                        continue;
                     }
                 }
             } else {
@@ -49578,8 +49767,8 @@ mod tests {
         cursor.child.continuation_grant_required = true;
         assert_eq!(
             cyw43_dpc_turn_route(&cursor),
-            Cyw43DpcTurnRoute::GrantChild,
-            "a missed child poll requires a separate later grant turn",
+            Cyw43DpcTurnRoute::Quarantine,
+            "a persisted deferred-grant state has no production fallback",
         );
         cursor.child.continuation_grant_required = false;
         assert_eq!(
@@ -50079,6 +50268,37 @@ mod tests {
     }
 
     #[test]
+    fn serial_irq_drain_marks_a_level_source_pending_at_the_turn_limit() {
+        use std::cell::Cell;
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        let source = *b"xy";
+        let cursor = Cell::new(0usize);
+        let outcome = serial_drain_source_to_queue(
+            &mut queue,
+            1,
+            || {
+                if cursor.get() < source.len() {
+                    MINI_UART_LSR_RX_READY
+                } else {
+                    0
+                }
+            },
+            || {
+                let index = cursor.get();
+                cursor.set(index + 1);
+                source[index]
+            },
+        );
+
+        assert_eq!(outcome.bytes, 1);
+        assert!(outcome.source_pending);
+        assert_eq!(cursor.get(), 1);
+        assert_eq!(queue.pop(), Some(source[0]));
+        assert_eq!(queue.pop(), None);
+    }
+
+    #[test]
     fn serial_irq_badge_is_exact_and_deferred_ack_retries_after_queue_space() {
         let mut queue = SerialRuntimeRxQueue::new();
         let mut ack_calls = 0u32;
@@ -50122,6 +50342,334 @@ mod tests {
         assert_eq!(ack_calls, 2);
         assert_eq!(queue.irq_acks, 1);
         assert!(!queue.irq_ack_pending);
+    }
+
+    #[test]
+    fn serial_owner_rx_turn_recovers_bytes_without_an_irq_notification() {
+        use std::cell::Cell;
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        assert!(queue.push(b'a'));
+        let source = *b"bc";
+        let cursor = Cell::new(0usize);
+        let ack_calls = Cell::new(0u32);
+        let mut copied = Vec::new();
+
+        let read = serial_owner_rx_turn_with(
+            &mut queue,
+            MINI_UART_RX_DRAIN_LIMIT,
+            |queue, limit| {
+                serial_drain_source_to_queue(
+                    queue,
+                    limit,
+                    || {
+                        if cursor.get() < source.len() {
+                            MINI_UART_LSR_RX_READY
+                        } else {
+                            0
+                        }
+                    },
+                    || {
+                        let index = cursor.get();
+                        cursor.set(index + 1);
+                        source[index]
+                    },
+                )
+            },
+            |queue, limit| {
+                while copied.len() < limit {
+                    let Some(byte) = queue.pop() else {
+                        break;
+                    };
+                    copied.push(byte);
+                }
+                copied.len()
+            },
+            || {
+                ack_calls.set(ack_calls.get() + 1);
+                true
+            },
+        );
+
+        assert_eq!(read, 3);
+        assert_eq!(copied, b"abc");
+        assert_eq!(cursor.get(), source.len());
+        assert_eq!(ack_calls.get(), 1);
+        assert_eq!(queue.irq_wakes, 0, "no notification drove this turn");
+        assert_eq!(queue.irq_acks, 1);
+        assert_eq!(queue.irq_ack_failures, 0);
+        assert!(!queue.irq_ack_pending);
+        assert_eq!(queue.len, 0);
+    }
+
+    #[test]
+    fn serial_owner_rx_turn_shares_one_byte_grant_across_both_samples() {
+        use std::cell::{Cell, RefCell};
+
+        let budget = DriverTaskBudgetGrant {
+            max_ops: 8,
+            max_frames: 8,
+            max_bytes: 1,
+        };
+        let grant = serial_rx_budget_limit(budget);
+        assert_eq!(grant, 1);
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        assert!(queue.push(b'a'));
+        let source = *b"xy";
+        let cursor = Cell::new(0usize);
+        let sample_limits = RefCell::new(Vec::new());
+        let ack_calls = Cell::new(0u32);
+        let mut sample = |queue: &mut SerialRuntimeRxQueue, limit: usize| {
+            sample_limits.borrow_mut().push(limit);
+            serial_drain_source_to_queue(
+                queue,
+                limit,
+                || {
+                    if cursor.get() < source.len() {
+                        MINI_UART_LSR_RX_READY
+                    } else {
+                        0
+                    }
+                },
+                || {
+                    let index = cursor.get();
+                    cursor.set(index + 1);
+                    source[index]
+                },
+            )
+        };
+        let mut ack = || {
+            ack_calls.set(ack_calls.get() + 1);
+            true
+        };
+
+        let mut first_frame = Vec::new();
+        let first_read = serial_owner_rx_turn_with(
+            &mut queue,
+            grant,
+            &mut sample,
+            |queue, limit| {
+                while first_frame.len() < limit {
+                    let Some(byte) = queue.pop() else {
+                        break;
+                    };
+                    first_frame.push(byte);
+                }
+                first_frame.len()
+            },
+            &mut ack,
+        );
+        assert_eq!(first_read, 1);
+        assert_eq!(first_frame, b"a");
+        assert_eq!(cursor.get(), 1, "only one UART byte owns this grant");
+        assert_eq!(*sample_limits.borrow(), [1, 0]);
+        assert_eq!(ack_calls.get(), 0);
+        assert!(queue.irq_ack_pending);
+
+        let mut second_frame = Vec::new();
+        let second_read = serial_owner_rx_turn_with(
+            &mut queue,
+            2,
+            &mut sample,
+            |queue, limit| {
+                while second_frame.len() < limit {
+                    let Some(byte) = queue.pop() else {
+                        break;
+                    };
+                    second_frame.push(byte);
+                }
+                second_frame.len()
+            },
+            &mut ack,
+        );
+        assert_eq!(second_read, 2);
+        assert_eq!(second_frame, b"xy", "deferred UART bytes remain ordered");
+        assert_eq!(cursor.get(), source.len());
+        assert_eq!(*sample_limits.borrow(), [1, 0, 2, 1]);
+        assert_eq!(ack_calls.get(), 1);
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+    }
+
+    #[test]
+    fn serial_owner_rx_turn_honors_one_op_and_one_frame_grants() {
+        use std::cell::{Cell, RefCell};
+
+        for budget in [
+            DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 8,
+                max_bytes: 8,
+            },
+            DriverTaskBudgetGrant {
+                max_ops: 8,
+                max_frames: 1,
+                max_bytes: 8,
+            },
+        ] {
+            let grant = serial_rx_budget_limit(budget);
+            assert_eq!(grant, 1);
+            let mut queue = SerialRuntimeRxQueue::new();
+            let source = *b"xy";
+            let cursor = Cell::new(0usize);
+            let sample_limits = RefCell::new(Vec::new());
+            let ack_calls = Cell::new(0u32);
+            let mut frame = Vec::new();
+
+            let read = serial_owner_rx_turn_with(
+                &mut queue,
+                grant,
+                |queue, limit| {
+                    sample_limits.borrow_mut().push(limit);
+                    serial_drain_source_to_queue(
+                        queue,
+                        limit,
+                        || {
+                            if cursor.get() < source.len() {
+                                MINI_UART_LSR_RX_READY
+                            } else {
+                                0
+                            }
+                        },
+                        || {
+                            let index = cursor.get();
+                            cursor.set(index + 1);
+                            source[index]
+                        },
+                    )
+                },
+                |queue, limit| {
+                    while frame.len() < limit {
+                        let Some(byte) = queue.pop() else {
+                            break;
+                        };
+                        frame.push(byte);
+                    }
+                    frame.len()
+                },
+                || {
+                    ack_calls.set(ack_calls.get() + 1);
+                    true
+                },
+            );
+
+            assert_eq!(read, 1);
+            assert_eq!(frame, b"x");
+            assert_eq!(cursor.get(), 1);
+            assert_eq!(*sample_limits.borrow(), [1, 0]);
+            assert_eq!(ack_calls.get(), 0);
+            assert!(queue.irq_ack_pending);
+        }
+    }
+
+    #[test]
+    fn serial_owner_rx_turn_defers_rearm_until_source_drains_and_ack_succeeds() {
+        use std::cell::Cell;
+
+        let mut queue = SerialRuntimeRxQueue::new();
+        for byte in 0..MINI_UART_RX_QUEUE_CAPACITY {
+            assert!(queue.push(byte as u8));
+        }
+        let source = [0xfe, 0xff];
+        let cursor = Cell::new(0usize);
+        let ack_calls = Cell::new(0u32);
+        let mut sample = |queue: &mut SerialRuntimeRxQueue, limit: usize| {
+            serial_drain_source_to_queue(
+                queue,
+                limit,
+                || {
+                    if cursor.get() < source.len() {
+                        MINI_UART_LSR_RX_READY
+                    } else {
+                        0
+                    }
+                },
+                || {
+                    let index = cursor.get();
+                    cursor.set(index + 1);
+                    source[index]
+                },
+            )
+        };
+        let mut ack = || {
+            let call = ack_calls.get() + 1;
+            ack_calls.set(call);
+            call > 1
+        };
+
+        let mut first_frame = Vec::new();
+        let first_read = serial_owner_rx_turn_with(
+            &mut queue,
+            MINI_UART_RX_QUEUE_CAPACITY,
+            &mut sample,
+            |queue, limit| {
+                assert_ne!(limit, 0);
+                if let Some(byte) = queue.pop() {
+                    first_frame.push(byte);
+                    1
+                } else {
+                    0
+                }
+            },
+            &mut ack,
+        );
+        assert_eq!(first_read, 1);
+        assert_eq!(first_frame, [0]);
+        assert_eq!(cursor.get(), 1);
+        assert_eq!(
+            ack_calls.get(),
+            0,
+            "asserted hardware source must remain masked"
+        );
+        assert!(queue.irq_ack_pending);
+
+        let mut second_frame = Vec::new();
+        let second_read = serial_owner_rx_turn_with(
+            &mut queue,
+            MINI_UART_RX_QUEUE_CAPACITY,
+            &mut sample,
+            |queue, limit| {
+                while second_frame.len() < limit {
+                    let Some(byte) = queue.pop() else {
+                        break;
+                    };
+                    second_frame.push(byte);
+                }
+                second_frame.len()
+            },
+            &mut ack,
+        );
+        assert_eq!(second_read, MINI_UART_RX_QUEUE_CAPACITY);
+        assert_eq!(second_frame[0], 1);
+        assert_eq!(second_frame[MINI_UART_RX_QUEUE_CAPACITY - 1], source[0]);
+        assert_eq!(cursor.get(), source.len());
+        assert_eq!(ack_calls.get(), 1);
+        assert_eq!(queue.irq_ack_failures, 1);
+        assert!(queue.irq_ack_pending, "failed rearm must remain retryable");
+
+        let mut final_frame = Vec::new();
+        let final_read = serial_owner_rx_turn_with(
+            &mut queue,
+            MINI_UART_RX_QUEUE_CAPACITY,
+            &mut sample,
+            |queue, limit| {
+                while final_frame.len() < limit {
+                    let Some(byte) = queue.pop() else {
+                        break;
+                    };
+                    final_frame.push(byte);
+                }
+                final_frame.len()
+            },
+            &mut ack,
+        );
+        assert_eq!(final_read, 1);
+        assert_eq!(final_frame, [source[1]]);
+        assert_eq!(ack_calls.get(), 2);
+        assert_eq!(queue.irq_acks, 1);
+        assert!(!queue.irq_ack_pending);
+        assert_eq!(queue.irq_wakes, 0);
     }
 
     #[test]
@@ -53300,6 +53848,159 @@ mod tests {
     }
 
     #[test]
+    fn delegated_completion_miss_rearms_exact_grant_and_signals_last() {
+        let intake = retained_gate_test_intake(0x8000_00c2);
+        let command = intake.command;
+        let generation = command.aux1;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+        let mut current_grant_id = 0u32;
+        let mut signalled = Vec::new();
+
+        let late = DriverTaskCompletionRecord::progress(command.sequence, 7);
+        assert_eq!(
+            runtime_delegated_completion_miss_rearm_with_signal(
+                base,
+                command,
+                generation,
+                &mut current_grant_id,
+                || Some(late),
+                |_| signalled.push(0),
+            ),
+            RuntimeDelegatedCompletionMissOutcome::LateCompletion(late),
+        );
+        assert_eq!(current_grant_id, 0);
+        assert!(signalled.is_empty());
+        assert_eq!(
+            read_runtime_continuation_grant_at(base),
+            None,
+            "a matching late terminal suppresses grant publication and signalling",
+        );
+
+        assert!(runtime_rearm_delegated_continuation_after_miss_with_signal(
+            base,
+            command,
+            generation,
+            &mut current_grant_id,
+            |sequence| {
+                let grant = read_runtime_continuation_grant_at(base)
+                    .expect("grant publication must precede its doorbell");
+                assert_eq!(grant.request_sequence, sequence);
+                assert_eq!(grant.grant_id, 1);
+                assert_eq!(grant.consumed_grant_id, 0);
+                signalled.push(grant.grant_id);
+            },
+        ),);
+        assert_eq!(current_grant_id, 1);
+
+        assert!(
+            runtime_rearm_delegated_continuation_after_miss_with_signal(
+                base,
+                command,
+                generation,
+                &mut current_grant_id,
+                |sequence| {
+                    let grant = read_runtime_continuation_grant_at(base)
+                        .expect("an unconsumed exact grant must remain durable");
+                    assert_eq!(grant.request_sequence, sequence);
+                    assert_eq!(grant.grant_id, 1);
+                    assert_eq!(grant.consumed_grant_id, 0);
+                    signalled.push(grant.grant_id);
+                },
+            ),
+            "an unconsumed exact grant is re-signalled without replacement",
+        );
+        assert_eq!(current_grant_id, 1);
+
+        assert!(acknowledge_runtime_continuation_grant_at(base, 1));
+        assert!(runtime_rearm_delegated_continuation_after_miss_with_signal(
+            base,
+            command,
+            generation,
+            &mut current_grant_id,
+            |sequence| {
+                let grant = read_runtime_continuation_grant_at(base)
+                    .expect("replacement grant must be sequence-last before its doorbell");
+                assert_eq!(grant.request_sequence, sequence);
+                assert_eq!(grant.grant_id, 2);
+                assert_eq!(grant.consumed_grant_id, 0);
+                signalled.push(grant.grant_id);
+            },
+        ),);
+        assert_eq!(current_grant_id, 2);
+        assert_eq!(signalled, vec![1, 1, 2]);
+
+        clear_runtime_continuation_grant_at(base);
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            command,
+            generation,
+            u32::MAX,
+        ));
+        assert!(acknowledge_runtime_continuation_grant_at(base, u32::MAX));
+        current_grant_id = u32::MAX;
+        let signal_count = signalled.len();
+        assert!(
+            !runtime_rearm_delegated_continuation_after_miss_with_signal(
+                base,
+                command,
+                generation,
+                &mut current_grant_id,
+                |_| signalled.push(0),
+            ),
+            "grant-ID exhaustion must fail closed without a doorbell",
+        );
+        assert_eq!(signalled.len(), signal_count);
+        assert_eq!(current_grant_id, u32::MAX);
+    }
+
+    #[test]
+    fn completion_during_grant_observation_suppresses_publish_and_signal() {
+        let intake = retained_gate_test_intake(0x8000_00c3);
+        let command = intake.command;
+        let generation = command.aux1;
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+        let mut current_grant_id = 1u32;
+
+        assert!(publish_runtime_continuation_grant_at(
+            base, command, generation, 1,
+        ));
+        assert!(acknowledge_runtime_continuation_grant_at(base, 1));
+        let consumed = read_runtime_continuation_grant_at(base).expect("consumed grant");
+        let late = DriverTaskCompletionRecord::progress(command.sequence, 9);
+        let mut probe_count = 0u32;
+        let mut signalled = Vec::new();
+
+        assert_eq!(
+            runtime_delegated_completion_miss_rearm_with_signal(
+                base,
+                command,
+                generation,
+                &mut current_grant_id,
+                || {
+                    probe_count = probe_count.saturating_add(1);
+                    if probe_count == 2 {
+                        Some(late)
+                    } else {
+                        None
+                    }
+                },
+                |sequence| signalled.push(sequence),
+            ),
+            RuntimeDelegatedCompletionMissOutcome::LateCompletion(late),
+        );
+        assert_eq!(probe_count, 2);
+        assert_eq!(current_grant_id, 1);
+        assert!(signalled.is_empty());
+        assert_eq!(
+            read_runtime_continuation_grant_at(base),
+            Some(consumed),
+            "a completion arriving during grant observation must suppress grant 2 publication",
+        );
+    }
+
+    #[test]
     fn continuation_grant_state_and_id_exhaustion_are_fail_closed() {
         let intake = retained_gate_test_intake(0x8000_0042);
         let command = intake.command;
@@ -54124,14 +54825,14 @@ mod tests {
     }
 
     #[test]
-    fn root_cyw43_256_poll_drain_spends_256_grants_and_outer_execute_turns() {
+    fn root_cyw43_256_poll_drain_spends_one_software_slice_per_exact_grant() {
         let generation = 0;
         let intake = root_retained_gate_test_intake(73, generation);
         let mut retained = intake;
         let mut gate = RuntimePendingCommandGate::new();
         let mut ring = test_continuation_grant_ring();
         let base = ring.0.as_mut_ptr() as usize;
-        let mut outer_turns = 0usize;
+        let mut software_slices = 0usize;
         let mut owner_quanta = 0usize;
 
         for grant_id in 1..=256u32 {
@@ -54143,41 +54844,54 @@ mod tests {
             ));
             gate.retain_after_pending_root_generation(generation);
 
-            let next_phase = runtime_retained_owner_phase_after_wake(
+            let quanta_before_admission = owner_quanta;
+            let advance = runtime_retained_owner_software_advance_after_wake(
                 &mut gate,
-                Some(&mut retained),
+                &mut retained,
                 RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+                base,
             );
-            outer_turns = outer_turns.saturating_add(1);
-            assert_eq!(next_phase, RuntimeRetainedOwnerPhase::CheckGrant);
-            gate.set_delegated_owner_phase(next_phase);
-
-            let probe = probe_runtime_retained_continuation_grant(&gate, Some(intake), base);
-            outer_turns = outer_turns.saturating_add(1);
-            let RuntimeRetainedGrantProbe::Ready(grant) = probe else {
+            software_slices = software_slices.saturating_add(1);
+            let RuntimeRetainedSoftwareAdvance::Execute(grant) = advance else {
                 panic!("grant {grant_id} was not admitted");
             };
             assert_eq!(grant.grant_id, grant_id);
-            gate.set_delegated_owner_phase(runtime_retained_owner_phase_after_grant(probe));
+            assert_eq!(
+                owner_quanta, quanta_before_admission,
+                "wake and exact-grant validation perform no physical action",
+            );
 
             assert_eq!(
                 runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
                 RuntimePendingWakeRoute::ContinueForeground,
             );
+            assert_eq!(
+                owner_quanta, quanta_before_admission,
+                "grant consumption alone performs no physical action",
+            );
             assert!(acknowledge_runtime_continuation_grant_at(
                 base,
                 grant.grant_id,
             ));
-            outer_turns = outer_turns.saturating_add(1);
+            let consumed =
+                read_runtime_continuation_grant_at(base).expect("acknowledged exact grant");
+            assert_eq!(
+                consumed.consumed_grant_id, grant.grant_id,
+                "the immutable grant ACK commits before the modeled owner action",
+            );
             owner_quanta = owner_quanta.saturating_add(1);
+            assert_eq!(
+                owner_quanta.saturating_sub(quanta_before_admission),
+                1,
+                "one software slice releases at most one physical owner quantum",
+            );
             assert_eq!(gate.last_grant_id, grant_id);
         }
 
         assert_eq!(owner_quanta, 256, "256 polls require 256 exact grants");
         assert_eq!(
-            outer_turns,
-            256 * 3,
-            "wake, stable-grant poll, and owner execution remain separate outer turns",
+            software_slices, 256,
+            "wake, stable-grant validation, ACK, and one owner quantum share one bounded slice",
         );
     }
 
@@ -54461,23 +55175,38 @@ mod tests {
     }
 
     #[test]
-    fn ready_grant_without_saved_edge_preserves_observed_older_irq_order() {
+    fn late_card_interrupt_wins_without_consuming_the_frozen_exact_grant() {
         let intake = retained_gate_test_intake(0x8000_0042);
         let generation = intake.command.aux1;
-        let grant = retained_gate_test_grant(intake, generation, 1);
+        let mut ring = test_continuation_grant_ring();
+        let base = ring.0.as_mut_ptr() as usize;
+        assert!(publish_runtime_continuation_grant_at(
+            base,
+            intake.command,
+            generation,
+            1,
+        ));
+        let grant = read_runtime_continuation_grant_at(base).expect("exact owner grant");
         let mut retained = intake;
         let mut gate = RuntimePendingCommandGate::new();
         gate.retain_after_pending_generation(generation);
-        gate.deferred_service_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
         assert!(!gate.has_deferred_delegated_wake());
+        let mut service_quanta = 0usize;
+        let mut foreground_quanta = 0usize;
 
-        // CheckGrant freezes the exact authority on one outer turn. Execute
-        // then discovers the already-observed CARD_INT and schedules it
-        // without consuming the grant or performing foreground I/O.
-        let execute_phase =
-            runtime_retained_owner_phase_after_grant(RuntimeRetainedGrantProbe::Ready(grant));
-        assert_eq!(execute_phase, RuntimeRetainedOwnerPhase::Execute(grant),);
-        gate.set_delegated_owner_phase(execute_phase);
+        // The combined wake sample sees no CARD_INT and freezes the exact
+        // immutable grant. Model CARD_INT arriving immediately after that
+        // linearization point but before grant consumption.
+        assert_eq!(
+            runtime_retained_owner_software_advance_after_wake(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::Notification(DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE),
+                base,
+            ),
+            RuntimeRetainedSoftwareAdvance::Execute(grant),
+        );
+        gate.deferred_service_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
         assert_eq!(
             runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
             RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
@@ -54485,20 +55214,36 @@ mod tests {
         assert_eq!(gate.last_grant_id, 0, "IRQ cannot spend owner authority");
         assert!(gate.continuation_required());
         assert!(gate.foreground_due_after_service);
+        let stable = read_runtime_continuation_grant_at(base).expect("grant remains stable");
+        assert_eq!(stable.consumed_grant_id, 0);
+        service_quanta = service_quanta.saturating_add(1);
+        assert_eq!(foreground_quanta, 0);
 
-        // After exactly one service turn, the same still-unconsumed grant is
-        // re-read and admitted on a distinct Execute turn.
+        // After exactly one service slice, the same still-unconsumed grant is
+        // re-read, acknowledged, and releases one later foreground quantum.
         gate.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::CheckGrant);
-        let execute_phase =
-            runtime_retained_owner_phase_after_grant(RuntimeRetainedGrantProbe::Ready(grant));
-        assert_eq!(execute_phase, RuntimeRetainedOwnerPhase::Execute(grant),);
-        gate.set_delegated_owner_phase(execute_phase);
+        assert_eq!(
+            runtime_retained_owner_software_advance_after_wake(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::None,
+                base,
+            ),
+            RuntimeRetainedSoftwareAdvance::Execute(grant),
+        );
         assert_eq!(
             runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
             RuntimePendingWakeRoute::ContinueForeground,
         );
+        assert!(acknowledge_runtime_continuation_grant_at(
+            base,
+            grant.grant_id,
+        ));
+        foreground_quanta = foreground_quanta.saturating_add(1);
         assert_eq!(gate.last_grant_id, 1);
         assert!(!gate.continuation_required());
+        assert_eq!(service_quanta, 1);
+        assert_eq!(foreground_quanta, 1);
     }
 
     #[test]
@@ -54570,9 +55315,10 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous() {
+    fn reciprocal_sdio_child_miss_rearms_owner_in_the_same_parent_slice() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_5301;
         let desc = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_CARD_COMMAND,
             response_kind: DRIVER_RUNTIME_SDIO_RESP_OCR,
@@ -54581,13 +55327,15 @@ mod tests {
             timeout_us: 100_000,
             ..DriverRuntimeSdioCommandDescriptor::empty()
         };
-        let command = stage_sdio_descriptor_service_command(0x8000_5d01, desc);
+        let mut command = stage_sdio_descriptor_service_command(0x8000_5d01, desc);
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        command.aux1 = generation;
         let mut io = TestSdioHostIo::new();
         io.command_status = SDHCI_INT_RESPONSE;
         io.command_response = 0x80ff_8000;
         let parent = retained_gate_test_intake(0x8000_0042).command;
         let mut transaction = Cyw43ForegroundTransaction::new();
-        transaction.generation = 0x4359_5301;
+        transaction.generation = generation;
         assert!(transaction.begin_turn(parent, 1));
         transaction.prepared_sequence = command.sequence;
         transaction.prepared_descriptor = desc;
@@ -54597,6 +55345,8 @@ mod tests {
         let entry = transaction.frontier;
         assert!(transaction.frontier_ticket_valid());
         let mut ring = TestReciprocalRecordRing;
+        let mut grant_ring = test_continuation_grant_ring();
+        let grant_base = grant_ring.0.as_mut_ptr() as usize;
 
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
@@ -54646,21 +55396,37 @@ mod tests {
             Cyw43SdioChildState::new(command.sequence).completion(first, second),
             Cyw43SdioChildCompletion::Waiting,
         );
-        transaction.retain_frontier_wait(1, true);
-        assert!(transaction.turn.action_consumed);
-        assert!(transaction.turn.pending);
-        assert!(transaction.frontier_continuation_grant_required);
-        assert_eq!(transaction.frontier_grant_id, 1);
-        assert_eq!(io.command_issue_count(), 0);
-
-        assert!(transaction.begin_turn(parent, 3));
-        transaction.retain_frontier_grant(1);
+        let mut signals = 0usize;
+        assert!(runtime_rearm_delegated_continuation_after_miss_with_signal(
+            grant_base,
+            command,
+            generation,
+            &mut transaction.frontier_grant_id,
+            |sequence| {
+                let grant = read_runtime_continuation_grant_at(grant_base)
+                    .expect("grant must be sequence-last before the wake");
+                assert_eq!(grant.grant_id, 1);
+                assert_eq!(grant.request_sequence, sequence);
+                signals = signals.saturating_add(1);
+            },
+        ),);
+        transaction.retain_frontier_rearmed(transaction.frontier_grant_id);
         assert!(transaction.turn.action_consumed);
         assert!(transaction.turn.pending);
         assert!(!transaction.frontier_continuation_grant_required);
-        // The reciprocal owner executes the descriptor/controller seam only
-        // after the retained grant turn; it is not folded into CYW43's submit
-        // or completion-poll quantum.
+        assert_eq!(transaction.frontier_grant_id, 1);
+        assert_eq!(signals, 1);
+        assert_eq!(io.command_issue_count(), 0);
+
+        let grant = read_runtime_continuation_grant_at(grant_base)
+            .expect("same-slice rearm publishes exact owner authority");
+        assert!(acknowledge_runtime_continuation_grant_at(
+            grant_base,
+            grant.grant_id,
+        ));
+        // The reciprocal owner executes only after consuming that exact grant;
+        // producer rearm remains software-only and never folds controller I/O
+        // into the parent completion-poll slice.
         let owner_completion = service_sdio_descriptor_command_with_io(owner_command, &mut io);
         assert_eq!(io.command_issue_count(), 1);
         assert_eq!(
@@ -54677,7 +55443,7 @@ mod tests {
             owner_completion.sequence,
         ));
 
-        assert!(transaction.begin_turn(parent, 4));
+        assert!(transaction.begin_turn(parent, 3));
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
@@ -55812,7 +56578,7 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns() {
+    fn reciprocal_multiphase_child_rearms_on_miss_without_a_grant_only_turn() {
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Submit,
@@ -55829,18 +56595,18 @@ mod tests {
         );
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, true, true, true, true, false, false),
-            Cyw43ForegroundFrontierRoute::Defer,
-            "a missed poll cannot publish a continuation in the same turn",
+            Cyw43ForegroundFrontierRoute::Poison,
+            "persisted deferred-grant state has no production fallback",
         );
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, true, true, false, true, false, false),
-            Cyw43ForegroundFrontierRoute::Grant,
-            "a later parent turn publishes and signals one exact continuation",
+            Cyw43ForegroundFrontierRoute::Poison,
+            "a grant-only outer turn is forbidden",
         );
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
-            "the grant turn cannot also poll the owner completion",
+            "the miss/rearm slice cannot poll the owner completion twice",
         );
         assert_eq!(
             cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
@@ -71305,16 +72071,12 @@ mod tests {
             if owner_started {
                 assert!(
                     cyw43_runtime_service_dpc_event(),
-                    "one DPC poll turn must retain the exact owner child",
+                    "one DPC poll turn must retain and rearm the exact owner child",
                 );
                 CYW43_RUNTIME_STATE.with_ref(|state| {
                     assert!(state.dpc_cursor.child.active);
-                    assert!(state.dpc_cursor.child.continuation_grant_required);
+                    assert!(!state.dpc_cursor.child.continuation_grant_required);
                 });
-                assert!(
-                    cyw43_runtime_service_dpc_event(),
-                    "one later DPC turn publishes the exact continuation grant",
-                );
                 let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
                     .filter(|grant| {
                         grant.grant_id != 0
@@ -71325,7 +72087,7 @@ mod tests {
                                 == runtime_continuation_action_fingerprint(command)
                             && grant.generation == generation
                     })
-                    .expect("DPC publishes a fresh exact owner grant");
+                    .expect("the completion-miss DPC slice publishes a fresh exact owner grant");
                 assert!(acknowledge_runtime_continuation_grant_at(
                     DRIVER_TASK_SDIO_BUS_RING_VADDR,
                     grant.grant_id,
@@ -72031,9 +72793,8 @@ mod tests {
         );
         gate.retain_after_pending_generation(generation);
 
-        // CYW43 completion miss and grant publication consume separate parent
-        // turns. Consume their coalesced badge and retain no edge.
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        // The CYW43 completion miss publishes and signals the exact grant in
+        // the same parent slice. Consume its coalesced badge and retain no edge.
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
             .expect("HOST_CONFIG parent publishes an exact retained grant");
@@ -72041,23 +72802,17 @@ mod tests {
         assert_eq!(grant.generation, generation);
         assert!(!gate.has_deferred_delegated_wake());
 
-        // CheckWake, CheckGrant, and Execute are three distinct outer turns.
-        let next_phase = runtime_retained_owner_phase_after_wake(
-            &mut gate,
-            Some(&mut retained),
-            RuntimeWake::None,
+        // Wake sampling and exact-grant validation collapse into this one
+        // software slice; the grant ACK still precedes the one physical action.
+        assert_eq!(
+            runtime_retained_owner_software_advance_after_wake(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::None,
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            ),
+            RuntimeRetainedSoftwareAdvance::Execute(grant),
         );
-        assert_eq!(next_phase, RuntimeRetainedOwnerPhase::CheckGrant);
-        gate.set_delegated_owner_phase(next_phase);
-        let probe = probe_runtime_retained_continuation_grant(
-            &gate,
-            Some(intake),
-            DRIVER_TASK_SDIO_BUS_RING_VADDR,
-        );
-        assert_eq!(probe, RuntimeRetainedGrantProbe::Ready(grant));
-        let next_phase = runtime_retained_owner_phase_after_grant(probe);
-        assert_eq!(next_phase, RuntimeRetainedOwnerPhase::Execute(grant),);
-        gate.set_delegated_owner_phase(next_phase);
         assert_eq!(
             runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
             RuntimePendingWakeRoute::ContinueForeground,
@@ -72174,14 +72929,8 @@ mod tests {
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         assert_eq!(
             test_sdio_owner_doorbell(1),
-            None,
-            "a completion miss consumes its turn without also publishing a grant",
-        );
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
-        assert_eq!(
-            test_sdio_owner_doorbell(1),
             Some(expected_doorbell),
-            "the following outer turn re-signals the exact immutable child",
+            "the completion-miss slice publishes and signals exact authority",
         );
         assert_eq!(test_sdio_owner_doorbell(2), None);
         let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
@@ -72277,12 +73026,10 @@ mod tests {
         let expected_doorbell = runtime_sdio_owner_doorbell(child.sequence);
         assert_eq!(test_sdio_owner_doorbell(0), Some(expected_doorbell));
 
-        // Adversarial production ordering: CYW43 gets two outer turns before
-        // SDIO is scheduled. It first observes the missing completion, then
-        // publishes grant 1 and sends the same badge again. seL4 coalesces both
-        // signals into one pending bit.
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
-        assert_eq!(test_sdio_owner_doorbell(1), None);
+        // Adversarial production ordering: CYW43 observes the missing
+        // completion before SDIO is scheduled, publishes grant 1 in that same
+        // slice, and sends the same badge again. seL4 coalesces both signals
+        // into one pending bit.
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         assert_eq!(test_sdio_owner_doorbell(1), Some(expected_doorbell));
         assert_eq!(test_sdio_owner_doorbell(2), None);
@@ -72331,26 +73078,18 @@ mod tests {
             RuntimeRetainedOwnerPhase::CheckWake,
         );
 
-        // Run the same poll-only CheckWake transition used by runtime_main
-        // with no kernel-latched source, followed by the separately scheduled
-        // exact-grant read.
-        let next_phase = runtime_retained_owner_phase_after_wake(
-            &mut gate,
-            Some(&mut retained),
-            RuntimeWake::None,
-        );
-        assert_eq!(next_phase, RuntimeRetainedOwnerPhase::CheckGrant);
-        gate.set_delegated_owner_phase(next_phase);
-        let probe = probe_runtime_retained_continuation_grant(
-            &gate,
-            Some(intake),
-            DRIVER_TASK_SDIO_BUS_RING_VADDR,
-        );
-        assert_eq!(probe, RuntimeRetainedGrantProbe::Ready(grant));
-        let next_phase = runtime_retained_owner_phase_after_grant(probe);
-        assert_eq!(next_phase, RuntimeRetainedOwnerPhase::Execute(grant),);
-        gate.set_delegated_owner_phase(next_phase);
+        // The empty combined poll and exact-grant validation are software-only
+        // phases of one child slice.
         let gate_before_grant = gate;
+        assert_eq!(
+            runtime_retained_owner_software_advance_after_wake(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::None,
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            ),
+            RuntimeRetainedSoftwareAdvance::Execute(grant),
+        );
         assert_eq!(
             runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
             RuntimePendingWakeRoute::ContinueForeground,
@@ -72372,15 +73111,15 @@ mod tests {
             !gate.has_deferred_delegated_wake(),
             "ack rollback cannot manufacture notification authority",
         );
-        let retry_probe = probe_runtime_retained_continuation_grant(
-            &gate,
-            Some(intake),
-            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+        assert_eq!(
+            runtime_retained_owner_software_advance_after_wake(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::None,
+                DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            ),
+            RuntimeRetainedSoftwareAdvance::Execute(grant),
         );
-        assert_eq!(retry_probe, RuntimeRetainedGrantProbe::Ready(grant));
-        let retry_phase = runtime_retained_owner_phase_after_grant(retry_probe);
-        assert_eq!(retry_phase, RuntimeRetainedOwnerPhase::Execute(grant),);
-        gate.set_delegated_owner_phase(retry_phase);
         assert_eq!(
             runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
             RuntimePendingWakeRoute::ContinueForeground,
@@ -72432,7 +73171,7 @@ mod tests {
     }
 
     #[test]
-    fn completion_between_poll_and_resignal_never_reissues_owner_action() {
+    fn completion_after_same_slice_rearm_never_reissues_owner_action() {
         let _guard = test_guard();
         let generation = 0x4359_f181;
         initialize_production_foreground_pair(generation);
@@ -72467,13 +73206,25 @@ mod tests {
 
         assert!(transaction.begin_turn(parent, 2));
         assert_eq!(cyw43_foreground_poll_frontier(&mut transaction), None);
-        assert!(transaction.frontier_continuation_grant_required);
-        assert_eq!(test_sdio_owner_doorbell(1), None);
+        assert!(!transaction.frontier_continuation_grant_required);
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            Some(runtime_sdio_owner_doorbell(child.sequence)),
+            "the completion-miss slice publishes its grant before signalling",
+        );
 
         let owner_ring =
             RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
         let owner_command = runtime_ring_read_command_stable(&owner_ring)
-            .expect("owner observes the durable child before the planned re-signal");
+            .expect("owner observes the durable child after the same-slice rearm");
+        let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+            .expect("same-slice rearm publishes exact owner authority");
+        assert_eq!(grant.request_sequence, child.sequence);
+        assert_eq!(grant.generation, generation);
+        assert!(acknowledge_runtime_continuation_grant_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            grant.grant_id,
+        ));
         let mut io = TestSdioHostIo::new();
         io.use_sdio_owner_payload = true;
         io.command_status = SDHCI_INT_RESPONSE;
@@ -72500,15 +73251,6 @@ mod tests {
         ));
 
         assert!(transaction.begin_turn(parent, 3));
-        assert!(cyw43_foreground_grant_frontier(&mut transaction));
-        assert_eq!(
-            test_sdio_owner_doorbell(1),
-            Some(runtime_sdio_owner_doorbell(child.sequence)),
-            "the already-planned re-signal is a harmless coalescing edge",
-        );
-        assert_eq!(io.command_issue_count(), 1);
-
-        assert!(transaction.begin_turn(parent, 4));
         assert_eq!(
             cyw43_foreground_poll_frontier(&mut transaction),
             Some(completion),
@@ -73891,67 +74633,30 @@ mod tests {
             assert!(!original_watermark.includes(1));
 
             let production_mode = ProductionForegroundModeGuard::enter();
-            assert_eq!(
-                service_command_turn(0, parent),
-                RuntimeCommandTurn::Pending,
-                "queue-empty hintless op{op} retains its source-probe cursor first",
-            );
-            CYW43_RUNTIME_STATE.with_ref(|state| {
-                assert_eq!(state.prompt_poll.phase, Cyw43PromptPollPhase::SourceProbe);
-                assert_eq!(state.prompt_poll.parent_sequence, parent_sequence);
-                assert_eq!(state.prompt_poll.generation, generation);
-                assert_eq!(state.prompt_poll.descriptor.op, op);
-            });
-            assert!(!cyw43_foreground_transaction_active());
-
-            let intake = RuntimeCommandIntake {
-                command: parent,
-                reply_cap_available: false,
-            };
-            let mut retained = intake;
-            let mut gate = RuntimePendingCommandGate::new();
-            let mut grant_ring = test_continuation_grant_ring();
-            let grant_base = grant_ring.0.as_mut_ptr() as usize;
-            assert!(publish_runtime_continuation_grant_at(
-                grant_base, parent, generation, 1,
-            ));
-            gate.retain_after_pending_root_generation(generation);
-            let next_phase = runtime_retained_owner_phase_after_wake(
-                &mut gate,
-                Some(&mut retained),
-                RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
-            );
-            assert_eq!(next_phase, RuntimeRetainedOwnerPhase::CheckGrant);
-            gate.set_delegated_owner_phase(next_phase);
-            let probe = probe_runtime_retained_continuation_grant(&gate, Some(intake), grant_base);
-            let RuntimeRetainedGrantProbe::Ready(grant) = probe else {
-                panic!("op{op} root continuation grant was not ready");
-            };
-            gate.set_delegated_owner_phase(runtime_retained_owner_phase_after_grant(probe));
-            assert_eq!(
-                runtime_retained_owner_prepare_execute(&mut gate, &mut retained, grant),
-                RuntimePendingWakeRoute::ContinueForeground,
-            );
-            assert!(acknowledge_runtime_continuation_grant_at(
-                grant_base,
-                grant.grant_id,
-            ));
             let turn_before = CYW43_FOREGROUND_TURN_ID.load(Ordering::Acquire);
             assert_eq!(
                 service_command_turn(0, parent),
                 RuntimeCommandTurn::Pending,
-                "the exact acknowledged root grant admits one SourceProbe turn",
+                "queue-empty hintless op{op} advances Queue and submits one source-probe child",
             );
+            CYW43_RUNTIME_STATE.with_ref(|state| {
+                assert_eq!(
+                    state.prompt_poll.phase,
+                    Cyw43PromptPollPhase::Idle,
+                    "the retained foreground baseline stays immutable while its exact child is active",
+                );
+            });
             assert_eq!(
                 CYW43_FOREGROUND_TURN_ID.load(Ordering::Acquire),
                 turn_before + 1,
-                "one root grant cannot collapse two foreground actions",
+                "Queue-to-SourceProbe collapse still consumes one foreground slice",
             );
+            assert!(cyw43_foreground_transaction_active());
             let owner_ring =
                 RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
             let probe_child = runtime_ring_read_command_stable(&owner_ring)
                 .filter(|command| command.sequence != 0)
-                .expect("the admitted SourceProbe turn publishes exactly one SDIO child");
+                .expect("initial prompt admission publishes exactly one SDIO child");
             let probe_descriptor =
                 sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
                     .expect("hintless poll publishes one stable source-probe descriptor");
@@ -74169,25 +74874,13 @@ mod tests {
         assert_eq!(
             service_command_turn(0, parent),
             RuntimeCommandTurn::Pending,
-            "fresh hintless op10 retains the queue-empty source-probe cursor",
+            "fresh hintless op10 advances Queue and submits its source-probe child",
         );
         root_gate.retain_after_pending_root_generation(generation);
         CYW43_RUNTIME_STATE.with_ref(|state| {
-            assert_eq!(state.prompt_poll.phase, Cyw43PromptPollPhase::SourceProbe);
+            assert_eq!(state.prompt_poll.phase, Cyw43PromptPollPhase::Idle);
             assert!(!state.recovery_required);
         });
-
-        assert_eq!(
-            service_production_root_granted_parent_turn(
-                &mut root_gate,
-                &mut retained,
-                generation,
-                next_root_grant_id,
-            ),
-            RuntimeCommandTurn::Pending,
-            "the first exact root grant publishes one forced source-probe child",
-        );
-        next_root_grant_id = next_root_grant_id.wrapping_add(1);
         let mut owner_ring =
             RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
         let probe_child = runtime_ring_read_command_stable(&owner_ring)
@@ -74500,7 +75193,10 @@ mod tests {
         let owner_before = runtime_ring_read_command_stable(&owner_ring);
         let production_mode = ProductionForegroundModeGuard::enter();
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending,);
-        assert!(!cyw43_foreground_transaction_active());
+        assert!(
+            cyw43_foreground_transaction_active(),
+            "Queue-to-SourceProbe collapse retains the exact child on initial admission",
+        );
 
         stage_cyw43_descriptor(DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
@@ -74512,12 +75208,16 @@ mod tests {
             RuntimeCommandTurn::Pending,
             "the retained prompt cursor, not DPC-reused scratch, owns continuation identity",
         );
-        CYW43_RUNTIME_STATE.with_ref(|state| {
-            assert_eq!(state.prompt_poll.parent_sequence, parent_sequence);
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert_eq!(transaction.parent.sequence, parent_sequence);
+            assert!(transaction.parent_descriptor_valid);
             assert_eq!(
-                state.prompt_poll.descriptor.op,
+                transaction.parent_descriptor.op,
                 DRIVER_RUNTIME_CYW43_OP_CONTROL_POLL,
             );
+        });
+        CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(!state.recovery_required);
         });
         assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
@@ -74546,6 +75246,15 @@ mod tests {
             service_command_turn(0, stale_parent),
             RuntimeCommandTurn::Pending,
         );
+        let stale_owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("hintless source probe binds SDIO owner");
+        let stale_child = runtime_ring_read_command_stable(&stale_owner_ring)
+            .filter(|command| command.sequence != 0)
+            .expect("initial hintless admission publishes one exact source-probe child");
+        let stale_descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("source-probe descriptor remains sequence-last visible");
+        let stale_result =
+            cyw43_sdio_bus_link_command_result_from_descriptor(stale_child, stale_descriptor);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             state.dpc_shared_epoch = replacement_generation;
             state.tx_frames = 77;
@@ -74556,7 +75265,10 @@ mod tests {
         assert_eq!(stale.sequence, stale_parent.sequence);
         assert_eq!(stale.code, COMPLETION_FAULT);
         assert_eq!(stale.detail, FAULT_CYW43_TRANSPORT_BUS_LINK);
-        assert_eq!(stale.result, old_generation);
+        assert_eq!(
+            stale.result, stale_result,
+            "a replaced generation reports the exact abandoned child action",
+        );
         assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert_eq!(state.dpc_shared_epoch, replacement_generation);
@@ -74601,7 +75313,6 @@ mod tests {
         });
         let parent = cyw43_descriptor_command(parent_sequence);
         let production_mode = ProductionForegroundModeGuard::enter();
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let child = drive_production_parent_until_first_child(parent);
         let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
             .expect("prompt poll publishes one immutable source-probe descriptor");
@@ -74730,7 +75441,12 @@ mod tests {
             transaction.frontier_timeout_cycles = 0;
             transaction.frontier_polls = CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS as u32 - 1;
         });
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        for _ in 0..3 {
+            assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+            if CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire) {
+                break;
+            }
+        }
         assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         assert!(CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
         assert_eq!(
@@ -75892,10 +76608,8 @@ mod tests {
         assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
 
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
-        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let exact = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-            .expect("parent publishes the exact retained-owner continuation grant");
+            .expect("the completion-miss slice publishes exact retained-owner authority");
         assert_eq!(exact.request_sequence, child.sequence);
         assert_eq!(
             exact.action_fingerprint,
@@ -76124,7 +76838,6 @@ mod tests {
             };
 
             clear_runtime_continuation_grant_at(grant_base);
-            let mut child_grant_id = 0u32;
             let completion = loop {
                 let issues_before = io.command_issue_count();
                 let snapshots_before = io.dma_dreq_snapshots;
@@ -76185,44 +76898,25 @@ mod tests {
                             Cyw43SdioChildState::new(sequence).completion(first, second),
                             Cyw43SdioChildCompletion::Waiting,
                         );
-                        child_grant_id = child_grant_id.saturating_add(1);
-                        transaction.retain_frontier_wait(child_grant_id, true);
-
-                        begin_parent_turn_with_cached_prefix(
-                            &mut transaction,
-                            parent,
-                            &mut turn_id,
-                        );
-                        parent_turns = parent_turns.saturating_add(1);
-                        prepare_foreground_entry(&mut transaction, entry);
-                        assert_eq!(
-                            cyw43_foreground_frontier_route(
-                                transaction.turn.replay_index,
-                                transaction.turn.completed_count,
-                                transaction.frontier_valid,
-                                transaction.frontier_submitted,
-                                transaction.frontier_continuation_grant_required,
-                                transaction.turn.action_consumed,
-                                cyw43_foreground_prepared_matches(&transaction, entry, command,),
-                                transaction.poisoned,
-                                transaction.issued_unknown,
+                        assert!(
+                            runtime_rearm_delegated_continuation_after_miss_with_signal(
+                                grant_base,
+                                owner_command,
+                                generation,
+                                &mut transaction.frontier_grant_id,
+                                |_| {},
                             ),
-                            Cyw43ForegroundFrontierRoute::Grant,
+                            "the completion-miss slice must publish or re-signal exact authority",
                         );
-                        assert!(publish_runtime_continuation_grant_at(
-                            grant_base,
-                            owner_command,
-                            generation,
-                            child_grant_id,
-                        ));
+                        transaction.retain_frontier_rearmed(transaction.frontier_grant_id);
                         let grant = read_runtime_continuation_grant_at(grant_base)
                             .expect("exact continuation grant must publish sequence-last");
-                        assert_eq!(grant.grant_id, child_grant_id);
+                        assert_eq!(grant.grant_id, transaction.frontier_grant_id);
                         assert_eq!(grant.request_sequence, sequence);
-                        transaction.retain_frontier_grant(child_grant_id);
+                        assert!(!transaction.frontier_continuation_grant_required);
                         assert!(acknowledge_runtime_continuation_grant_at(
                             grant_base,
-                            child_grant_id,
+                            transaction.frontier_grant_id,
                         ));
                     }
                 }
@@ -76291,8 +76985,8 @@ mod tests {
         assert_eq!(owner_turns, pending_owner_turns + COMMANDS.len());
         assert_eq!(
             parent_turns,
-            COMMANDS.len() * 2 + pending_owner_turns * 2,
-            "every owner continuation requires one parent poll and one fresh grant",
+            COMMANDS.len() * 2 + pending_owner_turns,
+            "every owner continuation rearm shares its parent completion-poll slice",
         );
         assert_eq!(io.command_issue_count(), COMMANDS.len());
         assert_eq!(io.dma_started, 1);

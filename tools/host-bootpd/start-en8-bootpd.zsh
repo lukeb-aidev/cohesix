@@ -10,13 +10,16 @@ readonly service_name="AX88179B"
 readonly script_dir="${0:A:h}"
 readonly repo_root="${script_dir:h:h}"
 readonly config="${repo_root}/tools/host-bootpd/bootpd.plist"
-readonly log_file="${repo_root}/out/host-bootpd/bootpd-supervisor.log"
-readonly pid_file="${repo_root}/out/host-bootpd/bootpd-supervisor.pid"
-
-mkdir -p "${repo_root}/out/host-bootpd"
-print "$$" > "${pid_file}"
+readonly runtime_dir="${repo_root}/out/host-bootpd"
+readonly log_file="${runtime_dir}/bootpd-supervisor.log"
+readonly pid_file="${runtime_dir}/bootpd-supervisor.pid"
 
 last_state=""
+
+ensure_runtime_dir() {
+	mkdir -p "${runtime_dir}"
+	print "$$" > "${pid_file}"
+}
 
 log() {
 	local now
@@ -35,6 +38,7 @@ interface_ready() {
 }
 
 while true; do
+	ensure_runtime_dir
 	configure_service
 	if interface_ready; then
 		if [[ "${last_state}" != "ready" ]]; then
