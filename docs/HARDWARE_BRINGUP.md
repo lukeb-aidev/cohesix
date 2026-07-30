@@ -748,15 +748,15 @@ second begun epoch before the first boot terminal, a missing lifetime record,
 or a generic engine-replay failure that discarded the owner's detail/result
 fails the single-lifetime proof.
 
-That numeric owner record is proof, not cold-publication authority. Successful
+That numeric owner record is proof, not publication authority. Successful
 completion of the typed initial-physical-lifetime pair transaction separately
-mints a one-shot cold provenance token. A pre-handoff recovery can produce the
-same numeric pair/lifetime epoch and replay state, so those values can never
-reconstruct the token. Every recovery request, pair-transaction failure,
-unfinished cursor drop, and replay terminal revokes it. The token may be
-used only during that owned initial replay and only after each publication's
-ABI-invisible sequence-zero stage, authorizing the following software-only
-operation's commit, exact grant, `Issued`, and signal-last publication.
+records cold provenance through its owned replay. A pre-handoff recovery can
+produce the same numeric pair/lifetime epoch and replay state, so none of those
+values may select a faster publisher. Every recovery request,
+pair-transaction failure, unfinished cursor drop, and replay terminal clears
+the provenance. Cold, recovery, and steady parents all use the same
+phase-separated `Stage -> CommitRing -> PublishGrant -> NotifyRing ->
+PollRing` lane.
 
 The matching completed epoch is the supervisor's
 `physical_lifetime_epoch`. It must remain current through Gate 8 acceptance and
@@ -1061,25 +1061,17 @@ one pair-epoch-bound scheduling lease. HAL reserves both scheduling envelopes,
 then boosts SDIO and CYW43 exactly once before the first parent is admitted.
 Each exact current-generation root-to-CYW43 parent reuses that lease while
 retaining its own immutable sequence-zero prepare, nonzero issue commit, grant,
-notification, and completion state. When that exact lease is already `Open`,
-HAL performs prepare, sequence-last commit, exact grant publication, `Issued`,
-and reserved-badge signal in one ordered administrative service turn, with
-signal last and issued-unknown state latched before commit. It therefore
-collapses four root administration turns to one without issuing a physical SDIO
-  action. The existing fresh cold-bootstrap priority-`255` lifetime preserves
-  its separate ABI-invisible prepare turn, then combines commit, grant,
-  `Issued`, and signal last on the next turn only while the one-shot provenance
-  token minted by successful completion of the typed initial-physical-lifetime
-  pair transaction remains live for that owned initial replay. Both runtimes
-  must remain in
-  `Bootstrap`, and the Network lease and reservations must be empty. Numeric
-  pair/lifetime epoch or replay state is never sufficient, and every recovery
-  request, failure, unfinished cursor, or replay terminal revokes the token. It
-  collapses four cold root administration turns to two without adding another
-  lease. Nonmatching, closing, stale, and recovery publications fail closed
-  rather than acquiring the cold lane. GENET cannot enter or inspect either
-  CYW43-only path. Each later owner turn still admits at most one CYW43/SDIO
-  child physical operation.
+notification, and completion state. Every parent uses a separate
+sequence-zero prepare turn, sequence-last `CommitRing` turn, exact
+`PublishGrant` turn, signal-last `NotifyRing` turn, and `PollRing` turn.
+Cold-bootstrap priority `255`, recovery, and an already `Open` steady Network
+lease differ only in scheduling context; they do not select different
+publication protocols. Issued-unknown state is latched before commit, retained
+state reaches `Issued` before signal, and no administrative phase performs a
+physical SDIO action. Nonmatching, closing, stale, recovery-torn, and GENET
+requests fail closed rather than acquiring another lane. Each later owner turn
+still admits at most one CYW43/SDIO
+child physical operation.
 
 Ending the quantum first closes admission to fresh pair parents. If one exact
 CYW43 parent is already `Prepared` or `Issued`, only that parent may drain;
@@ -1094,23 +1086,19 @@ inspect this lease and its service rotation is unchanged.
 
 Every root-to-CYW43 descriptor, including generation zero, uses the shared
 continuation record and the reserved root badge on CYW43's bound notification.
-For an exact already-open steady lease, grant publication and notification
-signalling complete in the same ordered administrative turn as ring commit;
-the exact fresh cold lifetime performs that final publication after its
-separate staging turn. The exact grant binds the immutable command, request,
-and logical connection generation; CYW43 acknowledges it before one
-  continuation quantum. On a stable completion miss, that same software-only
-  HAL operation publishes the monotonic replacement after exact
-  acknowledgement or re-signals the exact unconsumed grant, keeps `Issued`
-  durable, and signals last. A matching late completion suppresses both
-  publication and signal. A consumer acknowledgement observed between stable
-  grant snapshots is legal only as `consumed_grant_id: 0 -> current` and must
-  remain current on one bounded confirmation read; reverse, skipped, foreign,
-  or body-mutated observations fail closed. The intentional initial split lane
-  alone may persist `GrantRequired(id=0)` and then `Granted(id=1)`; recurrent
-  `GrantRequired`, nonzero-id `GrantRequired`, or non-initial `Granted` is
-  invalid and enters issued-unknown pair recovery rather than a later
-  grant-only operation. The notification can coalesce or arrive before intake
+The exact grant binds the immutable command, request, and logical connection
+generation; CYW43 acknowledges it before one continuation quantum. A stable
+completion miss performs no publication or signal. It records `Granted` for an
+exact unconsumed grant or `GrantRequired` after exact acknowledgement. A later
+producer turn publishes a monotonic replacement when required, and the
+following notify turn marks `Issued` before signalling. A matching completion
+wins before either later authority transition. If the runtime acknowledges the
+exact grant between poll and notify, the notify turn advances to `Issued`
+without another signal and the next turn polls completion. A consumer acknowledgement
+observed between stable grant snapshots is legal only as
+`consumed_grant_id: 0 -> current` and must remain current on one bounded
+confirmation read; reverse, skipped, foreign, or body-mutated observations fail
+closed. The notification can coalesce or arrive before intake
   because it is only a scheduling hint; the durable grant is rechecked before
   quiescence. Endpoint delivery is rejected for this lane.
 Other retained runtimes keep their endpoint rendezvous. No completion is
@@ -1143,21 +1131,19 @@ states fail closed.
 The SDIO owner validates the delegated command against its independently
 retained generation before executing the first action, binds that generation at
 the first `Pending`, and irrevocably acknowledges exactly one exact grant before
-  spending its continuation quantum. On a stable completion miss, the same
-  software-only producer operation publishes the exact acknowledged replacement
-  or re-signals the exact unconsumed grant, with durable bytes committed before
-  signal. A matching late completion suppresses both. Foreground and DPC-owned
-  children use the same rule; there is no intervening grant-only producer turn.
-  A notification by itself cannot advance either cursor, and a coalesced or
-  already-consumed edge cannot be required after an exact grant becomes durable.
-  Every delegated `Pending` phase retains one bounded software-admission slice.
-  `CheckWake` performs one nonblocking combined poll, a stable shared-record
-  check freezes the exact unused grant, acknowledgement irrevocably consumes it,
-  and `Execute` may run one owner operation in that same scheduler slice. `Wait`
-  performs one blocking receive only when no usable grant exists. The collapsed
-  bookkeeping cannot add a second physical action: before `Execute` it is
-  software-only, and `Execute` consumes at most one exact grant and admits at
-  most one physical owner action.
+spending its continuation quantum. On a stable completion miss, the producer
+only records whether its next explicit `Grant` turn must publish the
+acknowledged replacement or re-signal the exact unconsumed grant. That later
+turn commits durable cursor/grant state before signal, and a later `Poll` turn
+observes completion. Foreground and DPC-owned children use the same
+`Poll -> Grant -> Poll` rule. A notification by itself cannot advance either
+cursor, and a coalesced or already-consumed edge cannot be required after an
+exact grant becomes durable. Every delegated `Pending` phase retains distinct
+`CheckWake`, `CheckGrant`, and `Execute` turns. `CheckWake` performs one
+nonblocking combined poll, `CheckGrant` freezes the exact unused grant without
+physical I/O, and `Execute` acknowledges it immediately before its one owner
+operation. `Wait` performs one blocking receive only when no usable grant
+exists.
 
 The SDIO-to-CYW43 badge-2 completion/DPC notification and badge-159 SDIO IRQ
 remain coalescing service wakes and cannot advance foreground work. CYW43 also
@@ -1179,11 +1165,12 @@ admitted, so a coalesced IRQ and command cannot perform two physical actions in
 one scheduler slice.
 Pending-command DPC arbitration performs at most one retained DPC or foreground
   action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
-  producer turn to submit the immutable child-ring command; each later stable
-  completion-miss producer turn also publishes or re-signals the exact next
-  grant before signal. The separately scheduled owner slice consumes at most
-  that one grant and performs at most one physical action. DPC and foreground
-  routes have identical grant bounds. Neither path may privately yield,
+  producer turn to submit the immutable child-ring command. A later completion
+  poll miss only schedules the explicit grant turn that publishes or re-signals
+  the exact next grant before signal. The separately scheduled owner
+  `CheckWake`, `CheckGrant`, and `Execute` turns consume at most that one grant
+  and perform at most one physical action. DPC and foreground routes have
+  identical grant bounds. Neither path may privately yield,
   resignal, or poll itself into another physical action. A trace that shows
   multiple non-CYW43 foreground phases after one endpoint rendezvous, multiple
   root/delegated CYW43 foreground phases after one exact shared grant, or
@@ -1219,7 +1206,7 @@ linked-runtime translation rather than a Linux-style private worker: one
 bounded EventPump Network quantum with serial probes, exact grants, one HAL
 owner, one linked SDIO runtime issuer, and no private physical drain loop.
 
-The ordered publication, coalesced runtime admission, conditional source probe,
+The ordered publication, phase-separated runtime admission, conditional source probe,
 passive receive watch, and bounded serial-stride changes above are a source
 candidate only. The mandatory next-image target is at least a tenfold CYW43
 improvement: request-to-first-payload p95 at or below 40 ms and at least 29
@@ -1440,10 +1427,10 @@ coalescing scheduling edge. Badge 256 is disjoint from CARD_INT badge 159. When
 they coalesce, one loop slice services one IRQ quantum, an explicit scheduler
 handoff follows, and the preserved typed wake may release only one exact granted
 owner quantum on the next slice. The exact acknowledged predecessor is
-transient non-authorizing state while the same stable-miss producer operation
-publishes its replacement, never a persisted grant-only turn; stale, malformed,
-wrong-generation, mismatched-consumed, and replayed grants still
-reject. The diagnostic also separates live ring poison from a stale
+non-authorizing state after the completion-poll miss; a separate later producer
+turn publishes its replacement and commits before signalling. Stale, malformed,
+wrong-generation, mismatched-consumed, and replayed grants still reject. The
+diagnostic also separates live ring poison from a stale
 client-counter sample, so a mixed snapshot no longer misreports an intact ring
 as physically poisoned. These are hardware-free corrections until the next
 exact image is rebuilt, read back, and booted; this capture does not prove the
@@ -1920,7 +1907,7 @@ At a quiescent prompt, accept only the exact policy
 `m26d_net_first=no physical_input_yield=enabled`, `state=inactive active=no
 close_pending=no` and `failures=0`, equal `opens`, `closes`, and `restores`, and
 nonzero `amortized_requests` after steady traffic. A nonzero
-`recovery_revocations` requires the exact same-slice typed pair-recovery
+`recovery_revocations` requires the exact contemporaneous typed pair-recovery
 record; a poisoned, active, closing, or restoring terminal sample is not ready
 for latency or pressure proof. Repeated steady parents should increase
 `amortized_requests` without requiring one open/restore pair per parent.
@@ -1992,14 +1979,16 @@ deferred-recovery records after steady-path guards unwind, preservation of an
 unresolved association cursor across logical epoch changes, exact immutable
 endpoint-rendezvous gating after every retained non-CYW43 root-command
 `Pending` quantum, acknowledged sequence-last shared grants plus signal-last
-notification hints, the exact-open-lease CYW43 ordered publication turn,
-delegated software wake/grant/ACK collapse around at most one physical action,
-foreground/DPC same-slice stable-completion-miss rearm parity, authoritative
+notification hints,
+phase-separated root `Stage -> CommitRing -> PublishGrant -> NotifyRing ->
+PollRing`, delegated `Poll -> Grant -> Poll` producer parity, distinct
+`CheckWake -> CheckGrant -> Execute` owner turns with ACK immediately before
+at most one physical action, authoritative
 owner-generation rejection, and the one-pair-restart-per-attempt bound until
 attached address/TCP readiness,
 retained generation-bound ALP/backplane attach with one request, deadline poll,
-CMD52/CMD53 child action or stable completion-poll/rearm producer operation per
-outer turn, a separately admitted exact-grant owner action, terminal poll
+CMD52/CMD53 child action, completion poll, later explicit grant/re-signal, or
+exact-grant owner action per outer turn, terminal poll
 separation, per-poll cursor checkpointing beyond the 1,024-action trace
 capacity, exact window/ChipCommon progress, and exact one-shot pull-up-clear
 completion with any fault poisoning the generation,
