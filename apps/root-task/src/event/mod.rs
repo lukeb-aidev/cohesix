@@ -324,17 +324,31 @@ const fn local_seat_usb_service_pending_state(
         || (first_byte_ready && (recovery_aux_pending || no_reply_streak != 0))
 }
 
-#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
-const fn local_seat_usb_input_pending_state(
-    polling_enabled: bool,
-    command_ready: bool,
-    enumeration_pending: bool,
-    keyboard_ready: bool,
-    first_report_ready: bool,
-) -> bool {
-    (polling_enabled && !command_ready)
-        || enumeration_pending
-        || (keyboard_ready && !first_report_ready)
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LinkedPhysicalOperatorWork {
+    Idle,
+    UsbServiceDebt,
+    Input,
+}
+
+impl LinkedPhysicalOperatorWork {
+    const fn classify(input_pending: bool, usb_service_pending: bool) -> Self {
+        if input_pending {
+            Self::Input
+        } else if usb_service_pending {
+            Self::UsbServiceDebt
+        } else {
+            Self::Idle
+        }
+    }
+
+    const fn needs_operator_rotation(self) -> bool {
+        !matches!(self, Self::Idle)
+    }
+
+    const fn retains_network_fence_after_dispatch(self) -> bool {
+        matches!(self, Self::Input)
+    }
 }
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
@@ -717,15 +731,6 @@ fn net_status_active_interface_is_wired(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
-const fn net_physical_input_pressure_for_status(
-    physical_input_active: bool,
-    local_seat_first_report_pending: bool,
-    host_eapol_pending: bool,
-) -> bool {
-    physical_input_active || (local_seat_first_report_pending && !host_eapol_pending)
-}
-
-#[cfg(feature = "net-console")]
 fn net_status_should_yield_to_physical_input(status: &NetStatusReport) -> bool {
     matches!(
         status.address_source,
@@ -742,19 +747,12 @@ fn net_status_needs_physical_pressure_service(status: &NetStatusReport) -> bool 
 fn net_status_yields_to_physical_input(
     status: &NetStatusReport,
     physical_input_active: bool,
-    local_seat_first_report_pending: bool,
     suppress_console_input: bool,
     network_data_yields_to_input: bool,
 ) -> bool {
     let should_yield_before = net_status_should_yield_to_physical_input(status);
-    let host_eapol_pending_before = net_status_needs_host_eapol_burst(status);
     let service_under_physical_pressure = net_status_needs_physical_pressure_service(status);
-    let local_seat_input_pressure = net_physical_input_pressure_for_status(
-        physical_input_active,
-        local_seat_first_report_pending,
-        host_eapol_pending_before,
-    );
-    local_seat_input_pressure
+    physical_input_active
         && !suppress_console_input
         && !service_under_physical_pressure
         && (should_yield_before || network_data_yields_to_input)
@@ -2525,6 +2523,8 @@ where
     local_seat: Option<&'a mut LocalSeatRuntime>,
     #[cfg(test)]
     test_pi4_debug_commands: bool,
+    #[cfg(test)]
+    linked_local_seat_usb_service_pending_test_override: Option<bool>,
     banner_emitted: bool,
     console_ready_announced: bool,
     serial_console_turn_active: bool,
@@ -2844,6 +2844,8 @@ where
             local_seat: None,
             #[cfg(test)]
             test_pi4_debug_commands: false,
+            #[cfg(test)]
+            linked_local_seat_usb_service_pending_test_override: None,
             banner_emitted: false,
             console_ready_announced: false,
             serial_console_turn_active: false,
@@ -3290,9 +3292,9 @@ where
                     self.refresh_linked_runtime_cyw43_durable_resume();
                     if serial_rx_activity
                         || self.physical_console_response_pending()
-                        || self.physical_console_input_pending_for_output()
-                        || self.linked_local_seat_usb_input_pending()
-                        || self.linked_local_seat_usb_recovery_pending()
+                        || self
+                            .linked_physical_operator_work()
+                            .needs_operator_rotation()
                     {
                         self.require_linked_runtime_cyw43_operator_rotation();
                     }
@@ -3747,9 +3749,9 @@ where
         if self.network_service_quarantined || self.reboot_pending {
             self.clear_linked_runtime_cyw43_scheduler_state();
         } else if self.physical_console_response_pending()
-            || self.physical_console_input_pending_for_output()
-            || self.linked_local_seat_usb_input_pending()
-            || self.linked_local_seat_usb_recovery_pending()
+            || self
+                .linked_physical_operator_work()
+                .needs_operator_rotation()
         {
             self.require_linked_runtime_cyw43_operator_rotation();
         }
@@ -3996,8 +3998,11 @@ where
     /// Finish the physical-operator fence only after Dispatch.
     ///
     /// Serial always precedes this point and LocalSeat does too when present.
-    /// If their work still owns a response/input boundary, retain the fence and
-    /// start another bounded physical rotation instead of reopening Network.
+    /// If their work still owns a response or actual input boundary, retain
+    /// the fence and start another bounded physical rotation instead of
+    /// reopening Network. USB readiness/recovery is service debt: it receives
+    /// the LocalSeat turn in this rotation but cannot retain the fence after
+    /// Dispatch when no byte arrived.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn finish_linked_runtime_cyw43_operator_rotation_after_dispatch(&mut self) -> bool {
         if self
@@ -4007,9 +4012,9 @@ where
             return true;
         }
         if self.physical_console_response_pending()
-            || self.physical_console_input_pending_for_output()
-            || self.linked_local_seat_usb_input_pending()
-            || self.linked_local_seat_usb_recovery_pending()
+            || self
+                .linked_physical_operator_work()
+                .retains_network_fence_after_dispatch()
         {
             return false;
         }
@@ -4029,7 +4034,9 @@ where
     /// cursor, so the retained level cannot repeatedly bypass physical
     /// operators. A fresh edge observed outside `Serial`/`Network` first
     /// returns to `Serial`; that turn may then hand directly to `Network` when
-    /// no real serial or USB input/recovery work owns the boundary.
+    /// no real serial or USB input owns the boundary. Persistent USB
+    /// readiness/recovery debt receives one LocalSeat turn first, then releases
+    /// the boundary so it cannot starve the retained Network parent.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn poll_linked_runtime_cyw43_rx_admission(&mut self) {
         if self.network_service_quarantined
@@ -4086,9 +4093,7 @@ where
                 .is_none()
             && !self.physical_console_response_pending()
             && !serial_rx_activity
-            && !self.physical_console_input_pending_for_output()
-            && !self.linked_local_seat_usb_input_pending()
-            && !self.linked_local_seat_usb_recovery_pending()
+            && self.linked_physical_operator_work() == LinkedPhysicalOperatorWork::Idle
             && !self
                 .net
                 .as_ref()
@@ -4942,8 +4947,6 @@ where
         }
 
         #[cfg(feature = "net-console")]
-        let local_seat_usb_input_pending = self.linked_local_seat_usb_input_pending();
-        #[cfg(feature = "net-console")]
         let cyw43_network_service_fenced = service_network
             && !self.cyw43_bootstrap_operator_turn_is_active()
             && !self.network_service_quarantined
@@ -4984,7 +4987,6 @@ where
             let yield_for_physical_input = net_status_yields_to_physical_input(
                 &status_before,
                 physical_input_active,
-                local_seat_usb_input_pending,
                 suppress_console_input,
                 network_data_yields_to_input,
             );
@@ -5845,6 +5847,13 @@ where
         self.physical_response_barrier != PhysicalResponseBarrier::Idle
     }
 
+    fn linked_physical_operator_work(&self) -> LinkedPhysicalOperatorWork {
+        LinkedPhysicalOperatorWork::classify(
+            self.physical_console_input_pending_for_output(),
+            self.linked_local_seat_usb_service_pending(),
+        )
+    }
+
     fn physical_console_input_pending_for_display_pump(&self) -> bool {
         self.serial.interactive_input_active()
             || self.local_seat_chunk_input_pending
@@ -5854,7 +5863,14 @@ where
                 .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
     }
 
+    #[cfg(test)]
+    fn linked_local_seat_usb_service_pending(&self) -> bool {
+        self.linked_local_seat_usb_service_pending_test_override
+            .unwrap_or(false)
+    }
+
     #[cfg(all(
+        not(test),
         feature = "kernel",
         feature = "usb",
         target_arch = "aarch64",
@@ -5890,85 +5906,16 @@ where
         )
     }
 
-    #[cfg(not(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    )))]
+    #[cfg(all(
+        not(test),
+        not(all(
+            feature = "kernel",
+            feature = "usb",
+            target_arch = "aarch64",
+            target_os = "none"
+        ))
+    ))]
     const fn linked_local_seat_usb_service_pending(&self) -> bool {
-        false
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn linked_local_seat_usb_recovery_pending(&self) -> bool {
-        let trace = self
-            .local_seat
-            .as_ref()
-            .map(|runtime| runtime.keyboard_trace())
-            .unwrap_or_default();
-        local_seat_usb_service_pending_state(
-            false,
-            true,
-            false,
-            false,
-            true,
-            crate::local_seat::linked_local_seat_usb_first_byte_ready(),
-            (
-                trace.recovery_aux_pending,
-                trace.driver_task_no_reply_streak,
-            ),
-        )
-    }
-
-    #[cfg(not(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    )))]
-    const fn linked_local_seat_usb_recovery_pending(&self) -> bool {
-        false
-    }
-
-    #[cfg(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    ))]
-    fn linked_local_seat_usb_input_pending(&self) -> bool {
-        let (polling_enabled, command_ready) = self
-            .local_seat
-            .as_ref()
-            .map(|runtime| {
-                (
-                    runtime.backend_keyboard_polling_enabled(),
-                    runtime.usb_keyboard_command_ready_latched(),
-                )
-            })
-            .unwrap_or((false, false));
-        local_seat_usb_input_pending_state(
-            polling_enabled,
-            command_ready,
-            crate::local_seat::linked_local_seat_usb_enumeration_pending(),
-            crate::local_seat::linked_local_seat_usb_keyboard_ready(),
-            crate::local_seat::linked_local_seat_usb_first_report_ready(),
-        )
-    }
-
-    #[cfg(not(all(
-        feature = "kernel",
-        feature = "usb",
-        target_arch = "aarch64",
-        target_os = "none"
-    )))]
-    const fn linked_local_seat_usb_input_pending(&self) -> bool {
         false
     }
 
@@ -12981,12 +12928,18 @@ where
         handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: data_handoff lane consumer={} control_progress=ordinary-network-turn",
+            "wifi: data_handoff lane consumer={} rx_watch={} rx_generation={} rx_pair={} rx_physical={} deadline_probes={} terminals={} control_progress=ordinary-network-turn",
             if handoff.consumer_open {
                 "open"
             } else {
                 "blocked"
             },
+            handoff.rx_watch_state,
+            handoff.rx_watch_generation,
+            handoff.rx_watch_pair_epoch,
+            handoff.rx_watch_physical_lifetime_epoch,
+            handoff.rx_watch_deadline_probes,
+            handoff.rx_watch_terminals,
         ))
     }
 
@@ -24700,6 +24653,12 @@ mod tests {
             publication_epoch_token: u64::MAX,
             committed: true,
             consumer_open: true,
+            rx_watch_state: "deadline-due",
+            rx_watch_generation: u32::MAX,
+            rx_watch_pair_epoch: u64::MAX,
+            rx_watch_physical_lifetime_epoch: u32::MAX,
+            rx_watch_deadline_probes: u32::MAX,
+            rx_watch_terminals: u32::MAX,
             baseline_generation: u32::MAX,
             root_rx_queue_len: 50,
             root_rx_queue_cap: 50,
@@ -24746,10 +24705,13 @@ mod tests {
         assert!(handoff_state.contains("queue=50/50 high_water=50"));
         let handoff_lane = KernelConsoleTestPump::wifi_diag_data_handoff_lane_line(handoff);
         assert!(!handoff_lane.contains(DIAGNOSTIC_TRUNCATION_MARKER));
-        assert_eq!(
-            handoff_lane.as_str(),
-            "wifi: data_handoff lane consumer=open control_progress=ordinary-network-turn"
-        );
+        assert!(handoff_lane.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_lane.contains(
+            "consumer=open rx_watch=deadline-due rx_generation=4294967295 rx_pair=18446744073709551615"
+        ));
+        assert!(handoff_lane
+            .contains("rx_physical=4294967295 deadline_probes=4294967295 terminals=4294967295"));
+        assert!(handoff_lane.ends_with("control_progress=ordinary-network-turn"));
         let handoff_counters = KernelConsoleTestPump::wifi_diag_data_handoff_counters_line(handoff);
         assert!(!handoff_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER));
         assert!(handoff_counters.len() < DEFAULT_LINE_CAPACITY);
@@ -27144,7 +27106,7 @@ mod tests {
 
     #[cfg(feature = "net-console")]
     #[test]
-    fn wired_dhcp_lease_does_not_yield_to_usb_first_report_wait() {
+    fn wired_dhcp_lease_does_not_yield_without_physical_input() {
         let mut wired = NetStatusReport::default();
         wired.profile_backend = "bcmgenet-v5";
         wired.backend = "bcmgenet-v5";
@@ -27154,7 +27116,7 @@ mod tests {
         wired.dhcp_phase = "bound";
 
         assert!(!net_status_yields_to_physical_input(
-            &wired, false, true, false, true
+            &wired, false, false, true
         ));
     }
 
@@ -27267,16 +27229,15 @@ mod tests {
         status.dhcp_phase = "host-eapol-pending";
 
         assert!(net_status_yields_to_physical_input(
-            &status, true, true, false, true
+            &status, true, false, true
         ));
         assert!(!net_status_yields_to_physical_input(
-            &status, false, true, false, true
+            &status, false, false, true
         ));
 
         let failed_below_init = NetStatusReport::default();
         assert!(net_status_yields_to_physical_input(
             &failed_below_init,
-            true,
             true,
             false,
             true
@@ -27301,14 +27262,6 @@ mod tests {
         drop(pump);
 
         assert_eq!(net.polls, 1);
-    }
-
-    #[cfg(feature = "net-console")]
-    #[test]
-    fn host_eapol_pending_ignores_idle_usb_first_report_wait() {
-        assert!(!net_physical_input_pressure_for_status(false, true, true));
-        assert!(net_physical_input_pressure_for_status(true, true, true));
-        assert!(net_physical_input_pressure_for_status(false, true, false));
     }
 
     #[cfg(feature = "net-console")]
@@ -29793,7 +29746,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_pending_enumeration_counts_as_service_and_input_pressure() {
+    fn usb_readiness_debt_gets_service_without_becoming_operator_input() {
         assert!(local_seat_usb_service_pending_state(
             true,
             false,
@@ -29849,21 +29802,26 @@ mod tests {
             (false, 1)
         ));
 
-        assert!(local_seat_usb_input_pending_state(
-            true, false, false, false, false
-        ));
-        assert!(local_seat_usb_input_pending_state(
-            false, true, true, false, false
-        ));
-        assert!(local_seat_usb_input_pending_state(
-            false, true, false, true, false
-        ));
-        assert!(!local_seat_usb_input_pending_state(
-            false, true, false, true, true
-        ));
-        assert!(!local_seat_usb_input_pending_state(
-            false, true, false, false, false
-        ));
+        let idle = LinkedPhysicalOperatorWork::classify(false, false);
+        assert_eq!(idle, LinkedPhysicalOperatorWork::Idle);
+        assert!(!idle.needs_operator_rotation());
+        assert!(!idle.retains_network_fence_after_dispatch());
+
+        let service_debt = LinkedPhysicalOperatorWork::classify(false, true);
+        assert_eq!(service_debt, LinkedPhysicalOperatorWork::UsbServiceDebt);
+        assert!(service_debt.needs_operator_rotation());
+        assert!(
+            !service_debt.retains_network_fence_after_dispatch(),
+            "USB readiness/recovery gets one LocalSeat turn but cannot starve Network"
+        );
+
+        let input = LinkedPhysicalOperatorWork::classify(true, true);
+        assert_eq!(input, LinkedPhysicalOperatorWork::Input);
+        assert!(input.needs_operator_rotation());
+        assert!(
+            input.retains_network_fence_after_dispatch(),
+            "actual serial or queued USB input keeps operator precedence"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -32044,6 +32002,94 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(61, 13, 9, 1),
+        ));
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat,
+                "persistent USB readiness debt must receive one bounded LocalSeat turn"
+            );
+            let durable_identity = pump
+                .linked_runtime_cyw43_durable_resume
+                .expect("current CYW43 work must retain its durable identity");
+            assert!(
+                pump.linked_runtime_cyw43_operator_rotation_pending
+                    .is_some(),
+                "the bounded Serial/LocalSeat/Dispatch rotation must remain explicit"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "service debt cannot retain the WiFi fence after Dispatch"
+            );
+            assert_eq!(
+                pump.linked_runtime_cyw43_durable_resume,
+                Some(durable_identity),
+                "the same generation/lifetime must resume without replacement or recovery"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+
+            pump.poll();
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, 1,
+                "Network must receive the next outer turn despite persistent USB service debt"
+            );
+        }
+
+        assert_eq!(net.polls, 1);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_operator_probe_completes_serial_command_under_durable_pressure() {
         struct LinkedRuntimeTestReset;
 
@@ -33242,6 +33288,24 @@ mod tests {
                 pump.linked_runtime_cyw43_operator_rotation_pending
                     .is_some(),
                 "queued USB input must fence direct durable Network re-admission"
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "a real partial local-seat line must retain the operator fence after Dispatch"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, 0,
+                "actual queued input must remain ahead of Network"
             );
 
             let wake_before_quarantine =

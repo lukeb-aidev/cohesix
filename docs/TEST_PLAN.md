@@ -880,6 +880,10 @@ changed. The passive
 the same epoch with connection generation and pair epoch; changing only the
 physical epoch must invalidate both durable Network resume and any pending
 operator fence without admitting Wi-Fi work under the replacement identity.
+The lifetime RX-watch cursor must bind the same three-part identity. Missing,
+active, failed, or changed physical-lifetime state must clear it without a
+source probe, and a replacement lifetime must arm only from its own Gate 8
+data-consumer publication.
 
 Cold-lifetime tests must prove a separate typed provenance lifecycle. Only
 successful completion of a pair transaction owned as `ColdBootstrap` may
@@ -1209,8 +1213,8 @@ exact same-identity idle snapshot clears it. Coverage must exercise every
 reason-mask class, coalesced/lost/repeated notifications, stale idle snapshots,
 physical-lifetime changes, pair and connection generation changes, quarantine,
 reboot, and selected-NIC change.
-A complete TCP command, physical response/input, turn cap, and time cap must
-retain unfinished Wi-Fi work behind a fence and prove `Serial`, optional
+A complete TCP command, actual physical response/buffered input, turn cap, and
+time cap must retain unfinished Wi-Fi work behind a fence and prove `Serial`, optional
 `LocalSeat`, and `Dispatch` each receive their bounded turn before Network
 re-admission. A queued USB report and a buffered complete network command must
 not be bypassed. GENET must neither sample nor retain the CYW43 snapshot and
@@ -1222,6 +1226,14 @@ NetData request at the Gate 8 handoff, prove the next outer turn decodes it
 through HAL's immutable retained identity and advances it beyond `Inactive`,
 then prove host-EAPOL receives the next fresh prompt-poll turn without a pair
 recovery latch.
+
+Physical-input fence coverage must distinguish actual buffered input or a
+physical response from USB service debt. Persistent first-report or
+command-ready debt with no decoded or buffered byte may request exactly one
+`LocalSeat` rotation, then must permit `Dispatch` and re-admit the same
+sequence-zero `Inactive` CYW43 parent. A queued partial local-seat command must
+still retain the fence. Recovery and terminal USB failure remain device-local
+and must not mutate the CYW43 cursor.
 
 Parent-replay coverage must table every CYW43 operation against transfer
 stages 1 through 7. Only stage-1 `0x5103` on the seven single-action parents may
@@ -1343,10 +1355,14 @@ leave the immutable USB command, readiness flags, no-reply counters, and
 recovery state unchanged; a pre-issue terminal `Failed` must clear the active
 command and fail closed exactly once, while issued-unknown retains its poisoned
 identity without replay. Tests must also prove that sustained Pending traffic
-cannot manufacture the pressure signal that suppresses HDMI. Adversarial lease
-faults before and after the issue boundary must prove that USB, serial, and HDMI
-never request CYW43/SDIO pair recovery: pre-issue requests fail locally, while
-issued-unknown requests retain their immutable identity in a poisoned slot.
+cannot manufacture the pressure signal that suppresses HDMI, or the physical-
+input signal that retains the CYW43 operator fence. Missing first-report or
+command-ready proof with an empty local-seat queue must earn one bounded service
+turn without becoming input; decoded or buffered input must retain its existing
+precedence. Adversarial lease faults before and after the issue boundary must
+prove that USB, serial, and HDMI never request CYW43/SDIO pair recovery:
+pre-issue requests fail locally, while issued-unknown requests retain their
+immutable identity in a poisoned slot.
 Equivalent CYW43 and SDIO faults must still request deterministic pair recovery.
 
 Descriptor replay, engine init, prerequisite admission, context replay, and
@@ -1415,10 +1431,12 @@ prove that the admitted turn still uses the sole existing CYW43 owner. A queued
 WiFi HDMI status may be preempted but must remain queued. Keeping the
 notification level latched without incrementing its hit epoch must not re-arm
 the admission or skip another physical phase. Real serial/local-seat input and
-USB recovery retain their operator precedence; quarantine and reboot clear the
-local cursor without a NIC turn or wake poll. The same injected wake under
-GENET must leave its ordinary phase result, CYW43 wake counters, and CYW43
-quantum counters unchanged.
+USB recovery retain their operator precedence. First-report or command-ready
+service debt with no decoded or buffered input receives one `LocalSeat` turn
+but must not be classified as real input or retain the post-Dispatch fence;
+quarantine and reboot clear the local cursor without a NIC turn or wake poll.
+The same injected wake under GENET must leave its ordinary phase result, CYW43
+wake counters, and CYW43 quantum counters unchanged.
 
 Ordinary post-prompt EventPump coverage must also prove that the same
 linked-serial cutover advances for every physical-network selection, including
@@ -1440,8 +1458,9 @@ and admit neither operation; the same cases must leave GENET service unchanged.
 
 `Serial` may perform one TX-first reciprocal-ring turn; `LocalSeat` then polls
 one retained USB keyboard turn so fresh physical input is buffered before the
-network quantum. `Dispatch` may consume one serial, buffered local-seat, or
-buffered network command without polling the NIC or flushing TCP. `Network` may
+network quantum. USB service debt may request that turn but cannot itself count
+as input. `Dispatch` may consume one serial, buffered local-seat, or buffered
+network command without polling the NIC or flushing TCP. `Network` may
 perform exactly one ordinary NIC service
 or one retained GENET response flush and must leave any received command
 buffered for a later `Dispatch` turn. NIC polling, TCP flushing, and command
@@ -1457,22 +1476,37 @@ runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX/fairness continuation may retain `Network` for at
 most the compiler-declared CYW43 `max_ops_per_turn` service bound (currently
 192 successive outer turns) and 25 ms on the seL4 virtual counter, whichever
-comes first. The fairness predicate includes the active `RequiredPoll` phase
-but excludes passive post-TX `Watching`. `RequiredPoll` must block fresh TX
-until an exact nonfault op8 terminal;
-`FrameReady` clears it, while an initially empty `Idle`/`Progress` terminal
-must release fresh TX and transition the same cursor to an eight-millisecond
-counter-deadlined receive watch. The watch is a passive deadline and must
-neither weight Network nor manufacture an op8 source probe. A frame, expiry,
-generation invalidation, or recovery must clear it. Tests must prove wrong
-request/generation and fault terminals
-cannot advance it, a new accepted TX rearms `RequiredPoll` without allocating
-a second cursor, and GENET never reads or reports this state. Root must set
-`RX_HINTLESS_FIRSTREAD` only for active `RequiredPoll`, a proved
-current-generation root wake, or a live DPC-ring level. A forced empty op8/op10
-may combine software `Queue -> SourceProbe` with the probe as that turn's single
-new physical action, while cached completion/event replay remains a later turn.
-Ordinary empty polls remain queue-only. Authentication without pending work
+comes first.
+
+Gate 8 data-consumer publication must arm one RX-watch cursor, initially in a
+fresh eight-millisecond `Watching` interval, bound to the current connection
+generation, pair epoch, and completed physical-lifetime epoch. `RequiredPoll`
+must block fresh TX until an exact nonfault op8 terminal whose immutable
+descriptor includes `RX_HINTLESS_FIRSTREAD`. Only that hintless
+`Idle`, `Progress`, or `FrameReady` terminal may release fresh TX and rearm the
+counter-deadlined `Watching` interval. A queue-only op8 terminal must neither
+slide an unexpired deadline nor satisfy `RequiredPoll`. Before expiry,
+`Watching` must neither weight Network nor manufacture an op8 source probe.
+Expiry must advance that same cursor to `RequiredPoll`, retain
+current-identity Network work, and force one op8
+`RX_HINTLESS_FIRSTREAD`; it must never clear the cursor. If a queue-only op8 is
+already retained, its exact terminal must leave `RequiredPoll` armed and the
+following fresh descriptor must carry the hintless probe. A new accepted TX
+must also advance the existing cursor to `RequiredPoll` without allocating a
+second cursor.
+
+Tests must cover repeated long quiet intervals with no root wake or DPC edge,
+deadline-not-due passivity, deadline-due admission, one forced source probe,
+and hintless `Idle`, `Progress`, and `FrameReady` rearm. Queue-only, wrong
+request, wrong identity, and fault terminals cannot advance the cursor.
+Connection-generation, pair,
+physical-lifetime, recovery, quarantine, reboot, and selected-NIC changes must
+clear it. GENET must never read, arm, clear, or report this state. Root may also
+set `RX_HINTLESS_FIRSTREAD` for a proved current-generation root wake or live
+DPC-ring level. A forced empty op8/op10 may combine software
+`Queue -> SourceProbe` with the probe as that turn's single new physical action,
+while cached completion/event replay remains a later turn. Ordinary empty polls
+remain queue-only. Authentication without pending work
 must not extend the quantum. Tests must prove that every third admitted Network
 operation performs one probe-only Serial turn, that an idle probe resumes the
 same quantum, and that real input exits through the normal operator rotation.
@@ -1753,6 +1787,12 @@ The focused adversarial cases include
 `cyw43_service_snapshot_rejects_invalid_physical_lifetime_metadata`,
 `wifi_gate_one_requires_one_completed_supervisor_bound_physical_lifetime`,
 `linked_cyw43_physical_lifetime_change_invalidates_resume_and_operator_fence`,
+`cyw43_gate8_ready_publication_is_a_separate_retractable_consumer_fence`,
+`cyw43_lifetime_receive_watch_fails_closed_on_pair_or_physical_change`,
+`cyw43_lifetime_receive_watch_ignores_queue_only_terminals`,
+`cyw43_rx_fairness_keeps_one_lifetime_receive_watch`,
+`linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
+`linked_cyw43_rx_admission_honors_input_and_clears_on_guards`,
 `cyw43_durable_work_requires_one_completed_non_recovery_physical_lifetime`,
 `linked_cyw43_epoch_zero_work_never_admits_an_ordinary_network_turn`,
 `cyw43_lifetime_fence_covers_direct_runtime_entries_without_affecting_genet`,
@@ -2567,7 +2607,11 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     closed must remain `FIRST_REPORT_PENDING`; recovery must revoke stale
     first-report, first-byte, parser, and HDMI command-ready latches until a
     fresh decoded all-zero release reopens them. Endpoint-health counters may
-    advance during that interval but cannot substitute for readiness. A
+    advance during that interval but cannot substitute for readiness. Missing
+    first-report or command-ready proof alone is USB service debt, not physical
+    input; it may schedule one bounded `LocalSeat` turn but cannot retain the
+    selected-network operator fence without a decoded or buffered byte or
+    physical response. A
     replay miss reports the first missing translated May/U-Boot/Linux behavior
     through `*_OLDGOOD_MISSING`; gate 10 without replay remains triage evidence
     only. USB replay requires distinct ordered endpoint, interrupt-IN,

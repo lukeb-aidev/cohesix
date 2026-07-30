@@ -761,11 +761,11 @@ PollRing` lane.
 The matching completed epoch is the supervisor's
 `physical_lifetime_epoch`. It must remain current through Gate 8 acceptance and
 publication, operational Gate 8 continuity, and Gate 10 acceptance. The
-passive service-work snapshot and EventPump durable Network-resume identity
-also bind it with the connection generation and pair epoch. Any missing,
-active, failed, or changed owner epoch invalidates those proofs and scheduler
-state; do not count a later gate, DHCP, or TCP success as belonging to the
-discarded lifetime.
+passive service-work snapshot, EventPump durable Network-resume identity, and
+lifetime RX-watch cursor also bind it with the connection generation and pair
+epoch. Any missing, active, failed, or changed owner epoch invalidates those
+proofs and scheduler state; do not count a later gate, DHCP, or TCP success as
+belonging to the discarded lifetime.
 
 An epoch-zero snapshot may still report the recovery reason to the retained
 bootstrap supervisor, but it cannot arm or preserve the EventPump wake cursor,
@@ -944,13 +944,22 @@ generation; the next consumer-active generation captures a new baseline
 without resetting cumulative counters. A stale-purge count is diagnostic
 evidence, not successful receive or permission to ignore later loss.
 
-For steady traffic, each exact terminal that accepts a current-generation data
-TX must be followed by one exact terminal from the existing sole `NetData`
-`RX_POLL`/DPC lane before another fresh TX is admitted. Accept `Idle`,
-`Progress`, or `FrameReady` only for the same generation and exact retained
-request. A fault or stale terminal cannot clear the fence. In the paired pcap,
-check that outbound TCP trains do not suppress peer ACK/FIN ingress while this
-bounded RX-fairness transaction is active.
+Gate 8 data-consumer publication arms one RX-watch cursor bound to the
+connection generation, pair epoch, and completed physical-lifetime epoch. It
+starts in an eight-millisecond `Watching` interval on the existing sole
+`NetData` `RX_POLL`/DPC lane. Accept `Idle`, `Progress`, or `FrameReady` only
+for the same identity and exact retained request whose immutable descriptor
+includes `RX_HINTLESS_FIRSTREAD`; only that source-probe terminal rearms the
+interval. A fault, stale terminal, or ordinary queue-only op8 cannot advance or
+slide it. An accepted data TX moves the same cursor immediately to
+`RequiredPoll` and withholds another fresh TX until the exact hintless
+terminal. An unexpired watch is passive; expiry returns it to `RequiredPoll`
+and forces one hintless source probe through the same op8 owner. If a
+queue-only op8 was already retained, it first completes unchanged and leaves
+the requirement armed for the next fresh op8. In the paired pcap, check both
+that outbound TCP trains do not suppress peer ACK/FIN ingress and that inbound
+traffic after a quiet interval triggers a reply without requiring unrelated
+TX.
 
 Capture the passive scheduler, handoff, and retained-frontier lines from both
 `wifi diag` and `wifi probe-ht`:
@@ -960,7 +969,7 @@ wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=o
 wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
-wifi: data_handoff lane consumer=<blocked|open> control_progress=ordinary-network-turn
+wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|required|watching|deadline-due> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
@@ -968,6 +977,10 @@ wifi: data_handoff postcommit_first_loss=no
 wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 ```
+
+`deadline_probes` advances only when an expired interval becomes
+`RequiredPoll`; `terminals` advances only when the exact hintless op8 terminal
+rearms `Watching`. Queue-only terminals advance neither counter.
 
 A live NetStack frontier becomes authoritative only with complete current
 `8a`-through-`8h` proof and no active pair recovery. Until then, retain recovery,
@@ -1177,23 +1190,29 @@ Pending-command DPC arbitration performs at most one retained DPC or foreground
   foreground progress caused by a scheduling badge without a valid grant, fails
   the one-operation-per-turn contract.
 
-The 2026-07-30 `a94903514f72...` exact-image hardware group establishes two
-different frontiers. The power-off boot's first attached Join parent lost its
-provable terminal/owner after the bounded child lease. The sole pair-recovery
-allowance produced a replacement pair that passed Gate 8a-8h, but aggregate
-readiness correctly rejected `supervisor-in-attempt-recovery-used`. Five
-following powered warm reboots each passed Gate 8a-8h on the first pair with
-zero recovery. This is 5/5 warm proof, not closure of the cold first-pair
-failure.
+The 2026-07-30 exact `09e4201b5d55` /
+`cae3bdb64c862893d09ea3716939aa26256f67b78dffb6859094021a19f2746b`
+hardware group proves the phase-separated owner can boot successfully, but it
+also exposes two independent liveness gaps. The power-off boot completed one
+physical lifetime, Gate 8a-8h, and DHCP. Warm reboots R01, R03, and R05 also
+passed; R02 and R04 stopped at Gate 8c with the exact Join parent still
+sequence-zero and `Inactive`. The result is 3/5 warm, or 4/6 including the
+power-off boot, not repeatability closure.
 
-The same image's WiFi pcap showed a clean persistent TCP flow with no sequence
-gap, out-of-order segment, reset, zero window, SACK recovery, or SYN retry, yet
-request-to-first-payload averaged about 315 ms, reached about 407 ms at p95, and
-command cadence was about 2.9/s. The pressure run completed only 309 of 824
-operations and timed out 515. The GENET control used the same console, TCP,
-REST, and gateway stack, measured about 1.23 ms request-to-first-payload, and
-completed 8,983 of 8,983 operations. Treat the latency as a CYW43
-linked-runtime/HAL cadence defect, not RF loss or a common TCP-stack defect.
+R02 and R04 had no decoded or buffered USB input. USB first-report and
+command-ready proof were pending, and EventPump incorrectly promoted that
+readiness debt to physical input pressure. The retained operator fence then
+withheld the Join parent's required second Network admission. The corrected
+classifier grants readiness debt one `LocalSeat` service turn without allowing
+it to retain that fence; actual input and physical responses keep their
+operator precedence.
+
+R05 reached DHCP at `192.168.86.154`, but the WiFi capture showed 12 direct
+ICMP requests and seven TCP SYNs with no reply and no outbound Pi IPv4. This is
+a quiet-ingress liveness failure, so `.coh`, latency, and REST/hive pressure
+were correctly withheld. The earlier `a94903514f72...` capture remains
+historical evidence of a clean but materially slow persistent WiFi flow and an
+unchanged fast GENET control; it cannot qualify the current image.
 
 Linux `brcmfmac` keeps durable DPC/pending state on one ordered high-priority
 worker and performs an RX-first bounded drain before sleep:
@@ -1206,15 +1225,15 @@ linked-runtime translation rather than a Linux-style private worker: one
 bounded EventPump Network quantum with serial probes, exact grants, one HAL
 owner, one linked SDIO runtime issuer, and no private physical drain loop.
 
-The ordered publication, phase-separated runtime admission, conditional source probe,
-passive receive watch, and bounded serial-stride changes above are a source
-candidate only. The mandatory next-image target is at least a tenfold CYW43
-improvement: request-to-first-payload p95 at or below 40 ms and at least 29
-sequential requests/s with no loss, reconnect, or benchmark timeout. The
-aggressive low-overhead target is p95 at or below 10 ms and at least 100
-requests/s. It also requires five first-pair WiFi boots and one unchanged GENET
-control. Until the exact rebuilt/read-back image produces that evidence, neither
-target is proved.
+The ordered publication, phase-separated runtime admission, USB service-debt
+classification, lifetime receive watchdog, and bounded serial-stride changes
+above are source candidates only. The next exact image must first prove
+first-pair boot repeatability and reply to traffic after repeated quiet
+intervals. The performance target then remains request-to-first-payload p95 at
+or below 40 ms and at least 29 sequential requests/s with no loss, reconnect,
+or benchmark timeout; the aggressive target is p95 at or below 10 ms and at
+least 100 requests/s. It also requires one unchanged GENET control. Until the
+exact rebuilt/read-back image produces that evidence, neither target is proved.
 
 The historical capture `pi4-serial-20260724-214130.log`, with the bounded
 post-exhaustion sidecar `pi4-serial-20260724-6c6-postexhaust-diag.log` and
@@ -1746,11 +1765,14 @@ endpoint-wake, or completion-poll phase is progress, not a no-reply event: it
 must preserve the ticket, command-ready state, and counters. Only terminal
 `Failed` may revoke readiness and add no-reply debt. Sustained `usb status`
 evidence with normal input but no-reply growth proportional to retained phase
-count is a software regression rather than a keyboard fault. A retained USB,
-serial, or HDMI lease fault is device-local: pre-issue failure clears that
-request and issued-unknown failure poisons it, but neither may request
-CYW43/SDIO pair recovery. The CYW43/SDIO pair epoch is consulted only for those
-two contracts;
+count is a software regression rather than a keyboard fault. First-report or
+command-ready service debt with no decoded or buffered byte earns one bounded
+`LocalSeat` turn but is not physical input pressure and cannot retain the
+CYW43 post-Dispatch operator fence. Only actual buffered input or a physical
+response has that authority. A retained USB, serial, or HDMI lease fault is
+device-local: pre-issue failure clears that request and issued-unknown failure
+poisons it, but neither may request CYW43/SDIO pair recovery. The CYW43/SDIO
+pair epoch is consulted only for those two contracts;
 serial, USB, HDMI, PCIe, and GENET retain contract-local transport identity and
 cannot be invalidated by a Wi-Fi restart. Linked serial RX, staged TX, and
 transmitter-idle probes consume typed `Pending`, `Complete`, and `Failed`
@@ -1838,8 +1860,10 @@ command. The ordinary linked EventPump uses the fixed `Serial`, `LocalSeat`,
 `Dispatch`, `Network`, and `Display` outer-turn order. `Serial` admits one
 TX-first serial-ring turn. `LocalSeat` then performs one retained USB keyboard
 turn, so new physical input is buffered before network weighting begins.
-`Dispatch` consumes at most one serial, buffered local-seat, or already-buffered
-network command without polling the NIC or flushing TCP. Each `Network` turn
+First-report or command-ready service debt may request that one turn, but it is
+not physical input without a decoded or buffered byte. `Dispatch` consumes at
+most one serial, buffered local-seat, or already-buffered network command
+without polling the NIC or flushing TCP. Each `Network` turn
 performs one NIC service and leaves any received command buffered for a later
 `Dispatch` turn. For wired GENET, that service may instead be one retained
 post-command TCP flush; polling, flushing, and command dispatch remain separate
@@ -1854,24 +1878,26 @@ maintenance, and recovery obligations retain that level
 until an exact same-identity idle snapshot. Physical-lifetime, pair, or
 generation change, quarantine, reboot, or another selected NIC invalidates it.
 It may therefore retain `Network` for an exact current DPC/RX/TX/fairness
-continuation, a nonempty runtime/root queue, or actual TCP socket, parser, or
-response work after the one-shot edge cursor has already been consumed. An
-authenticated but idle socket is not a weighting reason. The post-TX
-`Watching` phase is likewise a passive deadline and cannot retain Network.
-Root forces op8/op10 `RX_HINTLESS_FIRSTREAD` only for an active `RequiredPoll`,
-a proved current-generation root wake, or a live DPC-ring level. Otherwise an
-empty receive poll remains queue-only. A forced empty poll may combine the
-software `Queue -> SourceProbe` transition with the source probe as its single
-new physical action, but cached completion/event replay and FIFO recheck remain
+continuation, including a due lifetime-watch `RequiredPoll`, a nonempty
+runtime/root queue, or actual TCP socket, parser, or response work after the
+one-shot edge cursor has already been consumed. An authenticated but idle
+socket is not a weighting reason. An unexpired `Watching` interval is passive
+and cannot retain Network; its deadline advances the same generation-, pair-,
+and physical-lifetime-bound cursor to `RequiredPoll` rather than clearing it.
+Root forces op8/op10 `RX_HINTLESS_FIRSTREAD` only for that active
+`RequiredPoll`, a proved current-generation root wake, or a live DPC-ring level.
+Otherwise an empty receive poll remains queue-only. A forced empty poll may
+combine the software `Queue -> SourceProbe` transition with the source probe as
+its single new physical action, but cached completion/event replay and FIFO recheck remain
 later owner work; no turn gains a second physical action. One continuation
 quantum is capped at both the compiler-declared CYW43 `max_ops_per_turn`
 service bound (currently 192 separately opened outer turns) and 25 milliseconds
 from the seL4 virtual counter. Every third admitted Network operation performs
 one probe-only `Serial` turn. An idle probe resumes the same CYW43 quantum
 without advancing LocalSeat, Dispatch, or Display; real serial input exits into
-the ordinary operator rotation. A complete TCP command or pending physical
-response/input is likewise an immediate typed exit into a fairness fence. That
-fence preserves
+the ordinary operator rotation. A complete TCP command or pending actual
+physical response/buffered input is likewise an immediate typed exit into a
+fairness fence. That fence preserves
 unfinished Wi-Fi work but requires `Serial`, optional `LocalSeat`, and
 `Dispatch` to receive one bounded turn before Network resumes. Reboot or
 quarantine invalidates the Wi-Fi-only scheduler state. An already-open quantum
@@ -2070,7 +2096,11 @@ After attach or endpoint recovery, decoded held-key/modifier traffic is health
 telemetry only until a decoded all-zero release establishes a fresh baseline.
 The runtime reports first-report pending during that guard, and root invalidates
 stale first-report, first-byte, parser, and HDMI command-ready latches while
-keeping the endpoint and ordinary serial/HDMI service available.
+keeping the endpoint and ordinary serial/HDMI service available. A pending
+first-report or command-ready proof is service demand only: EventPump grants one
+bounded `LocalSeat` opportunity but must not report physical input, retain the
+post-Dispatch CYW43 operator fence, or block the following Network turn unless
+an actual decoded or buffered byte or physical response exists.
 
 Before constructing the EventPump, Pi root completes the current synchronous
 PCIe HAL prerequisite as local bookkeeping and authority setup for the retained

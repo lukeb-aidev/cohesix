@@ -519,12 +519,13 @@ static CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 // candidate/proof record; steady DHCP/TCP consumption stays closed until this
 // second publication boundary succeeds.
 static CYW43_GATE8_PUBLICATION_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
-// Linux leaves receive/DPC service runnable across the short interval between
-// an accepted TX and the peer's response. Cohesix represents that condition
-// with one generation-bound cursor on the existing NetData op8 lane: the first
-// exact terminal poll releases fresh TX, while a short counter-deadlined watch
-// remains passive metadata after an initially empty terminal. A later proved
-// DPC/root-wake level or another accepted TX reactivates the sole poll lane.
+// Linux leaves receive/DPC service alive for the full netdev lifetime through
+// its interrupt/DPC path plus a watchdog. Cohesix represents that invariant
+// with one generation-, pair-, and physical-lifetime-bound cursor on the
+// existing NetData op8 owner. The cursor is passive between deadlines. At each
+// deadline it requires one hintless source probe, and only that exact
+// source-probe terminal rearms the next interval. DPC/root-wake levels and
+// accepted TX pull the same cursor forward; they never create a second issuer.
 #[cfg(feature = "kernel")]
 const CYW43_DATA_TX_RX_WATCH_MS: u64 = 8;
 #[cfg(feature = "kernel")]
@@ -539,10 +540,14 @@ enum Cyw43DataTxRxFairnessPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43DataTxRxFairness {
     generation: u32,
+    pair_epoch: u64,
+    physical_lifetime_epoch: u32,
     phase: Cyw43DataTxRxFairnessPhase,
 }
 #[cfg(feature = "kernel")]
 static CYW43_DATA_TX_RX_FAIRNESS: Mutex<Option<Cyw43DataTxRxFairness>> = Mutex::new(None);
+static CYW43_DATA_RX_WATCH_DEADLINE_PROBES: AtomicU32 = AtomicU32::new(0);
+static CYW43_DATA_RX_WATCH_TERMINALS: AtomicU32 = AtomicU32::new(0);
 static CYW43_STALE_RX_PURGED_TOTAL: AtomicU32 = AtomicU32::new(0);
 static CYW43_STALE_RX_PURGE_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 static CYW43_STALE_RX_PURGED_LAST: AtomicU32 = AtomicU32::new(0);
@@ -670,6 +675,12 @@ pub(crate) struct Cyw43DataHandoffDiagnostic {
     pub publication_epoch_token: u64,
     pub committed: bool,
     pub consumer_open: bool,
+    pub rx_watch_state: &'static str,
+    pub rx_watch_generation: u32,
+    pub rx_watch_pair_epoch: u64,
+    pub rx_watch_physical_lifetime_epoch: u32,
+    pub rx_watch_deadline_probes: u32,
+    pub rx_watch_terminals: u32,
     pub baseline_generation: u32,
     pub root_rx_queue_len: u32,
     pub root_rx_queue_cap: u32,
@@ -697,6 +708,7 @@ pub(crate) fn begin_cyw43_outer_event_turn() {
     CYW43_OUTER_EVENT_TURN_CLAIMED.store(0, Ordering::Release);
     CYW43_OUTER_EVENT_TURN_REJECTED.store(0, Ordering::Release);
     CYW43_OUTER_EVENT_TURN_OPERATIONS.store(0, Ordering::Release);
+    advance_cyw43_data_rx_watch_fallback_boundary();
 }
 
 #[cfg(feature = "kernel")]
@@ -7185,26 +7197,116 @@ fn cyw43_current_generation_data_consumer_open() -> bool {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_data_rx_lifetime_identity(generation: u32) -> Option<(u64, u32)> {
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation
+        || !cyw43_data_consumer_open_for_generation(generation)
+    {
+        return None;
+    }
+    let pair_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+    let physical_lifetime_epoch = cyw43_completed_physical_lifetime_epoch();
+    if pair_epoch == 0
+        || physical_lifetime_epoch == 0
+        || CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire) != physical_lifetime_epoch
+    {
+        return None;
+    }
+    core::sync::atomic::fence(Ordering::Acquire);
+    (CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
+        && CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == pair_epoch
+        && cyw43_completed_physical_lifetime_epoch() == physical_lifetime_epoch
+        && CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire) == physical_lifetime_epoch
+        && cyw43_data_consumer_open_for_generation(generation))
+    .then_some((pair_epoch, physical_lifetime_epoch))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_rx_fairness_identity_current(cursor: Cyw43DataTxRxFairness) -> bool {
+    if cursor.pair_epoch == 0
+        || cursor.physical_lifetime_epoch == 0
+        || CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != cursor.generation
+        || CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) != cursor.pair_epoch
+        || CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire)
+            != cursor.physical_lifetime_epoch
+        || !cyw43_data_consumer_open_for_generation(cursor.generation)
+    {
+        return false;
+    }
+    // Publication already proved the completed shared physical-lifetime
+    // record. Every coordinated lifetime cut clears or replaces the bound
+    // epoch before steady work can resume, so hot predicates use the root
+    // atomics and a torn-snapshot recheck. Re-invalidating the SDIO shared
+    // record for every EventPump predicate would add cache syscalls to every
+    // quiet TCP turn without adding authority.
+    core::sync::atomic::fence(Ordering::Acquire);
+    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == cursor.generation
+        && CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == cursor.pair_epoch
+        && CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire)
+            == cursor.physical_lifetime_epoch
+        && cyw43_data_consumer_open_for_generation(cursor.generation)
+}
+
+/// Advance only the poll-count fallback at one outer scheduler boundary.
+///
+/// Hardware uses the read-only virtual counter, so passive work snapshots never
+/// mutate the deadline. Host tests without a target counter still need a single
+/// deterministic notion of time: exactly one decrement per EventPump turn.
+#[cfg(feature = "kernel")]
+fn advance_cyw43_data_rx_watch_fallback_boundary() {
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(mut cursor) = *slot else {
+        return;
+    };
+    if !matches!(
+        cursor.phase,
+        Cyw43DataTxRxFairnessPhase::Watching {
+            deadline: Cyw43PollDeadline::Polls { .. }
+        }
+    ) {
+        // Hardware Counter deadlines advance from CNTVCT_EL0. Inspecting one
+        // must not add a shared-ring lifetime read or mutate the cursor on
+        // every outer scheduler turn.
+        return;
+    }
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        *slot = None;
+        return;
+    }
+    if let Cyw43DataTxRxFairnessPhase::Watching {
+        deadline: Cyw43PollDeadline::Polls { ref mut remaining },
+    } = cursor.phase
+    {
+        *remaining = remaining.saturating_sub(1);
+        *slot = Some(cursor);
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_data_tx_rx_fairness_due_for_generation(generation: u32) -> bool {
     if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
         return false;
     }
     let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
-    let Some(cursor) = *slot else {
+    let Some(mut cursor) = *slot else {
         return false;
     };
     if cursor.generation != generation {
         return false;
     }
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        *slot = None;
+        return false;
+    }
     match cursor.phase {
         Cyw43DataTxRxFairnessPhase::RequiredPoll => true,
         Cyw43DataTxRxFairnessPhase::Watching { deadline } => {
-            if !cyw43_poll_deadline_is_open(&deadline) {
-                // Retire only the expired root-local watch. This passive
-                // predicate never advances or replaces a retained HAL parent.
-                *slot = None;
+            if cyw43_poll_deadline_is_open(&deadline) {
+                return false;
             }
-            false
+            cursor.phase = Cyw43DataTxRxFairnessPhase::RequiredPoll;
+            *slot = Some(cursor);
+            increment_atomic_u32_saturating(&CYW43_DATA_RX_WATCH_DEADLINE_PROBES);
+            true
         }
     }
 }
@@ -7216,11 +7318,18 @@ fn cyw43_current_generation_data_tx_rx_fairness_due() -> bool {
 
 #[cfg(feature = "kernel")]
 fn cyw43_data_tx_rx_fairness_required_for_generation(generation: u32) -> bool {
-    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
-        && CYW43_DATA_TX_RX_FAIRNESS.lock().is_some_and(|cursor| {
-            cursor.generation == generation
-                && cursor.phase == Cyw43DataTxRxFairnessPhase::RequiredPoll
-        })
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != generation {
+        return false;
+    }
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        *slot = None;
+        return false;
+    }
+    cursor.phase == Cyw43DataTxRxFairnessPhase::RequiredPoll
 }
 
 #[cfg(feature = "kernel")]
@@ -7251,26 +7360,72 @@ fn cyw43_current_generation_data_rx_poll_flags(owner: Cyw43PromptPollOwner) -> u
 
 #[cfg(feature = "kernel")]
 fn cyw43_data_tx_rx_fairness_watching_for_generation(generation: u32) -> bool {
-    CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
-        && CYW43_DATA_TX_RX_FAIRNESS.lock().is_some_and(|cursor| {
-            cursor.generation == generation
-                && matches!(
-                    cursor.phase,
-                    Cyw43DataTxRxFairnessPhase::Watching { deadline }
-                        if cyw43_poll_deadline_is_open(&deadline)
-                )
-        })
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != generation {
+        return false;
+    }
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        *slot = None;
+        return false;
+    }
+    matches!(
+        cursor.phase,
+        Cyw43DataTxRxFairnessPhase::Watching { deadline }
+            if cyw43_poll_deadline_is_open(&deadline)
+    )
 }
 
 #[cfg(feature = "kernel")]
-fn arm_cyw43_data_tx_rx_fairness(generation: u32) {
-    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == generation
-        && cyw43_data_consumer_open_for_generation(generation)
-    {
-        *CYW43_DATA_TX_RX_FAIRNESS.lock() = Some(Cyw43DataTxRxFairness {
-            generation,
-            phase: Cyw43DataTxRxFairnessPhase::RequiredPoll,
-        });
+fn publish_cyw43_data_rx_lifetime_cursor(generation: u32) -> bool {
+    let Some((pair_epoch, physical_lifetime_epoch)) = cyw43_data_rx_lifetime_identity(generation)
+    else {
+        return false;
+    };
+    let cursor = Cyw43DataTxRxFairness {
+        generation,
+        pair_epoch,
+        physical_lifetime_epoch,
+        phase: Cyw43DataTxRxFairnessPhase::Watching {
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                CYW43_DATA_TX_RX_WATCH_MS,
+                CYW43_DATA_TX_RX_WATCH_FALLBACK_TERMINALS,
+            ),
+        },
+    };
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        return false;
+    }
+    *slot = Some(cursor);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn arm_cyw43_data_tx_rx_fairness(generation: u32) -> bool {
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    let Some(mut cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != generation {
+        return false;
+    }
+    if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        *slot = None;
+        return false;
+    }
+    cursor.phase = Cyw43DataTxRxFairnessPhase::RequiredPoll;
+    *slot = Some(cursor);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_data_tx_rx_fairness_for_generation(generation: u32) {
+    let mut slot = CYW43_DATA_TX_RX_FAIRNESS.lock();
+    if (*slot).is_some_and(|cursor| cursor.generation == generation) {
+        *slot = None;
     }
 }
 
@@ -9706,6 +9861,7 @@ pub(crate) fn publish_cyw43_gate8_data_consumer(
         && !cyw43_recovery_required()
         && !cyw43_rejoin_pending_for_epoch(expected_generation)
         && CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == expected_generation
+        && publish_cyw43_data_rx_lifetime_cursor(expected_generation)
     {
         return true;
     }
@@ -9730,10 +9886,38 @@ pub(crate) fn retract_cyw43_gate8_data_consumer(expected_generation: u32) -> boo
         Ordering::AcqRel,
         Ordering::Acquire,
     ) {
-        Ok(_) => true,
-        Err(0) => true,
+        Ok(_) | Err(0) => {
+            clear_cyw43_data_tx_rx_fairness_for_generation(expected_generation);
+            true
+        }
         Err(_) => false,
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_rx_watch_diagnostic() -> (&'static str, u32, u64, u32) {
+    let Some(cursor) = *CYW43_DATA_TX_RX_FAIRNESS.lock() else {
+        return ("absent", 0, 0, 0);
+    };
+    let state = if !cyw43_data_tx_rx_fairness_identity_current(cursor) {
+        "stale"
+    } else {
+        match cursor.phase {
+            Cyw43DataTxRxFairnessPhase::RequiredPoll => "required",
+            Cyw43DataTxRxFairnessPhase::Watching { deadline }
+                if cyw43_poll_deadline_is_open(&deadline) =>
+            {
+                "watching"
+            }
+            Cyw43DataTxRxFairnessPhase::Watching { .. } => "deadline-due",
+        }
+    };
+    (
+        state,
+        cursor.generation,
+        cursor.pair_epoch,
+        cursor.physical_lifetime_epoch,
+    )
 }
 
 /// Return a passive copy of the root-consumer handoff and loss counters.
@@ -9748,6 +9932,12 @@ pub(crate) fn cyw43_data_handoff_diagnostic() -> Cyw43DataHandoffDiagnostic {
     let committed = baseline.generation == generation
         && baseline_epoch_token == cyw43_epoch_token(generation)
         && cyw43_data_handoff_committed_for_generation(generation);
+    let (
+        rx_watch_state,
+        rx_watch_generation,
+        rx_watch_pair_epoch,
+        rx_watch_physical_lifetime_epoch,
+    ) = cyw43_data_rx_watch_diagnostic();
     Cyw43DataHandoffDiagnostic {
         generation,
         commit_epoch_token,
@@ -9755,6 +9945,12 @@ pub(crate) fn cyw43_data_handoff_diagnostic() -> Cyw43DataHandoffDiagnostic {
         publication_epoch_token,
         committed,
         consumer_open: committed && cyw43_data_consumer_open_for_generation(generation),
+        rx_watch_state,
+        rx_watch_generation,
+        rx_watch_pair_epoch,
+        rx_watch_physical_lifetime_epoch,
+        rx_watch_deadline_probes: CYW43_DATA_RX_WATCH_DEADLINE_PROBES.load(Ordering::Acquire),
+        rx_watch_terminals: CYW43_DATA_RX_WATCH_TERMINALS.load(Ordering::Acquire),
         baseline_generation: baseline.generation,
         root_rx_queue_len,
         root_rx_queue_cap: CYW43_PENDING_RX_QUEUE_CAP as u32,
@@ -20737,6 +20933,7 @@ fn complete_cyw43_data_tx_rx_fairness(
 ) -> bool {
     if pending.owner != Cyw43PromptPollOwner::NetData
         || pending.descriptor.op != DRIVER_RUNTIME_CYW43_OP_RX_POLL
+        || pending.descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD == 0
         || completion.sequence == 0
         || pending
             .request
@@ -20757,32 +20954,22 @@ fn complete_cyw43_data_tx_rx_fairness(
     let Some(mut cursor) = *slot else {
         return false;
     };
-    if cursor.generation != pending.generation {
+    if cursor.generation != pending.generation
+        || !cyw43_data_tx_rx_fairness_identity_current(cursor)
+    {
+        if cursor.generation == pending.generation {
+            *slot = None;
+        }
         return false;
     }
-    if completion.code == DriverTaskCompletionCode::FrameReady.as_u16() {
-        *slot = None;
-        return true;
-    }
-    match cursor.phase {
-        Cyw43DataTxRxFairnessPhase::RequiredPoll => {
-            cursor.phase = Cyw43DataTxRxFairnessPhase::Watching {
-                deadline: cyw43_poll_deadline_from_millis_or_polls(
-                    CYW43_DATA_TX_RX_WATCH_MS,
-                    CYW43_DATA_TX_RX_WATCH_FALLBACK_TERMINALS,
-                ),
-            };
-            *slot = Some(cursor);
-        }
-        Cyw43DataTxRxFairnessPhase::Watching { mut deadline } => {
-            if cyw43_poll_deadline_open(&mut deadline) {
-                cursor.phase = Cyw43DataTxRxFairnessPhase::Watching { deadline };
-                *slot = Some(cursor);
-            } else {
-                *slot = None;
-            }
-        }
-    }
+    cursor.phase = Cyw43DataTxRxFairnessPhase::Watching {
+        deadline: cyw43_poll_deadline_from_millis_or_polls(
+            CYW43_DATA_TX_RX_WATCH_MS,
+            CYW43_DATA_TX_RX_WATCH_FALLBACK_TERMINALS,
+        ),
+    };
+    *slot = Some(cursor);
+    increment_atomic_u32_saturating(&CYW43_DATA_RX_WATCH_TERMINALS);
     true
 }
 
@@ -24040,11 +24227,16 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         // Do not return copied RX with smoltcp's infallible paired TxToken
         // while the required post-TX poll is armed. Advance the existing sole
         // NetData op8 cursor first, preserve any child-queued frame, and let a
-        // later device callback deliver it after the exact terminal releases
-        // fresh TX. An empty terminal retains only the bounded receive watch;
-        // that phase follows the ordinary root-work fences below.
+        // later device callback deliver it after the exact source-probe
+        // terminal releases fresh TX. If the deadline became due while a
+        // queue-only op8 was retained, resume that immutable descriptor first;
+        // its terminal leaves RequiredPoll armed, and the following fresh op8
+        // performs the source probe. Only that source-probe terminal rearms
+        // Watching.
+        let rx_poll_flags =
+            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData);
         let completion = poll_cyw43_driver_task_data_completion_for_owner(
-            CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            rx_poll_flags,
             Cyw43PromptPollOwner::NetData,
         )?;
         let _ = preserve_driver_task_pre_poll_completion(
@@ -26070,7 +26262,7 @@ mod tests {
         CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
         CYW43_PAIR_SCRUB_EPOCH.store(0, Ordering::Release);
         CYW43_GENERATION_RECOVERY_ACTIVE.store(0, Ordering::Release);
-        CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.store(0, Ordering::Release);
+        set_cyw43_service_physical_lifetime_epoch_test_override(None);
         CYW43_REJOIN_PENDING_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_RX.store(0, Ordering::Release);
@@ -26137,6 +26329,9 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         CYW43_TEST_COUNTER_TICKS.store(0, Ordering::Release);
         CYW43_TEST_COUNTER_FREQ_HZ.store(0, Ordering::Release);
+        clear_cyw43_data_tx_rx_fairness();
+        CYW43_DATA_RX_WATCH_DEADLINE_PROBES.store(0, Ordering::Release);
+        CYW43_DATA_RX_WATCH_TERMINALS.store(0, Ordering::Release);
         begin_cyw43_outer_event_turn();
         CYW43_RX_FRAMES.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_OP.store(0, Ordering::Release);
@@ -26173,7 +26368,6 @@ mod tests {
         CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.store(0, Ordering::Release);
-        clear_cyw43_data_tx_rx_fairness();
         *CYW43_RETAINED_PRE_RECOVERY_GATE8.lock() = None;
         CYW43_STALE_RX_PURGED_TOTAL.store(0, Ordering::Release);
         CYW43_STALE_RX_PURGE_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -30791,6 +30985,12 @@ mod tests {
         generation: u32,
         dpc: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
     ) {
+        if CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == 0 {
+            CYW43_PAIR_SCRUB_EPOCH.store(1, Ordering::Release);
+        }
+        set_cyw43_service_physical_lifetime_epoch_test_override(Some(
+            generation.wrapping_add(0x1000).max(1),
+        ));
         *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = Some(dpc);
         CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
         invalidate_cyw43_data_handoff();
@@ -31257,6 +31457,7 @@ mod tests {
             completed_epoch: epoch,
             ..pi4_driver_abi::DriverRuntimeSdioPhysicalLifetimeRecord::empty()
         };
+        set_cyw43_service_physical_lifetime_epoch_test_override(None);
         let mut ring = test_publish_sdio_ring();
         ring.publish_physical_lifetime(record);
         supervisor.physical_lifetime_epoch = Some(epoch);
@@ -42904,6 +43105,7 @@ mod tests {
             ),
         ];
 
+        set_cyw43_service_physical_lifetime_epoch_test_override(None);
         for (label, record) in invalid_lifetimes {
             let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
             supervisor.phase = Cyw43BootstrapPhase::Complete;
@@ -48090,6 +48292,9 @@ mod tests {
         mark_cyw43_gate8_ready_for_test(generation);
         assert!(cyw43_data_handoff_diagnostic().committed);
         assert!(cyw43_current_generation_data_consumer_open());
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
 
         assert!(retract_cyw43_gate8_data_consumer(generation));
         let retracted = cyw43_data_handoff_diagnostic();
@@ -48097,16 +48302,58 @@ mod tests {
         assert_eq!(retracted.publication_epoch_token, 0);
         assert!(!retracted.consumer_open);
         assert!(
+            !cyw43_data_tx_rx_fairness_watching_for_generation(generation),
+            "retraction must remove the same generation's lifetime watch"
+        );
+        assert!(
             publish_cyw43_gate8_data_consumer_for_test(generation),
             "the unchanged exact Gate 8 snapshot may be freshly republished"
         );
         assert!(cyw43_current_generation_data_consumer_open());
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
 
         assert!(
             !retract_cyw43_gate8_data_consumer(generation.wrapping_sub(1)),
             "a stale retraction cannot close the newer published generation"
         );
         assert!(cyw43_current_generation_data_consumer_open());
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lifetime_receive_watch_fails_closed_on_pair_or_physical_change() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 37;
+        mark_cyw43_gate8_ready_for_test(generation);
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
+
+        CYW43_PAIR_SCRUB_EPOCH.fetch_add(1, Ordering::AcqRel);
+        assert!(
+            !cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "a prior physical pair cannot authorize a source probe"
+        );
+        assert!(!arm_cyw43_data_tx_rx_fairness(generation));
+
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(generation);
+        let replacement_physical_epoch = cyw43_completed_physical_lifetime_epoch()
+            .wrapping_add(1)
+            .max(1);
+        set_cyw43_service_physical_lifetime_epoch_test_override(Some(replacement_physical_epoch));
+        assert!(
+            !cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "a prior physical lifetime cannot authorize a source probe"
+        );
+        assert!(!arm_cyw43_data_tx_rx_fairness(generation));
+
         reset_cyw43_status_flags();
     }
 
@@ -48346,20 +48593,39 @@ mod tests {
             DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
             "an exact active descriptor must remain immutable as levels change"
         );
+        let retained_queue_only = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .take()
+            .expect("the immutable queue-only request remains retained");
+        assert!(
+            !complete_cyw43_data_tx_rx_fairness(
+                retained_queue_only,
+                DriverTaskCompletionRecord::idle(0x91),
+            ),
+            "the queue-only terminal cannot satisfy the required source probe"
+        );
+        assert!(cyw43_data_tx_rx_fairness_required_for_generation(
+            generation
+        ));
+        assert_eq!(
+            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+            CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            "the following fresh op8 must carry the still-required hintless source read"
+        );
 
         reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_rx_fairness_transitions_to_bounded_receive_watch() {
+    fn cyw43_rx_fairness_keeps_one_lifetime_receive_watch() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         let generation = 23;
         mark_cyw43_gate8_ready_for_test(generation);
-        arm_cyw43_data_tx_rx_fairness(generation);
+        assert!(arm_cyw43_data_tx_rx_fairness(generation));
         let pending = Cyw43PendingPromptPoll {
             ticket_id: 0x4944_4c45,
             owner: Cyw43PromptPollOwner::NetData,
@@ -48431,7 +48697,7 @@ mod tests {
             request: Some(0x94),
             ..pending
         };
-        arm_cyw43_data_tx_rx_fairness(generation);
+        assert!(arm_cyw43_data_tx_rx_fairness(generation));
         assert!(
             cyw43_data_tx_rx_fairness_required_for_generation(generation),
             "a TX accepted during the watch must rearm the same cursor as RequiredPoll"
@@ -48465,8 +48731,12 @@ mod tests {
             frame_ready,
         ));
         assert!(!cyw43_data_tx_rx_fairness_due_for_generation(generation));
+        assert!(
+            cyw43_data_tx_rx_fairness_watching_for_generation(generation),
+            "a received frame rearms rather than retires the lifetime watch"
+        );
 
-        arm_cyw43_data_tx_rx_fairness(generation);
+        assert!(arm_cyw43_data_tx_rx_fairness(generation));
         assert!(cyw43_data_tx_rx_fairness_required_for_generation(
             generation
         ));
@@ -48477,19 +48747,124 @@ mod tests {
         ));
         CYW43_TEST_COUNTER_TICKS.store(28_001, Ordering::Release);
         assert!(
-            !cyw43_data_tx_rx_fairness_due_for_generation(generation),
-            "the counter deadline must stop weighting an empty receive lane"
+            cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "an expired counter deadline must require the next quiet source probe"
+        );
+        let due_diagnostic = cyw43_data_handoff_diagnostic();
+        assert_eq!(due_diagnostic.rx_watch_state, "required");
+        assert_eq!(due_diagnostic.rx_watch_generation, generation);
+        assert_eq!(
+            due_diagnostic.rx_watch_pair_epoch,
+            CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire)
+        );
+        assert_eq!(
+            due_diagnostic.rx_watch_physical_lifetime_epoch,
+            cyw43_completed_physical_lifetime_epoch()
+        );
+        assert_eq!(due_diagnostic.rx_watch_deadline_probes, 1);
+        assert!(
+            cyw43_data_tx_rx_fairness_required_for_generation(generation),
+            "the expired watch becomes the same cursor's RequiredPoll phase"
         );
         assert!(
-            !complete_cyw43_data_tx_rx_fairness(
+            complete_cyw43_data_tx_rx_fairness(
                 watch_pending,
                 DriverTaskCompletionRecord::idle(0x94),
             ),
-            "expiry must retire the sole cursor before another terminal can claim it"
+            "the exact quiet source terminal must rearm the next interval"
         );
-        assert!(!cyw43_data_tx_rx_fairness_watching_for_generation(
+        assert!(
+            !cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "the rearmed cursor stays passive until its next deadline"
+        );
+        assert!(
+            cyw43_data_tx_rx_fairness_watching_for_generation(generation),
+            "the lifetime cursor cannot disappear at a quiet terminal"
+        );
+        let rearmed_diagnostic = cyw43_data_handoff_diagnostic();
+        assert_eq!(rearmed_diagnostic.rx_watch_state, "watching");
+        assert_eq!(rearmed_diagnostic.rx_watch_deadline_probes, 1);
+        assert_eq!(rearmed_diagnostic.rx_watch_terminals, 6);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lifetime_receive_watch_ignores_queue_only_terminals() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(10_000, Ordering::Release);
+        let generation = 24;
+        mark_cyw43_gate8_ready_for_test(generation);
+
+        let queue_only = Cyw43PendingPromptPoll {
+            ticket_id: 0x5155_4555,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0xa0),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: true,
+            child_reply_renewals: 0,
+        };
+        CYW43_TEST_COUNTER_TICKS.store(15_000, Ordering::Release);
+        assert!(
+            !complete_cyw43_data_tx_rx_fairness(queue_only, DriverTaskCompletionRecord::idle(0xa0),),
+            "a queue-only terminal did not prove a physical source read"
+        );
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
             generation
         ));
+
+        CYW43_TEST_COUNTER_TICKS.store(18_001, Ordering::Release);
+        assert!(
+            cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "queue-only activity cannot slide the lifetime source-probe deadline"
+        );
+        let required_queue_only = Cyw43PendingPromptPoll {
+            request: Some(0xa1),
+            ..queue_only
+        };
+        assert!(
+            !complete_cyw43_data_tx_rx_fairness(
+                required_queue_only,
+                DriverTaskCompletionRecord::idle(0xa1),
+            ),
+            "a retained queue-only request cannot satisfy a newly due source probe"
+        );
+        assert!(cyw43_data_tx_rx_fairness_required_for_generation(
+            generation
+        ));
+        assert_eq!(cyw43_data_handoff_diagnostic().rx_watch_terminals, 0);
+
+        let source_probe = Cyw43PendingPromptPoll {
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..queue_only.descriptor
+            },
+            request: Some(0xa2),
+            ..queue_only
+        };
+        assert!(complete_cyw43_data_tx_rx_fairness(
+            source_probe,
+            DriverTaskCompletionRecord::idle(0xa2),
+        ));
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation
+        ));
+        assert_eq!(cyw43_data_handoff_diagnostic().rx_watch_terminals, 1);
 
         reset_cyw43_status_flags();
     }
