@@ -34,6 +34,7 @@ DRIVER_RUNTIME_EMBED_CPIO_NAME="cohesix-driver-runtimes.cpio"
 ROOT_TASK_STRIP_DIR="${ROOT_DIR}/out/pi4-root-task-stripped"
 PI4_ASSEMBLY_DIR="${ROOT_DIR}/out/pi4-image-assembly"
 FLASH_DISK=""
+INITIALIZE_DISK=0
 DISK_LABEL="COHESIX"
 ROOT_TASK_FEATURES="release-pi4,bootstrap-trace"
 SKIP_BUILD=0
@@ -44,7 +45,8 @@ RESTORE_CANONICAL_CODEGEN=0
 PRESERVED_POLICY_TEMP=""
 POLICY_RECOVERY_FILE=""
 POLICY_RECOVERY_CONSUMED_FILE=""
-FLASH_ERASE_STARTED=0
+FLASH_MEDIA_MUTATION_STARTED=0
+FLASH_CAFFEINATE_PID=""
 PI4_DTB_PADDED_SIZE=$((128 * 1024))
 U_BOOT_CROSS_COMPILE="aarch64-linux-gnu-"
 U_BOOT_MENU_INPUT="usb"
@@ -77,7 +79,9 @@ Builds and stages a Pi 4 SD payload with:
   - Linux brcmfmac dynamic-debug helpers for known-good Wi-Fi trace capture
 
 By default this script only builds/stages files under out/pi4-sd.
-To erase and flash an SD card, pass --flash-disk /dev/diskN explicitly.
+To refresh an existing canonical Cohesix SD card, pass
+--flash-disk /dev/diskN explicitly. Whole-disk initialization additionally
+requires --initialize-disk.
 
 Options:
   --manifest <path>         Manifest input for root-task build:
@@ -98,7 +102,10 @@ Options:
   --clean                   Clean and rebuild root-task and Pi 4 U-Boot outputs;
                             never rebuild or mutate seL4/build_UBOOT
   --skip-build              Reuse the provenance-bound exact-image assembly
-  --flash-disk <device>     Erase + flash SD card (example: /dev/disk16)
+  --flash-disk <device>     Refresh an existing canonical COHESIX card
+                            (example: /dev/disk16)
+  --initialize-disk         Explicitly create the one-partition MBR/FAT32
+                            layout before flashing; never selected implicitly
   --policy-recovery-file <path>
                             Explicit private cohesix.env copy retained by a
                             prior interrupted flash
@@ -1304,6 +1311,10 @@ parse_args() {
                 FLASH_DISK="$2"
                 shift 2
                 ;;
+            --initialize-disk)
+                INITIALIZE_DISK=1
+                shift
+                ;;
             --policy-recovery-file)
                 [[ $# -ge 2 ]] || fail "--policy-recovery-file requires a path"
                 POLICY_RECOVERY_FILE="$2"
@@ -1385,6 +1396,9 @@ validate_output_paths() {
                 fail "--policy-recovery-file must be outside the replaceable stage directory"
                 ;;
         esac
+    fi
+    if [[ "${INITIALIZE_DISK}" -eq 1 ]]; then
+        [[ -n "${FLASH_DISK}" ]] || fail "--initialize-disk requires --flash-disk"
     fi
     for protected in \
         "$SEL4_BUILD_DIR" \
@@ -1512,11 +1526,12 @@ restore_canonical_codegen() {
 cleanup() {
     local status=$?
     trap - EXIT
+    stop_flash_caffeinate
     if [[ -n "${PRESERVED_POLICY_TEMP:-}" ]]; then
-        if [[ "$status" -ne 0 && "${FLASH_ERASE_STARTED:-0}" -eq 1 && \
+        if [[ "$status" -ne 0 && "${FLASH_MEDIA_MUTATION_STARTED:-0}" -eq 1 && \
               -z "${POLICY_RECOVERY_CONSUMED_FILE:-}" ]]; then
             chmod 600 "$PRESERVED_POLICY_TEMP" 2>/dev/null || true
-            log "Retained saved policy after interrupted erase: ${PRESERVED_POLICY_TEMP}"
+            log "Retained saved policy after interrupted media update: ${PRESERVED_POLICY_TEMP}"
             log "Retry with --policy-recovery-file ${PRESERVED_POLICY_TEMP}"
         else
             rm -f "$PRESERVED_POLICY_TEMP"
@@ -2173,27 +2188,43 @@ EOF
 
 flash_sd_card() {
     local disk="$1"
-    local wait_attempts=45
+    local wait_attempts=20
     local policy_file="cohesix.env"
     local preserved_policy=""
+    local target_identity=""
+    local current_identity=""
+    local validation_layout="canonical"
+    local part=""
+    local exact_part=""
+    local preflash_volume=""
+    local volume=""
+    local current_volume=""
 
     command -v diskutil >/dev/null 2>&1 || fail "diskutil not found"
     command -v rsync >/dev/null 2>&1 || fail "rsync not found"
+    command -v cmp >/dev/null 2>&1 || fail "cmp not found"
 
-    [[ "$disk" == /dev/disk* ]] || fail "--flash-disk must look like /dev/diskN"
-    diskutil info "$disk" >/dev/null 2>&1 || fail "disk not found: ${disk}"
+    [[ "$disk" =~ ^/dev/disk[0-9]+$ ]] || \
+      fail "--flash-disk must name one explicit whole disk such as /dev/disk16"
+    require_flash_session_unlocked
+    start_flash_caffeinate
+    require_flash_session_unlocked
+    if [[ "${INITIALIZE_DISK}" -eq 1 ]]; then
+        validation_layout="initialize"
+    fi
+    target_identity="$(validated_flash_target_identity "$disk" "$validation_layout")" || \
+      fail "refusing unsafe flash target: ${disk}"
 
-    diskutil mountDisk "$disk" >/dev/null 2>&1 || true
-    local preflash_volume="/Volumes/${DISK_LABEL}"
-    local disk_basename="${disk#/dev/}"
-    if [[ -d "$preflash_volume" ]]; then
-        local preflash_whole=""
-        preflash_whole="$(diskutil_info_value "$preflash_volume" "Part of Whole")"
-        if [[ "$preflash_whole" != "$disk_basename" ]]; then
-            preflash_volume=""
-        fi
+    if part="$(canonical_flash_partition "$disk" "$DISK_LABEL" 2>/dev/null)"; then
+        diskutil mount "$part" >/dev/null 2>&1 || true
+        preflash_volume="$(validated_flash_partition_mount "$disk" "$part" "$DISK_LABEL")" || \
+          fail "failed to validate the exact ${DISK_LABEL} child ${part}"
+        [[ -n "$preflash_volume" && -d "$preflash_volume" ]] || \
+          fail "failed to mount the exact ${DISK_LABEL} child ${part}"
+    elif [[ "${INITIALIZE_DISK}" -eq 0 ]]; then
+        fail "${disk} must already contain exactly one MBR FAT32 ${DISK_LABEL} partition; use --initialize-disk only for intentional first-time media setup"
     else
-        preflash_volume=""
+        part="${disk}s1"
     fi
 
     if [[ -n "${POLICY_RECOVERY_FILE}" ]]; then
@@ -2215,6 +2246,10 @@ flash_sd_card() {
         POLICY_RECOVERY_CONSUMED_FILE="${POLICY_RECOVERY_FILE}"
         log "Using explicit private Cohesix policy recovery file"
     elif [[ -n "$preflash_volume" && -f "${preflash_volume}/${policy_file}" && -s "${preflash_volume}/${policy_file}" ]]; then
+        local existing_policy_size
+        existing_policy_size="$(stat -f '%z' "${preflash_volume}/${policy_file}")"
+        [[ "$existing_policy_size" =~ ^[0-9]+$ && "$existing_policy_size" -le 384 ]] || \
+          fail "existing ${policy_file} exceeds the 384-byte Cohesix policy bound"
         preserved_policy="$(mktemp "${TMPDIR:-/tmp}/cohesix-policy.XXXXXX")"
         chmod 600 "$preserved_policy"
         cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"
@@ -2223,28 +2258,40 @@ flash_sd_card() {
         log "Preserving existing Cohesix U-Boot policy file ${policy_file} across flash"
     fi
 
-    log "Flashing ${disk} (this erases the target disk)"
-    diskutil unmountDisk force "$disk" >/dev/null 2>&1 || true
-    FLASH_ERASE_STARTED=1
-    local erase_status=0
-    if diskutil eraseDisk FAT32 "$DISK_LABEL" MBRFormat "$disk" >/dev/null; then
-        erase_status=0
-    else
-        erase_status=$?
-        log "diskutil eraseDisk returned status=${erase_status}; checking for mounted ${DISK_LABEL} partition before failing"
-    fi
+    current_identity="$(validated_flash_target_identity "$disk" "$validation_layout")" || \
+      fail "flash target disappeared before the critical section: ${disk}"
+    [[ "$current_identity" == "$target_identity" ]] || \
+      fail "flash target identity changed before the critical section: ${disk}"
 
-    local part=""
-    local volume=""
-    if ! resolve_flash_partition_after_erase "$disk" "$DISK_LABEL" "$wait_attempts"; then
-        fail "failed to find mounted FAT partition after erasing ${disk}"
+    if [[ "${INITIALIZE_DISK}" -eq 1 ]]; then
+        require_flash_session_unlocked
+        log "Initializing ${disk} as one MBR/FAT32 ${DISK_LABEL} partition (explicit opt-in)"
+        FLASH_MEDIA_MUTATION_STARTED=1
+        if ! diskutil eraseDisk FAT32 "$DISK_LABEL" MBRFormat "$disk" >/dev/null; then
+            fail "explicit initialization failed for ${disk}; policy recovery was retained"
+        fi
+        if ! resolve_exact_flash_partition_after_initialize \
+          "$disk" "$part" "$DISK_LABEL" "$target_identity" "$wait_attempts"; then
+            fail "exact target ${disk}/${part} disappeared or changed after initialization; refusing to select another disk"
+        fi
+        part="$FLASH_PARTITION_DEVICE"
+        volume="$FLASH_PARTITION_MOUNT"
+    else
+        exact_part="$(canonical_flash_partition "$disk" "$DISK_LABEL")" || \
+          fail "canonical ${DISK_LABEL} partition disappeared before copy"
+        [[ "$exact_part" == "$part" ]] || \
+          fail "canonical ${DISK_LABEL} partition changed before copy"
+        volume="$(validated_flash_partition_mount "$disk" "$part" "$DISK_LABEL")" || \
+          fail "canonical ${DISK_LABEL} partition identity changed before copy"
+        [[ "$volume" == "$preflash_volume" && -d "$volume" ]] || \
+          fail "canonical ${DISK_LABEL} mount changed before copy"
+        FLASH_PARTITION_DEVICE="$part"
+        FLASH_PARTITION_MOUNT="$volume"
+        require_flash_session_unlocked
+        FLASH_MEDIA_MUTATION_STARTED=1
+        log "Refreshing ${disk} in place through mounted exact child ${part}; partition map and FAT volume are retained"
     fi
-    part="$FLASH_PARTITION_DEVICE"
-    volume="$FLASH_PARTITION_MOUNT"
-    [[ -n "$part" && -d "$volume" ]] || fail "failed to find mounted FAT partition after erasing ${disk}"
-    if [[ "$erase_status" -ne 0 ]]; then
-        log "Continuing after recoverable eraseDisk status=${erase_status}; using ${part} at ${volume}"
-    fi
+    [[ -n "$part" && -d "$volume" ]] || fail "exact flash volume is unavailable"
     disable_spotlight_for_flash_volume "$volume"
 
     COPYFILE_DISABLE=1 rsync -a --delete \
@@ -2253,15 +2300,12 @@ flash_sd_card() {
       --exclude=".Trashes" \
       --exclude=".metadata_never_index" \
       --exclude="._*" \
+      --exclude="${policy_file}" \
       "${STAGE_DIR}/" "${volume}/"
 
     if [[ -n "$preserved_policy" && -f "$preserved_policy" ]]; then
         cp -f "$preserved_policy" "${volume}/${policy_file}"
         chmod 600 "${volume}/${policy_file}" 2>/dev/null || true
-        rm -f "$preserved_policy"
-        preserved_policy=""
-        PRESERVED_POLICY_TEMP=""
-        FLASH_ERASE_STARTED=0
         log "Restored preserved Cohesix U-Boot policy file ${policy_file}"
     fi
 
@@ -2270,16 +2314,33 @@ flash_sd_card() {
 
     sync
 
-    local stage_hash sd_hash
-    local stage_fallback_hash sd_fallback_hash
-    stage_hash="$(shasum -a 256 "${STAGE_DIR}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
-    sd_hash="$(shasum -a 256 "${volume}/${COHESIX_IMAGE_NAME}" | awk '{print $1}')"
-    [[ "$stage_hash" == "$sd_hash" ]] || fail "rootserver image hash mismatch after flash"
-    stage_fallback_hash="$(shasum -a 256 "${STAGE_DIR}/${SEL4_UPSTREAM_IMAGE_NAME}" | awk '{print $1}')"
-    sd_fallback_hash="$(shasum -a 256 "${volume}/${SEL4_UPSTREAM_IMAGE_NAME}" | awk '{print $1}')"
-    [[ "$stage_fallback_hash" == "$sd_fallback_hash" ]] || fail "fallback image hash mismatch after flash"
+    verify_flashed_stage_files "$volume"
+    if [[ -n "$preserved_policy" && -f "$preserved_policy" ]]; then
+        cmp -s "$preserved_policy" "${volume}/${policy_file}" || \
+          fail "preserved ${policy_file} mismatch after flash"
+    fi
+
+    current_identity="$(validated_flash_target_identity "$disk")" || \
+      fail "flash target disappeared before readback completion: ${disk}"
+    [[ "$current_identity" == "$target_identity" ]] || \
+      fail "flash target identity changed before readback completion: ${disk}"
+    exact_part="$(canonical_flash_partition "$disk" "$DISK_LABEL")" || \
+      fail "canonical ${DISK_LABEL} partition disappeared before readback completion"
+    [[ "$exact_part" == "$part" ]] || \
+      fail "canonical ${DISK_LABEL} partition changed before readback completion"
+    current_volume="$(validated_flash_partition_mount "$disk" "$part" "$DISK_LABEL")" || \
+      fail "canonical ${DISK_LABEL} mount identity changed before readback completion"
+    [[ "$current_volume" == "$volume" && -d "$current_volume" ]] || \
+      fail "canonical ${DISK_LABEL} mount changed before readback completion"
 
     unmount_flashed_disk "$disk" "$volume"
+    FLASH_MEDIA_MUTATION_STARTED=0
+    stop_flash_caffeinate
+    if [[ -n "$preserved_policy" && -f "$preserved_policy" ]]; then
+        rm -f "$preserved_policy"
+        preserved_policy=""
+        PRESERVED_POLICY_TEMP=""
+    fi
     if [[ -n "${POLICY_RECOVERY_CONSUMED_FILE}" ]]; then
         rm -f "${POLICY_RECOVERY_CONSUMED_FILE}"
         POLICY_RECOVERY_CONSUMED_FILE=""
@@ -2288,75 +2349,269 @@ flash_sd_card() {
     log "Flash complete and unmounted: ${disk}"
 }
 
-diskutil_info_value() {
-    local target="$1"
-    local key="$2"
-    diskutil info "$target" 2>/dev/null | awk -F: -v key="$key" '
-        $1 ~ "^[[:space:]]*" key "$" {
-            value=$2
-            sub(/^[[:space:]]+/, "", value)
-            sub(/[[:space:]]+$/, "", value)
-            print value
-            exit
-        }
-    '
+validated_flash_target_identity() {
+    local disk="$1"
+    local layout="${2:-canonical}"
+    local disk_basename="${disk#/dev/}"
+
+    diskutil info -plist "$disk" 2>/dev/null | python3 -c '
+import hashlib
+import json
+import plistlib
+import sys
+
+disk = sys.argv[1]
+identifier = sys.argv[2]
+layout = sys.argv[3]
+try:
+    info = plistlib.loads(sys.stdin.buffer.read())
+except Exception as error:
+    print(f"cannot read disk identity for {disk}: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+def require(condition, message):
+    if not condition:
+        print(f"unsafe flash target {disk}: {message}", file=sys.stderr)
+        raise SystemExit(2)
+
+require(info.get("DeviceIdentifier") == identifier, "device identifier changed")
+require(info.get("DeviceNode") == disk, "device node changed")
+require(info.get("WholeDisk") is True, "target is not a whole disk")
+require(info.get("ParentWholeDisk") == identifier, "whole-disk parent mismatch")
+if layout == "canonical":
+    require(info.get("Content") == "FDisk_partition_scheme", "partition map is not MBR")
+elif layout != "initialize":
+    require(False, f"unknown validation layout {layout!r}")
+require(info.get("Writable") is True and info.get("WritableMedia") is True, "media is read-only")
+require(
+    info.get("RemovableMediaOrExternalDevice") is True
+    and (info.get("Removable") is True or info.get("Ejectable") is True),
+    "media is neither removable nor ejectable",
+)
+require(info.get("VirtualOrPhysical") == "Physical", "target is not physical media")
+require(info.get("SystemImage") is not True, "target is a system image")
+require(info.get("OSInternalMedia") is not True, "target is OS-internal media")
+require(isinstance(info.get("TotalSize"), int) and info["TotalSize"] > 0, "media size is invalid")
+
+stable = {
+    key: info.get(key)
+    for key in (
+        "DeviceIdentifier",
+        "DeviceNode",
+        "ParentWholeDisk",
+        "TotalSize",
+        "IOKitSize",
+        "DeviceBlockSize",
+        "MediaName",
+        "BusProtocol",
+        "DeviceTreePath",
+        "IORegistryEntryName",
+    )
+}
+encoded = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode()
+print(hashlib.sha256(encoded).hexdigest())
+' "$disk" "$disk_basename" "$layout"
+}
+
+canonical_flash_partition() {
+    local disk="$1"
+    local label="$2"
+    local disk_basename="${disk#/dev/}"
+
+    diskutil list -plist "$disk" 2>/dev/null | python3 -c '
+import plistlib
+import sys
+
+identifier = sys.argv[1]
+label = sys.argv[2]
+try:
+    listing = plistlib.loads(sys.stdin.buffer.read())
+except Exception as error:
+    print(f"cannot read partition list for {identifier}: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+matches = [
+    disk
+    for disk in listing.get("AllDisksAndPartitions", [])
+    if disk.get("DeviceIdentifier") == identifier
+]
+if len(matches) != 1:
+    print(f"expected one exact whole-disk record for {identifier}", file=sys.stderr)
+    raise SystemExit(2)
+partitions = matches[0].get("Partitions", [])
+expected = f"{identifier}s1"
+if len(partitions) != 1:
+    print(f"{identifier} must contain exactly one partition", file=sys.stderr)
+    raise SystemExit(2)
+partition = partitions[0]
+if (
+    partition.get("DeviceIdentifier") != expected
+    or partition.get("Content") != "DOS_FAT_32"
+    or partition.get("VolumeName") != label
+):
+    print(f"{identifier} does not contain exact FAT32 {label} child {expected}", file=sys.stderr)
+    raise SystemExit(2)
+print(f"/dev/{expected}")
+' "$disk_basename" "$label"
+}
+
+validated_flash_partition_mount() {
+    local disk="$1"
+    local part="$2"
+    local label="$3"
+    local disk_basename="${disk#/dev/}"
+    local part_basename="${part#/dev/}"
+
+    diskutil info -plist "$part" 2>/dev/null | python3 -c '
+import plistlib
+import sys
+
+disk = sys.argv[1]
+partition = sys.argv[2]
+label = sys.argv[3]
+try:
+    info = plistlib.loads(sys.stdin.buffer.read())
+except Exception as error:
+    print(f"cannot read partition identity for {partition}: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+checks = (
+    (info.get("DeviceIdentifier") == partition, "partition identifier changed"),
+    (info.get("DeviceNode") == f"/dev/{partition}", "partition node changed"),
+    (info.get("WholeDisk") is False, "child unexpectedly became a whole disk"),
+    (info.get("ParentWholeDisk") == disk, "partition parent changed"),
+    (info.get("Content") == "DOS_FAT_32", "partition is not FAT32"),
+    (info.get("VolumeName") == label, "partition label changed"),
+    (
+        info.get("Writable") is True and info.get("WritableMedia") is True,
+        "partition is read-only",
+    ),
+)
+for valid, message in checks:
+    if not valid:
+        print(f"invalid flash partition /dev/{partition}: {message}", file=sys.stderr)
+        raise SystemExit(2)
+mount = info.get("MountPoint")
+if isinstance(mount, str):
+    print(mount)
+' "$disk_basename" "$part_basename" "$label"
 }
 
 FLASH_PARTITION_DEVICE=""
 FLASH_PARTITION_MOUNT=""
-resolve_flash_partition_after_erase() {
+resolve_exact_flash_partition_after_initialize() {
     local disk="$1"
-    local label="$2"
-    local wait_attempts="$3"
+    local part="$2"
+    local label="$3"
+    local expected_identity="$4"
+    local wait_attempts="$5"
     local attempt
-    local candidate
-    local part
+    local identity
+    local exact_part
     local volume
 
     FLASH_PARTITION_DEVICE=""
     FLASH_PARTITION_MOUNT=""
     for attempt in $(seq 1 "$wait_attempts"); do
-        for candidate in "${disk}s1" "/Volumes/${label}" /Volumes/"${label}"\ *; do
-            [[ -e "$candidate" || -d "$candidate" ]] || continue
-            part="$(diskutil_info_value "$candidate" "Device Node")"
-            volume="$(diskutil_info_value "$candidate" "Mount Point")"
-            if [[ -n "$part" ]]; then
-                if [[ -z "$volume" || "$volume" == "Not mounted" ]]; then
-                    diskutil mount "$part" >/dev/null 2>&1 || true
-                    volume="$(diskutil_info_value "$part" "Mount Point")"
-                fi
-                if [[ -d "$volume" ]]; then
+        identity="$(validated_flash_target_identity "$disk" 2>/dev/null)" || identity=""
+        if [[ -n "$identity" && "$identity" == "$expected_identity" ]]; then
+            exact_part="$(canonical_flash_partition "$disk" "$label" 2>/dev/null)" || exact_part=""
+            if [[ "$exact_part" == "$part" ]]; then
+                diskutil mount "$part" >/dev/null 2>&1 || true
+                volume="$(validated_flash_partition_mount "$disk" "$part" "$label" 2>/dev/null)" || volume=""
+                if [[ -n "$volume" && -d "$volume" ]]; then
                     FLASH_PARTITION_DEVICE="$part"
                     FLASH_PARTITION_MOUNT="$volume"
                     return 0
                 fi
             fi
-        done
-
-        part="$(diskutil list | awk -v label="$label" '$0 ~ label { print "/dev/" $NF; exit }')"
-        if [[ -n "$part" && "$part" == /dev/disk*s* ]]; then
-            diskutil mount "$part" >/dev/null 2>&1 || true
-            volume="$(diskutil_info_value "$part" "Mount Point")"
-            if [[ -d "$volume" ]]; then
-                FLASH_PARTITION_DEVICE="$part"
-                FLASH_PARTITION_MOUNT="$volume"
-                return 0
-            fi
-        fi
-
-        if diskutil info "$disk" >/dev/null 2>&1; then
-            diskutil mountDisk "$disk" >/dev/null 2>&1 || true
         fi
         sleep 1
     done
     return 1
 }
 
+verify_flashed_stage_files() {
+    local volume="$1"
+    local staged
+    local relative
+    local target
+    local verified=0
+
+    while IFS= read -r -d '' staged; do
+        relative="${staged#${STAGE_DIR}/}"
+        target="${volume}/${relative}"
+        [[ -f "$target" ]] || fail "staged file missing after flash: ${relative}"
+        cmp -s "$staged" "$target" || fail "staged file mismatch after flash: ${relative}"
+        verified=$((verified + 1))
+    done < <(find "$STAGE_DIR" -type f -print0)
+    [[ "$verified" -gt 0 ]] || fail "stage contains no regular files to verify"
+    log "Verified all ${verified} staged regular files on the flash target"
+}
+
+require_flash_session_unlocked() {
+    command -v ioreg >/dev/null 2>&1 || fail "ioreg not found"
+
+    if ! ioreg -n Root -d1 -a 2>/dev/null | python3 -c '
+import os
+import plistlib
+import sys
+
+try:
+    root = plistlib.loads(sys.stdin.buffer.read())
+except Exception as error:
+    print(f"cannot inspect console lock state: {error}", file=sys.stderr)
+    raise SystemExit(2)
+
+uid = os.getuid()
+sessions = [
+    session
+    for session in root.get("IOConsoleUsers", [])
+    if session.get("kCGSSessionOnConsoleKey") is True
+    and session.get("kCGSessionLoginDoneKey") is True
+    and session.get("kCGSSessionUserIDKey") == uid
+]
+if (
+    len(sessions) != 1
+    or root.get("IOConsoleLocked") is not False
+    or sessions[0].get("CGSSessionScreenIsLocked") is True
+):
+    print(
+        "the active macOS console must be unlocked before flashing; "
+        "a locked loginwindow can eject removable media during mount",
+        file=sys.stderr,
+    )
+    raise SystemExit(2)
+'; then
+        fail "refusing to flash while the active macOS console is locked"
+    fi
+}
+
+start_flash_caffeinate() {
+    command -v caffeinate >/dev/null 2>&1 || fail "caffeinate not found"
+    [[ -z "${FLASH_CAFFEINATE_PID:-}" ]] || fail "flash caffeinate guard is already active"
+
+    caffeinate -dimsu -t 3600 -w "$$" >/dev/null 2>&1 &
+    FLASH_CAFFEINATE_PID=$!
+    sleep 1
+    kill -0 "$FLASH_CAFFEINATE_PID" 2>/dev/null || \
+      fail "failed to establish the macOS flash caffeinate guard"
+    log "Holding display, idle, disk, system, and user-active assertions during flash"
+}
+
+stop_flash_caffeinate() {
+    if [[ -n "${FLASH_CAFFEINATE_PID:-}" ]]; then
+        kill "$FLASH_CAFFEINATE_PID" 2>/dev/null || true
+        wait "$FLASH_CAFFEINATE_PID" 2>/dev/null || true
+        FLASH_CAFFEINATE_PID=""
+    fi
+}
+
 disable_spotlight_for_flash_volume() {
     local volume="$1"
 
-    # macOS can start Spotlight metadata sync on a freshly erased FAT volume
-    # before the final unmount, which makes diskutil report an mdsync dissenter.
+    # macOS can start Spotlight metadata sync on a FAT volume before the final
+    # unmount, which makes diskutil report an mdsync dissenter.
     # The marker is the documented non-root opt-out for removable volumes.
     touch "${volume}/.metadata_never_index" 2>/dev/null || true
     mkdir -p "${volume}/.fseventsd" 2>/dev/null || true
@@ -2390,9 +2645,9 @@ unmount_flashed_disk() {
         sleep 1
     done
 
-    log "Final volume unmount was blocked; forcing whole-disk unmount for ${disk}"
-    if ! output="$(diskutil unmountDisk force "$disk" 2>&1)"; then
-        fail "failed to unmount flashed disk ${disk}: ${output}"
+    log "Final volume unmount was blocked; forcing exact-child unmount for ${volume}"
+    if ! output="$(diskutil unmount force "$volume" 2>&1)"; then
+        fail "failed to unmount flashed volume ${volume} on ${disk}: ${output}"
     fi
 }
 

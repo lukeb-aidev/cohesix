@@ -165,16 +165,24 @@ separate entries in the flash ledger.
 
 ### 2. Verify the Flash Target
 
-Flashing is destructive. Identify the whole removable disk twice:
+Flashing is destructive. Identify both the whole removable medium and its exact
+existing Cohesix child:
 
 ```bash
-diskutil list external physical
+diskutil list
 diskutil info /dev/diskN
+diskutil list /dev/diskN
+diskutil info /dev/diskNs1
 ```
 
-Confirm the device node, external/removable status, size, and expected media.
-Do not infer the target from a stale `/Volumes/COHESIX` mount or a partition
-node such as `/dev/diskNs1`.
+Confirm that the whole node is physical, removable, writable, non-virtual, and
+the expected size/media. Apple's built-in SDXC reader reports its physical slot
+as `Internal`; the card must still report `Removable Media: Removable` and
+`Protocol: Secure Digital`. Confirm that the exact child is the expected
+writable FAT32 `COHESIX` volume and that its `Part of Whole` is the supplied
+whole-disk identifier. Do not infer the target from a stale
+`/Volumes/COHESIX` mount, a historical `/dev/diskN`, or any same-label volume
+on another disk.
 
 ### 3. Flash and Read Back
 
@@ -188,18 +196,47 @@ Only after verification, pass the explicit whole-disk node:
   --flash-disk /dev/diskN
 ```
 
-The flash path erases the target, preserves a non-empty `cohesix.env` found on
-the expected existing volume, restores it with restricted permissions, checks
-the staged root and fallback image hashes, and unmounts the disk. Do not print
-the policy file: it may contain Wi-Fi credentials.
+Routine reflash is a single in-place content-replacement lane on that already
+provisioned exact child. The helper refuses a locked macOS console session,
+holds a bounded `caffeinate` assertion through the media-critical section,
+revalidates the child/whole relationship immediately before mutation, preserves
+the non-empty `cohesix.env` without printing it, and synchronizes the staged
+payload with deletion of obsolete payload files. It does not call
+`diskutil eraseDisk`, reformat the volume, force-unmount the whole medium, or
+search every mounted volume for the `COHESIX` label. It verifies every staged
+regular file byte-for-byte, restores and verifies the bounded private policy,
+syncs, and unmounts only the exact child.
 
-Keep the Mac unlocked throughout erase and copy. If macOS ejects or refuses to
-mount the new FAT partition after erase, the helper retains the private policy
-copy with mode `0600` and prints its path. Reinsert and reverify the whole disk,
-then retry with `--policy-recovery-file <printed-path>`. Recovery refuses to
-replace a different non-empty on-card policy, enforces the 384-byte policy
-bound, and removes the private recovery file only after the flash has been
-hash-verified and unmounted successfully.
+This lock guard is mandatory, not advisory. When `loginwindow` denies the mount
+of a newly created removable volume, Disk Arbitration may immediately eject the
+whole medium and remove its BSD nodes even though formatting succeeded. A mount
+retry cannot recover an `Ejected=Yes` medium; physically reinsert it, rediscover
+the new `/dev/diskN`, and revalidate the target before continuing.
+
+Whole-disk MBR/FAT provisioning is a separate explicit first-use or repair
+operation:
+
+```bash
+./scripts/pi4-image-build.sh \
+  --manifest configs/root_task_pi4_uboot_aarch64.toml \
+  --venv .venv \
+  --skip-build \
+  --flash-disk /dev/diskN \
+  --initialize-disk
+```
+
+Never use `--initialize-disk` for an ordinary reflash. It is the only lane
+allowed to recreate partition topology. The helper rechecks that the Mac is
+unlocked immediately before that operation and never falls back to it when
+normal exact-child validation fails.
+
+If any media mutation is interrupted, the helper retains the private policy
+copy with mode `0600` and prints its path. Reinsert if macOS has removed the BSD
+node, rediscover and reverify the whole disk, then retry the normal reflash with
+`--policy-recovery-file <printed-path>`. Recovery refuses to replace a
+different non-empty on-card policy, enforces the 384-byte policy bound, and
+removes the private recovery file only after the complete staged payload has
+been verified and the exact child unmounted successfully.
 
 For acceptance, remount the media and independently compare every staged
 artifact. Re-run `scripts/pi4_image_identity.py verify` on the read-back primary

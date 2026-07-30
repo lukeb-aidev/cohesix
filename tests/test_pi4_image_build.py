@@ -5,7 +5,10 @@
 """Tests for scripts/pi4-image-build.sh."""
 
 import hashlib
+import os
 import pathlib
+import plistlib
+import shlex
 import shutil
 import subprocess
 
@@ -397,33 +400,35 @@ def test_pi4_image_build_serial_wifi_missing_policy_uses_simple_prompt() -> None
     assert "setenv coh_menu_page interface" in wifi_capture
 
 
-def test_pi4_image_build_mounts_target_before_preserving_policy() -> None:
-    """Reflash must not drop saved Wi-Fi policy just because the card is unmounted."""
+def test_pi4_image_build_validates_exact_target_before_preserving_policy() -> None:
+    """Normal reflash must bind policy to the exact child of the supplied disk."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     flash_start = source.index("flash_sd_card() {")
-    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+    flash_body = source[flash_start : source.index("\nvalidated_flash_target_identity() {")]
 
-    assert 'diskutil mountDisk "$disk" >/dev/null 2>&1 || true' in flash_body
-    assert 'preflash_volume="/Volumes/${DISK_LABEL}"' in flash_body
-    assert 'disk_basename="${disk#/dev/}"' in flash_body
-    assert 'diskutil_info_value "$preflash_volume" "Part of Whole"' in flash_body
-    assert '[[ "$preflash_whole" != "$disk_basename" ]]' in flash_body
+    assert 'part="$(canonical_flash_partition "$disk" "$DISK_LABEL"' in flash_body
+    assert 'diskutil mount "$part" >/dev/null 2>&1 || true' in flash_body
+    assert 'validated_flash_partition_mount "$disk" "$part" "$DISK_LABEL"' in flash_body
+    assert 'diskutil mountDisk "$disk"' not in flash_body
+    assert 'preflash_volume="/Volumes/${DISK_LABEL}"' not in flash_body
     assert 'cp -f "${preflash_volume}/${policy_file}" "$preserved_policy"' in flash_body
+    assert 'diskutil list | awk' not in source
+    assert '/Volumes/"${label}"\\ *' not in source
 
 
-def test_pi4_image_build_retains_policy_after_interrupted_erase() -> None:
-    """A post-erase mount failure must not delete the only saved policy copy."""
+def test_pi4_image_build_retains_policy_after_interrupted_media_mutation() -> None:
+    """A post-copy failure must not delete the only saved policy copy."""
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     cleanup_start = source.index("cleanup() {")
     cleanup_body = source[cleanup_start : source.index("\nsync_resolved_manifest_json() {")]
     flash_start = source.index("flash_sd_card() {")
-    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+    flash_body = source[flash_start : source.index("\nvalidated_flash_target_identity() {")]
 
-    assert 'FLASH_ERASE_STARTED=1' in flash_body
-    assert '"${FLASH_ERASE_STARTED:-0}" -eq 1' in cleanup_body
-    assert "Retained saved policy after interrupted erase" in cleanup_body
+    assert 'FLASH_MEDIA_MUTATION_STARTED=1' in flash_body
+    assert '"${FLASH_MEDIA_MUTATION_STARTED:-0}" -eq 1' in cleanup_body
+    assert "Retained saved policy after interrupted media update" in cleanup_body
     assert "Retry with --policy-recovery-file" in cleanup_body
     assert 'rm -f "$PRESERVED_POLICY_TEMP"' in cleanup_body
 
@@ -433,7 +438,7 @@ def test_pi4_image_build_policy_recovery_is_explicit_bounded_and_consumed() -> N
 
     source = SCRIPT_PATH.read_text(encoding="utf-8")
     flash_start = source.index("flash_sd_card() {")
-    flash_body = source[flash_start : source.index("\ndiskutil_info_value() {")]
+    flash_body = source[flash_start : source.index("\nvalidated_flash_target_identity() {")]
     unmount_index = flash_body.index('unmount_flashed_disk "$disk" "$volume"')
     consume_index = flash_body.index('rm -f "${POLICY_RECOVERY_CONSUMED_FILE}"')
 
@@ -445,10 +450,10 @@ def test_pi4_image_build_policy_recovery_is_explicit_bounded_and_consumed() -> N
     assert consume_index > unmount_index
 
 
-def test_pi4_image_build_cleanup_keeps_post_erase_policy_copy(
+def test_pi4_image_build_cleanup_keeps_post_mutation_policy_copy(
     tmp_path: pathlib.Path,
 ) -> None:
-    """The executable cleanup path must retain a private copy past erase."""
+    """The executable cleanup path must retain a private copy past mutation."""
 
     script = _copy_sourceable_build_script(tmp_path)
     policy = tmp_path / "cohesix-policy.test"
@@ -459,7 +464,8 @@ def test_pi4_image_build_cleanup_keeps_post_erase_policy_copy(
         script,
         (
             f"PRESERVED_POLICY_TEMP={str(policy)!r}; "
-            "POLICY_RECOVERY_CONSUMED_FILE=''; FLASH_ERASE_STARTED=1; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=1; "
             "COMPOSITION_ROOT=''; RESTORE_CANONICAL_CODEGEN=0; "
             "EXACT_GIT_COMMIT=''; set +e; false; cleanup"
         ),
@@ -468,8 +474,289 @@ def test_pi4_image_build_cleanup_keeps_post_erase_policy_copy(
     assert result.returncode == 1
     assert policy.is_file()
     assert policy.stat().st_mode & 0o777 == 0o600
-    assert "Retained saved policy after interrupted erase" in result.stdout
+    assert "Retained saved policy after interrupted media update" in result.stdout
     assert "Retry with --policy-recovery-file" in result.stdout
+
+
+def test_pi4_image_build_refreshes_exact_child_without_erasing(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Normal reflashes may mount but never recreate partition or FAT topology."""
+
+    fixture = _write_flash_command_fixture(tmp_path)
+    stage = tmp_path / "stage"
+    nested = stage / "overlays"
+    nested.mkdir(parents=True)
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+    (nested / "upstream.dtbo").write_bytes(b"overlay\n")
+    policy = fixture["volume"] / "cohesix.env"
+    policy.write_bytes(b"coh_net_mode=dhcp\n")
+    stale = fixture["volume"] / "stale.txt"
+    stale.write_text("remove me\n", encoding="utf-8")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert "mount /dev/disk20s1" in commands
+    assert f"unmount {fixture['volume']}" in commands
+    assert all("eraseDisk" not in command for command in commands)
+    assert all("eraseVolume" not in command for command in commands)
+    assert all("mountDisk" not in command for command in commands)
+    assert all("unmountDisk" not in command for command in commands)
+    assert all(command != "list" for command in commands)
+    assert policy.read_bytes() == b"coh_net_mode=dhcp\n"
+    assert not stale.exists()
+    assert (fixture["volume"] / "config.txt").read_bytes() == (
+        stage / "config.txt"
+    ).read_bytes()
+    assert (fixture["volume"] / "overlays" / "upstream.dtbo").read_bytes() == (
+        nested / "upstream.dtbo"
+    ).read_bytes()
+    assert "Verified all 2 staged regular files" in result.stdout
+    assert "-dimsu -t 3600 -w" in fixture["caffeinate_log"].read_text(
+        encoding="utf-8"
+    )
+
+
+def test_pi4_image_build_initializes_whole_disk_only_with_explicit_opt_in(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Whole-disk partitioning must be reachable only through --initialize-disk."""
+
+    fixture = _write_flash_command_fixture(tmp_path)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+
+    parsed_default = _source_function(
+        fixture["script"],
+        "INITIALIZE_DISK=0; parse_args --flash-disk /dev/disk20; "
+        'printf "%s\\n" "$INITIALIZE_DISK"',
+    )
+    parsed_explicit = _source_function(
+        fixture["script"],
+        "INITIALIZE_DISK=0; parse_args --flash-disk /dev/disk20 "
+        '--initialize-disk; printf "%s\\n" "$INITIALIZE_DISK"',
+    )
+    assert parsed_default.stdout.strip() == "0"
+    assert parsed_explicit.stdout.strip() == "1"
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=1; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert commands.count(
+        "eraseDisk FAT32 COHESIX MBRFormat /dev/disk20"
+    ) == 1
+    assert all("eraseVolume" not in command for command in commands)
+    assert all("unmountDisk" not in command for command in commands)
+
+
+def test_pi4_image_build_refuses_locked_console_before_media_update(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A loginwindow-locked Mac must fail before copy or initialization."""
+
+    fixture = _write_flash_command_fixture(tmp_path, locked=True)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+    policy = fixture["volume"] / "cohesix.env"
+    policy.write_bytes(b"coh_net_mode=dhcp\n")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "console is locked" in result.stderr
+    assert policy.read_bytes() == b"coh_net_mode=dhcp\n"
+    commands = (
+        fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+        if fixture["diskutil_log"].exists()
+        else []
+    )
+    assert all("erase" not in command for command in commands)
+    assert all("unmount" not in command for command in commands)
+    assert not fixture["caffeinate_log"].exists()
+
+
+def test_pi4_image_build_rechecks_lock_immediately_before_initialization(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A lock transition after preflight must still prevent whole-disk erase."""
+
+    fixture = _write_flash_command_fixture(tmp_path, lock_after_check=2)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=1; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "console is locked" in result.stderr
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert all("erase" not in command for command in commands)
+    assert all("unmount" not in command for command in commands)
+
+
+def test_pi4_image_build_rechecks_lock_immediately_before_normal_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A lock transition after mounting must still prevent in-place mutation."""
+
+    fixture = _write_flash_command_fixture(tmp_path, lock_after_check=2)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+    policy = fixture["volume"] / "cohesix.env"
+    policy.write_bytes(b"coh_net_mode=dhcp\n")
+    stale = fixture["volume"] / "stale.txt"
+    stale.write_text("must remain\n", encoding="utf-8")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "console is locked" in result.stderr
+    assert policy.read_bytes() == b"coh_net_mode=dhcp\n"
+    assert stale.read_text(encoding="utf-8") == "must remain\n"
+    assert not (fixture["volume"] / "config.txt").exists()
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert all("erase" not in command for command in commands)
+    assert all("unmount" not in command for command in commands)
+
+
+def test_pi4_image_build_rejects_oversize_existing_policy_before_copy(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The implicit on-card policy path must enforce the canonical bound."""
+
+    fixture = _write_flash_command_fixture(tmp_path)
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+    policy = fixture["volume"] / "cohesix.env"
+    policy.write_bytes(b"x" * 385)
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "exceeds the 384-byte Cohesix policy bound" in result.stderr
+    assert policy.read_bytes() == b"x" * 385
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert all("erase" not in command for command in commands)
+    assert all("unmount" not in command for command in commands)
+
+
+def test_pi4_image_build_never_follows_changed_flash_identity(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The critical-section recheck must reject even the same reused BSD node."""
+
+    fixture = _write_flash_command_fixture(
+        tmp_path, change_identity_after_first=True
+    )
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    (stage / "config.txt").write_text("kernel=u-boot.bin\n", encoding="utf-8")
+
+    result = _source_function(
+        fixture["script"],
+        (
+            f"PATH={str(fixture['bin'])!r}:$PATH; export PATH; "
+            f"DISKUTIL_LOG={str(fixture['diskutil_log'])!r}; "
+            f"CAFFEINATE_LOG={str(fixture['caffeinate_log'])!r}; "
+            "export DISKUTIL_LOG CAFFEINATE_LOG; "
+            f"STAGE_DIR={str(stage)!r}; DISK_LABEL=COHESIX; "
+            "INITIALIZE_DISK=0; POLICY_RECOVERY_FILE=''; "
+            "POLICY_RECOVERY_CONSUMED_FILE=''; PRESERVED_POLICY_TEMP=''; "
+            "FLASH_MEDIA_MUTATION_STARTED=0; FLASH_CAFFEINATE_PID=''; "
+            "trap stop_flash_caffeinate EXIT; flash_sd_card /dev/disk20"
+        ),
+    )
+
+    assert result.returncode != 0
+    assert "identity changed before the critical section" in result.stderr
+    commands = fixture["diskutil_log"].read_text(encoding="utf-8").splitlines()
+    assert all("erase" not in command for command in commands)
+    assert all("unmount" not in command for command in commands)
 
 
 def test_pi4_image_build_keeps_per_role_driver_runtime_artifacts() -> None:
@@ -1119,6 +1406,201 @@ def _source_function(script: pathlib.Path, command: str) -> subprocess.Completed
         capture_output=True,
         text=True,
     )
+
+
+def _write_flash_command_fixture(
+    tmp_path: pathlib.Path,
+    *,
+    locked: bool = False,
+    change_identity_after_first: bool = False,
+    lock_after_check: int | None = None,
+) -> dict[str, pathlib.Path]:
+    """Create deterministic diskutil/ioreg/caffeinate commands for flash tests."""
+
+    script = _copy_sourceable_build_script(tmp_path)
+    bin_dir = tmp_path / "fake-bin"
+    bin_dir.mkdir()
+    volume = tmp_path / "COHESIX"
+    volume.mkdir()
+    diskutil_log = tmp_path / "diskutil.log"
+    caffeinate_log = tmp_path / "caffeinate.log"
+    info_count = tmp_path / "whole-info-count"
+    lock_count = tmp_path / "lock-count"
+
+    whole_info = {
+        "DeviceIdentifier": "disk20",
+        "DeviceNode": "/dev/disk20",
+        "WholeDisk": True,
+        "ParentWholeDisk": "disk20",
+        "Content": "FDisk_partition_scheme",
+        "Writable": True,
+        "WritableMedia": True,
+        "RemovableMediaOrExternalDevice": True,
+        "Removable": True,
+        "Ejectable": True,
+        "VirtualOrPhysical": "Physical",
+        "SystemImage": False,
+        "OSInternalMedia": False,
+        "TotalSize": 63_864_569_856,
+        "IOKitSize": 63_864_569_856,
+        "DeviceBlockSize": 512,
+        "MediaName": "SD Card Reader",
+        "BusProtocol": "Secure Digital",
+        "DeviceTreePath": "IODeviceTree:/arm-io/sdxc",
+        "IORegistryEntryName": "SD Card Reader Media",
+    }
+    changed_info = dict(whole_info)
+    changed_info["TotalSize"] += 512
+    partition_info = {
+        "DeviceIdentifier": "disk20s1",
+        "DeviceNode": "/dev/disk20s1",
+        "WholeDisk": False,
+        "ParentWholeDisk": "disk20",
+        "Content": "DOS_FAT_32",
+        "VolumeName": "COHESIX",
+        "Writable": True,
+        "WritableMedia": True,
+        "MountPoint": str(volume),
+    }
+    listing = {
+        "AllDisksAndPartitions": [
+            {
+                "DeviceIdentifier": "disk20",
+                "Content": "FDisk_partition_scheme",
+                "Partitions": [
+                    {
+                        "DeviceIdentifier": "disk20s1",
+                        "Content": "DOS_FAT_32",
+                        "VolumeName": "COHESIX",
+                    }
+                ],
+            }
+        ]
+    }
+    console = {
+        "IOConsoleLocked": locked,
+        "IOConsoleUsers": [
+            {
+                "kCGSSessionOnConsoleKey": True,
+                "kCGSessionLoginDoneKey": True,
+                "kCGSSessionUserIDKey": os.getuid(),
+                **(
+                    {"CGSSessionScreenIsLocked": True}
+                    if locked
+                    else {}
+                ),
+            }
+        ],
+    }
+    locked_console = {
+        "IOConsoleLocked": True,
+        "IOConsoleUsers": [
+            {
+                "kCGSSessionOnConsoleKey": True,
+                "kCGSessionLoginDoneKey": True,
+                "kCGSSessionUserIDKey": os.getuid(),
+                "CGSSessionScreenIsLocked": True,
+            }
+        ],
+    }
+
+    payloads = {
+        "whole.plist": plistlib.dumps(whole_info),
+        "whole-changed.plist": plistlib.dumps(changed_info),
+        "partition.plist": plistlib.dumps(partition_info),
+        "list.plist": plistlib.dumps(listing),
+        "console.plist": plistlib.dumps(console),
+        "console-locked.plist": plistlib.dumps(locked_console),
+    }
+    for filename, payload in payloads.items():
+        (tmp_path / filename).write_bytes(payload)
+
+    diskutil = bin_dir / "diskutil"
+    diskutil.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$DISKUTIL_LOG"
+case "$1" in
+  info)
+    [[ "$2" == "-plist" ]]
+    if [[ "$3" == "/dev/disk20" ]]; then
+      count=0
+      [[ ! -f {shlex.quote(str(info_count))} ]] || count="$(<{shlex.quote(str(info_count))})"
+      count=$((count + 1))
+      printf '%s\\n' "$count" > {shlex.quote(str(info_count))}
+      if [[ {int(change_identity_after_first)} -eq 1 && "$count" -gt 1 ]]; then
+        /bin/cat {shlex.quote(str(tmp_path / "whole-changed.plist"))}
+      else
+        /bin/cat {shlex.quote(str(tmp_path / "whole.plist"))}
+      fi
+    elif [[ "$3" == "/dev/disk20s1" ]]; then
+      /bin/cat {shlex.quote(str(tmp_path / "partition.plist"))}
+    else
+      exit 2
+    fi
+    ;;
+  list)
+    [[ "$2" == "-plist" && "$3" == "/dev/disk20" ]]
+    /bin/cat {shlex.quote(str(tmp_path / "list.plist"))}
+    ;;
+  mount)
+    [[ "$2" == "/dev/disk20s1" ]]
+    ;;
+  eraseDisk)
+    [[ "$2" == "FAT32" && "$3" == "COHESIX" && "$4" == "MBRFormat" && "$5" == "/dev/disk20" ]]
+    ;;
+  unmount)
+    [[ "$2" == {shlex.quote(str(volume))} || "$3" == {shlex.quote(str(volume))} ]]
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+""",
+        encoding="utf-8",
+    )
+    diskutil.chmod(0o755)
+
+    ioreg = bin_dir / "ioreg"
+    ioreg.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+count=0
+[[ ! -f {shlex.quote(str(lock_count))} ]] || count="$(<{shlex.quote(str(lock_count))})"
+count=$((count + 1))
+printf '%s\\n' "$count" > {shlex.quote(str(lock_count))}
+if [[ {lock_after_check if lock_after_check is not None else 0} -gt 0 \
+      && "$count" -gt {lock_after_check if lock_after_check is not None else 0} ]]; then
+  /bin/cat {shlex.quote(str(tmp_path / "console-locked.plist"))}
+else
+  /bin/cat {shlex.quote(str(tmp_path / "console.plist"))}
+fi
+""",
+        encoding="utf-8",
+    )
+    ioreg.chmod(0o755)
+
+    caffeinate = bin_dir / "caffeinate"
+    caffeinate.write_text(
+        """#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$CAFFEINATE_LOG"
+trap 'exit 0' TERM INT
+while :; do
+  /bin/sleep 1
+done
+""",
+        encoding="utf-8",
+    )
+    caffeinate.chmod(0o755)
+
+    return {
+        "script": script,
+        "bin": bin_dir,
+        "volume": volume,
+        "diskutil_log": diskutil_log,
+        "caffeinate_log": caffeinate_log,
+    }
 
 
 def test_repository_state_digest_binds_tracked_and_untracked_contents(
