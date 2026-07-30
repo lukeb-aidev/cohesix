@@ -1493,7 +1493,11 @@ current-identity Network work, and force one op8
 already retained, its exact terminal must leave `RequiredPoll` armed and the
 following fresh descriptor must carry the hintless probe. A new accepted TX
 must also advance the existing cursor to `RequiredPoll` without allocating a
-second cursor.
+second cursor. Conversely, a watch that expires after an immutable op7 is
+retained must not pre-empt that owner: distinct outer turns advance only the
+same op7 ticket/request/payload through its exact terminal, no op8 may be
+created in those turns, and `RequiredPoll` remains armed. The op7 terminal
+consumes its turn; only the next unowned turn may begin the hintless op8.
 
 Tests must cover repeated long quiet intervals with no root wake or DPC edge,
 deadline-not-due passivity, deadline-due admission, one forced source probe,
@@ -1526,6 +1530,12 @@ next Network slice must resume the same parent; request substitution,
 `Issued`-to-`Prepared` regression, or disappearance without a typed terminal
 must request pair recovery. After the exact parent terminates, restore order
 must be CYW43 then SDIO before the EventPump exits the slice.
+Fresh generic NetData pre-poll admission at both the outer stack wrapper and
+inner budgeted service must also reject any retained host-EAPOL
+TX/key/drain owner. Coverage must stage a request-less post-secure M4 op7,
+prove fresh op8 admission is closed without changing the WiFi data-ready
+label, prove an already-assigned exact NetData continuation remains
+non-revocable, and prove fresh admission reopens only after the M4 terminal.
 This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
@@ -1570,7 +1580,9 @@ The focused acceptance tests
 `completion_between_poll_and_grant_suppresses_signal_and_owner_reissue`,
 `production_owner_notification_coalesces_irq_and_releases_one_exact_granted_quantum`,
 `cyw43_rx_fairness_transitions_to_bounded_receive_watch`, and
-`cyw43_receive_path_drains_post_tx_fairness_before_queued_arp` must pass.
+`cyw43_receive_path_drains_post_tx_fairness_before_queued_arp`,
+`cyw43_required_receive_watch_does_not_preempt_retained_data_tx`, and
+`post_secure_host_eapol_tx_blocks_fresh_net_data_pre_poll` must pass.
 Together they must prove the exact policy line
 `m26d_net_first=no physical_input_yield=enabled` and exactly four scheduler
 writes for a clean quantum

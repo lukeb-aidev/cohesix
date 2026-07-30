@@ -740,7 +740,12 @@ remains an obligation of the same host-EAPOL policy owner. Post-association
 BSSID and filter maintenance retains priority; after that maintenance reaches
 its exact terminal, each ordinary EventPump turn consumes at most one queued
 EAPOL frame and retains any resulting TX/key/drain continuation for later
-turns. A secure session therefore cannot exit while the aggregate Gate 8g work
+turns. That aggregate owner also fences a fresh generic NetData pre-poll at
+both stack entry and its inner budgeted service: a request-less post-secure
+op7 must acquire and advance its own HAL request instead of repeatedly finding
+the turn consumed by a fresh op8. An already-assigned exact NetData
+continuation remains non-revocable and finishes first. A secure session
+therefore cannot exit while the aggregate Gate 8g work
 fence is held solely by its own queued frame. Frames handled after secure key
 completion retain post-secure rekey/fail-closed semantics; this is not a
 second RX poll, retry, or NetData lane.
@@ -2392,8 +2397,14 @@ generation and XID.
 
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing
-  fingerprint; once TX completes, the required RX fairness poll proceeds on the
-  same NetData owner. TX advances the already-armed lifetime cursor to
+  fingerprint. This ordering is invariant even when the passive lifetime watch
+  expires after that op7 was retained: each later outer Network turn advances
+  only the exact immutable TX owner, and the resulting TX terminal consumes its
+  turn. The still-required op8 source probe begins only on the following
+  unowned turn. Expiry therefore changes scheduling demand but never displaces,
+  replaces, or runs ahead of an existing physical owner. Once TX completes, the
+  required RX fairness poll proceeds on the same NetData owner. TX advances the
+  already-armed lifetime cursor to
   `RequiredPoll`; only the exact nonfault terminal of its hintless source probe
   releases fresh TX and rearms the watch described above. A queue-only terminal
   cannot advance either phase. The watch never creates a competing cursor, and

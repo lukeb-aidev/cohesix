@@ -1912,6 +1912,13 @@ one current-pair priority lease, boosts SDIO then CYW43, and exact parents reuse
 it until close. Close is a fresh-work fence; it drains only an exact active
 parent and restores CYW43 then SDIO before returning to `Serial`.
 
+A retained host-EAPOL TX/key/drain action, including a request-less
+post-secure M4 op7, blocks every fresh generic NetData pre-poll at both the
+outer stack wrapper and inner budgeted service. This is owner precedence, not a
+second data-path block: an exact already-assigned NetData continuation remains
+non-revocable, then the EAPOL owner receives the next unowned turn. A repeated
+op8 while that M4 stays at sequence zero is failed service evidence.
+
 The central EventPump `network_contract_service_admissible` fence covers both
 ordinary `poll_runtime` and pre-root `poll_pre_root_network`. It rechecks the
 CYW43 service snapshot before Network service and again immediately before
@@ -1963,7 +1970,13 @@ network-generation or stack reset aborts the pair. CYW43 and GENET use this same
 bounded handoff.
 
 If a TX command already owns the shared ring slot, RX remains unallocated and
-cannot install a competing ticket or fingerprint. CYW43 likewise retains a
+cannot install a competing ticket or fingerprint. If the lifetime receive
+watch expires while that immutable op7 is retained, the existing op7 advances
+first on successive outer Network turns. Its terminal consumes its turn, and
+the required hintless op8 begins only on the following unowned turn. Treat an
+op8 that repeatedly runs ahead of an active op7, or op7 identity that changes
+across those turns, as failed single-lifetime evidence rather than a recoverable
+RX/TX race. CYW43 likewise retains a
 copied RX frame instead of exposing smoltcp's paired response token while a
 prior retained TX or unproved credit window would reject that token. When the
 bounded linked TX queue is full, complete output remains retained. Three backlog records are

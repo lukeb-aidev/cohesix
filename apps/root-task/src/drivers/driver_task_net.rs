@@ -20251,10 +20251,7 @@ const fn cyw43_runtime_descriptor_blocks_net_pre_poll(op: u16) -> bool {
 #[cfg(feature = "kernel")]
 fn cyw43_root_work_blocks_fresh_net_data_pre_poll() -> bool {
     cyw43_maintenance_pending()
-        || CYW43_HOST_EAPOL_SESSION
-            .lock()
-            .as_ref()
-            .is_some_and(cyw43_post_assoc_bssid_obligation_pending)
+        || cyw43_host_eapol_runtime_work_pending()
         || cyw43_pending_rx_token_occupied()
         || CYW43_PENDING_DATA_TX.lock().is_some()
         || !CYW43_PENDING_ARP_TX.lock().is_empty()
@@ -20293,10 +20290,7 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
             // Active maintenance/control work retains its established exact
             // owner and completes before this required transaction.
             return !cyw43_maintenance_pending()
-                && !CYW43_HOST_EAPOL_SESSION
-                    .lock()
-                    .as_ref()
-                    .is_some_and(cyw43_post_assoc_bssid_obligation_pending)
+                && !cyw43_host_eapol_runtime_work_pending()
                 && CYW43_PENDING_DATA_TX.lock().is_none()
                 && !cyw43_active_descriptor_blocks_fresh_net_poll(contract);
         }
@@ -24223,6 +24217,13 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         defer_cyw43_precommit_data_frame(contract, flags, token);
         return None;
     }
+    if service_cyw43_pending_data_tx_turn(contract) {
+        // A lifetime receive-watch deadline may become due while the sole
+        // immutable ETH_TX owner is phase-separated across EventPump turns.
+        // Finish that exact owner first; RequiredPoll remains armed and receives
+        // the next otherwise-unowned NetData turn after the TX terminal.
+        return None;
+    }
     if cyw43_current_generation_data_tx_rx_fairness_required() {
         // Do not return copied RX with smoltcp's infallible paired TxToken
         // while the required post-TX poll is armed. Advance the existing sole
@@ -26102,6 +26103,27 @@ mod tests {
             };
         }
         completion
+    }
+
+    unsafe fn cyw43_data_tx_then_rx_ring_test_service(
+        _selector: usize,
+        command: DriverTaskCommandRecord,
+    ) -> DriverTaskCompletionRecord {
+        let descriptor = crate::hal::driver_task::driver_task_ring_frame_bytes(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command.frame,
+        )
+        .and_then(decode_cyw43_descriptor)
+        .expect("the data-owner ordering fixture requires a CYW43 descriptor");
+        CYW43_SUPERVISOR_LAST_OP.store(u32::from(descriptor.op), Ordering::Release);
+        CYW43_SUPERVISOR_RING_TURNS.fetch_add(1, Ordering::AcqRel);
+        if descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX {
+            return DriverTaskCompletionRecord::progress(
+                command.sequence,
+                descriptor.total_len.max(1),
+            );
+        }
+        DriverTaskCompletionRecord::idle(command.sequence)
     }
 
     unsafe fn cyw43_pair_restart_ring_test_service(
@@ -36988,6 +37010,85 @@ mod tests {
             !cyw43_host_eapol_runtime_work_pending(),
             "a stale session cannot manufacture work in the replacement generation"
         );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn post_secure_host_eapol_tx_blocks_fresh_net_data_pre_poll() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 31;
+        CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        let credentials =
+            WifiCredentials::new("cohesix", "passphrase").expect("valid host-EAPOL credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host-EAPOL session starts");
+        session.progress.connection_epoch = generation;
+        session.progress.secure_keys_ready = true;
+        begin_cyw43_host_eapol_tx_submit(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &mut session,
+            &[0x01, 0x03, 0x00, 0x05],
+            "cyw43-host-eapol-post-secure-m4-retransmit",
+            "post-secure-m4-before-wsec",
+            7,
+            Cyw43HostEapolTxDrainContinuation::M4Retransmit {
+                post_secure: true,
+                retry_frame: None,
+            },
+        )
+        .expect("immutable post-secure M4 is retained");
+        let m4 = session
+            .pending_tx_submit
+            .expect("post-secure M4 owns the policy lane");
+        assert_eq!(m4.request, None);
+        assert!(!m4.issued);
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+
+        assert!(cyw43_host_eapol_runtime_work_pending());
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "fresh op8 must not consume every outer turn ahead of the request-less op7 owner",
+        );
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+            ticket_id: 0x4558_4143,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0x91),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: false,
+            child_reply_renewals: 0,
+        });
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "an exact assigned NetData continuation remains non-revocable",
+        );
+
+        *CYW43_PENDING_PROMPT_POLL.lock() = None;
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "fresh NetData remains fenced until the retained M4 reaches its exact terminal",
+        );
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_mut()
+            .expect("post-secure session remains current")
+            .pending_tx_submit = None;
+        assert!(driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
 
         reset_cyw43_status_flags();
     }
@@ -48444,6 +48545,193 @@ mod tests {
             "the accepted TX terminal must require one exact receive poll before copied RX delivery"
         );
 
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_required_receive_watch_does_not_preempt_retained_data_tx() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 30;
+
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_data_tx_then_rx_ring_test_service,
+            )
+        );
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(10_000, Ordering::Release);
+        mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let frame = b"tcp-retained-across-rx-watch-deadline";
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            frame,
+        ));
+        let mut granted = None;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            assert_eq!(
+                advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+                Cyw43DataTxTurnOutcome::Pending,
+            );
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            let snapshot = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .expect("the retained ETH_TX grant remains inspectable");
+            if snapshot.phase_name == "granted" {
+                granted = Some(snapshot);
+                break;
+            }
+        }
+        let granted = granted.expect("the exact ETH_TX request reaches Granted");
+        assert!(granted.active);
+        assert!(granted.exact);
+        assert!(granted.sequence_issued);
+        assert_eq!(granted.consumed_grant_id, 0);
+        CYW43_TEST_COUNTER_TICKS.store(18_001, Ordering::Release);
+        assert!(
+            cyw43_data_tx_rx_fairness_due_for_generation(generation),
+            "the lifetime watch must expire while the ETH_TX owner is retained",
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+        let pending_before = CYW43_PENDING_DATA_TX
+            .lock()
+            .expect("the exact ETH_TX owner remains retained");
+        assert_eq!(pending_before.request, Some(granted.request));
+
+        begin_cyw43_outer_event_turn();
+        assert!(
+            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+            "the retained owner turn cannot expose a paired smoltcp TxToken",
+        );
+
+        let issued = crate::hal::driver_task::driver_task_retained_grant_snapshot(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("the same ETH_TX request remains inspectable after notify");
+        assert_eq!(issued.request, granted.request);
+        assert_eq!(issued.phase_name, "issued");
+        assert!(issued.exact);
+        assert!(issued.sequence_issued);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
+            u32::from(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+            "the sole child action remains the retained op7, never a competing op8",
+        );
+        assert!(
+            CYW43_PENDING_PROMPT_POLL.lock().is_none(),
+            "RequiredPoll cannot create an op8 while op7 owns the HAL request",
+        );
+        let pending_after = CYW43_PENDING_DATA_TX
+            .lock()
+            .expect("the exact ETH_TX owner remains retained after notify");
+        assert_eq!(pending_after.ticket_id, pending_before.ticket_id);
+        assert_eq!(pending_after.generation, pending_before.generation);
+        assert_eq!(pending_after.request, pending_before.request);
+        assert_eq!(pending_after.payload_digest, pending_before.payload_digest);
+        assert_eq!(pending_after.len, pending_before.len);
+        assert_eq!(
+            &pending_after.frame[..usize::from(pending_after.len)],
+            frame,
+        );
+        assert!(pending_after.child_cursor_started);
+        assert!(cyw43_data_tx_rx_fairness_required_for_generation(
+            generation,
+        ));
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        begin_cyw43_outer_event_turn();
+        assert!(
+            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+            "the exact op7 terminal consumes its own outer receive turn",
+        );
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "the exact Progress terminal must release the retained op7 owner",
+        );
+        assert!(
+            CYW43_PENDING_PROMPT_POLL.lock().is_none(),
+            "the op7 terminal turn cannot also allocate the required op8",
+        );
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
+            u32::from(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+        );
+        assert!(cyw43_data_tx_rx_fairness_required_for_generation(
+            generation,
+        ));
+
+        begin_cyw43_outer_event_turn();
+        assert!(
+            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+            "the next unowned turn may begin only the required op8",
+        );
+        let required_poll = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .expect("the required NetData op8 must be retained");
+        assert_eq!(required_poll.owner, Cyw43PromptPollOwner::NetData);
+        assert_eq!(required_poll.descriptor.op, DRIVER_RUNTIME_CYW43_OP_RX_POLL);
+        assert_ne!(
+            required_poll.descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
+            0,
+            "the post-op7 lifetime probe must read the physical source",
+        );
+
+        let mut exact_rx_terminal_seen = false;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            assert!(
+                receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+                "an empty exact op8 terminal returns no smoltcp RX token",
+            );
+            assert!(cyw43_outer_event_turn_operation_count() <= 1);
+            if !cyw43_data_tx_rx_fairness_required_for_generation(generation) {
+                exact_rx_terminal_seen = true;
+                break;
+            }
+        }
+        assert!(
+            exact_rx_terminal_seen,
+            "the exact hintless op8 terminal must release RequiredPoll",
+        );
+        assert!(cyw43_data_tx_rx_fairness_watching_for_generation(
+            generation,
+        ));
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 2);
+        assert_eq!(
+            CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
+            u32::from(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+        );
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
     }
 
