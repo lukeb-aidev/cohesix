@@ -160,9 +160,9 @@ optional = true
 default-features = false
 features = [
     "alloc",
-    "auto-icmp-echo-reply",
     "medium-ethernet",
     "proto-ipv4",
+    "socket-raw",
     "socket-tcp",
     "socket-udp",
 ]

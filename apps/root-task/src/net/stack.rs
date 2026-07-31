@@ -31,6 +31,10 @@ use smoltcp::config::IFACE_NEIGHBOR_CACHE_COUNT;
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
 };
+use smoltcp::socket::raw::{
+    PacketBuffer as RawPacketBuffer, PacketMetadata as RawPacketMetadata,
+    RecvError as RawRecvError, SendError as RawSendError, Socket as RawSocket,
+};
 use smoltcp::socket::tcp::{
     ConnectError as TcpConnectError, RecvError as TcpRecvError, Socket as TcpSocket,
     SocketBuffer as TcpSocketBuffer, State as TcpState,
@@ -42,18 +46,19 @@ use smoltcp::socket::udp::{
 };
 use smoltcp::time::Instant;
 use smoltcp::wire::{
-    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, Ipv4Address,
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, IpListenEndpoint, IpProtocol,
+    IpVersion, Ipv4Address,
 };
 
 use super::{
     console_srv::{SessionEvent, TcpConsoleServer},
     dhcp::{DhcpClient, DhcpEvent, DhcpLease, DhcpPhase, DHCP_CLIENT_PORT, DHCP_SERVER_PORT},
     outbound::{OutboundCoalescer, OutboundLane, SendError},
-    ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason, NetConsoleEvent,
-    NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode, NetPoller,
-    NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage, NetStatusReport,
-    NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX, NET_DIAG,
-    NET_STAGE,
+    parse_icmp_echo_request, ConsoleLine, ConsoleNetConfig, NetBackend, NetConsoleDisconnectReason,
+    NetConsoleEvent, NetCounters, NetDevice, NetDriverError, NetInterfacePolicy, NetMode,
+    NetPoller, NetSelfTestReport, NetSelfTestResult, NetSelfTestStartResult, NetStage,
+    NetStatusReport, NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
+    MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
 };
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
@@ -90,9 +95,17 @@ const TCP_SERVICE_BYTES_PER_TURN: u32 =
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
-// Full networking can concurrently own two console acceptors, DHCP, UDP
-// beacon/echo, inbound/outbound smoke sockets, and the outbound probe.
-const SOCKET_CAPACITY: usize = 8;
+// Full networking can concurrently own one raw ICMP responder, two console
+// acceptors, DHCP, UDP beacon/echo, inbound/outbound smoke sockets, and the
+// outbound probe.
+const SOCKET_CAPACITY: usize = 9;
+const ICMP_ECHO_RX_METADATA_CAPACITY: usize = 2;
+const ICMP_ECHO_TX_METADATA_CAPACITY: usize = 1;
+const ICMP_ECHO_RX_PAYLOAD_CAPACITY: usize = MAX_FRAME_LEN * ICMP_ECHO_RX_METADATA_CAPACITY;
+const ICMP_ECHO_TX_PAYLOAD_CAPACITY: usize = MAX_FRAME_LEN;
+const ICMP_ECHO_REPLY_DEADLINE_MS: u64 = 3_000;
+const ICMP_ECHO_NEIGHBOR_RETRY_MS: u64 = 1_000;
+const ICMP_ECHO_TX_AVAILABILITY_RETRY_MS: u64 = 1;
 const FLUSH_BLOCKED_HEARTBEAT_MS: u64 = 2_000;
 const RANDOM_SEED: u64 = 0x5a5a_5a5a_1234_5678;
 const ECHO_MODE: bool = cfg!(feature = "tcp-echo-31337");
@@ -815,6 +828,7 @@ pub enum NetStackError<DE> {
     TcpStandbyTxStorageInUse,
     TcpSmokeRxStorageInUse,
     TcpSmokeTxStorageInUse,
+    IcmpEchoStorageInUse,
     UdpBeaconStorageInUse,
     UdpEchoStorageInUse,
     DhcpStorageInUse,
@@ -840,6 +854,7 @@ impl<DE: fmt::Display> fmt::Display for NetStackError<DE> {
             Self::TcpStandbyTxStorageInUse => f.write_str("TCP standby TX storage already in use"),
             Self::TcpSmokeRxStorageInUse => f.write_str("TCP smoke test RX storage already in use"),
             Self::TcpSmokeTxStorageInUse => f.write_str("TCP smoke test TX storage already in use"),
+            Self::IcmpEchoStorageInUse => f.write_str("ICMP echo storage already in use"),
             Self::UdpBeaconStorageInUse => f.write_str("UDP beacon storage already in use"),
             Self::UdpEchoStorageInUse => f.write_str("UDP echo storage already in use"),
             Self::DhcpStorageInUse => f.write_str("DHCP socket storage already in use"),
@@ -1283,6 +1298,25 @@ fn reserve_tcp_smoke_out_tx_storage<DE>(
     )
 }
 
+fn reserve_icmp_echo_storage<DE>(
+    owner_id: u64,
+    tag: StorageTag,
+) -> Result<StorageLease, NetStackError<DE>> {
+    reserve_storage(
+        StorageMetadata {
+            flag: &ICMP_ECHO_STORAGE_IN_USE,
+            owner: &ICMP_ECHO_STORAGE_OWNER,
+            tag_id: &ICMP_ECHO_STORAGE_TAG_ID,
+            tag_label: &ICMP_ECHO_STORAGE_TAG_LABEL,
+            label: "icmp-echo",
+        },
+        owner_id,
+        tag,
+        NetStackError::IcmpEchoStorageInUse,
+        None,
+    )
+}
+
 fn reserve_udp_beacon_storage<DE>(
     owner_id: u64,
     tag: StorageTag,
@@ -1391,6 +1425,7 @@ struct StorageReservation {
     tcp_smoke_tx: Option<StorageLease>,
     tcp_smoke_out_rx: Option<StorageLease>,
     tcp_smoke_out_tx: Option<StorageLease>,
+    icmp_echo: StorageLease,
     udp_beacon: Option<StorageLease>,
     udp_echo: Option<StorageLease>,
     #[cfg(feature = "net-outbound-probe")]
@@ -1449,6 +1484,7 @@ impl StorageReservation {
         } else {
             None
         };
+        let icmp_echo = reserve_icmp_echo_storage(owner.owner_id(), reservation_tag)?;
         let udp_beacon = if self_test_enabled {
             Some(reserve_udp_beacon_storage(
                 owner.owner_id(),
@@ -1478,6 +1514,7 @@ impl StorageReservation {
             tcp_smoke_tx,
             tcp_smoke_out_rx,
             tcp_smoke_out_tx,
+            icmp_echo,
             udp_beacon,
             udp_echo,
             #[cfg(feature = "net-outbound-probe")]
@@ -1629,6 +1666,10 @@ static TCP_PROBE_TX_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
 static TCP_PROBE_TX_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 #[cfg(feature = "net-outbound-probe")]
 static mut TCP_PROBE_TX_STORAGE: [u8; TCP_PROBE_BUFFER] = [0u8; TCP_PROBE_BUFFER];
+static ICMP_ECHO_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
+static ICMP_ECHO_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
+static ICMP_ECHO_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
+static ICMP_ECHO_STORAGE_TAG_LABEL: Mutex<Option<&'static str>> = Mutex::new(None);
 static UDP_BEACON_STORAGE_IN_USE: AtomicBool = AtomicBool::new(false);
 static UDP_BEACON_STORAGE_OWNER: AtomicU64 = AtomicU64::new(0);
 static UDP_BEACON_STORAGE_TAG_ID: AtomicU32 = AtomicU32::new(0);
@@ -1653,6 +1694,14 @@ static mut DHCP_RX_METADATA: [UdpPacketMetadata; DHCP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; DHCP_METADATA_CAPACITY];
 static mut DHCP_TX_METADATA: [UdpPacketMetadata; DHCP_METADATA_CAPACITY] =
     [UdpPacketMetadata::EMPTY; DHCP_METADATA_CAPACITY];
+static mut ICMP_ECHO_RX_METADATA: [RawPacketMetadata; ICMP_ECHO_RX_METADATA_CAPACITY] =
+    [RawPacketMetadata::EMPTY; ICMP_ECHO_RX_METADATA_CAPACITY];
+static mut ICMP_ECHO_TX_METADATA: [RawPacketMetadata; ICMP_ECHO_TX_METADATA_CAPACITY] =
+    [RawPacketMetadata::EMPTY; ICMP_ECHO_TX_METADATA_CAPACITY];
+static mut ICMP_ECHO_RX_STORAGE: [u8; ICMP_ECHO_RX_PAYLOAD_CAPACITY] =
+    [0u8; ICMP_ECHO_RX_PAYLOAD_CAPACITY];
+static mut ICMP_ECHO_TX_STORAGE: [u8; ICMP_ECHO_TX_PAYLOAD_CAPACITY] =
+    [0u8; ICMP_ECHO_TX_PAYLOAD_CAPACITY];
 static mut UDP_BEACON_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_BEACON_TX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
 static mut UDP_ECHO_RX_STORAGE: [u8; UDP_PAYLOAD_CAPACITY] = [0u8; UDP_PAYLOAD_CAPACITY];
@@ -1703,6 +1752,11 @@ pub struct NetStack<D: NetDevice> {
     sockets: SocketSet<'static>,
     _reservation: StorageReservation,
     init_attempt: NetInitAttempt,
+    icmp_echo_handle: SocketHandle,
+    icmp_echo_pending_since_ms: Option<u64>,
+    icmp_echo_next_poll_ms: Option<u64>,
+    icmp_echo_arp_probe_sent: bool,
+    icmp_echo_reply_constructed_this_turn: bool,
     tcp_handle: SocketHandle,
     tcp_standby_handle: SocketHandle,
     standby_listener_armed: bool,
@@ -2359,6 +2413,22 @@ fn log_storage_addresses_once(marker: &'static str) {
             TCP_SMOKE_TX_BUFFER,
         ),
         StorageAddressSnapshot::new(
+            "icmp-echo-rx",
+            &ICMP_ECHO_STORAGE_IN_USE,
+            &ICMP_ECHO_STORAGE_OWNER,
+            &ICMP_ECHO_STORAGE_TAG_ID,
+            unsafe { ICMP_ECHO_RX_STORAGE.as_ptr() },
+            ICMP_ECHO_RX_PAYLOAD_CAPACITY,
+        ),
+        StorageAddressSnapshot::new(
+            "icmp-echo-tx",
+            &ICMP_ECHO_STORAGE_IN_USE,
+            &ICMP_ECHO_STORAGE_OWNER,
+            &ICMP_ECHO_STORAGE_TAG_ID,
+            unsafe { ICMP_ECHO_TX_STORAGE.as_ptr() },
+            ICMP_ECHO_TX_PAYLOAD_CAPACITY,
+        ),
+        StorageAddressSnapshot::new(
             "udp-beacon",
             &UDP_BEACON_STORAGE_IN_USE,
             &UDP_BEACON_STORAGE_OWNER,
@@ -2901,6 +2971,9 @@ where
         }
         NetStackError::TcpSmokeTxStorageInUse => {
             NetConsoleError::Init(NetStackError::TcpSmokeTxStorageInUse)
+        }
+        NetStackError::IcmpEchoStorageInUse => {
+            NetConsoleError::Init(NetStackError::IcmpEchoStorageInUse)
         }
         NetStackError::UdpBeaconStorageInUse => {
             NetConsoleError::Init(NetStackError::UdpBeaconStorageInUse)
@@ -3891,6 +3964,11 @@ impl<D: NetDevice> NetStack<D> {
             sockets,
             _reservation: reservation,
             init_attempt: attempt,
+            icmp_echo_handle: SocketHandle::default(),
+            icmp_echo_pending_since_ms: None,
+            icmp_echo_next_poll_ms: None,
+            icmp_echo_arp_probe_sent: false,
+            icmp_echo_reply_constructed_this_turn: false,
             tcp_handle: SocketHandle::default(),
             tcp_standby_handle: SocketHandle::default(),
             standby_listener_armed: false,
@@ -3975,6 +4053,7 @@ impl<D: NetDevice> NetStack<D> {
         });
         stack.assert_bootinfo_overlaps();
         stack.log_buffer_addresses_once("net.init.buffers");
+        stack.initialise_icmp_echo_socket()?;
         if stage_policy.allow_tcp {
             stack.initialise_socket()?;
         }
@@ -4009,6 +4088,52 @@ impl<D: NetDevice> NetStack<D> {
         log_bootinfo_mark("net.init.post", &attempt)?;
         init_guard.commit_online();
         Ok(stack)
+    }
+
+    fn add_icmp_echo_socket(&mut self) {
+        debug_assert!(ICMP_ECHO_STORAGE_IN_USE.load(Ordering::Acquire));
+        // SAFETY: StorageReservation owns all four ICMP buffer arrays for this
+        // NetStack lifetime. Callers remove the prior raw socket before
+        // reconstructing it, so no live socket aliases these slices.
+        let socket = unsafe {
+            let rx_buffer = RawPacketBuffer::new(
+                &mut ICMP_ECHO_RX_METADATA[..],
+                &mut ICMP_ECHO_RX_STORAGE[..],
+            );
+            let tx_buffer = RawPacketBuffer::new(
+                &mut ICMP_ECHO_TX_METADATA[..],
+                &mut ICMP_ECHO_TX_STORAGE[..],
+            );
+            RawSocket::new(
+                Some(IpVersion::Ipv4),
+                Some(IpProtocol::Icmp),
+                rx_buffer,
+                tx_buffer,
+            )
+        };
+        self.icmp_echo_handle = self.sockets.add(socket);
+    }
+
+    fn initialise_icmp_echo_socket(&mut self) -> Result<(), NetStackError<D::Error>> {
+        self.add_icmp_echo_socket();
+        self.log_init_canary("net.init.socket.icmp_echo")?;
+        Ok(())
+    }
+
+    fn reset_icmp_echo_socket(&mut self, reason: &'static str, now_ms: u64) {
+        let socket = self.sockets.get::<RawSocket>(self.icmp_echo_handle);
+        let rx_bytes = socket.recv_queue();
+        let tx_bytes = socket.send_queue();
+        let _ = self.sockets.remove(self.icmp_echo_handle);
+        self.add_icmp_echo_socket();
+        self.icmp_echo_pending_since_ms = None;
+        self.icmp_echo_next_poll_ms = None;
+        self.icmp_echo_arp_probe_sent = false;
+        if rx_bytes != 0 || tx_bytes != 0 {
+            info!(
+                "[icmp-echo] reset reason={reason} dropped_rx_bytes={rx_bytes} dropped_tx_bytes={tx_bytes} now_ms={now_ms}"
+            );
+        }
     }
 
     fn initialise_socket(&mut self) -> Result<(), NetStackError<D::Error>> {
@@ -4210,6 +4335,7 @@ impl<D: NetDevice> NetStack<D> {
             self.wifi_static_address_pending = true;
         }
 
+        self.reset_icmp_echo_socket("wifi-generation-reset", now_ms);
         self.abort_console_socket_pair("wifi-generation-reset");
         if let Some(handle) = self.tcp_smoke_handle {
             self.sockets.get_mut::<TcpSocket>(handle).abort();
@@ -4284,6 +4410,7 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn begin_poll_turn(&mut self, now_ms: u64) -> (Instant, bool) {
+        self.icmp_echo_reply_constructed_this_turn = false;
         let wifi_generation_changed = self.sync_wifi_connection_generation(now_ms);
         let _ = self.restore_static_wifi_generation_address_if_ready();
         if !self.service_logged {
@@ -4345,12 +4472,176 @@ impl<D: NetDevice> NetStack<D> {
         self.sync_device_counters();
     }
 
+    fn icmp_echo_service_due_at(&self, now_ms: u64) -> bool {
+        let socket = self.sockets.get::<RawSocket>(self.icmp_echo_handle);
+        if socket.recv_queue() != 0 {
+            return true;
+        }
+        if socket.send_queue() == 0 {
+            return false;
+        }
+        if self
+            .icmp_echo_pending_since_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= ICMP_ECHO_REPLY_DEADLINE_MS)
+        {
+            return true;
+        }
+        self.icmp_echo_next_poll_ms
+            .is_none_or(|next_poll| now_ms >= next_poll)
+    }
+
+    fn update_icmp_echo_dispatch_state(
+        &mut self,
+        now_ms: u64,
+        tx_pending_before: bool,
+        arp_tx_before: u64,
+    ) {
+        let tx_pending_after = self
+            .sockets
+            .get::<RawSocket>(self.icmp_echo_handle)
+            .send_queue()
+            != 0;
+        if !tx_pending_after {
+            self.icmp_echo_pending_since_ms = None;
+            self.icmp_echo_next_poll_ms = None;
+            self.icmp_echo_arp_probe_sent = false;
+            return;
+        }
+        if !tx_pending_before {
+            return;
+        }
+        if self.device.counters().arp_tx > arp_tx_before {
+            self.icmp_echo_arp_probe_sent = true;
+        }
+        let retry_ms = if self.icmp_echo_arp_probe_sent {
+            ICMP_ECHO_NEIGHBOR_RETRY_MS
+        } else {
+            ICMP_ECHO_TX_AVAILABILITY_RETRY_MS
+        };
+        let retry_at = now_ms.saturating_add(retry_ms);
+        let deadline = self
+            .icmp_echo_pending_since_ms
+            .map(|started| started.saturating_add(ICMP_ECHO_REPLY_DEADLINE_MS))
+            .unwrap_or(retry_at);
+        self.icmp_echo_next_poll_ms = Some(core::cmp::min(retry_at, deadline));
+    }
+
+    fn expire_icmp_echo_if_due(&mut self, now_ms: u64) -> bool {
+        let expired = self
+            .icmp_echo_pending_since_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= ICMP_ECHO_REPLY_DEADLINE_MS)
+            && self
+                .sockets
+                .get::<RawSocket>(self.icmp_echo_handle)
+                .send_queue()
+                != 0;
+        if expired {
+            self.reset_icmp_echo_socket("neighbor-resolution-timeout", now_ms);
+        }
+        expired
+    }
+
+    fn service_icmp_echo(&mut self, now_ms: u64) -> bool {
+        let (rx_bytes, tx_bytes) = {
+            let socket = self.sockets.get::<RawSocket>(self.icmp_echo_handle);
+            (socket.recv_queue(), socket.send_queue())
+        };
+        if tx_bytes == 0 {
+            self.icmp_echo_pending_since_ms = None;
+            self.icmp_echo_next_poll_ms = None;
+            self.icmp_echo_arp_probe_sent = false;
+        } else if self
+            .icmp_echo_pending_since_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= ICMP_ECHO_REPLY_DEADLINE_MS)
+        {
+            self.reset_icmp_echo_socket("neighbor-resolution-timeout", now_ms);
+            return true;
+        }
+        if rx_bytes == 0 {
+            return false;
+        }
+        if tx_bytes == 0 && self.icmp_echo_reply_constructed_this_turn {
+            return false;
+        }
+
+        let mut packet = [0u8; MAX_FRAME_LEN];
+        let recv_result = self
+            .sockets
+            .get_mut::<RawSocket>(self.icmp_echo_handle)
+            .recv_slice(&mut packet);
+        let packet_len = match recv_result {
+            Ok(packet_len) => packet_len,
+            Err(RawRecvError::Exhausted) => return false,
+            Err(RawRecvError::Truncated) => {
+                warn!("[icmp-echo] dropped oversized raw IPv4 packet");
+                return true;
+            }
+        };
+
+        if tx_bytes != 0 {
+            debug!(
+                "[icmp-echo] dropped request reason=reply-pending packet_len={packet_len} now_ms={now_ms}"
+            );
+            return true;
+        }
+
+        let request = match parse_icmp_echo_request(&packet[..packet_len], self.ip) {
+            Ok(request) => request,
+            Err(reason) => {
+                trace!(
+                    "[icmp-echo] ignored raw ICMP packet reason={reason:?} packet_len={packet_len}"
+                );
+                return true;
+            }
+        };
+        let reply_len = request.reply_len();
+        let emit_result = {
+            let socket = self.sockets.get_mut::<RawSocket>(self.icmp_echo_handle);
+            match socket.send(reply_len) {
+                Ok(output) => request.emit_reply(self.ip, output),
+                Err(RawSendError::BufferFull) => {
+                    debug!(
+                        "[icmp-echo] dropped request reason=reply-buffer-full packet_len={packet_len}"
+                    );
+                    return true;
+                }
+            }
+        };
+        if let Err(reason) = emit_result {
+            warn!(
+                "[icmp-echo] reply construction failed reason={reason:?} action=socket-reset now_ms={now_ms}"
+            );
+            self.reset_icmp_echo_socket("reply-construction-failed", now_ms);
+            return true;
+        }
+        self.icmp_echo_pending_since_ms = Some(now_ms);
+        self.icmp_echo_next_poll_ms = Some(now_ms);
+        self.icmp_echo_arp_probe_sent = false;
+        self.icmp_echo_reply_constructed_this_turn = true;
+        debug!(
+            "[icmp-echo] reply retained src={} bytes={} deadline_ms={}",
+            request.source,
+            reply_len,
+            now_ms.saturating_add(ICMP_ECHO_REPLY_DEADLINE_MS)
+        );
+        true
+    }
+
     fn poll_smoltcp_once(&mut self, timestamp: Instant, now_ms: u64, label: &'static str) -> bool {
+        let mut activity = self.expire_icmp_echo_if_due(now_ms);
+        let icmp_echo_tx_pending_before = self
+            .sockets
+            .get::<RawSocket>(self.icmp_echo_handle)
+            .send_queue()
+            != 0;
+        let arp_tx_before = self.device.counters().arp_tx;
         self.bump_poll_counter();
         let poll_result = self
             .interface
             .poll(timestamp, self.device.as_mut(), &mut self.sockets);
-        let activity = poll_result != PollResult::None;
+        activity |= poll_result != PollResult::None;
+        self.update_icmp_echo_dispatch_state(now_ms, icmp_echo_tx_pending_before, arp_tx_before);
+        activity |= self.service_icmp_echo(now_ms);
         if activity {
             log::debug!("[net] smoltcp: {label} poll now_ms={now_ms}");
         }
@@ -5457,7 +5748,7 @@ impl<D: NetDevice> NetStack<D> {
             DhcpEvent::LeaseAcquired(lease) => {
                 #[cfg(feature = "kernel")]
                 let admission_ready = self.reassert_cyw43_dhcp_rx_admission("lease-bound", now_ms);
-                self.apply_dhcp_lease(lease);
+                self.apply_dhcp_lease(lease, now_ms);
                 #[cfg(feature = "kernel")]
                 if !admission_ready {
                     warn!(
@@ -5481,12 +5772,15 @@ impl<D: NetDevice> NetStack<D> {
         }
     }
 
-    fn apply_dhcp_lease(&mut self, lease: DhcpLease) {
+    fn apply_dhcp_lease(&mut self, lease: DhcpLease, now_ms: u64) {
         self.dhcp_restart_after_ms = None;
         let ip = Ipv4Address::new(lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]);
         let gateway = lease
             .gateway
             .map(|value| Ipv4Address::new(value[0], value[1], value[2], value[3]));
+        if self.ip != ip || self.prefix_len != lease.prefix_len || self.gateway != gateway {
+            self.reset_icmp_echo_socket("dhcp-address-change", now_ms);
+        }
         self.ip = ip;
         self.prefix_len = lease.prefix_len;
         self.gateway = gateway;
@@ -8344,9 +8638,15 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         )
     }
 
+    fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
+        self.icmp_echo_service_due_at(now_ms)
+    }
+
     fn inject_console_line(&mut self, _line: &str) {}
 
     fn reset(&mut self) {
+        let reset_now_ms = self.last_now_ms.unwrap_or(0);
+        self.reset_icmp_echo_socket("stack-reset", reset_now_ms);
         self.abort_console_socket_pair("stack-reset");
         self.server.end_session();
         self.session_active = false;
@@ -9022,6 +9322,16 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.icmp_echo_service_due(now_ms),
+            Self::GenetDriverTask(stack) => stack.icmp_echo_service_due(now_ms),
+            Self::Cyw43DriverTask(stack) => stack.icmp_echo_service_due(now_ms),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.icmp_echo_service_due(now_ms),
+        }
+    }
+
     fn inject_console_line(&mut self, line: &str) {
         match self {
             Self::Rtl8139(stack) => stack.inject_console_line(line),
@@ -9124,6 +9434,11 @@ mod tests {
         SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
         SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
         *SOCKET_STORAGE_TAG_LABEL.lock() = None;
+
+        ICMP_ECHO_STORAGE_IN_USE.store(false, Ordering::Release);
+        ICMP_ECHO_STORAGE_OWNER.store(0, Ordering::Release);
+        ICMP_ECHO_STORAGE_TAG_ID.store(0, Ordering::Release);
+        *ICMP_ECHO_STORAGE_TAG_LABEL.lock() = None;
 
         TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
         TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
@@ -9243,7 +9558,8 @@ mod tests {
 
     #[test]
     fn socket_capacity_covers_full_profile_with_outbound_probe() {
-        const FULL_PROFILE_WITH_OUTBOUND_PROBE: usize = 2 // active + standby console
+        const FULL_PROFILE_WITH_OUTBOUND_PROBE: usize = 1 // raw ICMP echo responder
+            + 2 // active + standby console
             + 1 // DHCP
             + 2 // UDP beacon + echo
             + 2 // TCP smoke listener + outbound
@@ -11348,6 +11664,12 @@ mod tests {
             TCP_STANDBY_TX_STORAGE_OWNER.load(Ordering::Acquire),
             attempt.owner_id()
         );
+        assert!(ICMP_ECHO_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(
+            ICMP_ECHO_STORAGE_OWNER.load(Ordering::Acquire),
+            attempt.owner_id()
+        );
+        assert_ne!(ICMP_ECHO_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
 
         drop(reservation);
 
@@ -11358,6 +11680,37 @@ mod tests {
         assert_eq!(TCP_STANDBY_RX_STORAGE_OWNER.load(Ordering::Acquire), 0);
         assert!(!TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
         assert_eq!(TCP_STANDBY_TX_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert!(!ICMP_ECHO_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(ICMP_ECHO_STORAGE_OWNER.load(Ordering::Acquire), 0);
+        assert_eq!(ICMP_ECHO_STORAGE_TAG_ID.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn icmp_echo_reservation_failure_releases_earlier_leases() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
+        reset_console_storage_state();
+
+        ICMP_ECHO_STORAGE_IN_USE.store(true, Ordering::Release);
+        ICMP_ECHO_STORAGE_OWNER.store(0x1c4d, Ordering::Release);
+        let attempt = NetInitAttempt::new("test.icmp-echo-reservation");
+        let result = StorageReservation::acquire::<Infallible>(
+            false,
+            false,
+            &attempt,
+            "test.icmp-echo-reservation",
+        );
+
+        assert!(matches!(result, Err(NetStackError::IcmpEchoStorageInUse)));
+        assert!(!SOCKET_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_STANDBY_RX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(!TCP_STANDBY_TX_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert!(ICMP_ECHO_STORAGE_IN_USE.load(Ordering::Acquire));
+        assert_eq!(ICMP_ECHO_STORAGE_OWNER.load(Ordering::Acquire), 0x1c4d);
+
+        ICMP_ECHO_STORAGE_IN_USE.store(false, Ordering::Release);
+        ICMP_ECHO_STORAGE_OWNER.store(0, Ordering::Release);
     }
 
     #[test]

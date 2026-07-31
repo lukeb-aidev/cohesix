@@ -880,10 +880,11 @@ changed. The passive
 the same epoch with connection generation and pair epoch; changing only the
 physical epoch must invalidate both durable Network resume and any pending
 operator fence without admitting Wi-Fi work under the replacement identity.
-The lifetime RX-watch cursor must bind the same three-part identity. Missing,
-active, failed, or changed physical-lifetime state must clear it without a
-source probe, and a replacement lifetime must arm only from its own Gate 8
-data-consumer publication.
+The identity-only lifetime RX cursor must bind the same three-part identity.
+Missing, active, failed, or changed physical-lifetime state must clear it
+without a source probe, and a replacement lifetime may publish only from its
+own Gate 8 data-consumer boundary. The cursor grants permission but must never
+set a durable-work reason, schedule a fresh op8, or change TX admission.
 
 Cold-lifetime tests must prove a separate typed provenance lifecycle. Only
 successful completion of a pair transaction owned as `ColdBootstrap` may
@@ -919,9 +920,11 @@ sequence-zero `Prepared` parent keeps an open quantum actionable and that a
 closing parent advances in successive bounded Network turns rather than one
 turn per physical-operator rotation. Every turn must admit at most one child
 physical operation and revalidate the same request plus a monotonic
-`Prepared`-to-`Issued` state. A time/turn cap or pending physical or buffered
-console response may yield, but the next admitted slice must resume only the
-same fenced parent. Restore order is CYW43 then SDIO after its exact terminal.
+`Prepared`-to-`Issued` state. The 25-ms virtual-counter cap must fence only
+fresh-parent admission and must not interrupt that exact parent. A pending
+physical or buffered-console response or the hard 192-turn bound may yield,
+but the next admitted slice must resume only the same fenced parent. Restore
+order is CYW43 then SDIO after its exact terminal.
 Tests must reject a fresh or switched parent during close, issue-state
 regression, wrong-generation reuse, torn phase/reservation state, invalid
 active-parent state, and partial acquisition or restore. A clean partial
@@ -1213,15 +1216,18 @@ exact same-identity idle snapshot clears it. Coverage must exercise every
 reason-mask class, coalesced/lost/repeated notifications, stale idle snapshots,
 physical-lifetime changes, pair and connection generation changes, quarantine,
 reboot, and selected-NIC change.
-A complete TCP command, actual physical response/buffered input, turn cap, and
-time cap must retain unfinished Wi-Fi work behind a fence and prove `Serial`, optional
-`LocalSeat`, and `Dispatch` each receive their bounded turn before Network
-re-admission. A queued USB report and a buffered complete network command must
-not be bypassed. GENET must neither sample nor retain the CYW43 snapshot and
-must leave the CYW43 urgency, durable-resume, and operator-fence counters/state
-untouched. The passive `rx_wake` state and `rx_wake_counters` records must
-remain separate and untruncated at maximum counter values. Tests must also
-stage a child-invisible sequence-zero
+A complete TCP command, actual physical response/buffered input, hard turn cap,
+and fresh-parent time cap must retain unfinished Wi-Fi work behind a fence and
+prove `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded
+turn before Network re-admission. The 25-ms time cap must not interrupt an exact
+already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
+the hard 192-turn bound may yield it only with the same identity retained. A
+queued USB report and a buffered complete network command must not be bypassed.
+GENET must neither sample nor retain the CYW43 snapshot and must leave the
+CYW43 urgency, durable-resume, and operator-fence counters/state untouched. The
+passive `rx_wake` state and `rx_wake_counters` records must remain separate and
+untruncated at maximum counter values. Tests must also stage a child-invisible
+sequence-zero
 NetData request at the Gate 8 handoff, prove the next outer turn decodes it
 through HAL's immutable retained identity and advances it beyond `Inactive`,
 then prove host-EAPOL receives the next fresh prompt-poll turn without a pair
@@ -1425,18 +1431,19 @@ with a CYW43 operation. Ordinary linked EventPump coverage must prove the
 `Serial -> LocalSeat -> Dispatch -> Network -> Display` phase classes and the
 bounded CYW43 network weighting. Selected-CYW43 edge-admission coverage must
 inject one empty-to-nonempty root wake from `Display`, `LocalSeat`, and
-`Dispatch`, prove that `Serial` owns the first bounded turn and `Network` is
-admitted on the next turn when no physical input/recovery owner is pending, and
-prove that the admitted turn still uses the sole existing CYW43 owner. A queued
-WiFi HDMI status may be preempted but must remain queued. Keeping the
-notification level latched without incrementing its hit epoch must not re-arm
-the admission or skip another physical phase. Real serial/local-seat input and
-USB recovery retain their operator precedence. First-report or command-ready
-service debt with no decoded or buffered input receives one `LocalSeat` turn
-but must not be classified as real input or retain the post-Dispatch fence;
-quarantine and reboot clear the local cursor without a NIC turn or wake poll.
-The same injected wake under GENET must leave its ordinary phase result, CYW43
-wake counters, and CYW43 quantum counters unchanged.
+`Dispatch`, prove that the wake latches without skipping or rewriting the
+already-scheduled `LocalSeat`, `Dispatch`, or pending `Display` phase, and then
+admits `Network` at the next safe boundary when no physical-input or recovery
+owner is pending. The admitted turn must still use the sole existing CYW43
+owner. Keeping the notification level latched without incrementing its hit
+epoch must not re-arm admission or skip another physical phase. Real
+serial/local-seat input and USB recovery retain their operator precedence.
+First-report or command-ready service debt with no decoded or buffered input
+receives one `LocalSeat` turn but must not be classified as real input or
+retain the post-Dispatch fence; quarantine and reboot clear the local cursor
+without a NIC turn or wake poll. The same injected wake under GENET must leave
+its ordinary phase result, CYW43 wake counters, and CYW43 quantum counters
+unchanged.
 
 Ordinary post-prompt EventPump coverage must also prove that the same
 linked-serial cutover advances for every physical-network selection, including
@@ -1473,60 +1480,73 @@ buffered command stays behind the first cursor, and a changed or absent active
 connection rejects stale cursor work. A data-ready CYW43 connection must not
 create the GENET cursor. A response flush, exact socket/parser work,
 runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
-retained CYW43 NetData/TX/fairness continuation may retain `Network` for at
-most the compiler-declared CYW43 `max_ops_per_turn` service bound (currently
-192 successive outer turns) and 25 ms on the seL4 virtual counter, whichever
-comes first.
+retained CYW43 NetData/TX continuation may retain `Network` subject to the
+compiler-declared CYW43 `max_ops_per_turn` hard bound (currently 192 successive
+outer turns). A separate 25-ms seL4 virtual-counter cap fences admission of a
+fresh physical parent.
 
-Gate 8 data-consumer publication must arm one RX-watch cursor, initially in a
-fresh eight-millisecond `Watching` interval, bound to the current connection
-generation, pair epoch, and completed physical-lifetime epoch. `RequiredPoll`
-must block fresh TX until an exact nonfault op8 terminal whose immutable
-descriptor includes `RX_HINTLESS_FIRSTREAD`. Only that hintless
-`Idle`, `Progress`, or `FrameReady` terminal may release fresh TX and rearm the
-counter-deadlined `Watching` interval. A queue-only op8 terminal must neither
-slide an unexpired deadline nor satisfy `RequiredPoll`. Before expiry,
-`Watching` must neither weight Network nor manufacture an op8 source probe.
-Expiry must advance that same cursor to `RequiredPoll`, retain
-current-identity Network work, and force one op8
-`RX_HINTLESS_FIRSTREAD`; it must never clear the cursor. If a queue-only op8 is
-already retained, its exact terminal must leave `RequiredPoll` armed and the
-following fresh descriptor must carry the hintless probe. A new accepted TX
-must also advance the existing cursor to `RequiredPoll` without allocating a
-second cursor. Conversely, a watch that expires after an immutable op7 is
-retained must not pre-empt that owner: distinct outer turns advance only the
-same op7 ticket/request/payload through its exact terminal, no op8 may be
-created in those turns, and `RequiredPoll` remains armed. The op7 terminal
-consumes its turn; only the next unowned turn may begin the hintless op8.
+Gate 8 data-consumer publication must install one identity-only lifetime RX
+cursor bound to the current connection generation, pair epoch, and completed
+physical-lifetime epoch. Its healthy diagnostic state is `idle`. It has no
+deadline and must neither add a durable-work reason, manufacture a fresh op8,
+acquire the pair priority lease, nor block a later credited TX. Repeated quiet
+outer turns with no DPC/root wake, queue, retained owner, or protocol
+continuation must leave the shared command sequence, op8 count, priority-lease
+counters, DPC counters, `deadline_probes`, and `terminals` unchanged.
 
-Tests must cover repeated long quiet intervals with no root wake or DPC edge,
-deadline-not-due passivity, deadline-due admission, one forced source probe,
-and hintless `Idle`, `Progress`, and `FrameReady` rearm. Queue-only, wrong
-request, wrong identity, and fault terminals cannot advance the cursor.
-Connection-generation, pair,
-physical-lifetime, recovery, quarantine, reboot, and selected-NIC changes must
-clear it. GENET must never read, arm, clear, or report this state. Root may also
-set `RX_HINTLESS_FIRSTREAD` for a proved current-generation root wake or live
-DPC-ring level. A forced empty op8/op10 may combine software
-`Queue -> SourceProbe` with the probe as that turn's single new physical action,
-while cached completion/event replay remains a later turn. Ordinary empty polls
-remain queue-only. Authentication without pending work
-must not extend the quantum. Tests must prove that every third admitted Network
-operation performs one probe-only Serial turn, that an idle probe resumes the
-same quantum, and that real input exits through the normal operator rotation.
-They must advance time between outer turns and
-prove that a quantum already at its deadline returns to `Serial` with zero
-additional NIC/SDIO operations. An idle selected interface must not acquire the
-pair priority lease. The first actionable selected-WiFi turn must reserve and
-boost SDIO then CYW43 once; later exact current-generation parents in the same
-quantum must add no scheduler writes. Every quantum exit path must latch the
-fresh-work close fence. An exact active parent, including an ABI-invisible
-sequence-zero `Prepared` parent, must prevent an open lease from closing between
-stages. If close has already fenced it, successive admitted `Network` turns may
-advance only that same parent, by at most one child physical operation per
-turn, while rechecking request identity and monotonic issue state after every
-turn. A cap or operator response may yield to `Serial` and `LocalSeat`, but the
-next Network slice must resume the same parent; request substitution,
+Root may set `RX_HINTLESS_FIRSTREAD` only for a proved current-generation
+child-to-root wake or live DPC-ring level. The runtime must signal its private
+RX queue only on empty-to-nonempty transition. HAL must preserve a latched
+level after notification coalescing, and exact empty op8 completion must clear
+and immediately recheck it so an edge racing the clear remains pending. One
+real level may admit one fresh source probe through the existing sole op8,
+HAL, and linked SDIO owner; cached completion/event replay remains later owner
+work and no turn gains a second physical action. Queue-only, wrong-request,
+wrong-identity, stale, and fault terminals must not increment the source-probe
+terminal counter. Exact non-fault `Idle`, `Progress`, or `FrameReady` terminal
+from that real source probe may increment it once.
+
+Every non-source durable-work reason—pre-poll, data TX, ARP TX, runtime
+descriptor, root RX, control reply, logical owner, terminal drain, host EAPOL,
+HAL lease, prompt, maintenance, recovery, and their ordinary combination—must
+fail both fresh-op8 gates without creating a prompt owner, linked-runtime turn,
+or source-terminal increment. Those reasons still retain EventPump service for
+their own bounded owner work.
+
+An accepted data TX must not create receive demand, alter the lifetime cursor,
+force a following source probe, or fence another credited TX. Conversely, an
+already-retained immutable op7 or op8 must continue through its exact
+ticket/request/payload terminal without displacement or competing cursor.
+Connection-generation, pair, physical-lifetime, recovery, quarantine, reboot,
+and selected-NIC changes must clear the lifetime cursor. GENET must never read,
+install, clear, or report this state.
+
+Authentication without pending work must not extend the quantum. Tests must
+prove that every third admitted Network operation performs one bounded
+`Serial -> LocalSeat -> Dispatch -> pending Display` checkpoint, even when no
+root-side USB byte was already visible. The checkpoint must perform zero NIC
+operations, preserve the exact CYW43 parent/lease identity, and resume that same
+quantum. A fresh wake must latch admission without rewriting a scheduled
+LocalSeat, Dispatch, or Display phase. Tests must advance time between
+outer turns and prove that a quantum already at its deadline and without an
+exact retained parent returns to `Serial` with zero additional NIC/SDIO
+operations. An idle selected interface must not acquire the pair priority
+lease. The first actionable selected-WiFi turn must reserve and boost SDIO then
+CYW43 once; later exact current-generation parents in the same quantum must add
+no scheduler writes. Every quantum exit path must latch the fresh-work close
+fence. An exact active parent, including an ABI-invisible sequence-zero
+`Prepared` parent, must prevent an open lease from closing between stages only
+after HAL proves a root-continuation operation, nonzero immutable fingerprint,
+matching request and logical generation, current pair epoch, open priority
+reservations, and no pair restart or context replay. This identity must remain
+stable across the EventPump's before/after snapshot. If close has already
+fenced it, successive admitted `Network` turns may advance only that same
+parent, by at most one child physical operation per turn, while rechecking
+request identity and monotonic issue state after every turn. Elapsed 25-ms time
+must not interrupt that parent. An operator response or the hard 192-turn cap
+may yield to `Serial` and `LocalSeat`, but the next Network slice must resume
+the same parent; when elapsed and hard bounds coincide, telemetry must classify
+the yield as `turn_cap`, not `time_cap`. Request substitution,
 `Issued`-to-`Prepared` regression, or disappearance without a typed terminal
 must request pair recovery. After the exact parent terminates, restore order
 must be CYW43 then SDIO before the EventPump exits the slice.
@@ -1551,14 +1571,22 @@ network-origin reboot acknowledgement drain; after that required NIC service
 turn, or when a physical response becomes pending during an admitted operation,
 the next phase must be `Serial` rather than `Display`. `netstats` must expose
 quantum count, turns, maximum duration, `operator_yields`, and exit reasons;
-`operator_yields` counts every-third-operation Serial probes and may be nonzero
-only for selected CYW43. Selected WiFi must additionally emit:
+`operator_yields` counts bounded physical-console checkpoints
+(`Serial -> LocalSeat -> Dispatch -> pending Display`) and may be nonzero only
+for selected CYW43. Selected WiFi must additionally emit:
 
 ```text
 netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
 netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
+
+`wifi diag` and `wifi probe-ht` must preserve the compatible handoff grammar
+with `rx_watch=<absent|stale|idle>`. Live source may emit no other watch state;
+`deadline_probes` must remain zero, and `terminals` may advance only for exact
+non-fault hintless op8 terminals caused by real root-wake/DPC source probes.
+The maximum-width formatting fixture may exercise arbitrary field values but
+must not be treated as a reachable driver state.
 
 The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
@@ -1579,9 +1607,18 @@ The focused acceptance tests
 `reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns`,
 `completion_between_poll_and_grant_suppresses_signal_and_owner_reissue`,
 `production_owner_notification_coalesces_irq_and_releases_one_exact_granted_quantum`,
-`cyw43_rx_fairness_transitions_to_bounded_receive_watch`, and
-`cyw43_receive_path_drains_post_tx_fairness_before_queued_arp`,
-`cyw43_required_receive_watch_does_not_preempt_retained_data_tx`, and
+`cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
+`cyw43_non_source_work_reasons_cannot_manufacture_fresh_op8`,
+`cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do`,
+`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
+`cyw43_steady_rx_poll_forces_source_only_for_a_proved_level`,
+`cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition`,
+`cyw43_root_wake_clear_recheck_preserves_new_edges`,
+`cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal`,
+`cyw43_open_network_parent_requires_complete_current_identity`,
+`linked_cyw43_hard_turn_cap_wins_simultaneous_time_deadline`,
+`linked_cyw43_closing_lease_drains_exact_parent_contiguously`,
+`linked_cyw43_unleased_boundary_adopts_only_one_exact_parent`, and
 `post_secure_host_eapol_tx_blocks_fresh_net_data_pre_poll` must pass.
 Together they must prove the exact policy line
 `m26d_net_first=no physical_input_yield=enabled` and exactly four scheduler
@@ -1597,46 +1634,100 @@ nonzero. A recovery revocation is acceptable only with matching contemporaneous
 typed pair-recovery evidence. The GENET fixture must omit this WiFi-only
 line and keep all CYW43 quantum counters zero.
 
-The 2026-07-30 hardware baseline for this performance gate is deliberately
-non-passing. Its power-off boot required pair recovery before Gate 8a-8h, while
-the following five powered warm boots passed on the first pair. Its clean WiFi
-TCP flow averaged about 315 ms request-to-first-payload, reached about 407 ms at
-p95, sustained about 2.9 sequential commands/s, and completed only 309 of 824
-pressure operations; the same shared stack over GENET measured about 1.23 ms
-and completed 8,983 of 8,983. These figures locate the material defect in CYW43
-linked-runtime/HAL cadence and do not prove a tenfold repair.
+The 2026-07-31 exact `0b15321d0c12` hardware baseline for this performance
+gate is deliberately non-passing despite 7/7 first-lifetime startup. One
+power-off boot and warm R01-R06 all used attempt 1 and pair epoch 1, passed
+Gate 8a-8h, and bound DHCP without pair recovery. Its clean 506-request WiFi
+TCP stream had about 380 ms request-to-first-response p50, 468 ms p95, and only
+about 2.42 exchanges/s despite no retransmission, reset, sequence disorder,
+reconnect, or zero window. Across the six ICMP-probed lifetimes—the power-off
+boot and R01-R05—the first echo was received and caused the Pi to ARP-resolve
+the host about 126-179 ms later. smoltcp 0.13.1 had already constructed its
+automatic stateless Echo Reply, but Ethernet dispatch returned
+unresolved-neighbor and discarded it. This proves the first CYW43 wire ingress
+was delivered and isolates a common NetStack reply-lifetime defect; it is
+neither RF loss nor acceptable cold-neighbor behavior. Current acceptance must
+retain that original reply through neighbor resolution. These figures still
+locate the separate material persistent-flow defect in CYW43
+linked-runtime/HAL cadence and do not prove either source repair.
+R06 sent TCP before ping: the Pi retained the SYN across cold neighbor
+resolution, ARP-requested the host after 130.616 ms, returned one SYN/ACK after
+322.861 ms, and closed cleanly without a SYN retry. Preserve that cold sample
+separately and evaluate the driver-performance threshold on ARP-warmed traffic.
 
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
-invariants without importing its private workqueue or host lock: durable
-DPC/pending state, ordered RX-first bounded drain, `BRCMF_RXBOUND=50`,
-`BRCMF_TXBOUND=20`, `BRCMF_TXMINMAX=1` while RX remains pending, a 2,048-entry
-TX queue, 32-KiB aggregation, and block-mode CMD53. Cohesix must prove its
-translation through the existing 50-frame RX bound, credits/glom, 32-KiB shared
-aperture, 512-byte Function 2 blocks, multi-block CMD53, and external DMA. Its
-scheduler form remains one bounded EventPump Network quantum with serial
-probes, exact grants, one HAL owner, and one linked SDIO runtime issuer; no test
-may pass by adding a private physical drain loop.
+invariants without importing its private workqueue or host lock. Normal SDIO
+mode has interrupts enabled and polling disabled; the ISR schedules durable
+DPC/pending work, the ordered worker performs an RX-first bounded drain, and TX
+completion does not mandate a physical receive-source read. Preserve
+`BRCMF_RXBOUND=50`, `BRCMF_TXBOUND=20`, `BRCMF_TXMINMAX=1` while RX remains
+pending, a 2,048-entry TX queue, 32-KiB aggregation, and block-mode CMD53.
+Cohesix must prove its translation through the existing 50-frame RX bound,
+credits/glom, 32-KiB shared aperture, 512-byte Function 2 blocks, multi-block
+CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
+latch. Its scheduler form remains one bounded EventPump Network quantum with
+physical-console checkpoints, exact grants, one HAL owner, and one linked SDIO
+runtime issuer; no test may pass by adding a timer poller or private physical
+drain loop.
 
-Fresh exact-image acceptance must pair five first-pair WiFi boots with one
-GENET control and then run the same sequential request and no-retry pressure
-workloads. The mandatory tenfold floor is WiFi
-request-to-first-payload p95 at most 40 ms and at least 29 sequential
-requests/s. The aggressive low-overhead target is p95 at most 10 ms and at
-least 100 requests/s. The pcap must show no loss, sequence gap, out-of-order
+Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
+the sole Echo Reply owner. From its two-frame RX side, the service admits only
+checksum-valid Echo Requests from a unicast source addressed to the exact
+assigned local IPv4 address and constructs at most one reply per NetStack
+service turn. Its one-frame TX side
+must remain queued while smoltcp reports the neighbor missing, allow ordinary
+ARP retry policy to run, and emit exactly one reply after resolution.
+Identifier, sequence, and payload must match exactly. Duplicate, malformed,
+nonlocal, wrong-peer, saturated, expired, and stale-generation/reset work must
+not emit a reply. WiFi generation, DHCP address, and explicit stack-reset
+transitions purge both queues. The host queue model and Pi-feature production
+tests must exercise this driver-neutral policy; neither may pass by warming ARP
+before the cold test, adding another packet issuer, manufacturing CYW43 source
+work, or changing GENET scheduling.
+
+Run the focused source gates serially:
+
+```bash
+cargo test -p root-task --lib --no-default-features --features net-console icmp_echo -- --test-threads=1
+cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 retained_icmp_echo_due_extends_only_the_cyw43_network_lane -- --test-threads=1
+cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 socket_capacity_covers_full_profile_with_outbound_probe -- --test-threads=1
+cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 icmp_echo_reservation_failure_releases_earlier_leases -- --test-threads=1
+```
+
+Fresh exact-image acceptance must pair one power-off plus five first-pair warm
+WiFi boots with one GENET control and then run the same sequential request and
+no-retry pressure workloads. Before ping, TCP, `cohsh`, or benchmark traffic
+warms the Pi's host-neighbor entry on each lifetime, send exactly one ICMPv4
+Echo Request. The boot-paired pcap must show that request, the Pi's ARP request,
+the matching host ARP reply, and exactly one Echo Reply with the original
+identifier, sequence, and payload, without a second host Echo Request or
+duplicate Pi reply. Failure of that semantic cold-neighbor gate fails the
+lifetime independently of CYW43 ingress and warmed cadence. Record its elapsed
+time separately; use only subsequent ARP-warmed ping, SYN, and
+request-to-first-payload samples for the CYW43 cadence threshold. The mandatory
+tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
+29 sequential requests/s. The aggressive low-overhead target is p95 at most 10
+ms and at least 100 requests/s. At true idle,
+`rx_watch=idle`, `deadline_probes=0`, no fresh op8 or priority lease may appear,
+and source-probe terminals must correlate with real DPC/root-wake activity. The
+pcap must additionally show no warmed-traffic loss, sequence gap, out-of-order
 delivery, reset, zero window, SACK recovery block, SYN retry, or reconnect, and
-the pressure run must have zero timeout masking. GENET latency and throughput
-must remain within its control baseline. Until a rebuilt/read-back image
-produces this evidence, both thresholds remain targets rather than results.
+the pressure run must have zero timeout masking. GENET must pass the same
+common cold-neighbor semantic gate while latency, throughput, and scheduler
+counters remain within its control contract. Until a rebuilt/read-back image
+produces this evidence, the cold-neighbor repair and both performance
+thresholds remain source claims rather than hardware results.
 
 CYW43 device tests must also prove that a retained TX or unproved credit window
 withholds smoltcp's paired RX/TX token, preserves the copied RX frame, advances
 only the sole retained owner, and produces zero fabricated TX drops before the
 frame is later delivered.
 
-The console socket pack must cover the maximum enabled profile: active and
-standby console acceptors, DHCP, two UDP self-test sockets, two TCP self-test
-sockets, and the optional outbound probe. All application close origins enter
-one `Draining`/`PeerCloseWait`/`Closing` state machine. Clean `QUIT` must drain
+The socket pack must cover the maximum enabled profile: one raw ICMP responder,
+active and standby console acceptors, DHCP, two UDP self-test sockets, two TCP
+self-test sockets, and the optional outbound probe. All application close
+origins enter one `Draining`/`PeerCloseWait`/`Closing` state machine. Clean
+`QUIT` must drain
 `OK QUIT`, wait up to one second for the peer FIN, and close from `CloseWait`
 before standby promotion. If the active socket remains `Established` at grace
 expiry, the policy must force abort and promote that terminal result; it must
@@ -1800,9 +1891,10 @@ The focused adversarial cases include
 `wifi_gate_one_requires_one_completed_supervisor_bound_physical_lifetime`,
 `linked_cyw43_physical_lifetime_change_invalidates_resume_and_operator_fence`,
 `cyw43_gate8_ready_publication_is_a_separate_retractable_consumer_fence`,
-`cyw43_lifetime_receive_watch_fails_closed_on_pair_or_physical_change`,
-`cyw43_lifetime_receive_watch_ignores_queue_only_terminals`,
-`cyw43_rx_fairness_keeps_one_lifetime_receive_watch`,
+`cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
+`cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do`,
+`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
+`cyw43_steady_rx_poll_forces_source_only_for_a_proved_level`,
 `linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
 `linked_cyw43_rx_admission_honors_input_and_clears_on_guards`,
 `cyw43_durable_work_requires_one_completed_non_recovery_physical_lifetime`,
@@ -2590,6 +2682,18 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=genet --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
   - The minimum 26b Wi-Fi closure command is:
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=cyw43 --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
+  - Cold-neighbor reply-retention gate:
+    - Before any host probe or TCP/`cohsh` connection on each accepted WiFi
+      lifetime and the GENET control, send one ICMPv4 Echo Request while the
+      Pi's peer entry is cold. Retain the boot-paired capture through ordinary
+      ARP resolution.
+    - Require the ordered pcap trace
+      `Echo Request -> Pi ARP Request -> matching ARP Reply -> exactly one matching Echo Reply`,
+      with the original identifier, sequence, and payload and with no second
+      Echo Request, duplicate reply, stale-address reply, or unrelated
+      cache-warming traffic. Report this semantic result separately from
+      ARP-warmed latency. A missing first reply fails the lifetime even when
+      Gate 8, DHCP, later pings, and TCP pass.
   - `--require-usb-ready`, `--require-wifi-ready`, and `--require-ready` are
     stricter than gate/blocker success. They require the isolated runtime
     old-good replay fields from `scripts/pi4_trace_normalize.py --gate-summary`:
@@ -2649,7 +2753,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`; DHCP-bound evidence is address proof only, while acceptance still requires listener/command evidence (`netstatus ... tcp_ready=yes`, authenticated `cohsh`, or successful `nettest`).
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
-    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, and `USB_BUSY_AFTER_READY=no`, and hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; parser ingress reported as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic only. A printable-key line such as `runtime keyboard first-printable-byte ...` remains required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply/runtime-skipped pressure during typing, arrow-history, and lock-key bursts.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, and the single interrupt-IN lane stably armed as `queued_reports=1`; any larger active depth is an invariant failure. Hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, and visible HDMI echo remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply/runtime-skipped pressure during typing, arrow-history, and lock-key bursts.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing

@@ -1162,6 +1162,127 @@ pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Rtl8139;
 #[cfg(all(feature = "net-console", feature = "net-backend-virtio"))]
 pub const DEFAULT_NET_BACKEND: NetBackend = NetBackend::Virtio;
 
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum IcmpEchoRequestError {
+    MalformedIpv4,
+    NonLocalDestination,
+    InvalidSource,
+    WrongProtocol,
+    MalformedIcmp,
+    NotEchoRequest,
+    ReplyBufferTooSmall,
+}
+
+#[cfg(feature = "net-console")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct IcmpEchoRequest<'a> {
+    source: smoltcp::wire::Ipv4Address,
+    ident: u16,
+    sequence: u16,
+    payload: &'a [u8],
+}
+
+#[cfg(feature = "net-console")]
+impl IcmpEchoRequest<'_> {
+    pub(super) fn reply_len(&self) -> usize {
+        smoltcp::wire::Ipv4Repr {
+            src_addr: smoltcp::wire::Ipv4Address::UNSPECIFIED,
+            dst_addr: self.source,
+            next_header: smoltcp::wire::IpProtocol::Icmp,
+            payload_len: smoltcp::wire::Icmpv4Repr::EchoReply {
+                ident: self.ident,
+                seq_no: self.sequence,
+                data: self.payload,
+            }
+            .buffer_len(),
+            hop_limit: 64,
+        }
+        .buffer_len()
+            + smoltcp::wire::Icmpv4Repr::EchoReply {
+                ident: self.ident,
+                seq_no: self.sequence,
+                data: self.payload,
+            }
+            .buffer_len()
+    }
+
+    pub(super) fn emit_reply(
+        &self,
+        local_ip: smoltcp::wire::Ipv4Address,
+        output: &mut [u8],
+    ) -> Result<usize, IcmpEchoRequestError> {
+        let icmp_repr = smoltcp::wire::Icmpv4Repr::EchoReply {
+            ident: self.ident,
+            seq_no: self.sequence,
+            data: self.payload,
+        };
+        let ipv4_repr = smoltcp::wire::Ipv4Repr {
+            src_addr: local_ip,
+            dst_addr: self.source,
+            next_header: smoltcp::wire::IpProtocol::Icmp,
+            payload_len: icmp_repr.buffer_len(),
+            hop_limit: 64,
+        };
+        let ipv4_len = ipv4_repr.buffer_len();
+        let reply_len = ipv4_len.saturating_add(icmp_repr.buffer_len());
+        if output.len() < reply_len {
+            return Err(IcmpEchoRequestError::ReplyBufferTooSmall);
+        }
+        let checksums = smoltcp::phy::ChecksumCapabilities::default();
+        ipv4_repr.emit(
+            &mut smoltcp::wire::Ipv4Packet::new_unchecked(&mut output[..reply_len]),
+            &checksums,
+        );
+        icmp_repr.emit(
+            &mut smoltcp::wire::Icmpv4Packet::new_unchecked(&mut output[ipv4_len..reply_len]),
+            &checksums,
+        );
+        Ok(reply_len)
+    }
+}
+
+#[cfg(feature = "net-console")]
+pub(super) fn parse_icmp_echo_request(
+    packet: &[u8],
+    local_ip: smoltcp::wire::Ipv4Address,
+) -> Result<IcmpEchoRequest<'_>, IcmpEchoRequestError> {
+    let checksums = smoltcp::phy::ChecksumCapabilities::default();
+    let ipv4_packet = smoltcp::wire::Ipv4Packet::new_checked(packet)
+        .map_err(|_| IcmpEchoRequestError::MalformedIpv4)?;
+    let ipv4 = smoltcp::wire::Ipv4Repr::parse(&ipv4_packet, &checksums)
+        .map_err(|_| IcmpEchoRequestError::MalformedIpv4)?;
+    if local_ip.is_unspecified() || ipv4.dst_addr != local_ip {
+        return Err(IcmpEchoRequestError::NonLocalDestination);
+    }
+    if ipv4.src_addr.is_unspecified()
+        || ipv4.src_addr.is_multicast()
+        || ipv4.src_addr.is_broadcast()
+    {
+        return Err(IcmpEchoRequestError::InvalidSource);
+    }
+    if ipv4.next_header != smoltcp::wire::IpProtocol::Icmp {
+        return Err(IcmpEchoRequestError::WrongProtocol);
+    }
+    let icmp_packet = smoltcp::wire::Icmpv4Packet::new_checked(ipv4_packet.payload())
+        .map_err(|_| IcmpEchoRequestError::MalformedIcmp)?;
+    match smoltcp::wire::Icmpv4Repr::parse(&icmp_packet, &checksums)
+        .map_err(|_| IcmpEchoRequestError::MalformedIcmp)?
+    {
+        smoltcp::wire::Icmpv4Repr::EchoRequest {
+            ident,
+            seq_no,
+            data,
+        } => Ok(IcmpEchoRequest {
+            source: ipv4.src_addr,
+            ident,
+            sequence: seq_no,
+            payload: data,
+        }),
+        _ => Err(IcmpEchoRequestError::NotEchoRequest),
+    }
+}
+
 /// Networking integration exposed to the pump when the `net` feature is enabled.
 pub trait NetPoller {
     /// Poll the network subsystem and return whether new work occurred.
@@ -1257,6 +1378,14 @@ pub trait NetPoller {
     /// another network service turn. An idle authenticated connection must
     /// return `false`.
     fn console_service_pending(&self) -> bool {
+        false
+    }
+
+    /// Return whether retained ICMP echo work is due for another network turn.
+    ///
+    /// This is separate from TCP console demand so a cold-neighbor Echo Reply
+    /// can survive ARP resolution without manufacturing NIC-driver work.
+    fn icmp_echo_service_due(&self, _now_ms: u64) -> bool {
         false
     }
 

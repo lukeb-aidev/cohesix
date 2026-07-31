@@ -4638,6 +4638,39 @@ impl DriverTaskRetainedRequestState {
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_task_retained_phase_is_prepared(
+    phase: DriverTaskRetainedLeasePhase,
+    doorbell_issued: bool,
+) -> bool {
+    !doorbell_issued
+        && matches!(
+            phase,
+            DriverTaskRetainedLeasePhase::Inactive
+                | DriverTaskRetainedLeasePhase::BoostBus
+                | DriverTaskRetainedLeasePhase::BoostPrimary
+                | DriverTaskRetainedLeasePhase::ReadyToIssue
+        )
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_retained_phase_is_issued(
+    phase: DriverTaskRetainedLeasePhase,
+    doorbell_issued: bool,
+) -> bool {
+    doorbell_issued
+        && matches!(
+            phase,
+            DriverTaskRetainedLeasePhase::GrantRequired
+                | DriverTaskRetainedLeasePhase::Granted
+                | DriverTaskRetainedLeasePhase::Committed
+                | DriverTaskRetainedLeasePhase::Issued
+                | DriverTaskRetainedLeasePhase::RestorePrimary
+                | DriverTaskRetainedLeasePhase::RestoreBus
+                | DriverTaskRetainedLeasePhase::ReadyToComplete
+        )
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DriverTaskRetainedRequestSnapshot {
     state: DriverTaskRetainedRequestState,
@@ -4706,30 +4739,14 @@ fn active_driver_task_retained_request_for_slot(
         return Some(DriverTaskRetainedRequestState::Invalid { request });
     };
     let doorbell_issued = slot.retained_doorbell_issued.load(Ordering::Acquire) != 0;
-    let prepared = command.sequence == 0
-        && !doorbell_issued
-        && matches!(
-            phase,
-            DriverTaskRetainedLeasePhase::Inactive
-                | DriverTaskRetainedLeasePhase::BoostBus
-                | DriverTaskRetainedLeasePhase::BoostPrimary
-                | DriverTaskRetainedLeasePhase::ReadyToIssue
-        );
+    let prepared =
+        command.sequence == 0 && driver_task_retained_phase_is_prepared(phase, doorbell_issued);
     if prepared {
         command.sequence = request;
         return Some(DriverTaskRetainedRequestState::Prepared { request, command });
     }
-    let issued = command.sequence == request
-        && matches!(
-            (phase, doorbell_issued),
-            (DriverTaskRetainedLeasePhase::GrantRequired, true)
-                | (DriverTaskRetainedLeasePhase::Granted, true)
-                | (DriverTaskRetainedLeasePhase::Committed, true)
-                | (DriverTaskRetainedLeasePhase::Issued, true)
-                | (DriverTaskRetainedLeasePhase::RestorePrimary, true)
-                | (DriverTaskRetainedLeasePhase::RestoreBus, true)
-                | (DriverTaskRetainedLeasePhase::ReadyToComplete, true)
-        );
+    let issued =
+        command.sequence == request && driver_task_retained_phase_is_issued(phase, doorbell_issued);
     if issued {
         Some(DriverTaskRetainedRequestState::Issued { request, command })
     } else {
@@ -4844,6 +4861,133 @@ pub(crate) fn cyw43_sdio_network_boundary_parent() -> Cyw43SdioNetworkBoundaryPa
         && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
         && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
     validate_cyw43_sdio_network_boundary_parent(parent, phase, priority_token_present, pair_current)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_active_parent_resumable_with(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    snapshot: Option<DriverTaskRetainedRequestSnapshot>,
+    expected_connection_generation: u32,
+    current_pair_epoch: u32,
+    pair_current: bool,
+) -> bool {
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    let parent = classify_cyw43_sdio_network_boundary_parent(Some(snapshot));
+    let (request, command_fingerprint) = match parent {
+        Cyw43SdioNetworkBoundaryParent::Prepared {
+            request,
+            command_fingerprint,
+        }
+        | Cyw43SdioNetworkBoundaryParent::Issued {
+            request,
+            command_fingerprint,
+        } => (request, command_fingerprint),
+        Cyw43SdioNetworkBoundaryParent::Inactive
+        | Cyw43SdioNetworkBoundaryParent::Invalid { .. } => return false,
+    };
+    let Some(command) = snapshot.state.command() else {
+        return false;
+    };
+    if command.sequence != request
+        || command.aux1 != expected_connection_generation
+        || cyw43_slot.active.load(Ordering::Acquire) == 0
+        || cyw43_slot.request_seq.load(Ordering::Acquire) != request as usize
+        || cyw43_slot
+            .active_command_fingerprint
+            .load(Ordering::Acquire)
+            != command_fingerprint
+        || cyw43_slot.root_notification.load(Ordering::Acquire) == 0
+        || !pair_current
+    {
+        return false;
+    }
+
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire));
+    let mask = lease.mask.load(Ordering::Acquire);
+    let valid_mask = DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS;
+    if phase != Some(Cyw43SdioNetworkPriorityLeasePhase::Open)
+        || lease.pair_epoch.load(Ordering::Acquire) != current_pair_epoch
+        || mask == 0
+        || mask & !valid_mask != 0
+        || !cyw43_sdio_network_priority_reservations_match(cyw43_slot, sdio_slot, mask)
+    {
+        return false;
+    }
+
+    let retained_phase = DriverTaskRetainedLeasePhase::from_usize(
+        cyw43_slot
+            .retained_priority_lease_phase
+            .load(Ordering::Acquire),
+    );
+    let doorbell_issued = cyw43_slot.retained_doorbell_issued.load(Ordering::Acquire) != 0;
+    let retained_phase_matches = match (snapshot.state, retained_phase) {
+        (DriverTaskRetainedRequestState::Prepared { .. }, Some(retained_phase)) => {
+            driver_task_retained_phase_is_prepared(retained_phase, doorbell_issued)
+        }
+        (DriverTaskRetainedRequestState::Issued { .. }, Some(retained_phase)) => {
+            driver_task_retained_phase_is_issued(retained_phase, doorbell_issued)
+        }
+        (DriverTaskRetainedRequestState::Invalid { .. }, _) | (_, None) => false,
+    };
+    if !retained_phase_matches {
+        return false;
+    }
+    if retained_phase == Some(DriverTaskRetainedLeasePhase::Inactive) {
+        return !snapshot.state.issued()
+            && cyw43_slot
+                .retained_priority_lease_request
+                .load(Ordering::Acquire)
+                == 0
+            && cyw43_slot
+                .retained_priority_lease_fingerprint
+                .load(Ordering::Acquire)
+                == 0
+            && cyw43_slot
+                .retained_priority_lease_generation
+                .load(Ordering::Acquire)
+                == 0
+            && cyw43_slot
+                .retained_priority_lease_mask
+                .load(Ordering::Acquire)
+                == 0
+            && cyw43_slot.retained_grant_id.load(Ordering::Acquire) == 0;
+    }
+
+    driver_task_retained_lease_identity_matches_generation(
+        cyw43_slot,
+        request as usize,
+        command_fingerprint,
+        current_pair_epoch,
+    )
+}
+
+/// Return whether the open Network lease owns one exact current CYW43 parent.
+///
+/// Closing and unleased-boundary parents use their separate typed drain
+/// snapshots. This predicate is solely for keeping an already-admitted Open
+/// parent contiguous after the fresh-parent virtual-time fence has elapsed.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_network_active_parent_resumable(
+    expected_connection_generation: u32,
+) -> bool {
+    let current_pair_epoch = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    let pair_current = CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
+    cyw43_sdio_network_active_parent_resumable_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        &DRIVER_TASK_SLOT_CYW43455,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        active_driver_task_retained_request_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        expected_connection_generation,
+        current_pair_epoch,
+        pair_current,
+    )
 }
 
 /// Open the sole pair-fenced continuation lane for one already-issued CYW43
@@ -7285,11 +7429,11 @@ fn driver_task_retained_uses_root_grant(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_retained_lease_identity_matches(
+fn driver_task_retained_lease_identity_matches_generation(
     slot: &DriverTaskCommandSlot,
-    contract: DriverTaskContract,
     request: usize,
     fingerprint: u32,
+    generation: u32,
 ) -> bool {
     slot.retained_priority_lease_request.load(Ordering::Acquire) == request
         && slot
@@ -7299,7 +7443,22 @@ fn driver_task_retained_lease_identity_matches(
         && slot
             .retained_priority_lease_generation
             .load(Ordering::Acquire)
-            == driver_task_retained_lease_generation(contract)
+            == generation
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_retained_lease_identity_matches(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    request: usize,
+    fingerprint: u32,
+) -> bool {
+    driver_task_retained_lease_identity_matches_generation(
+        slot,
+        request,
+        fingerprint,
+        driver_task_retained_lease_generation(contract),
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -19668,6 +19827,199 @@ mod tests {
                 "Closing, leaked priority ownership, and pair recovery must reject adoption"
             );
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_open_network_parent_requires_complete_current_identity() {
+        let lease = Cyw43SdioNetworkPriorityLeaseState::new();
+        let cyw43 = network_priority_test_slot(160);
+        let sdio = network_priority_test_slot(200);
+        let pair_epoch = 23;
+        let connection_generation = 17;
+        let request = 41;
+        let command_fingerprint = 0x1234_5678;
+        let mut command = network_priority_test_cyw43_command(connection_generation);
+        command.sequence = request;
+        let prepared = DriverTaskRetainedRequestSnapshot {
+            state: DriverTaskRetainedRequestState::Prepared { request, command },
+            command_fingerprint,
+        };
+
+        lease.phase.store(
+            Cyw43SdioNetworkPriorityLeasePhase::Open.as_u32(),
+            Ordering::Release,
+        );
+        lease.pair_epoch.store(pair_epoch, Ordering::Release);
+        lease.mask.store(
+            DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS,
+            Ordering::Release,
+        );
+        cyw43
+            .retained_priority_boost_active
+            .store(CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN, Ordering::Release);
+        sdio.retained_priority_boost_active
+            .store(CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN, Ordering::Release);
+        cyw43.active.store(1, Ordering::Release);
+        cyw43.request_seq.store(request as usize, Ordering::Release);
+        cyw43
+            .active_command_fingerprint
+            .store(command_fingerprint, Ordering::Release);
+        cyw43.root_notification.store(0x77, Ordering::Release);
+
+        assert!(
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(prepared),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            "the ABI-invisible stage-only Prepared parent remains exact under its current Open lease",
+        );
+
+        let mut wrong_parent_command = command;
+        wrong_parent_command.aux0 = 0;
+        for rejected in [
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(DriverTaskRetainedRequestSnapshot {
+                    state: DriverTaskRetainedRequestState::Prepared {
+                        request,
+                        command: wrong_parent_command,
+                    },
+                    command_fingerprint,
+                }),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(DriverTaskRetainedRequestSnapshot {
+                    state: prepared.state,
+                    command_fingerprint: 0,
+                }),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(DriverTaskRetainedRequestSnapshot {
+                    state: prepared.state,
+                    command_fingerprint: command_fingerprint ^ 1,
+                }),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(prepared),
+                connection_generation.wrapping_add(1),
+                pair_epoch,
+                true,
+            ),
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(prepared),
+                connection_generation,
+                pair_epoch,
+                false,
+            ),
+        ] {
+            assert!(
+                !rejected,
+                "wrong-operation, missing or mutated fingerprint, stale-generation, and recovery-owned parents must fail closed",
+            );
+        }
+
+        lease
+            .pair_epoch
+            .store(pair_epoch.wrapping_add(1), Ordering::Release);
+        assert!(!cyw43_sdio_network_active_parent_resumable_with(
+            &lease,
+            &cyw43,
+            &sdio,
+            Some(prepared),
+            connection_generation,
+            pair_epoch,
+            true,
+        ));
+        lease.pair_epoch.store(pair_epoch, Ordering::Release);
+
+        sdio.retained_priority_boost_active
+            .store(0, Ordering::Release);
+        assert!(!cyw43_sdio_network_active_parent_resumable_with(
+            &lease,
+            &cyw43,
+            &sdio,
+            Some(prepared),
+            connection_generation,
+            pair_epoch,
+            true,
+        ));
+        sdio.retained_priority_boost_active
+            .store(CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN, Ordering::Release);
+
+        cyw43
+            .retained_priority_lease_request
+            .store(request as usize, Ordering::Release);
+        cyw43
+            .retained_priority_lease_fingerprint
+            .store(command_fingerprint, Ordering::Release);
+        cyw43
+            .retained_priority_lease_generation
+            .store(pair_epoch, Ordering::Release);
+        cyw43.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        cyw43.retained_doorbell_issued.store(1, Ordering::Release);
+        let issued = DriverTaskRetainedRequestSnapshot {
+            state: DriverTaskRetainedRequestState::Issued { request, command },
+            command_fingerprint,
+        };
+        assert!(
+            cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(issued),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            "an issued parent must retain the same request, fingerprint, pair, and connection identities",
+        );
+        cyw43
+            .retained_priority_lease_generation
+            .store(pair_epoch.wrapping_add(1), Ordering::Release);
+        assert!(
+            !cyw43_sdio_network_active_parent_resumable_with(
+                &lease,
+                &cyw43,
+                &sdio,
+                Some(issued),
+                connection_generation,
+                pair_epoch,
+                true,
+            ),
+            "a stale retained-lease generation cannot bypass the fresh-parent time fence",
+        );
     }
 
     #[cfg(feature = "kernel")]

@@ -6,6 +6,7 @@
 #![cfg(not(feature = "kernel"))]
 
 extern crate alloc;
+use alloc::boxed::Box;
 use core::fmt;
 use core::sync::atomic::Ordering;
 
@@ -13,12 +14,18 @@ use heapless::{spsc::Queue, String as HeaplessString, Vec as HeaplessVec};
 use portable_atomic::{AtomicU32, AtomicU64};
 use smoltcp::iface::{Config as IfaceConfig, Interface, PollResult, SocketSet, SocketStorage};
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
+use smoltcp::socket::raw::{
+    PacketBuffer as RawPacketBuffer, PacketMetadata as RawPacketMetadata,
+    RecvError as RawRecvError, SendError as RawSendError, Socket as RawSocket,
+};
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
+use smoltcp::wire::{
+    EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpProtocol, IpVersion, Ipv4Address,
+};
 
 use super::{
-    console_auth_token, console_srv::TcpConsoleServer, ConsoleLine, NetPoller, NetTelemetry,
-    IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
+    console_auth_token, console_srv::TcpConsoleServer, parse_icmp_echo_request, ConsoleLine,
+    NetPoller, NetTelemetry, IDLE_TIMEOUT_MS, MAX_FRAME_LEN,
 };
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
@@ -31,6 +38,7 @@ pub const TX_QUEUE_DEPTH: usize = 16;
 
 /// Number of sockets provisioned for the interface.
 pub const SOCKET_CAPACITY: usize = 4;
+const ICMP_ECHO_REPLY_DEADLINE_MS: u64 = 3_000;
 
 /// Errors surfaced by the networking substrate.
 #[derive(Debug, PartialEq, Eq)]
@@ -293,6 +301,10 @@ pub struct NetStack {
     clock: NetworkClock,
     device: QueuePhy,
     interface: Interface,
+    sockets: SocketSet<'static>,
+    icmp_echo_handle: smoltcp::iface::SocketHandle,
+    icmp_echo_pending_since_ms: Option<u64>,
+    ip: Ipv4Address,
     hardware_addr: EthernetAddress,
     telemetry: NetTelemetry,
     server: TcpConsoleServer,
@@ -300,6 +312,25 @@ pub struct NetStack {
 }
 
 impl NetStack {
+    fn new_icmp_echo_socket_set() -> (SocketSet<'static>, smoltcp::iface::SocketHandle) {
+        let socket_storage = Box::leak(Box::new([SocketStorage::EMPTY; SOCKET_CAPACITY]));
+        let rx_metadata = Box::leak(Box::new([RawPacketMetadata::EMPTY; 2]));
+        let tx_metadata = Box::leak(Box::new([RawPacketMetadata::EMPTY; 1]));
+        let rx_storage = Box::leak(Box::new([0u8; MAX_FRAME_LEN * 2]));
+        let tx_storage = Box::leak(Box::new([0u8; MAX_FRAME_LEN]));
+        let rx_buffer = RawPacketBuffer::new(&mut rx_metadata[..], &mut rx_storage[..]);
+        let tx_buffer = RawPacketBuffer::new(&mut tx_metadata[..], &mut tx_storage[..]);
+        let socket = RawSocket::new(
+            Some(IpVersion::Ipv4),
+            Some(IpProtocol::Icmp),
+            rx_buffer,
+            tx_buffer,
+        );
+        let mut sockets = SocketSet::new(&mut socket_storage[..]);
+        let handle = sockets.add(socket);
+        (sockets, handle)
+    }
+
     /// Construct a new stack configured with the supplied IPv4 address.
     pub fn new(ip: Ipv4Address) -> (Self, QueueHandle) {
         let (mut device, handle) = QueuePhy::new();
@@ -314,11 +345,16 @@ impl NetStack {
                 addrs[0] = IpCidr::new(IpAddress::from(ip), 24);
             }
         });
+        let (sockets, icmp_echo_handle) = Self::new_icmp_echo_socket_set();
 
         let stack = Self {
             clock,
             device,
             interface,
+            sockets,
+            icmp_echo_handle,
+            icmp_echo_pending_since_ms: None,
+            ip,
             hardware_addr: mac,
             telemetry: NetTelemetry::default(),
             server: TcpConsoleServer::new(console_auth_token(), IDLE_TIMEOUT_MS),
@@ -338,12 +374,12 @@ impl NetStack {
             self.clock.advance(delta_ms)
         };
 
-        let device = &mut self.device;
-        let interface = &mut self.interface;
-        let storage: &mut [SocketStorage<'static>] = &mut [];
-        let mut sockets = SocketSet::new(storage);
-        let changed = interface.poll(timestamp, device, &mut sockets);
-        let mut activity = changed != PollResult::None;
+        let mut activity = self.expire_icmp_echo_if_due(now_ms);
+        let changed = self
+            .interface
+            .poll(timestamp, &mut self.device, &mut self.sockets);
+        activity |= changed != PollResult::None;
+        activity |= self.service_icmp_echo(now_ms);
 
         if self.flush_outbound_lines() {
             activity = true;
@@ -355,6 +391,73 @@ impl NetStack {
         }
         self.telemetry.tx_drops = self.device.tx_drop_count();
         activity
+    }
+
+    fn reset_icmp_echo_socket(&mut self) {
+        let (sockets, handle) = Self::new_icmp_echo_socket_set();
+        self.sockets = sockets;
+        self.icmp_echo_handle = handle;
+        self.icmp_echo_pending_since_ms = None;
+    }
+
+    fn expire_icmp_echo_if_due(&mut self, now_ms: u64) -> bool {
+        let expired = self
+            .icmp_echo_pending_since_ms
+            .is_some_and(|started| now_ms.saturating_sub(started) >= ICMP_ECHO_REPLY_DEADLINE_MS)
+            && self
+                .sockets
+                .get::<RawSocket>(self.icmp_echo_handle)
+                .send_queue()
+                != 0;
+        if expired {
+            self.reset_icmp_echo_socket();
+        }
+        expired
+    }
+
+    fn service_icmp_echo(&mut self, now_ms: u64) -> bool {
+        let (rx_bytes, tx_bytes) = {
+            let socket = self.sockets.get::<RawSocket>(self.icmp_echo_handle);
+            (socket.recv_queue(), socket.send_queue())
+        };
+        if tx_bytes == 0 {
+            self.icmp_echo_pending_since_ms = None;
+        }
+        if rx_bytes == 0 {
+            return false;
+        }
+        let mut packet = [0u8; MAX_FRAME_LEN];
+        let packet_len = match self
+            .sockets
+            .get_mut::<RawSocket>(self.icmp_echo_handle)
+            .recv_slice(&mut packet)
+        {
+            Ok(packet_len) => packet_len,
+            Err(RawRecvError::Exhausted) => return false,
+            Err(RawRecvError::Truncated) => return true,
+        };
+        if tx_bytes != 0 {
+            return true;
+        }
+        let request = match parse_icmp_echo_request(&packet[..packet_len], self.ip) {
+            Ok(request) => request,
+            Err(_) => return true,
+        };
+        let reply_len = request.reply_len();
+        let emit_result = match self
+            .sockets
+            .get_mut::<RawSocket>(self.icmp_echo_handle)
+            .send(reply_len)
+        {
+            Ok(output) => request.emit_reply(self.ip, output),
+            Err(RawSendError::BufferFull) => return true,
+        };
+        if emit_result.is_err() {
+            self.reset_icmp_echo_socket();
+            return true;
+        }
+        self.icmp_echo_pending_since_ms = Some(now_ms);
+        true
     }
 
     fn flush_outbound_lines(&mut self) -> bool {
@@ -448,6 +551,7 @@ impl NetStack {
     /// Reset the queue-backed PHY and clear console session state.
     pub fn force_reset(&mut self) {
         self.device.reset();
+        self.reset_icmp_echo_socket();
         self.server.end_session();
         self.session_active = false;
         self.telemetry = NetTelemetry::default();
@@ -493,6 +597,15 @@ impl NetPoller for NetStack {
             return false;
         }
         true
+    }
+
+    fn icmp_echo_service_due(&self, now_ms: u64) -> bool {
+        let socket = self.sockets.get::<RawSocket>(self.icmp_echo_handle);
+        socket.recv_queue() != 0
+            || socket.send_queue() != 0
+            || self.icmp_echo_pending_since_ms.is_some_and(|started| {
+                now_ms.saturating_sub(started) >= ICMP_ECHO_REPLY_DEADLINE_MS
+            })
     }
 
     fn inject_console_line(&mut self, line: &str) {
@@ -579,54 +692,24 @@ mod tests {
         assert_eq!(telemetry.tx_drops, handle.tx_drops());
     }
 
-    #[test]
-    fn icmp_echo_request_emits_reply_with_explicit_smoltcp_feature() {
-        let local_ip = Ipv4Address::new(10, 0, 2, 15);
-        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
-        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
-        let echo_data = [0xaa, 0x00, 0x00, 0xff];
-        let (mut stack, handle) = NetStack::new(local_ip);
-
-        let arp_ethernet_repr = EthernetRepr {
-            src_addr: peer_mac,
-            dst_addr: EthernetAddress::BROADCAST,
-            ethertype: EthernetProtocol::Arp,
-        };
-        let arp_repr = ArpRepr::EthernetIpv4 {
-            operation: ArpOperation::Request,
-            source_hardware_addr: peer_mac,
-            source_protocol_addr: peer_ip,
-            target_hardware_addr: EthernetAddress::from_bytes(&[0; 6]),
-            target_protocol_addr: local_ip,
-        };
-        let arp_frame_len = arp_ethernet_repr.buffer_len() + arp_repr.buffer_len();
-        let mut arp_request = [0u8; 64];
-        arp_ethernet_repr.emit(&mut EthernetFrame::new_unchecked(
-            &mut arp_request[..arp_frame_len],
-        ));
-        arp_repr.emit(&mut ArpPacket::new_unchecked(
-            &mut arp_request[arp_ethernet_repr.buffer_len()..arp_frame_len],
-        ));
-        handle
-            .push_rx(
-                Frame::from_slice(&arp_request[..arp_frame_len]).expect("valid ARP request frame"),
-            )
-            .expect("RX queue accepts ARP request");
-        assert!(stack.poll_with_time(1), "smoltcp must answer ARP");
-        let arp_reply = handle.pop_tx().expect("ARP reply missing");
-        let arp_reply =
-            EthernetFrame::new_checked(arp_reply.as_slice()).expect("valid ARP reply frame");
-        assert_eq!(arp_reply.ethertype(), EthernetProtocol::Arp);
-
+    fn echo_request_frame(
+        local_mac: EthernetAddress,
+        local_ip: Ipv4Address,
+        peer_mac: EthernetAddress,
+        peer_ip: Ipv4Address,
+        ident: u16,
+        sequence: u16,
+        data: &[u8],
+    ) -> Frame {
         let ethernet_repr = EthernetRepr {
             src_addr: peer_mac,
-            dst_addr: stack.hardware_address(),
+            dst_addr: local_mac,
             ethertype: EthernetProtocol::Ipv4,
         };
         let icmp_repr = Icmpv4Repr::EchoRequest {
-            ident: 0x1234,
-            seq_no: 0xabcd,
-            data: &echo_data,
+            ident,
+            seq_no: sequence,
+            data,
         };
         let ipv4_repr = Ipv4Repr {
             src_addr: peer_ip,
@@ -649,21 +732,60 @@ mod tests {
             &mut Icmpv4Packet::new_unchecked(&mut request[ethernet_len + ipv4_len..frame_len]),
             &ChecksumCapabilities::default(),
         );
+        Frame::from_slice(&request[..frame_len]).expect("valid echo request frame")
+    }
 
-        handle
-            .push_rx(Frame::from_slice(&request[..frame_len]).expect("valid echo request frame"))
-            .expect("RX queue accepts echo request");
-        assert!(
-            stack.poll_with_time(2),
-            "smoltcp must consume the echo request and emit a reply"
-        );
+    fn arp_frame(
+        operation: ArpOperation,
+        local_mac: EthernetAddress,
+        local_ip: Ipv4Address,
+        peer_mac: EthernetAddress,
+        peer_ip: Ipv4Address,
+    ) -> Frame {
+        let ethernet_repr = EthernetRepr {
+            src_addr: peer_mac,
+            dst_addr: if operation == ArpOperation::Request {
+                EthernetAddress::BROADCAST
+            } else {
+                local_mac
+            },
+            ethertype: EthernetProtocol::Arp,
+        };
+        let arp_repr = ArpRepr::EthernetIpv4 {
+            operation,
+            source_hardware_addr: peer_mac,
+            source_protocol_addr: peer_ip,
+            target_hardware_addr: if operation == ArpOperation::Request {
+                EthernetAddress::from_bytes(&[0; 6])
+            } else {
+                local_mac
+            },
+            target_protocol_addr: local_ip,
+        };
+        let frame_len = ethernet_repr.buffer_len() + arp_repr.buffer_len();
+        let mut frame = [0u8; 64];
+        ethernet_repr.emit(&mut EthernetFrame::new_unchecked(&mut frame[..frame_len]));
+        arp_repr.emit(&mut ArpPacket::new_unchecked(
+            &mut frame[ethernet_repr.buffer_len()..frame_len],
+        ));
+        Frame::from_slice(&frame[..frame_len]).expect("valid ARP frame")
+    }
 
-        let reply = handle.pop_tx().expect("ICMP echo reply missing");
+    fn assert_echo_reply(
+        reply: Frame,
+        local_mac: EthernetAddress,
+        local_ip: Ipv4Address,
+        peer_mac: EthernetAddress,
+        peer_ip: Ipv4Address,
+        ident: u16,
+        sequence: u16,
+        data: &[u8],
+    ) {
         let ethernet_packet =
             EthernetFrame::new_checked(reply.as_slice()).expect("valid reply Ethernet frame");
         let reply_ethernet =
             EthernetRepr::parse(&ethernet_packet).expect("valid reply Ethernet header");
-        assert_eq!(reply_ethernet.src_addr, stack.hardware_address());
+        assert_eq!(reply_ethernet.src_addr, local_mac);
         assert_eq!(reply_ethernet.dst_addr, peer_mac);
         assert_eq!(reply_ethernet.ethertype, EthernetProtocol::Ipv4);
 
@@ -682,10 +804,271 @@ mod tests {
         assert_eq!(
             reply_icmp,
             Icmpv4Repr::EchoReply {
-                ident: 0x1234,
-                seq_no: 0xabcd,
-                data: &echo_data,
+                ident,
+                seq_no: sequence,
+                data,
             }
+        );
+    }
+
+    #[test]
+    fn cold_neighbor_icmp_echo_reply_survives_arp_without_host_retry() {
+        let local_ip = Ipv4Address::new(10, 0, 2, 15);
+        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
+        let wrong_peer_ip = Ipv4Address::new(10, 0, 2, 3);
+        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let wrong_peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x03]);
+        let echo_data = [0xaa, 0x00, 0x00, 0xff];
+        let (mut stack, handle) = NetStack::new(local_ip);
+        let local_mac = stack.hardware_address();
+
+        handle
+            .push_rx(echo_request_frame(
+                local_mac, local_ip, peer_mac, peer_ip, 0x1234, 0xabcd, &echo_data,
+            ))
+            .expect("RX queue accepts first echo request");
+        assert!(
+            stack.poll_with_time(1),
+            "first request must enter raw socket"
+        );
+        assert!(
+            handle.pop_tx().is_none(),
+            "reply construction must not perform a second hardware poll"
+        );
+        assert!(stack.icmp_echo_service_due(1));
+
+        let _ = stack.poll_with_time(2);
+        let arp_request = handle.pop_tx().expect("cold neighbor ARP request missing");
+        let arp_ethernet =
+            EthernetFrame::new_checked(arp_request.as_slice()).expect("valid ARP Ethernet frame");
+        assert_eq!(arp_ethernet.ethertype(), EthernetProtocol::Arp);
+        let arp_packet =
+            ArpPacket::new_checked(arp_ethernet.payload()).expect("valid ARP request packet");
+        assert_eq!(
+            ArpRepr::parse(&arp_packet).expect("valid ARP request representation"),
+            ArpRepr::EthernetIpv4 {
+                operation: ArpOperation::Request,
+                source_hardware_addr: local_mac,
+                source_protocol_addr: local_ip,
+                target_hardware_addr: EthernetAddress::BROADCAST,
+                target_protocol_addr: peer_ip,
+            }
+        );
+
+        handle
+            .push_rx(arp_frame(
+                ArpOperation::Reply,
+                local_mac,
+                local_ip,
+                wrong_peer_mac,
+                wrong_peer_ip,
+            ))
+            .expect("RX queue accepts unrelated ARP reply");
+        handle
+            .push_rx(echo_request_frame(
+                local_mac, local_ip, peer_mac, peer_ip, 0x1234, 0xabce, &echo_data,
+            ))
+            .expect("RX queue accepts bounded competing echo");
+        assert!(stack.poll_with_time(3));
+        assert!(
+            handle.pop_tx().is_none(),
+            "wrong-peer ARP and a second echo must not release or replace the first reply"
+        );
+
+        handle
+            .push_rx(arp_frame(
+                ArpOperation::Reply,
+                local_mac,
+                local_ip,
+                peer_mac,
+                peer_ip,
+            ))
+            .expect("RX queue accepts matching ARP reply");
+        assert!(stack.poll_with_time(4));
+        let reply = match handle.pop_tx() {
+            Some(reply) => reply,
+            None => {
+                assert!(stack.poll_with_time(5));
+                handle.pop_tx().expect("retained ICMP echo reply missing")
+            }
+        };
+        assert_echo_reply(
+            reply, local_mac, local_ip, peer_mac, peer_ip, 0x1234, 0xabcd, &echo_data,
+        );
+        assert!(
+            handle.pop_tx().is_none(),
+            "reply must be emitted exactly once"
+        );
+        let _ = stack.poll_with_time(6);
+        assert!(
+            handle.pop_tx().is_none(),
+            "later polls must not duplicate reply"
+        );
+        assert_eq!(
+            stack
+                .sockets
+                .get::<RawSocket>(stack.icmp_echo_handle)
+                .send_queue(),
+            0
+        );
+    }
+
+    #[test]
+    fn warm_neighbor_icmp_echo_emits_exactly_one_reply() {
+        let local_ip = Ipv4Address::new(10, 0, 2, 15);
+        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
+        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let echo_data = [1, 2, 3, 4];
+        let (mut stack, handle) = NetStack::new(local_ip);
+        let local_mac = stack.hardware_address();
+
+        handle
+            .push_rx(arp_frame(
+                ArpOperation::Request,
+                local_mac,
+                local_ip,
+                peer_mac,
+                peer_ip,
+            ))
+            .expect("RX queue accepts ARP warmup");
+        assert!(stack.poll_with_time(1));
+        assert_eq!(
+            EthernetFrame::new_checked(handle.pop_tx().expect("ARP reply missing").as_slice())
+                .expect("valid ARP reply")
+                .ethertype(),
+            EthernetProtocol::Arp
+        );
+
+        handle
+            .push_rx(echo_request_frame(
+                local_mac, local_ip, peer_mac, peer_ip, 7, 9, &echo_data,
+            ))
+            .expect("RX queue accepts echo");
+        assert!(stack.poll_with_time(2));
+        assert!(handle.pop_tx().is_none());
+        assert!(stack.poll_with_time(3));
+        assert_echo_reply(
+            handle.pop_tx().expect("warm echo reply missing"),
+            local_mac,
+            local_ip,
+            peer_mac,
+            peer_ip,
+            7,
+            9,
+            &echo_data,
+        );
+        let _ = stack.poll_with_time(4);
+        assert!(handle.pop_tx().is_none(), "warm reply must not duplicate");
+    }
+
+    #[test]
+    fn icmp_echo_reset_and_expiry_drop_stale_pending_reply() {
+        let local_ip = Ipv4Address::new(10, 0, 2, 15);
+        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
+        let expiry_peer_ip = Ipv4Address::new(10, 0, 2, 4);
+        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let expiry_peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x04]);
+        let (mut stack, handle) = NetStack::new(local_ip);
+        let local_mac = stack.hardware_address();
+        let request = echo_request_frame(local_mac, local_ip, peer_mac, peer_ip, 1, 0, &[0x5a]);
+
+        handle.push_rx(request.clone()).expect("RX accepts echo");
+        assert!(stack.poll_with_time(1));
+        assert!(stack.icmp_echo_service_due(1));
+        stack.force_reset();
+        handle
+            .push_rx(arp_frame(
+                ArpOperation::Reply,
+                local_mac,
+                local_ip,
+                peer_mac,
+                peer_ip,
+            ))
+            .expect("RX accepts post-reset ARP");
+        let _ = stack.poll_with_time(2);
+        assert!(
+            handle.pop_tx().is_none(),
+            "reset must purge old-lifetime reply"
+        );
+
+        handle
+            .push_rx(echo_request_frame(
+                local_mac,
+                local_ip,
+                expiry_peer_mac,
+                expiry_peer_ip,
+                2,
+                0,
+                &[0x5a],
+            ))
+            .expect("RX accepts second echo");
+        assert!(stack.poll_with_time(3));
+        let _ = stack.poll_with_time(4);
+        assert_eq!(
+            EthernetFrame::new_checked(handle.pop_tx().expect("ARP request missing").as_slice())
+                .expect("valid ARP frame")
+                .ethertype(),
+            EthernetProtocol::Arp
+        );
+        assert!(stack.poll_with_time(3u64.saturating_add(ICMP_ECHO_REPLY_DEADLINE_MS)));
+        handle
+            .push_rx(arp_frame(
+                ArpOperation::Reply,
+                local_mac,
+                local_ip,
+                expiry_peer_mac,
+                expiry_peer_ip,
+            ))
+            .expect("RX accepts late ARP");
+        let _ = stack.poll_with_time(4u64.saturating_add(ICMP_ECHO_REPLY_DEADLINE_MS));
+        assert!(handle.pop_tx().is_none(), "expired reply must not escape");
+    }
+
+    #[test]
+    fn icmp_echo_rejects_nonlocal_invalid_source_and_bad_checksum() {
+        let local_ip = Ipv4Address::new(10, 0, 2, 15);
+        let peer_ip = Ipv4Address::new(10, 0, 2, 2);
+        let peer_mac = EthernetAddress::from_bytes(&[0x02, 0x00, 0x00, 0x00, 0x00, 0x02]);
+        let (mut stack, handle) = NetStack::new(local_ip);
+        let local_mac = stack.hardware_address();
+
+        handle
+            .push_rx(echo_request_frame(
+                local_mac,
+                Ipv4Address::new(10, 0, 2, 99),
+                peer_mac,
+                peer_ip,
+                1,
+                1,
+                &[1],
+            ))
+            .expect("RX accepts nonlocal frame");
+        handle
+            .push_rx(echo_request_frame(
+                local_mac,
+                local_ip,
+                peer_mac,
+                Ipv4Address::BROADCAST,
+                2,
+                2,
+                &[2],
+            ))
+            .expect("RX accepts invalid-source frame");
+        let mut bad_checksum =
+            echo_request_frame(local_mac, local_ip, peer_mac, peer_ip, 3, 3, &[3]);
+        let final_byte = bad_checksum.0.len().saturating_sub(1);
+        bad_checksum.0[final_byte] ^= 0xff;
+        handle
+            .push_rx(bad_checksum)
+            .expect("RX accepts bad-checksum frame");
+
+        let _ = stack.poll_with_time(1);
+        let _ = stack.poll_with_time(2);
+        let _ = stack.poll_with_time(3);
+        let _ = stack.poll_with_time(4);
+        assert!(
+            handle.pop_tx().is_none(),
+            "rejected raw packets must not create ARP or Echo Reply traffic"
         );
     }
 
