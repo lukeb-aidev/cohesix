@@ -23640,6 +23640,17 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             pending.request.is_some() || pending.child_cursor_started,
         );
     }
+    if pending.request.is_none()
+        && !pending.child_cursor_started
+        && !cyw43_tx_unproven_window_ready(contract)
+    {
+        // Predecessor-credit discovery belongs to RX/op8 service. A frame
+        // that has never crossed into HAL owns no child lease and cannot
+        // expire or poison the reciprocal runtime pair while that discovery
+        // proceeds.
+        *CYW43_PENDING_DATA_TX.lock() = Some(pending);
+        return Cyw43DataTxTurnOutcome::CreditWait;
+    }
     let deadline_before_turn = pending.deadline;
     if !cyw43_poll_deadline_open(&mut pending.deadline) {
         let credit_wait = cyw43_unproven_tx_window().is_some();
@@ -23854,6 +23865,18 @@ pub(crate) fn service_cyw43_data_tx_event_turn(
         || cyw43_data_tx_queue_has_current_generation()
         || !CYW43_PENDING_ARP_TX.lock().is_empty();
     if !work_pending {
+        return Ok(false);
+    }
+    let predecessor_credit_required = CYW43_PENDING_DATA_TX
+        .lock()
+        .as_ref()
+        .is_none_or(|pending| pending.request.is_none() && !pending.child_cursor_started);
+    if predecessor_credit_required
+        && !cyw43_tx_unproven_window_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+    {
+        // Keep the complete service budget available for the op8/RX turn that
+        // can prove predecessor credit. Promotion, its child deadline, and
+        // the op7 budget start only after that evidence exists.
         return Ok(false);
     }
 
@@ -24611,6 +24634,7 @@ fn promote_one_cyw43_data_tx_if_ready(contract: DriverTaskContract) -> bool {
         || !cyw43_current_generation_data_consumer_open()
         || cyw43_recovery_required()
         || !cyw43_fresh_tx_admission_ready(contract)
+        || !cyw43_tx_unproven_window_ready(contract)
     {
         return false;
     }
@@ -28086,7 +28110,11 @@ mod tests {
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             b"credit-wait-owner",
         ));
-        for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "the credit-wait head remains in the FIFO without a child lease",
+        );
+        for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(2) {
             let mut frame = [0u8; 64];
             frame[0] = marker as u8;
             assert!(submit_cyw43_driver_task_eth_frame(
@@ -28126,7 +28154,11 @@ mod tests {
         assert!(service_cyw43_data_tx_event_turn_for_test());
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 15);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 14);
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "the credit-ready successor may start its child lease after the head completes",
+        );
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
 
         begin_cyw43_outer_event_turn();
@@ -49228,10 +49260,10 @@ mod tests {
             0,
             "copied RX must not wait behind an uncredited active owner"
         );
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "the sole active ticket may wait locally for credit without issuing"
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "predecessor-credit wait must remain queued and own no child lease"
         );
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert_eq!(
@@ -49431,9 +49463,10 @@ mod tests {
             "a non-credit RX must not fabricate firmware credit"
         );
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "the paired response may become the immutable sole owner while credit is pending"
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "the paired response must stay queued until predecessor credit is proven"
         );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
             1,
@@ -49661,10 +49694,10 @@ mod tests {
             .transmit(Instant::from_millis(0))
             .expect("missing credit must not close the bounded ingress FIFO");
         tx.consume(64, |bytes| bytes.fill(0x42));
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "the sole active ticket may wait locally for credit without issuing"
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "an unissued frame must remain queued while predecessor credit is unresolved"
         );
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
 
@@ -49691,62 +49724,87 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_credit_wait_deadline_latches_pair_recovery_before_fifo_cascade() {
+    fn cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(1, Ordering::Release);
         CYW43_TX_SUBMITTED.store(1, Ordering::Release);
         record_cyw43_unproven_tx_window(Some(DriverTaskCompletionRecord::progress(7, 64)));
         mark_cyw43_gate8_ready_for_test(48);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
 
+        let discover = test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let mut post_gate8_dhcp = [0u8; 342];
+        post_gate8_dhcp[..discover.len()].copy_from_slice(&discover);
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            b"credit-wait-owner",
+            &post_gate8_dhcp,
         ));
-        assert!(submit_cyw43_driver_task_eth_frame(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            b"queued-successor",
-        ));
-        CYW43_PENDING_DATA_TX
-            .lock()
-            .as_mut()
-            .expect("the credit-wait owner is retained")
-            .deadline = Cyw43PollDeadline::Polls { remaining: 1 };
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
 
+        CYW43_TEST_COUNTER_TICKS.store(CYW43_LINKED_ACTION_CHILD_LEASE_MS + 2, Ordering::Release);
         begin_cyw43_outer_event_turn();
-        assert_eq!(
-            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-            Cyw43DataTxTurnOutcome::CreditWait,
-            "valid credit wait remains retained until its elapsed-time bound",
-        );
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        let mut budget = DriverServiceBudget::new(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("the static CYW43 service contract is valid");
+        let before = budget;
+        assert_eq!(service_cyw43_data_tx_event_turn(&mut budget), Ok(false));
+        assert_eq!(budget, before, "queued credit wait spends no op7 budget");
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
         assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
-
-        begin_cyw43_outer_event_turn();
-        assert_eq!(
-            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-            Cyw43DataTxTurnOutcome::Failed,
-        );
-        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
-        let recovery = CYW43_DEFERRED_RECOVERY
-            .lock()
-            .expect("expired missing-credit state poisons the exact physical pair");
-        assert_eq!(recovery.cause, Cyw43RecoveryCause::DataTx);
-        assert!(cyw43_recovery_required());
-        assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
-
-        begin_cyw43_outer_event_turn();
         assert!(
-            !service_cyw43_data_tx_event_turn_for_test(),
-            "recovery fencing prevents serial timeout of every queued successor",
+            !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
+            "a never-issued queued frame cannot poison the physical pair",
+        );
+
+        let mut credit_completion = DriverTaskCompletionRecord::progress(8, 1);
+        credit_completion.frame = DriverFrameDescriptor {
+            offset: 0,
+            len: 1,
+            flags: 2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
+        };
+        assert!(preserve_driver_task_pre_poll_completion(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            DriverTaskHotPath::Cyw43Wifi,
+            credit_completion,
+        ));
+        assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
+        begin_cyw43_outer_event_turn();
+        let mut budget = DriverServiceBudget::new(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("the static CYW43 service contract is valid");
+        let before = budget;
+        assert!(
+            service_cyw43_data_tx_event_turn(&mut budget)
+                .expect("one credit-ready op7 quantum fits the static contract"),
+            "exact op8 credit must release the queued DHCP frame",
+        );
+        assert_eq!(
+            budget.ops_left(),
+            before
+                .ops_left()
+                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_OPS),
+        );
+        assert_eq!(
+            budget.frames_left(),
+            before
+                .frames_left()
+                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_FRAMES),
+        );
+        assert_eq!(
+            budget.bytes_left(),
+            before
+                .bytes_left()
+                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_BYTES),
         );
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
 
         reset_cyw43_status_flags();
     }

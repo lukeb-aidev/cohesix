@@ -987,8 +987,10 @@ handoff boundary.
 
 The root Wi-Fi ingress path is one generation-scoped bounded aggregate of 16
 immutable TX frames feeding one sole active `CYW43_PENDING_DATA_TX` op7 owner.
-The aggregate uses urgent-control and bulk FIFO classes. ARP, EAPOL, DHCP, TCP
-SYN/FIN/RST, and payload-free TCP control frames are urgent; other
+FIFO acceptance and op7 admission are distinct: accepting a frame preserves it
+in the bounded aggregate but does not create an active op7. The aggregate uses
+urgent-control and bulk FIFO classes. ARP, EAPOL, DHCP, TCP SYN/FIN/RST, and
+payload-free TCP control frames are urgent; other
 payload-bearing TCP, fragmented IPv4, and ordinary traffic remain bulk. Any
 response produced through the copied-RX paired token is urgent independently.
 Urgent is selected first, with FIFO order within each class. These are two
@@ -1002,27 +1004,35 @@ older op7 is active. EventPump is the sole production TX coordinator. Before
 each smoltcp poll, its one Wi-Fi-only hook may advance at most one physical turn
 of the active owner. With copied RX pending and a paired permit available, the
 hook returns before ARP staging and physical TX, so the device delivers copied
-RX first even while the active op7 waits for credit. `Device::receive` and
-reservation failure never service TX.
+RX first even while an older op7 is active or the FIFO head is waiting for
+predecessor credit. `Device::receive` and reservation failure never service TX.
 
 Otherwise the hook may move one eligible ARP/GARP record into the same urgent
-aggregate. With all 16 slots in use, it may advance the active owner and
-promote one successor locally after its terminal, restoring paired-RX capacity
-without a second physical operation. A credit-wait deadline failure poisons
-and restarts the exact CYW43/SDIO pair before any queued successor can begin an
-independent timeout. A generation/reset boundary purges never-issued queued
-frames; issued or otherwise ambiguous active ownership remains fail-closed and
-poisons through the existing recovery path. This aggregate and service hook
-are CYW43-only; GENET retains its existing direct device path.
+aggregate. With all 16 slots in use and an active owner present, it may advance
+that owner and promote one successor locally after its terminal, restoring
+paired-RX capacity without a second physical operation. Before charging the TX
+service budget or promoting a FIFO head, the hook proves that the predecessor
+SDPCM-credit window
+is closed. Without that proof, the immutable frame remains queued with no
+active op7, HAL request, or child deadline; the hook spends no TX budget and
+yields to already-authorized NetData RX/op8 continuation or source work. A
+queued frame cannot expire or poison the pair. Credit-bearing RX/op8 work may
+close the predecessor window; promotion then starts the op7 lifetime. A
+generation/reset boundary purges never-issued queued frames; issued or
+otherwise ambiguous active ownership remains fail-closed and poisons through
+the existing recovery path. This aggregate and service hook are CYW43-only;
+GENET retains its existing direct device path.
 
-Once a valid current-generation frame is accepted, the retained op7 owner keeps
-its exact payload, digest, ticket, request, and generation across transient
-SDPCM-credit waits until a typed `Submitted` terminal or its real
-virtual-counter deadline. A fixed turn count is not a second lifetime bound:
-there is no eight-turn abandonment. Corruption, lost ownership, generation
-replacement, deadline expiry, or a typed fatal terminal remains fail-closed.
-The focused regression holds one immutable frame across twelve no-credit turns
-before successful submission.
+Only a credit-ready FIFO head is promoted, and promotion starts the retained
+op7 owner's real virtual-counter deadline. From then on the owner keeps its
+exact payload, digest, ticket, request, and generation across nonterminal
+HAL/runtime turns until a typed `Submitted` terminal or deadline. A fixed turn
+count is not a second lifetime bound: there is no eight-turn abandonment after
+promotion. Corruption, lost ownership, generation replacement, deadline
+expiry, or a typed fatal terminal remains fail-closed. The focused regression
+advances time beyond the complete child lease while the immutable frame remains
+queued without TX budget or recovery, then supplies exact credit proof and
+observes promotion and physical issue.
 
 Bounded data traffic is legal while 8h passes: non-full root RX, pending data
 TX/ARP, runtime backlog, and an exact assigned current-generation NetData
@@ -2251,8 +2261,9 @@ netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_p
 `wifi: tx_phase`, `wifi: tx_phase_i2t`, and `wifi: tx_queue` prefixes. The
 tracker resets on logical connection generation, deduplicates immutable
 tickets, and scales from the generated virtual-counter frequency. `a2i` is
-TxToken acceptance, including FIFO wait, to first observed op7 issue; `i2t` is
-issue to typed terminal; and `t2c` is successful terminal to SDPCM-credit
+TxToken acceptance, including FIFO and predecessor-credit wait, to first
+observed op7 issue; `i2t` is issue to typed terminal; and `t2c` is successful
+terminal to SDPCM-credit
 proof. `next_issues` and the `credit_to_next_issue` metric, printed compactly as
 `c2i`, mean credit proof to the next actual op7 issue, not acceptance of a new
 TxToken or an earlier local FIFO-head promotion. High
@@ -2383,10 +2394,11 @@ queue/tail-drain `RX_STEADY_TAIL_DRAIN` op8; neither may add
 `RX_HINTLESS_FIRSTREAD`. Treat an
 op8 that repeatedly runs ahead of an active op7, or op7 identity that changes
 across those turns, as failed single-lifetime evidence rather than a recoverable
-RX/TX race. CYW43 likewise retains a
-copied RX frame instead of exposing smoltcp's paired response token while a
-prior retained TX or unproved credit window would reject that token. When the
-bounded linked TX queue is full, complete output remains retained. Three backlog records are
+RX/TX race. With a paired aggregate permit, CYW43 exposes the copied RX frame
+and smoltcp response token even while a prior op7 is active or predecessor
+credit remains unproved. The response remains queued and cannot become op7
+until that credit window closes. Only when the bounded linked TX queue is full
+does complete output remain retained. Three backlog records are
 reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`
 records cannot consume them. A response-priority enqueue may preempt only the
 newest `BackgroundLine`, whose authoritative copy is already in

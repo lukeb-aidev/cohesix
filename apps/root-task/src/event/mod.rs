@@ -2120,7 +2120,7 @@ const LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS: u64 = 25;
 /// turn-count cadence is deliberately forbidden: the linked parent can require
 /// many cheap child microsteps, and rotating after every small fixed tranche
 /// can spend more service turns on console probes than on packet progress.
-#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[cfg(feature = "net-console")]
 const LINKED_RUNTIME_NETWORK_OPERATOR_CHECKPOINT_MS: u64 = 25;
 
 /// Outcome of one serial ownership-cutover EventPump turn.

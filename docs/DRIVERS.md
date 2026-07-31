@@ -1082,7 +1082,8 @@ ordinary traffic remain bulk. A frame produced through the copied-RX paired
 token is urgent independently, preserving response liveness. Urgent frames are
 selected before bulk while FIFO order is preserved within each class. This is
 scheduling priority, not a second physical lane: both classes feed exactly one
-`CYW43_PENDING_DATA_TX`, which remains the sole op7 owner.
+`CYW43_PENDING_DATA_TX`, which exists only after the FIFO head has proof that
+the predecessor SDPCM-credit window is closed and remains the sole op7 owner.
 The two fixed backing deques occupy about 50 KiB of BSS, roughly 25 KiB more
 than one deque, while the aggregate admission bound remains 16. This deliberate
 static trade avoids O(n) movement of approximately 1.5-KiB frame records on the
@@ -1097,20 +1098,25 @@ sole production TX coordinator. Its Wi-Fi-only hook runs once before smoltcp
 polling and advances at most one physical turn of the active owner. If a
 root-copied RX frame is pending and its paired permit is available, the hook
 returns before staging ARP or performing TX, so `Device::receive` delivers that
-memory-only RX first even while an older op7 is active or credit-waiting.
+memory-only RX first even while an older op7 is active or the FIFO head is
+waiting for predecessor credit.
 Neither `Device::receive` nor a failed reservation services TX.
 
 Otherwise the hook may move one eligible ARP/GARP record into the same urgent
 aggregate before advancing the one active owner. If all 16 aggregate slots are
-occupied, one owner turn may reach a terminal and promote one queued successor
-as local bookkeeping, restoring the paired-RX slot without a second physical
-operation. A retained credit-wait deadline failure poisons and restarts the
-exact CYW43/SDIO pair before any queued successor can begin an independent
-timeout; the backlog cannot cascade through serial credit failures. Generation
-replacement or reset purges never-issued queued frames locally, while an active
-issued or otherwise ambiguous frame follows the existing poison-and-recovery
-path. GENET has no queue reservation, priority class, promotion, hook, or
-telemetry path.
+occupied and an active owner exists, one owner turn may reach a terminal and
+promote one queued successor as local bookkeeping, restoring the paired-RX slot
+without a second physical operation. Before charging the TX service budget or
+promoting a FIFO head, the hook proves that the predecessor SDPCM-credit window
+is closed. Without that
+proof, the immutable frame remains queued with no active op7, HAL request, or
+child deadline; the hook spends no TX budget and yields to already-authorized
+NetData RX/op8 continuation or source work. A queued frame cannot expire or
+poison the pair. Credit-bearing RX/op8 work may close the predecessor window;
+promotion then starts the op7 lifetime. Generation replacement or reset purges
+never-issued queued frames locally, while an active issued or otherwise
+ambiguous frame follows the existing poison-and-recovery path. GENET has no
+queue reservation, priority class, promotion, hook, or telemetry path.
 
 Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
 and retained-frontier records after association and maintenance state:
@@ -2103,8 +2109,9 @@ generation and XID.
   `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
   stale_purged=<n>` (`wifi diag` uses the equivalent `wifi: tx_phase*` and
   `wifi: tx_queue` prefixes). `a2i` measures actual TxToken acceptance,
-  including FIFO residence, to the first observed issue of that immutable op7
-  ticket; `i2t` measures first observed issue to its typed terminal; `t2c`
+  including FIFO residence and predecessor-credit wait, to the first observed
+  issue of that immutable op7 ticket; `i2t` measures first observed issue to
+  its typed terminal; `t2c`
   measures successful op7 terminal to SDPCM-credit proof. `next_issues` and the
   `credit_to_next_issue` metric, printed compactly as `c2i`, measure credit
   proof to the next actual op7 issue from the FIFO,
@@ -2830,26 +2837,33 @@ generation and XID.
   path.
 
   One immutable TX command may occupy the shared reciprocal-ring slot while up
-  to 16 never-issued frames remain in the root aggregate. Urgent ARP, EAPOL,
-  DHCP, TCP SYN/FIN/RST, and payload-free TCP control precede other
-  payload-bearing TCP and bulk, with FIFO order within each class; both classes
-  still feed the same sole op7 owner. Each later physical
-  Network turn advances only that exact active owner. Once promoted, it retains
-  its payload, digest, ticket, request, and generation through transient
-  SDPCM-credit waits until the typed `Submitted` terminal or the retained
-  virtual-counter deadline. There is no eight-turn abandonment or other
-  turn-count lifetime bound; corruption, identity loss, generation replacement,
-  or a typed terminal fault still fails closed. The regression
-  `cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns` holds the same
-  active frame for twelve no-credit turns before successful submission.
+  to 16 never-issued frames remain in the root aggregate. FIFO acceptance and
+  op7 admission are distinct: accepting a frame preserves it in the bounded
+  aggregate but does not create an active op7. Urgent ARP, EAPOL, DHCP, TCP
+  SYN/FIN/RST, and payload-free TCP control precede other payload-bearing TCP
+  and bulk, with FIFO order within each class; both classes still feed the same
+  sole op7 owner. An unproved predecessor credit window leaves the selected
+  head queued with no TX budget charge, active op7, HAL request, or child
+  deadline. Already-authorized RX/op8 work may close that predecessor window;
+  the queued TX does not manufacture a fresh op8. Only a credit-ready head is
+  promoted, and promotion starts its retained virtual-counter deadline. Each
+  later physical Network turn advances only that exact active owner, which
+  retains its payload, digest, ticket, request, and generation through
+  nonterminal HAL/runtime turns until the typed `Submitted` terminal or
+  deadline. There is no eight-turn abandonment or other turn-count lifetime
+  bound after promotion; corruption, identity loss, generation replacement, or
+  a typed terminal fault still fails closed. The regression
+  `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery` advances
+  time beyond the complete child lease before credit and proves that promotion
+  and physical issue occur only after exact credit proof.
   EventPump is the sole production TX coordinator. A copied RX frame is
   delivered before that active command and before ARP staging whenever the
   aggregate has the paired-response permit, without spending a physical
-  operation. A full aggregate instead spends the turn on the sole active TX
-  and promotes one successor locally after a terminal, releasing paired
-  capacity without a second physical action. A credit-wait deadline poisons and
-  restarts the exact pair before any successor can start; `Device::receive` and
-  reservation failure never service TX. TX
+  operation. A full aggregate with a sole active TX instead spends the turn on
+  that owner and promotes one successor locally after a terminal, releasing
+  paired capacity without a second physical action. A queued, unissued frame
+  has no child deadline and cannot poison the pair; `Device::receive` and reservation
+  failure never service TX. TX
   completion does not manufacture a following op8, alter the lifetime cursor,
   or fence another credited TX. A later fresh op8 begins only for a current
   DPC/root-wake data level or one due progress-conditioned lost-edge audit.
@@ -2860,9 +2874,9 @@ generation and XID.
   an exact assigned continuation remains non-revocable. Every op8 still uses
   the same sole NetData/HAL/SDIO owner chain. CYW43 TxToken reservation is
   therefore bounded by aggregate capacity rather than by whether an older active
-  owner or unproved credit window exists; only physical issue remains
-  credit-gated. A consumed reservation cannot be reported successful unless
-  its immutable frame was retained. There is no
+  owner or unproved credit window exists; promotion into op7 and physical issue
+  both remain credit-gated. A consumed reservation cannot be reported
+  successful unless its immutable frame was retained. There is no
   generic/current-TCB UART fallback. If the bounded
   linked TX queue cannot accept an operator response, EventPump retains the
   complete record instead of dropping or truncating it. The pending-console

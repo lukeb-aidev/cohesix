@@ -19445,6 +19445,7 @@ enum Cyw43ForegroundFrontierRoute {
     Cached,
     Submit,
     Poll,
+    Grant,
     Defer,
     Poison,
 }
@@ -19475,6 +19476,7 @@ const fn cyw43_foreground_frontier_route(
     completed_count: u16,
     frontier_valid: bool,
     frontier_submitted: bool,
+    continuation_grant_required: bool,
     action_consumed: bool,
     identity_matches: bool,
     poisoned: bool,
@@ -19486,6 +19488,8 @@ const fn cyw43_foreground_frontier_route(
         Cyw43ForegroundFrontierRoute::Cached
     } else if action_consumed {
         Cyw43ForegroundFrontierRoute::Defer
+    } else if frontier_valid && frontier_submitted && continuation_grant_required {
+        Cyw43ForegroundFrontierRoute::Grant
     } else if frontier_valid && frontier_submitted {
         Cyw43ForegroundFrontierRoute::Poll
     } else {
@@ -19755,6 +19759,8 @@ struct Cyw43ForegroundTransaction {
     frontier: Cyw43ForegroundTraceEntry,
     frontier_valid: bool,
     frontier_submitted: bool,
+    frontier_continuation_grant_required: bool,
+    frontier_continuation_grant_publish: bool,
     frontier_grant_id: u32,
     frontier_started_ticks: u64,
     frontier_timeout_cycles: u64,
@@ -19811,6 +19817,8 @@ impl Cyw43ForegroundTransaction {
             frontier: Cyw43ForegroundTraceEntry::empty(),
             frontier_valid: false,
             frontier_submitted: false,
+            frontier_continuation_grant_required: false,
+            frontier_continuation_grant_publish: false,
             frontier_grant_id: 0,
             frontier_started_ticks: 0,
             frontier_timeout_cycles: 0,
@@ -19845,6 +19853,8 @@ impl Cyw43ForegroundTransaction {
         self.frontier = Cyw43ForegroundTraceEntry::empty();
         self.frontier_valid = false;
         self.frontier_submitted = false;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -19869,6 +19879,8 @@ impl Cyw43ForegroundTransaction {
         self.frontier = Cyw43ForegroundTraceEntry::empty();
         self.frontier_valid = false;
         self.frontier_submitted = false;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -20066,6 +20078,8 @@ impl Cyw43ForegroundTransaction {
 
     fn retain_frontier_submit(&mut self, started_ticks: u64, timeout_cycles: u64) {
         self.frontier_submitted = true;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = started_ticks;
         self.frontier_timeout_cycles = timeout_cycles;
@@ -20078,8 +20092,17 @@ impl Cyw43ForegroundTransaction {
         self.turn.action_consumed = true;
     }
 
+    fn retain_frontier_wait(&mut self, grant_id: u32, publish: bool) {
+        self.frontier_grant_id = grant_id;
+        self.frontier_continuation_grant_required = true;
+        self.frontier_continuation_grant_publish = publish;
+        self.turn.pending = true;
+    }
+
     fn retain_frontier_grant(&mut self, grant_id: u32) {
         self.frontier_grant_id = grant_id;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
         self.turn.action_consumed = true;
         self.turn.pending = true;
     }
@@ -20101,6 +20124,8 @@ impl Cyw43ForegroundTransaction {
         self.frontier = Cyw43ForegroundTraceEntry::empty();
         self.frontier_valid = false;
         self.frontier_submitted = false;
+        self.frontier_continuation_grant_required = false;
+        self.frontier_continuation_grant_publish = false;
         self.frontier_grant_id = 0;
         self.frontier_started_ticks = 0;
         self.frontier_timeout_cycles = 0;
@@ -22144,6 +22169,63 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
+    let entry = transaction.frontier;
+    if !cyw43_foreground_retained_owner_generation_is_current(transaction) {
+        cyw43_foreground_abandon_stale_transaction(transaction);
+        return false;
+    }
+    if !transaction.frontier_ticket_valid()
+        || !transaction.frontier_submitted
+        || !transaction.frontier_continuation_grant_required
+        || !cyw43_foreground_published_frontier_is_immutable(transaction)
+        || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+        || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) != entry.command.sequence
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+    {
+        cyw43_foreground_poison_active_frontier(transaction);
+        return false;
+    }
+    let exact_child = Cyw43SdioChildState::new(entry.command.sequence);
+    if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(exact_child) {
+        return cyw43_foreground_accept_exact_completion(transaction, entry, completion).is_some();
+    }
+    let grant_id = transaction.frontier_grant_id;
+    if grant_id == 0 {
+        transaction.poisoned = true;
+        transaction.turn.pending = false;
+        return false;
+    }
+    // Preserve the late-terminal fence from the lifetime repair. The poll and
+    // grant phases remain separate outer turns, but an exact completion that
+    // became stable between them suppresses needless continuation authority.
+    if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(exact_child) {
+        return cyw43_foreground_accept_exact_completion(transaction, entry, completion).is_some();
+    }
+
+    let publish = transaction.frontier_continuation_grant_publish;
+    transaction.retain_frontier_grant(grant_id);
+    core::sync::atomic::compiler_fence(Ordering::Release);
+    if publish
+        && !publish_runtime_continuation_grant_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+            entry.command,
+            entry.ticket.generation,
+            grant_id,
+        )
+    {
+        transaction.poisoned = true;
+        transaction.turn.pending = false;
+        return false;
+    }
+    // The transaction cursor is durable before this coalescing scheduling
+    // edge. SDIO still validates and acknowledges the immutable grant before
+    // its separately scheduled Execute turn touches hardware.
+    runtime_signal_sdio_owner_doorbell(entry.command.sequence);
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_accept_exact_completion(
     transaction: &mut Cyw43ForegroundTransaction,
     entry: Cyw43ForegroundTraceEntry,
@@ -22284,10 +22366,9 @@ where
         cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, result);
         transaction.issued_unknown = true;
     } else {
-        // A stable completion miss consumes this turn's sole reciprocal poll,
-        // but publication itself performs no physical I/O. Commit the exact
-        // grant frontier now, then publish/re-signal and notify last so the
-        // owner can admit one quantum without a scheduler-only parent turn.
+        // A stable completion miss consumes this outer turn's sole reciprocal
+        // operation. Freeze the exact grant plan so a later grant turn can
+        // publish or re-signal it after one more late-completion fence.
         let (grant_id, publish) = match plan {
             RuntimeContinuationGrantPlan::Publish(grant_id) => (grant_id, true),
             RuntimeContinuationGrantPlan::Resignal(grant_id) => (grant_id, false),
@@ -22297,21 +22378,7 @@ where
                 return None;
             }
         };
-        transaction.retain_frontier_grant(grant_id);
-        core::sync::atomic::compiler_fence(Ordering::Release);
-        if publish
-            && !publish_runtime_continuation_grant_at(
-                DRIVER_TASK_SDIO_BUS_RING_VADDR,
-                entry.command,
-                entry.ticket.generation,
-                grant_id,
-            )
-        {
-            transaction.poisoned = true;
-            transaction.turn.pending = false;
-            return None;
-        }
-        runtime_signal_sdio_owner_doorbell(entry.command.sequence);
+        transaction.retain_frontier_wait(grant_id, publish);
     }
     if timed_out {
         transaction.turn.pending = true;
@@ -22442,6 +22509,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 transaction.turn.completed_count,
                 transaction.frontier_valid,
                 transaction.frontier_submitted,
+                transaction.frontier_continuation_grant_required,
                 transaction.turn.action_consumed,
                 identity_matches,
                 transaction.poisoned,
@@ -22450,6 +22518,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
                 Cyw43ForegroundFrontierRoute::Cached => {}
                 Cyw43ForegroundFrontierRoute::Poison
                 | Cyw43ForegroundFrontierRoute::Submit
+                | Cyw43ForegroundFrontierRoute::Grant
                 | Cyw43ForegroundFrontierRoute::Poll
                 | Cyw43ForegroundFrontierRoute::Defer => {
                     transaction.poisoned = true;
@@ -22514,6 +22583,7 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
             transaction.turn.completed_count,
             transaction.frontier_valid,
             transaction.frontier_submitted,
+            transaction.frontier_continuation_grant_required,
             transaction.turn.action_consumed,
             true,
             transaction.poisoned,
@@ -22521,6 +22591,13 @@ fn sdio_bus_link_call(mut command: DriverTaskCommandRecord) -> Cyw43BusLinkOutco
         ) {
             Cyw43ForegroundFrontierRoute::Submit => {
                 if cyw43_foreground_submit_frontier(transaction) {
+                    Cyw43BusLinkOutcome::Pending
+                } else {
+                    Cyw43BusLinkOutcome::Failed
+                }
+            }
+            Cyw43ForegroundFrontierRoute::Grant => {
+                if cyw43_foreground_grant_frontier(transaction) {
                     Cyw43BusLinkOutcome::Pending
                 } else {
                     Cyw43BusLinkOutcome::Failed
@@ -53002,11 +53079,11 @@ mod tests {
         ));
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, false, false, true, false, false,),
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit,
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "sequence-last publication consumes the turn and cannot be repeated",
         );
@@ -56817,7 +56894,7 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_sdio_child_poll_fuses_exact_grant_publication() {
+    fn reciprocal_sdio_child_submit_and_polls_require_separate_root_rendezvous() {
         let _guard = test_guard();
         reset_sdio_descriptor_seam_for_test();
         let generation = 0x4359_5301;
@@ -56849,7 +56926,7 @@ mod tests {
         let mut ring = TestReciprocalRecordRing;
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, false, false, true, false, false,),
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit
         );
         assert!(runtime_ring_write_completion_staged(
@@ -56878,16 +56955,16 @@ mod tests {
         assert_eq!(owner_command.sequence, command.sequence);
         assert_eq!(owner_command.frame, command.frame);
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "the submit turn cannot also poll its child",
         );
 
         assert!(transaction.begin_turn(parent, 2));
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
-            "a fresh parent turn admits the one completion poll",
+            "a fresh parent exact-grant turn admits the one completion poll",
         );
         transaction.retain_frontier_completion_poll();
         let (first, second) = runtime_ring_read_completion_stable(&ring)
@@ -56896,19 +56973,28 @@ mod tests {
             Cyw43SdioChildState::new(command.sequence).completion(first, second),
             Cyw43SdioChildCompletion::Waiting,
         );
+        transaction.retain_frontier_wait(1, true);
+        assert!(transaction.turn.action_consumed);
+        assert!(transaction.turn.pending);
+        assert!(transaction.frontier_continuation_grant_required);
+        assert!(transaction.frontier_continuation_grant_publish);
+        assert_eq!(transaction.frontier_grant_id, 1);
+        assert_eq!(io.command_issue_count(), 0);
+
+        assert!(transaction.begin_turn(parent, 3));
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, true, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Grant,
+            "the completion miss schedules a distinct grant-only parent turn",
+        );
         transaction.retain_frontier_grant(1);
         assert!(transaction.turn.action_consumed);
         assert!(transaction.turn.pending);
-        assert_eq!(transaction.frontier_grant_id, 1);
-        assert_eq!(io.command_issue_count(), 0);
-        assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
-            Cyw43ForegroundFrontierRoute::Defer,
-            "the fused poll/grant turn cannot also poll or issue physical I/O",
-        );
+        assert!(!transaction.frontier_continuation_grant_required);
+        assert!(!transaction.frontier_continuation_grant_publish);
         // The reciprocal owner executes the descriptor/controller seam only
-        // after the producer commits and releases its exact grant; it is not
-        // folded into CYW43's completion-poll quantum.
+        // after the retained grant turn; it is not folded into CYW43's submit
+        // or completion-poll quantum.
         let owner_completion = service_sdio_descriptor_command_with_io(owner_command, &mut io);
         assert_eq!(io.command_issue_count(), 1);
         assert_eq!(
@@ -56925,11 +57011,11 @@ mod tests {
             owner_completion.sequence,
         ));
 
-        assert!(transaction.begin_turn(parent, 3));
+        assert!(transaction.begin_turn(parent, 4));
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
-            "the following parent turn performs the next completion poll",
+            "a fresh parent exact-grant turn admits the one completion poll",
         );
         transaction.retain_frontier_completion_poll();
         let (first, second) = runtime_ring_read_completion_stable(&ring)
@@ -56945,13 +57031,13 @@ mod tests {
         assert_eq!(transaction.turn.completed_count, 1);
         assert!(!transaction.frontier_valid);
         assert_eq!(
-            cyw43_foreground_frontier_route(1, 1, true, false, true, true, false, false),
+            cyw43_foreground_frontier_route(1, 1, true, false, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "a terminal poll cannot submit the next reciprocal action in the same turn",
         );
         assert_eq!(io.command_issue_count(), 1);
 
-        assert!(transaction.begin_turn(parent, 4));
+        assert!(transaction.begin_turn(parent, 5));
         transaction.prepared_sequence = command.sequence;
         transaction.prepared_descriptor = desc;
         transaction.prepared_descriptor_valid = true;
@@ -57039,6 +57125,7 @@ mod tests {
                     parent_turn.completed_count,
                     false,
                     false,
+                    false,
                     parent_turn.action_consumed,
                     true,
                     false,
@@ -57062,6 +57149,7 @@ mod tests {
                         false,
                         false,
                         false,
+                        false,
                         true,
                         false,
                         false,
@@ -57076,6 +57164,7 @@ mod tests {
                     cyw43_foreground_frontier_route(
                         parent_turn.replay_index,
                         parent_turn.completed_count,
+                        false,
                         false,
                         false,
                         false,
@@ -58080,28 +58169,38 @@ mod tests {
     }
 
     #[test]
-    fn reciprocal_multiphase_child_fuses_poll_miss_and_exact_grant() {
+    fn reciprocal_multiphase_child_alternates_poll_grant_and_poll_outer_turns() {
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, false, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit,
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
             "submission consumes its parent outer turn",
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
             "the next parent turn performs only one completion poll",
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, true, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, true, true, true, false, false),
             Cyw43ForegroundFrontierRoute::Defer,
-            "a missed poll may publish authority but cannot poll or issue again",
+            "a missed poll cannot publish a continuation in the same turn",
         );
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 0, true, true, false, true, false, false),
+            cyw43_foreground_frontier_route(0, 0, true, true, true, false, true, false, false),
+            Cyw43ForegroundFrontierRoute::Grant,
+            "a later parent turn publishes and signals one exact continuation",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, true, true, false, false),
+            Cyw43ForegroundFrontierRoute::Defer,
+            "the grant turn cannot also poll the owner completion",
+        );
+        assert_eq!(
+            cyw43_foreground_frontier_route(0, 0, true, true, false, false, true, false, false),
             Cyw43ForegroundFrontierRoute::Poll,
             "the following turn resumes the one-poll frontier",
         );
@@ -58268,14 +58367,14 @@ mod tests {
         assert_eq!(io.command_issue_count(), 1);
 
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 1, false, false, false, true, false, false,),
+            cyw43_foreground_frontier_route(0, 1, false, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Cached
         );
         let replayed = completion;
         assert_eq!(replayed, completion);
         assert_eq!(io.command_issue_count(), 1, "cached replay is local only");
         assert_eq!(
-            cyw43_foreground_frontier_route(1, 1, true, false, false, true, false, false,),
+            cyw43_foreground_frontier_route(1, 1, true, false, false, false, true, false, false,),
             Cyw43ForegroundFrontierRoute::Submit,
             "the cached prefix spends no physical-operation budget",
         );
@@ -58352,12 +58451,14 @@ mod tests {
         ] {
             assert!(!matches);
             assert_eq!(
-                cyw43_foreground_frontier_route(0, 1, true, true, false, matches, false, false,),
+                cyw43_foreground_frontier_route(
+                    0, 1, true, true, false, false, matches, false, false,
+                ),
                 Cyw43ForegroundFrontierRoute::Poison
             );
         }
         assert_eq!(
-            cyw43_foreground_frontier_route(0, 1, true, true, false, true, false, true),
+            cyw43_foreground_frontier_route(0, 1, true, true, false, false, true, false, true),
             Cyw43ForegroundFrontierRoute::Poison,
             "issued-unknown ownership can never replay a cached or frontier action",
         );
@@ -74567,8 +74668,18 @@ mod tests {
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         assert_eq!(
             test_sdio_owner_doorbell(1),
+            None,
+            "a completion miss consumes its turn without also publishing a grant",
+        );
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none(),
+            "the completion-miss turn retains the exact grant plan locally",
+        );
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
             Some(expected_doorbell),
-            "the completion-miss turn publishes and signals exact authority",
+            "the following outer turn publishes and signals exact authority",
         );
         assert_eq!(test_sdio_owner_doorbell(2), None);
         let grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
@@ -74584,8 +74695,19 @@ mod tests {
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         assert_eq!(
             test_sdio_owner_doorbell(2),
+            None,
+            "the next completion miss only retains the exact re-signal plan",
+        );
+        assert_eq!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR),
+            Some(grant),
+            "the poll turn cannot mutate the existing unconsumed grant",
+        );
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(
+            test_sdio_owner_doorbell(2),
             Some(expected_doorbell),
-            "an unconsumed exact grant is re-signalled without minting authority",
+            "the later grant turn re-signals without minting authority",
         );
         assert_eq!(test_sdio_owner_doorbell(3), None);
         assert_eq!(
@@ -74680,10 +74802,12 @@ mod tests {
         let expected_doorbell = runtime_sdio_owner_doorbell(child.sequence);
         assert_eq!(test_sdio_owner_doorbell(0), Some(expected_doorbell));
 
-        // Adversarial production ordering: CYW43 observes the missing
-        // completion before SDIO is scheduled, publishes grant 1, and sends
-        // the same badge again in that poll turn. seL4 coalesces submit and
-        // grant signals into one pending bit.
+        // Adversarial production ordering: CYW43 gets two outer turns before
+        // SDIO is scheduled. It first observes the missing completion, then
+        // publishes grant 1 and sends the same badge again. seL4 coalesces both
+        // signals into one pending bit.
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert_eq!(test_sdio_owner_doorbell(1), None);
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         assert_eq!(test_sdio_owner_doorbell(1), Some(expected_doorbell));
         assert_eq!(test_sdio_owner_doorbell(2), None);
@@ -74907,7 +75031,7 @@ mod tests {
         assert_eq!(
             test_sdio_owner_doorbell(1),
             None,
-            "a completion stable at the late poll suppresses fused grant publication",
+            "a completion stable at the late poll suppresses the planned grant turn",
         );
         assert!(!transaction.frontier_valid);
         assert_eq!(transaction.turn.completed_count, 1);
@@ -74924,6 +75048,7 @@ mod tests {
                 transaction.turn.completed_count,
                 transaction.frontier_valid,
                 transaction.frontier_submitted,
+                transaction.frontier_continuation_grant_required,
                 transaction.turn.action_consumed,
                 true,
                 transaction.poisoned,
@@ -74937,6 +75062,115 @@ mod tests {
             1,
             "an exact completion racing the grant cannot replay physical I/O",
         );
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn completion_between_outer_poll_and_grant_is_cached_without_authority() {
+        let _guard = test_guard();
+        let generation = 0x4359_f1a1;
+        initialize_production_foreground_pair(generation);
+        let parent = cyw43_descriptor_command(0x4359_f1b0);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(parent.sequence, Ordering::Release);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
+            function: 0,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: SDIO_CCCR_IORX,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 1,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let mut child = stage_sdio_descriptor_service_command(0x8000_f1b1, descriptor);
+        child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        child.aux1 = generation;
+        let mut transaction = Cyw43ForegroundTransaction::new();
+        transaction.generation = generation;
+        assert!(transaction.begin_turn(parent, 1));
+        transaction.prepared_sequence = child.sequence;
+        transaction.prepared_descriptor = descriptor;
+        transaction.prepared_descriptor_valid = true;
+        transaction.prepared_write_len = 0;
+        assert!(cyw43_foreground_reserve_frontier(&mut transaction, child));
+        assert!(cyw43_foreground_submit_frontier(&mut transaction));
+        assert_eq!(
+            test_sdio_owner_doorbell(0),
+            Some(runtime_sdio_owner_doorbell(child.sequence)),
+        );
+
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        let owner_command = runtime_ring_read_command_stable(&owner_ring)
+            .expect("owner observes the durable child before the producer poll");
+        let mut io = TestSdioHostIo::new();
+        io.use_sdio_owner_payload = true;
+        io.command_status = SDHCI_INT_RESPONSE;
+        io.command_response = u32::from(SDIO_FUNC_READY_1 | SDIO_FUNC_READY_2);
+        let completion = service_sdio_descriptor_command_with_io(owner_command, &mut io);
+        assert_eq!(io.command_issue_count(), 1);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::frame_ready_at(
+                child.sequence,
+                CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+                1,
+            ),
+        );
+
+        assert!(transaction.begin_turn(parent, 2));
+        assert_eq!(cyw43_foreground_poll_frontier(&mut transaction), None);
+        assert!(transaction.frontier_continuation_grant_required);
+        assert!(transaction.frontier_continuation_grant_publish);
+        assert_eq!(transaction.frontier_grant_id, 1);
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none(),
+            "the completion-miss turn retains its grant plan without publishing authority",
+        );
+
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        let issues_before_grant = io.command_issue_count();
+        let snapshots_before_grant = io.dma_dreq_snapshots;
+
+        assert!(transaction.begin_turn(parent, 3));
+        assert_eq!(
+            cyw43_foreground_frontier_route(
+                transaction.turn.replay_index,
+                transaction.turn.completed_count,
+                transaction.frontier_valid,
+                transaction.frontier_submitted,
+                transaction.frontier_continuation_grant_required,
+                transaction.turn.action_consumed,
+                true,
+                transaction.poisoned,
+                transaction.issued_unknown,
+            ),
+            Cyw43ForegroundFrontierRoute::Grant,
+        );
+        assert!(cyw43_foreground_grant_frontier(&mut transaction));
+        assert_eq!(
+            test_sdio_owner_doorbell(1),
+            None,
+            "a terminal committed between Poll and Grant suppresses the grant signal",
+        );
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none(),
+            "the late terminal suppresses continuation-grant publication",
+        );
+        assert_eq!(io.command_issue_count(), issues_before_grant);
+        assert_eq!(io.dma_dreq_snapshots, snapshots_before_grant);
+        assert_eq!(transaction.turn.completed_count, 1);
+        assert_eq!(transaction.entries[0].completion, completion);
+        assert!(!transaction.frontier_valid);
+        assert!(!transaction.frontier_continuation_grant_required);
         assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
@@ -78280,8 +78514,17 @@ mod tests {
         assert_eq!(cyw43_foreground_poll_frontier(&mut transaction), None);
         let consumed_grant_id = transaction.frontier_grant_id;
         assert_eq!(consumed_grant_id, 1);
+        assert!(transaction.frontier_continuation_grant_required);
+        assert_eq!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR),
+            None,
+            "the completion-miss turn only freezes the first exact grant plan",
+        );
+
+        assert!(transaction.begin_turn(parent, 3));
+        assert!(cyw43_foreground_grant_frontier(&mut transaction));
         let first_grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-            .expect("fused foreground miss publishes the first exact grant");
+            .expect("the separate foreground grant turn publishes exact authority");
         assert_eq!(first_grant.grant_id, consumed_grant_id);
         assert_eq!(first_grant.request_sequence, child.sequence);
         assert!(acknowledge_runtime_continuation_grant_at(
@@ -78292,7 +78535,7 @@ mod tests {
         transaction.frontier_timeout_cycles = 0;
         transaction.frontier_polls = CYW43_SDIO_CHILD_WAIT_FALLBACK_POLLS as u32 - 1;
 
-        assert!(transaction.begin_turn(parent, 3));
+        assert!(transaction.begin_turn(parent, 4));
         assert_eq!(cyw43_foreground_poll_frontier(&mut transaction), None);
         assert!(!transaction.issued_unknown);
         assert!(!transaction.poisoned);
@@ -78301,8 +78544,16 @@ mod tests {
             "a consumed exact grant resets the fallback inactivity age",
         );
         assert_eq!(transaction.frontier_grant_id, consumed_grant_id + 1);
+        assert!(transaction.frontier_continuation_grant_required);
+        let consumed = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+            .expect("the consumed grant remains stable until the later grant turn");
+        assert_eq!(consumed.grant_id, consumed_grant_id);
+        assert_eq!(consumed.consumed_grant_id, consumed_grant_id);
+
+        assert!(transaction.begin_turn(parent, 5));
+        assert!(cyw43_foreground_grant_frontier(&mut transaction));
         let next_grant = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-            .expect("consumed frontier publishes its replacement in the same poll turn");
+            .expect("the later grant turn publishes the consumed frontier replacement");
         assert_eq!(next_grant.grant_id, consumed_grant_id + 1);
         assert_eq!(next_grant.request_sequence, child.sequence);
         assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
@@ -78449,8 +78700,13 @@ mod tests {
         assert!(SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
 
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none(),
+            "the completion-miss turn records the grant plan without publishing it",
+        );
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let exact = read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
-            .expect("the completion-miss turn publishes exact retained-owner authority");
+            .expect("the following grant-only turn publishes exact retained-owner authority");
         assert_eq!(exact.request_sequence, child.sequence);
         assert_eq!(
             exact.action_fingerprint,
@@ -78560,6 +78816,7 @@ mod tests {
                         transaction.turn.completed_count,
                         transaction.frontier_valid,
                         transaction.frontier_submitted,
+                        transaction.frontier_continuation_grant_required,
                         transaction.turn.action_consumed,
                         true,
                         transaction.poisoned,
@@ -78647,6 +78904,7 @@ mod tests {
                     transaction.turn.completed_count,
                     transaction.frontier_valid,
                     transaction.frontier_submitted,
+                    transaction.frontier_continuation_grant_required,
                     transaction.turn.action_consumed,
                     true,
                     transaction.poisoned,
@@ -78723,6 +78981,7 @@ mod tests {
                                 transaction.turn.completed_count,
                                 transaction.frontier_valid,
                                 transaction.frontier_submitted,
+                                transaction.frontier_continuation_grant_required,
                                 transaction.turn.action_consumed,
                                 true,
                                 transaction.poisoned,
@@ -78780,6 +79039,7 @@ mod tests {
                     transaction.turn.completed_count,
                     transaction.frontier_valid,
                     transaction.frontier_submitted,
+                    transaction.frontier_continuation_grant_required,
                     transaction.turn.action_consumed,
                     cyw43_foreground_prepared_matches(&transaction, entry, command),
                     transaction.poisoned,
@@ -78802,6 +79062,7 @@ mod tests {
                     transaction.turn.completed_count,
                     transaction.frontier_valid,
                     transaction.frontier_submitted,
+                    transaction.frontier_continuation_grant_required,
                     transaction.turn.action_consumed,
                     true,
                     transaction.poisoned,
@@ -83698,6 +83959,7 @@ mod tests {
                     foreground_turn.completed_count,
                     false,
                     false,
+                    false,
                     foreground_turn.action_consumed,
                     true,
                     false,
@@ -83713,6 +83975,7 @@ mod tests {
                     cyw43_foreground_frontier_route(
                         foreground_turn.replay_index,
                         foreground_turn.completed_count,
+                        false,
                         false,
                         false,
                         false,

@@ -702,18 +702,25 @@ prove all of the following:
   remains active, and dropping an unused token must release only that local
   permit. EventPump must be the sole production TX coordinator:
   `Device::receive` and reservation failure must perform zero TX service. A
-  copied RX frame with paired capacity must be delivered before active or
-  credit-waiting TX and before pending ARP staging, with zero physical
-  operations. With all 16 aggregate slots occupied and copied RX pending, the
-  dedicated pre-smoltcp EventPump hook must advance exactly one physical turn
-  of the sole active owner and locally promote at most one successor after a
-  terminal so paired capacity returns. A later device call then delivers the
-  preserved RX without a second operation. A retained credit-wait deadline
-  must poison and restart the exact pair before any queued successor is
-  promoted, preventing serial timeout cascades. Generation/reset must purge
-  queued never-issued frames locally, while issued/ambiguous active ownership
-  remains poison-and-recovery work. All classing, reservation, promotion,
-  service, and telemetry behavior must be absent from GENET.
+  copied RX frame with paired capacity must be delivered before an active op7
+  or FIFO head waiting for predecessor credit and before pending ARP staging,
+  with zero physical operations. With all 16 aggregate slots occupied, an
+  existing sole active owner, and copied RX pending, the dedicated pre-smoltcp
+  EventPump hook must advance exactly one physical turn of that owner and
+  locally promote at most one successor after a terminal so paired capacity
+  returns. A later device call then delivers the preserved RX without a second
+  operation. Before charging the TX service
+  budget or promoting a FIFO head, the hook must prove that the predecessor
+  SDPCM-credit window is closed. While it is unproved, the immutable frame must
+  remain queued with no active op7, HAL request, child deadline, TX budget
+  charge, drop, or recovery. Already-authorized NetData RX/op8 continuation or
+  source work must remain admissible, while the queued TX must not manufacture
+  a fresh op8. Exact credit proof must then permit promotion and start the op7
+  lifetime. A queued, unissued frame has no deadline and cannot poison the
+  pair. Generation/reset must purge queued never-issued frames locally, while
+  issued/ambiguous active ownership remains poison-and-recovery work. All
+  classing, reservation, promotion, service, and telemetry behavior must be
+  absent from GENET.
 - Root and child tests must bind their queue capacity and the child bounded RX
   drain budget to
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
@@ -1683,14 +1690,18 @@ watchdog, force a following source probe, or fence another credited TX.
 Conversely, an already-retained immutable op7 or op8 must continue through its
 exact ticket/request/payload terminal without displacement or competing
 cursor.
-Once a valid current-generation op7 frame has been accepted, its payload,
-digest, ticket, request, and generation must remain immutable through transient
-SDPCM-credit waits until typed `Submitted` or the retained virtual-counter
-deadline. No fixed turn count may abandon it. Focused coverage must hold one
-frame for at least twelve no-credit turns, exceed the retired eight-turn bound,
-and then prove one successful submission without payload, ticket, request, or
-generation substitution. Corruption, lost ownership, generation replacement,
-deadline expiry, and typed fatal terminals must remain fail-closed.
+Once a valid current-generation frame has been accepted into the FIFO, its
+payload, digest, ticket, and generation must remain immutable. An unproved
+predecessor credit window must leave it queued with no active op7, HAL request,
+child deadline, or TX budget charge. Focused coverage must advance virtual time
+beyond the complete child lease with zero drop or recovery and unchanged TX
+budget, inject exact credit through RX/op8 accounting, and only then observe
+promotion and first physical issue. Once promoted, the active op7 must retain
+its payload, digest, ticket, request, and generation through nonterminal
+HAL/runtime turns until a typed `Submitted` terminal or its retained
+virtual-counter deadline. No fixed turn count may abandon it after promotion.
+Corruption, lost ownership, generation replacement, deadline expiry after
+promotion, and typed fatal terminals must remain fail-closed.
 Connection-generation, pair, physical-lifetime, recovery, quarantine, reboot,
 and selected-NIC changes must clear the lifetime cursor. GENET must never read,
 install, clear, or report this state.
@@ -1805,7 +1816,7 @@ The focused acceptance tests
 `cyw43_data_levels_schedule_queue_only_op8_while_idle_stays_quiet`,
 `cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
 `cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
-`cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns`,
+`cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
 `cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit`,
 `cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
 `cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot`,
@@ -2009,15 +2020,18 @@ scheduler counters remain within its control contract. Until a rebuilt/read-back
 image produces this evidence, the cold-neighbor repair and both performance
 thresholds remain source claims rather than hardware results.
 
-CYW43 device tests must also prove that a retained TX or unproved credit window
-blocks physical issue but not an available bounded aggregate reservation or
-memory-only copied-RX delivery. They must preserve the sole active owner,
+CYW43 device tests must also prove that a retained TX blocks another physical
+issue, while an unproved predecessor credit window blocks both FIFO-head
+promotion and physical issue but not an available bounded aggregate reservation
+or memory-only copied-RX delivery. They must preserve the sole active owner,
 urgent-before-bulk selection and FIFO-within-class order, reserve paired
 response capacity before dequeueing RX, and produce zero fabricated TX drops.
 Copied RX must return before pending ARP can take the paired slot. Full-capacity
-backpressure may advance only that owner and must never issue a second
-operation in the same outer turn. Expired credit wait must latch one exact-pair
-recovery before a queued successor becomes active.
+backpressure may advance only an existing active owner and must never issue a
+second operation in the same outer turn. An unproved predecessor credit window
+must survive longer than the complete child lease with no active op7, TX budget
+charge, child deadline, or recovery; exact credit proof must then promote the
+same immutable FIFO head and begin its op7 lifetime.
 
 The socket pack must cover the maximum enabled profile: one raw ICMP responder,
 active and standby console acceptors, DHCP, two UDP self-test sockets, two TCP
