@@ -15142,6 +15142,33 @@ def bootstrap_gate8_ready_tail(
     ]
 
 
+def gate8_commit_line(
+    *,
+    generation: int,
+    pair_epoch: int,
+    deadline_ms: int,
+    console_seq: int,
+) -> str:
+    """Return one exact production Gate 8 nonterminal commit record."""
+
+    return (
+        "CYW43_GATE8_COMMIT attempt=1 status=ready "
+        f"pair_epoch={pair_epoch} generation={generation} "
+        f"deadline_ms={deadline_ms} console_seq={console_seq} "
+        "telemetry_sinks=serial+qlog+hdmi consumer=data"
+    )
+
+
+def runtime_recovery_ready_line(*, generation: int, console_seq: int) -> str:
+    """Return one exact-generation runtime service-restoration record."""
+
+    return (
+        "CYW43_RUNTIME_RECOVERY status=ready "
+        f"generation={generation} console_seq={console_seq} "
+        "telemetry_sinks=serial+qlog+hdmi"
+    )
+
+
 def bootstrap_gate8_exhaustion_lines() -> list[str]:
     """Return a historical five-attempt Gate 8 recovery/exhaustion trace."""
 
@@ -15855,6 +15882,261 @@ def test_bootstrap_supervisor_ready_requires_gate8_after_stabilizing() -> None:
         record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
         == "gate8-subgates-incomplete"
     )
+
+
+def test_gate8_commit_is_nonterminal_until_later_bootstrap_service_ready() -> None:
+    """Commit opens data, while delayed DHCP/listener Ready closes bootstrap."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            gate8_commit_line(
+                pair_epoch=3,
+                generation=17,
+                deadline_ms=90_100,
+                console_seq=3,
+            ),
+            "[dhcp] start ready interface=wifi",
+            "[dhcp] lease bound ip=192.168.86.154/24 "
+            "gateway=192.168.86.1 server=192.168.86.1 lease_s=3600",
+            "[net-console] listener admitted for current WiFi generation",
+            bootstrap_supervisor_line(1, "ready", 0, 12_500, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_PAIR_EPOCH"] == 3
+    assert record["WIFI_GATE8_GENERATION"] == 17
+    assert record["WIFI_GATE8_BLOCKER"] == "none"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_gate8_commit_without_service_ready_remains_nonterminal() -> None:
+    """An exact Gate 8 commit cannot itself satisfy bootstrap readiness."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            gate8_commit_line(
+                pair_epoch=3,
+                generation=17,
+                deadline_ms=90_100,
+                console_seq=3,
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_MISSING"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+    assert (
+        record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"]
+        == "stabilizing-not-terminal"
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "expected_blocker"),
+    [
+        ("pair_epoch=3", "gate8-commit-identity-mismatch"),
+        ("generation=17", "gate8-commit-identity-mismatch"),
+    ],
+)
+def test_gate8_commit_rejects_mixed_snapshot_identity(
+    mutation: str, expected_blocker: str
+) -> None:
+    """The commit cannot stitch a different pair or generation to 8a-8h."""
+
+    replacement = "pair_epoch=4" if mutation.startswith("pair") else "generation=18"
+    commit = gate8_commit_line(
+        pair_epoch=3,
+        generation=17,
+        deadline_ms=90_100,
+        console_seq=3,
+    ).replace(mutation, replacement, 1)
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            commit,
+            bootstrap_supervisor_line(1, "ready", 0, 12_500, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == expected_blocker
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+
+
+def test_gate8_commit_must_be_atomic_ninth_record() -> None:
+    """No unrelated record may bisect the ordered 8a-8h plus Commit batch."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            "[dhcp] start ready interface=wifi",
+            gate8_commit_line(
+                pair_epoch=3,
+                generation=17,
+                deadline_ms=90_100,
+                console_seq=3,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 12_500, 4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "gate8-commit-not-adjacent"
+
+
+def test_runtime_ready_cannot_replace_bootstrap_ready() -> None:
+    """A runtime restoration marker is never an initial bootstrap terminal."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            gate8_commit_line(
+                pair_epoch=3,
+                generation=17,
+                deadline_ms=90_100,
+                console_seq=3,
+            ),
+            runtime_recovery_ready_line(generation=17, console_seq=4),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "runtime-recovery-before-bootstrap-ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
+
+
+def test_runtime_recovery_restores_without_second_bootstrap_ready() -> None:
+    """Runtime service restoration stays distinct from the sole bootstrap Ready."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=3,
+                generation=17,
+            ),
+            gate8_commit_line(
+                pair_epoch=3,
+                generation=17,
+                deadline_ms=90_100,
+                console_seq=3,
+            ),
+            bootstrap_supervisor_line(1, "ready", 0, 12_500, 4),
+            bootstrap_supervisor_line(1, "recovery", 0, 130_000, 5),
+            bootstrap_supervisor_line(1, "stabilizing", 0, 220_000, 6),
+            *wifi_gate8_snapshot_lines(
+                len(normalizer.WIFI_GATE8_SUBGATES),
+                pair_epoch=4,
+                generation=18,
+            ),
+            gate8_commit_line(
+                pair_epoch=4,
+                generation=18,
+                deadline_ms=220_000,
+                console_seq=7,
+            ),
+            runtime_recovery_ready_line(generation=18, console_seq=8),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_PAIR_EPOCH"] == 4
+    assert record["WIFI_GATE8_GENERATION"] == 18
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS"] == "ready"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_RECOVERIES"] == 0
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "yes"
+    assert record["CYW43_BOOTSTRAP_SUPERVISOR_BLOCKER"] == "none"
+
+
+def test_runtime_recovery_rejects_duplicate_bootstrap_ready() -> None:
+    """A restored runtime generation cannot publish bootstrap Ready again."""
+
+    lines = [
+        bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+        bootstrap_supervisor_line(1, "stabilizing", 0, 90_100, 2),
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=3,
+            generation=17,
+        ),
+        gate8_commit_line(
+            pair_epoch=3,
+            generation=17,
+            deadline_ms=90_100,
+            console_seq=3,
+        ),
+        bootstrap_supervisor_line(1, "ready", 0, 12_500, 4),
+        bootstrap_supervisor_line(1, "recovery", 0, 130_000, 5),
+        bootstrap_supervisor_line(1, "stabilizing", 0, 220_000, 6),
+        *wifi_gate8_snapshot_lines(
+            len(normalizer.WIFI_GATE8_SUBGATES),
+            pair_epoch=4,
+            generation=18,
+        ),
+        gate8_commit_line(
+            pair_epoch=4,
+            generation=18,
+            deadline_ms=220_000,
+            console_seq=7,
+        ),
+        bootstrap_supervisor_line(1, "ready", 0, 180_000, 8),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "bootstrap-ready-duplicate"
 
 
 def test_bootstrap_supervisor_accepts_production_raw_uart_suffix() -> None:

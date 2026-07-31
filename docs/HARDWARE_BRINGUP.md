@@ -421,15 +421,20 @@ mismatched, incomplete, truncated, or failed final `netstats` verdict while
 still collecting the remaining diagnostics.
 
 For the Wi-Fi lane, that helper does not treat the first root prompt as
-bootstrap completion. It first waits without sending input for exactly one
-newline-complete current production `CYW43_BOOTSTRAP_SUPERVISOR` terminal
+bootstrap completion. It also treats the atomic 8a-through-8h
+`CYW43_GATE8_COMMIT` as nonterminal progress and sends no command merely
+because that commit appears. It first waits without sending input for exactly
+one newline-complete current production `CYW43_BOOTSTRAP_SUPERVISOR` terminal
 record (`ready`, `failed`, or `permanent`). The record must carry canonical
 `attempt=1`, `backoff_ms`, `next_attempt_ms`, `serial`, `local_seat`,
 `recovery=full`, `console_seq`, `telemetry_sinks=serial+qlog+hdmi`, and
 `prompt_refresh=yes` fields. A truncated or malformed terminal, a duplicate or
 contradictory terminal, or any later attempt in the accumulated post-prompt
-settle evidence fails closed. After `ready`, guarded `netstats` polls must show
-the selected Wi-Fi/DHCP generation as
+settle evidence fails closed. `recovery` or `stabilizing` retracts an earlier
+Ready candidate. After the first Ready candidate, the helper keeps serial and
+network writes idle for the full 130-second Gate 8 lifetime plus terminal-drain
+window; only an unchanged Ready admits diagnostics. Guarded `netstats` polls
+must then show the selected Wi-Fi/DHCP generation as
 `active=wifi addr_src=dhcp-lease ... dhcp=bound` before `nettest` is admitted.
 One absolute 60-second DHCP deadline covers every prompt barrier, command,
 result wait, and poll interval. Expiry is recorded as a diagnostic failure; the
@@ -666,11 +671,12 @@ between connections is failed TCP liveness evidence.
 
 ### CYW43 Wi-Fi
 
-This runbook section exercises active Milestone 26d task
-`m26d-cyw43-hardware-free-closure`, where the latency defect was discovered,
-to restore Reopened Milestone 26b task
-`m26b-wifi-sdio-notification-dpc-closure`. It does not authorize a second
-production, scheduling, or acceptance lane.
+This runbook section uses completed Milestone 26d task
+`m26d-cyw43-hardware-free-closure` as downstream discovery context. Active
+authority is Reopened Milestone 26b tasks
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`. It does not authorize a second production,
+scheduling, or acceptance lane.
 
 Wi-Fi is the current research and evidence-closure lane. Source tests and a
 stage-only build do not establish live association or data-path readiness. The
@@ -685,12 +691,13 @@ pass the complete normalizer evidence predicate with `NET_ACTIVE=wifi`, reach
 Wi-Fi `status=ready` on the sole `attempt=1` boot episode, and contain no
 automatic whole-bootstrap restart. Any `status=backoff`, second `status=begin`,
 attempt-2-or-later record, or reset used to rescue initial bootstrap is a
-production-schema failure rather than a pass hidden by extra passes. One
-`status=recovery` may mark the consumed-once pair repair inside `attempt=1`, but
-any use of it keeps that boot out of the clean repeatability sample. A later
-steady-state runtime-recovery episode is legal only after same-generation Gate
-10 proof and remains separately visible; it cannot rescue or rewrite the
-initial bootstrap result.
+production-schema failure rather than a pass hidden by extra passes. Any
+pre-service `status=recovery` or physical pair epoch beyond the initial pair is
+also a production failure. A later steady-state runtime-recovery episode is
+legal only after exact-generation Gate 8 commit, bound DHCP address, and
+admitted TCP listener. It remains separately visible as
+`CYW43_RUNTIME_RECOVERY` and cannot rescue or rewrite the initial bootstrap
+result. Gate 10 remains mandatory data-service evidence for every counted boot.
 
 The cold boot episode and any later authorized steady-state runtime recovery use
 one path after linked-pair admission. Root registers and replays both
@@ -812,11 +819,12 @@ Gate 8 is an ordered stability proof, not the first moment the linked transport
 attaches. After transport/control attachment, require
 `CYW43_BOOTSTRAP_SUPERVISOR ... status=stabilizing`. The sole boot episode has
 one absolute 90,000-millisecond stabilization deadline. Gate 8 is passive and
-cannot create a pair-recovery request. Only a separately typed runtime/SDIO
-fault or issued-unknown physical operation may consume the one full pair
-repair, and that repair does not refresh the deadline. Before accepting
-`CYW43_BOOTSTRAP_SUPERVISOR ... status=ready`, the serial/qlog evidence must
-contain one all-or-nothing immutable snapshot immediately before that record:
+cannot create a pair-recovery request. Production bootstrap admits one initial
+physical pair and zero pre-service pair restarts; a separately typed
+runtime/SDIO fault drains and fences its exact owner but cannot turn the boot
+into pair 2. The original deadline remains authoritative through DHCP and TCP
+listener admission. Before accepting Gate 8 commit, serial/qlog evidence must
+contain this one all-or-nothing immutable transaction:
 
 ```text
 wifi: gate 8 subgate=8a-pair-generation status=pass pair_epoch=<p> generation=<n> blocker=none
@@ -827,6 +835,7 @@ wifi: gate 8 subgate=8e-bssid-refresh status=pass pair_epoch=<p> generation=<n> 
 wifi: gate 8 subgate=8f-eapol-keys status=pass pair_epoch=<p> generation=<n> blocker=none
 wifi: gate 8 subgate=8g-post-key-maintenance status=pass pair_epoch=<p> generation=<n> blocker=none
 wifi: gate 8 subgate=8h-data-admission status=pass pair_epoch=<p> generation=<n> blocker=none
+CYW43_GATE8_COMMIT attempt=1 status=ready pair_epoch=<p> generation=<n> deadline_ms=<n> console_seq=<n> telemetry_sinks=serial+qlog+hdmi consumer=data
 ```
 
 Treat 8a and 8b as one pair/control epoch and 8c through 8h as one current
@@ -834,10 +843,11 @@ logical connection generation. The repeated `generation=<n>` field is the
 connection-generation publication checked by the normalizer; it cannot be
 used to stitch pair/control evidence from an earlier recovery into the current
 snapshot. A partial, reordered, duplicated, generation-regressing, or
-cross-recovery sequence, or any gap between 8h and `status=ready`, fails closed.
-The eight records are one immutable candidate transaction, but Ready requires
-the same stable pair epoch and logical generation on two consecutive ordinary
-control turns. Both observations must be publication-quiescent: no pending
+cross-recovery sequence, or any gap between 8h and `CYW43_GATE8_COMMIT`, fails
+closed. The nine records are one immutable nonterminal commit transaction.
+Commit requires the same stable pair epoch and logical generation on two
+consecutive ordinary control turns. Both observations must be
+publication-quiescent: no pending
 current-generation host-EAPOL event or queued pre-secure EAPOL RX frame; no
 host-EAPOL prompt, session work, deferred reauthentication, or post-association
 BSSID work; no maintenance, logical-control, prompt-poll, terminal-drain, or
@@ -850,19 +860,30 @@ recovery; movement is not. Any intervening owner activity, DPC publication,
 counter movement, DPC epoch change, or logical/pair generation change clears
 the candidate. Root rechecks the exact pair/generation/DPC/history receipt
 before and after consumer-token publication, and a failed recheck publishes no
-Ready. In particular,
+Gate 8 commit. In particular,
 `8h ... status=pass` proves that the exact-generation handoff snapshot is
 eligible; it does not open the steady DHCP/TCP consumer and is not accepted
-Gate 8 by itself. The immediately adjacent `status=ready` is the lifecycle
-commit: root must first revalidate the same generation, handoff tokens, owner
-state, and recovery state, then publish the separate consumer token. A failed
-publication retracts the candidate and publishes no Ready. A later recovery
-does not rewrite an earlier accepted record, but it retracts current readiness
-and requires a fresh complete candidate plus Ready before ordinary data
-admission resumes. Once Ready is published, one exact current-generation
-NetData continuation remains legal and does not by itself retract stable
-proof; before initial publication, the same owner must reach its exact terminal
-so publication quiescence is true.
+Gate 8 by itself. The immediately adjacent commit is the lifecycle cut: root
+first revalidates the same generation, handoff tokens, owner state, and
+recovery state, then publishes the separate consumer token. A failed
+publication retracts the candidate and publishes no commit. A later recovery
+does not rewrite an earlier accepted record, but it retracts current
+authorization and requires a fresh complete candidate plus commit before
+ordinary data admission resumes. Once commit is published, one exact
+current-generation NetData continuation remains legal and does not by itself
+retract stable proof; before initial publication, the same owner must reach its
+exact terminal so publication quiescence is true.
+
+Gate 8 commit opens the data consumer so DHCP can run; it is not the
+ready-to-use cut and must not admit host test commands. The unique terminal
+`CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready ...` may appear later and
+need not be adjacent, but it must bind to this committed generation and
+requires the active CYW43/Wi-Fi interface, DHCP `bound`, a nonempty IP address,
+and the actual TCP console listener. It intentionally does not require a prior
+TCP accept/auth session. Only this supervisor Ready releases the final HDMI
+`Ready to use` banner. Successful later repair uses
+`CYW43_RUNTIME_RECOVERY status=ready generation=<n> ...`, never a second
+bootstrap Ready.
 
 Before initial publication, a queued current-generation EAPOL frame is still
 a host-EAPOL policy obligation. Once BSSID/filter maintenance is terminal, the
@@ -873,8 +894,8 @@ Post-key frames retain post-secure handling; no diagnostic or fallback poll is
 introduced.
 
 First-cause deferred-recovery and terminal-drain telemetry must remain visible
-until the complete 8a-through-8h plus Ready transaction is retained; a rejected
-receipt or output preflight cannot erase it.
+until the complete 8a-through-8h plus Gate 8 commit transaction is retained; a
+rejected receipt or output preflight cannot erase it.
 
 An ordinary firmware `AUTH` timeout is diagnostic telemetry, not a terminal
 association event. Unsuccessful `SET_SSID`, link-down/no-network,
@@ -892,7 +913,7 @@ same-pair backoff, and new logical generation.
 
 Gate 8h cannot become a candidate pass until root has committed the handoff for
 the same generation; that handoff commit remains fenced from steady consumers
-until the lifecycle Ready publication above. Association-generation start is
+until the Gate 8 commit publication above. Association-generation start is
 too early: Cohesix may admit firmware data after secure keys while post-key
 maintenance still owns the linked-runtime lane and before the root NetStack
 exists, whereas Linux `brcmfmac` already has a live netdev consumer at
@@ -916,10 +937,14 @@ lane. Before it succeeds, 8h must report
 
 If that ordinary attached Network turn discovers a typed runtime/SDIO fault,
 it commits no handoff and yields immediately. The next outer iteration is the
-hardware-free Operator turn; only after that turn yields may the following
-Driver iteration service one recovery child. Driver rechecks reboot and linked
-serial admission before issuing the child, so accepted operator `reboot` work
-cannot compose with or be followed by a same-iteration CYW43/SDIO operation.
+hardware-free Operator turn. Before exact DHCP/listener service readiness, the
+following Driver turns may only drain, fence, and poison the uncertain exact
+owner before terminal quarantine; they publish no `status=recovery`, cannot
+start pair 2, and issue no replacement physical lifetime. After exact service
+readiness, the following Driver iteration may service one child of the sole
+consumed-once runtime recovery episode. Driver rechecks reboot and linked serial
+admission before issuing any child, so accepted operator `reboot` work cannot
+compose with or be followed by a same-iteration CYW43/SDIO operation.
 
 The child decoded-RX queue, its bounded drain budget, and the root copied-RX
 queue all use
@@ -927,6 +952,14 @@ queue all use
 root or child capacity during diagnosis; the shared ABI value is the one
 production envelope, and capacity alignment is not a substitute for the
 handoff boundary.
+
+When a retained op7 data TX reaches `Submitted`, one frame already copied into
+the root RX queue may cross into smoltcp in that same outer turn. This is a
+memory-only delivery, not a second physical action; its paired TxToken can only
+retain an immutable response for a later turn. `Pending` or `Failed` TX exposes
+no RX, and a submitted TX with no copied frame ends the turn before ARP or op8
+work. In DHCP captures, this invariant prevents a received Offer from sitting
+behind the next Discover indefinitely.
 
 Bounded data traffic is legal while 8h passes: non-full root RX, pending data
 TX/ARP, runtime backlog, and an exact assigned current-generation NetData
@@ -946,21 +979,25 @@ evidence, not successful receive or permission to ignore later loss.
 
 Gate 8 data-consumer publication installs one identity-only RX cursor bound to
 the connection generation, pair epoch, and completed physical-lifetime epoch
-on the existing sole `NetData` op8 `RX_POLL`/DPC lane. Its healthy state is
-`idle`: it has no timer, creates no service demand, and neither an accepted TX
-nor the passage of time manufactures a source probe or fences a later credited
-TX.
+on the existing sole `NetData` op8 `RX_POLL`/DPC lane. It owns one
+32-millisecond lost-edge audit deadline scaled from the exported seL4 virtual
+counter. A proved current-generation child-to-root wake or live DPC-ring level
+remains the urgent source. If the linked notification chain loses or coalesces
+an edge, deadline expiry admits one `RX_HINTLESS_FIRSTREAD` audit through the
+same op8/HAL/SDIO owner. The SDIO runtime first inspects the hardware source; a
+quiescent result performs no blind Function-2 read.
 
-A fresh hintless source probe is admissible only for a proved
-current-generation child-to-root wake or live DPC-ring level. The runtime
-signals on private-RX-queue empty-to-nonempty transition, HAL latches that wake,
-and root clears and immediately rechecks it only after an exact empty op8
-terminal. This preserves an edge racing the clear while keeping the queue, DPC
-ring, and latched wake as durable level truth. Retained owner and protocol
-continuations still advance on the sole op8/HAL/SDIO chain. In the paired pcap,
-check both that outbound TCP trains do not suppress peer ACK/FIN ingress and
-that ARP-warmed inbound traffic after a quiet interval triggers a prompt reply
-without unrelated TX.
+The runtime signals on private-RX-queue empty-to-nonempty transition, HAL
+latches that wake, and root clears and immediately rechecks it only after an
+exact empty op8 terminal. This preserves an edge racing the clear while keeping
+the queue, DPC ring, and latched wake as durable level truth. Exact current
+non-fault `Idle`, `Progress`, or `FrameReady` terminals re-arm the audit;
+wrong-request, wrong-lifetime, stale, and fault terminals do not. Neither an
+accepted TX nor non-source queue work creates a second audit or owner. Retained
+owner and protocol continuations still advance on the sole op8/HAL/SDIO chain;
+GENET never reads or reports this state. In the paired pcap, check both that
+outbound TCP trains do not suppress peer ACK/FIN ingress and that inbound
+traffic after a quiet interval triggers a prompt reply without unrelated TX.
 
 Capture the passive scheduler, handoff, and retained-frontier lines from both
 `wifi diag` and `wifi probe-ht`:
@@ -970,7 +1007,7 @@ wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=o
 wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
-wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|idle> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
+wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|watching|audit-due> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
@@ -979,10 +1016,13 @@ wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 ```
 
-The retired field names remain for diagnostic and normalizer compatibility.
-`deadline_probes` must be zero. `terminals` advances only for an exact
-non-fault hintless op8 source-probe terminal caused by a real DPC/root-wake
-level; queue-only terminals advance neither field.
+The retained field names remain for diagnostic and normalizer compatibility.
+`deadline_probes` counts admitted lost-edge audits. `terminals` advances only
+for an exact non-fault hintless op8 source-probe terminal caused by a real
+DPC/root-wake level or the same-owner audit; queue-only terminals advance
+neither field. `netstats: wifi_post_dhcp_rx` counts frames only when they cross
+an actual smoltcp delivery boundary, so trace-only preserve/deliver events
+cannot count one frame twice.
 
 A live NetStack frontier becomes authoritative only with complete current
 `8a`-through-`8h` proof and no active pair recovery. Until then, retain recovery,
@@ -1014,38 +1054,42 @@ while that connection epoch was current; it is not producer, runtime, SDIO, or
 physical-owner attribution. Correlate it with exact retained-owner and pcap
 evidence before assigning a cause.
 
-After `ready`, keep capturing. A later fresh non-stable or different-generation
-snapshot must produce `status=stabilizing`; this can occur in the same logical
-generation when exact owner/admission proof is lost. Discard the earlier
-snapshot and require a new complete 8a-through-8h proof. Before same-generation
-Gate 10 closes bootstrap, a logical `fail` remains inside Gate 8 until the
-90-second deadline. Deadline exhaustion retains the complete eight-line
-terminal snapshot and adjacent
+After Gate 8 commit, keep capturing until the unique supervisor Ready. A later
+fresh non-stable or different-generation snapshot must produce
+`status=stabilizing`; this can occur in the same logical generation when exact
+owner/admission proof is lost. Discard the earlier snapshot and require a new
+complete 8a-through-8h plus commit proof. A logical Gate 8 failure, or committed
+service that still lacks same-generation DHCP/listener readiness, remains
+inside the one boot episode until its original 90-second deadline. The latter
+uses `blocker=service-readiness-deadline`. Deadline exhaustion retains the
+complete eight-line terminal snapshot and adjacent
 `CYW43_GATE8_TERMINAL ... action=quarantine`, then emits terminal
 `status=permanent`, quarantines attached Wi-Fi network service, and returns to
 ordinary operator service without pair repair. Serial, local-seat, HDMI
 diagnostics, authentication, and `reboot` must remain responsive. There is no
 automatic backoff, reset, or attempt 2. If retained-output capacity delays this
 terminal transaction, only the hardware-free operator-output turn may run. A
-newly visible typed runtime/SDIO recovery may supersede the logical terminal
-while schema/route/capacity preflight remains blocked. Once preflight succeeds,
-root performs one final typed-recovery probe and, if clear, commits the explicit
-terminal decision immediately before atomically retaining the batch. That
-decision cut, not later output drain, linearizes terminal policy; no
-network/child poll may reopen it while the batch and adjacent Permanent record
-drain. A
-separately typed runtime/SDIO or issued-unknown fault may still use the
-consumed-once pair repair inside `attempt=1`, without renewing the deadline.
-Retraction purges queued HDMI Ready/prompt bytes and forces a canonical
-Stabilizing redraw. Gate-local association, DHCP, and protocol retries remain
-bounded inside their owning gates. Gate 9 DHCP/address and Gate 10 nettest, TCP,
-and authenticated `cohsh` must remain in the accepted Gate 8 connection
-generation. Each DHCP start must also publish a fresh generation-bound XID;
-late Offer/ACK packets carrying a prior XID are not current proof. Do not count
-a boot whose generation change or readiness retraction invalidates those
-proofs. A fault after this same-generation Gate 10 boundary may open one
-distinct steady-state runtime-recovery episode with one fresh consumed-once
-pair repair; it cannot publish or rewrite a boot attempt.
+  newly visible typed runtime/SDIO fault may preserve its stronger physical
+  causal terminal while schema/route/capacity preflight remains blocked; it
+  cannot reopen or repair the pre-service lifetime. Once preflight succeeds,
+  root performs one final typed-fault probe and, if clear, commits the explicit
+  terminal decision immediately before atomically retaining the batch. That
+  decision cut, not later output drain, linearizes terminal policy; no
+  network/child poll may reopen it while the batch and adjacent Permanent record
+  drain. No pre-service fault may publish Recovery or open a second physical
+  pair. Retraction purges
+queued HDMI Ready/prompt bytes and forces a canonical Stabilizing redraw.
+Gate-local association, DHCP, and protocol retries remain bounded inside their
+owning gates. Gate 9 DHCP/address and Gate 10 nettest, TCP, and authenticated
+`cohsh` must remain in the accepted Gate 8 connection generation. Each DHCP
+start must also publish a fresh generation-bound XID; late Offer/ACK packets
+carrying a prior XID are not current proof. Do not count a boot whose
+generation change or readiness retraction invalidates those proofs. Exact
+service readiness admits one distinct steady-state runtime-recovery episode
+with one consumed-once pair repair. Duplicate Ready cannot replenish it, and a
+successful restored generation is reported by `CYW43_RUNTIME_RECOVERY`, not a
+new boot attempt. Gate 10 remains mandatory acceptance evidence but does not
+grant recovery authority.
 
 On the current shared-core linked-runtime design, the prompt-side supervisor
 must prove the SDIO owner before the CYW43 client. SDIO service registration and
@@ -1230,6 +1274,28 @@ stack-reset transitions purge both queues, and a three-second virtual-counter
 deadline expires unresolved state. The lane neither issues CYW43/SDIO work nor
 changes GENET scheduling.
 
+The later exact `b91b31f9a2b471d37ceeb66469e3fc10609e4df2` /
+`a70ca8e8f03c280302306a87e9d6f67f493488d786e858331dcb7e75b19c0433`
+hardware group is the current defect-discovery boundary, not acceptance proof.
+The power-off boot and warm R01 each transmitted 40 DHCP
+Discovers and received 39 promptly returned Offers in the paired Wi-Fi capture
+but issued no Request. R02-R05 each completed one DORA and bound
+`192.168.86.154`, so bootstrap was only 4/5. After R05 remained idle for 130
+seconds, 21 host Echo Requests produced no reply; source-level DPC/root-wake
+counters did not advance. `.coh` and Wi-Fi pressure were correctly withheld.
+This separates a retained-TX/root-copied-Offer head-of-line defect from a later
+lost/coalesced linked-runtime receive edge. Both repairs described here are
+source-only until a newly built image is flashed and repeats the hardware run.
+
+The GENET control on the same exact image remained healthy. Its first cold Echo
+Request was retained while the Pi ARP-resolved the host and then returned one
+matching Echo Reply. Three `.coh` scripts and a post-pressure repeat passed. The
+one-minute REST/hive run completed 9,956 of 9,960 operations; the four failures
+were bounded application-level `schedule_write ... buffer-full` responses. Its
+one sustained TCP flow had no RST, zero window, duplicate range, overlap, or
+sequence gap, and request-to-first-Pi-payload latency was 1.216 ms p50 and
+1.538 ms p95. No GENET change is authorized by that evidence.
+
 Linux `brcmfmac` normally enables SDIO interrupts and disables polling. Its ISR
 schedules one ordered DPC worker, which performs an RX-first bounded drain
 before sleep; TX completion does not require a physical receive-source read.
@@ -1244,18 +1310,19 @@ bounded EventPump Network quantum with physical-console checkpoints, exact
 grants, one HAL owner, one linked SDIO runtime issuer, and no private physical
 drain loop.
 
-The as-built source candidate retires periodic and post-TX source probes. Its
-lifetime cursor is identity-only, true idle creates no fresh op8, and only a
-real current-lifetime DPC/root-wake level admits a fresh source poll. Queues,
-retained owners, and protocol continuations schedule only their own
-already-proved work. The 25-ms virtual-counter cap fences only fresh-parent
-admission; an already admitted exact parent continues to its typed terminal
-subject to physical/dispatch yields and the hard 192-turn bound. HAL must
-revalidate that parent's root-continuation operation, nonzero immutable
-fingerprint, request, logical generation, pair epoch, open priority
-reservations, and restart-free state across the check. The next exact image
-must preserve first-pair startup and, before any peer-warming traffic on every
-lifetime, answer one first Echo Request across the ordered cold trace
+The as-built source candidate has no post-TX receive probe and no second
+receive lane. Its exact-lifetime cursor carries the 32-ms same-owner source
+audit described above so a lost/coalesced notification edge cannot leave a
+live card silent indefinitely. Queues, retained owners, and protocol
+continuations still schedule only their own already-proved work. The 25-ms
+virtual-counter cap fences only fresh-parent admission; an already admitted
+exact parent continues to its typed terminal subject to physical/dispatch
+yields and the hard 192-turn bound. HAL must revalidate that parent's
+root-continuation operation, nonzero immutable fingerprint, request, logical
+generation, pair epoch, open priority reservations, and restart-free state
+across the check. The next exact image must preserve first-pair startup and,
+before any peer-warming traffic on every lifetime, answer one first Echo
+Request across the ordered cold trace
 `Echo Request -> Pi ARP Request -> host ARP Reply -> matching Echo Reply`
 without a second request or duplicate reply. Record that semantic/elapsed
 sample separately, then require ARP-warmed request-to-first-payload p95 at or
@@ -1763,13 +1830,14 @@ error rather than being swallowed by the failed bootstrap. In the ordinary
 linked-runtime rotation, quarantine consumes neither the CYW43 root-wake
 notification nor a NIC turn; it skips directly to one bounded independent HDMI
 `Display` turn when local-seat is attached, then returns to `Serial`. Only
-same-generation Gate 10 plus attached address/TCP network-ready proof closes
-bootstrap and authorizes a later independently signalled steady-state
-runtime-recovery episode. That episode has one fresh consumed-once pair repair,
-uses the same canonical owner-first lane, and cannot alter the recorded boot
-result or publish another boot attempt. Production hardware acceptance requires
-the canonical cold pair transaction and all later Wi-Fi gates to complete in
-the sole attempt-1 boot episode.
+exact-generation Gate 8 commit, bound DHCP address, and the admitted TCP
+listener closes bootstrap and authorizes a later independently signalled
+steady-state runtime-recovery episode. That episode has one consumed-once pair
+repair, uses the same canonical owner-first lane, and cannot alter the recorded
+boot result or publish another boot attempt. Gate 10 remains required
+data-service acceptance. Production hardware acceptance requires the canonical
+cold pair transaction and all later Wi-Fi gates to complete in the sole
+attempt-1 boot episode.
 
 The high-impact supervisor `preflight`, `begin`, `recovery`, `stabilizing`,
 `ready`, `failed`, and `permanent` records declare
@@ -1785,8 +1853,8 @@ immediately; a fixed episode-sized FIFO retains a complete worst-case episode
 without overwriting delayed milestones, and the isolated HDMI runtime mirrors
 at most one entry during each later ordinary `Display` turn. A trace with a
 second boot `begin`, any `backoff`, `attempt>1`, a second recovery before the
-active episode earns same-generation Gate 10, a recovery that renews the Gate 8
-deadline, a same-turn HDMI submit, a lost queued terminal status, an attached
+active episode re-earns exact service readiness, a recovery that renews the
+Gate 8 deadline, a same-turn HDMI submit, a lost queued terminal status, an attached
 network poll after a terminal status, or an unresponsive prompt after
 `status=failed` or `status=permanent` fails the software liveness contract even
 before Wi-Fi RF acceptance is considered.

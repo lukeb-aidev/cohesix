@@ -77,6 +77,11 @@ DIAGNOSTIC_COMMAND_DRAIN_S = 0.25
 NETTEST_STARTED_MARKER = b"OK NETTEST detail=started"
 NETTEST_OBSERVATION_S = 17.0
 WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S = 240.0
+WIFI_GATE8_LIFETIME_S = 90.0
+WIFI_TERMINAL_DRAIN_MARGIN_S = 40.0
+WIFI_READY_STABILITY_WINDOW_S = (
+    WIFI_GATE8_LIFETIME_S + WIFI_TERMINAL_DRAIN_MARGIN_S
+)
 WIFI_DHCP_TERMINAL_TIMEOUT_S = 60.0
 WIFI_DHCP_POLL_INTERVAL_S = 5.0
 WIFI_SUPERVISOR_TERMINAL_MARKERS = (
@@ -92,10 +97,10 @@ WIFI_SUPERVISOR_HEADER_RE = re.compile(
     rb"attempt=(?P<attempt>[^ \r\n]+) "
     rb"status=(?P<status>[^ \r\n]+)"
 )
-WIFI_SUPERVISOR_TERMINAL_RE = re.compile(
+WIFI_SUPERVISOR_RECORD_RE = re.compile(
     rb"^CYW43_BOOTSTRAP_SUPERVISOR "
     rb"attempt=(?P<attempt>0|[1-9][0-9]*) "
-    rb"status=(?P<status>ready|failed|permanent) "
+    rb"status=(?P<status>begin|recovery|stabilizing|ready|failed|permanent) "
     rb"backoff_ms=(?P<backoff_ms>0|[1-9][0-9]*) "
     rb"next_attempt_ms=(?P<next_attempt_ms>0|[1-9][0-9]*) "
     rb"serial=(?P<serial>ready|blocked) "
@@ -105,6 +110,10 @@ WIFI_SUPERVISOR_TERMINAL_RE = re.compile(
     rb"telemetry_sinks=serial\+qlog\+hdmi "
     rb"prompt_refresh=yes$"
 )
+WIFI_SUPERVISOR_LIFECYCLE_STATUSES = frozenset(
+    {"begin", "recovery", "stabilizing", "ready", "failed", "permanent"}
+)
+WIFI_SUPERVISOR_FINAL_STATUSES = frozenset({"failed", "permanent"})
 NETSTATS_NETWORK_RE = re.compile(
     rb"netstats: generation=(?P<generation>0|[1-9][0-9]*) "
     rb"mode=(?P<mode>[^ \r\n]+) "
@@ -492,9 +501,17 @@ def inspect_wifi_supervisor_evidence(
     *,
     reject_trailing_partial: bool = False,
 ) -> tuple[tuple[int, str] | None, str | None]:
-    """Validate complete supervisor lines and return one production terminal."""
+    """Validate one Wi-Fi lifetime and return its current admission candidate.
 
-    terminal: tuple[int, str] | None = None
+    ``ready`` is retractable until it remains quiet for the separate stability
+    window. A same-attempt ``recovery`` or ``stabilizing`` record therefore
+    clears an earlier candidate; only ``failed`` and ``permanent`` are
+    irrevocable lifecycle terminals.
+    """
+
+    current: tuple[int, str] | None = None
+    previous_status: str | None = None
+    recoveries = 0
     for raw_line in snapshot.splitlines(keepends=True):
         line_complete = raw_line.endswith((b"\r", b"\n"))
         line = (
@@ -545,11 +562,13 @@ def inspect_wifi_supervisor_evidence(
         if attempt > 1:
             return None, f"attempt-{attempt}-forbidden"
         status = header.group("status").decode("ascii", errors="replace")
-        if status not in {"ready", "failed", "permanent"}:
+        if attempt == 0:
             continue
-        match = WIFI_SUPERVISOR_TERMINAL_RE.fullmatch(line)
+        if status not in WIFI_SUPERVISOR_LIFECYCLE_STATUSES:
+            return None, f"lifecycle-status-{status}-invalid"
+        match = WIFI_SUPERVISOR_RECORD_RE.fullmatch(line)
         if match is None or attempt != 1:
-            return None, "terminal-schema-invalid"
+            return None, "lifecycle-schema-invalid"
         numeric_fields = (
             match.group("backoff_ms"),
             match.group("next_attempt_ms"),
@@ -559,13 +578,31 @@ def inspect_wifi_supervisor_evidence(
             return None, "terminal-numeric-field-invalid"
         if int(match.group("backoff_ms")) != 0:
             return None, "terminal-backoff-invalid"
-        candidate = (attempt, status)
-        if terminal is not None:
-            if terminal != candidate:
+        if previous_status in WIFI_SUPERVISOR_FINAL_STATUSES:
+            if status == previous_status:
+                return None, "terminal-duplicate"
+            return None, "terminal-contradiction"
+        if status == "begin":
+            if previous_status is not None:
+                return None, "lifecycle-begin-duplicate"
+            current = None
+        elif status == "recovery":
+            recoveries += 1
+            if recoveries > 1:
+                return None, "recovery-limit-exceeded"
+            current = None
+        elif status == "stabilizing":
+            current = None
+        elif status == "ready":
+            if previous_status == "ready":
+                return None, "terminal-duplicate"
+            current = (attempt, status)
+        else:
+            if previous_status == "ready":
                 return None, "terminal-contradiction"
-            return None, "terminal-duplicate"
-        terminal = candidate
-    return terminal, None
+            current = (attempt, status)
+        previous_status = status
+    return current, None
 
 
 def parse_wifi_supervisor_terminal(snapshot: bytes) -> tuple[int, str] | None:
@@ -575,10 +612,18 @@ def parse_wifi_supervisor_terminal(snapshot: bytes) -> tuple[int, str] | None:
     return terminal if error is None else None
 
 
-def wifi_terminal_marker_offset(snapshot: bytes) -> int:
-    """Return the newest terminal-prefix offset, or ``-1`` when absent."""
+def wifi_supervisor_lifecycle_record_count(snapshot: bytes) -> int:
+    """Count complete canonical attempt-one lifecycle records."""
 
-    return max(snapshot.rfind(marker) for marker in WIFI_SUPERVISOR_TERMINAL_MARKERS)
+    count = 0
+    for raw_line in snapshot.splitlines(keepends=True):
+        if not raw_line.endswith((b"\r", b"\n")):
+            continue
+        line = raw_line.removesuffix(b"\n").removesuffix(b"\r")
+        match = WIFI_SUPERVISOR_RECORD_RE.fullmatch(line)
+        if match is not None and match.group("attempt") == b"1":
+            count += 1
+    return count
 
 
 def parse_netstats_network_status(
@@ -996,34 +1041,26 @@ def wait_for_wifi_supervisor_terminal(
     controller: RedactingSerialController,
     initial_snapshot: bytes,
     timeout_s: float,
+    *,
+    ready_stability_s: float = WIFI_READY_STABILITY_WINDOW_S,
 ) -> tuple[str, bytes]:
-    """Wait passively until the single Wi-Fi bootstrap attempt is terminal."""
+    """Wait passively for one stable or failed Wi-Fi physical lifetime.
+
+    The first ``ready`` record is only a retractable candidate. Keep serial and
+    network traffic idle for the complete Gate 8 plus terminal-drain window,
+    reset that observation after every lifecycle edge, and admit diagnostics
+    only when Ready remains current. This preserves the host's opportunity to
+    run the one cold-neighbor ICMP probe before TCP or ``nettest`` traffic.
+    """
 
     deadline = time.monotonic() + timeout_s
     evidence = initial_snapshot
     observed = b""
-    terminal, error = inspect_wifi_supervisor_evidence(evidence)
-    if error is not None:
-        raise RuntimeError(f"invalid CYW43 bootstrap supervisor evidence: {error}")
     source = "boot-snapshot"
-    if terminal is None:
-        source = "serial-wait"
-        marker_offset = wifi_terminal_marker_offset(evidence)
-        if marker_offset < 0:
-            chunk = controller.read_until(
-                WIFI_SUPERVISOR_TERMINAL_MARKERS,
-                remaining_before_deadline(
-                    deadline,
-                    label="terminal CYW43 bootstrap supervisor status",
-                ),
-                label="terminal CYW43 bootstrap supervisor status",
-            )
-            observed += chunk
-            evidence += chunk
-            marker_offset = wifi_terminal_marker_offset(evidence)
+    while True:
+        marker_offset = evidence.rfind(WIFI_SUPERVISOR_PREFIX)
         if marker_offset >= 0 and not any(
-            terminator in evidence[marker_offset:]
-            for terminator in (b"\r", b"\n")
+            terminator in evidence[marker_offset:] for terminator in (b"\r", b"\n")
         ):
             chunk = controller.read_until(
                 (b"\r", b"\n"),
@@ -1035,21 +1072,103 @@ def wait_for_wifi_supervisor_terminal(
             )
             observed += chunk
             evidence += chunk
-        terminal, error = inspect_wifi_supervisor_evidence(evidence)
-    if error is not None:
-        raise RuntimeError(f"invalid CYW43 bootstrap supervisor evidence: {error}")
-    if terminal is None:
-        raise RuntimeError(
-            "terminal CYW43 bootstrap marker did not contain one line-complete "
-            "current production supervisor record"
+        terminal, error = inspect_wifi_supervisor_evidence(
+            evidence,
+            reject_trailing_partial=True,
         )
-    attempt, status = terminal
-    controller.note(
-        "wifi supervisor terminal "
-        f"attempt={attempt} status={status} source={source} "
-        "action=diagnostics-admitted"
-    )
-    return status, observed
+        if error is not None:
+            raise RuntimeError(
+                f"invalid CYW43 bootstrap supervisor evidence: {error}"
+            )
+        if terminal is None:
+            source = "serial-wait"
+            chunk = controller.read_until(
+                WIFI_SUPERVISOR_TERMINAL_MARKERS,
+                remaining_before_deadline(
+                    deadline,
+                    label="terminal CYW43 bootstrap supervisor status",
+                ),
+                label="terminal CYW43 bootstrap supervisor status",
+            )
+            observed += chunk
+            evidence += chunk
+            continue
+
+        attempt, status = terminal
+        if status in WIFI_SUPERVISOR_FINAL_STATUSES:
+            controller.note(
+                "wifi supervisor terminal "
+                f"attempt={attempt} status={status} source={source} "
+                "action=diagnostics-admitted"
+            )
+            return status, observed
+
+        candidate_records = wifi_supervisor_lifecycle_record_count(evidence)
+        controller.note(
+            "wifi supervisor ready candidate "
+            f"attempt={attempt} source={source} "
+            f"observe_s={ready_stability_s:.2f} serial_writes=none "
+            "network_writes=none cold_icmp_order=preserved"
+        )
+        chunk = controller.drain_for(
+            ready_stability_s,
+            label="post-ready stable-lifetime observation",
+        )
+        observed += chunk
+        evidence += chunk
+
+        marker_offset = evidence.rfind(WIFI_SUPERVISOR_PREFIX)
+        if marker_offset >= 0 and not any(
+            terminator in evidence[marker_offset:] for terminator in (b"\r", b"\n")
+        ):
+            chunk = controller.read_until(
+                (b"\r", b"\n"),
+                remaining_before_deadline(
+                    deadline,
+                    label="complete post-ready CYW43 supervisor line",
+                ),
+                label="complete post-ready CYW43 supervisor line",
+            )
+            observed += chunk
+            evidence += chunk
+
+        settled, error = inspect_wifi_supervisor_evidence(
+            evidence,
+            reject_trailing_partial=True,
+        )
+        if error is not None:
+            raise RuntimeError(
+                f"invalid CYW43 bootstrap supervisor evidence: {error}"
+            )
+        settled_records = wifi_supervisor_lifecycle_record_count(evidence)
+        if (
+            settled == (attempt, "ready")
+            and settled_records == candidate_records
+        ):
+            controller.note(
+                "wifi supervisor stable lifetime "
+                f"attempt={attempt} status=ready source={source} "
+                f"observe_s={ready_stability_s:.2f} "
+                "action=diagnostics-admitted"
+            )
+            return "ready", observed
+        if (
+            settled is not None
+            and settled[1] in WIFI_SUPERVISOR_FINAL_STATUSES
+        ):
+            controller.note(
+                "wifi supervisor terminal "
+                f"attempt={settled[0]} status={settled[1]} source=serial-wait "
+                "action=diagnostics-admitted"
+            )
+            return settled[1], observed
+        controller.note(
+            "wifi supervisor ready retracted "
+            f"attempt={attempt} lifecycle_records_before={candidate_records} "
+            f"lifecycle_records_after={settled_records} "
+            "action=continue-passive-lifetime-observation"
+        )
+        source = "serial-wait"
 
 
 def issue_diagnostic_command(

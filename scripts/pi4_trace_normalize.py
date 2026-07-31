@@ -119,6 +119,24 @@ CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE = re.compile(
     r"telemetry_sinks=serial\+queen-log "
     r"prompt_refresh=no$"
 )
+CYW43_GATE8_COMMIT_RE = re.compile(
+    r"^CYW43_GATE8_COMMIT "
+    r"attempt=(?P<attempt>[0-9]+) "
+    r"status=(?P<status>ready) "
+    r"pair_epoch=(?P<pair_epoch>[0-9]+) "
+    r"generation=(?P<generation>[0-9]+) "
+    r"deadline_ms=(?P<deadline_ms>[0-9]+) "
+    r"console_seq=(?P<console_seq>[0-9]+) "
+    r"telemetry_sinks=serial\+qlog\+hdmi "
+    r"consumer=data$"
+)
+CYW43_RUNTIME_RECOVERY_RE = re.compile(
+    r"^CYW43_RUNTIME_RECOVERY "
+    r"status=(?P<status>ready) "
+    r"generation=(?P<generation>[0-9]+) "
+    r"console_seq=(?P<console_seq>[0-9]+) "
+    r"telemetry_sinks=serial\+qlog\+hdmi$"
+)
 WIFI_GATE8_SUBGATE_RE = re.compile(
     r"^wifi: gate 8 "
     r"subgate=(?P<subgate>[a-z0-9-]+) "
@@ -2866,9 +2884,13 @@ def summarize_wifi_gate7_subgate(
 
 
 def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
-    """Validate one atomic Gate-8 snapshot-to-Ready publication transaction."""
+    """Validate Gate 8 commit and same-generation service-ready publication."""
 
     event_list = list(events)
+    committed_lifecycle_seen = any(
+        event.raw.startswith(("CYW43_GATE8_COMMIT ", "CYW43_RUNTIME_RECOVERY "))
+        for event in event_list
+    )
     supervisor_protocol_seen = any(
         event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
         for event in event_list
@@ -2882,6 +2904,8 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
                 "CYW43_GATE8_READY_RETRACTED",
                 "CYW43_GATE8_READY_TRANSACTION",
                 "CYW43_GATE8_SNAPSHOT_COMMIT",
+                "CYW43_GATE8_COMMIT ",
+                "CYW43_RUNTIME_RECOVERY ",
             )
         )
         for event in event_list
@@ -2897,6 +2921,8 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
                 "CYW43_GATE8_READY_RETRACTED",
                 "CYW43_GATE8_READY_TRANSACTION",
                 "CYW43_GATE8_SNAPSHOT_COMMIT",
+                "CYW43_GATE8_COMMIT ",
+                "CYW43_RUNTIME_RECOVERY ",
             )
         )
         if event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR") or gate8_authority_boundary:
@@ -3108,6 +3134,434 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
 
         delta = (current_pair_epoch - previous) & U64_MAX
         return 0 < delta < (1 << 63)
+
+    def summarize_committed_lifecycle() -> WifiGate8Proof:
+        """Validate the production 8a-8h, Commit, then service-Ready lifecycle."""
+
+        latest = WifiGate8Proof()
+        latest_farthest = WifiGate8Proof()
+        candidate: WifiGate8Proof | None = None
+        committed: WifiGate8Proof | None = None
+        current_attempt = 0
+        episode_started = False
+        stabilizing = False
+        bootstrap_ready_seen = False
+        runtime_recovery_pending = False
+        runtime_snapshot_seen = False
+        last_pair_epoch: int | None = None
+        last_generation: int | None = None
+        last_console_sequence: int | None = None
+        fatal = False
+
+        def canonical_decimal(value: str, maximum: int) -> int | None:
+            """Parse a canonical nonnegative decimal bounded by production."""
+
+            if not value or (len(value) > 1 and value.startswith("0")):
+                return None
+            parsed = int(value)
+            return parsed if parsed <= maximum else None
+
+        def passed_subgate_count(proof: WifiGate8Proof) -> int:
+            """Return the ordered sub-gate depth represented by one frontier."""
+
+            if proof.seen == "none":
+                return 0
+            return len(proof.seen.split(">"))
+
+        def retain_latest_farthest(proof: WifiGate8Proof) -> None:
+            """Retain the farthest current-production snapshot."""
+
+            nonlocal latest_farthest
+            proof = replace(proof, attempt=current_attempt)
+            candidate_key = (passed_subgate_count(proof), proof.line)
+            retained_key = (
+                passed_subgate_count(latest_farthest),
+                latest_farthest.line,
+            )
+            if candidate_key >= retained_key:
+                latest_farthest = proof
+
+        def reject(
+            blocker: str,
+            line: int,
+            *,
+            basis: WifiGate8Proof | None = None,
+        ) -> None:
+            """Fail the canonical lifetime without accepting later rescue."""
+
+            nonlocal candidate, committed, fatal, latest
+            proof = basis or candidate or committed or latest
+            latest = replace(
+                proof,
+                complete=False,
+                missing=(
+                    proof.missing
+                    if proof.missing not in {"none", "ready"}
+                    else "ready"
+                ),
+                status="fail",
+                blocker=blocker,
+                line=line,
+                attempt=current_attempt,
+                ready_line=0,
+            )
+            candidate = None
+            committed = None
+            fatal = True
+
+        def observe_console_sequence(sequence_text: str, line: int) -> bool:
+            """Validate one sequence across supervisor, commit, and runtime records."""
+
+            nonlocal last_console_sequence
+            sequence = canonical_decimal(sequence_text, U64_MAX)
+            if sequence is None:
+                reject("numeric-field-invalid", line)
+                return False
+            if (
+                last_console_sequence is not None
+                and sequence <= last_console_sequence
+            ):
+                reject("console-sequence-not-monotonic", line)
+                return False
+            last_console_sequence = sequence
+            return True
+
+        for item in proof_stream:
+            if fatal:
+                break
+
+            if isinstance(item, list):
+                proof, snapshot_valid = summarize_snapshot(item)
+                pair_epoch = snapshot_pair_epoch(item)
+                generation = snapshot_generation(item)
+                if pair_epoch is not None:
+                    if (
+                        runtime_recovery_pending
+                        and not runtime_snapshot_seen
+                        and last_pair_epoch is not None
+                        and not pair_epoch_advances(last_pair_epoch, pair_epoch)
+                    ):
+                        proof = replace(
+                            proof,
+                            complete=False,
+                            missing=WIFI_GATE8_SUBGATES[0],
+                            status="fail",
+                            blocker="pair-epoch-not-advanced-after-runtime-recovery",
+                            line=item[-1].line,
+                        )
+                        snapshot_valid = False
+                    elif (
+                        last_pair_epoch is not None
+                        and pair_epoch != last_pair_epoch
+                        and not pair_epoch_advances(last_pair_epoch, pair_epoch)
+                    ):
+                        proof = replace(
+                            proof,
+                            complete=False,
+                            missing=WIFI_GATE8_SUBGATES[0],
+                            status="fail",
+                            blocker="pair-epoch-regression",
+                            line=item[-1].line,
+                        )
+                        snapshot_valid = False
+                if generation is not None:
+                    if (
+                        runtime_recovery_pending
+                        and not runtime_snapshot_seen
+                        and last_generation is not None
+                        and not generation_advances(last_generation, generation)
+                    ):
+                        proof = replace(
+                            proof,
+                            complete=False,
+                            missing=WIFI_GATE8_SUBGATES[0],
+                            status="fail",
+                            blocker="generation-not-advanced-after-runtime-recovery",
+                            line=item[-1].line,
+                        )
+                        snapshot_valid = False
+                    elif (
+                        last_generation is not None
+                        and generation != last_generation
+                        and not generation_advances(last_generation, generation)
+                    ):
+                        proof = replace(
+                            proof,
+                            complete=False,
+                            missing=WIFI_GATE8_SUBGATES[0],
+                            status="fail",
+                            blocker="generation-regression",
+                            line=item[-1].line,
+                        )
+                        snapshot_valid = False
+
+                if snapshot_valid:
+                    retain_latest_farthest(proof)
+                if not episode_started or not stabilizing:
+                    if committed is not None and committed.complete:
+                        # A passive diagnostic snapshot cannot replace the
+                        # retained service-ready generation.
+                        continue
+                    reject(
+                        "gate8-snapshot-outside-stabilizing",
+                        item[-1].line,
+                        basis=proof,
+                    )
+                    continue
+                if not snapshot_valid or not proof.complete:
+                    reject(proof.blocker, proof.line, basis=proof)
+                    continue
+
+                if pair_epoch is not None:
+                    last_pair_epoch = pair_epoch
+                if generation is not None:
+                    last_generation = generation
+                if runtime_recovery_pending:
+                    runtime_snapshot_seen = True
+                candidate = replace(
+                    proof,
+                    complete=False,
+                    missing="commit",
+                    status="pending",
+                    blocker="gate8-commit-missing",
+                    attempt=current_attempt,
+                    ready_line=0,
+                )
+                latest = candidate
+                continue
+
+            raw = item.raw
+            if raw.startswith("CYW43_GATE8_COMMIT "):
+                match = CYW43_GATE8_COMMIT_RE.fullmatch(raw)
+                if match is None:
+                    reject("gate8-commit-malformed", item.line)
+                    continue
+                attempt = canonical_decimal(match.group("attempt"), U32_MAX)
+                pair_epoch = canonical_decimal(match.group("pair_epoch"), U64_MAX)
+                generation = canonical_decimal(match.group("generation"), U32_MAX)
+                deadline_ms = canonical_decimal(match.group("deadline_ms"), U64_MAX)
+                if (
+                    attempt != 1
+                    or pair_epoch is None
+                    or generation is None
+                    or deadline_ms is None
+                ):
+                    reject("gate8-commit-numeric-field-invalid", item.line)
+                    continue
+                if not observe_console_sequence(match.group("console_seq"), item.line):
+                    continue
+                if (
+                    candidate is None
+                    or current_attempt != attempt
+                    or not stabilizing
+                ):
+                    reject("gate8-commit-without-snapshot", item.line)
+                    continue
+                if candidate.line + 1 != item.line:
+                    reject("gate8-commit-not-adjacent", item.line, basis=candidate)
+                    continue
+                if (
+                    candidate.pair_epoch != pair_epoch
+                    or candidate.generation != generation
+                ):
+                    reject("gate8-commit-identity-mismatch", item.line, basis=candidate)
+                    continue
+                committed = replace(
+                    candidate,
+                    complete=False,
+                    missing="ready",
+                    status="pending",
+                    blocker="service-ready-missing",
+                    attempt=attempt,
+                    ready_line=0,
+                )
+                latest = committed
+                candidate = None
+                stabilizing = False
+                continue
+
+            if raw.startswith("CYW43_RUNTIME_RECOVERY "):
+                match = CYW43_RUNTIME_RECOVERY_RE.fullmatch(raw)
+                if match is None:
+                    reject("runtime-recovery-ready-malformed", item.line)
+                    continue
+                generation = canonical_decimal(match.group("generation"), U32_MAX)
+                if generation is None:
+                    reject("runtime-recovery-generation-invalid", item.line)
+                    continue
+                if not observe_console_sequence(match.group("console_seq"), item.line):
+                    continue
+                if not bootstrap_ready_seen:
+                    reject("runtime-recovery-before-bootstrap-ready", item.line)
+                    continue
+                if not runtime_recovery_pending:
+                    reject("runtime-recovery-ready-without-recovery", item.line)
+                    continue
+                if committed is None or committed.generation != generation:
+                    reject("runtime-recovery-generation-mismatch", item.line)
+                    continue
+                committed = replace(
+                    committed,
+                    complete=True,
+                    missing="none",
+                    status="pass",
+                    blocker="none",
+                    ready_line=item.line,
+                )
+                latest = committed
+                runtime_recovery_pending = False
+                runtime_snapshot_seen = False
+                continue
+
+            if not raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR"):
+                if raw.startswith("CYW43_GATE8_READY_RETRACTED"):
+                    if not stabilizing:
+                        reject("gate8-retraction-outside-stabilizing", item.line)
+                    continue
+                if raw.startswith(
+                    (
+                        "CYW43_GATE8_READY_TRANSACTION",
+                        "CYW43_GATE8_SNAPSHOT_COMMIT",
+                    )
+                ):
+                    reject("legacy-gate8-publication-mixed-with-commit", item.line)
+                # CYW43_GATE8_RECOVERY is a causal diagnostic; the following
+                # supervisor Recovery remains the authoritative lifecycle edge.
+                continue
+
+            match = CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(raw)
+            if match is None:
+                reject("supervisor-malformed", item.line)
+                continue
+            suffix = match.group("production_suffix")
+            suffix_match = CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE.fullmatch(
+                suffix
+            )
+            if (
+                suffix_match is None
+                and match.group("attempt") == "0"
+                and match.group("status") == "preflight"
+            ):
+                suffix_match = CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE.fullmatch(
+                    suffix
+                )
+            if suffix_match is None:
+                reject("supervisor-production-suffix-incomplete", item.line)
+                continue
+            if not observe_console_sequence(
+                suffix_match.group("console_seq"), item.line
+            ):
+                continue
+
+            status = match.group("status")
+            attempt = canonical_decimal(match.group("attempt"), U64_MAX)
+            if attempt is None:
+                reject("supervisor-attempt-invalid", item.line)
+                continue
+            if status == "preflight":
+                if attempt != 0 or episode_started:
+                    reject("supervisor-preflight-order", item.line)
+                continue
+            if status == "begin":
+                if attempt != 1 or episode_started:
+                    reject("supervisor-begin-order", item.line)
+                    continue
+                current_attempt = 1
+                episode_started = True
+                latest = WifiGate8Proof(
+                    status="pending",
+                    blocker="supervisor-begin",
+                    line=item.line,
+                    attempt=1,
+                )
+                continue
+            if attempt != current_attempt or not episode_started:
+                reject("supervisor-attempt-mismatch", item.line)
+                continue
+            if status == "recovery":
+                if not bootstrap_ready_seen:
+                    reject("pre-service-recovery-forbidden", item.line)
+                    continue
+                if runtime_recovery_pending:
+                    reject("runtime-recovery-already-pending", item.line)
+                    continue
+                runtime_recovery_pending = True
+                runtime_snapshot_seen = False
+                stabilizing = False
+                candidate = None
+                committed = None
+                latest = replace(
+                    latest,
+                    complete=False,
+                    missing="ready",
+                    status="pending",
+                    blocker="runtime-recovery-pending",
+                    line=item.line,
+                    ready_line=0,
+                )
+                continue
+            if status == "stabilizing":
+                if bootstrap_ready_seen and not runtime_recovery_pending:
+                    reject("stabilizing-after-ready-without-recovery", item.line)
+                    continue
+                candidate = None
+                committed = None
+                stabilizing = True
+                latest = replace(
+                    latest,
+                    complete=False,
+                    missing=WIFI_GATE8_SUBGATES[0],
+                    status="pending",
+                    blocker="supervisor-stabilizing",
+                    line=item.line,
+                    attempt=current_attempt,
+                    ready_line=0,
+                )
+                continue
+            if status == "ready":
+                if bootstrap_ready_seen:
+                    reject("bootstrap-ready-duplicate", item.line)
+                    continue
+                if runtime_recovery_pending:
+                    reject("bootstrap-ready-used-for-runtime-recovery", item.line)
+                    continue
+                if committed is None:
+                    reject("service-ready-without-gate8-commit", item.line)
+                    continue
+                committed = replace(
+                    committed,
+                    complete=True,
+                    missing="none",
+                    status="pass",
+                    blocker="none",
+                    ready_line=item.line,
+                )
+                latest = committed
+                bootstrap_ready_seen = True
+                continue
+            if status in {"failed", "exhausted", "permanent"} or status.startswith(
+                "permanent-"
+            ):
+                reject(f"supervisor-{status}", item.line)
+                continue
+            reject(f"supervisor-{status}-invalid", item.line)
+
+        retained = committed if committed is not None and committed.complete else latest
+        return replace(
+            retained,
+            latest_seen=latest_farthest.seen,
+            latest_last=latest_farthest.last,
+            latest_missing=latest_farthest.missing,
+            latest_status=latest_farthest.status,
+            latest_pair_epoch=latest_farthest.pair_epoch,
+            latest_generation=latest_farthest.generation,
+            latest_blocker=latest_farthest.blocker,
+            latest_line=latest_farthest.line,
+            latest_attempt=latest_farthest.attempt,
+        )
+
+    if committed_lifecycle_seen:
+        return summarize_committed_lifecycle()
 
     latest = WifiGate8Proof()
     latest_farthest = WifiGate8Proof()
@@ -12929,6 +13383,29 @@ def summarize_cyw43_bootstrap_supervisor(
         for event in event_list
         if event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
     ]
+    if any(event.raw.startswith("CYW43_GATE8_COMMIT ") for event in event_list):
+        # The first service-ready supervisor record terminally closes bootstrap.
+        # Later `status=recovery`/`status=stabilizing` records belong to the
+        # separately identified runtime-recovery lifetime and must neither
+        # erase bootstrap Ready nor demand a duplicate supervisor Ready.
+        first_ready_line = next(
+            (
+                event.line
+                for event in supervisor_events
+                if (
+                    (match := CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw))
+                    is not None
+                    and match.group("status") == "ready"
+                )
+            ),
+            None,
+        )
+        if first_ready_line is not None:
+            supervisor_events = [
+                event
+                for event in supervisor_events
+                if event.line <= first_ready_line
+            ]
     if not supervisor_events:
         return Cyw43BootstrapSupervisorProof()
 
@@ -13230,6 +13707,8 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
                 "CYW43_GATE8_READY_RETRACTED",
                 "CYW43_GATE8_READY_TRANSACTION",
                 "CYW43_GATE8_SNAPSHOT_COMMIT",
+                "CYW43_GATE8_COMMIT ",
+                "CYW43_RUNTIME_RECOVERY ",
             )
         )
         for event in event_list

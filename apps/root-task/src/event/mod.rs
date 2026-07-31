@@ -561,6 +561,22 @@ fn net_status_allows_root_console(status: &NetStatusReport) -> bool {
 }
 
 #[cfg(feature = "net-console")]
+fn net_status_has_cyw43_boot_service_ready(
+    status: &NetStatusReport,
+    counters: NetCounters,
+    listener_ready: bool,
+    expected_generation: u32,
+) -> bool {
+    status.active_driver == "cyw43"
+        && status.active_interface == "wifi"
+        && status.address_source == "dhcp-lease"
+        && status.dhcp_phase == "bound"
+        && !status.ip.is_empty()
+        && listener_ready
+        && counters.wifi_connection_generation == u64::from(expected_generation)
+}
+
+#[cfg(feature = "net-console")]
 fn net_status_has_cyw43_gate10_proof(
     status: &NetStatusReport,
     counters: NetCounters,
@@ -2094,6 +2110,8 @@ const fn ordinary_eventpump_serial_cutover_required(
 #[cfg(feature = "kernel")]
 fn cyw43_bootstrap_serial_milestone(line: &str) -> bool {
     line.as_bytes().starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
+        || line.as_bytes().starts_with(b"CYW43_GATE8_COMMIT ")
+        || line.as_bytes().starts_with(b"CYW43_RUNTIME_RECOVERY ")
         || line.as_bytes().starts_with(b"wifi: gate 8 subgate=")
         || line.as_bytes().starts_with(b"wifi: deferred_recovery ")
         || line.as_bytes().starts_with(b"CYW43_GATE8_TERMINAL ")
@@ -2110,6 +2128,152 @@ fn cyw43_gate8_pass_line_matches_token(line: &str, expected_token: &str) -> bool
         == Some(expected_token)
         && line.contains(" status=pass ")
         && line.ends_with(" blocker=none")
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_gate8_pass_line_identity(line: &str, expected_token: &str) -> Option<(u64, u32)> {
+    if !cyw43_gate8_pass_line_matches_token(line, expected_token) {
+        return None;
+    }
+    let mut pair_epoch = None;
+    let mut generation = None;
+    let mut field_count = 0;
+    for field in line.split_ascii_whitespace() {
+        field_count += 1;
+        if let Some(value) = field.strip_prefix("pair_epoch=") {
+            if pair_epoch.is_some() {
+                return None;
+            }
+            pair_epoch = value.parse().ok();
+        } else if let Some(value) = field.strip_prefix("generation=") {
+            if generation.is_some() {
+                return None;
+            }
+            generation = value.parse().ok();
+        }
+    }
+    if field_count != 8 {
+        return None;
+    }
+    Some((pair_epoch?, generation?))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_gate8_commit_matches_identity(
+    line: &str,
+    expected_pair_epoch: u64,
+    expected_generation: u32,
+) -> bool {
+    if !line.as_bytes().starts_with(b"CYW43_GATE8_COMMIT ") {
+        return false;
+    }
+    let mut attempt = None;
+    let mut status = None;
+    let mut pair_epoch = None;
+    let mut generation = None;
+    let mut deadline_ms = None;
+    let mut console_sequence = None;
+    let mut telemetry_sinks = None;
+    let mut consumer = None;
+    let mut field_count = 0;
+    for field in line.split_ascii_whitespace().skip(1) {
+        field_count += 1;
+        if let Some(value) = field.strip_prefix("attempt=") {
+            if attempt.is_some() {
+                return false;
+            }
+            attempt = value.parse::<u32>().ok();
+        } else if let Some(value) = field.strip_prefix("status=") {
+            if status.is_some() {
+                return false;
+            }
+            status = Some(value);
+        } else if let Some(value) = field.strip_prefix("pair_epoch=") {
+            if pair_epoch.is_some() {
+                return false;
+            }
+            pair_epoch = value.parse::<u64>().ok();
+        } else if let Some(value) = field.strip_prefix("generation=") {
+            if generation.is_some() {
+                return false;
+            }
+            generation = value.parse::<u32>().ok();
+        } else if let Some(value) = field.strip_prefix("deadline_ms=") {
+            if deadline_ms.is_some() {
+                return false;
+            }
+            deadline_ms = value.parse::<u64>().ok();
+        } else if let Some(value) = field.strip_prefix("console_seq=") {
+            if console_sequence.is_some() {
+                return false;
+            }
+            console_sequence = value.parse::<u64>().ok();
+        } else if let Some(value) = field.strip_prefix("telemetry_sinks=") {
+            if telemetry_sinks.is_some() {
+                return false;
+            }
+            telemetry_sinks = Some(value);
+        } else if let Some(value) = field.strip_prefix("consumer=") {
+            if consumer.is_some() {
+                return false;
+            }
+            consumer = Some(value);
+        } else {
+            return false;
+        }
+    }
+    field_count == 8
+        && attempt == Some(1)
+        && status == Some("ready")
+        && pair_epoch == Some(expected_pair_epoch)
+        && generation == Some(expected_generation)
+        && deadline_ms.is_some()
+        && console_sequence.is_some()
+        && telemetry_sinks == Some("serial+qlog+hdmi")
+        && consumer == Some("data")
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_runtime_service_ready_matches_identity(line: &str, expected_generation: u32) -> bool {
+    if !line.as_bytes().starts_with(b"CYW43_RUNTIME_RECOVERY ") {
+        return false;
+    }
+    let mut status = None;
+    let mut generation = None;
+    let mut console_sequence = None;
+    let mut telemetry_sinks = None;
+    let mut field_count = 0;
+    for field in line.split_ascii_whitespace().skip(1) {
+        field_count += 1;
+        if let Some(value) = field.strip_prefix("status=") {
+            if status.is_some() {
+                return false;
+            }
+            status = Some(value);
+        } else if let Some(value) = field.strip_prefix("generation=") {
+            if generation.is_some() {
+                return false;
+            }
+            generation = value.parse::<u32>().ok();
+        } else if let Some(value) = field.strip_prefix("console_seq=") {
+            if console_sequence.is_some() {
+                return false;
+            }
+            console_sequence = value.parse::<u64>().ok();
+        } else if let Some(value) = field.strip_prefix("telemetry_sinks=") {
+            if telemetry_sinks.is_some() {
+                return false;
+            }
+            telemetry_sinks = Some(value);
+        } else {
+            return false;
+        }
+    }
+    field_count == 4
+        && status == Some("ready")
+        && generation == Some(expected_generation)
+        && console_sequence.is_some()
+        && telemetry_sinks == Some("serial+qlog+hdmi")
 }
 
 #[cfg(feature = "kernel")]
@@ -2310,6 +2474,7 @@ impl Cyw43BootstrapHdmiProgressCadence {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43NetworkReadyHdmiProgressCadence {
     active: bool,
+    generation: Option<u32>,
     current: Option<Cyw43NetworkReadyHdmiState>,
     emitted: Option<Cyw43NetworkReadyHdmiState>,
     last_emitted_ms: u64,
@@ -2320,14 +2485,16 @@ impl Cyw43NetworkReadyHdmiProgressCadence {
     const fn new() -> Self {
         Self {
             active: false,
+            generation: None,
             current: None,
             emitted: None,
             last_emitted_ms: 0,
         }
     }
 
-    fn begin(&mut self, now_ms: u64) {
+    fn begin(&mut self, generation: u32, now_ms: u64) {
         self.active = true;
+        self.generation = Some(generation);
         self.current = Some(Cyw43NetworkReadyHdmiState::WaitingForNetworkStack);
         self.emitted = None;
         self.last_emitted_ms = now_ms;
@@ -2335,6 +2502,7 @@ impl Cyw43NetworkReadyHdmiProgressCadence {
 
     fn clear(&mut self, now_ms: u64) {
         self.active = false;
+        self.generation = None;
         self.current = None;
         self.emitted = None;
         self.last_emitted_ms = now_ms;
@@ -4402,82 +4570,47 @@ where
             return;
         }
         if self.local_seat.is_none() {
-            self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
             return;
         }
 
         let observation = self.net.as_ref().map(|net| {
             let status = net.status_report();
+            let counters = net.stats();
             let listener_ready = net.console_listener_ready();
             let state = cyw43_network_ready_hdmi_state(&status, listener_ready);
-            (state, status.ip, net.console_listen_port())
+            (state, status, counters, listener_ready)
         });
-        let Some((state, ip, listen_port)) = observation else {
+        let Some((mut state, status, counters, listener_ready)) = observation else {
             self.cyw43_network_ready_hdmi_progress
                 .observe(Cyw43NetworkReadyHdmiState::WaitingForNetworkStack);
             self.queue_due_cyw43_network_ready_hdmi_progress();
             return;
         };
+        if state == Cyw43NetworkReadyHdmiState::Ready
+            && self
+                .cyw43_network_ready_hdmi_progress
+                .generation
+                .is_none_or(|generation| {
+                    !net_status_has_cyw43_boot_service_ready(
+                        &status,
+                        counters,
+                        listener_ready,
+                        generation,
+                    )
+                })
+        {
+            state = Cyw43NetworkReadyHdmiState::WaitingForNetworkStack;
+        }
 
         if state != Cyw43NetworkReadyHdmiState::Ready {
             self.cyw43_network_ready_hdmi_progress.observe(state);
             self.queue_due_cyw43_network_ready_hdmi_progress();
-            return;
         }
-
-        let mut text = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-        if write!(
-            text,
-            "{} DHCP bound at {}; TCP console listening on port {}",
-            crate::local_seat::CYW43_READY_TO_USE_HDMI_PREFIX,
-            ip,
-            listen_port,
-        )
-        .is_err()
-        {
-            crate::log_buffer::append_log_line(
-                "CYW43_HDMI_READY status=format-failed action=retain-readiness-fence",
-            );
-            return;
-        }
-        // A final Ready transition supersedes any coalesced wait heartbeat;
-        // no stale "still working" line may follow the usable prompt.
-        self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
-        let ready_log = text.clone();
-        let milestone = PendingCyw43BootstrapHdmiMilestone {
-            text,
-            releases_console_ready: true,
-        };
-        let queued = match self
-            .pending_cyw43_bootstrap_hdmi_milestones
-            .push_back(milestone)
-        {
-            Ok(()) => true,
-            Err(milestone)
-                if self
-                    .pending_cyw43_bootstrap_hdmi_terminal_milestone
-                    .is_none() =>
-            {
-                self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(milestone);
-                crate::log_buffer::append_log_line(
-                    "CYW43_HDMI_READY status=terminal-reserved action=release-after-retained-milestones",
-                );
-                true
-            }
-            Err(_) => {
-                crate::log_buffer::append_log_line(
-                    "CYW43_HDMI_READY status=queue-full action=retry-after-display-progress",
-                );
-                false
-            }
-        };
-        if !queued {
-            return;
-        }
-
-        crate::log_buffer::append_log_line(ready_log.as_str());
-        self.cyw43_bootstrap_hdmi_pending = true;
-        self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+        // Userland owns the sole terminal decision because it also retains the
+        // accepted Gate 8 generation and bootstrap-versus-runtime history.
+        // Keep this method progress-only; the following outer turn calls
+        // `queue_cyw43_service_ready_transaction` to publish serial and HDMI
+        // from one revalidated cut.
     }
 
     /// Queue one bootstrap/recovery diagnostic without touching the root UART.
@@ -4684,26 +4817,33 @@ where
         }
     }
 
-    /// Atomically publish one complete Gate 8 snapshot and its Ready terminal.
+    /// Atomically publish one complete Gate 8 snapshot and nonterminal commit.
     ///
-    /// The serial proof and the HDMI Gate 8 milestone are preflighted before
-    /// either route is mutated. Gate 8 starts the bounded DHCP/listener wait;
-    /// it does not release the interactive HDMI prompt by itself.
+    /// Every line is bound to the caller's exact pair and logical generation.
+    /// The serial proof and HDMI Gate 8 milestone are preflighted before either
+    /// route is mutated. The commit opens the data consumer and starts the
+    /// bounded DHCP/listener wait; it is not bootstrap supervisor Ready and
+    /// does not release the interactive HDMI prompt.
     #[cfg(feature = "kernel")]
-    pub fn queue_cyw43_gate8_ready_transaction(
+    pub fn queue_cyw43_gate8_commit_transaction(
         &mut self,
+        pair_epoch: u64,
+        generation: u32,
         subgate_lines: &[HeaplessString<DEFAULT_LINE_CAPACITY>],
-        serial_ready_line: &str,
-        hdmi_ready_line: &str,
+        serial_commit_line: &str,
+        hdmi_commit_line: &str,
     ) -> bool {
         if subgate_lines.len() != 8
             || !subgate_lines
                 .iter()
                 .zip(crate::drivers::driver_task_net::CYW43_GATE8_SUBGATE_TOKENS)
-                .all(|(line, token)| cyw43_gate8_pass_line_matches_token(line.as_str(), token))
-            || !cyw43_bootstrap_serial_milestone(serial_ready_line)
-            || !serial_ready_line.contains(" status=ready ")
-            || hdmi_ready_line != crate::local_seat::CYW43_GATE8_READY_HDMI_LINE
+                .all(|(line, token)| {
+                    cyw43_gate8_pass_line_identity(line.as_str(), token)
+                        == Some((pair_epoch, generation))
+                })
+            || !cyw43_bootstrap_serial_milestone(serial_commit_line)
+            || !cyw43_gate8_commit_matches_identity(serial_commit_line, pair_epoch, generation)
+            || hdmi_commit_line != crate::local_seat::CYW43_GATE8_READY_HDMI_LINE
         {
             return false;
         }
@@ -4713,12 +4853,12 @@ where
             return false;
         }
 
-        let mut serial_terminal = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-        if serial_terminal.push_str(serial_ready_line).is_err() {
+        let mut serial_commit = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if serial_commit.push_str(serial_commit_line).is_err() {
             return false;
         }
-        let mut hdmi_terminal = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
-        if hdmi_terminal.push_str(hdmi_ready_line).is_err() {
+        let mut hdmi_commit = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if hdmi_commit.push_str(hdmi_commit_line).is_err() {
             return false;
         }
         let Some(required_serial) = self
@@ -4749,25 +4889,26 @@ where
                 return false;
             }
         }
-        crate::log_buffer::append_log_line(serial_ready_line);
-        let ready_queued = self
+        crate::log_buffer::append_log_line(serial_commit_line);
+        let commit_queued = self
             .pending_cyw43_bootstrap_serial_milestones
-            .push_back(serial_terminal);
+            .push_back(serial_commit);
         debug_assert!(
-            ready_queued.is_ok(),
-            "preflighted Gate 8 Ready must fit retained queue"
+            commit_queued.is_ok(),
+            "preflighted Gate 8 commit must fit retained queue"
         );
-        if ready_queued.is_err() {
+        if commit_queued.is_err() {
             return false;
         }
 
+        #[cfg(feature = "net-console")]
+        self.cyw43_network_ready_hdmi_progress
+            .begin(generation, self.now_ms);
         if self.local_seat.is_some() {
             self.cyw43_bootstrap_hdmi_progress.clear(self.now_ms);
-            #[cfg(feature = "net-console")]
-            self.cyw43_network_ready_hdmi_progress.begin(self.now_ms);
             self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
             let gate8 = PendingCyw43BootstrapHdmiMilestone {
-                text: hdmi_terminal,
+                text: hdmi_commit,
                 releases_console_ready: false,
             };
             if hdmi_fifo_full {
@@ -4781,7 +4922,7 @@ where
                     .push_back(gate8);
                 debug_assert!(
                     hdmi_queued.is_ok(),
-                    "preflighted Gate 8 HDMI Ready must fit retained queue"
+                    "preflighted Gate 8 HDMI commit must fit retained queue"
                 );
                 if hdmi_queued.is_err() {
                     return false;
@@ -4789,6 +4930,129 @@ where
             }
             self.cyw43_bootstrap_hdmi_pending = true;
         }
+        true
+    }
+
+    /// Atomically publish one exact-generation service-ready transition.
+    ///
+    /// Gate 8 has already opened the exact-generation data consumer. This
+    /// transaction rechecks that the same generation obtained a DHCP lease and
+    /// that the TCP listener is admitted, then retains serial and final HDMI
+    /// output without polling or issuing another physical operation. The first
+    /// call carries the sole bootstrap Ready; a later repaired generation uses
+    /// a distinct runtime-recovery record. Clearing the retained Gate 8
+    /// generation makes either transition exactly once.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn queue_cyw43_service_ready_transaction(
+        &mut self,
+        expected_generation: u32,
+        serial_ready_line: &str,
+    ) -> bool {
+        let bootstrap_ready = serial_ready_line
+            .as_bytes()
+            .starts_with(b"CYW43_BOOTSTRAP_SUPERVISOR ")
+            && serial_ready_line.contains(" attempt=1 ")
+            && serial_ready_line.contains(" status=ready ");
+        let runtime_ready =
+            cyw43_runtime_service_ready_matches_identity(serial_ready_line, expected_generation);
+        if self.network_service_quarantined
+            || self.cyw43_network_ready_hdmi_progress.generation != Some(expected_generation)
+            || (!bootstrap_ready && !runtime_ready)
+            || !cyw43_bootstrap_serial_milestone(serial_ready_line)
+        {
+            return false;
+        }
+        let Some((status, counters, listener_ready, listen_port)) = self.net.as_ref().map(|net| {
+            (
+                net.status_report(),
+                net.stats(),
+                net.console_listener_ready(),
+                net.console_listen_port(),
+            )
+        }) else {
+            return false;
+        };
+        if !net_status_has_cyw43_boot_service_ready(
+            &status,
+            counters,
+            listener_ready,
+            expected_generation,
+        ) {
+            return false;
+        }
+        if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && !crate::serial::serial_linked_runtime_transport_active()
+        {
+            return false;
+        }
+
+        let mut serial_ready = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if serial_ready.push_str(serial_ready_line).is_err()
+            || self.pending_cyw43_bootstrap_serial_milestones.len()
+                >= CYW43_BOOTSTRAP_SERIAL_MILESTONE_CAPACITY
+        {
+            return false;
+        }
+        let mut hdmi_ready = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+        if write!(
+            hdmi_ready,
+            "{} DHCP bound at {}; TCP console listening on port {}",
+            crate::local_seat::CYW43_READY_TO_USE_HDMI_PREFIX,
+            status.ip,
+            listen_port,
+        )
+        .is_err()
+        {
+            return false;
+        }
+        let hdmi_fifo_full = self.local_seat.is_some()
+            && self.pending_cyw43_bootstrap_hdmi_milestones.len()
+                >= CYW43_BOOTSTRAP_HDMI_MILESTONE_CAPACITY;
+        if hdmi_fifo_full
+            && self
+                .pending_cyw43_bootstrap_hdmi_terminal_milestone
+                .is_some()
+        {
+            return false;
+        }
+
+        crate::log_buffer::append_log_line(serial_ready_line);
+        let serial_queued = self
+            .pending_cyw43_bootstrap_serial_milestones
+            .push_back(serial_ready);
+        debug_assert!(
+            serial_queued.is_ok(),
+            "preflighted service Ready must fit retained serial queue"
+        );
+        if serial_queued.is_err() {
+            return false;
+        }
+
+        if self.local_seat.is_some() {
+            let ready_log = hdmi_ready.clone();
+            let milestone = PendingCyw43BootstrapHdmiMilestone {
+                text: hdmi_ready,
+                releases_console_ready: true,
+            };
+            if hdmi_fifo_full {
+                self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(milestone);
+            } else {
+                let hdmi_queued = self
+                    .pending_cyw43_bootstrap_hdmi_milestones
+                    .push_back(milestone);
+                debug_assert!(
+                    hdmi_queued.is_ok(),
+                    "preflighted service Ready must fit retained HDMI queue"
+                );
+                if hdmi_queued.is_err() {
+                    return false;
+                }
+            }
+            self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+            crate::log_buffer::append_log_line(ready_log.as_str());
+            self.cyw43_bootstrap_hdmi_pending = true;
+        }
+        self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
         true
     }
 
@@ -5814,6 +6078,27 @@ where
             Some(net) => net_status_allows_root_console(&net.status_report()),
             None => false,
         }
+    }
+
+    /// Return exact-generation DHCP and TCP-listener bootstrap readiness.
+    ///
+    /// This intentionally does not require an accepted/authenticated TCP
+    /// session. Requiring that stronger Gate 10 proof before publishing
+    /// bootstrap Ready would prevent the host from opening the first session.
+    #[cfg(all(feature = "net-console", feature = "kernel"))]
+    pub fn net_console_cyw43_boot_service_ready_for_root(&self, expected_generation: u32) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
+        let Some(net) = self.net.as_ref() else {
+            return false;
+        };
+        net_status_has_cyw43_boot_service_ready(
+            &net.status_report(),
+            net.stats(),
+            net.console_listener_ready(),
+            expected_generation,
+        )
     }
 
     /// Returns exact same-generation Wi-Fi Gate 10 proof.
@@ -22737,10 +23022,17 @@ mod tests {
     #[test]
     fn cyw43_network_ready_requires_dhcp_bound_ip_and_listener() {
         let mut status = NetStatusReport::default();
+        let mut counters = NetCounters {
+            wifi_connection_generation: 17,
+            ..NetCounters::default()
+        };
         assert_eq!(
             cyw43_network_ready_hdmi_state(&status, false),
             Cyw43NetworkReadyHdmiState::WaitingForNetworkStack
         );
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, false, 17,
+        ));
 
         status.active_driver = "cyw43";
         status.active_interface = "wifi";
@@ -22750,6 +23042,13 @@ mod tests {
             cyw43_network_ready_hdmi_state(&status, false),
             Cyw43NetworkReadyHdmiState::WaitingForDhcp
         );
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, false, 17,
+        ));
+        status.dhcp_phase = "requesting";
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, false, 17,
+        ));
 
         status.address_source = "dhcp-lease";
         status.dhcp_phase = "bound";
@@ -22766,13 +23065,41 @@ mod tests {
             cyw43_network_ready_hdmi_state(&status, true),
             Cyw43NetworkReadyHdmiState::Ready
         );
+        assert!(
+            net_status_has_cyw43_boot_service_ready(&status, counters, true, 17),
+            "bootstrap service readiness requires listener admission, not a prior TCP session",
+        );
+        assert!(
+            !status.tcp_ready,
+            "the first host TCP session cannot be required before bootstrap Ready",
+        );
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, true, 18,
+        ));
+        counters.wifi_connection_generation = 18;
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, true, 17,
+        ));
+        status.active_driver = "bcmgenet-v5";
+        status.active_interface = "wired";
+        assert!(!net_status_has_cyw43_boot_service_ready(
+            &status, counters, true, 18,
+        ));
+        assert!(cyw43_runtime_service_ready_matches_identity(
+            "CYW43_RUNTIME_RECOVERY status=ready generation=18 console_seq=9 telemetry_sinks=serial+qlog+hdmi",
+            18,
+        ));
+        assert!(!cyw43_runtime_service_ready_matches_identity(
+            "CYW43_RUNTIME_RECOVERY status=ready generation=18 console_seq=9 telemetry_sinks=serial+qlog+hdmi",
+            17,
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn cyw43_network_wait_progress_refreshes_on_frontier_and_heartbeat() {
         let mut cadence = Cyw43NetworkReadyHdmiProgressCadence::new();
-        cadence.begin(1_000);
+        cadence.begin(17, 1_000);
         cadence.observe(Cyw43NetworkReadyHdmiState::WaitingForDhcp);
         assert_eq!(cadence.due(5_999), None);
         assert_eq!(
@@ -35187,7 +35514,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn gate8_transaction_waits_for_dhcp_and_listener_before_hdmi_ready() {
+    fn gate8_commit_is_nonterminal_until_same_generation_service_ready() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -35219,6 +35546,7 @@ mod tests {
         net.status.dhcp_phase = "bound";
         net.status.ip.push_str("192.168.86.154").unwrap();
         net.listener_ready = true;
+        net.counters.wifi_connection_generation = 17;
 
         let mut subgates = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
         for token in [
@@ -35239,8 +35567,9 @@ mod tests {
             .unwrap();
             subgates.push(line).unwrap();
         }
-        let serial_ready = "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready console_sequence=9";
-        let hdmi_ready = crate::local_seat::CYW43_GATE8_READY_HDMI_LINE;
+        let serial_commit = "CYW43_GATE8_COMMIT attempt=1 status=ready pair_epoch=3 generation=17 deadline_ms=90000 console_seq=9 telemetry_sinks=serial+qlog+hdmi consumer=data";
+        let hdmi_commit = crate::local_seat::CYW43_GATE8_READY_HDMI_LINE;
+        let serial_ready = "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 next_attempt_ms=91000 serial=ready local_seat=enabled recovery=full console_seq=10 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes";
         let terminal_line = "CYW43_GATE8_TERMINAL attempt=1 generation=17 blocker=root-rx-drop-since-generation deadline_ms=90000 action=quarantine";
         let mut terminal_batch = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 9>::new();
         for line in &subgates {
@@ -35258,10 +35587,36 @@ mod tests {
 
             let mut reordered = subgates.clone();
             reordered.as_mut_slice().swap(0, 1);
-            assert!(!pump.queue_cyw43_gate8_ready_transaction(
+            assert!(!pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
                 reordered.as_slice(),
-                serial_ready,
-                hdmi_ready,
+                serial_commit,
+                hdmi_commit,
+            ));
+            assert!(pump.pending_cyw43_bootstrap_serial_milestones.is_empty());
+            assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
+
+            let mut mixed_generation = subgates.clone();
+            mixed_generation[7].clear();
+            write!(
+                mixed_generation[7],
+                "wifi: gate 8 subgate=8h-data-admission status=pass pair_epoch=3 generation=18 blocker=none"
+            )
+            .unwrap();
+            assert!(!pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
+                mixed_generation.as_slice(),
+                serial_commit,
+                hdmi_commit,
+            ));
+            assert!(!pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
+                subgates.as_slice(),
+                "CYW43_GATE8_COMMIT attempt=1 status=ready pair_epoch=4 generation=17 deadline_ms=90000 console_seq=9 telemetry_sinks=serial+qlog+hdmi consumer=data",
+                hdmi_commit,
             ));
             assert!(pump.pending_cyw43_bootstrap_serial_milestones.is_empty());
             assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
@@ -35278,10 +35633,12 @@ mod tests {
                     .unwrap();
             }
             let retained_before = pump.pending_cyw43_bootstrap_serial_milestones.len();
-            assert!(!pump.queue_cyw43_gate8_ready_transaction(
+            assert!(!pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
                 subgates.as_slice(),
-                serial_ready,
-                hdmi_ready,
+                serial_commit,
+                hdmi_commit,
             ));
             assert_eq!(
                 pump.pending_cyw43_bootstrap_serial_milestones.len(),
@@ -35361,13 +35718,22 @@ mod tests {
             pump.pending_cyw43_bootstrap_serial_milestones.clear();
             pump.pending_console_output.clear();
             let _ = crate::serial::test_take_linked_runtime_only_tx();
-            assert!(pump.queue_cyw43_gate8_ready_transaction(
+            assert!(pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
                 subgates.as_slice(),
-                serial_ready,
-                hdmi_ready,
+                serial_commit,
+                hdmi_commit,
             ));
             assert_eq!(pump.pending_cyw43_bootstrap_serial_milestones.len(), 9);
             assert_eq!(pump.pending_cyw43_bootstrap_hdmi_milestones.len(), 1);
+            assert!(pump.net_console_cyw43_boot_service_ready_for_root(17));
+            assert!(!pump.net_console_cyw43_boot_service_ready_for_root(18));
+            assert!(!pump.queue_cyw43_service_ready_transaction(18, serial_ready));
+            assert!(pump
+                .pending_cyw43_bootstrap_serial_milestones
+                .iter()
+                .all(|line| !line.contains("CYW43_BOOTSTRAP_SUPERVISOR")));
             assert!(!pump
                 .local_seat
                 .as_ref()
@@ -35386,11 +35752,18 @@ mod tests {
                 .hdmi_bootstrap_terminal_ready());
 
             pump.pending_cyw43_bootstrap_serial_milestones.clear();
-            assert!(pump.queue_cyw43_gate8_ready_transaction(
+            assert!(pump.queue_cyw43_gate8_commit_transaction(
+                3,
+                17,
                 subgates.as_slice(),
-                "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready console_sequence=10",
-                hdmi_ready,
+                "CYW43_GATE8_COMMIT attempt=1 status=ready pair_epoch=3 generation=17 deadline_ms=90000 console_seq=11 telemetry_sinks=serial+qlog+hdmi consumer=data",
+                hdmi_commit,
             ));
+            assert!(pump.queue_cyw43_service_ready_transaction(17, serial_ready));
+            assert!(
+                !pump.queue_cyw43_service_ready_transaction(17, serial_ready),
+                "clearing the retained Gate 8 generation makes Ready exactly once",
+            );
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             assert!(!pump
                 .local_seat
@@ -35420,6 +35793,66 @@ mod tests {
             net.polls, 0,
             "hardware-free terminal and retained-output turns must never poll the network",
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn cyw43_service_ready_serial_transaction_does_not_require_local_seat() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.active_driver = "cyw43";
+        net.status.active_interface = "wifi";
+        net.status.address_source = "dhcp-lease";
+        net.status.dhcp_phase = "bound";
+        net.status.ip.push_str("192.168.86.154").unwrap();
+        net.listener_ready = true;
+        net.counters.wifi_connection_generation = 7;
+
+        let mut subgates = heapless::Vec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 8>::new();
+        for token in crate::drivers::driver_task_net::CYW43_GATE8_SUBGATE_TOKENS {
+            let mut line = HeaplessString::new();
+            write!(
+                line,
+                "wifi: gate 8 subgate={token} status=pass pair_epoch=2 generation=7 blocker=none"
+            )
+            .unwrap();
+            subgates.push(line).unwrap();
+        }
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        assert!(pump.queue_cyw43_gate8_commit_transaction(
+            2,
+            7,
+            subgates.as_slice(),
+            "CYW43_GATE8_COMMIT attempt=1 status=ready pair_epoch=2 generation=7 deadline_ms=90000 console_seq=4 telemetry_sinks=serial+qlog+hdmi consumer=data",
+            crate::local_seat::CYW43_GATE8_READY_HDMI_LINE,
+        ));
+        assert!(pump.net_console_cyw43_boot_service_ready_for_root(7));
+        assert!(pump.queue_cyw43_service_ready_transaction(
+            7,
+            "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 next_attempt_ms=91000 serial=ready local_seat=disabled recovery=full console_seq=5 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        ));
+        assert_eq!(pump.pending_cyw43_bootstrap_serial_milestones.len(), 10);
+        assert!(pump.pending_cyw43_bootstrap_hdmi_milestones.is_empty());
+        assert!(!pump.queue_cyw43_service_ready_transaction(
+            7,
+            "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 next_attempt_ms=91000 serial=ready local_seat=disabled recovery=full console_seq=6 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
+        ));
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -35825,6 +36258,8 @@ mod tests {
         net.counters.tcp_accepts = 2;
         net.counters.tcp_auth_sessions = 2;
         net.counters.tcp_rx_bytes = 128;
+        net.counters.wifi_connection_generation = 17;
+        net.listener_ready = true;
 
         let fault = crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus {
             stage: "cyw43-firmware-chunk",
@@ -35857,6 +36292,7 @@ mod tests {
         assert!(pump
             .wifi_host_eapol_exact_from_current_net_status()
             .is_none());
+        assert!(!pump.net_console_cyw43_boot_service_ready_for_root(17));
         assert!(!pump.wifi_diag_dhcp_bound());
         assert!(!pump.wifi_diag_acceptance_pass());
 
@@ -36062,7 +36498,8 @@ mod tests {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut net)
                 .with_local_seat(&mut local_seat);
-            pump.cyw43_network_ready_hdmi_progress.begin(pump.now_ms);
+            pump.cyw43_network_ready_hdmi_progress
+                .begin(17, pump.now_ms);
             pump.quarantine_network_service_after_cyw43_terminal_failure();
             assert!(
                 !pump.cyw43_network_ready_hdmi_progress.active,

@@ -476,11 +476,12 @@ def test_root_prompt_marker_accepts_tail_fragment() -> None:
 
 
 def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
-    """Progress records cannot admit commands before Wi-Fi bootstrap is terminal."""
+    """Progress records cannot admit commands before Wi-Fi bootstrap is stable."""
 
     progress = (
         b"CYW43_BOOTSTRAP_SUPERVISOR attempt=0 status=preflight\n"
-        b"CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing\n"
+        + wifi_supervisor_record("begin", console_seq=3)
+        + wifi_supervisor_record("stabilizing", console_seq=4)
     )
 
     assert pi4_serial_reboot.parse_wifi_supervisor_terminal(progress) is None
@@ -523,9 +524,12 @@ def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
         wifi_supervisor_record("ready") + wifi_supervisor_record("ready", attempt=2)
     )
     assert later_attempt_error == "attempt-2-forbidden"
-    _, contradiction_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
-        wifi_supervisor_record("ready") + wifi_supervisor_record("permanent")
+    retracted_terminal, contradiction_error = (
+        pi4_serial_reboot.inspect_wifi_supervisor_evidence(
+            wifi_supervisor_record("ready") + wifi_supervisor_record("permanent")
+        )
     )
+    assert retracted_terminal is None
     assert contradiction_error == "terminal-contradiction"
     trailing_retry = (
         wifi_supervisor_record("ready")
@@ -540,6 +544,33 @@ def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
         reject_trailing_partial=True,
     )
     assert trailing_retry_error == "attempt-2-forbidden"
+
+
+def test_wifi_supervisor_parser_tracks_ready_retraction_and_republication() -> None:
+    """Same-attempt recovery revokes Ready until a fresh candidate is published."""
+
+    retracted = (
+        wifi_supervisor_record("begin", console_seq=3)
+        + wifi_supervisor_record("stabilizing", console_seq=4)
+        + wifi_supervisor_record("ready", console_seq=5)
+        + wifi_supervisor_record("recovery", console_seq=6)
+        + wifi_supervisor_record("stabilizing", console_seq=7)
+    )
+
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(retracted) is None
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        retracted + wifi_supervisor_record("ready", console_seq=8)
+    ) == (1, "ready")
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+        retracted + wifi_supervisor_record("permanent", console_seq=8)
+    ) == (1, "permanent")
+
+    _, repeated_recovery_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
+        retracted
+        + wifi_supervisor_record("recovery", console_seq=8)
+        + wifi_supervisor_record("stabilizing", console_seq=9)
+    )
+    assert repeated_recovery_error == "recovery-limit-exceeded"
 
 
 def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
@@ -637,6 +668,15 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
         pi4_serial_reboot.WIFI_DHCP_POLL_INTERVAL_S,
         "wifi DHCP progress before poll 2",
     ) in controller.drains
+    assert (
+        pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+        "post-ready stable-lifetime observation",
+    ) in controller.drains
+    assert any(
+        "wifi supervisor stable lifetime" in note
+        and "action=diagnostics-admitted" in note
+        for note in controller.notes
+    )
 
 
 def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
@@ -671,8 +711,8 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
     )
 
 
-def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> None:
-    """A forbidden retry observed during settle cannot inherit Ready."""
+def test_wifi_ready_observation_rejects_later_attempt_before_any_command() -> None:
+    """A forbidden retry observed after Ready cannot collide with diagnostics."""
 
     controller = FakeController(
         [
@@ -690,15 +730,54 @@ def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> N
         + b"CYW43_BOOTSTRAP_SUPERVISOR attempt=2 status=ready"
     )
 
+    with pytest.raises(RuntimeError, match="attempt-2-forbidden"):
+        pi4_serial_reboot.run_diagnostics(
+            controller,
+            "wifi",
+            prompt_ready=True,
+            boot_snapshot=(
+                wifi_supervisor_record("ready")
+                + b"[local-seat] usb keyboard command-ready "
+                b"action=enable-command-input\ncohesix> "
+            ),
+        )
+
+    assert controller.sent == []
+    assert controller.diagnostic_barriers == []
+    assert controller.drains == [
+        (
+            pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+            "post-ready stable-lifetime observation",
+        )
+    ]
+
+
+def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
+    """R01-style Ready/recovery/permanent stays passive until quarantine."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            NETSTATS_OK,
+            NETSTATS_OK,
+            b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+    controller.drain_reads.append(
+        wifi_supervisor_record("recovery", console_seq=6)
+        + wifi_supervisor_record("stabilizing", console_seq=7)
+        + wifi_supervisor_record("permanent", console_seq=8)
+    )
+
     diagnostics_ok = pi4_serial_reboot.run_diagnostics(
         controller,
         "wifi",
         prompt_ready=True,
-        boot_snapshot=(
-            wifi_supervisor_record("ready")
-            + b"[local-seat] usb keyboard command-ready "
-            b"action=enable-command-input\ncohesix> "
-        ),
+        boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
     )
 
     assert not diagnostics_ok
@@ -712,12 +791,96 @@ def test_wifi_settle_rejects_later_attempt_and_still_collects_diagnostics() -> N
         "usb probe-kbd",
         "smp activity",
     ]
+    assert controller.drains[0] == (
+        pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+        "post-ready stable-lifetime observation",
+    )
     assert any(
-        "reason=attempt-2-forbidden" in note
-        and "action=skip-unavailable-nettest" in note
+        "status=permanent" in note and "action=diagnostics-admitted" in note
         for note in controller.notes
     )
-    assert "wifi-supervisor:invalid-attempt-2-forbidden" in controller.notes[-1]
+    assert "wifi-supervisor:permanent" in controller.notes[-1]
+
+
+def test_wifi_ready_retraction_without_terminal_continues_passive_wait() -> None:
+    """A retracted candidate cannot fall through to commands while still busy."""
+
+    controller = FakeController(
+        [wifi_supervisor_record("permanent", console_seq=8)]
+    )
+    controller.drain_reads.append(
+        wifi_supervisor_record("recovery", console_seq=6)
+        + wifi_supervisor_record("stabilizing", console_seq=7)
+    )
+
+    status, observed = pi4_serial_reboot.wait_for_wifi_supervisor_terminal(
+        controller,
+        wifi_supervisor_record("ready", console_seq=5),
+        240.0,
+    )
+
+    assert status == "permanent"
+    assert wifi_supervisor_record("recovery", console_seq=6) in observed
+    assert wifi_supervisor_record("permanent", console_seq=8) in observed
+    assert controller.sent == []
+    assert controller.diagnostic_barriers == []
+    assert any(
+        "wifi supervisor ready retracted" in note
+        and "action=continue-passive-lifetime-observation" in note
+        for note in controller.notes
+    )
+
+
+def test_wifi_republished_ready_restarts_full_passive_stability_window() -> None:
+    """A fresh Ready after recovery earns its own complete quiet observation."""
+
+    controller = FakeController(
+        [
+            NETSTATS_WIFI_BOUND,
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK WIFI\ncohesix>",
+            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+        ]
+    )
+    controller.drain_reads.extend(
+        [
+            (
+                wifi_supervisor_record("recovery", console_seq=6)
+                + wifi_supervisor_record("stabilizing", console_seq=7)
+                + wifi_supervisor_record("ready", console_seq=8)
+            ),
+            b"",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "wifi",
+        prompt_ready=False,
+        boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
+    )
+
+    assert diagnostics_ok
+    assert controller.drains[:2] == [
+        (
+            pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+            "post-ready stable-lifetime observation",
+        ),
+        (
+            pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+            "post-ready stable-lifetime observation",
+        ),
+    ]
+    assert any(
+        "wifi supervisor ready retracted" in note
+        and "action=continue-passive-lifetime-observation" in note
+        for note in controller.notes
+    )
 
 
 def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
@@ -900,6 +1063,10 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     ) in controller.notes
     assert "diagnostics complete result=pass" in controller.notes
     assert controller.drains == [
+        (
+            pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
+            "post-ready stable-lifetime observation",
+        ),
         (8.0, "post-root-prompt-settle-before-diagnostics"),
         (
             pi4_serial_reboot.NETTEST_OBSERVATION_S,
