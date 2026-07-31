@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 5;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 6;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -512,6 +512,19 @@ pub const DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET: u16 = 2048;
 /// Keeping the 28-byte descriptor on its own cache line at `1920` makes those
 /// writers disjoint; root's command sequence remains the sole publication bit.
 pub const DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET: u16 = 1920;
+/// Fixed offset of the SDIO owner's passive host/card clock snapshot.
+///
+/// The snapshot occupies the otherwise unused cache line between the
+/// CYW43 parent-command descriptor and the SDPCM transmit aperture. Only the
+/// isolated SDIO owner writes it; root and CYW43 consume stable read-only
+/// samples.
+pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET: u16 = 1984;
+/// Bytes in the SDIO owner's passive host/card clock snapshot.
+pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES: u16 = 44;
+/// Magic value for an initialized SDIO clock snapshot.
+pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC: u32 = 0x5344_434b;
+/// Layout version for [`DriverRuntimeSdioClockSnapshot`].
+pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION: u16 = 1;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 /// Fixed offset of the SDIO owner's physical WiFi lifetime record.
@@ -1692,6 +1705,180 @@ impl DriverRuntimeSdioPhysicalLifetimeRecord {
     }
 }
 
+/// Passive SDIO-owner proof of the programmed host clock and negotiated card mode.
+///
+/// `sequence` is the sequence-last commit word. The SDIO owner publishes zero
+/// there, writes the immutable snapshot, and commits the nonzero retained
+/// command sequence last. Readers accept only two identical, valid samples.
+/// The record is evidence only: it never authorizes or advances bus work.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSdioClockSnapshot {
+    /// Fixed [`DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero retained SDIO command sequence committed last by the owner.
+    pub sequence: u32,
+    /// Completed physical WiFi lifetime that owns this configuration.
+    pub physical_lifetime_epoch: u32,
+    /// Clock rate requested by the CYW43 client.
+    pub requested_clock_hz: u32,
+    /// Generated BCM2711 SDIO base-clock truth used for divider selection.
+    pub base_clock_hz: u32,
+    /// Effective card clock after applying `divider`.
+    pub effective_clock_hz: u32,
+    /// Generated virtual-counter frequency used for elapsed-time deadlines.
+    pub timer_clock_hz: u32,
+    /// Decoded SDHCI clock divisor.
+    pub divider: u16,
+    /// Final SDHCI `CLOCK_CONTROL` register readback.
+    pub clock_control: u16,
+    /// Final SDHCI `HOST_CONTROL` register readback.
+    pub host_control: u8,
+    /// Final CCCR `SPEED` register readback when flagged valid.
+    pub cccr_speed: u8,
+    /// Final CCCR `BUS_INTERFACE_CONTROL` readback when flagged valid.
+    pub cccr_interface: u8,
+    /// [`Self::FLAG_*`] proof bits.
+    pub flags: u8,
+    /// Must remain zero.
+    pub reserved: u32,
+}
+
+impl DriverRuntimeSdioClockSnapshot {
+    /// Requested clock is an observed, nonzero client value.
+    pub const FLAG_REQUEST_VALID: u8 = 1 << 0;
+    /// SDHCI clock/control registers were read back after programming.
+    pub const FLAG_CLOCK_READBACK_VALID: u8 = 1 << 1;
+    /// SDHCI reported its internal clock stable.
+    pub const FLAG_INTERNAL_CLOCK_STABLE: u8 = 1 << 2;
+    /// SDHCI reported the card clock enabled.
+    pub const FLAG_CARD_CLOCK_ENABLED: u8 = 1 << 3;
+    /// The CYW43 client supplied a read-back CCCR high-speed negotiation.
+    pub const FLAG_CARD_HIGH_SPEED: u8 = 1 << 4;
+    /// SDHCI reported the 4-bit host-width selection.
+    pub const FLAG_HOST_WIDTH_4BIT: u8 = 1 << 5;
+    /// `cccr_speed` is a read-back CCCR value.
+    pub const FLAG_CCCR_SPEED_VALID: u8 = 1 << 6;
+    /// `cccr_interface` is a read-back CCCR value.
+    pub const FLAG_CCCR_INTERFACE_VALID: u8 = 1 << 7;
+
+    /// SDHCI `CLOCK_CONTROL` internal-clock enable bit.
+    pub const CLOCK_CONTROL_INTERNAL_ENABLE: u16 = 1 << 0;
+    /// SDHCI `CLOCK_CONTROL` internal-clock stable bit.
+    pub const CLOCK_CONTROL_INTERNAL_STABLE: u16 = 1 << 1;
+    /// SDHCI `CLOCK_CONTROL` card-clock enable bit.
+    pub const CLOCK_CONTROL_CARD_ENABLE: u16 = 1 << 2;
+    /// CCCR `SPEED` high-speed enable bit.
+    pub const CCCR_SPEED_EHS: u8 = 1 << 1;
+    /// CCCR bus-width mask.
+    pub const CCCR_INTERFACE_WIDTH_MASK: u8 = 0x03;
+    /// CCCR 4-bit bus-width encoding.
+    pub const CCCR_INTERFACE_WIDTH_4BIT: u8 = 0x02;
+
+    /// Byte-zero form produced by initial command-ring construction.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self {
+            magic: 0,
+            version: 0,
+            len: 0,
+            sequence: 0,
+            physical_lifetime_epoch: 0,
+            requested_clock_hz: 0,
+            base_clock_hz: 0,
+            effective_clock_hz: 0,
+            timer_clock_hz: 0,
+            divider: 0,
+            clock_control: 0,
+            host_control: 0,
+            cccr_speed: 0,
+            cccr_interface: 0,
+            flags: 0,
+            reserved: 0,
+        }
+    }
+
+    /// Returns true when this snapshot is complete and internally consistent.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        let request_valid = self.flags & Self::FLAG_REQUEST_VALID != 0;
+        let readback_valid = self.flags & Self::FLAG_CLOCK_READBACK_VALID != 0;
+        let stable = self.flags & Self::FLAG_INTERNAL_CLOCK_STABLE != 0;
+        let card_enabled = self.flags & Self::FLAG_CARD_CLOCK_ENABLED != 0;
+        let card_high_speed = self.flags & Self::FLAG_CARD_HIGH_SPEED != 0;
+        let host_width_4bit = self.flags & Self::FLAG_HOST_WIDTH_4BIT != 0;
+        let cccr_speed_valid = self.flags & Self::FLAG_CCCR_SPEED_VALID != 0;
+        let cccr_interface_valid = self.flags & Self::FLAG_CCCR_INTERFACE_VALID != 0;
+        self.magic == DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC
+            && self.version == DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION
+            && self.len == DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES
+            && self.sequence != 0
+            && self.physical_lifetime_epoch != 0
+            && request_valid
+            && readback_valid
+            && self.requested_clock_hz != 0
+            && self.base_clock_hz != 0
+            && self.effective_clock_hz != 0
+            && self.timer_clock_hz != 0
+            && self.divider != 0
+            && self.effective_clock_hz == self.base_clock_hz / (self.divider as u32)
+            && stable == (self.clock_control & Self::CLOCK_CONTROL_INTERNAL_STABLE != 0)
+            && card_enabled == (self.clock_control & Self::CLOCK_CONTROL_CARD_ENABLE != 0)
+            && (!readback_valid || self.clock_control & Self::CLOCK_CONTROL_INTERNAL_ENABLE != 0)
+            && card_high_speed == (cccr_speed_valid && self.cccr_speed & Self::CCCR_SPEED_EHS != 0)
+            && host_width_4bit == (self.host_control & 0x02 != 0)
+            && (!cccr_speed_valid || self.cccr_speed != 0)
+            && (!cccr_interface_valid
+                || self.cccr_interface & Self::CCCR_INTERFACE_WIDTH_MASK
+                    == Self::CCCR_INTERFACE_WIDTH_4BIT)
+            && (!cccr_interface_valid || host_width_4bit)
+            && self.reserved == 0
+    }
+
+    /// Whether this snapshot proves the final high-speed, 4-bit Gate 4 state.
+    #[must_use]
+    pub const fn gate4_ready(self) -> bool {
+        self.valid()
+            && self.flags & Self::FLAG_INTERNAL_CLOCK_STABLE != 0
+            && self.flags & Self::FLAG_CARD_CLOCK_ENABLED != 0
+            && self.flags & Self::FLAG_CARD_HIGH_SPEED != 0
+            && self.flags & Self::FLAG_HOST_WIDTH_4BIT != 0
+            && self.flags & Self::FLAG_CCCR_SPEED_VALID != 0
+            && self.flags & Self::FLAG_CCCR_INTERFACE_VALID != 0
+    }
+
+    /// Accept two identical, valid volatile samples as one stable snapshot.
+    #[must_use]
+    pub const fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first.magic == second.magic
+            && first.version == second.version
+            && first.len == second.len
+            && first.sequence == second.sequence
+            && first.physical_lifetime_epoch == second.physical_lifetime_epoch
+            && first.requested_clock_hz == second.requested_clock_hz
+            && first.base_clock_hz == second.base_clock_hz
+            && first.effective_clock_hz == second.effective_clock_hz
+            && first.timer_clock_hz == second.timer_clock_hz
+            && first.divider == second.divider
+            && first.clock_control == second.clock_control
+            && first.host_control == second.host_control
+            && first.cccr_speed == second.cccr_speed
+            && first.cccr_interface == second.cccr_interface
+            && first.flags == second.flags
+            && first.reserved == second.reserved
+            && first.valid()
+        {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
 /// Durable authority for exactly one retained-command continuation quantum.
 ///
 /// `grant_id` is the sequence-last commit word. Producers publish zero there,
@@ -1916,6 +2103,17 @@ const _: () = {
     );
     assert!(core::mem::size_of::<DriverRuntimeSdioPhysicalLifetimeRecord>() == 16);
     assert!(core::mem::align_of::<DriverRuntimeSdioPhysicalLifetimeRecord>() == 4);
+    assert!(core::mem::size_of::<DriverRuntimeSdioClockSnapshot>() == 44);
+    assert!(core::mem::align_of::<DriverRuntimeSdioClockSnapshot>() == 4);
+    assert!(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET.is_multiple_of(64));
+    assert!(
+        DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET + 64
+            <= DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET
+    );
+    assert!(
+        DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + 64
+            <= DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+    );
 };
 /// Fixed number of producer entries in the bounded DPC event ring.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH: usize = 4;
@@ -2356,7 +2554,12 @@ pub struct DriverRuntimeSdioCommandDescriptor {
     pub block_count: u16,
     /// Role-specific primitive flags.
     pub flags: u16,
-    /// Reserved for alignment and future fields.
+    /// HOST_CONFIG-only CCCR readbacks, or zero for every other operation.
+    ///
+    /// The low byte carries `SPEED` when
+    /// [`Self::FLAG_HOST_CCCR_SPEED_VALID`] is set. The high byte carries
+    /// `BUS_INTERFACE_CONTROL` when
+    /// [`Self::FLAG_HOST_CCCR_INTERFACE_VALID`] is set.
     pub reserved: u16,
     /// Bounded command timeout in microseconds.
     pub timeout_us: u32,
@@ -2375,6 +2578,11 @@ impl DriverRuntimeSdioCommandDescriptor {
     /// A Function-2 CMD53 write must sample the host `CARD_INT` source at the
     /// final pre-issue boundary and defer without issuing when it is asserted.
     pub const FLAG_PRE_TX_DPC_FENCE: u16 = 1 << 4;
+    /// HOST_CONFIG carries a read-back CCCR `SPEED` byte in `reserved[7:0]`.
+    pub const FLAG_HOST_CCCR_SPEED_VALID: u16 = 1 << 5;
+    /// HOST_CONFIG carries a read-back CCCR `BUS_INTERFACE_CONTROL` byte in
+    /// `reserved[15:8]`.
+    pub const FLAG_HOST_CCCR_INTERFACE_VALID: u16 = 1 << 6;
 
     /// Empty descriptor.
     #[must_use]
@@ -2418,6 +2626,14 @@ impl DriverRuntimeSdioCommandDescriptor {
         let cmd53 = self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
         let pre_tx_dpc_fence = self.flags & Self::FLAG_PRE_TX_DPC_FENCE != 0;
+        let host_cccr_speed_valid = self.flags & Self::FLAG_HOST_CCCR_SPEED_VALID != 0;
+        let host_cccr_interface_valid = self.flags & Self::FLAG_HOST_CCCR_INTERFACE_VALID != 0;
+        let host_cccr_speed = (self.reserved & 0xff) as u8;
+        let host_cccr_interface = (self.reserved >> 8) as u8;
+        let host_known_flags = Self::FLAG_HOST_BUS_WIDTH_4BIT
+            | Self::FLAG_HOST_HIGH_SPEED
+            | Self::FLAG_HOST_CCCR_SPEED_VALID
+            | Self::FLAG_HOST_CCCR_INTERFACE_VALID;
         let read_result = self.op == DRIVER_RUNTIME_SDIO_OP_CMD52_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_POLL_IRQ;
         let effective_len = if read_result {
@@ -2447,7 +2663,18 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.len == 0
                     && self.block_size == 0
                     && self.block_count == 0
-                    && self.reserved == 0
+                    && self.flags & !host_known_flags == 0
+                    && (!host_cccr_speed_valid
+                        || (self.flags & Self::FLAG_HOST_HIGH_SPEED != 0
+                            && host_cccr_speed & DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS
+                                != 0))
+                    && (host_cccr_speed_valid || host_cccr_speed == 0)
+                    && (!host_cccr_interface_valid
+                        || (self.flags & Self::FLAG_HOST_BUS_WIDTH_4BIT != 0
+                            && host_cccr_interface
+                                & DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_MASK
+                                == DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_4BIT))
+                    && (host_cccr_interface_valid || host_cccr_interface == 0)
                     && self.addr <= 100_000_000))
             && (!card_command
                 || (self.function == 0
@@ -3789,7 +4016,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 2);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 5);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 6);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -3861,6 +4088,72 @@ mod tests {
             DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(impossible, impossible),
             None,
         );
+    }
+
+    #[test]
+    fn sdio_clock_snapshot_is_disjoint_and_requires_complete_stable_readback() {
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSdioClockSnapshot>(),
+            usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES)
+        );
+        assert!(
+            DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET
+                + core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>() as u16
+                <= DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET
+        );
+        assert_eq!(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET % 64, 0);
+        assert!(
+            DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET + 64
+                <= DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET
+        );
+        assert!(
+            DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + 64
+                <= DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+        );
+
+        let snapshot = DriverRuntimeSdioClockSnapshot {
+            magic: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC,
+            version: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
+            len: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+            sequence: 9,
+            physical_lifetime_epoch: 3,
+            requested_clock_hz: 50_000_000,
+            base_clock_hz: 250_000_000,
+            effective_clock_hz: 41_666_666,
+            timer_clock_hz: 54_000_000,
+            divider: 6,
+            clock_control: DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_INTERNAL_ENABLE
+                | DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_INTERNAL_STABLE
+                | DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_CARD_ENABLE,
+            host_control: 0x02,
+            cccr_speed: DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS,
+            cccr_interface: DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_4BIT,
+            flags: DriverRuntimeSdioClockSnapshot::FLAG_REQUEST_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_CLOCK_READBACK_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_INTERNAL_CLOCK_STABLE
+                | DriverRuntimeSdioClockSnapshot::FLAG_CARD_CLOCK_ENABLED
+                | DriverRuntimeSdioClockSnapshot::FLAG_CARD_HIGH_SPEED
+                | DriverRuntimeSdioClockSnapshot::FLAG_HOST_WIDTH_4BIT
+                | DriverRuntimeSdioClockSnapshot::FLAG_CCCR_SPEED_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_CCCR_INTERFACE_VALID,
+            reserved: 0,
+        };
+        assert!(snapshot.valid());
+        assert!(snapshot.gate4_ready());
+        assert_eq!(
+            DriverRuntimeSdioClockSnapshot::stable_snapshot(snapshot, snapshot),
+            Some(snapshot)
+        );
+
+        let mut torn = snapshot;
+        torn.sequence += 1;
+        assert_eq!(
+            DriverRuntimeSdioClockSnapshot::stable_snapshot(snapshot, torn),
+            None
+        );
+        torn = snapshot;
+        torn.clock_control &= !DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_CARD_ENABLE;
+        assert!(!torn.valid());
     }
 
     #[test]
@@ -4521,6 +4814,16 @@ mod tests {
             timeout_us: 1000,
         };
         assert!(descriptor.valid());
+
+        descriptor.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_SPEED_VALID
+            | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_INTERFACE_VALID;
+        descriptor.reserved = u16::from(DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS)
+            | (u16::from(DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_4BIT) << 8);
+        assert!(descriptor.valid());
+        descriptor.reserved &= !u16::from(DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS);
+        assert!(!descriptor.valid());
+        descriptor.reserved = u16::from(DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS)
+            | (u16::from(DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_4BIT) << 8);
 
         descriptor.addr = 100_000_001;
         assert!(!descriptor.valid());

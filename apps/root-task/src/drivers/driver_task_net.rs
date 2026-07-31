@@ -278,7 +278,6 @@ const CYW43_ASSOCIATION_JOIN_CONTROL_FRAME_BYTES: usize =
 const CYW43_HOST_EAPOL_START_FIRST_MS: u64 = 8_192;
 const CYW43_HOST_EAPOL_START_INTERVAL_MS: u64 = 8_192;
 const CYW43_HOST_EAPOL_START_MAX: u32 = 12;
-const CYW43_DATA_TX_ATTEMPTS: usize = 8;
 const CYW43_DATA_TX_MIN_FUNCTION2_BYTES: usize = 128;
 const CYW43_DATA_RX_STEADY_POLL_FLAGS: u16 = DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
     | DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN;
@@ -522,21 +521,42 @@ static CYW43_GATE8_PUBLICATION_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 // Linux leaves receive/DPC service alive for the full netdev lifetime through
 // its interrupt-driven worker. Cohesix has two linked runtime/notification
 // boundaries between the SDHCI source and root, so the same existing NetData
-// op8 owner also performs one slow, generation-bound lost-edge audit. The
-// audit asks the SDIO runtime to inspect the source chain; a quiescent result
-// never authorizes a blind Function-2 read. It is neither a second issuer nor
-// a post-TX retry lane.
+// op8 owner carries one current-lifetime lost-edge watchdog. The watchdog
+// samples only passive producer/consumer and root-wake progress. A genuinely
+// stalled identity gets one hintless source-chain inspection; the exact
+// terminal suppresses another inspection until later external progress or a
+// replacement identity rebases the watchdog. It is neither a periodic poller,
+// a second issuer, nor a post-TX retry lane.
 #[cfg(feature = "kernel")]
-const CYW43_DATA_RX_LOST_EDGE_AUDIT_MS: u64 = 32;
+const CYW43_DATA_RX_LOST_EDGE_WATCHDOG_MS: u64 = 32;
 #[cfg(feature = "kernel")]
-const CYW43_DATA_RX_LOST_EDGE_AUDIT_FALLBACK_TURNS: usize = 16;
+const CYW43_DATA_RX_LOST_EDGE_WATCHDOG_FALLBACK_TURNS: usize = 16;
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43DataRxExternalProgress {
+    dpc_present: bool,
+    dpc_epoch: u32,
+    dpc_producer: u32,
+    dpc_consumer: u32,
+    dpc_flags: u32,
+    root_wake_present: bool,
+    root_wake_hits: usize,
+    root_wake_clears: usize,
+    root_wake_rechecks: usize,
+}
+#[cfg(all(feature = "kernel", test))]
+static CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE: Mutex<Option<Cyw43DataRxExternalProgress>> =
+    Mutex::new(None);
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43DataRxLifetimeCursor {
     generation: u32,
     pair_epoch: u64,
     physical_lifetime_epoch: u32,
-    audit_deadline: Cyw43PollDeadline,
+    watchdog_deadline: Cyw43PollDeadline,
+    progress: Cyw43DataRxExternalProgress,
+    watchdog_probe_ticket: u64,
+    watchdog_probe_completed: bool,
 }
 #[cfg(feature = "kernel")]
 static CYW43_DATA_RX_LIFETIME_CURSOR: Mutex<Option<Cyw43DataRxLifetimeCursor>> = Mutex::new(None);
@@ -7247,6 +7267,65 @@ fn cyw43_data_rx_lifetime_identity_current(cursor: Cyw43DataRxLifetimeCursor) ->
         && cyw43_data_consumer_open_for_generation(cursor.generation)
 }
 
+/// Return one passive sample of progress outside the root NetData issuer.
+///
+/// DPC producer/consumer state and root-wake hit/clear/recheck epochs can move
+/// only when the SDIO/CYW43 child pipeline or the exact notification consumer
+/// advances. Root-wake poll counts are intentionally excluded: observing an
+/// idle notification endpoint is not hardware progress and must not postpone a
+/// genuine lost-edge probe forever.
+#[cfg(feature = "kernel")]
+fn cyw43_data_rx_external_progress() -> Cyw43DataRxExternalProgress {
+    #[cfg(test)]
+    if let Some(progress) = *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() {
+        return progress;
+    }
+
+    let mut progress = Cyw43DataRxExternalProgress::default();
+    if let Some(dpc) = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot() {
+        progress.dpc_present = true;
+        progress.dpc_epoch = dpc.epoch;
+        progress.dpc_producer = dpc.producer;
+        progress.dpc_consumer = dpc.consumer;
+        progress.dpc_flags = dpc.flags;
+    }
+    if let Some(root_wake) = crate::hal::driver_task::cyw43_root_wake_snapshot() {
+        progress.root_wake_present = true;
+        progress.root_wake_hits = root_wake.hits;
+        progress.root_wake_clears = root_wake.clears;
+        progress.root_wake_rechecks = root_wake.rechecks;
+    }
+    progress
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_rx_watchdog_deadline() -> Cyw43PollDeadline {
+    cyw43_poll_deadline_from_millis_or_polls(
+        CYW43_DATA_RX_LOST_EDGE_WATCHDOG_MS,
+        CYW43_DATA_RX_LOST_EDGE_WATCHDOG_FALLBACK_TURNS,
+    )
+}
+
+/// Rebase one current watchdog after externally owned pipeline progress.
+///
+/// A progress edge also clears a completed one-shot and any obsolete local
+/// probe claim. This is the only same-identity path that can arm a later
+/// hintless watchdog probe.
+#[cfg(feature = "kernel")]
+fn rebase_cyw43_data_rx_watchdog_on_progress(
+    cursor: &mut Cyw43DataRxLifetimeCursor,
+    progress: Cyw43DataRxExternalProgress,
+) -> bool {
+    if cursor.progress == progress {
+        return false;
+    }
+    cursor.progress = progress;
+    cursor.watchdog_deadline = cyw43_data_rx_watchdog_deadline();
+    cursor.watchdog_probe_ticket = 0;
+    cursor.watchdog_probe_completed = false;
+    true
+}
+
 /// Advance only the host-test fallback deadline once per outer scheduler turn.
 ///
 /// Pi hardware uses the exported virtual counter, so the production deadline
@@ -7258,14 +7337,17 @@ fn advance_cyw43_data_rx_audit_fallback_boundary() {
     let Some(mut cursor) = *slot else {
         return;
     };
-    if !matches!(cursor.audit_deadline, Cyw43PollDeadline::Polls { .. }) {
+    if cursor.watchdog_probe_completed
+        || cursor.watchdog_probe_ticket != 0
+        || !matches!(cursor.watchdog_deadline, Cyw43PollDeadline::Polls { .. })
+    {
         return;
     }
     if !cyw43_data_rx_lifetime_identity_current(cursor) {
         *slot = None;
         return;
     }
-    if let Cyw43PollDeadline::Polls { ref mut remaining } = cursor.audit_deadline {
+    if let Cyw43PollDeadline::Polls { ref mut remaining } = cursor.watchdog_deadline {
         *remaining = remaining.saturating_sub(1);
         *slot = Some(cursor);
     }
@@ -7276,22 +7358,83 @@ fn cyw43_data_rx_audit_due_for_generation(generation: u32) -> bool {
     if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
         return false;
     }
+    let progress = cyw43_data_rx_external_progress();
     let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
-    let Some(cursor) = *slot else {
+    let Some(mut cursor) = *slot else {
         return false;
     };
     if cursor.generation != generation || !cyw43_data_rx_lifetime_identity_current(cursor) {
-        if cursor.generation == generation {
-            *slot = None;
-        }
+        *slot = None;
         return false;
     }
-    !cyw43_poll_deadline_is_open(&cursor.audit_deadline)
+    if rebase_cyw43_data_rx_watchdog_on_progress(&mut cursor, progress) {
+        *slot = Some(cursor);
+        return false;
+    }
+    !cursor.watchdog_probe_completed
+        && cursor.watchdog_probe_ticket == 0
+        && !cyw43_poll_deadline_is_open(&cursor.watchdog_deadline)
 }
 
 #[cfg(feature = "kernel")]
 fn cyw43_current_generation_data_rx_audit_due() -> bool {
     cyw43_data_rx_audit_due_for_generation(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire))
+}
+
+/// Claim the one watchdog probe for an exact fresh NetData ticket.
+///
+/// Genuine DPC/root-wake levels use the same hintless op8 descriptor but do not
+/// consume this claim unless the current no-progress deadline is independently
+/// due. The retained prompt cursor remains the sole physical issuer.
+#[cfg(feature = "kernel")]
+fn claim_cyw43_data_rx_watchdog_probe(generation: u32, ticket_id: u64) -> bool {
+    if ticket_id == 0 || CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
+        return false;
+    }
+    let progress = cyw43_data_rx_external_progress();
+    let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+    let Some(mut cursor) = *slot else {
+        return false;
+    };
+    if cursor.generation != generation || !cyw43_data_rx_lifetime_identity_current(cursor) {
+        *slot = None;
+        return false;
+    }
+    if rebase_cyw43_data_rx_watchdog_on_progress(&mut cursor, progress)
+        || cursor.watchdog_probe_completed
+        || cursor.watchdog_probe_ticket != 0
+        || cyw43_poll_deadline_is_open(&cursor.watchdog_deadline)
+    {
+        *slot = Some(cursor);
+        return false;
+    }
+    cursor.watchdog_probe_ticket = ticket_id;
+    *slot = Some(cursor);
+    true
+}
+
+/// Release a proven-not-terminal local watchdog claim.
+///
+/// This is used only when the matching prompt cursor is discarded or fenced.
+/// The expired deadline remains expired, so a later fresh root ticket may
+/// retry the one allowed inspection if the generation itself stays admissible.
+#[cfg(feature = "kernel")]
+fn release_cyw43_data_rx_watchdog_probe(pending: Cyw43PendingPromptPoll) {
+    if pending.owner != Cyw43PromptPollOwner::NetData || pending.ticket_id == 0 {
+        return;
+    }
+    let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+    let Some(mut cursor) = *slot else {
+        return;
+    };
+    if cursor.generation != pending.generation || !cyw43_data_rx_lifetime_identity_current(cursor) {
+        *slot = None;
+        return;
+    }
+    if cursor.watchdog_probe_ticket == pending.ticket_id {
+        cursor.watchdog_probe_ticket = 0;
+        *slot = Some(cursor);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -7304,6 +7447,7 @@ fn cyw43_data_rx_lifetime_current_for_generation(generation: u32) -> bool {
         return false;
     };
     if cursor.generation != generation {
+        *slot = None;
         return false;
     }
     if !cyw43_data_rx_lifetime_identity_current(cursor) {
@@ -7365,10 +7509,10 @@ fn publish_cyw43_data_rx_lifetime_cursor(generation: u32) -> bool {
         generation,
         pair_epoch,
         physical_lifetime_epoch,
-        audit_deadline: cyw43_poll_deadline_from_millis_or_polls(
-            CYW43_DATA_RX_LOST_EDGE_AUDIT_MS,
-            CYW43_DATA_RX_LOST_EDGE_AUDIT_FALLBACK_TURNS,
-        ),
+        watchdog_deadline: cyw43_data_rx_watchdog_deadline(),
+        progress: cyw43_data_rx_external_progress(),
+        watchdog_probe_ticket: 0,
+        watchdog_probe_completed: false,
     };
     let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
     if !cyw43_data_rx_lifetime_identity_current(cursor) {
@@ -9858,10 +10002,14 @@ fn cyw43_data_rx_watch_diagnostic() -> (&'static str, u32, u64, u32) {
     };
     let state = if !cyw43_data_rx_lifetime_identity_current(cursor) {
         "stale"
-    } else if cyw43_poll_deadline_is_open(&cursor.audit_deadline) {
+    } else if cursor.watchdog_probe_ticket != 0 {
+        "watchdog-probing"
+    } else if cursor.watchdog_probe_completed {
+        "watchdog-suppressed"
+    } else if cyw43_poll_deadline_is_open(&cursor.watchdog_deadline) {
         "watching"
     } else {
-        "audit-due"
+        "watchdog-due"
     };
     (
         state,
@@ -20476,6 +20624,7 @@ fn cyw43_prompt_slice_active_descriptor_matches(
 fn clear_cyw43_active_prompt_poll() {
     let pending = CYW43_PENDING_PROMPT_POLL.lock().take();
     if let Some(pending) = pending {
+        release_cyw43_data_rx_watchdog_probe(pending);
         disarm_cyw43_root_wake_op8_epoch(pending);
     }
 }
@@ -20498,6 +20647,7 @@ fn latch_cyw43_prompt_poll_recovery_with_cause(
     cause: Cyw43RecoveryCause,
     completion: Option<DriverTaskCompletionRecord>,
 ) {
+    release_cyw43_data_rx_watchdog_probe(*pending);
     let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         pending.generation,
@@ -20886,23 +21036,27 @@ fn record_cyw43_data_rx_source_probe_terminal(
     if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != pending.generation {
         return false;
     }
+    let progress = cyw43_data_rx_external_progress();
     let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
     let Some(mut cursor) = *slot else {
         return false;
     };
     if cursor.generation != pending.generation || !cyw43_data_rx_lifetime_identity_current(cursor) {
-        if cursor.generation == pending.generation {
-            *slot = None;
-        }
+        *slot = None;
         return false;
     }
-    let audit_was_due = !cyw43_poll_deadline_is_open(&cursor.audit_deadline);
-    cursor.audit_deadline = cyw43_poll_deadline_from_millis_or_polls(
-        CYW43_DATA_RX_LOST_EDGE_AUDIT_MS,
-        CYW43_DATA_RX_LOST_EDGE_AUDIT_FALLBACK_TURNS,
-    );
+    let watchdog_terminal = cursor.watchdog_probe_ticket == pending.ticket_id;
+    if watchdog_terminal {
+        // clear_cyw43_root_wake_after_exact_empty_rx_poll() runs before this
+        // recorder, so the post-probe baseline includes any exact clear and
+        // recheck performed by the matching op8 terminal.
+        cursor.progress = progress;
+        cursor.watchdog_deadline = cyw43_data_rx_watchdog_deadline();
+        cursor.watchdog_probe_ticket = 0;
+        cursor.watchdog_probe_completed = true;
+    }
     *slot = Some(cursor);
-    if audit_was_due {
+    if watchdog_terminal {
         increment_atomic_u32_saturating(&CYW43_DATA_RX_AUDIT_PROBES);
     }
     increment_atomic_u32_saturating(&CYW43_DATA_RX_SOURCE_PROBE_TERMINALS);
@@ -20941,8 +21095,9 @@ fn run_cyw43_owned_prompt_poll(
             if crate::hal::driver_task::active_driver_task_retained_request(contract).is_some() {
                 return None;
             }
+            let ticket_id = CYW43_DATA_TX_NEXT_TICKET.fetch_add(1, Ordering::AcqRel);
             let pending = Cyw43PendingPromptPoll {
-                ticket_id: CYW43_DATA_TX_NEXT_TICKET.fetch_add(1, Ordering::AcqRel),
+                ticket_id,
                 owner,
                 generation: CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
                 descriptor,
@@ -20955,6 +21110,12 @@ fn run_cyw43_owned_prompt_poll(
                 child_reply_latched: false,
                 child_reply_renewals: 0,
             };
+            if owner == Cyw43PromptPollOwner::NetData
+                && descriptor.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
+                && descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
+            {
+                let _ = claim_cyw43_data_rx_watchdog_probe(pending.generation, pending.ticket_id);
+            }
             arm_cyw43_root_wake_op8_epoch(pending);
             pending
         }
@@ -21005,6 +21166,8 @@ fn run_cyw43_owned_prompt_poll(
             pending.deadline = deadline_before_turn;
             if pending.owner != Cyw43PromptPollOwner::NetData || pending.request.is_some() {
                 *CYW43_PENDING_PROMPT_POLL.lock() = Some(pending);
+            } else {
+                release_cyw43_data_rx_watchdog_probe(pending);
             }
             // A fresh request-less NetData poll lost admission before HAL or
             // either child runtime observed it. Do not retain that local cursor:
@@ -22866,7 +23029,10 @@ fn retain_cyw43_pending_data_tx(pending: Cyw43PendingDataTx) -> Cyw43DataTxTurnO
 /// The exact payload, generation, ticket, and accepted request sequence remain
 /// immutable across yields. A missing or mismatched accepted request is
 /// issued-unknown and poisons the current linked-runtime generation instead of
-/// replaying a possibly transmitted Ethernet frame.
+/// replaying a possibly transmitted Ethernet frame. The retained VCNT deadline
+/// is the sole lifetime bound: a second turn-count limit can discard an
+/// accepted TCP segment while the single SDPCM-credit owner is still making
+/// valid progress.
 #[cfg(feature = "kernel")]
 fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTurnOutcome {
     let Some(mut pending) = CYW43_PENDING_DATA_TX.lock().take() else {
@@ -23018,14 +23184,6 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         && !cyw43_completion_allows_same_command_retry(completion)
     {
         return fail_cyw43_pending_data_tx(&pending, contract, "issued-unknown-fault", true);
-    }
-    if usize::from(pending.turns) >= CYW43_DATA_TX_ATTEMPTS {
-        return fail_cyw43_pending_data_tx(
-            &pending,
-            contract,
-            "turn-budget-exhausted",
-            pending.child_cursor_started,
-        );
     }
     CYW43_DATA_TX_RETRIES.fetch_add(1, Ordering::AcqRel);
     retain_cyw43_pending_data_tx(pending)
@@ -26283,6 +26441,7 @@ mod tests {
         CYW43_TEST_COUNTER_TICKS.store(0, Ordering::Release);
         CYW43_TEST_COUNTER_FREQ_HZ.store(0, Ordering::Release);
         clear_cyw43_data_rx_lifetime_cursor();
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = None;
         CYW43_DATA_RX_AUDIT_PROBES.store(0, Ordering::Release);
         CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.store(0, Ordering::Release);
         begin_cyw43_outer_event_turn();
@@ -30983,6 +31142,21 @@ mod tests {
         let receipt =
             cyw43_gate8_publication_receipt(generation).expect("test Gate 8 publication receipt");
         assert!(publish_cyw43_gate8_data_consumer(generation, receipt));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn cyw43_data_rx_progress_for_test(seed: u32) -> Cyw43DataRxExternalProgress {
+        Cyw43DataRxExternalProgress {
+            dpc_present: true,
+            dpc_epoch: seed,
+            dpc_producer: seed.wrapping_add(1),
+            dpc_consumer: seed.wrapping_add(1),
+            dpc_flags: seed.rotate_left(5),
+            root_wake_present: true,
+            root_wake_hits: seed as usize,
+            root_wake_clears: seed.saturating_sub(1) as usize,
+            root_wake_rechecks: seed.saturating_sub(2) as usize,
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -47405,13 +47579,14 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_retries_transient_no_credit_completion() {
+    fn cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
-        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(3, Ordering::Release);
+        let pending_turns = 12;
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(pending_turns, Ordering::Release);
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -47419,11 +47594,14 @@ mod tests {
         ));
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
         assert_eq!(
-            drive_cyw43_pending_data_tx_for_test(4),
+            drive_cyw43_pending_data_tx_for_test(pending_turns as usize + 1),
             Cyw43DataTxTurnOutcome::Submitted
         );
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 4);
-        assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), 3);
+        assert_eq!(
+            CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
+            pending_turns + 1
+        );
+        assert_eq!(CYW43_DATA_TX_RETRIES.load(Ordering::Acquire), pending_turns);
 
         reset_cyw43_status_flags();
     }
@@ -48306,30 +48484,32 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_retryable_fault_window_remains_bounded() {
+    fn cyw43_data_tx_retryable_fault_window_uses_retained_deadline() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
-        CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS
-            .store(CYW43_DATA_TX_ATTEMPTS as u32, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(
+            CYW43_RUNTIME_MIN_RETAINED_TURNS.saturating_add(1) as u32,
+            Ordering::Release,
+        );
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             b"dhcp-request"
         ));
         assert_eq!(
-            drive_cyw43_pending_data_tx_for_test(CYW43_DATA_TX_ATTEMPTS),
+            drive_cyw43_pending_data_tx_for_test(CYW43_RUNTIME_MIN_RETAINED_TURNS + 1),
             Cyw43DataTxTurnOutcome::Failed
         );
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
-            CYW43_DATA_TX_ATTEMPTS as u32
+            CYW43_RUNTIME_MIN_RETAINED_TURNS as u32
         );
         assert_eq!(
             CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
-            CYW43_DATA_TX_ATTEMPTS.saturating_sub(1) as u32
+            CYW43_RUNTIME_MIN_RETAINED_TURNS as u32
         );
 
         reset_cyw43_status_flags();
@@ -48650,7 +48830,7 @@ mod tests {
             cursor
                 .as_mut()
                 .expect("Gate 8 publishes one RX lifetime cursor")
-                .audit_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(cyw43_current_generation_data_rx_audit_due());
         assert_eq!(
@@ -48686,25 +48866,24 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_audit_is_one_current_lifetime_hintless_op8_per_interval() {
+    fn cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         let generation = 23;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x20));
         mark_cyw43_gate8_ready_for_test(generation);
-        let identity = cyw43_service_work_snapshot();
 
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
             cursor
                 .as_mut()
                 .expect("Gate 8 publishes one RX lifetime cursor")
-                .audit_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         let due = cyw43_service_work_snapshot();
         assert_eq!(due.generation(), generation);
-        assert_eq!(due.pair_epoch(), identity.pair_epoch());
         assert_eq!(
             due.reason_mask() & CYW43_SERVICE_WORK_RX_AUDIT,
             CYW43_SERVICE_WORK_RX_AUDIT
@@ -48714,6 +48893,7 @@ mod tests {
             cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
             CYW43_DATA_RX_STEADY_POLL_FLAGS
         );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
 
         let pending = Cyw43PendingPromptPoll {
             ticket_id: 0x4155_4449,
@@ -48734,21 +48914,36 @@ mod tests {
             child_reply_renewals: 0,
         };
         assert!(
+            claim_cyw43_data_rx_watchdog_probe(generation, pending.ticket_id),
+            "the expired no-progress identity grants one exact probe ticket"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
+        assert!(
+            !cyw43_current_generation_data_rx_audit_due(),
+            "an in-flight exact watchdog ticket suppresses a second issuer"
+        );
+        assert!(
             !record_cyw43_data_rx_source_probe_terminal(
                 pending,
                 DriverTaskCompletionRecord::idle(0xa1),
             ),
-            "the wrong sequence cannot consume or rearm the audit"
+            "the wrong sequence cannot consume the one-shot"
         );
-        assert!(cyw43_current_generation_data_rx_audit_due());
+        assert_eq!(
+            CYW43_DATA_RX_LIFETIME_CURSOR
+                .lock()
+                .as_ref()
+                .expect("watchdog cursor remains")
+                .watchdog_probe_ticket,
+            pending.ticket_id
+        );
         assert!(
             !record_cyw43_data_rx_source_probe_terminal(
                 pending,
                 DriverTaskCompletionRecord::fault(0xa0, DriverTaskFaultCode::RejectedCommand),
             ),
-            "a fault is not a valid source-audit terminal"
+            "a fault is not a valid watchdog terminal"
         );
-        assert!(cyw43_current_generation_data_rx_audit_due());
 
         assert!(record_cyw43_data_rx_source_probe_terminal(
             pending,
@@ -48760,24 +48955,136 @@ mod tests {
             CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
             1
         );
-        assert_eq!(
-            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
-            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
-            "the exact terminal rearms the interval instead of issuing again"
-        );
-
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
-            cursor
+            let cursor = cursor
                 .as_mut()
-                .expect("the current cursor remains armed")
-                .pair_epoch = identity.pair_epoch().wrapping_add(1);
+                .expect("the completed current watchdog remains published");
+            assert!(cursor.watchdog_probe_completed);
+            assert_eq!(cursor.watchdog_probe_ticket, 0);
+            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(
             !cyw43_current_generation_data_rx_audit_due(),
-            "a stale pair identity fails closed and clears the audit cursor"
+            "elapsed time alone cannot reissue a completed one-shot"
         );
-        assert!(CYW43_DATA_RX_LIFETIME_CURSOR.lock().is_none());
+        assert_eq!(
+            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+            "the exact terminal suppresses periodic source polling"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_progress_rebases_and_rearms_one_shot() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 24;
+        let baseline = cyw43_data_rx_progress_for_test(0x30);
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(baseline);
+        mark_cyw43_gate8_ready_for_test(generation);
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_mut()
+                .expect("Gate 8 publishes one current watchdog");
+            cursor.watchdog_probe_completed = true;
+            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        let mut progressed = baseline;
+        progressed.dpc_producer = progressed.dpc_producer.wrapping_add(1);
+        progressed.dpc_consumer = progressed.dpc_consumer.wrapping_add(1);
+        progressed.dpc_flags ^= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
+        progressed.root_wake_hits = progressed.root_wake_hits.saturating_add(1);
+        progressed.root_wake_clears = progressed.root_wake_clears.saturating_add(1);
+        progressed.root_wake_rechecks = progressed.root_wake_rechecks.saturating_add(1);
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(progressed);
+        assert!(
+            !cyw43_current_generation_data_rx_audit_due(),
+            "external DPC/wake progress rebases rather than probes"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watching");
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_mut()
+                .expect("the current progress baseline stays published");
+            assert_eq!(cursor.progress, progressed);
+            assert!(!cursor.watchdog_probe_completed);
+            assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
+            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        assert!(
+            cyw43_current_generation_data_rx_audit_due(),
+            "a later no-progress interval may arm the next one-shot"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_never_masks_a_genuine_root_wake_level() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 25;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x40));
+        mark_cyw43_gate8_ready_for_test(generation);
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_mut()
+                .expect("Gate 8 publishes one current watchdog");
+            cursor.watchdog_probe_completed = true;
+            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
+            true, 7,
+        ));
+
+        let work = cyw43_service_work_snapshot();
+        assert_eq!(
+            work.reason_mask() & CYW43_SERVICE_WORK_ROOT_WAKE,
+            CYW43_SERVICE_WORK_ROOT_WAKE
+        );
+        assert!(cyw43_fresh_data_rx_work_demanded());
+        assert_eq!(
+            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+            CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            "a genuine current root-wake level wins after watchdog completion"
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_clears_on_generation_identity_change() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 26;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x50));
+        mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_CONNECTION_EPOCH.store(generation.wrapping_add(1), Ordering::Release);
+
+        assert!(!cyw43_data_rx_audit_due_for_generation(
+            generation.wrapping_add(1)
+        ));
+        assert!(
+            CYW43_DATA_RX_LIFETIME_CURSOR.lock().is_none(),
+            "a replacement connection identity clears the old watchdog"
+        );
 
         reset_cyw43_status_flags();
     }
@@ -49131,30 +49438,32 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_retry_window_remains_bounded() {
+    fn cyw43_data_tx_no_credit_window_uses_retained_deadline() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
-        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS
-            .store(CYW43_DATA_TX_ATTEMPTS as u32, Ordering::Release);
+        CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(
+            CYW43_RUNTIME_MIN_RETAINED_TURNS.saturating_add(1) as u32,
+            Ordering::Release,
+        );
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             b"dhcp-discover"
         ));
         assert_eq!(
-            drive_cyw43_pending_data_tx_for_test(CYW43_DATA_TX_ATTEMPTS),
+            drive_cyw43_pending_data_tx_for_test(CYW43_RUNTIME_MIN_RETAINED_TURNS + 1),
             Cyw43DataTxTurnOutcome::Failed
         );
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
-            CYW43_DATA_TX_ATTEMPTS as u32
+            CYW43_RUNTIME_MIN_RETAINED_TURNS as u32
         );
         assert_eq!(
             CYW43_DATA_TX_RETRIES.load(Ordering::Acquire),
-            CYW43_DATA_TX_ATTEMPTS.saturating_sub(1) as u32
+            CYW43_RUNTIME_MIN_RETAINED_TURNS as u32
         );
 
         reset_cyw43_status_flags();

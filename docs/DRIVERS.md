@@ -394,18 +394,25 @@ the one-exact-grant/one-owner-action admission.
 
 The as-built source candidate has no post-TX receive watch and no alternate
 receive lane. Gate 8 commit retains the current lifetime identity plus one
-32-ms virtual-counter-scaled lost-edge audit on the existing op8 owner. A real
-DPC/root-wake level remains the urgent source; audit expiry runs
-`RX_HINTLESS_FIRSTREAD` through the same HAL/SDIO chain, where a quiescent
-source performs no blind Function-2 read. Exact current non-fault terminals
-re-arm it; stale, wrong-identity, and fault terminals do not. Queues, retained
-owners, and protocol continuations retain Network only for their own
-already-proved work. The 25-ms virtual-counter cap fences fresh-parent
-admission only; one already admitted exact `Prepared`/`Issued` parent continues
-to its typed terminal subject to physical/dispatch yields and the hard
-192-turn bound. “Exact” is HAL-validated: root-continuation operation, nonzero
-immutable fingerprint, request, logical generation, pair epoch, open priority
-reservations, and restart-free state must all remain current across the check.
+progress-conditioned, 32-ms virtual-counter-scaled lost-edge watchdog on the
+existing op8 owner. Its passive progress signature contains DPC presence,
+epoch, producer, consumer, and flags plus root-wake presence, hits, clears, and
+rechecks. Any external progress rebases the deadline and arms one later
+one-shot. With no progress, expiry admits exactly one
+`RX_HINTLESS_FIRSTREAD` source inspection through the same HAL/SDIO chain,
+where a quiescent source performs no blind Function-2 read. The exact
+non-fault terminal samples the post-probe progress baseline and suppresses
+another watchdog probe until external progress or a replacement identity
+re-arms it; elapsed time alone cannot create periodic polling. A genuine
+DPC/root-wake level remains urgent independently of watchdog completion.
+Queues, retained owners, and protocol continuations retain Network only for
+their own already-proved work. The 25-ms virtual-counter cap fences
+fresh-parent admission only; one already admitted exact `Prepared`/`Issued`
+parent continues to its typed terminal subject to physical/dispatch yields and
+the hard 192-turn bound. “Exact” is HAL-validated: root-continuation operation,
+nonzero immutable fingerprint, request, logical generation, pair epoch, open
+priority reservations, and restart-free state must all remain current across
+the check.
 The next read-back-proven image must preserve first-lifetime startup, retain one
 first inbound Echo Request across cold ARP and answer it exactly once without a
 host retry, then achieve ARP-warmed request-to-first-payload p95 at or below 40
@@ -656,6 +663,33 @@ wifi: gate 1 name=runtime-power-reset status=<pass|blocked|fail> evidence=power=
 
 The separate bounded owner line prevents the causal Gate 1 dependency from
 being truncated by the fixed 256-byte console record.
+
+Gate 4 uses a separate 44-byte, sequence-last
+`DriverRuntimeSdioClockSnapshot` in the SDIO owner ring. The final retained
+`HOST_CONFIG` carries the CYW43 client's read-back CCCR `SPEED` and
+`BUS_INTERFACE_CONTROL` bytes to the sole SDIO owner; the owner combines those
+card facts with its requested clock, BCM2711 base clock, decoded divisor,
+effective clock, final `CLOCK_CONTROL`/`HOST_CONTROL` readbacks, completed
+physical-lifetime epoch, and generated virtual-counter frequency. Root only
+double-reads this passive record. It never reads SDIO MMIO or creates another
+clock owner.
+
+The Pi 4 production setting requests 50,000,000 Hz. The BCM2711 250,000,000 Hz
+source and legal even divisor `6` produce 41,666,666 Hz; that effective value is
+expected and is not a slow-clock fallback. The elapsed-time source remains
+`CNTVCT_EL0` at the generated 54,000,000 Hz `TIMER_CLOCK_HZ`. Gate 4 can pass
+only when the snapshot belongs to the current completed physical lifetime,
+both clock-stable and card-enable bits are present, CCCR `EHS` is read back,
+and both host and card report 4-bit width. Missing, torn, stale, zero, or
+partial evidence fails closed at Gate 4 and is rendered as `unavailable`;
+linked-runtime diagnostics never substitute `clock=0Hz width=unknown`.
+Because the snapshot is evidence-only, an unavailable publication never
+rewrites an otherwise successful physical `HOST_CONFIG` completion; it removes
+Gate 4 proof instead of creating a second hardware failure lane.
+`wifi diag` keeps the gate line bounded and emits the remaining register,
+CCCR, and timer fields on one adjacent `wifi: evidence sdio_clock` line. This
+record is CYW43/SDIO-only and does not alter the GENET clock, descriptor, or
+service path.
 
 The canonical cold transaction remains part of `attempt=1`, not a retry. Its
 successful typed `ColdBootstrap` completion records the exact
@@ -920,11 +954,14 @@ Gate 8 data-consumer publication installs one identity-only lifetime RX cursor
 on the existing sole `NetData` op8 `RX_POLL`/DPC path. The cursor binds the
 logical connection generation, linked pair epoch, and completed
 physical-lifetime epoch. It grants permission to service that lifetime and
-owns one 32-millisecond, virtual-counter-scaled lost-edge audit deadline. A
-live SDIO DPC-ring level or compiler-declared CYW43 child-to-root wake remains
-the urgent source. When neither level survives the linked
+owns one progress-conditioned, 32-millisecond, virtual-counter-scaled lost-edge
+watchdog deadline. Its immutable identity is paired with a passive progress
+signature: DPC-ring presence, epoch, producer, consumer, and flags plus
+root-wake presence, hits, clears, and rechecks. A changed signature rebases the
+deadline and arms one later inspection. When neither a durable level nor
+progress survives the linked
 SDIO-runtime-to-DPC-ring-to-CYW43-runtime-to-root notification chain, expiry
-admits one audit through the same sole op8 owner and sets
+admits one watchdog inspection through the same sole op8 owner and sets
 `RX_HINTLESS_FIRSTREAD`. The SDIO runtime first inspects the current hardware
 source; a quiescent result performs no blind Function-2 read.
 
@@ -933,11 +970,14 @@ other protocol obligations schedule only their own owner work; they cannot
 authorize a separate fresh-op8 lane. An exact already-assigned NetData
 continuation remains non-revocable after its initiating level clears. Exact
 current-generation non-fault `Idle`, `Progress`, or `FrameReady` completion
-re-arms the audit; wrong request, wrong lifetime, stale, or fault completion
-does not. The runtime signals its private RX queue only on empty-to-nonempty
-transition. After an exact empty op8 terminal, root clears and immediately
-rechecks the wake so an edge racing the clear remains pending. An accepted data
-TX neither arms an audit nor adds a post-TX fence.
+for the claimed watchdog ticket samples the post-probe progress baseline,
+marks that one-shot complete, and suppresses another watchdog probe until
+later external progress or identity replacement. Wrong request, wrong
+lifetime, stale, or fault completion consumes neither the ticket nor the
+one-shot. The runtime signals its private RX queue only on
+empty-to-nonempty transition. After an exact empty op8 terminal, root clears
+and immediately rechecks the wake so an edge racing the clear remains pending.
+An accepted data TX neither arms the watchdog nor adds a post-TX fence.
 
 Only connection-generation, pair, or physical-lifetime invalidation, recovery,
 quarantine, reboot, or selection of another NIC clears the identity cursor.
@@ -961,7 +1001,7 @@ wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=o
 wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
-wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|watching|audit-due> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
+wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|watching|watchdog-due|watchdog-probing|watchdog-suppressed> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
@@ -971,12 +1011,18 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 ```
 
 The retained field names remain for diagnostic and normalizer compatibility.
-`deadline_probes` counts admitted lost-edge audits. `terminals` advances only
-for an exact non-fault hintless op8 source-probe terminal admitted by a real
-DPC/root-wake level or the same-owner audit; a queue-only terminal advances
-neither field. The separate `wifi_post_dhcp_rx` counters advance only when a
-frame crosses an actual smoltcp delivery boundary. Trace-only `rx-preserve`
-and `rx-deliver` observations cannot double-count one frame.
+`watching` is an armed deadline, `watchdog-due` is one unclaimed expiry,
+`watchdog-probing` owns the exact op8 ticket, and `watchdog-suppressed` is the
+completed one-shot awaiting external progress or identity replacement.
+`deadline_probes` counts claimed lost-edge watchdog one-shots, not elapsed
+intervals. `terminals` advances only for an exact non-fault hintless op8
+source-probe terminal admitted by a real DPC/root-wake level or the same-owner
+watchdog; a queue-only terminal advances neither field. After a watchdog
+terminal, both counters remain stable at idle until external DPC/root-wake
+progress or identity replacement re-arms one successor. The separate
+`wifi_post_dhcp_rx` counters advance only when a frame crosses an actual
+smoltcp delivery boundary. Trace-only `rx-preserve` and `rx-deliver`
+observations cannot double-count one frame.
 
 A live NetStack frontier supersedes retained runtime evidence only after the
 current generation has complete `8a`-through-`8h` proof and no pair recovery is
@@ -1992,11 +2038,13 @@ generation and XID.
   Pre-terminal HDMI text reports startup/diagnostic availability only. The
   linked display schedules its canonical attach snapshot once, immediately at
   successful attach and before queued incremental startup text can drain.
-  Pre-terminal USB bytes remain parser-buffered without opening an unprompted
-  HDMI row. Later Wi-Fi milestones are inserted above an open command row with
-  that exact prompt and typed row restored and cleared to end-of-line; a closed
-  command retains its newline before response text, rather than restarting a
-  viewport redraw.
+  Once the root console admits USB input, pre-terminal bytes update a live HDMI
+  input row even though the final ready banner and `cohesix>` prompt remain
+  withheld. Wi-Fi startup, quarantine, or terminal failure must never make a
+  working keyboard blind. Later Wi-Fi milestones are inserted above an open
+  command row with the exact typed row restored and cleared to end-of-line; a
+  closed command retains its newline before response text, rather than
+  restarting a viewport redraw.
   Every cold boot enters the same sole 22-action pair transaction and context
   replay used by recovery before firmware/control. Descriptor and mailbox
   admission touch no physical engine; the transaction's SDIO engine replay
@@ -2351,9 +2399,11 @@ generation and XID.
   after cutover. A sparse turn line is
   attempted on stage transitions and power-of-two repeats, and a rejected
   enqueue preserves eligibility for a later same-stage attempt. Local-seat
-  service consumes only already-buffered
-  bytes while Wi-Fi bootstrap or recovery owns the HAL; USB backend polling,
-  HDMI echo/redraw, and network service remain fenced. During this fence,
+  service consumes only already-buffered bytes while Wi-Fi bootstrap or
+  recovery owns the HAL. Root may update the bounded canonical input/echo
+  queue, but USB backend polling, HDMI frame submission, and network service
+  remain fenced; one separately retained Display turn submits pending echo.
+  During this fence,
   `attach queen <ticket>` remains available because it is parser/ticket-table
   work; authenticated `reboot` remains the only hardware-facing exception.
   Once accepted, it fences all later command intake, reserves and retains its
@@ -2430,17 +2480,20 @@ generation and XID.
   bounded by the compiler-declared CYW43 `max_ops_per_turn` service limit
   (currently 192 separately opened Network turns). A 25-ms seL4
   virtual-counter cap separately fences admission of a fresh physical parent.
-  While that quantum remains active, every third admitted Network operation
-  performs one bounded physical-console checkpoint: `Serial`, one `LocalSeat`
-  USB poll when attached, `Dispatch`, and one pending `Display` turn. The
-  checkpoint performs no NIC operation, does not close or reissue the exact
-  CYW43 parent or its pair-priority lease, and resumes the same quantum after
-  the console phases finish. A fresh CYW43 wake latches admission but never
-  rewrites an already-scheduled physical-console phase. The time cap is checked before
-  fresh-parent admission, so an elapsed idle or between-parent quantum admits
-  no new NIC/SDIO parent. An exact already-`Prepared` or already-`Issued`
-  parent is not split by that elapsed-time check and continues toward its typed
-  terminal. Reaching the hard turn bound, a
+  A separate 25-ms virtual-counter clock bounds elapsed time between
+  physical-console checkpoints while that quantum remains active. On expiry,
+  EventPump completes `Serial -> LocalSeat -> Dispatch` and leaves at most one
+  `Display` turn pending. The checkpoint performs no NIC operation, does not
+  close or reissue the exact CYW43 parent or its pair-priority lease, and
+  resets only its own clock after `Dispatch` before resuming the same quantum.
+  Operation count alone never triggers a checkpoint; cheap linked-runtime
+  microsteps can therefore run at transport cadence instead of spending every
+  fixed tranche on console probes. A fresh CYW43 wake latches admission but
+  never rewrites an already-scheduled physical-console phase. The fresh-parent
+  time cap is checked before admission, so an elapsed idle or between-parent
+  quantum admits no new NIC/SDIO parent. An exact already-`Prepared` or
+  already-`Issued` parent is not split by that elapsed-time check and continues
+  toward its typed terminal. Reaching the hard turn bound, a
   complete TCP command, or pending actual physical response/buffered input
   retains unfinished
   Wi-Fi service behind an operator fence and returns to `Serial`, optional
@@ -2475,6 +2528,7 @@ generation and XID.
   counts. On selected WiFi it also emits:
 
   ```text
+  netstats: cyw43_quantum runs=<n> turns=<n> max_turns=<n> max_elapsed_us=<n> operator_yields=<n> checkpoint_ms=25
   netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
   netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
   netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
@@ -2493,14 +2547,21 @@ generation and XID.
   lease records are omitted on GENET. `operator_yields` counts the bounded
   physical-console checkpoints
   (`Serial -> LocalSeat -> Dispatch -> pending Display`) and therefore may be
-  nonzero only for selected CYW43.
+  nonzero only for selected CYW43. `checkpoint_ms=25` is the independent
+  elapsed-time cadence; no network-turn count is a second yield trigger.
   `wifi_trace_tx_retries` counts only an actual action retry or an unproved TX
   credit. A `no-completion*` software scheduling deferral is a pending
   transition and cannot inflate that retry counter.
   `Display` performs at most one retained HDMI attach or frame turn after the
-  Network phase. Every phase returns to the outer loop before its successor; a
-  missing local seat skips directly from `Serial` to `Dispatch` and from
-  `Network` back to `Serial`.
+  Network phase or after Dispatch queues physical input echo. A partial command
+  may retain the CYW43 operator fence, but it cannot route back to Serial before
+  that pending Display turn unless a reboot acknowledgement or physical
+  response tail already owns Serial. Display then returns to Serial with the
+  exact parent and fence unchanged; response-owned Dispatch instead returns
+  directly to Serial and leaves the echo pending for a later Display turn.
+  Every phase returns to the outer loop before its successor; a missing local
+  seat skips directly from `Serial` to `Dispatch` and from `Network` back to
+  `Serial`.
 
   The TCP console keeps exactly one parser, authentication server, and attached
   session authority. Once that active socket enters the single
@@ -2526,19 +2587,28 @@ generation and XID.
   While an immutable TX command occupies the shared reciprocal-ring slot, RX
   returns `Pending` without allocating an RX cursor, ticket, or competing
   fingerprint. Each later outer Network turn advances only the exact immutable
-  TX owner. A `Pending` or `Failed` terminal exposes no RX. A `Submitted`
-  terminal may release one frame already copied into root memory in that same
-  outer turn; this spends no second physical action, and the paired TxToken may
-  only stage an immutable response for a later turn. With no copied frame, the
-  submitted terminal consumes the turn before ARP, retained op8, or fresh op8.
-  TX completion does not manufacture a following op8, alter the lifetime
-  cursor, or fence another credited TX. A later fresh op8 begins only for a
-  current-lifetime DPC/root-wake level or the 32-ms same-owner lost-edge audit;
-  queues schedule their own bounded owner work, and an exact assigned
-  continuation remains non-revocable. Every op8 still uses the same sole
-  NetData/HAL/SDIO owner chain. The CYW43 device withholds smoltcp's paired
-  RX/TX token while the retained TX owner or its unproved credit window is
-  active, so a dropped TX is never reported as success. There is no
+  TX owner. Once a valid current-generation frame has been accepted, root
+  retains its payload, digest, ticket, request, and generation through
+  transient SDPCM-credit waits until the typed `Submitted` terminal or the
+  retained virtual-counter deadline. There is no eight-turn abandonment or
+  other turn-count lifetime bound; corruption, identity loss, generation
+  replacement, or a typed terminal fault still fails closed. The regression
+  `cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns` holds the same
+  frame for twelve no-credit turns before successful submission.
+  A `Pending` or `Failed` terminal exposes no RX. A `Submitted` terminal may
+  release one frame already copied into root memory in that same outer turn;
+  this spends no second physical action, and the paired TxToken may only stage
+  an immutable response for a later turn. With no copied frame, the submitted
+  terminal consumes the turn before ARP, retained op8, or fresh op8. TX
+  completion does not manufacture a following op8, alter the lifetime cursor,
+  or fence another credited TX. A later fresh op8 begins only for a
+  current-lifetime DPC/root-wake level or one due progress-conditioned
+  same-owner lost-edge watchdog; queues schedule their own bounded owner work,
+  and an exact assigned continuation remains non-revocable. Every op8 still
+  uses the same sole NetData/HAL/SDIO owner chain. The CYW43 device withholds
+  smoltcp's paired RX/TX token while the retained TX owner or its unproved
+  credit window is active, so a dropped TX is never reported as success. There
+  is no
   generic/current-TCB UART fallback. If the bounded
   linked TX queue cannot accept an operator response, EventPump retains the
   complete record instead of dropping or truncating it. The pending-console

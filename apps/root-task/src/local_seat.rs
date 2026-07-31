@@ -982,15 +982,12 @@ pub(crate) const fn local_seat_hdmi_initial_snapshot_due(
 
 /// Return whether USB input may be echoed onto the interactive HDMI row.
 ///
-/// The parser may retain input while deferred Wi-Fi bootstrap is active, but
-/// HDMI must not open an unprompted row before the terminal bootstrap status
-/// has released its ready banner and prompt.
+/// Wi-Fi terminal state gates only the final Ready banner and prompt. Once the
+/// root console accepts keyboard input, typed characters must remain visible
+/// during Wi-Fi startup, quarantine, and terminal failure as well.
 #[must_use]
-pub(crate) const fn local_seat_hdmi_input_echo_allowed(
-    root_console_ready: bool,
-    bootstrap_terminal: bool,
-) -> bool {
-    root_console_ready && bootstrap_terminal
+pub(crate) const fn local_seat_hdmi_input_echo_allowed(root_console_ready: bool) -> bool {
+    root_console_ready
 }
 
 /// Return whether linked-runtime USB keyboard bytes may enter the shared parser.
@@ -1806,7 +1803,11 @@ pub struct LocalSeatKeyboardTrace {
     pub arming_bytes: u64,
     /// Bytes drained from the queue into the console parser path.
     pub drained_bytes: u64,
-    /// Bytes echoed to HDMI after entering the parser path.
+    /// Bytes applied to root-owned echo state after entering the parser path.
+    ///
+    /// This is parser/renderer-intent evidence, not proof that an HDMI frame
+    /// reached the display; `LocalSeatDisplayTrace` carries that transport
+    /// evidence separately.
     pub echoed_bytes: u64,
     /// Bytes dropped because the queue was full.
     pub dropped_bytes: u64,
@@ -3018,7 +3019,11 @@ impl LocalSeatRuntime {
             return;
         }
         self.hdmi_console_ready_line_emitted = true;
-        self.mirror_line("Cohesix console ready");
+        if self.hdmi_open_line && self.hdmi_open_line_mirrors_input {
+            self.mirror_linked_hdmi_high_impact_above_open_line("Cohesix console ready");
+        } else {
+            self.mirror_line("Cohesix console ready");
+        }
     }
 
     #[cfg(any(
@@ -3031,6 +3036,9 @@ impl LocalSeatRuntime {
         )
     ))]
     fn mirror_linked_hdmi_prompt_now(&mut self, prompt: &str) {
+        if self.promote_linked_hdmi_open_input_line_to_prompt(prompt) {
+            return;
+        }
         let queue_tail = self.root_console_ready
             && self.hdmi_scrollback_offset == 0
             && !self.linked_hdmi_snapshot_recovery_required();
@@ -3045,6 +3053,40 @@ impl LocalSeatRuntime {
         } else if !queue_tail {
             self.refresh_linked_hdmi_redraw_after_content_mutation();
         }
+    }
+
+    fn promote_linked_hdmi_open_input_line_to_prompt(&mut self, prompt: &str) -> bool {
+        if !self.hdmi_open_line
+            || !self.hdmi_open_line_mirrors_input
+            || self.hdmi_open_line_floor_bytes != 0
+        {
+            return false;
+        }
+        let prompt = truncate_for_display(prompt, self.status.line_bytes);
+        let Some(input) = self.mirrored_lines.back_mut() else {
+            return false;
+        };
+        let mut promoted = String::new();
+        promoted.push_str(prompt);
+        let remaining = usize::from(self.status.line_bytes).saturating_sub(promoted.len());
+        promoted.push_str(truncate_for_display(input.as_str(), remaining as u16));
+        *input = promoted;
+        self.hdmi_open_line_floor_bytes = prompt.len();
+
+        if self.hdmi_scrollback_offset != 0 || self.linked_hdmi_snapshot_recovery_required() {
+            self.request_linked_hdmi_snapshot_redraw();
+            return true;
+        }
+        if !self.hdmi_pending_bytes.is_empty() && !self.hdmi_pending_high_impact {
+            let superseded = self.hdmi_pending_bytes.len();
+            self.hdmi_pending_bytes.clear();
+            self.hdmi_superseded_bytes =
+                self.hdmi_superseded_bytes.saturating_add(superseded as u64);
+        }
+        if !self.queue_linked_hdmi_current_input_line() {
+            self.request_linked_hdmi_snapshot_redraw();
+        }
+        true
     }
 
     fn refresh_linked_hdmi_redraw_after_content_mutation(&mut self) {
@@ -4044,12 +4086,7 @@ impl LocalSeatRuntime {
         target_os = "none"
     ))]
     fn mirror_input_bytes_to_display(&mut self, bytes: &[u8], preview_changed: bool) {
-        if bytes.is_empty()
-            || !local_seat_hdmi_input_echo_allowed(
-                self.root_console_ready,
-                self.hdmi_bootstrap_terminal_ready,
-            )
-        {
+        if bytes.is_empty() || !local_seat_hdmi_input_echo_allowed(self.root_console_ready) {
             return;
         }
         if crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
@@ -10481,6 +10518,37 @@ mod tests {
     }
 
     #[test]
+    fn terminal_ready_promotes_promptless_partial_input_onto_prompt_row() {
+        let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        runtime.mark_root_console_ready();
+        runtime.defer_hdmi_console_ready_until_cyw43_terminal();
+        for &byte in b"hi" {
+            runtime.record_linked_hdmi_input_echo_byte(byte);
+        }
+        runtime.queue_linked_hdmi_input_echo_or_redraw(b"hi");
+        assert_eq!(
+            runtime.mirrored_lines_snapshot().last().map(String::as_str),
+            Some("hi")
+        );
+
+        runtime.mark_cyw43_bootstrap_terminal_for_hdmi();
+        runtime.emit_linked_hdmi_console_ready_if_due(true);
+        runtime.mirror_linked_hdmi_prompt_now("cohesix> ");
+
+        let lines = runtime.mirrored_lines_snapshot();
+        assert!(lines.iter().any(|line| line == "Cohesix console ready"));
+        assert_eq!(lines.last().map(String::as_str), Some("cohesix> hi"));
+        assert_eq!(runtime.hdmi_open_line_floor_bytes, "cohesix> ".len());
+        assert!(runtime.hdmi_open_line_mirrors_input);
+        assert!(runtime.linked_hdmi_pending_work());
+    }
+
+    #[test]
     fn cyw43_retraction_supersedes_queued_ready_and_prompt_with_stabilizing_snapshot() {
         let mut runtime = LocalSeatRuntime::new(LocalSeatStatus {
             keyboard_device: "usb-kbd0",
@@ -10610,11 +10678,9 @@ mod tests {
     }
 
     #[test]
-    fn physical_pi_hdmi_input_echo_waits_for_terminal_bootstrap_status() {
-        assert!(!local_seat_hdmi_input_echo_allowed(false, false));
-        assert!(!local_seat_hdmi_input_echo_allowed(true, false));
-        assert!(!local_seat_hdmi_input_echo_allowed(false, true));
-        assert!(local_seat_hdmi_input_echo_allowed(true, true));
+    fn physical_pi_hdmi_input_echo_follows_root_console_not_wifi_terminal() {
+        assert!(!local_seat_hdmi_input_echo_allowed(false));
+        assert!(local_seat_hdmi_input_echo_allowed(true));
     }
 
     #[test]

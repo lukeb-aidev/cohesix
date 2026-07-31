@@ -545,6 +545,12 @@ use pi4_driver_abi::{
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
+    DriverRuntimeSdioClockSnapshot, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
+};
+#[cfg(any(target_os = "none", test))]
+use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE, DRIVER_RUNTIME_RESERVED_ROOT_BADGE,
 };
@@ -13084,6 +13090,13 @@ fn sdio_external_dma_success<I: SdioTransferIo>(
     io: &mut I,
 ) -> RuntimeCommandTurn {
     let identity = cursor.identity;
+    if identity.descriptor.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG && identity.arg != 0 {
+        // This record is passive evidence, never command authority. A missing
+        // completed lifetime or unavailable ring publication makes Gate 4
+        // diagnostics fail closed, but cannot turn successful physical
+        // HOST_CONFIG work into a second boot-failure lane.
+        let _ = sdio_clock_snapshot_publish_for_host_config(cursor, io);
+    }
     sdio_clear_last_transfer_failure();
     SDIO_RUNTIME_FLAGS.fetch_or(ENGINE_STATE_TX_PROGRESS, Ordering::AcqRel);
     if identity.descriptor.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG {
@@ -18832,14 +18845,24 @@ fn sdio_execute_via_bus_link_with_descriptor_flags(
     Some(completion.result)
 }
 
-fn cyw43_configure_sdio_host(target_hz: u32, flags: u16) -> bool {
+fn cyw43_configure_sdio_host(
+    target_hz: u32,
+    flags: u16,
+    _cccr_speed: Option<u8>,
+    _cccr_interface: Option<u8>,
+) -> bool {
     #[cfg(not(target_os = "none"))]
     {
         #[cfg(test)]
         TEST_CYW43_HOST_CONFIG_CALLS.fetch_add(1, Ordering::AcqRel);
         #[cfg(test)]
         if TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.load(Ordering::Acquire) {
-            return cyw43_configure_sdio_host_via_bus_link(target_hz, flags);
+            return cyw43_configure_sdio_host_via_bus_link(
+                target_hz,
+                flags,
+                _cccr_speed,
+                _cccr_interface,
+            );
         }
         return sdio_apply_host_config(target_hz, flags);
     }
@@ -18849,12 +18872,26 @@ fn cyw43_configure_sdio_host(target_hz: u32, flags: u16) -> bool {
             cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
             return false;
         }
-        cyw43_configure_sdio_host_via_bus_link(target_hz, flags)
+        cyw43_configure_sdio_host_via_bus_link(target_hz, flags, _cccr_speed, _cccr_interface)
     }
 }
 
 #[cfg(any(target_os = "none", test))]
-fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
+fn cyw43_configure_sdio_host_via_bus_link(
+    target_hz: u32,
+    mut flags: u16,
+    cccr_speed: Option<u8>,
+    cccr_interface: Option<u8>,
+) -> bool {
+    let mut reserved = 0u16;
+    if let Some(speed) = cccr_speed {
+        flags |= DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_SPEED_VALID;
+        reserved |= u16::from(speed);
+    }
+    if let Some(interface) = cccr_interface {
+        flags |= DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_INTERFACE_VALID;
+        reserved |= u16::from(interface) << 8;
+    }
     let sequence = cyw43_sdio_bus_link_next_sequence();
     let desc = DriverRuntimeSdioCommandDescriptor {
         op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
@@ -18866,7 +18903,7 @@ fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
         block_size: 0,
         block_count: 0,
         flags,
-        reserved: 0,
+        reserved,
         timeout_us: sdio_owner_descriptor_timeout_us(0),
     };
     if !desc.valid() {
@@ -18901,7 +18938,12 @@ fn cyw43_configure_sdio_host_via_bus_link(target_hz: u32, flags: u16) -> bool {
 }
 
 #[cfg(all(not(target_os = "none"), not(test)))]
-fn cyw43_configure_sdio_host_via_bus_link(_target_hz: u32, _flags: u16) -> bool {
+fn cyw43_configure_sdio_host_via_bus_link(
+    _target_hz: u32,
+    _flags: u16,
+    _cccr_speed: Option<u8>,
+    _cccr_interface: Option<u8>,
+) -> bool {
     true
 }
 
@@ -23541,7 +23583,7 @@ fn cyw43_sdio_card_init_step(
                     pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_CYW43_CARD_HOST_CONFIG_BEGIN,
                     aux0,
                 );
-                if !cyw43_configure_sdio_host(SDHCI_STARTUP_CLOCK_HZ, 0) {
+                if !cyw43_configure_sdio_host(SDHCI_STARTUP_CLOCK_HZ, 0, None, None) {
                     return cyw43_card_init_fault(state, FAULT_CYW43_TRANSPORT_HOST_BUS_WIDTH);
                 }
                 state.card_init_phase = CYW43_CARD_INIT_PHASE_CMD0;
@@ -24149,6 +24191,7 @@ fn cyw43_configure_linux_normal_lane_step(
                     FAULT_CYW43_TRANSPORT_HIGH_SPEED,
                 ));
             }
+            state.card_lane.desired_speed = speed;
             state.card_high_speed = true;
             state.card_lane.phase = Cyw43CardLanePhase::HostClock;
             Ok(false)
@@ -24162,6 +24205,8 @@ fn cyw43_configure_linux_normal_lane_step(
             if !cyw43_configure_sdio_host(
                 cyw43_sdio_operating_clock_hz(state.card_high_speed),
                 flags,
+                Some(state.card_lane.desired_speed),
+                None,
             ) {
                 return Err(cyw43_fail_card_lane(
                     state,
@@ -24220,6 +24265,8 @@ fn cyw43_configure_linux_normal_lane_step(
             if !cyw43_configure_sdio_host(
                 cyw43_sdio_operating_clock_hz(state.card_high_speed),
                 DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT | high_speed,
+                Some(state.card_lane.desired_speed),
+                Some(state.card_interface_control),
             ) {
                 return Err(cyw43_fail_card_lane(
                     state,
@@ -44453,6 +44500,148 @@ fn sdio_physical_lifetime_publish(_record: DriverRuntimeSdioPhysicalLifetimeReco
     true
 }
 
+#[cfg(any(target_os = "none", test))]
+fn sdio_clock_snapshot_publish_for_host_config<I: SdioTransferIo>(
+    cursor: SdioExternalDmaRequestCursor,
+    io: &mut I,
+) -> bool {
+    let identity = cursor.identity;
+    if identity.descriptor.op != DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG
+        || identity.sequence == 0
+        || identity.arg == 0
+    {
+        return false;
+    }
+    let Some(lifetime) = sdio_physical_lifetime_snapshot() else {
+        return false;
+    };
+    if lifetime.active()
+        || lifetime.completed_epoch == 0
+        || lifetime.completed_epoch != lifetime.begun_epoch
+    {
+        return false;
+    }
+    let timer_clock_hz = runtime_timer_freq_hz();
+    if timer_clock_hz == 0 || timer_clock_hz > u64::from(u32::MAX) {
+        return false;
+    }
+    let requested_clock_hz = SDIO_REQUESTED_CLOCK_HZ.load(Ordering::Acquire);
+    let effective_clock_hz = SDIO_ACTIVE_CLOCK_HZ.load(Ordering::Acquire);
+    let clock_control = io.read16(SDHCI_CLOCK_CONTROL);
+    let host_control = io.read8(SDHCI_HOST_CONTROL);
+    let mut flags = DriverRuntimeSdioClockSnapshot::FLAG_REQUEST_VALID
+        | DriverRuntimeSdioClockSnapshot::FLAG_CLOCK_READBACK_VALID;
+    if clock_control & SDHCI_CLOCK_INT_STABLE != 0 {
+        flags |= DriverRuntimeSdioClockSnapshot::FLAG_INTERNAL_CLOCK_STABLE;
+    }
+    if clock_control & SDHCI_CLOCK_CARD_EN != 0 {
+        flags |= DriverRuntimeSdioClockSnapshot::FLAG_CARD_CLOCK_ENABLED;
+    }
+    if host_control & SDHCI_HOST_CONTROL_4BIT != 0 {
+        flags |= DriverRuntimeSdioClockSnapshot::FLAG_HOST_WIDTH_4BIT;
+    }
+    let descriptor = identity.descriptor;
+    let cccr_speed = (descriptor.reserved & 0xff) as u8;
+    let cccr_interface = (descriptor.reserved >> 8) as u8;
+    if descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_SPEED_VALID != 0 {
+        flags |= DriverRuntimeSdioClockSnapshot::FLAG_CCCR_SPEED_VALID;
+        if cccr_speed & DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS != 0 {
+            flags |= DriverRuntimeSdioClockSnapshot::FLAG_CARD_HIGH_SPEED;
+        }
+    }
+    if descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_INTERFACE_VALID != 0 {
+        flags |= DriverRuntimeSdioClockSnapshot::FLAG_CCCR_INTERFACE_VALID;
+    }
+    let snapshot = DriverRuntimeSdioClockSnapshot {
+        magic: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC,
+        version: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
+        len: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+        sequence: identity.sequence,
+        physical_lifetime_epoch: lifetime.completed_epoch,
+        requested_clock_hz,
+        base_clock_hz: BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ,
+        effective_clock_hz,
+        timer_clock_hz: timer_clock_hz as u32,
+        divider: cursor.config_divider,
+        clock_control,
+        host_control,
+        cccr_speed,
+        cccr_interface,
+        flags,
+        reserved: 0,
+    };
+    if requested_clock_hz != identity.arg || !snapshot.valid() {
+        return false;
+    }
+
+    let ring = RuntimeRingWindow::local();
+    let offset = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
+    if !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, sequence),
+        0,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, magic),
+        snapshot.magic,
+    ) || !ring.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, version),
+        snapshot.version,
+    ) || !ring.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, len),
+        snapshot.len,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, physical_lifetime_epoch),
+        snapshot.physical_lifetime_epoch,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, requested_clock_hz),
+        snapshot.requested_clock_hz,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, base_clock_hz),
+        snapshot.base_clock_hz,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, effective_clock_hz),
+        snapshot.effective_clock_hz,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, timer_clock_hz),
+        snapshot.timer_clock_hz,
+    ) || !ring.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, divider),
+        snapshot.divider,
+    ) || !ring.write_u16(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, clock_control),
+        snapshot.clock_control,
+    ) || !ring.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, host_control),
+        snapshot.host_control,
+    ) || !ring.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, cccr_speed),
+        snapshot.cccr_speed,
+    ) || !ring.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, cccr_interface),
+        snapshot.cccr_interface,
+    ) || !ring.write_u8(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, flags),
+        snapshot.flags,
+    ) || !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, reserved),
+        snapshot.reserved,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    if !ring.write_u32(
+        offset + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, sequence),
+        snapshot.sequence,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        DRIVER_TASK_RING_VADDR + offset,
+        usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES),
+    );
+    true
+}
+
 fn sdio_physical_lifetime_begin() -> Option<u32> {
     let mut record = sdio_physical_lifetime_snapshot()?;
     if record.active() {
@@ -52308,10 +52497,87 @@ mod tests {
         }
     }
 
+    fn establish_completed_sdio_physical_lifetime_for_test(epoch: u32) {
+        assert_ne!(epoch, 0);
+        assert!(sdio_physical_lifetime_publish(
+            DriverRuntimeSdioPhysicalLifetimeRecord {
+                begun_epoch: epoch,
+                completed_epoch: epoch,
+                ..DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+            }
+        ));
+    }
+
+    fn sdio_clock_snapshot_for_test() -> Option<DriverRuntimeSdioClockSnapshot> {
+        let ring = RuntimeRingWindow::local();
+        let base = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
+        let read = || {
+            Some(DriverRuntimeSdioClockSnapshot {
+                magic: ring.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, magic),
+                )?,
+                version: ring.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, version),
+                )?,
+                len: ring
+                    .read_u16(base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, len))?,
+                sequence: ring.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, sequence),
+                )?,
+                physical_lifetime_epoch: ring.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        physical_lifetime_epoch
+                    ),
+                )?,
+                requested_clock_hz: ring.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        requested_clock_hz
+                    ),
+                )?,
+                base_clock_hz: ring.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, base_clock_hz),
+                )?,
+                effective_clock_hz: ring.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        effective_clock_hz
+                    ),
+                )?,
+                timer_clock_hz: ring.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, timer_clock_hz),
+                )?,
+                divider: ring.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, divider),
+                )?,
+                clock_control: ring.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, clock_control),
+                )?,
+                host_control: ring.read_u8(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, host_control),
+                )?,
+                cccr_speed: ring.read_u8(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, cccr_speed),
+                )?,
+                cccr_interface: ring.read_u8(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, cccr_interface),
+                )?,
+                flags: ring
+                    .read_u8(base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, flags))?,
+                reserved: ring.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, reserved),
+                )?,
+            })
+        };
+        DriverRuntimeSdioClockSnapshot::stable_snapshot(read()?, read()?)
+    }
+
     fn reset_sdio_descriptor_seam_for_test() {
         reset_runtime_for_test();
         init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
         SDIO_RUNTIME_FLAGS.store(ENGINE_STATE_INITIALIZED, Ordering::Release);
+        establish_completed_sdio_physical_lifetime_for_test(1);
     }
 
     fn stage_u16(offset: usize, value: u16) {
@@ -71342,6 +71608,7 @@ mod tests {
                 | ENGINE_STATE_HW_READY,
             Ordering::Release,
         );
+        establish_completed_sdio_physical_lifetime_for_test(1);
         let owner_dpc_base =
             DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         dpc_event_ring_initialize_at(owner_dpc_base, generation);
@@ -77607,7 +77874,11 @@ mod tests {
             response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
             addr: CYW43_SDIO_FAST_CLOCK_HZ,
             flags: DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
-                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED,
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_SPEED_VALID
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_CCCR_INTERFACE_VALID,
+            reserved: u16::from(SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS)
+                | (u16::from(0xa2u8) << 8),
             timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
             ..DriverRuntimeSdioCommandDescriptor::empty()
         };
@@ -77650,7 +77921,78 @@ mod tests {
             SDIO_REQUESTED_CLOCK_HZ.load(Ordering::Acquire),
             CYW43_SDIO_FAST_CLOCK_HZ
         );
+        let snapshot = sdio_clock_snapshot_for_test()
+            .expect("host config publishes one stable SDIO-owner clock snapshot");
+        assert_eq!(snapshot.sequence, sequence);
+        assert_eq!(snapshot.physical_lifetime_epoch, 1);
+        assert_eq!(snapshot.requested_clock_hz, CYW43_SDIO_FAST_CLOCK_HZ);
+        assert_eq!(
+            snapshot.effective_clock_hz,
+            BCM2711_SDIO_EFFECTIVE_BASE_CLOCK_HZ / u32::from(snapshot.divider)
+        );
+        assert_ne!(
+            snapshot.clock_control & DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_INTERNAL_STABLE,
+            0,
+        );
+        assert_ne!(
+            snapshot.clock_control & DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_CARD_ENABLE,
+            0,
+        );
+        assert_eq!(snapshot.timer_clock_hz, runtime_timer_freq_hz() as u32);
+        assert_eq!(
+            snapshot.cccr_speed,
+            SDIO_CCCR_SPEED_SHS | SDIO_CCCR_SPEED_EHS
+        );
+        assert_eq!(snapshot.cccr_interface, 0xa2);
+        assert!(snapshot.gate4_ready());
         assert_eq!(SDIO_CMD_COUNT.load(Ordering::Acquire), 0);
+    }
+
+    #[test]
+    fn sdio_successful_host_config_does_not_depend_on_passive_clock_snapshot() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        assert!(sdio_physical_lifetime_publish(
+            DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        ));
+        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_5302);
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_NONE,
+            addr: CYW43_SDIO_FAST_CLOCK_HZ,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_HOST_BUS_WIDTH_4BIT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_HOST_HIGH_SPEED,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let sequence = 0x4843_4648;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.clock_stable_on_enable = true;
+        io.set_register(
+            SDHCI_HOST_VERSION,
+            sdio_merge_u16_word(0, SDHCI_HOST_VERSION, SDHCI_SPEC_300),
+        );
+
+        let mut turns = 0usize;
+        let completion = loop {
+            turns = turns.saturating_add(1);
+            assert!(turns < 100_000, "host config retained bound");
+            match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
+                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Complete(completion) => break completion,
+            }
+        };
+
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::progress(sequence, 1)
+        );
+        assert_eq!(sdio_clock_snapshot_for_test(), None);
+        assert_eq!(
+            SDIO_REQUESTED_CLOCK_HZ.load(Ordering::Acquire),
+            CYW43_SDIO_FAST_CLOCK_HZ
+        );
     }
 
     #[test]

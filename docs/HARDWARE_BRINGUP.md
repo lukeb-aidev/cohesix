@@ -782,6 +782,33 @@ still contains the preceding completed epoch. Ordinary Network service resumes
 only after the canonical pair transaction publishes a new completed lifetime
 and recovery has ended.
 
+Gate 4 clock evidence comes from the SDIO owner, not from inferred driver
+state. The final retained `HOST_CONFIG` publishes one passive 44-byte,
+sequence-last `DriverRuntimeSdioClockSnapshot` containing the completed
+physical-lifetime epoch, requested/base/effective clocks, decoded divisor,
+final `CLOCK_CONTROL` and `HOST_CONTROL` readbacks, read-back CCCR `SPEED` and
+`BUS_INTERFACE_CONTROL`, and generated virtual-counter frequency. Root accepts
+only two identical valid samples for the current completed lifetime; it does
+not read SDIO MMIO.
+
+On Pi 4, expect a 50,000,000 Hz request to resolve to 41,666,666 Hz from the
+250,000,000 Hz BCM2711 source and legal even divisor `6`, with internal clock
+stable, card clock enabled, CCCR `EHS`, and 4-bit width proved on both sides.
+Elapsed-time deadlines use `CNTVCT_EL0` at the generated 54,000,000 Hz
+`TIMER_CLOCK_HZ`. The effective 41,666,666 Hz value is the production setting,
+not a slow-clock fallback. A missing, torn, stale, zero, or partial snapshot
+blocks Gate 4 with explicit `unavailable` fields but does not rewrite an
+otherwise successful physical `HOST_CONFIG` completion. Capture the adjacent
+register detail and bounded Gate 4 line:
+
+```text
+wifi: evidence sdio_clock base=250000000Hz clock_control=<hex> host_control=<hex> card_high_speed=yes cccr_speed=<hex> ehs=yes cccr_if=<hex> timer_source=cntvct-el0 timer=54000000Hz
+wifi: gate 4 name=ht-clock status=<pass|blocked|fail> evidence=clock_snapshot=current sequence=<n> lifetime=<e> requested=50000000Hz effective=41666666Hz divider=6 stable=yes card_enabled=yes width=4bit source=sdio-owner next=backplane-window
+```
+
+This record is CYW43/SDIO-only. It does not change or instrument the GENET
+clock, descriptor, or service path.
+
 SDIO descriptor opcode 8 (`GENERATION_RESET`) and opcode 10
 (`GENERATION_COMMIT`) are retired, reserved tombstones. `wifi diag` must never
 show either as an admitted recovery phase. They are typed-rejected before
@@ -961,6 +988,15 @@ no RX, and a submitted TX with no copied frame ends the turn before ARP or op8
 work. In DHCP captures, this invariant prevents a received Offer from sitting
 behind the next Discover indefinitely.
 
+Once a valid current-generation frame is accepted, the retained op7 owner keeps
+its exact payload, digest, ticket, request, and generation across transient
+SDPCM-credit waits until a typed `Submitted` terminal or its real
+virtual-counter deadline. A fixed turn count is not a second lifetime bound:
+there is no eight-turn abandonment. Corruption, lost ownership, generation
+replacement, deadline expiry, or a typed fatal terminal remains fail-closed.
+The focused regression holds one immutable frame across twelve no-credit turns
+before successful submission.
+
 Bounded data traffic is legal while 8h passes: non-full root RX, pending data
 TX/ARP, runtime backlog, and an exact assigned current-generation NetData
 request do not by themselves block readiness. A stale prompt generation,
@@ -980,24 +1016,32 @@ evidence, not successful receive or permission to ignore later loss.
 Gate 8 data-consumer publication installs one identity-only RX cursor bound to
 the connection generation, pair epoch, and completed physical-lifetime epoch
 on the existing sole `NetData` op8 `RX_POLL`/DPC lane. It owns one
-32-millisecond lost-edge audit deadline scaled from the exported seL4 virtual
-counter. A proved current-generation child-to-root wake or live DPC-ring level
-remains the urgent source. If the linked notification chain loses or coalesces
-an edge, deadline expiry admits one `RX_HINTLESS_FIRSTREAD` audit through the
-same op8/HAL/SDIO owner. The SDIO runtime first inspects the hardware source; a
+progress-conditioned, 32-millisecond lost-edge watchdog deadline scaled from
+the exported seL4 virtual counter. Its passive progress signature comprises
+DPC presence, epoch, producer, consumer, and flags plus root-wake presence,
+hits, clears, and rechecks. Any signature change rebases the deadline and arms
+one later one-shot. A proved current-generation child-to-root wake or live
+DPC-ring level remains the urgent source. If the linked notification chain
+loses or coalesces an edge and no external progress occurs before expiry,
+exactly one `RX_HINTLESS_FIRSTREAD` inspection is admitted through the same
+op8/HAL/SDIO owner. The SDIO runtime first inspects the hardware source; a
 quiescent result performs no blind Function-2 read.
 
 The runtime signals on private-RX-queue empty-to-nonempty transition, HAL
 latches that wake, and root clears and immediately rechecks it only after an
 exact empty op8 terminal. This preserves an edge racing the clear while keeping
 the queue, DPC ring, and latched wake as durable level truth. Exact current
-non-fault `Idle`, `Progress`, or `FrameReady` terminals re-arm the audit;
-wrong-request, wrong-lifetime, stale, and fault terminals do not. Neither an
-accepted TX nor non-source queue work creates a second audit or owner. Retained
-owner and protocol continuations still advance on the sole op8/HAL/SDIO chain;
-GENET never reads or reports this state. In the paired pcap, check both that
-outbound TCP trains do not suppress peer ACK/FIN ingress and that inbound
-traffic after a quiet interval triggers a prompt reply without unrelated TX.
+non-fault `Idle`, `Progress`, or `FrameReady` terminal for the claimed
+watchdog ticket samples the post-probe progress baseline and suppresses another
+watchdog probe until external progress or identity replacement re-arms it.
+Elapsed time alone cannot produce repeated polling; wrong-request,
+wrong-lifetime, stale, and fault terminals consume neither the ticket nor the
+one-shot. Neither an accepted TX nor non-source queue work creates a second
+watchdog or owner. Retained owner and protocol continuations still advance on
+the sole op8/HAL/SDIO chain; GENET never reads or reports this state. In the
+paired pcap, check both that outbound TCP trains do not suppress peer ACK/FIN
+ingress and that inbound traffic after a quiet interval triggers a prompt reply
+without unrelated TX.
 
 Capture the passive scheduler, handoff, and retained-frontier lines from both
 `wifi diag` and `wifi probe-ht`:
@@ -1007,7 +1051,7 @@ wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=o
 wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
-wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|watching|audit-due> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
+wifi: data_handoff lane consumer=<blocked|open> rx_watch=<absent|stale|watching|watchdog-due|watchdog-probing|watchdog-suppressed> rx_generation=<n> rx_pair=<p> rx_physical=<e> deadline_probes=<n> terminals=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
@@ -1017,12 +1061,18 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 ```
 
 The retained field names remain for diagnostic and normalizer compatibility.
-`deadline_probes` counts admitted lost-edge audits. `terminals` advances only
-for an exact non-fault hintless op8 source-probe terminal caused by a real
-DPC/root-wake level or the same-owner audit; queue-only terminals advance
-neither field. `netstats: wifi_post_dhcp_rx` counts frames only when they cross
-an actual smoltcp delivery boundary, so trace-only preserve/deliver events
-cannot count one frame twice.
+`watching` is an armed deadline, `watchdog-due` is one unclaimed expiry,
+`watchdog-probing` owns the exact op8 ticket, and `watchdog-suppressed` is the
+completed one-shot awaiting external progress or identity replacement.
+`deadline_probes` counts claimed lost-edge watchdog one-shots rather than
+elapsed intervals. `terminals` advances only for an exact non-fault hintless
+op8 source-probe terminal caused by a real DPC/root-wake level or the
+same-owner watchdog; queue-only terminals advance neither field. After the
+one-shot terminal, both counters remain stable at idle until external
+DPC/root-wake progress or identity replacement re-arms one successor.
+`netstats: wifi_post_dhcp_rx` counts frames only when they cross an actual
+smoltcp delivery boundary, so trace-only preserve/deliver events cannot count
+one frame twice.
 
 A live NetStack frontier becomes authoritative only with complete current
 `8a`-through-`8h` proof and no active pair recovery. Until then, retain recovery,
@@ -1311,18 +1361,22 @@ grants, one HAL owner, one linked SDIO runtime issuer, and no private physical
 drain loop.
 
 The as-built source candidate has no post-TX receive probe and no second
-receive lane. Its exact-lifetime cursor carries the 32-ms same-owner source
-audit described above so a lost/coalesced notification edge cannot leave a
-live card silent indefinitely. Queues, retained owners, and protocol
-continuations still schedule only their own already-proved work. The 25-ms
-virtual-counter cap fences only fresh-parent admission; an already admitted
-exact parent continues to its typed terminal subject to physical/dispatch
-yields and the hard 192-turn bound. HAL must revalidate that parent's
-root-continuation operation, nonzero immutable fingerprint, request, logical
-generation, pair epoch, open priority reservations, and restart-free state
-across the check. The next exact image must preserve first-pair startup and,
-before any peer-warming traffic on every lifetime, answer one first Echo
-Request across the ordered cold trace
+receive lane. Its exact-lifetime cursor carries the progress-conditioned,
+one-shot 32-ms same-owner lost-edge watchdog described above so a
+lost/coalesced notification edge cannot leave a live card silent indefinitely
+without turning idle into periodic polling. Queues, retained owners, and
+protocol continuations still schedule only their own already-proved work. The
+25-ms virtual-counter cap fences only fresh-parent admission; an already
+admitted exact parent continues to its typed terminal subject to
+physical/dispatch yields and the hard 192-turn bound. The independent 25-ms
+operator checkpoint clock admits one complete
+`Serial -> LocalSeat -> Dispatch -> pending Display` rotation only when elapsed
+time requires it; operation count alone never yields. HAL must revalidate that
+parent's root-continuation operation, nonzero immutable fingerprint, request,
+logical generation, pair epoch, open priority reservations, and restart-free
+state across the check. The next exact image must preserve first-pair startup.
+Before any peer-warming traffic on every lifetime, it must answer one first
+Echo Request across the ordered cold trace
 `Echo Request -> Pi ARP Request -> host ARP Reply -> matching Echo Reply`
 without a second request or duplicate reply. Record that semantic/elapsed
 sample separately, then require ARP-warmed request-to-first-payload p95 at or
@@ -1897,14 +1951,18 @@ stays retained at the ordinary root console, retries the service proof every
 miss must not disable Wi-Fi for the remainder of the boot. While a Wi-Fi HAL
 scope is held, serial uses only that proved
 linked route and local-seat handling consumes already-buffered bytes only; USB
-backend polling, HDMI/echo re-entry, and network polling remain fenced until the
-scope is released. High-impact `CYW43_BOOTSTRAP_SUPERVISOR` lifecycle records
+backend polling, HDMI frame submission, and network polling remain fenced until
+the scope is released. High-impact `CYW43_BOOTSTRAP_SUPERVISOR` lifecycle records
 retain their exact machine-readable form on serial and in the bounded
 `/log/queen.log` ledger. HDMI instead shows a concise `[drivers] WiFi ...`
 semantic rendering on a later isolated-display turn; it must not render the raw
 supervisor record. The `telemetry_sinks=serial+qlog+hdmi` field declares the
 configured routing targets without requiring byte-identical presentation; it
 is not proof that an unavailable or saturated display accepted the mirror.
+Root-owned echo bookkeeping for already-buffered USB bytes is permitted while
+the Wi-Fi HAL scope is held, but the resulting frame is submitted only on a
+separate later Display turn. This keeps typed characters visible without
+combining USB, HDMI, or CYW43 hardware operations.
 The first physical frontier explicitly reports
 `[drivers] WiFi starting one CYW43/SDIO physical lifetime`. An unchanged
 frontier may append `(still working)` after five virtual-time seconds. This
@@ -1982,25 +2040,31 @@ parser, or response work after the one-shot edge cursor has already been
 consumed. The identity-only lifetime cursor is permission rather than work
 demand, and an authenticated but idle socket is not a weighting reason. Root
 forces op8/op10 `RX_HINTLESS_FIRSTREAD` only for a proved current-generation
-root wake or live DPC-ring level. Otherwise an empty receive poll remains
-queue-only. A forced empty poll may combine the software
-`Queue -> SourceProbe` transition with the source probe as its single new
-physical action, but cached completion/event replay and FIFO recheck remain
-later owner work; no turn gains a second physical action.
+root wake, live DPC-ring level, or one due progress-conditioned lost-edge
+watchdog. Otherwise an empty receive poll remains queue-only. A forced empty
+poll may combine the software `Queue -> SourceProbe` transition with the source
+probe as its single new physical action, but cached completion/event replay and
+FIFO recheck remain later owner work; no turn gains a second physical action.
 
 One continuation quantum has the compiler-declared CYW43
 `max_ops_per_turn` hard bound (currently 192 separately opened outer turns).
 A 25-ms seL4 virtual-counter cap separately fences admission of a fresh
-physical parent. Every third admitted Network operation performs one bounded
-`Serial -> LocalSeat -> Dispatch -> pending Display` checkpoint. It submits no
-NIC operation and preserves the exact CYW43 parent and pair-priority lease
-before resuming the same quantum. A fresh CYW43 wake latches admission without
-rewriting any already-scheduled console phase. A complete TCP command or
-pending actual physical response/buffered input is likewise an immediate typed
-exit into a fairness fence. That fence preserves unfinished Wi-Fi work but
-requires `Serial`,
+physical parent. A separate 25-ms virtual-counter clock bounds elapsed time
+between operator checkpoints. On expiry it completes
+`Serial -> LocalSeat -> Dispatch`, leaves at most one `Display` turn pending,
+submits no NIC operation, preserves the exact CYW43 parent and pair-priority
+lease, and resets only after `Dispatch` before resuming the same quantum.
+Operation count alone never triggers this checkpoint. A fresh CYW43 wake
+latches admission without rewriting any already-scheduled console phase. A
+complete TCP command or pending actual physical response/buffered input is
+likewise an immediate typed exit into a fairness fence. That fence preserves
+unfinished Wi-Fi work but requires `Serial`,
 optional `LocalSeat`, and `Dispatch` to receive one bounded turn before Network
-resumes. Reboot or quarantine invalidates the Wi-Fi-only scheduler state. An
+resumes. If Dispatch queues HDMI echo while a partial command retains that
+fence, one Display turn runs before the next Serial turn unless a reboot
+acknowledgement or physical response tail already owns Serial. The echo remains
+pending in that case. Display does not close, replace, or service the retained
+CYW43 parent. Reboot or quarantine invalidates the Wi-Fi-only scheduler state. An
 elapsed quantum with no exact parent admits no fresh NIC/SDIO parent. An exact
 already-`Prepared` or already-`Issued` parent continues despite elapsed time
 until a typed terminal, physical/dispatch yield, or the hard 192-turn bound;
@@ -2040,6 +2104,7 @@ Run `netstats` after WiFi readiness and again after the sequential `.coh`
 sample. Alongside the existing quantum records, selected WiFi must emit:
 
 ```text
+netstats: cyw43_quantum runs=<n> turns=<n> max_turns=<n> max_elapsed_us=<n> operator_yields=<n> checkpoint_ms=25
 netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
 netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
@@ -2057,10 +2122,14 @@ for latency or pressure proof. Repeated steady parents should increase
 `operator_yields`, and idle, turn-cap, time-cap, physical, and guard exits.
 `operator_yields` counts bounded physical-console checkpoints
 (`Serial -> LocalSeat -> Dispatch -> pending Display`) and may be nonzero only
-on selected CYW43. Those counters remain zero for GENET, and GENET omits the
-WiFi-only priority-lease records. `Display` performs at most one retained HDMI
-attach or pending-frame turn. Without a local seat, the rotation skips directly
-from `Serial` to `Dispatch` and from `Network` back to `Serial`.
+on selected CYW43. `checkpoint_ms=25` is the elapsed-time cadence; no
+network-operation count is a second yield trigger. Those counters remain zero
+for GENET, and GENET omits the WiFi-only priority-lease records. `Display`
+performs at most one retained HDMI attach or pending-frame turn. Pending input
+echo takes that Display turn immediately after Dispatch even when a partial
+command retains the operator fence; Display returns to Serial without admitting
+Network. Without a local seat, the rotation skips directly from `Serial` to
+`Dispatch` and from `Network` back to `Serial`.
 
 The TCP console retains one parser/authentication/session authority. After its
 active socket enters the sole `Draining`/`PeerCloseWait`/`Closing` lane, one

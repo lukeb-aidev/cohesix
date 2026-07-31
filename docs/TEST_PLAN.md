@@ -1205,6 +1205,22 @@ function or pull mismatch. Target bootstrap must fail closed if that stable
 readback was not published, and passive `wifi diag` must render both complete
 GPFSEL3/GPPUPPDN2 words and the expected masked values.
 
+Gate 4 coverage must exercise the ABI, SDIO owner, and passive root reader as
+one proof chain. ABI tests must keep the 44-byte
+`DriverRuntimeSdioClockSnapshot` disjoint from the CYW43 parent descriptor and
+SDPCM TX aperture, reject torn/invalid samples, and validate the
+HOST_CONFIG-only CCCR readback fields. The retained owner test must publish a
+current completed-lifetime snapshot and prove a 50,000,000 Hz request becomes
+41,666,666 Hz from the 250,000,000 Hz source and divisor `6`, with final
+internal-stable/card-enable, CCCR `EHS`, host/card 4-bit, and generated
+54,000,000 Hz `CNTVCT_EL0` timer evidence. Root ring tests must decode the same
+record without a write or child turn. `wifi diag` tests must prove a current
+snapshot can pass Gate 4 and that a missing or stale snapshot fails Gate 4 with
+explicit `unavailable` fields; `clock=0Hz width=unknown` is forbidden for the
+linked-runtime path. A separate owner test must prove snapshot-publication
+failure cannot convert a successful physical `HOST_CONFIG` into a fault. These
+tests must leave the GENET path unchanged.
+
 The production pull-up-clear turn must perform exactly one child-runtime SDIO
 operation: Function 1 CMD52, `SBSDIO_FUNC1_SDIOPULLUP=0`. It must return before
 the first ChipCommon action and advance only after the exact completion. Each
@@ -1522,26 +1538,35 @@ fresh physical parent.
 
 Gate 8 data-consumer publication must install one identity-only lifetime RX
 cursor bound to the current connection generation, pair epoch, and completed
-physical-lifetime epoch. It must own one 32-ms virtual-counter-scaled lost-edge
-audit deadline on the existing op8 owner. Its healthy diagnostic state is
-`watching`, becoming `audit-due` only after expiry. Before expiry, quiet turns
-with no DPC/root wake, queue, retained owner, or protocol continuation must
-leave the shared command sequence, op8 count, priority-lease counters, DPC
+physical-lifetime epoch. It must own one progress-conditioned, 32-ms
+virtual-counter-scaled lost-edge watchdog deadline on the existing op8 owner.
+Its passive progress signature must include DPC presence, epoch, producer,
+consumer, and flags plus root-wake presence, hits, clears, and rechecks. A
+changed signature must rebase the deadline and arm one later one-shot. Its
+healthy diagnostic state is `watching`, becoming `watchdog-due` only after a
+no-progress expiry, `watchdog-probing` while its exact ticket is active, and
+`watchdog-suppressed` after the terminal until re-arm. Before expiry, quiet
+turns with no DPC/root wake, queue, retained owner, or protocol continuation
+must leave the shared command sequence, op8 count, priority-lease counters, DPC
 counters, `deadline_probes`, and `terminals` unchanged.
 
 Root may set `RX_HINTLESS_FIRSTREAD` for a proved current-generation
-child-to-root wake, live DPC-ring level, or one due same-owner audit. The
+child-to-root wake, live DPC-ring level, or one due same-owner watchdog. The
 runtime must signal its private RX queue only on empty-to-nonempty transition.
 HAL must preserve a latched level after notification coalescing, and exact
 empty op8 completion must clear and immediately recheck it so an edge racing
-the clear remains pending. One level or due interval may admit one fresh source
-probe through the existing sole op8, HAL, and linked SDIO owner; a quiescent
-audit may inspect source state but must perform no blind Function-2 read.
+the clear remains pending. One level or one due watchdog may admit one fresh
+source probe through the existing sole op8, HAL, and linked SDIO owner; a
+quiescent watchdog may inspect source state but must perform no blind
+Function-2 read.
 Cached completion/event replay remains later owner work and no turn gains a
 second physical action. Queue-only, wrong-request, wrong-identity, stale, and
-fault terminals must not increment or re-arm the audit. Exact current non-fault
-`Idle`, `Progress`, or `FrameReady` terminal may increment the terminal counter
-once and re-arm the next interval.
+fault terminals must not increment or consume the claimed watchdog one-shot.
+An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for
+that ticket may increment the terminal counter once, sample the post-probe
+progress baseline, and suppress another probe. Elapsed time alone must not
+reissue it; only later external progress or identity replacement may re-arm
+one successor.
 
 Every non-source durable-work reason—pre-poll, data TX, ARP TX, runtime
 descriptor, root RX, control reply, logical owner, terminal drain, host EAPOL,
@@ -1550,31 +1575,49 @@ fail both fresh-op8 gates without creating a prompt owner, linked-runtime turn,
 or source-terminal increment. Those reasons still retain EventPump service for
 their own bounded owner work.
 
-An accepted data TX must not create receive demand, alter or re-arm the audit,
-force a following source probe, or fence another credited TX. Conversely, an
-already-retained immutable op7 or op8 must continue through its exact
-ticket/request/payload terminal without displacement or competing cursor.
+An accepted data TX must not create receive demand, alter or re-arm the
+watchdog, force a following source probe, or fence another credited TX.
+Conversely, an already-retained immutable op7 or op8 must continue through its
+exact ticket/request/payload terminal without displacement or competing
+cursor.
+Once a valid current-generation op7 frame has been accepted, its payload,
+digest, ticket, request, and generation must remain immutable through transient
+SDPCM-credit waits until typed `Submitted` or the retained virtual-counter
+deadline. No fixed turn count may abandon it. Focused coverage must hold one
+frame for at least twelve no-credit turns, exceed the retired eight-turn bound,
+and then prove one successful submission without payload, ticket, request, or
+generation substitution. Corruption, lost ownership, generation replacement,
+deadline expiry, and typed fatal terminals must remain fail-closed.
 Connection-generation, pair, physical-lifetime, recovery, quarantine, reboot,
 and selected-NIC changes must clear the lifetime cursor. GENET must never read,
 install, clear, or report this state.
 
 Authentication without pending work must not extend the quantum. Tests must
-prove that every third admitted Network operation performs one bounded
-`Serial -> LocalSeat -> Dispatch -> pending Display` checkpoint, even when no
-root-side USB byte was already visible. The checkpoint must perform zero NIC
-operations, preserve the exact CYW43 parent/lease identity, and resume that same
-quantum. A fresh wake must latch admission without rewriting a scheduled
-LocalSeat, Dispatch, or Display phase. Tests must advance time between
-outer turns and prove that a quantum already at its deadline and without an
-exact retained parent returns to `Serial` with zero additional NIC/SDIO
-operations. An idle selected interface must not acquire the pair priority
-lease. The first actionable selected-WiFi turn must reserve and boost SDIO then
-CYW43 once; later exact current-generation parents in the same quantum must add
-no scheduler writes. Every quantum exit path must latch the fresh-work close
-fence. An exact active parent, including an ABI-invisible sequence-zero
-`Prepared` parent, must prevent an open lease from closing between stages only
-after HAL proves a root-continuation operation, nonzero immutable fingerprint,
-matching request and logical generation, current pair epoch, open priority
+prove that an independent 25-ms virtual-counter clock, not operation count,
+performs one bounded `Serial -> LocalSeat -> Dispatch` checkpoint and leaves at
+most one `Display` turn pending after elapsed expiry. The checkpoint must
+perform zero NIC operations, preserve the exact CYW43 parent/lease and
+quantum-composition identity, complete the three physical-console phases, reset
+only its own cadence clock after `Dispatch`, and resume that same quantum. More
+than three cheap Network operations inside 25 ms must perform no checkpoint. A
+fresh wake must latch admission without rewriting a scheduled LocalSeat,
+Dispatch, or Display phase. Tests must advance time between outer turns and
+prove that a partial local-seat line with pending HDMI echo takes
+`Dispatch -> Display -> Serial`, retains the exact operator fence/parent, and
+admits no intervening Network turn. With the same pending echo, an owned reboot
+acknowledgement or physical response tail must instead route Dispatch directly
+to Serial and leave the echo pending. Tests must also
+prove that a quantum already at its deadline and without an exact retained
+parent returns to `Serial` with zero additional NIC/SDIO operations. An idle
+selected interface must not acquire the pair priority lease. The first
+actionable selected-WiFi turn must reserve and boost SDIO then CYW43 once;
+later exact current-generation parents in the same quantum must add no
+scheduler writes. Every quantum exit path must latch the fresh-work close
+fence. An exact active parent, including an ABI-invisible
+sequence-zero `Prepared` parent, must prevent an open lease from closing
+between stages only after HAL proves a root-continuation operation, a nonzero
+immutable fingerprint, matching request and logical generation, current pair
+epoch, open priority
 reservations, and no pair restart or context replay. This identity must remain
 stable across the EventPump's before/after snapshot. If close has already
 fenced it, successive admitted `Network` turns may advance only that same
@@ -1610,22 +1653,28 @@ the next phase must be `Serial` rather than `Display`. `netstats` must expose
 quantum count, turns, maximum duration, `operator_yields`, and exit reasons;
 `operator_yields` counts bounded physical-console checkpoints
 (`Serial -> LocalSeat -> Dispatch -> pending Display`) and may be nonzero only
-for selected CYW43. Selected WiFi must additionally emit:
+for selected CYW43. The reported checkpoint cadence is 25 ms and no
+network-operation count is a second trigger. Selected WiFi must additionally
+emit:
 
 ```text
+netstats: cyw43_quantum runs=<n> turns=<n> max_turns=<n> max_elapsed_us=<n> operator_yields=<n> checkpoint_ms=25
 netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
 netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
 
 `wifi diag` and `wifi probe-ht` must preserve the compatible handoff grammar
-with `rx_watch=<absent|stale|watching|audit-due>`.
-`deadline_probes` counts admitted audits, and `terminals` may advance only for
-exact non-fault hintless op8 terminals caused by real root-wake/DPC source
-probes or one due audit. Tests must prove one audit per interval, exact
-terminal-only re-arm, no blind Function-2 read for a quiescent source, and zero
-GENET interaction. The maximum-width formatting fixture may exercise arbitrary
-field values but must not be treated as a reachable driver state.
+with
+`rx_watch=<absent|stale|watching|watchdog-due|watchdog-probing|watchdog-suppressed>`.
+`deadline_probes` counts claimed watchdog one-shots, not elapsed intervals, and
+`terminals` may advance only for exact non-fault hintless op8 terminals caused
+by real root-wake/DPC source probes or one due watchdog. Tests must prove one
+probe for a stalled identity, suppression after its exact terminal, rebase and
+re-arm only after later external progress, no masking of a genuine level, no
+blind Function-2 read for a quiescent source, identity-change clearing, and
+zero GENET interaction. The maximum-width formatting fixture may exercise
+arbitrary field values but must not be treated as a reachable driver state.
 
 The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
@@ -1651,7 +1700,11 @@ The focused acceptance tests
 `cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do`,
 `cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
 `cyw43_steady_rx_poll_forces_source_only_for_a_proved_level`,
-`cyw43_lost_edge_audit_is_one_current_lifetime_hintless_op8_per_interval`,
+`cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns`,
+`cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
+`cyw43_lost_edge_watchdog_progress_rebases_and_rearms_one_shot`,
+`cyw43_lost_edge_watchdog_never_masks_a_genuine_root_wake_level`,
+`cyw43_lost_edge_watchdog_clears_on_generation_identity_change`,
 `cyw43_receive_delivers_queued_rx_on_paired_tx_terminal_turn`,
 `cyw43_copied_rx_is_delivered_when_pending_data_tx_reaches_terminal`,
 `cyw43_data_tx_terminal_without_copied_rx_ends_outer_physical_turn`,
@@ -1659,6 +1712,9 @@ The focused acceptance tests
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
 `cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal`,
 `cyw43_open_network_parent_requires_complete_current_identity`,
+`linked_cyw43_operator_checkpoint_preserves_quantum_composition_state`,
+`linked_cyw43_operator_probe_completes_serial_command_under_durable_pressure`,
+`linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
 `linked_cyw43_hard_turn_cap_wins_simultaneous_time_deadline`,
 `linked_cyw43_closing_lease_drains_exact_parent_contiguously`,
 `linked_cyw43_unleased_boundary_adopts_only_one_exact_parent`, and
@@ -1703,12 +1759,13 @@ is also non-passing. The power-off boot and R01 each exchanged 40 Discovers /
 39 Offers without a Request; R02-R05 each completed one DORA, yielding only
 4/5 bootstrap. R05 then dropped 21/21 host Echo Requests after its
 DPC/root-wake source state stopped advancing. This is the hardware evidence
-for the retained-TX/queued-Offer ordering repair and 32-ms lost-edge audit.
-Wi-Fi `.coh` and pressure remain withheld for that image. GENET on the same
-image passed the cold-neighbor request/ARP/reply sequence, `.coh`, and a
-one-minute pressure control with a clean TCP flow and 1.216 ms p50 / 1.538 ms
-p95 request-to-first-Pi-payload latency. The new Wi-Fi source remains pending
-rebuild, flash, and hardware proof.
+for the retained-TX/queued-Offer ordering repair and for a bounded lost-edge
+safeguard. The current safeguard is the progress-conditioned one-shot
+watchdog, not a periodic audit. Wi-Fi `.coh` and pressure remain withheld for
+that image. GENET on the same image passed the cold-neighbor request/ARP/reply
+sequence, `.coh`, and a one-minute pressure control with a clean TCP flow and
+1.216 ms p50 / 1.538 ms p95 request-to-first-Pi-payload latency. The new Wi-Fi
+source remains pending rebuild, flash, and hardware proof.
 
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
@@ -1723,9 +1780,11 @@ CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
 latch. Its scheduler form remains one bounded EventPump Network quantum with
 physical-console checkpoints, exact grants, one HAL owner, and one linked SDIO
 runtime issuer; no test may pass by adding a timer poller or private physical
-drain loop. The single 32-ms deadline on the existing op8 owner is a
-source-audit safeguard for Cohesix's extra linked notification boundaries, not
-a second poller; a quiescent audit must stop at source inspection.
+drain loop. The single 32-ms progress-conditioned one-shot on the existing op8
+owner is a lost-edge safeguard for Cohesix's extra linked notification
+boundaries, not a second poller. A quiescent inspection must stop at the source
+and suppress another watchdog probe until external DPC/root-wake progress or
+identity replacement.
 
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
@@ -1765,9 +1824,12 @@ request-to-first-payload samples for the CYW43 cadence threshold. The mandatory
 tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
 29 sequential requests/s. The aggressive low-overhead target is p95 at most 10
 ms and at least 100 requests/s. At true idle, `rx_watch=watching` may become
-`audit-due` once per 32-ms interval. `deadline_probes` and exact non-fault
-terminals must advance at that bounded cadence, a quiescent audit must perform
-no Function-2 read, and no second op8, priority lease, or GENET work may appear.
+`watchdog-due` after one 32-ms no-progress interval, then
+`watchdog-probing` and `watchdog-suppressed`. Exactly one
+`deadline_probes`/exact-non-fault-terminal pair may then advance; a quiescent
+inspection must perform no Function-2 read, and elapsed time alone must not
+produce a second op8, priority lease, or GENET work. Later external
+DPC/root-wake progress may rebase and re-arm one successor.
 The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
@@ -1807,8 +1869,10 @@ During
 bootstrap/recovery, only proved linked-runtime serial IRQ preservation, bounded
 software-queue polling, and flushing plus already-buffered local-seat bytes are
 permitted; generic/current-TCB UART
-fallback, USB backend polling, HDMI/echo re-entry, and network polling must
-remain absent. Accepting reboot must fence all later physical and network
+fallback, USB backend polling, HDMI frame submission, and network polling must
+remain absent in that same turn. Root-owned echo state may be updated, then one
+later isolated Display turn submits it. Accepting reboot must fence all later
+physical and network
 command intake and may discard only nonessential `BackgroundLine` records whose
 authoritative copies already exist in `/log/queen.log`; command output and
 protocol tails remain retained. Reset admission requires an empty pending-output
@@ -2113,8 +2177,12 @@ and keyboard report service then advance as retained one-action `LocalSeat`
 outer turns.
 
 While a Wi-Fi HAL scope is held, local-seat service is buffered-only: it must
-not poll USB, re-enter HDMI or echo, or start network work. It must then advance
-HID discovery only through the explicit keyboard-enumeration aux while ordinary
+not poll USB, submit HDMI, or start network work. It may update the bounded
+root-owned echo/scrollback state for already-buffered bytes; the resulting
+frame must be submitted only by one later retained Display turn. Tests must
+prove a printable byte remains visible during Wi-Fi startup or failure without
+composing USB, HDMI, and CYW43 hardware operations. HID discovery must then
+advance only through the explicit keyboard-enumeration aux while ordinary
 background polls report the current frontier without re-entering enumeration.
 No-reply background USB polls must produce `DRIVER_TASK_RING_CALL_TIMEOUT` plus
 `[local-seat] isolated USB runtime keyboard poll suspended contract=usb-local-seat source=linked-runtime reason=driver-task-no-reply action=serial-shell`
@@ -2859,6 +2927,13 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       parser ingress on the live prompt row, boot/progress messages refreshing
       at the documented 5-10 s cadence, and new output scrolling the isolated
       HDMI viewport like a serial terminal without full-screen blink. On a
+      pre-terminal or failed Wi-Fi episode, the final ready banner/prompt may
+      remain withheld, but admitted USB characters must still update a visible
+      input row. A partial line must schedule
+      `Dispatch -> Display -> Serial` before any Network turn while retaining
+      the exact CYW43 operator fence and parent, except that a pending reboot
+      acknowledgement or physical response tail retains immediate Serial
+      priority and leaves the echo queued. On a
       successful deferred Wi-Fi boot, Gate 8 commit remains progress only. The
       unique supervisor `ready` is the later current-generation DHCP Bound,
       nonempty-address, and TCP-listener-admission cut and releases the HDMI

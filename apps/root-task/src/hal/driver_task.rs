@@ -28,18 +28,18 @@ use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot, DriverRuntimeDpcEventRing,
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DriverRuntimeSdioPhysicalLifetimeRecord, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
-    DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
-    DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_DPC_EVENT_RING_BYTES, DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH,
-    DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET, DRIVER_RUNTIME_ENGINE_INIT_AUX,
-    DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888, DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
-    DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
+    DriverRuntimeSdioClockSnapshot, DriverRuntimeSdioPhysicalLifetimeRecord,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT,
+    DRIVER_RUNTIME_CYW43_COMMAND_AUX, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
+    DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
+    DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+    DRIVER_RUNTIME_FRAMEBUFFER_VADDR, DRIVER_RUNTIME_INIT_AUX, DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND,
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
     DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
@@ -421,7 +421,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_SCRATCHPAD_SLOT0_WRITTEN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
-    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
+    DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
     DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES, DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET,
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES, DRIVER_RUNTIME_SERIAL_IRQ,
@@ -2868,6 +2869,69 @@ impl DriverTaskRingView {
         driver_task_shared_load_barrier();
         let second = read()?;
         DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(first, second)
+    }
+
+    fn read_sdio_clock_snapshot(&self) -> Option<DriverRuntimeSdioClockSnapshot> {
+        let base = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
+        let read = || {
+            let host_card_flags = self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, host_control),
+            )?;
+            Some(DriverRuntimeSdioClockSnapshot {
+                magic: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, magic),
+                )?,
+                version: self.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, version),
+                )?,
+                len: self
+                    .read_u16(base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, len))?,
+                sequence: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, sequence),
+                )?,
+                physical_lifetime_epoch: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        physical_lifetime_epoch
+                    ),
+                )?,
+                requested_clock_hz: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        requested_clock_hz
+                    ),
+                )?,
+                base_clock_hz: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, base_clock_hz),
+                )?,
+                effective_clock_hz: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioClockSnapshot,
+                        effective_clock_hz
+                    ),
+                )?,
+                timer_clock_hz: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, timer_clock_hz),
+                )?,
+                divider: self.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, divider),
+                )?,
+                clock_control: self.read_u16(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, clock_control),
+                )?,
+                host_control: (host_card_flags & 0xff) as u8,
+                cccr_speed: ((host_card_flags >> 8) & 0xff) as u8,
+                cccr_interface: ((host_card_flags >> 16) & 0xff) as u8,
+                flags: (host_card_flags >> 24) as u8,
+                reserved: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioClockSnapshot, reserved),
+                )?,
+            })
+        };
+        let first = read()?;
+        driver_task_shared_load_barrier();
+        let second = read()?;
+        DriverRuntimeSdioClockSnapshot::stable_snapshot(first, second)
     }
 
     fn read_dpc_ring(&self) -> Option<DriverRuntimeDpcEventRing> {
@@ -9648,6 +9712,58 @@ pub fn driver_task_sdio_physical_lifetime_snapshot(
         usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES),
     );
     ring.read_sdio_physical_lifetime()
+}
+
+#[cfg(all(feature = "kernel", test))]
+static TEST_SDIO_CLOCK_SNAPSHOT_OVERRIDE: std::sync::Mutex<
+    Option<Option<DriverRuntimeSdioClockSnapshot>>,
+> = std::sync::Mutex::new(None);
+
+/// Return a passive, stable copy of the SDIO owner's host/card clock proof.
+///
+/// This never resumes a child, advances a request, or writes the shared ring.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_sdio_clock_snapshot() -> Option<DriverRuntimeSdioClockSnapshot> {
+    #[cfg(test)]
+    {
+        let override_guard = TEST_SDIO_CLOCK_SNAPSHOT_OVERRIDE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(snapshot) = *override_guard {
+            return snapshot;
+        }
+    }
+    let slot = driver_task_slot_for_contract(SDIO_HOST_DRIVER_TASK_CONTRACT)?;
+    if slot.root_ring_writers.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let offset = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
+    driver_task_ring_invalidate_root_range(
+        ring_root_ptr.checked_add(offset)?,
+        usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES),
+    );
+    ring.read_sdio_clock_snapshot()
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_set_sdio_clock_snapshot_override(
+    snapshot: Option<DriverRuntimeSdioClockSnapshot>,
+) {
+    let mut override_guard = TEST_SDIO_CLOCK_SNAPSHOT_OVERRIDE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *override_guard = Some(snapshot);
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_clear_sdio_clock_snapshot_override() {
+    let mut override_guard = TEST_SDIO_CLOCK_SNAPSHOT_OVERRIDE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *override_guard = None;
 }
 
 #[cfg(feature = "kernel")]
@@ -18391,6 +18507,59 @@ mod tests {
             ),
             Some(grant.grant_id),
         );
+
+        let clock_snapshot = DriverRuntimeSdioClockSnapshot {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
+            len: DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+            sequence: 23,
+            physical_lifetime_epoch: 4,
+            requested_clock_hz: 50_000_000,
+            base_clock_hz: 250_000_000,
+            effective_clock_hz: 41_666_666,
+            timer_clock_hz: 54_000_000,
+            divider: 6,
+            clock_control: DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_INTERNAL_ENABLE
+                | DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_INTERNAL_STABLE
+                | DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_CARD_ENABLE,
+            host_control: 0x02,
+            cccr_speed: DriverRuntimeSdioClockSnapshot::CCCR_SPEED_EHS,
+            cccr_interface: DriverRuntimeSdioClockSnapshot::CCCR_INTERFACE_WIDTH_4BIT,
+            flags: DriverRuntimeSdioClockSnapshot::FLAG_REQUEST_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_CLOCK_READBACK_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_INTERNAL_CLOCK_STABLE
+                | DriverRuntimeSdioClockSnapshot::FLAG_CARD_CLOCK_ENABLED
+                | DriverRuntimeSdioClockSnapshot::FLAG_CARD_HIGH_SPEED
+                | DriverRuntimeSdioClockSnapshot::FLAG_HOST_WIDTH_4BIT
+                | DriverRuntimeSdioClockSnapshot::FLAG_CCCR_SPEED_VALID
+                | DriverRuntimeSdioClockSnapshot::FLAG_CCCR_INTERFACE_VALID,
+            reserved: 0,
+        };
+        let clock_base = usize::from(DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET);
+        for (index, word) in [
+            clock_snapshot.magic,
+            u32::from(clock_snapshot.version) | (u32::from(clock_snapshot.len) << 16),
+            clock_snapshot.sequence,
+            clock_snapshot.physical_lifetime_epoch,
+            clock_snapshot.requested_clock_hz,
+            clock_snapshot.base_clock_hz,
+            clock_snapshot.effective_clock_hz,
+            clock_snapshot.timer_clock_hz,
+            u32::from(clock_snapshot.divider) | (u32::from(clock_snapshot.clock_control) << 16),
+            u32::from(clock_snapshot.host_control)
+                | (u32::from(clock_snapshot.cccr_speed) << 8)
+                | (u32::from(clock_snapshot.cccr_interface) << 16)
+                | (u32::from(clock_snapshot.flags) << 24),
+            clock_snapshot.reserved,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ring.window
+                .write_u32(clock_base + index * core::mem::size_of::<u32>(), word)
+                .expect("SDIO clock snapshot word fits");
+        }
+        assert_eq!(ring.read_sdio_clock_snapshot(), Some(clock_snapshot));
 
         let dpc = DriverRuntimeDpcEventRing::empty(9);
         let dpc_base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
