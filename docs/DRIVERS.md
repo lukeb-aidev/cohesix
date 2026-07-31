@@ -430,6 +430,19 @@ telemetry. None of these source changes is a hardware performance result until
 the exact rebuilt/read-back image passes fresh serial and paired-pcap
 thresholds.
 
+The final source audit closes three retained-lifetime gaps in that summary.
+Every admission observation, including re-entry from `Wait`, polls the combined
+source before accepting a newly ready grant; only an empty observation performs
+the final durable-grant check immediately before blocking. A CARD_INT that
+arrived during the prior wait therefore remains service-first and leaves the
+grant untouched. Issued-unknown completion reaping consumes one arbitration
+turn and then re-arms the same exact continuation grant instead of dropping to
+endpoint wait. Finally, root/delegated generation-bound descriptors derive
+their grant-only requirement from the immutable command itself, so loss or
+reset of mutable gate state cannot expose an endpoint fallback. These are
+single-lane fail-closed repairs, not another publisher, consumer, or physical
+owner.
+
 Linux `brcmfmac` normally runs SDIO with interrupts enabled and polling
 disabled. Its ISR schedules one ordered DPC worker, which drains durable
 pending work before sleeping; TX completion does not itself require a physical
@@ -1062,27 +1075,43 @@ This is Cohesix's linked-runtime translation of Linux interrupt/DPC idle, not a
 second poller, issuer, TX path, timer owner, or GENET behavior. The sole HAL
 op8 owner and linked SDIO runtime remain unchanged.
 
-Root admits Wi-Fi Ethernet output through one generation-scoped heapless FIFO
-of 16 immutable frames. `Device::transmit` reserves only the ordinary first 15
-slots, leaving the final slot for the mandatory TxToken paired with
+Root admits Wi-Fi Ethernet output through one generation-scoped bounded
+aggregate of 16 immutable frames. The aggregate uses two heapless FIFO classes:
+urgent control and bulk. ARP, EAPOL, DHCP, TCP SYN/FIN/RST, and payload-free TCP
+control segments are urgent; other payload-bearing TCP, fragmented IPv4, and
+ordinary traffic remain bulk. A frame produced through the copied-RX paired
+token is urgent independently, preserving response liveness. Urgent frames are
+selected before bulk while FIFO order is preserved within each class. This is
+scheduling priority, not a second physical lane: both classes feed exactly one
+`CYW43_PENDING_DATA_TX`, which remains the sole op7 owner.
+The two fixed backing deques occupy about 50 KiB of BSS, roughly 25 KiB more
+than one deque, while the aggregate admission bound remains 16. This deliberate
+static trade avoids O(n) movement of approximately 1.5-KiB frame records on the
+hot path and avoids an unsafe shared payload pool.
+
+`Device::transmit` reserves only the ordinary first 15 aggregate slots,
+leaving the final slot for the mandatory TxToken paired with
 `Device::receive`; that paired token may reserve all 16 slots. Consuming a
 reserved token cannot fail merely because an older op7 owner remains active,
-and dropping an unused token releases only its local permit. The FIFO promotes
-exactly one head into `CYW43_PENDING_DATA_TX`; that record remains the sole
-physical op7 owner and retains the existing credit, ticket, deadline,
-issued-unknown, and no-replay rules.
+and dropping an unused token releases only its local permit. EventPump is the
+sole production TX coordinator. Its Wi-Fi-only hook runs once before smoltcp
+polling and advances at most one physical turn of the active owner. If a
+root-copied RX frame is pending and its paired permit is available, the hook
+returns before staging ARP or performing TX, so `Device::receive` delivers that
+memory-only RX first even while an older op7 is active or credit-waiting.
+Neither `Device::receive` nor a failed reservation services TX.
 
-The Wi-Fi-only EventPump hook runs once before smoltcp polling and advances at
-most one physical turn of that sole active owner. If a root-copied RX frame is
-pending and its paired permit is available, the hook performs no TX operation:
-`Device::receive` delivers that memory-only RX first even while an older op7 is
-active or credit-waiting. If the FIFO is completely full, the hook instead
-advances the active owner and, after a terminal, may promote one queued head as
-local bookkeeping so the paired-RX slot becomes available on the next device
-call. No outer turn issues two physical operations. Generation replacement or
-reset purges never-issued queued frames locally; an active issued or otherwise
-ambiguous frame still follows the existing poison-and-recovery path. GENET has
-no FIFO reservation, promotion, hook, or telemetry path.
+Otherwise the hook may move one eligible ARP/GARP record into the same urgent
+aggregate before advancing the one active owner. If all 16 aggregate slots are
+occupied, one owner turn may reach a terminal and promote one queued successor
+as local bookkeeping, restoring the paired-RX slot without a second physical
+operation. A retained credit-wait deadline failure poisons and restarts the
+exact CYW43/SDIO pair before any queued successor can begin an independent
+timeout; the backlog cannot cascade through serial credit failures. Generation
+replacement or reset purges never-issued queued frames locally, while an active
+issued or otherwise ambiguous frame follows the existing poison-and-recovery
+path. GENET has no queue reservation, priority class, promotion, hook, or
+telemetry path.
 
 Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
 and retained-frontier records after association and maintenance state:
@@ -1437,10 +1466,12 @@ generation and XID.
   physical owner quantum. Empty or rejected grant state enters one blocking
   `Wait` turn; a peer-only wake carries no authority.
 
-  CARD_INT pending at `CheckWake` is service-first: the slice performs one IRQ
-  service action and defers the exact unconsumed grant to a later slice. It
-  cannot service CARD_INT and execute foreground owner work in the same slice.
-  An IRQ arriving after that
+  CARD_INT pending at every retained admission poll is service-first: the
+  slice performs one IRQ service action and defers the exact unconsumed grant
+  to a later slice. This includes `Wait` re-entry, where the combined source is
+  polled before a newly ready grant and the final durable-grant recheck is used
+  only immediately before blocking. The slice cannot service CARD_INT and
+  execute foreground owner work together. An IRQ arriving after that
   linearization point remains kernel-latched and may follow at most the one
   already-admitted owner quantum; every pending owner result returns through
   `CheckWake`, so neither source can starve. Acknowledgement failure restores
@@ -1479,12 +1510,17 @@ generation and XID.
   separately delivered wake per count. Actual SDIO owner progress and rearm
   are established by durable ring and owner telemetry such as
   `card_irq_rearms`.
-  Request, full command fingerprint, and pair generation must match throughout;
-  an issued-unknown request cannot be recommitted or granted again. Pair restart
+  Request, full command fingerprint, and pair generation must match throughout.
+  The immutable root/delegated command descriptor also retains the grant-only
+  requirement if mutable gate state is lost, so endpoint wake cannot become a
+  fallback. An issued-unknown request cannot be recommitted or granted again.
+  Pair restart
   revokes a poisoned Network scheduling lease only after both runtimes are
   suspended, fenced, and their rings are reset.
   Before the runtime applies a pair-restart hold, it first completion-reaps an
-  issued-unknown child. A late exact completion is ownership proof only: its
+  issued-unknown child. Each waiting reap arbitration re-arms the same exact
+  root/delegated continuation grant before returning to wait. A late exact
+  completion is ownership proof only: its
   result and payload are quarantined, the exact child claim is released, and
   the old foreground parent emits one exact typed terminal. No same-generation
   child replay or late payload application is permitted; every other ambiguous
@@ -2788,7 +2824,10 @@ generation and XID.
   path.
 
   One immutable TX command may occupy the shared reciprocal-ring slot while up
-  to 16 never-issued frames remain in the root FIFO. Each later physical
+  to 16 never-issued frames remain in the root aggregate. Urgent ARP, EAPOL,
+  DHCP, TCP SYN/FIN/RST, and payload-free TCP control precede other
+  payload-bearing TCP and bulk, with FIFO order within each class; both classes
+  still feed the same sole op7 owner. Each later physical
   Network turn advances only that exact active owner. Once promoted, it retains
   its payload, digest, ticket, request, and generation through transient
   SDPCM-credit waits until the typed `Submitted` terminal or the retained
@@ -2797,11 +2836,14 @@ generation and XID.
   or a typed terminal fault still fails closed. The regression
   `cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns` holds the same
   active frame for twelve no-credit turns before successful submission.
-  A copied RX frame is delivered before that active command whenever the FIFO
-  has the paired-response permit, without spending a physical operation. A full
-  FIFO instead spends the turn on the sole active TX and promotes one successor
-  locally after a terminal, releasing paired capacity without a second physical
-  action. TX
+  EventPump is the sole production TX coordinator. A copied RX frame is
+  delivered before that active command and before ARP staging whenever the
+  aggregate has the paired-response permit, without spending a physical
+  operation. A full aggregate instead spends the turn on the sole active TX
+  and promotes one successor locally after a terminal, releasing paired
+  capacity without a second physical action. A credit-wait deadline poisons and
+  restarts the exact pair before any successor can start; `Device::receive` and
+  reservation failure never service TX. TX
   completion does not manufacture a following op8, alter the lifetime cursor,
   or fence another credited TX. A later fresh op8 begins only for a
   current-lifetime root wake or one due progress-conditioned lost-edge audit.
@@ -2810,7 +2852,7 @@ generation and XID.
   owner rather than root op8. Queues schedule their own bounded owner work, and
   an exact assigned continuation remains non-revocable. Every op8 still uses
   the same sole NetData/HAL/SDIO owner chain. CYW43 TxToken reservation is
-  therefore bounded by FIFO capacity rather than by whether an older active
+  therefore bounded by aggregate capacity rather than by whether an older active
   owner or unproved credit window exists; only physical issue remains
   credit-gated. A consumed reservation cannot be reported successful unless
   its immutable frame was retained. There is no
@@ -2910,9 +2952,13 @@ fences. An issued-unknown child is completion-reaped before a restart hold; a
 late exact reply may release ownership and produce one exact old-parent
 terminal but must not apply its result/payload or replay a child.
 Owner-admission tests prove fused wake polling, stable exact-grant validation,
-ACK immediately before I/O, CARD_INT service-first behavior, ACK-failure
+ACK immediately before I/O, CARD_INT service-first behavior on both initial and
+`Wait` re-entry polls, final condition-before-sleep grant recheck, ACK-failure
 rollback with zero I/O, and at most one exact grant and one physical owner
-quantum per scheduled admission. `DPC_ACTIVATE`
+quantum per scheduled admission. They also prove that immutable
+generation-bound root/delegated commands reject endpoint fallback after mutable
+gate-state loss and that every issued-unknown reap wait preserves the exact
+continuation grant. `DPC_ACTIVATE`
 must finish its ordered mask/inspect/publish-or-coalesce/ACK/signal/rearm work
 inside one bounded 32-step quantum; only a failed exact IRQ acknowledgement may
 retain the cursor for a later turn. Torn, stale, mutated, wrong-generation,
@@ -2926,7 +2972,8 @@ coalesced peer service, and prove autonomous intake plus grant re-signal
 survives a consumed scheduling edge. Immediately before blocking, the runtime
 rechecks the durable shared grant. A grant published between the earlier empty
 probe and the receive is frozen for a later Execute turn; the recheck performs
-no physical I/O, and a consumed grant cannot replay. This is Cohesix's
+no physical I/O, a pending CARD_INT still wins before that grant, and a consumed
+grant cannot replay. This is Cohesix's
 linked-runtime form of Linux's condition-before-sleep workqueue rule.
 Real-ring epoch-cut tests advance the live
 epoch while the cursor is separately `Prepared` and `Issued`, then prove the

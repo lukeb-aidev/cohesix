@@ -5474,18 +5474,36 @@ where
                 if !cyw43_service_fenced {
                     if let Some(budget) = net_budget.as_mut() {
                         #[cfg(feature = "kernel")]
-                        if net_contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                        let cyw43_tx_activity = if net_contract
+                            == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
                         {
-                            let _ =
-                                crate::drivers::driver_task_net::service_cyw43_data_tx_event_turn();
-                        }
+                            match crate::drivers::driver_task_net::service_cyw43_data_tx_event_turn(
+                                budget,
+                            ) {
+                                Ok(serviced) => serviced,
+                                Err(err) => {
+                                    let message = format_message(format_args!(
+                                        "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service=cyw43-tx",
+                                        net_contract.name,
+                                        err.reason(),
+                                    ));
+                                    self.audit.denied(message.as_str());
+                                    false
+                                }
+                            }
+                        } else {
+                            false
+                        };
+                        #[cfg(not(feature = "kernel"))]
+                        let cyw43_tx_activity = false;
+                        activity |= cyw43_tx_activity;
                         let result = if flush_turn {
                             net.flush_tcp_with_budget(self.now_ms, budget)
                         } else {
                             net.poll_with_budget(self.now_ms, budget)
                         };
                         match result {
-                            Ok(polled) => activity = polled,
+                            Ok(polled) => activity |= polled,
                             Err(err) => {
                                 let message = format_message(format_args!(
                                     "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
@@ -36480,7 +36498,7 @@ mod tests {
         );
         assert_eq!(
             displays[1].as_str(),
-            "[drivers] WiFi repairing CYW43/SDIO within the active boot episode"
+            "[drivers] WiFi restoring previously ready CYW43/SDIO service"
         );
         let terminal = crate::userland::format_deferred_net_bootstrap_supervisor_status(
             u64::MAX,

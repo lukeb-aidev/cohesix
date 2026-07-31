@@ -5048,12 +5048,15 @@ const fn runtime_continuation_action_fingerprint(command: DriverTaskCommandRecor
 }
 
 #[cfg(any(target_os = "none", test))]
-const fn runtime_continuation_expected_generation(command: DriverTaskCommandRecord) -> Option<u32> {
-    if command.sequence & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN != 0
+const fn runtime_delegated_continuation_command(command: DriverTaskCommandRecord) -> bool {
+    command.sequence & CYW43_SDIO_BUS_LINK_SEQUENCE_DOMAIN != 0
         && command.arg0 == HOT_PATH_SDIO_HOST
         && command.arg1 == ROLE_SDIO
-        && command.aux1 != 0
-    {
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_continuation_expected_generation(command: DriverTaskCommandRecord) -> Option<u32> {
+    if runtime_delegated_continuation_command(command) && command.aux1 != 0 {
         Some(command.aux1)
     } else {
         None
@@ -5069,6 +5072,12 @@ const fn runtime_root_continuation_expected_generation(
     } else {
         None
     }
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_command_requires_continuation_grant(command: DriverTaskCommandRecord) -> bool {
+    runtime_root_continuation_expected_generation(command).is_some()
+        || runtime_delegated_continuation_command(command)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -5102,8 +5111,11 @@ fn runtime_delegated_generation_admission(
     command: DriverTaskCommandRecord,
     owner_generation: Option<u32>,
 ) -> RuntimeDelegatedGenerationAdmission {
-    let Some(command_generation) = runtime_continuation_expected_generation(command) else {
+    if !runtime_delegated_continuation_command(command) {
         return RuntimeDelegatedGenerationAdmission::NotDelegated;
+    }
+    let Some(command_generation) = runtime_continuation_expected_generation(command) else {
+        return RuntimeDelegatedGenerationAdmission::Rejected;
     };
     if owner_generation == Some(command_generation) {
         RuntimeDelegatedGenerationAdmission::Admitted(command_generation)
@@ -6491,11 +6503,14 @@ impl RuntimePendingCommandGate {
                 if candidate != *retained || candidate.reply_cap_available {
                     return RuntimePendingWakeRoute::Rejected;
                 }
-                let granted_lane = self.grant_generation().is_some();
-                if granted_lane {
+                if self.grant_generation().is_some()
+                    || runtime_command_requires_continuation_grant(retained.command)
+                {
                     // Generation-bound continuations have one production lane:
                     // a typed notification plus the exact immutable shared
-                    // grant. Endpoint payloads cannot become a fallback.
+                    // grant. Derive that requirement from the immutable command
+                    // as well as mutable gate state so a recovery-state loss
+                    // cannot recreate an endpoint fallback.
                     return RuntimePendingWakeRoute::Rejected;
                 }
                 if self.foreground_due_after_service {
@@ -6618,6 +6633,42 @@ enum RuntimeRetainedWaitRecheck {
     Block,
     Rejected(DriverRuntimeContinuationGrant),
     Execute(DriverRuntimeContinuationGrant),
+}
+
+/// Complete one retained wait-phase observation after polling the combined
+/// endpoint/notification source.
+///
+/// A typed wake always reaches owner arbitration before a ready grant, so an
+/// already-pending CARD_INT cannot be bypassed by the durable condition check.
+/// With no wake, the first stable grant observation may execute immediately;
+/// only an empty observation performs the final condition-before-sleep recheck.
+#[cfg(any(target_os = "none", test))]
+fn runtime_retained_wait_observation_after_poll<F>(
+    wake: RuntimeWake,
+    grant_probe: RuntimeRetainedGrantProbe,
+    recheck: F,
+) -> Option<(RuntimeWake, RuntimeRetainedGrantProbe)>
+where
+    F: FnOnce() -> RuntimeRetainedWaitRecheck,
+{
+    if wake != RuntimeWake::None
+        || !matches!(
+            grant_probe,
+            RuntimeRetainedGrantProbe::Inactive | RuntimeRetainedGrantProbe::Empty
+        )
+    {
+        return Some((wake, grant_probe));
+    }
+    match recheck() {
+        RuntimeRetainedWaitRecheck::Block => None,
+        RuntimeRetainedWaitRecheck::Rejected(grant) => Some((
+            RuntimeWake::None,
+            RuntimeRetainedGrantProbe::Rejected(grant),
+        )),
+        RuntimeRetainedWaitRecheck::Execute(grant) => {
+            Some((RuntimeWake::None, RuntimeRetainedGrantProbe::Ready(grant)))
+        }
+    }
 }
 
 /// Inspect the delegated SDIO continuation condition exactly once before a
@@ -46353,31 +46404,43 @@ pub fn runtime_main(task_key: usize) -> ! {
                 let phase = pending_command_gate.delegated_owner_phase();
                 let (wake, grant_probe) = match phase {
                     RuntimeRetainedOwnerPhase::Wait => {
-                        match recheck_runtime_retained_continuation_grant_before_wait(
+                        // Poll the combined source before inspecting a now-ready
+                        // grant. A CARD_INT that became pending after the prior
+                        // empty observation must win this arbitration slice. If
+                        // neither source is ready, the final recheck below closes
+                        // the grant-publication race immediately before Recv.
+                        let polled_wake = runtime_pending_wake_for_route(
+                            notification_route,
+                            poll_runtime_command_or_notification(last_sequence),
+                        );
+                        let polled_grant = probe_runtime_retained_continuation_grant(
                             &pending_command_gate,
                             pending_intake,
                             DRIVER_TASK_RING_VADDR,
-                        ) {
-                            RuntimeRetainedWaitRecheck::Execute(grant) => {
-                                (RuntimeWake::None, RuntimeRetainedGrantProbe::Ready(grant))
-                            }
-                            RuntimeRetainedWaitRecheck::Rejected(grant) => (
-                                RuntimeWake::None,
-                                RuntimeRetainedGrantProbe::Rejected(grant),
-                            ),
-                            RuntimeRetainedWaitRecheck::Block => {
-                                let wake = runtime_pending_wake_for_route(
-                                    notification_route,
-                                    wait_runtime_command_or_notification(last_sequence),
-                                );
-                                let grant_probe = probe_runtime_retained_continuation_grant(
+                        );
+                        runtime_retained_wait_observation_after_poll(
+                            polled_wake,
+                            polled_grant,
+                            || {
+                                recheck_runtime_retained_continuation_grant_before_wait(
                                     &pending_command_gate,
                                     pending_intake,
                                     DRIVER_TASK_RING_VADDR,
-                                );
-                                (wake, grant_probe)
-                            }
-                        }
+                                )
+                            },
+                        )
+                        .unwrap_or_else(|| {
+                            let wake = runtime_pending_wake_for_route(
+                                notification_route,
+                                wait_runtime_command_or_notification(last_sequence),
+                            );
+                            let grant_probe = probe_runtime_retained_continuation_grant(
+                                &pending_command_gate,
+                                pending_intake,
+                                DRIVER_TASK_RING_VADDR,
+                            );
+                            (wake, grant_probe)
+                        })
                     }
                     RuntimeRetainedOwnerPhase::Service(badge) => (
                         RuntimeWake::Notification(badge),
@@ -46562,8 +46625,12 @@ pub fn runtime_main(task_key: usize) -> ! {
             // Reaping is itself the one retained completion-poll action for
             // this turn. Whether it waited or proved terminal, no foreground
             // replay may run until a fresh root grant.
-            if pending_intake.is_some() {
-                pending_command_gate.retain_after_pending();
+            if let Some(intake) = pending_intake {
+                retain_runtime_command_after_arbitration_turn(
+                    &mut pending_command_gate,
+                    intake,
+                    notification_route,
+                );
             } else {
                 let _ = wait_runtime_command_or_notification(last_sequence);
             }
@@ -54887,6 +54954,13 @@ mod tests {
         }
     }
 
+    fn endpoint_retained_gate_test_intake(sequence: u32) -> RuntimeCommandIntake {
+        let mut intake = retained_gate_test_intake(sequence);
+        intake.command.arg0 = HOT_PATH_USB_KEYBOARD;
+        intake.command.arg1 = ROLE_USB;
+        intake
+    }
+
     fn root_retained_gate_test_intake(sequence: u32, generation: u32) -> RuntimeCommandIntake {
         RuntimeCommandIntake {
             command: DriverTaskCommandRecord {
@@ -55006,6 +55080,19 @@ mod tests {
         assert_eq!(
             runtime_delegated_generation_admission(command, None),
             RuntimeDelegatedGenerationAdmission::Rejected,
+        );
+        let mut zero_generation_command = command;
+        zero_generation_command.aux1 = 0;
+        assert!(runtime_command_requires_continuation_grant(
+            zero_generation_command,
+        ));
+        assert_eq!(
+            runtime_delegated_generation_admission(
+                zero_generation_command,
+                Some(generation),
+            ),
+            RuntimeDelegatedGenerationAdmission::Rejected,
+            "a delegated command cannot erase its required owner generation and become endpoint work",
         );
         assert_eq!(
             runtime_outer_generation_rejection_completion(
@@ -55155,7 +55242,7 @@ mod tests {
 
     #[test]
     fn pending_quantum_requires_one_exact_endpoint_rendezvous() {
-        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut retained = endpoint_retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
 
         assert!(!gate.continuation_required());
@@ -55173,7 +55260,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ContinueForeground
         );
@@ -55181,7 +55268,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::Rejected
         );
@@ -55204,7 +55291,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ContinueForeground
         );
@@ -55213,7 +55300,7 @@ mod tests {
 
     #[test]
     fn pending_quantum_notification_arbitration_is_fair_and_durable() {
-        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut retained = endpoint_retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
 
         assert_eq!(
@@ -55250,7 +55337,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ContinueForeground
         );
@@ -55264,7 +55351,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ServiceNotification(DRIVER_RUNTIME_SDIO_IRQ_BADGE)
         );
@@ -55273,7 +55360,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ContinueForeground,
         );
@@ -55284,7 +55371,7 @@ mod tests {
 
     #[test]
     fn continuously_coalesced_level_irq_cannot_starve_retained_foreground() {
-        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut retained = endpoint_retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
         let mut foreground_quanta = 0usize;
         let mut service_quanta = 0usize;
@@ -55305,7 +55392,7 @@ mod tests {
             assert_eq!(
                 gate.route_wake(
                     &mut retained,
-                    RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                    RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
                 ),
                 RuntimePendingWakeRoute::ContinueForeground,
             );
@@ -55323,7 +55410,7 @@ mod tests {
 
     #[test]
     fn non_cyw43_level_irq_reassertions_stop_until_root_endpoint_continues() {
-        let mut retained = retained_gate_test_intake(0x8000_0042);
+        let mut retained = endpoint_retained_gate_test_intake(0x8000_0042);
         let mut gate = RuntimePendingCommandGate::new();
         let mut service_quanta = 0usize;
         let mut rejected_reassertions = 0usize;
@@ -55367,7 +55454,7 @@ mod tests {
         assert_eq!(
             gate.route_wake(
                 &mut retained,
-                RuntimeWake::Command(retained_gate_test_intake(0x8000_0042)),
+                RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0042)),
             ),
             RuntimePendingWakeRoute::ContinueForeground,
             "a non-CYW43 exact endpoint rendezvous must win after the service quantum",
@@ -55393,17 +55480,17 @@ mod tests {
 
     #[test]
     fn pending_quantum_accepts_only_the_exact_one_way_endpoint_rendezvous() {
-        let original = retained_gate_test_intake(0x8000_0042);
+        let original = endpoint_retained_gate_test_intake(0x8000_0042);
         let mut retained = original;
-        let exact = retained_gate_test_intake(0x8000_0042);
-        let mut stale_sequence = retained_gate_test_intake(0x8000_0041);
-        let mut mutated_action = retained_gate_test_intake(0x8000_0042);
+        let exact = endpoint_retained_gate_test_intake(0x8000_0042);
+        let mut stale_sequence = endpoint_retained_gate_test_intake(0x8000_0041);
+        let mut mutated_action = endpoint_retained_gate_test_intake(0x8000_0042);
         mutated_action.command.aux0 = DRIVER_RUNTIME_NET_INIT_AUX;
-        let mut mutated_generation = retained_gate_test_intake(0x8000_0042);
+        let mut mutated_generation = endpoint_retained_gate_test_intake(0x8000_0042);
         mutated_generation.command.aux1 = 0x4359_5303;
-        let mut mutated_flags = retained_gate_test_intake(0x8000_0042);
+        let mut mutated_flags = endpoint_retained_gate_test_intake(0x8000_0042);
         mutated_flags.command.flags = 0;
-        let mut mutated_reply = retained_gate_test_intake(0x8000_0042);
+        let mut mutated_reply = endpoint_retained_gate_test_intake(0x8000_0042);
         mutated_reply.reply_cap_available = true;
         stale_sequence.command.sequence = original.command.sequence.wrapping_sub(1);
 
@@ -55539,6 +55626,42 @@ mod tests {
         );
         assert_eq!(gate.last_grant_id, 2);
         assert!(!gate.continuation_required());
+    }
+
+    #[test]
+    fn generation_bound_endpoint_is_rejected_after_mutable_gate_state_loss() {
+        let generation = 0x4359_5302;
+        for intake in [
+            root_retained_gate_test_intake(0x42, generation),
+            retained_gate_test_intake(0x8000_0042),
+        ] {
+            assert!(runtime_command_requires_continuation_grant(intake.command));
+            let mut retained = intake;
+            let mut gate = RuntimePendingCommandGate::new();
+            // Model a fail-closed recovery hold that retained the immutable
+            // command but lost its mutable root/delegated generation field.
+            gate.retain_after_pending();
+            assert_eq!(gate.grant_generation(), None);
+            assert_eq!(
+                gate.route_wake_with_grant(&mut retained, RuntimeWake::Command(intake), None,),
+                RuntimePendingWakeRoute::Rejected,
+                "immutable generation-bound identity must forbid endpoint fallback",
+            );
+            assert!(gate.continuation_required());
+        }
+
+        let endpoint = endpoint_retained_gate_test_intake(0x52);
+        assert!(!runtime_command_requires_continuation_grant(
+            endpoint.command
+        ));
+        let mut retained = endpoint;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending();
+        assert_eq!(
+            gate.route_wake(&mut retained, RuntimeWake::Command(endpoint)),
+            RuntimePendingWakeRoute::ContinueForeground,
+            "non-generation-bound runtimes retain their endpoint rendezvous",
+        );
     }
 
     #[test]
@@ -55727,6 +55850,8 @@ mod tests {
 
     #[test]
     fn root_grant_published_between_empty_probe_and_wait_is_rechecked_once() {
+        use core::cell::Cell;
+
         let generation = 8;
         let intake = root_retained_gate_test_intake(0x44, generation);
         let mut retained = intake;
@@ -55773,17 +55898,29 @@ mod tests {
             2,
         ));
         let second = read_runtime_continuation_grant_at(base).expect("second exact root grant");
+        let rechecks = Cell::new(0usize);
+        let observation =
+            runtime_retained_wait_observation_after_poll(RuntimeWake::None, consumed_probe, || {
+                rechecks.set(rechecks.get().saturating_add(1));
+                recheck_runtime_retained_continuation_grant_before_wait(&gate, Some(intake), base)
+            })
+            .expect("the final pre-sleep recheck observes the published grant");
         assert_eq!(
-            recheck_runtime_retained_continuation_grant_before_wait(&gate, Some(intake), base,),
-            RuntimeRetainedWaitRecheck::Execute(second),
+            rechecks.get(),
+            1,
+            "an empty poll performs exactly one final condition check",
+        );
+        assert_eq!(
+            observation,
+            (RuntimeWake::None, RuntimeRetainedGrantProbe::Ready(second)),
         );
         let gate_before_grant = gate;
         assert_eq!(
             runtime_retained_owner_fused_admission(
                 &mut gate,
                 &mut retained,
-                RuntimeWake::None,
-                RuntimeRetainedGrantProbe::Ready(second),
+                observation.0,
+                observation.1,
             ),
             RuntimeRetainedOwnerAdmission::Execute(second),
         );
@@ -55900,6 +56037,65 @@ mod tests {
             ),
             RuntimeRetainedOwnerAdmission::Execute(grant),
             "the unchanged exact grant is admitted after the one CARD_INT quantum",
+        );
+        assert_eq!(gate.last_grant_id, 1);
+    }
+
+    #[test]
+    fn wait_phase_pending_card_int_precedes_newly_ready_grant() {
+        use core::cell::Cell;
+
+        let intake = retained_gate_test_intake(0x8000_0074);
+        let generation = intake.command.aux1;
+        let grant = retained_gate_test_grant(intake, generation, 1);
+        let mut retained = intake;
+        let mut gate = RuntimePendingCommandGate::new();
+        gate.retain_after_pending_generation(generation);
+        gate.set_delegated_owner_phase(RuntimeRetainedOwnerPhase::Wait);
+        let rechecks = Cell::new(0usize);
+
+        let observation = runtime_retained_wait_observation_after_poll(
+            RuntimeWake::Notification(
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE,
+            ),
+            RuntimeRetainedGrantProbe::Ready(grant),
+            || {
+                rechecks.set(rechecks.get().saturating_add(1));
+                RuntimeRetainedWaitRecheck::Block
+            },
+        )
+        .expect("the already-pending CARD_INT wake is immediately observable");
+        assert_eq!(
+            rechecks.get(),
+            0,
+            "a pending persistent source never falls through to the pre-sleep recheck",
+        );
+        assert_eq!(
+            runtime_retained_owner_fused_admission(
+                &mut gate,
+                &mut retained,
+                observation.0,
+                observation.1,
+            ),
+            RuntimeRetainedOwnerAdmission::Service(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+        assert_eq!(
+            gate.last_grant_id, 0,
+            "CARD_INT service cannot consume the foreground grant",
+        );
+        assert!(gate.continuation_required());
+        assert!(gate.foreground_due_after_service);
+        assert!(gate.has_deferred_delegated_wake());
+
+        assert_eq!(
+            runtime_retained_owner_fused_admission(
+                &mut gate,
+                &mut retained,
+                RuntimeWake::None,
+                RuntimeRetainedGrantProbe::Ready(grant),
+            ),
+            RuntimeRetainedOwnerAdmission::Execute(grant),
+            "the unchanged grant remains available after one CARD_INT quantum",
         );
         assert_eq!(gate.last_grant_id, 1);
     }
@@ -56325,7 +56521,7 @@ mod tests {
 
     #[test]
     fn idle_peer_service_cannot_replay_a_committed_root_command() {
-        let intake = retained_gate_test_intake(0x8000_0042);
+        let intake = endpoint_retained_gate_test_intake(0x8000_0042);
         assert_eq!(
             runtime_idle_service_badge(
                 RuntimeNotificationRoute::Cyw43Client,
@@ -56389,6 +56585,94 @@ mod tests {
             "one exact later root grant resumes the retained foreground command",
         );
         assert_eq!(gate.last_grant_id, 1);
+    }
+
+    #[test]
+    fn issued_unknown_wait_and_reap_preserve_exact_root_grant_lane() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 9;
+        let intake = root_retained_gate_test_intake(0x43, generation);
+        let mut retained = intake;
+        let child_sequence = 0x8000_4301;
+        assert!(cyw43_sdio_child_claim(child_sequence));
+        assert!(cyw43_sdio_child_mark_issued_unknown(child_sequence));
+        let empty = DriverTaskCompletionRecord::fault(0, FAULT_REJECTED_COMMAND);
+        let exact = DriverTaskCompletionRecord::progress(child_sequence, 1);
+        let mut gate = RuntimePendingCommandGate::new();
+        retain_runtime_command_after_arbitration_turn(
+            &mut gate,
+            intake,
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+
+        let admit_root_quantum = |gate: &mut RuntimePendingCommandGate,
+                                  retained: &mut RuntimeCommandIntake,
+                                  grant_id: u32| {
+            let grant = retained_gate_test_grant(intake, generation, grant_id);
+            let gate_before_grant = *gate;
+            assert_eq!(
+                runtime_retained_owner_fused_admission(
+                    gate,
+                    retained,
+                    RuntimeWake::Notification(DRIVER_RUNTIME_RESERVED_ROOT_BADGE),
+                    RuntimeRetainedGrantProbe::Ready(grant),
+                ),
+                RuntimeRetainedOwnerAdmission::Execute(grant),
+            );
+            assert!(runtime_retained_owner_commit_grant_with(
+                gate,
+                gate_before_grant,
+                grant,
+                |id| id == grant_id,
+            ));
+        };
+
+        for grant_id in 1..=2 {
+            admit_root_quantum(&mut gate, &mut retained, grant_id);
+            assert_eq!(
+                cyw43_sdio_child_reap_stable_completion(child_sequence, empty, empty),
+                Cyw43IssuedUnknownReapResult::Waiting,
+            );
+            retain_runtime_command_after_arbitration_turn(
+                &mut gate,
+                intake,
+                RuntimeNotificationRoute::Cyw43Client,
+            );
+            assert_eq!(gate.root_generation, Some(generation));
+            assert_eq!(gate.last_grant_id, grant_id);
+            let mut endpoint_gate = gate;
+            let mut endpoint_retained = retained;
+            assert_eq!(
+                endpoint_gate.route_wake_with_grant(
+                    &mut endpoint_retained,
+                    RuntimeWake::Command(intake),
+                    None,
+                ),
+                RuntimePendingWakeRoute::Rejected,
+                "issued-unknown waiting cannot select an endpoint fallback",
+            );
+        }
+
+        admit_root_quantum(&mut gate, &mut retained, 3);
+        assert_eq!(
+            cyw43_sdio_child_reap_stable_completion(child_sequence, exact, exact),
+            Cyw43IssuedUnknownReapResult::Reaped {
+                sequence: child_sequence,
+            },
+        );
+        retain_runtime_command_after_arbitration_turn(
+            &mut gate,
+            intake,
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+        admit_root_quantum(&mut gate, &mut retained, 4);
+        assert_eq!(
+            gate.last_grant_id, 4,
+            "the reaped parent can consume a fresh exact grant for its terminal turn",
+        );
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
     }
 
     #[test]
@@ -57805,7 +58089,7 @@ mod tests {
 
     #[test]
     fn non_cyw43_256_poll_drain_spends_256_endpoint_rendezvous() {
-        let mut retained = retained_gate_test_intake(0x8000_0256);
+        let mut retained = endpoint_retained_gate_test_intake(0x8000_0256);
         let mut gate = RuntimePendingCommandGate::new();
         let mut admitted_polls = 0usize;
         for _ in 0..256 {
@@ -57813,7 +58097,7 @@ mod tests {
             assert_eq!(
                 gate.route_wake(
                     &mut retained,
-                    RuntimeWake::Command(retained_gate_test_intake(0x8000_0256)),
+                    RuntimeWake::Command(endpoint_retained_gate_test_intake(0x8000_0256)),
                 ),
                 RuntimePendingWakeRoute::ContinueForeground,
             );

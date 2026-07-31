@@ -984,24 +984,35 @@ root or child capacity during diagnosis; the shared ABI value is the one
 production envelope, and capacity alignment is not a substitute for the
 handoff boundary.
 
-The root Wi-Fi ingress path is one generation-scoped 16-frame heapless TX FIFO
-feeding one sole active `CYW43_PENDING_DATA_TX` op7 owner. Ordinary
-`Device::transmit` tokens may reserve only 15 slots; `Device::receive` reserves
-its mandatory paired TxToken before removing a copied RX frame and may use the
-final slot. Dropping an unused token releases that local permit, and consuming
-a reservation cannot fail merely because an older op7 is active. Only the
-promoted head can issue physically or become issued-unknown.
+The root Wi-Fi ingress path is one generation-scoped bounded aggregate of 16
+immutable TX frames feeding one sole active `CYW43_PENDING_DATA_TX` op7 owner.
+The aggregate uses urgent-control and bulk FIFO classes. ARP, EAPOL, DHCP, TCP
+SYN/FIN/RST, and payload-free TCP control frames are urgent; other
+payload-bearing TCP, fragmented IPv4, and ordinary traffic remain bulk. Any
+response produced through the copied-RX paired token is urgent independently.
+Urgent is selected first, with FIFO order within each class. These are two
+logical priority queues, not two physical lanes.
 
-Before each smoltcp poll, one Wi-Fi-only EventPump hook may advance at most one
-physical turn of that active owner. With copied RX pending and a paired permit
-available, the hook performs no TX work and the device delivers the copied RX
-first, even while the active op7 waits for credit. With all 16 FIFO slots in
-use, the hook advances the active owner and may promote one successor locally
-after its terminal, restoring paired-RX capacity without a second physical
-operation. A generation/reset boundary purges never-issued queued frames;
-issued or otherwise ambiguous active ownership remains fail-closed and poisons
-through the existing recovery path. This FIFO and service hook are CYW43-only;
-GENET retains its existing direct device path.
+Ordinary `Device::transmit` tokens may reserve only 15 aggregate slots;
+`Device::receive` reserves its mandatory paired TxToken before removing a
+copied RX frame and may use the final slot. Dropping an unused token releases
+that local permit, and consuming a reservation cannot fail merely because an
+older op7 is active. EventPump is the sole production TX coordinator. Before
+each smoltcp poll, its one Wi-Fi-only hook may advance at most one physical turn
+of the active owner. With copied RX pending and a paired permit available, the
+hook returns before ARP staging and physical TX, so the device delivers copied
+RX first even while the active op7 waits for credit. `Device::receive` and
+reservation failure never service TX.
+
+Otherwise the hook may move one eligible ARP/GARP record into the same urgent
+aggregate. With all 16 slots in use, it may advance the active owner and
+promote one successor locally after its terminal, restoring paired-RX capacity
+without a second physical operation. A credit-wait deadline failure poisons
+and restarts the exact CYW43/SDIO pair before any queued successor can begin an
+independent timeout. A generation/reset boundary purges never-issued queued
+frames; issued or otherwise ambiguous active ownership remains fail-closed and
+poisons through the existing recovery path. This aggregate and service hook
+are CYW43-only; GENET retains its existing direct device path.
 
 Once a valid current-generation frame is accepted, the retained op7 owner keeps
 its exact payload, digest, ticket, request, and generation across transient
@@ -1266,7 +1277,10 @@ cursor, and a coalesced or already-consumed edge cannot be required after an
 exact grant becomes durable. Every delegated `Pending` phase uses one
 scheduled admission slice to poll the combined wake, freeze one stable exact
 grant, acknowledge it immediately before I/O, and execute one owner operation.
-`Wait` performs one blocking receive only when no usable grant exists.
+`Wait` first polls the combined source, then inspects the stable grant. A
+pending CARD_INT therefore wins before a newly ready grant on every re-entry;
+only an empty observation performs the final durable-grant recheck immediately
+before one blocking receive.
 
 The SDIO-to-CYW43 badge-2 completion/DPC notification and badge-159 SDIO IRQ
 remain coalescing service wakes and cannot advance foreground work. CYW43 also
@@ -1276,8 +1290,8 @@ service source or foreground authority. The reserved high notification bit is
 excluded from service work. If badge 159 and badge 256 coalesce, SDIO services
 exactly one IRQ quantum in that slice and leaves the matching immutable grant
 unconsumed for a later slice. A standalone reasserted level wake cannot spend
-that grant. CARD_INT pending at
-the `CheckWake` linearization point wins; an interrupt arriving later remains
+that grant. CARD_INT pending at any retained admission observation wins; an
+interrupt arriving after that linearization point remains
 latched and is delayed by at most one already-admitted owner quantum. If deferred
 service consumes a root scheduling edge, the same unconsumed exact grant
 remains authoritative for a later CYW43 foreground turn. Scheduler handoffs after service and
@@ -1286,6 +1300,11 @@ block on their combined endpoint/notification receive rather than spinning.
 An idle CARD_INT service always hands off before a durable owner command is
 admitted, so a coalesced IRQ and command cannot perform two owner quanta in one
 scheduler slice.
+The immutable root/delegated command descriptor makes every generation-bound
+CYW43 lane grant-only even if mutable gate state was lost or reset; endpoint
+wake is not a fallback. Issued-unknown completion reaping consumes one
+arbitration turn and then preserves/re-arms the exact continuation grant before
+waiting for a late terminal or the canonical pair restart.
 Pending-command DPC arbitration performs at most one retained DPC or foreground
   action per released quantum. A reciprocal CYW43-to-SDIO transaction uses one
   producer turn to submit the immutable child-ring command. On a stable double
@@ -1371,6 +1390,15 @@ child-owner urgency disjoint from fresh root-op8 authority, collapses finite
 cause/frame-turn telemetry. Do not claim improved latency or throughput until
 the exact rebuilt/read-back image produces fresh serial and paired-pcap
 hardware proof.
+
+The final source audit strengthens that admission rule at every retained
+boundary. `Wait` now samples a pending CARD_INT before it accepts a newly ready
+grant, while retaining the condition-before-sleep grant recheck for the
+publication race. The issued-unknown reaper preserves and re-arms the exact
+grant on every waiting turn. Immutable generation-bound commands reject an
+endpoint wake even if their mutable gate state has been lost. These repairs
+close races in the one existing lane; they do not add a retry path or physical
+owner.
 
 R06 deliberately sent TCP before ping: the Pi ARP-resolved the host 130.616 ms
 after the SYN, retained that SYN across neighbor resolution, returned one

@@ -690,21 +690,30 @@ prove all of the following:
   boot or stale-purge telemetry. Pending tokens must capture their enqueue
   generation, stale tokens must be rejected before current-generation
   consumption, and the handoff must preserve valid current-generation backlog.
-- Bounded data-TX/RX ordering tests must prove one generation-scoped heapless
-  TX FIFO with capacity 16 feeds exactly one active op7 owner. Ordinary
-  `Device::transmit` reservations must stop at 15 and leave the final permit for
-  the TxToken paired with `Device::receive`; consuming a valid reservation must
-  not fail merely because an older owner remains active, and dropping an unused
-  token must release only that local permit. A copied RX frame with paired
-  capacity must be delivered before active or credit-waiting TX and perform zero
-  physical operations. With all 16 FIFO slots occupied and copied RX pending,
-  the dedicated pre-smoltcp EventPump hook must advance exactly one physical
-  turn of the sole active owner and locally promote at most one successor after
-  a terminal so paired capacity returns. A later device call then delivers the
-  preserved RX without a second operation. Generation/reset must purge queued
-  never-issued frames locally, while issued/ambiguous active ownership remains
-  poison-and-recovery work. All reservation, promotion, service, and telemetry
-  behavior must be absent from GENET.
+- Bounded data-TX/RX ordering tests must prove one generation-scoped aggregate
+  with total capacity 16 feeds exactly one active op7 owner. It uses urgent
+  control and bulk FIFO classes: ARP, EAPOL, DHCP, TCP SYN/FIN/RST, and
+  payload-free TCP control must precede other payload-bearing TCP and ordinary
+  data, while fragmented IPv4 remains bulk, a paired-RX response is
+  independently urgent, and FIFO order is preserved within each class.
+  Ordinary `Device::transmit` reservations must stop at 15 aggregate slots and
+  leave the final permit for the TxToken paired with `Device::receive`;
+  consuming a valid reservation must not fail merely because an older owner
+  remains active, and dropping an unused token must release only that local
+  permit. EventPump must be the sole production TX coordinator:
+  `Device::receive` and reservation failure must perform zero TX service. A
+  copied RX frame with paired capacity must be delivered before active or
+  credit-waiting TX and before pending ARP staging, with zero physical
+  operations. With all 16 aggregate slots occupied and copied RX pending, the
+  dedicated pre-smoltcp EventPump hook must advance exactly one physical turn
+  of the sole active owner and locally promote at most one successor after a
+  terminal so paired capacity returns. A later device call then delivers the
+  preserved RX without a second operation. A retained credit-wait deadline
+  must poison and restart the exact pair before any queued successor is
+  promoted, preventing serial timeout cascades. Generation/reset must purge
+  queued never-issued frames locally, while issued/ambiguous active ownership
+  remains poison-and-recovery work. All classing, reservation, promotion,
+  service, and telemetry behavior must be absent from GENET.
 - Root and child tests must bind their queue capacity and the child bounded RX
   drain budget to
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
@@ -1021,11 +1030,19 @@ producers, a stable double completion miss must commit the retained cursor and
 next grant id, publish the acknowledged replacement or re-signal the exact
 unconsumed grant, commit `Issued`, and notify signal-last in that same producer
 turn without physical I/O. A matching completion observed by either stable read
-wins before that authority action. One scheduled owner-admission turn polls the combined wake, validates
-one stable exact grant, ACKs immediately before I/O, consumes at most that one
-grant, and performs at most one physical owner quantum. CARD_INT service must
-win without grant consumption, and ACK failure must restore the exact pending
-authority while performing zero I/O. Foreground and DPC child timeouts
+wins before that authority action. One scheduled owner-admission turn polls the
+combined wake, validates one stable exact grant, ACKs immediately before I/O,
+consumes at most that one grant, and performs at most one physical owner
+quantum. Tests must exercise both initial admission and `Wait` re-entry: a
+pending CARD_INT must win before a newly ready grant, and only an empty
+combined-source poll may perform the final durable-grant recheck immediately
+before blocking. CARD_INT service must leave the grant unconsumed, and ACK
+failure must restore the exact pending authority while performing zero I/O.
+Immutable root/delegated generation-bound commands must reject endpoint wake
+even when mutable gate state is absent. Repeated issued-unknown reap waits must
+preserve/re-arm the exact continuation grant; the late exact terminal may close
+only the old parent, and no endpoint fallback may advance it. Foreground and
+DPC child timeouts
 must be inactivity fences rather than total-age limits: consumption of the
 exact retained continuation grant proves owner progress and must rebase both
 the virtual-counter start and bounded fallback-poll age.
@@ -1126,7 +1143,10 @@ applying the pair-restart hold. A late exact completion is terminal ownership
 proof only: quarantine its result and payload, release the exact child, emit
 one exact retained terminal fault for the old parent, and then permit the
 fenced cold pair restart. No same-generation child replay, late payload
-application, or second parent terminal is allowed.
+application, or second parent terminal is allowed. Every `Waiting` reap turn
+must retain the exact root/delegated generation grant, reject endpoint command
+authority, and allow the following fresh grant to resume only this same reaper
+or old parent.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
@@ -1872,7 +1892,13 @@ prove that DPC now supplies child-owner urgency only, a current root wake
 authorizes one queue/tail op8, only the independently due lost-edge audit adds
 hintless source authority, and the 32-step `DPC_ACTIVATE`, strict queued-frame
 terminal, v11 cause/frame-turn counters, and generation-scoped TX phase
-counters remain passive and bounded. Those source changes and counters remain
+counters remain passive and bounded. Final admission coverage must additionally
+prove CARD_INT-before-grant on `Wait` re-entry, immutable descriptor-based
+rejection of endpoint fallback after gate-state loss, and exact-grant
+preservation across repeated issued-unknown reap waits. TX coverage must prove
+the aggregate-capacity-16 urgent/bulk priority classes, EventPump-only
+coordination, copied-RX-before-ARP staging, and credit-timeout exact-pair
+recovery. Those source changes and counters remain
 unflashed; only the exact rebuilt/read-back image and fresh paired serial/pcap
 evidence can rank the residuals or satisfy a performance gate.
 
@@ -1965,11 +1991,14 @@ image produces this evidence, the cold-neighbor repair and both performance
 thresholds remain source claims rather than hardware results.
 
 CYW43 device tests must also prove that a retained TX or unproved credit window
-blocks physical issue but not an available bounded FIFO reservation or
+blocks physical issue but not an available bounded aggregate reservation or
 memory-only copied-RX delivery. They must preserve the sole active owner,
-reserve paired response capacity before dequeueing RX, and produce zero
-fabricated TX drops. Full-FIFO backpressure may advance only that owner and must
-never issue a second operation in the same outer turn.
+urgent-before-bulk selection and FIFO-within-class order, reserve paired
+response capacity before dequeueing RX, and produce zero fabricated TX drops.
+Copied RX must return before pending ARP can take the paired slot. Full-capacity
+backpressure may advance only that owner and must never issue a second
+operation in the same outer turn. Expired credit wait must latch one exact-pair
+recovery before a queued successor becomes active.
 
 The socket pack must cover the maximum enabled profile: one raw ICMP responder,
 active and standby console acceptors, DHCP, two UDP self-test sockets, two TCP
@@ -2499,11 +2528,12 @@ physical owner quantum. For
 mask/inspect/publish-or-coalesce/ACK/signal/rearm transaction; only a failed
 exact IRQ ACK may retain the cursor for a later ACK-only retry. Empty
 state enters `Wait`, whose durable grant recheck performs no owner I/O and
-cannot require a second notification edge. A CARD_INT pending at `CheckWake`
-must be service-first: it consumes a separate service turn and leaves the exact
-grant unconsumed for a later fused owner admission. A later CARD_INT
-may follow at most one already-admitted owner quantum and must be observed at
-the next `CheckWake`.
+cannot require a second notification edge. Before that recheck, `Wait` must
+poll the combined source; a pending CARD_INT is service-first on every retained
+admission observation, consumes a separate service turn, and leaves the exact
+grant unconsumed for a later fused owner admission. A later CARD_INT may follow
+at most one already-admitted owner quantum and must be observed at the next
+combined-source poll.
 The consumed grant cannot replay. The actual card-init `HOST_CONFIG` producer must
 cross the production reciprocal ring and retained owner cursor under this
 ordering. Telemetry must distinguish the post-generation-admission
