@@ -229,6 +229,82 @@ fn format_cyw43_priority_lease_netstats(
 }
 
 #[cfg(feature = "kernel")]
+fn format_cyw43_tx_phase_diagnostics(
+    namespace: &str,
+    metric_name: &str,
+    diagnostic: crate::drivers::driver_task_net::Cyw43TxPhaseDiagnostic,
+) -> (
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+) {
+    let bounded_us = |value: u64| value.min(u64::from(u32::MAX));
+    let accepted_to_issue = diagnostic.accepted_to_issue;
+    let issued_to_terminal = diagnostic.issued_to_terminal;
+    let terminal_to_credit = diagnostic.terminal_to_credit;
+    let credit_to_next_issue = diagnostic.credit_to_next_issue;
+    let counts = format_message(format_args!(
+        "{}: {}_counts gen={} accepted={} issued={} terminals={} credits={} next_issues={}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        diagnostic.accepted,
+        diagnostic.issued,
+        diagnostic.terminals,
+        diagnostic.credits,
+        diagnostic.next_issues,
+    ));
+    let timing = format_message(format_args!(
+        "{}: {} gen={} us=n/last/max/avg a2i={}/{}/{}/{} t2c={}/{}/{}/{} c2i={}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        accepted_to_issue.samples,
+        bounded_us(accepted_to_issue.last_us),
+        bounded_us(accepted_to_issue.max_us),
+        bounded_us(accepted_to_issue.average_us()),
+        terminal_to_credit.samples,
+        bounded_us(terminal_to_credit.last_us),
+        bounded_us(terminal_to_credit.max_us),
+        bounded_us(terminal_to_credit.average_us()),
+        credit_to_next_issue.samples,
+        bounded_us(credit_to_next_issue.last_us),
+        bounded_us(credit_to_next_issue.max_us),
+        bounded_us(credit_to_next_issue.average_us()),
+    ));
+    let issued_timing = format_message(format_args!(
+        "{}: {}_i2t gen={} us=n/last/max/avg i2t={}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        issued_to_terminal.samples,
+        bounded_us(issued_to_terminal.last_us),
+        bounded_us(issued_to_terminal.max_us),
+        bounded_us(issued_to_terminal.average_us()),
+    ));
+    (counts, timing, issued_timing)
+}
+
+#[cfg(feature = "kernel")]
+fn format_cyw43_data_tx_queue_diagnostic(
+    namespace: &str,
+    metric_name: &str,
+    diagnostic: crate::drivers::driver_task_net::Cyw43DataTxQueueDiagnostic,
+) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+    format_message(format_args!(
+        "{}: {} gen={} depth={} reserved={} hwm={} drops={} stale_purged={}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        diagnostic.depth,
+        diagnostic.reserved,
+        diagnostic.high_water,
+        diagnostic.drops,
+        diagnostic.stale_purged,
+    ))
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone)]
 struct WifiLiveNetFrontier {
     active_driver: &'static str,
@@ -5397,6 +5473,12 @@ where
                 cyw43_service_fenced = !Self::network_contract_service_admissible(net_contract);
                 if !cyw43_service_fenced {
                     if let Some(budget) = net_budget.as_mut() {
+                        #[cfg(feature = "kernel")]
+                        if net_contract == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+                        {
+                            let _ =
+                                crate::drivers::driver_task_net::service_cyw43_data_tx_event_turn();
+                        }
                         let result = if flush_turn {
                             net.flush_tcp_with_budget(self.now_ms, budget)
                         } else {
@@ -14122,6 +14204,21 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
+        let (tx_phase_counts, tx_phase_timing, tx_phase_issued_timing) =
+            format_cyw43_tx_phase_diagnostics(
+                "wifi",
+                "tx_phase",
+                crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic(),
+            );
+        let tx_queue = format_cyw43_data_tx_queue_diagnostic(
+            "wifi",
+            "tx_queue",
+            crate::drivers::driver_task_net::cyw43_data_tx_queue_diagnostic(),
+        );
+        self.emit_console_line(tx_phase_counts.as_str());
+        self.emit_console_line(tx_phase_timing.as_str());
+        self.emit_console_line(tx_phase_issued_timing.as_str());
+        self.emit_console_line(tx_queue.as_str());
         let retained_gate8_line = Self::wifi_diag_retained_gate8_line(retained_gate8);
         self.emit_console_line(retained_gate8_line.as_str());
         if let Some(recovery) = deferred_recovery {
@@ -14439,7 +14536,7 @@ where
         format_message(format_args!(
             "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
             snapshot.generation,
-            snapshot.captures,
+            snapshot.event_attempts,
             snapshot.published,
             snapshot.consumed,
             snapshot.rearms,
@@ -14449,6 +14546,17 @@ where
             snapshot.ack_failures,
             if snapshot.poisoned { "yes" } else { "no" },
             if snapshot.masked { "yes" } else { "no" },
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_sdio_dpc_scope_line() -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        // Keep the established accounting line byte-compatible for existing
+        // capture tooling, then define its historical `captures` key
+        // unambiguously beside it. The SDIO owner's true physical CARD_INT
+        // counter is not carried by the current fixed event-ring ABI.
+        format_message(format_args!(
+            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported"
         ))
     }
 
@@ -14500,16 +14608,47 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_sdio_dpc_cause_line(
+        snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcCauseDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "CYW43_SDIO_DPC_CAUSE samples={} frm={} hm={} fcc={} fcs={} ca={} other={} spur={} done={} dpc={} child={} owner={} fdpc={} fown={}",
+            snapshot.samples,
+            snapshot.frame,
+            snapshot.hostmail,
+            snapshot.fc_change,
+            snapshot.fc_state,
+            snapshot.chipactive,
+            snapshot.other,
+            snapshot.spurious,
+            snapshot.frames,
+            snapshot.dpc_turns,
+            snapshot.children,
+            snapshot.owner_turns,
+            snapshot.frame_dpc_turns,
+            snapshot.frame_owner_turns,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
         let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
             return;
         };
+        let cause =
+            crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(snapshot.generation);
         let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
+        let scope = Self::wifi_sdio_dpc_scope_line();
         let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
         let rearm = Self::wifi_sdio_dpc_rearm_line(snapshot);
         self.emit_console_line(accounting.as_str());
+        self.emit_console_line(scope.as_str());
         self.emit_console_line(truth.as_str());
         self.emit_console_line(rearm.as_str());
+        if let Some(cause) = cause {
+            let cause = Self::wifi_sdio_dpc_cause_line(cause);
+            self.emit_console_line(cause.as_str());
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -17768,10 +17907,10 @@ where
         snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
     ) -> bool {
         snapshot.generation != 0
-            && snapshot.captures != 0
-            && snapshot.captures == snapshot.published
+            && snapshot.event_attempts != 0
+            && snapshot.event_attempts == snapshot.published
             && snapshot.published == snapshot.consumed
-            && snapshot.rearms >= snapshot.captures
+            && snapshot.rearms >= snapshot.event_attempts
             && snapshot.overruns == 0
             && snapshot.epoch_errors == 0
             && snapshot.sequence_errors == 0
@@ -19532,6 +19671,22 @@ where
                                 );
                             format_cyw43_priority_lease_netstats(lease)
                         };
+                        #[cfg(feature = "kernel")]
+                        let (
+                            line_cyw43_tx_phase_counts,
+                            line_cyw43_tx_phase,
+                            line_cyw43_tx_phase_i2t,
+                        ) = format_cyw43_tx_phase_diagnostics(
+                            "netstats",
+                            "wifi_tx_phase",
+                            crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic(),
+                        );
+                        #[cfg(feature = "kernel")]
+                        let line_cyw43_tx_queue = format_cyw43_data_tx_queue_diagnostic(
+                            "netstats",
+                            "wifi_tx_queue",
+                            crate::drivers::driver_task_net::cyw43_data_tx_queue_diagnostic(),
+                        );
                         let line_policy = format_message(format_args!(
                             "netstats: proof_policy m26d_net_first=no physical_input_yield=enabled"
                         ));
@@ -19731,6 +19886,10 @@ where
                             {
                                 self.emit_console_line(line_cyw43_priority_lease.as_str());
                                 self.emit_console_line(line_cyw43_priority_lease_counts.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_counts.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_i2t.as_str());
+                                self.emit_console_line(line_cyw43_tx_queue.as_str());
                             }
                             self.emit_console_line(line_wifi.as_str());
                             self.emit_console_line(line_wifi_rxq.as_str());
@@ -21746,6 +21905,69 @@ mod tests {
         );
         assert!(counts.starts_with("netstats: cyw43_priority_lease_counts opens="));
         assert!(counts.ends_with(&format!(" failures={}", usize::MAX)));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tx_phase_netstats_remain_parseable_at_maximum_counters() {
+        let metric = crate::drivers::driver_task_net::Cyw43TxPhaseMetricDiagnostic {
+            samples: u32::MAX,
+            total_us: u64::MAX,
+            last_us: u64::MAX,
+            max_us: u64::MAX,
+        };
+        let (counts, timing, issued_timing) = format_cyw43_tx_phase_diagnostics(
+            "netstats",
+            "wifi_tx_phase",
+            crate::drivers::driver_task_net::Cyw43TxPhaseDiagnostic {
+                generation: u32::MAX,
+                accepted: u32::MAX,
+                issued: u32::MAX,
+                terminals: u32::MAX,
+                credits: u32::MAX,
+                next_issues: u32::MAX,
+                accepted_to_issue: metric,
+                issued_to_terminal: metric,
+                terminal_to_credit: metric,
+                credit_to_next_issue: metric,
+            },
+        );
+
+        assert!(!counts.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{counts}");
+        assert_eq!(
+            counts.as_str(),
+            "netstats: wifi_tx_phase_counts gen=4294967295 accepted=4294967295 issued=4294967295 terminals=4294967295 credits=4294967295 next_issues=4294967295"
+        );
+        assert!(!timing.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{timing}");
+        assert_eq!(
+            timing.as_str(),
+            "netstats: wifi_tx_phase gen=4294967295 us=n/last/max/avg a2i=4294967295/4294967295/4294967295/4294967295 t2c=4294967295/4294967295/4294967295/4294967295 c2i=4294967295/4294967295/4294967295/4294967295"
+        );
+        assert!(
+            !issued_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{issued_timing}"
+        );
+        assert_eq!(
+            issued_timing.as_str(),
+            "netstats: wifi_tx_phase_i2t gen=4294967295 us=n/last/max/avg i2t=4294967295/4294967295/4294967295/4294967295"
+        );
+        let queue = format_cyw43_data_tx_queue_diagnostic(
+            "netstats",
+            "wifi_tx_queue",
+            crate::drivers::driver_task_net::Cyw43DataTxQueueDiagnostic {
+                generation: u32::MAX,
+                depth: u32::MAX,
+                reserved: u32::MAX,
+                high_water: u32::MAX,
+                drops: u32::MAX,
+                stale_purged: u32::MAX,
+            },
+        );
+        assert!(!queue.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{queue}");
+        assert_eq!(
+            queue.as_str(),
+            "netstats: wifi_tx_queue gen=4294967295 depth=4294967295 reserved=4294967295 hwm=4294967295 drops=4294967295 stale_purged=4294967295"
+        );
     }
 
     #[test]
@@ -25423,7 +25645,7 @@ mod tests {
     fn wifi_sdio_dpc_diagnostic_lines_preserve_truth_without_truncation() {
         let diagnostic = crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
             generation: u32::MAX,
-            captures: u32::MAX,
+            event_attempts: u32::MAX,
             published: u32::MAX,
             consumed: u32::MAX,
             sample_consumer: u32::MAX,
@@ -25437,11 +25659,30 @@ mod tests {
             poisoned: true,
             masked: true,
         };
+        let cause_diagnostic = crate::drivers::driver_task_net::Cyw43SdioDpcCauseDiagnostic {
+            generation: u32::MAX,
+            samples: u32::MAX,
+            frame: u32::MAX,
+            hostmail: u32::MAX,
+            fc_change: u32::MAX,
+            fc_state: u32::MAX,
+            chipactive: u32::MAX,
+            other: u32::MAX,
+            spurious: u32::MAX,
+            frames: u32::MAX,
+            dpc_turns: u32::MAX,
+            children: u32::MAX,
+            owner_turns: u32::MAX,
+            frame_dpc_turns: u32::MAX,
+            frame_owner_turns: u32::MAX,
+        };
         let accounting = KernelConsoleTestPump::wifi_sdio_dpc_accounting_line(diagnostic);
+        let scope = KernelConsoleTestPump::wifi_sdio_dpc_scope_line();
         let truth = KernelConsoleTestPump::wifi_sdio_dpc_truth_line(diagnostic);
         let rearm = KernelConsoleTestPump::wifi_sdio_dpc_rearm_line(diagnostic);
+        let cause = KernelConsoleTestPump::wifi_sdio_dpc_cause_line(cause_diagnostic);
 
-        for line in [&accounting, &truth, &rearm] {
+        for line in [&accounting, &scope, &truth, &rearm, &cause] {
             assert!(
                 !line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
                 "DPC telemetry must remain parseable: {line}"
@@ -25449,6 +25690,10 @@ mod tests {
             assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
         }
         assert!(accounting.ends_with("poisoned=yes masked=yes"));
+        assert_eq!(
+            scope.as_str(),
+            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported"
+        );
         assert!(truth.contains("ring_poisoned=no client_sample_stale=yes"));
         assert!(truth.contains("ring_consumer=4294967295 sample_consumer=4294967295"));
         assert!(truth.ends_with(
@@ -25456,6 +25701,14 @@ mod tests {
         ));
         assert!(rearm.contains("counter=client-signal-attempts count=4294967295 owner_irq=masked"));
         assert!(rearm.ends_with("action=service-sdio-owner"));
+        assert!(cause
+            .starts_with("CYW43_SDIO_DPC_CAUSE samples=4294967295 frm=4294967295 hm=4294967295"));
+        assert!(cause.contains(
+            "fcc=4294967295 fcs=4294967295 ca=4294967295 other=4294967295 spur=4294967295 done=4294967295"
+        ));
+        assert!(cause.ends_with(
+            "dpc=4294967295 child=4294967295 owner=4294967295 fdpc=4294967295 fown=4294967295"
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -33095,7 +33348,7 @@ mod tests {
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(Some(
             crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
                 generation: dpc_generation,
-                captures: 12,
+                event_attempts: 12,
                 published: 12,
                 consumed: 11,
                 sample_consumer: 11,
@@ -37614,7 +37867,7 @@ mod tests {
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(Some(
             crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
                 generation: 9,
-                captures: 12,
+                event_attempts: 12,
                 published: 12,
                 consumed: 12,
                 rearms: 12,
@@ -37656,12 +37909,19 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
         let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
+        let dpc_scope = "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported";
         let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         let dpc_rearm = "CYW43_SDIO_DPC_REARM generation=9 counter=client-signal-attempts count=12 owner_irq=unmasked action=none";
         assert!(rendered.contains(dpc_line), "{rendered}");
+        assert!(rendered.contains(dpc_scope), "{rendered}");
         assert!(rendered.contains(dpc_truth), "{rendered}");
         assert!(rendered.contains(dpc_rearm), "{rendered}");
         assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
+        assert_eq!(
+            rendered.matches("CYW43_SDIO_DPC_SCOPE ").count(),
+            1,
+            "{rendered}"
+        );
         assert_eq!(
             rendered.matches("CYW43_SDIO_DPC_TRUTH ").count(),
             1,
@@ -40310,7 +40570,7 @@ mod tests {
     fn wifi_gate_ten_requires_healthy_unmasked_dpc_accounting() {
         let healthy = crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
             generation: 7,
-            captures: 4,
+            event_attempts: 4,
             published: 4,
             consumed: 4,
             rearms: 4,

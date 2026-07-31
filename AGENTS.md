@@ -118,6 +118,7 @@ The selected `SEL4_BUILD_DIR` / `--sel4-build` path defines kernel-level truth f
      - deterministic bounds,
      - manifest fidelity.
    - Convenience abstractions, refactors, or “cleanups” not required by the milestone are prohibited.
+  - Keep your work as simple and elegant as possible - don't confuse complexity with quality, or complexity with resilience.
 
 8. **Tooling Alignment**
    - Use the macOS ARM64 toolchain defined in `docs/TOOLCHAIN_MAC_ARM64.md`.

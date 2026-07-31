@@ -520,9 +520,10 @@ preserve those upper-path invariants, but this historical pass cannot satisfy a
 current-image gate and cannot authorize timing-dependent loops,
 same-generation replay, root-owned SDIO, or a legacy fallback.
 
-The CYW43 software-closure gate uses completed Milestone 26d task
-`m26d-cyw43-hardware-free-closure` as downstream discovery context. Active
-authority is Reopened Milestone 26b tasks
+The CYW43 software and cadence closure gate is authorized by Milestone 26d
+tasks `m26d-cyw43-hardware-free-closure` and
+`m26d-benchmark-revalidation-and-tuning`, with active defect authority from
+Reopened Milestone 26b tasks
 `m26b-wifi-sdio-notification-dpc-closure` and
 `m26b-net-control-priority`. It exercises the host-testable production
 transaction data and state transitions (`begin_turn`, frontier reservation,
@@ -689,14 +690,21 @@ prove all of the following:
   boot or stale-purge telemetry. Pending tokens must capture their enqueue
   generation, stale tokens must be rejected before current-generation
   consumption, and the handoff must preserve valid current-generation backlog.
-- Retained data-TX/RX ordering tests must stage an Offer-like frame already
-  copied into the root queue behind an immutable op7. `Pending` and `Failed`
-  op7 outcomes expose no RX. `Submitted` must release that copied frame in the
-  same root turn while the physical-operation count remains exactly one; the
-  paired TxToken may only retain a response for a later turn. If no copied
-  frame exists, the submitted terminal ends the turn before ARP, retained op8,
-  or fresh op8. This is the regression gate against DHCP Offer head-of-line
-  starvation.
+- Bounded data-TX/RX ordering tests must prove one generation-scoped heapless
+  TX FIFO with capacity 16 feeds exactly one active op7 owner. Ordinary
+  `Device::transmit` reservations must stop at 15 and leave the final permit for
+  the TxToken paired with `Device::receive`; consuming a valid reservation must
+  not fail merely because an older owner remains active, and dropping an unused
+  token must release only that local permit. A copied RX frame with paired
+  capacity must be delivered before active or credit-waiting TX and perform zero
+  physical operations. With all 16 FIFO slots occupied and copied RX pending,
+  the dedicated pre-smoltcp EventPump hook must advance exactly one physical
+  turn of the sole active owner and locally promote at most one successor after
+  a terminal so paired capacity returns. A later device call then delivers the
+  preserved RX without a second operation. Generation/reset must purge queued
+  never-issued frames locally, while issued/ambiguous active ownership remains
+  poison-and-recovery work. All reservation, promotion, service, and telemetry
+  behavior must be absent from GENET.
 - Root and child tests must bind their queue capacity and the child bounded RX
   drain budget to
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
@@ -786,11 +794,17 @@ classification must still recognize every bit in broad `INT_STATUS` error mask
 `0xffff8000`.
 
 External-DMA lifecycle coverage must prove the exact Linux order within one
-bounded preissue/issue owner quantum: SDHCI block-gap
-inspect/repair/verify, DMA-authority/idle snapshot, full immutable control-block
-staging, status clear, timeout, block size, block count, argument, transfer
-mode, exactly one COMMAND, and then exactly one BCM2835 DMA `ACTIVE` write.
+bounded preissue/issue owner quantum with `PREISSUE_STEP_BOUND=16`: SDHCI
+block-gap inspect/repair/verify, DMA-authority/idle snapshot, full immutable
+control-block staging, status clear, timeout, block size, block count, argument,
+transfer mode, exactly one COMMAND, and then exactly one BCM2835 DMA `ACTIVE`
+write.
 The status-clear step must include the same request-owned readback fence.
+If owned W1C bits survive that readback, the cursor must retain
+`ProgramVerifyStatusClear`, issue no COMMAND, and yield for one
+deadline-bounded retry. No other deterministic setup register may force a
+phase-per-outer-turn schedule; an optional pre-TX DPC fence may finish unissued
+but cannot retry or issue the request.
 That quantum must remain within the shared 256-operation contract and perform
 no post-issue completion snapshot. Stale pre-command
 `SPACE_AVAILABLE` cannot satisfy the fresh response or switch an immutable
@@ -971,18 +985,18 @@ single-`Network`-turn rotation, and emit no WiFi priority-lease telemetry.
 For every root-to-CYW43 generation, including zero, the authority edge remains
 one exact 24-byte continuation grant plus a reserved-root-badge notification
 scheduling hint; endpoint input is rejected. Cold bootstrap, recovery, and
-steady service must all preserve distinct `Stage`, `CommitRing`,
-`PublishGrant`, `NotifyRing`, and `PollRing` turns. Tests must prove that the
-sequence-zero stage is invisible to the autonomous runtime, the issue latch
-precedes sequence commit, grant publication performs no signal, `Issued`
-commits before the later notification signal, and no phase repeats after
-issued-unknown ownership. A stable completion miss must publish nothing and
-signal nothing: it records `Granted` for the exact unconsumed grant or
-`GrantRequired` after exact acknowledgement. The later publication and notify
-turns perform their one actions separately. A matching completion must win
-before either later transition. Tests must also acknowledge the exact grant
-between poll and notify and prove the notify turn advances to `Issued` with no
-signal or recovery. Two grant snapshots may differ only by the
+steady service must all preserve a separate ABI-invisible `Stage`, priority
+handoffs, and later `PollRing`. Tests must prove that the sequence-zero stage is
+invisible to the autonomous runtime; after priority admission, one issue turn
+latches issued-unknown before sequence-last commit, publishes initial grant 1,
+commits `Issued`, and signals last. After a stable double completion miss, that
+same CYW43 root `PollRing` turn must transiently commit `GrantRequired`, publish
+or re-signal exactly one grant, commit `Granted -> Issued`, signal last, and
+return immediately without physical I/O. There must be no later root
+`PublishGrant`/`Notify` turn. A matching completion observed by either stable
+read must win before the fused authority transition. Tests must also
+acknowledge the exact grant between publication and signal and prove final
+revalidation advances to `Issued` with no redundant signal or recovery. Two grant snapshots may differ only by the
 consumer's legal `consumed_grant_id: 0 -> current` acknowledgement, which must
 pass one bounded confirmation read; reverse acknowledgement, a skipped or
 foreign consumed id, or immutable-body drift must fail closed.
@@ -998,16 +1012,23 @@ generation, and a monotonic nonzero grant id sequence-last; let the owner publis
 `consumed_grant_id` irrevocably before spending one quantum; re-signal an
 unacknowledged id without replacement; publish a new id only after exact
 acknowledgement; classify the exact acknowledged predecessor as a
-non-authorizing state until a later explicit grant turn; and fail closed on
+non-authorizing state until the same stable-miss producer performs its fused
+grant publication or re-signal; and fail closed on
 torn, stale, mutated,
 wrong-generation, mismatched-consumed, replayed, aliased, or exhausted-id
 state. The notification is only a wake hint. For both foreground and DPC
-producers, a stable completion miss must only schedule the later explicit grant
-turn. That turn publishes the acknowledged replacement or re-signals the exact
-unconsumed grant with durable cursor/grant state committed before signal. A
-matching completion wins before that authority action. Distinct `CheckWake`,
-`CheckGrant`, and `Execute` owner turns consume at most one exact grant and
-perform at most one physical action.
+producers, a stable double completion miss must commit the retained cursor and
+next grant id, publish the acknowledged replacement or re-signal the exact
+unconsumed grant, commit `Issued`, and notify signal-last in that same producer
+turn without physical I/O. A matching completion observed by either stable read
+wins before that authority action. One scheduled owner-admission turn polls the combined wake, validates
+one stable exact grant, ACKs immediately before I/O, consumes at most that one
+grant, and performs at most one physical owner quantum. CARD_INT service must
+win without grant consumption, and ACK failure must restore the exact pending
+authority while performing zero I/O. Foreground and DPC child timeouts
+must be inactivity fences rather than total-age limits: consumption of the
+exact retained continuation grant proves owner progress and must rebase both
+the virtual-counter start and bounded fallback-poll age.
 An event's source/frame-length hint must be copied into the DPC cursor only on
 the first admission of that exact sequence. Later completion-poll, explicit
 grant, and exact-grant owner turns must not
@@ -1053,12 +1074,65 @@ Exactly one fresh child ticket is allowed only for a telemetry-bound
 `CONTAINED` entry-inhibit fault that proves no command issue; the second such
 failure and every command-or-later, owner-poisoned, malformed, timed-out, or
 issued-unknown cut must fence the pair without advancing the event.
+These explicitly scoped hintless descriptors cover
+bootstrap/control/host-EAPOL and Join-specific recovery paths; they must not
+authorize fresh steady NetData op8. A current root wake admits only a
+queue/tail-drain root op8, and DPC producer urgency admits no root op8. The
+separate progress-conditioned lost-edge watchdog is the only steady NetData
+source that may add the hintless flag.
+
+One admitted `DPC_ACTIVATE` grant must execute the Linux-ordered mask,
+host-status/ring inspect, durable publish/coalesce, exact IRQ ACK, signal, and
+rearm policy as a single bounded owner quantum with
+`SDIO_DPC_ACTIVATE_STEP_BOUND=32`. Only failure of the frozen exact IRQ
+acknowledgement may return `Pending` and cross an outer-turn boundary. That
+retry may only acknowledge the same epoch; it must not reread source state,
+republish the durable event, or replay device work. Exhausting
+`SDIO_DPC_IRQ_ACK_ATTEMPTS=3` must produce one terminal fault, leave the
+single CARD_INT event durable, keep the source masked and exact ACK pending,
+disable DPC activation, and perform no reread or republication. The persistent
+CYW43 DPC must inspect and drain the dongle/FIFO source, then recheck the
+durable condition before sleeping and rearming the sole SDIO owner.
+
+Active-DPC queue-delivery coverage must stage both an active DPC cursor and an
+issued child, then prove that only an already intake-sealed, strict,
+current-generation, non-hintless op8 or op10 with a proven nonempty private RX
+queue may complete. That completion must perform zero Function 1, Function 2,
+or reciprocal-SDIO actions and preserve the complete DPC cursor and child
+identity byte-for-byte. Empty queue, stale generation or owner frontier,
+parent/descriptor/prompt mismatch, unsealed input, `RX_HINTLESS_FIRSTREAD`,
+physical-capable descriptors, active control exchange, recovery, and
+quarantine must all remain serialized. The central production permit must
+still admit at most one root CYW43 runtime/HAL operation per ordinary
+EventPump turn, and the role-local CYW43 pre-poll bound must remain one.
+
+The same focused case must also prove the pre-baseline RX shortcut is narrower
+than the active-DPC queue exception. A just-intake-sealed, inactive,
+nonexecuting, nonpoisoned `RX_POLL` with flags exactly
+`RX_STEADY_TAIL_DRAIN`, a current healthy owner ring and linked runtime, and a
+proven nonempty private queue must complete through the existing software queue
+terminal without copying the 140-KiB foreground baseline. Mutating the shared
+descriptor after intake must not replace the sealed authority. The terminal
+must leave the root wake count and complete DPC cursor/child unchanged, clear
+only the exact seal, and report the queued frame once. `CONTROL_POLL`,
+`RX_HINTLESS_FIRSTREAD`, empty queue, stale generation, unhealthy owner ring,
+prompt mismatch, terminal cause, control exchange, recovery, restart,
+issued-unknown, and quarantine must miss this shortcut and retain the ordinary
+snapshot/rollback path. The hintless negative must prove one baseline snapshot
+while preserving the same DPC cursor and software-only frame result.
+
+Issued-unknown arbitration must completion-reap the immutable child before
+applying the pair-restart hold. A late exact completion is terminal ownership
+proof only: quarantine its result and payload, release the exact child, emit
+one exact retained terminal fault for the old parent, and then permit the
+fenced cold pair restart. No same-generation child replay, late payload
+application, or second parent terminal is allowed.
 
 Backplane-attach coverage must drive the production retained cursor through
 ALP request, every ALP read, FORCE_ALP, the 65-microsecond settle, the Pi
 pull-up clear, LOW/MID/HIGH window programming, the first ChipCommon read, and
-completion. Each child submission, completion poll, later explicit grant,
-exact-grant owner action, retained deadline observation, and pull-up-clear
+completion. Each child submission, fused stable-miss completion-poll plus explicit grant,
+exact-grant owner quantum, retained deadline observation, and pull-up-clear
 operation must consume its own outer EventPump turn.
 The terminal child poll and terminal deadline observation must return before a
 following action can issue. Tests must hold ALP unavailable for more than 1,024
@@ -1540,33 +1614,37 @@ Gate 8 data-consumer publication must install one identity-only lifetime RX
 cursor bound to the current connection generation, pair epoch, and completed
 physical-lifetime epoch. It must own one progress-conditioned, 32-ms
 virtual-counter-scaled lost-edge watchdog deadline on the existing op8 owner.
-Its passive progress signature must include DPC presence, epoch, producer,
-consumer, and flags plus root-wake presence, hits, clears, and rechecks. A
-changed signature must rebase the deadline and arm one later one-shot. Its
-healthy diagnostic state is `watching`, becoming `watchdog-due` only after a
-no-progress expiry, `watchdog-probing` while its exact ticket is active, and
-`watchdog-suppressed` after the terminal until re-arm. Before expiry, quiet
-turns with no DPC/root wake, queue, retained owner, or protocol continuation
+Its progress signature must include DPC presence, epoch, producer, consumer,
+and flags plus root-wake presence, hits, clears, and rechecks. A changed
+signature must rebase the deadline and arm one later one-shot. Before expiry,
+quiet turns with no root wake, queue, retained owner, or protocol continuation
 must leave the shared command sequence, op8 count, priority-lease counters, DPC
-counters, `deadline_probes`, and `terminals` unchanged.
+counters, `deadline_probes`, and `terminals` unchanged. A no-progress expiry
+must become exactly one durable audit reason.
 
-Root may set `RX_HINTLESS_FIRSTREAD` for a proved current-generation
-child-to-root wake, live DPC-ring level, or one due same-owner watchdog. The
-runtime must signal its private RX queue only on empty-to-nonempty transition.
-HAL must preserve a latched level after notification coalescing, and exact
-empty op8 completion must clear and immediately recheck it so an edge racing
-the clear remains pending. One level or one due watchdog may admit one fresh
-source probe through the existing sole op8, HAL, and linked SDIO owner; a
-quiescent watchdog may inspect source state but must perform no blind
-Function-2 read.
-Cached completion/event replay remains later owner work and no turn gains a
-second physical action. Queue-only, wrong-request, wrong-identity, stale, and
-fault terminals must not increment or consume the claimed watchdog one-shot.
-An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for
-that ticket may increment the terminal counter once, sample the post-probe
-progress baseline, and suppress another probe. Elapsed time alone must not
-reissue it; only later external progress or identity replacement may re-arm
-one successor.
+The runtime must signal its private RX queue only on empty-to-nonempty
+transition. HAL must preserve a latched level after notification coalescing,
+and exact empty op8 completion must clear and immediately recheck it so an edge
+racing the clear remains pending. A current root wake may schedule one fresh
+queue/tail-drain NetData op8 and must not add `RX_HINTLESS_FIRSTREAD`. A live
+DPC producer level is urgency only for the persistent child DPC owner and must
+not create fresh root op8. That child owner performs source inspection and
+bounded drain, then rechecks the durable condition before sleep and rearms only
+after it is clear. Only a genuinely due watchdog may claim one fresh hintless
+NetData op8; a quiescent source inspection must perform no blind Function-2
+read. An already-retained exact queue-only op8 is non-revocable and cannot be
+rewritten, so the audit remains due for a later unowned turn. Bootstrap,
+split-control/host-EAPOL, control pre-TX, and Join-only final-fence hintless
+probes remain separately bounded and must not be generalized into periodic
+steady NetData polling.
+
+An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the
+claimed watchdog must sample the post-probe progress baseline, suppress another
+probe, and increment `deadline_probes` and `terminals` exactly once. Elapsed
+time alone must not reissue it; only later external progress or identity
+replacement may re-arm one successor. Queue-only, wrong-request,
+wrong-identity, stale, and fault terminals must not consume the claim or
+advance either counter.
 
 Every non-source durable-work reason—pre-poll, data TX, ARP TX, runtime
 descriptor, root RX, control reply, logical owner, terminal drain, host EAPOL,
@@ -1667,14 +1745,15 @@ netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery
 `wifi diag` and `wifi probe-ht` must preserve the compatible handoff grammar
 with
 `rx_watch=<absent|stale|watching|watchdog-due|watchdog-probing|watchdog-suppressed>`.
-`deadline_probes` counts claimed watchdog one-shots, not elapsed intervals, and
-`terminals` may advance only for exact non-fault hintless op8 terminals caused
-by real root-wake/DPC source probes or one due watchdog. Tests must prove one
+`deadline_probes` and `terminals` each advance exactly once only for the exact
+current non-fault terminal of a claimed watchdog one-shot. Tests must prove one
 probe for a stalled identity, suppression after its exact terminal, rebase and
-re-arm only after later external progress, no masking of a genuine level, no
-blind Function-2 read for a quiescent source, identity-change clearing, and
-zero GENET interaction. The maximum-width formatting fixture may exercise
-arbitrary field values but must not be treated as a reachable driver state.
+re-arm only after later external progress, DPC-only state creates no root op8,
+root wake creates queue-only dequeue, a due audit alone adds the hintless flag,
+a retained queue-only owner cannot be rewritten, identity replacement clears
+the watch, and GENET never interacts with it. The maximum-width formatting
+fixture may exercise arbitrary field values but must not be treated as a
+reachable driver state.
 
 The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
@@ -1697,16 +1776,20 @@ The focused acceptance tests
 `production_owner_notification_coalesces_irq_and_releases_one_exact_granted_quantum`,
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
 `cyw43_non_source_work_reasons_cannot_manufacture_fresh_op8`,
-`cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do`,
+`cyw43_idle_and_dpc_only_lifetimes_never_create_fresh_op8`,
 `cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
-`cyw43_steady_rx_poll_forces_source_only_for_a_proved_level`,
+`cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
 `cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns`,
+`cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit`,
 `cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
-`cyw43_lost_edge_watchdog_progress_rebases_and_rearms_one_shot`,
-`cyw43_lost_edge_watchdog_never_masks_a_genuine_root_wake_level`,
+`cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot`,
+`cyw43_lost_edge_audit_never_masks_a_genuine_root_wake_level`,
+`cyw43_due_audit_preserves_an_exact_retained_queue_only_owner`,
 `cyw43_lost_edge_watchdog_clears_on_generation_identity_change`,
-`cyw43_receive_delivers_queued_rx_on_paired_tx_terminal_turn`,
-`cyw43_copied_rx_is_delivered_when_pending_data_tx_reaches_terminal`,
+`cyw43_receive_delivers_copied_rx_before_retained_paired_tx`,
+`cyw43_copied_rx_is_delivered_before_pending_data_tx_progress`,
+`cyw43_event_tx_hook_yields_to_deliverable_copied_rx`,
+`cyw43_event_tx_hook_frees_full_fifo_for_pending_rx`,
 `cyw43_data_tx_terminal_without_copied_rx_ends_outer_physical_turn`,
 `cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition`,
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
@@ -1754,15 +1837,56 @@ resolution, ARP-requested the host after 130.616 ms, returned one SYN/ACK after
 322.861 ms, and closed cleanly without a SYN retry. Preserve that cold sample
 separately and evaluate the driver-performance threshold on ARP-warmed traffic.
 
+The instrumented slow-path comparison is part of that non-passing baseline:
+roughly 140,000-168,000 outer Network turns ran over about 130 seconds, or
+roughly 1,100-1,300 turns/s, while only about 10,000-11,000
+`cyw43_quantum` runs completed. f4 R02 recorded 153,576 Network turns for 1,936
+covered root parents, while root/runtime RX queues reported zero drops or
+overruns. Its paired pcap returned host ACKs for Pi data in roughly 0.1-0.2 ms
+but left some later Pi segments off air for roughly 0.37-0.40 s. This rules out
+RF/TCP recovery, smoltcp queue loss, and a simple shortage of raw EventPump
+turn opportunities as the primary delay. Source audit falsifies ordinary
+request setup as the missing f4 repair: f4 already used
+`PREISSUE_STEP_BOUND=16` for one deterministic CMD52/CMD53
+preflight/register/COMMAND owner quantum, apart from the request-owned
+status-clear retry. Coverage must preserve that existing invariant without
+crediting it as a new fix. The stronger f4 amplifier is nested scheduler-only
+stop-and-wait. A root parent crossed prepare, commit, grant publication,
+notification, poll, then separate consumer wake/grant/execute turns. A normal
+linked Function-2 receive uses about five physical CYW43-to-SDIO children for
+a first-read-sized frame or six with a remainder. The shared 32-KiB aperture
+means a hot DPC episode performs zero Function-1 window writes; a cold episode
+adds exactly one LOW/MID/HIGH sequence. Coverage must prove those hot/cold
+counts and that preparation, priority transitions, completion polls, and each
+physical quantum stay separate. Root initial commit+grant+signal is one bounded
+producer turn; a stable double completion miss fuses the recurrent
+grant-or-resignal+signal into that same root `PollRing` producer turn. Delegated
+foreground and DPC coverage must double-poll the exact child completion and,
+on a stable miss, commit the producer cursor before publishing or re-signalling
+one grant and notifying last in that same turn, with no later completion poll
+or physical action after publication. The consumer must fuse wake poll,
+stable exact-grant
+validation, ACK-before-I/O, and one physical quantum, without consuming a grant
+when CARD_INT wins or performing I/O after ACK failure. Coverage must also
+prove that DPC now supplies child-owner urgency only, a current root wake
+authorizes one queue/tail op8, only the independently due lost-edge audit adds
+hintless source authority, and the 32-step `DPC_ACTIVATE`, strict queued-frame
+terminal, v11 cause/frame-turn counters, and generation-scoped TX phase
+counters remain passive and bounded. Those source changes and counters remain
+unflashed; only the exact rebuilt/read-back image and fresh paired serial/pcap
+evidence can rank the residuals or satisfy a performance gate.
+
 The later exact `b91b31f9a2b471d37ceeb66469e3fc10609e4df2` hardware group
 is also non-passing. The power-off boot and R01 each exchanged 40 Discovers /
 39 Offers without a Request; R02-R05 each completed one DORA, yielding only
 4/5 bootstrap. R05 then dropped 21/21 host Echo Requests after its
 DPC/root-wake source state stopped advancing. This is the hardware evidence
 for the retained-TX/queued-Offer ordering repair and for a bounded lost-edge
-safeguard. The current safeguard is the progress-conditioned one-shot
-watchdog, not a periodic audit. Wi-Fi `.coh` and pressure remain withheld for
-that image. GENET on the same image passed the cold-neighbor request/ARP/reply
+safeguard. The current safeguard is one progress-conditioned 32-ms one-shot on
+the existing op8 owner, not a periodic poller. The persistent child DPC owner
+also rechecks its durable condition before sleep/rearm. Wi-Fi `.coh` and
+pressure remain withheld for that image. GENET on the same image passed the
+cold-neighbor request/ARP/reply
 sequence, `.coh`, and a one-minute pressure control with a clean TCP flow and
 1.216 ms p50 / 1.538 ms p95 request-to-first-Pi-payload latency. The new Wi-Fi
 source remains pending rebuild, flash, and hardware proof.
@@ -1780,11 +1904,11 @@ CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
 latch. Its scheduler form remains one bounded EventPump Network quantum with
 physical-console checkpoints, exact grants, one HAL owner, and one linked SDIO
 runtime issuer; no test may pass by adding a timer poller or private physical
-drain loop. The single 32-ms progress-conditioned one-shot on the existing op8
+drain loop. The single progress-conditioned 32-ms one-shot on the existing op8
 owner is a lost-edge safeguard for Cohesix's extra linked notification
 boundaries, not a second poller. A quiescent inspection must stop at the source
-and suppress another watchdog probe until external DPC/root-wake progress or
-identity replacement.
+and its exact non-fault terminal must suppress another watchdog probe until
+external progress or identity replacement.
 
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
@@ -1826,10 +1950,12 @@ tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
 ms and at least 100 requests/s. At true idle, `rx_watch=watching` may become
 `watchdog-due` after one 32-ms no-progress interval, then
 `watchdog-probing` and `watchdog-suppressed`. Exactly one
-`deadline_probes`/exact-non-fault-terminal pair may then advance; a quiescent
-inspection must perform no Function-2 read, and elapsed time alone must not
-produce a second op8, priority lease, or GENET work. Later external
-DPC/root-wake progress may rebase and re-arm one successor.
+`deadline_probes`/`terminals` pair may advance at the exact current non-fault
+terminal. A quiescent inspection must perform no Function-2 read, and elapsed
+time alone must not produce a second op8, priority lease, or GENET work. Later
+external DPC/root-wake progress or identity replacement may rebase and re-arm
+one successor. DPC-only urgency must create no root op8, and root wake without
+an independently due watchdog must remain queue-only.
 The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
@@ -1839,9 +1965,11 @@ image produces this evidence, the cold-neighbor repair and both performance
 thresholds remain source claims rather than hardware results.
 
 CYW43 device tests must also prove that a retained TX or unproved credit window
-withholds smoltcp's paired RX/TX token, preserves the copied RX frame, advances
-only the sole retained owner, and produces zero fabricated TX drops before the
-frame is later delivered.
+blocks physical issue but not an available bounded FIFO reservation or
+memory-only copied-RX delivery. They must preserve the sole active owner,
+reserve paired response capacity before dequeueing RX, and produce zero
+fabricated TX drops. Full-FIFO backpressure may advance only that owner and must
+never issue a second operation in the same outer turn.
 
 The socket pack must cover the maximum enabled profile: one raw ICMP responder,
 active and standby console acceptors, DHCP, two UDP self-test sockets, two TCP
@@ -1954,16 +2082,35 @@ shared plus framebuffer, `genet` 64 DMA/32 shared, `cyw43` 0 DMA/64 shared,
 `sdio` 3 MMIO/10 DMA/32 shared, `pcie` 16 shared, `serial` 4 shared), then
 compile the separate runtime package for host and `aarch64-unknown-none`.
 
+USB runtime coverage must prove that the one-deep first interrupt-IN transfer
+arms a five-second virtual-counter liveness deadline only after its successful
+doorbell and binds that deadline to the exact slot, endpoint, report slot, TRB,
+and transfer generation. Polling the same identity must not refresh the
+deadline. Before expiry the result remains first-report pending; exact expiry
+with no transfer event, valid report, preserved event, or pending doorbell must
+fail the stalled attach closed with `FULL_QUEUE_NO_EVENT`, clear the endpoint
+identity, and retain one terminal recovery failure. Coverage must separately
+prove that any completed first transfer clears the watch and that a rearmed
+one-deep successor remains healthy through post-first idle well beyond the
+former deadline. The focused cases are
+`usb_keyboard_first_transfer_deadline_reenumerates_same_one_deep_no_event_identity`
+and `usb_keyboard_post_first_idle_successor_never_false_expires`; the former's
+acceptance assertion is timeout-to-fail-closed behavior, not proof that a new
+enumeration completed.
+
 SDIO runtime tests must prove the sole owner seals its engine from normalized
 host-block geometry: at most two blocks use retained PIO and more than two use
-external DMA. Every issued request remains in one immutable cursor. A
-preissue/issue owner quantum may batch the finite Linux-ordered setup and
-exactly one issue under the shared 256-operation contract; every later external
-DMA continuation performs at most one retained snapshot, while every fresh
-PIO-ready edge may move one complete normalized host block of at most 512 bytes
-and 128 FIFO accesses without crossing into a later block. Common completion
-requires response/R5, exact payload movement, authoritative `DATA_END`, and
-host quiescence. PIO tests must prove direction-correct
+external DMA. Every issued request remains in one immutable cursor. Preserving
+the existing f4 invariant, one preissue/issue owner quantum must batch the
+finite Linux-ordered setup and exactly one issue within
+`PREISSUE_STEP_BOUND=16` and the shared 256-operation contract. A failed
+request-owned status-clear readback may yield with zero issues for a later
+deadline-bounded verification; no other setup retry is admitted. Every later
+external DMA continuation performs at most one retained snapshot, while every
+fresh PIO-ready edge may move one complete normalized host block of at most 512
+bytes and 128 FIFO accesses without crossing into a later block. Common
+completion requires response/R5, exact payload movement, authoritative
+`DATA_END`, and host quiescence. PIO tests must prove direction-correct
 ready/present-state ownership, zero DMA accesses, block-granular progress, and
 that every owner quantum remains within 256 modeled HAL operations.
 External-DMA tests must prove control blocks split
@@ -2014,9 +2161,9 @@ The focused adversarial cases include
 `linked_cyw43_physical_lifetime_change_invalidates_resume_and_operator_fence`,
 `cyw43_gate8_ready_publication_is_a_separate_retractable_consumer_fence`,
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
-`cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do`,
+`cyw43_idle_and_dpc_only_lifetimes_never_create_fresh_op8`,
 `cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
-`cyw43_steady_rx_poll_forces_source_only_for_a_proved_level`,
+`cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
 `linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
 `linked_cyw43_rx_admission_honors_input_and_clears_on_guards`,
 `cyw43_durable_work_requires_one_completed_non_recovery_physical_lifetime`,
@@ -2039,9 +2186,20 @@ The focused adversarial cases include
 `sdio_descriptor_rejects_unrepresentable_cmd53_byte_mode_before_issue`,
 `sdio_wifi_power_sequence_advances_one_bounded_action_per_turn`,
 `sdio_engine_init_turn_withholds_completion_until_pwrseq_terminal`,
+`sdio_retained_external_dma_paces_32_blocks_across_finite_fifo_turns`,
 `sdio_retained_bootstrap_cmd52_and_card_commands_issue_once_without_private_polls`,
+`sdio_preissue_status_clear_requires_verified_readback_before_one_issue`,
 `sdio_retained_host_config_runs_recovery_and_set_ios_across_outer_turns`,
-`sdio_retained_dpc_activation_rearms_one_policy_register_per_outer_turn`,
+`sdio_retained_dpc_activation_completes_one_bounded_owner_quantum`,
+`sdio_real_irq_before_forced_probe_is_consumed_by_one_owner_quantum`,
+`sdio_retained_dpc_source_probe_coalesces_event_present_at_owner_entry`,
+`sdio_retained_card_irq_publishes_before_retrying_only_the_exact_ack`,
+`sdio_retained_card_irq_ack_exhaustion_fails_closed_without_republication`,
+`sdio_older_ack_completion_cannot_clear_a_newer_irq_epoch`,
+`sdio_pending_irq_ack_retry_is_not_acked_twice_before_rearm`,
+`sdio_retained_dpc_source_probe_coalesces_existing_events_without_second_ack`,
+`sdio_retained_dpc_ack_epoch_is_consumed_before_no_source_rearm`,
+`sdio_retained_dpc_bad_ring_acknowledges_exact_epoch_before_failing_closed`,
 `firmware_parent_reciprocal_ring_drives_retained_sdio_owner_as_511_plus_one`,
 `cyw43_linked_f2_tx_uses_cached_window_without_per_packet_iorx`,
 `cyw43_linked_control_and_eapol_tx_use_one_cached_window_f2_issue`,
@@ -2050,10 +2208,19 @@ The focused adversarial cases include
 `release_post_f2_crosses_exact_linux_order_to_real_dpc_activation`,
 `production_dpc_event_drains_real_owner_rx_before_foreground_poll`,
 `production_control_and_rx_polls_consume_only_dpc_owned_queue`,
+`dpc_cursor_serializes_physical_commands_but_allows_exact_queue_delivery`,
+`active_dpc_child_allows_only_intake_sealed_current_queue_delivery`,
+`cyw43_rx_idle_trace_v11_layout_is_additive`,
+`cyw43_rx_idle_trace_v11_appends_dpc_causes_without_v10_prefix_drift`,
+`cyw43_dpc_cause_and_frame_turn_accounting_is_episode_exact`,
 `firmware_terminal_and_issued_unknown_cuts_never_reissue_a_child`,
 `stale_foreground_completion_cannot_mutate_replacement_generation`,
 `mutated_action_fingerprint_poisoning_never_replays_issued_child`,
+`production_hintless_source_probe_reaps_to_one_retained_parent_terminal`,
+`consumed_foreground_grant_rebases_exact_child_inactivity_fence`,
+`consumed_dpc_grant_rebases_exact_child_inactivity_fence`,
 `issued_unknown_timeout_retains_one_child_without_same_generation_replay`,
+`dpc_pair_restart_arbitration_publishes_only_released_child_terminal_cause`,
 `corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum`,
 and `cyw43_foreground_baseline_requires_release_published_snapshot`.
 
@@ -2269,15 +2436,17 @@ or replay the command.
 Every root-to-CYW43 generation, including zero, instead advances only through
 the stable acknowledged exact shared grant. For an exact current-generation
 parent—cold, recovery, or under an already `Open` matching Network
-lease—tests must prove that HAL uses the same separate prepare, sequence-last
-commit, exact grant-publication, `Issued` plus notification, and completion-poll
-turns. Signal must be last, issued-unknown state must be latched before commit,
-and no administrative turn may perform a physical action. Typed cold provenance
-must not authorize a compressed publication. On a stable incomplete completion
-read, that poll turn must publish nothing and signal nothing. It may only
-schedule a later grant-publication or re-signal turn; the following notify turn
-must commit `Issued` before signalling. A matching completion must suppress
-both later actions. GENET must be unable to acquire, inspect, or execute any of
+lease—tests must prove that HAL uses the same separate ABI-invisible prepare
+and completion-poll handoffs around one admitted sequence-last commit, initial
+exact-grant publication, `Issued`, and signal-last issue turn. Issued-unknown
+state must be latched before commit, and no administrative turn may perform a
+physical action. Typed cold provenance must not authorize another publication
+lane. After a stable double incomplete completion read, that same CYW43 root
+`PollRing` turn must transiently commit `GrantRequired`, publish or re-signal
+one exact grant, commit `Granted -> Issued`, signal last, and return immediately
+without physical I/O. A matching completion observed by either stable read must
+suppress that authority action, and no later root `PublishGrant`/`Notify` turn
+may exist. GENET must be unable to acquire, inspect, or execute any of
 these CYW43 paths. The notification remains a coalescing scheduling hint and
 cannot grant authority. Tests must reject
 endpoint input, stale-sequence, changed-action, changed-generation,
@@ -2291,12 +2460,15 @@ complete action fingerprint, and the independently retained SDIO generation;
 its nonzero id is published last and must exceed the last consumed id. The
 consumer acknowledgement is irrevocable, an unacknowledged id may only be
 re-signalled, and the producer may publish the next id only after observing the
-exact acknowledgement. On a stable completion miss, the production foreground
-and DPC producer must schedule, but not perform, the next grant publication or
-unconsumed-grant re-signal. A later explicit grant turn commits durable state
-before signal, and a still later poll observes completion. A matching
-completion wins before the later authority action. The owner must consume at
-most one exact grant and perform at most one physical action. HAL must mint the
+exact acknowledgement. On a stable double completion miss, the production
+foreground or DPC producer must commit durable cursor/grant and `Issued` state,
+publish the next grant or re-signal the exact unconsumed grant, and notify
+signal-last in that same producer turn without physical I/O. A matching
+completion observed by either stable read wins before the authority action, and
+the following producer turn polls again. The owner must consume at
+most one exact grant and perform at most one physical owner quantum. Foreground
+and DPC child timeout age is inactivity: consumption of that exact grant must
+rebase the counter-backed and fallback-poll fences. HAL must mint the
 CYW43 send cap from the SDIO owner's bound notification with send-only rights
 and badge 256; it must not copy the owner endpoint.
 
@@ -2320,13 +2492,16 @@ The production reciprocal-ring/controller test must also schedule CYW43 far
 enough ahead that the initial command signal and first-grant signal are both
 published before SDIO intake and collapse to one badge-256 wake—or that the
 only edge is consumed before the grant becomes observable. The delegated owner
-must then show distinct bounded `CheckWake`, stable `CheckGrant`, and `Execute`
-turns. `CheckGrant` freezes authority without physical I/O; `Execute` performs
-the irrevocable ACK immediately before at most one physical owner action. Empty
+must then show one bounded admission that polls the wake, freezes one stable
+exact grant, and performs the irrevocable ACK immediately before at most one
+physical owner quantum. For
+`DPC_ACTIVATE`, that quantum is the bounded 32-step ordered
+mask/inspect/publish-or-coalesce/ACK/signal/rearm transaction; only a failed
+exact IRQ ACK may retain the cursor for a later ACK-only retry. Empty
 state enters `Wait`, whose durable grant recheck performs no owner I/O and
 cannot require a second notification edge. A CARD_INT pending at `CheckWake`
 must be service-first: it consumes a separate service turn and leaves the exact
-grant unconsumed for later `CheckGrant` and `Execute` turns. A later CARD_INT
+grant unconsumed for a later fused owner admission. A later CARD_INT
 may follow at most one already-admitted owner quantum and must be observed at
 the next `CheckWake`.
 The consumed grant cannot replay. The actual card-init `HOST_CONFIG` producer must
@@ -2354,15 +2529,24 @@ root grant and must reject endpoint continuation. Delegated initial intake must
 use the coalescing badge-256 notification and sequence-last ring command. After
 `Pending`, only an exact root or delegated shared grant for the retained intake
 may grant the next foreground quantum; the notification only schedules a later
-grant check. A stable completion miss must only schedule the later explicit
-grant or re-signal turn; it cannot publish, signal, or recommit the command
-sequence. The later grant turn commits state before signalling, and a matching
-completion wins before that authority action. Pending-command DPC arbitration,
+grant check. After a stable double completion miss, the CYW43 root `PollRing`
+producer must transiently commit `GrantRequired`, publish or re-signal one exact
+grant, commit `Granted -> Issued`, signal last, and return immediately without
+physical I/O; there is no later root `PublishGrant`/`Notify` turn. Delegated
+foreground/DPC producers retain their same-producer-turn double-poll fusion. A
+matching completion observed by either stable read wins before the authority
+action, while non-CYW43 and GENET endpoint paths retain their existing phases.
+Pending-command DPC arbitration,
 reciprocal SDIO child-ring submission, completion polling, explicit grant, and
-owner admission remain bounded retained work. The SDIO owner must preserve
-distinct wake, grant-check, and ACK-before-I/O Execute turns; no turn may
-consume more than one exact grant, execute two physical actions, or form a
-private yield/resignal/poll loop. The real root
+owner admission remain bounded retained work. The SDIO owner must fuse wake
+poll, stable grant validation, and ACK-before-I/O Execute into one scheduled
+admission; no turn may
+consume more than one exact grant, execute two owner quanta, or form a
+private yield/resignal/poll loop. Issued-unknown completion reaping must run
+before a pair-restart hold: a late exact child reply may prove terminal
+ownership and release the claim, but its result/payload is quarantined and only
+one exact old-parent terminal may be emitted before restart, with no
+same-generation replay. The real root
 reciprocal-ring
 tests must cut the logical connection epoch once while a CYW43 command is
 `Prepared` and once after it is `Issued`. Every active command, exact grant,
@@ -2409,24 +2593,55 @@ ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot
 slice and `WIFI_DPC_PROOF=yes` from
 `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that
 bounded accounting grammar and immediately follows it with
+`CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events
+source=card-int-or-source-probe physical_card_irq=not-exported`. The scope line
+is mandatory because the compatibility key `captures` means
+`ring.producer + ring.overruns`, includes hardware CARD_INT and authorized
+SOURCE_PENDING attempts, and is not a physical IRQ counter. The fixed v2 ring
+exports no cumulative physical CARD_INT count. The scope line is followed by
 `CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no
 client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>
 sample_reason=<reason> authority=live-ring action=<action>` plus
 `CYW43_SDIO_DPC_REARM generation=<n> counter=client-signal-attempts count=<n>
-owner_irq=masked|unmasked action=<action>`. All three lines must remain
-complete at maximum counter widths. The accounting `poisoned` value is the
+owner_irq=masked|unmasked action=<action>`. The additive v11 client trace keeps
+those three lines byte-stable and appends
+`CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n>
+other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n>
+fown=<n>`. All five lines must remain complete at maximum counter widths. The
+accounting `poisoned` value is the
 fail-closed aggregate of a live poisoned ring, a stale client sample, and
 client epoch errors; the truth line distinguishes those causes without
 weakening old-capture parsing.
 
+The same `netstats` snapshot must include complete maximum-width
+`wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n>
+credits=<n> next_issues=<n>` and
+`wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2c=<...> c2i=<...>`
+records, followed by
+`wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
+`wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
+stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
+`wifi: tx_queue` records. Focused tests must prove generation reset, ticket
+deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
+sampling, direct and later credit sampling, saturating counters, bounded
+formatting, FIFO HWM/drop/stale-purge accounting, and no GENET output or
+scheduling change. Hardware analysis must use high `a2i` for acceptance/FIFO
+wait through first issue, high `i2t` for issued runtime/SDIO service, and high
+`t2c` for firmware-credit/return delay. `next_issues` and the
+`credit_to_next_issue` metric, printed compactly as `c2i`, mean credit proof to
+the next actual op7 issue, not TxToken admission, an earlier local promotion,
+or general smoltcp delay.
+
 `wifi diag` emits the proof only after a stable valid read of the admitted SDIO
-owner ring and a same-generation v10 CYW43 client-counter sample. The v10
-`rearms` value counts generation-scoped owner-rearm signal attempts, not
-separately delivered wakes or hardware re-enables; the older
+owner ring and a same-generation current v11 CYW43 client-counter sample. The
+v11 layout preserves the complete v10 prefix for old-capture parsing.
+`rearms` counts generation-scoped owner-rearm signal attempts, not separately
+delivered wakes or hardware re-enables; the older
 source-asserted-empty episode counter cannot satisfy Gate 10. Acceptance also
 requires the stable live ring to report `masked=no`. It fails closed with
-`WIFI_DPC_REASON=no-activity` unless the exact proof has both `captures > 0`
-and `published > 0`; it also fails when the accounting line is missing,
+`WIFI_DPC_REASON=no-activity` unless the exact proof has both event-attempt
+`captures > 0` and `published > 0`; this proves DPC ring activity, not a
+physical CARD_INT. It also fails when the accounting line is missing,
 poisoned, or masked, any overrun/epoch/sequence/ack failure is nonzero,
 captured and published totals differ, consumed and published totals differ, or
 the final IRQ service state is unrearmed. The DPC diagnostic `generation` is
@@ -2438,6 +2653,29 @@ generation, but a prior supervisor attempt or superseded association
 generation cannot poison the latest exact attempt's healthy accounting.
 Exploratory summaries and wired-only historical evidence remain readable
 without this Wi-Fi-only proof.
+
+Cause-line coverage must count one `samples` episode per exact raw initial SDIO
+interrupt-status capture before the W1C ownership mask is applied. `frm`, `hm`,
+`fcc`, `fcs`, and `ca` may overlap and cover FRAME, HOSTMAIL, FC_CHANGE,
+FC_STATE, and CHIPACTIVE respectively. `other` advances when any nonzero raw
+bit falls outside those classes and may overlap a known cause; `spur` advances
+only when the complete raw initial status is zero. `dpc` counts
+event-associated CYW43 DPC turns, `child` counts distinct SDIO child
+submissions, and `owner` counts the initial and each fresh-grant owner quantum
+issued. `done` counts completed DPC-admitted frames. `fdpc` and `fown` must
+accumulate turn deltas only at frame completion, so their ratios to `done`
+exclude all work after the newest completed frame. Tests must prove the
+252-byte v11 layout is an additive suffix with no 196-byte v10-prefix drift,
+generation-reset behavior is unchanged, and the five diagnostic lines remain
+untruncated at `u32::MAX`. The counters are passive telemetry and must not
+change DPC authority or timing. Focused coverage is
+`cyw43_rx_idle_trace_v11_layout_is_additive`,
+`cyw43_rx_idle_trace_v11_appends_dpc_causes_without_v10_prefix_drift`,
+`cyw43_dpc_cause_and_frame_turn_accounting_is_episode_exact`,
+`rx_idle_trace_v11_decodes_dpc_causes_and_retains_v10`,
+`sdio_dpc_cause_diagnostic_preserves_generation_scoped_ratios`,
+`dpc_client_counters_require_same_generation_v11_sample`, and
+`wifi_sdio_dpc_diagnostic_lines_preserve_truth_without_truncation`.
 
 ### Automated Stage 03 — QEMU or Pi transport regression
 - `scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh`

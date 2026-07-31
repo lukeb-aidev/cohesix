@@ -34,7 +34,10 @@ use crate::hal::driver_task::{
     GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
 };
 #[cfg(feature = "kernel")]
-use crate::hal::driver_task::{DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot};
+use crate::hal::driver_task::{
+    DriverServiceBudget, DriverServiceBudgetError, DriverTaskRetainedServiceTurn,
+    DriverTaskRingProgressSnapshot,
+};
 use crate::hal::{HalError, Hardware};
 use crate::net::{
     ConsoleNetConfig, NetDevice, NetDeviceCounters, NetDriverError, NetInterfacePolicy, NetStage,
@@ -614,6 +617,20 @@ static CYW43_DPC_CLIENT_CONSUMED: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_REARMS: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_EPOCH_ERRORS: AtomicU32 = AtomicU32::new(0);
 static CYW43_DPC_CLIENT_SEQUENCE_ERRORS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_SAMPLES: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_FRAME: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_HOSTMAIL: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_FC_CHANGE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_FC_STATE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_OTHER: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_SOURCE_SPURIOUS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_TURNS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_OWNER_CHILDREN: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_OWNER_TURNS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_FRAMES_COMPLETED: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_FRAME_TURNS: AtomicU32 = AtomicU32::new(0);
+static CYW43_DPC_CLIENT_FRAME_OWNER_TURNS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
@@ -4828,7 +4845,9 @@ const CYW43_RX_IDLE_TRACE_VERSION_V8: u16 = 8;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_VERSION_V9: u16 = 9;
 #[cfg(feature = "kernel")]
-const CYW43_RX_IDLE_TRACE_VERSION: u16 = 10;
+const CYW43_RX_IDLE_TRACE_VERSION_V10: u16 = 10;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_VERSION: u16 = 11;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_BYTES: usize = 40;
 #[cfg(feature = "kernel")]
@@ -4849,6 +4868,8 @@ const CYW43_RX_IDLE_TRACE_V8_BYTES: usize = 180;
 const CYW43_RX_IDLE_TRACE_V9_BYTES: usize = 192;
 #[cfg(feature = "kernel")]
 const CYW43_RX_IDLE_TRACE_V10_BYTES: usize = 196;
+#[cfg(feature = "kernel")]
+const CYW43_RX_IDLE_TRACE_V11_BYTES: usize = 252;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_CHANNEL_NONE: u16 = 0xffff;
 #[cfg(feature = "kernel")]
@@ -4947,6 +4968,20 @@ struct Cyw43RxIdleTrace {
     dpc_epoch_errors: u32,
     dpc_sequence_errors: u32,
     dpc_owner_rearms: u32,
+    dpc_source_samples: u32,
+    dpc_source_frame: u32,
+    dpc_source_hostmail: u32,
+    dpc_source_fc_change: u32,
+    dpc_source_fc_state: u32,
+    dpc_source_chipactive: u32,
+    dpc_source_other: u32,
+    dpc_source_spurious: u32,
+    dpc_turns: u32,
+    dpc_owner_children: u32,
+    dpc_owner_turns: u32,
+    dpc_frames_completed: u32,
+    dpc_frame_turns: u32,
+    dpc_frame_owner_turns: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -4956,6 +4991,41 @@ struct Cyw43DpcClientCounters {
     rearms: u32,
     epoch_errors: u32,
     sequence_errors: u32,
+    source_samples: u32,
+    source_frame: u32,
+    source_hostmail: u32,
+    source_fc_change: u32,
+    source_fc_state: u32,
+    source_chipactive: u32,
+    source_other: u32,
+    source_spurious: u32,
+    turns: u32,
+    owner_children: u32,
+    owner_turns: u32,
+    frames_completed: u32,
+    frame_turns: u32,
+    frame_owner_turns: u32,
+}
+
+/// Generation-scoped DPC source and turn-amplification sample.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43SdioDpcCauseDiagnostic {
+    pub generation: u32,
+    pub samples: u32,
+    pub frame: u32,
+    pub hostmail: u32,
+    pub fc_change: u32,
+    pub fc_state: u32,
+    pub chipactive: u32,
+    pub other: u32,
+    pub spurious: u32,
+    pub frames: u32,
+    pub dpc_turns: u32,
+    pub children: u32,
+    pub owner_turns: u32,
+    pub frame_dpc_turns: u32,
+    pub frame_owner_turns: u32,
 }
 
 /// Compact Linux-equivalent CYW43/SDIO DPC service proof.
@@ -4963,7 +5033,10 @@ struct Cyw43DpcClientCounters {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct Cyw43SdioDpcDiagnostic {
     pub generation: u32,
-    pub captures: u32,
+    /// Total DPC ring publication attempts (`published + overruns`). This
+    /// includes both hardware CARD_INT events and software-authorized
+    /// SOURCE_PENDING probes; it is not a physical interrupt count.
+    pub event_attempts: u32,
     pub published: u32,
     pub consumed: u32,
     pub sample_consumer: u32,
@@ -5000,6 +5073,7 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         && version != CYW43_RX_IDLE_TRACE_VERSION_V7
         && version != CYW43_RX_IDLE_TRACE_VERSION_V8
         && version != CYW43_RX_IDLE_TRACE_VERSION_V9
+        && version != CYW43_RX_IDLE_TRACE_VERSION_V10
         && version != CYW43_RX_IDLE_TRACE_VERSION
     {
         return None;
@@ -5028,7 +5102,10 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
     if version == CYW43_RX_IDLE_TRACE_VERSION_V9 && bytes.len() < CYW43_RX_IDLE_TRACE_V9_BYTES {
         return None;
     }
-    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V10_BYTES {
+    if version == CYW43_RX_IDLE_TRACE_VERSION_V10 && bytes.len() < CYW43_RX_IDLE_TRACE_V10_BYTES {
+        return None;
+    }
+    if version == CYW43_RX_IDLE_TRACE_VERSION && bytes.len() < CYW43_RX_IDLE_TRACE_V11_BYTES {
         return None;
     }
     Some(Cyw43RxIdleTrace {
@@ -5092,12 +5169,51 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
         dpc_epoch_errors: cyw43_read_le_u32(bytes, 184).unwrap_or(0),
         dpc_sequence_errors: cyw43_read_le_u32(bytes, 188).unwrap_or(0),
         dpc_owner_rearms: cyw43_read_le_u32(bytes, 192).unwrap_or(0),
+        dpc_source_samples: cyw43_read_le_u32(bytes, 196).unwrap_or(0),
+        dpc_source_frame: cyw43_read_le_u32(bytes, 200).unwrap_or(0),
+        dpc_source_hostmail: cyw43_read_le_u32(bytes, 204).unwrap_or(0),
+        dpc_source_fc_change: cyw43_read_le_u32(bytes, 208).unwrap_or(0),
+        dpc_source_fc_state: cyw43_read_le_u32(bytes, 212).unwrap_or(0),
+        dpc_source_chipactive: cyw43_read_le_u32(bytes, 216).unwrap_or(0),
+        dpc_source_other: cyw43_read_le_u32(bytes, 220).unwrap_or(0),
+        dpc_source_spurious: cyw43_read_le_u32(bytes, 224).unwrap_or(0),
+        dpc_turns: cyw43_read_le_u32(bytes, 228).unwrap_or(0),
+        dpc_owner_children: cyw43_read_le_u32(bytes, 232).unwrap_or(0),
+        dpc_owner_turns: cyw43_read_le_u32(bytes, 236).unwrap_or(0),
+        dpc_frames_completed: cyw43_read_le_u32(bytes, 240).unwrap_or(0),
+        dpc_frame_turns: cyw43_read_le_u32(bytes, 244).unwrap_or(0),
+        dpc_frame_owner_turns: cyw43_read_le_u32(bytes, 248).unwrap_or(0),
     })
 }
 
 #[cfg(feature = "kernel")]
+fn reset_cyw43_dpc_client_counters() {
+    CYW43_DPC_CLIENT_CONSUMED.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FRAME.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_OTHER.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_TURNS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_OWNER_CHILDREN.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_OWNER_TURNS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAME_TURNS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(0, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
+}
+
+#[cfg(feature = "kernel")]
 fn cache_cyw43_dpc_client_counters(trace: Cyw43RxIdleTrace) {
-    if trace.version != CYW43_RX_IDLE_TRACE_VERSION {
+    if trace.version != CYW43_RX_IDLE_TRACE_VERSION_V10
+        && trace.version != CYW43_RX_IDLE_TRACE_VERSION
+    {
         return;
     }
     let Some(ring) = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot() else {
@@ -5107,6 +5223,20 @@ fn cache_cyw43_dpc_client_counters(trace: Cyw43RxIdleTrace) {
     CYW43_DPC_CLIENT_REARMS.store(trace.dpc_owner_rearms, Ordering::Relaxed);
     CYW43_DPC_CLIENT_EPOCH_ERRORS.store(trace.dpc_epoch_errors, Ordering::Relaxed);
     CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(trace.dpc_sequence_errors, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(trace.dpc_source_samples, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FRAME.store(trace.dpc_source_frame, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(trace.dpc_source_hostmail, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(trace.dpc_source_fc_change, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(trace.dpc_source_fc_state, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(trace.dpc_source_chipactive, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_OTHER.store(trace.dpc_source_other, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(trace.dpc_source_spurious, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_TURNS.store(trace.dpc_turns, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_OWNER_CHILDREN.store(trace.dpc_owner_children, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_OWNER_TURNS.store(trace.dpc_owner_turns, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(trace.dpc_frames_completed, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAME_TURNS.store(trace.dpc_frame_turns, Ordering::Relaxed);
+    CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(trace.dpc_frame_owner_turns, Ordering::Relaxed);
     CYW43_DPC_CLIENT_GENERATION.store(ring.epoch, Ordering::Release);
 }
 
@@ -5120,12 +5250,60 @@ fn cyw43_dpc_client_counters(generation: u32) -> Option<Cyw43DpcClientCounters> 
         rearms: CYW43_DPC_CLIENT_REARMS.load(Ordering::Relaxed),
         epoch_errors: CYW43_DPC_CLIENT_EPOCH_ERRORS.load(Ordering::Relaxed),
         sequence_errors: CYW43_DPC_CLIENT_SEQUENCE_ERRORS.load(Ordering::Relaxed),
+        source_samples: CYW43_DPC_CLIENT_SOURCE_SAMPLES.load(Ordering::Relaxed),
+        source_frame: CYW43_DPC_CLIENT_SOURCE_FRAME.load(Ordering::Relaxed),
+        source_hostmail: CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.load(Ordering::Relaxed),
+        source_fc_change: CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.load(Ordering::Relaxed),
+        source_fc_state: CYW43_DPC_CLIENT_SOURCE_FC_STATE.load(Ordering::Relaxed),
+        source_chipactive: CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.load(Ordering::Relaxed),
+        source_other: CYW43_DPC_CLIENT_SOURCE_OTHER.load(Ordering::Relaxed),
+        source_spurious: CYW43_DPC_CLIENT_SOURCE_SPURIOUS.load(Ordering::Relaxed),
+        turns: CYW43_DPC_CLIENT_TURNS.load(Ordering::Relaxed),
+        owner_children: CYW43_DPC_CLIENT_OWNER_CHILDREN.load(Ordering::Relaxed),
+        owner_turns: CYW43_DPC_CLIENT_OWNER_TURNS.load(Ordering::Relaxed),
+        frames_completed: CYW43_DPC_CLIENT_FRAMES_COMPLETED.load(Ordering::Relaxed),
+        frame_turns: CYW43_DPC_CLIENT_FRAME_TURNS.load(Ordering::Relaxed),
+        frame_owner_turns: CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.load(Ordering::Relaxed),
     };
     if CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire) == generation {
         Some(counters)
     } else {
         None
     }
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_dpc_cause_diagnostic_from(
+    generation: u32,
+    client: Cyw43DpcClientCounters,
+) -> Cyw43SdioDpcCauseDiagnostic {
+    Cyw43SdioDpcCauseDiagnostic {
+        generation,
+        samples: client.source_samples,
+        frame: client.source_frame,
+        hostmail: client.source_hostmail,
+        fc_change: client.source_fc_change,
+        fc_state: client.source_fc_state,
+        chipactive: client.source_chipactive,
+        other: client.source_other,
+        spurious: client.source_spurious,
+        frames: client.frames_completed,
+        dpc_turns: client.turns,
+        children: client.owner_children,
+        owner_turns: client.owner_turns,
+        frame_dpc_turns: client.frame_turns,
+        frame_owner_turns: client.frame_owner_turns,
+    }
+}
+
+/// Return generation-scoped CYW43 DPC source and turn-amplification telemetry.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_dpc_cause_diagnostic(
+    generation: u32,
+) -> Option<Cyw43SdioDpcCauseDiagnostic> {
+    let client = cyw43_dpc_client_counters(generation)?;
+    Some(cyw43_sdio_dpc_cause_diagnostic_from(generation, client))
 }
 
 #[cfg(feature = "kernel")]
@@ -5141,7 +5319,7 @@ fn cyw43_sdio_dpc_diagnostic_from(
     let masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
     Cyw43SdioDpcDiagnostic {
         generation: ring.epoch,
-        captures: ring.producer.saturating_add(ring.overruns),
+        event_attempts: ring.producer.saturating_add(ring.overruns),
         published: ring.producer,
         consumed: ring.consumer,
         sample_consumer: client.consumed,
@@ -5213,9 +5391,6 @@ const CYW43_SERVICE_WORK_DPC: u64 = 1 << 0;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_ROOT_WAKE: u64 = 1 << 1;
 #[cfg(feature = "kernel")]
-const CYW43_SERVICE_WORK_RX_SOURCE_LEVEL: u64 =
-    CYW43_SERVICE_WORK_DPC | CYW43_SERVICE_WORK_ROOT_WAKE;
-#[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_PRE_POLL: u64 = 1 << 2;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_DATA_TX: u64 = 1 << 3;
@@ -5254,10 +5429,10 @@ const CYW43_SERVICE_WORK_RECOVERY: u64 = 1 << 15;
 struct Cyw43ServiceWorkInputs {
     dpc: bool,
     root_wake: bool,
-    rx_audit: bool,
     pre_poll: bool,
     data_tx: bool,
     arp_tx: bool,
+    rx_audit: bool,
     runtime_descriptor: bool,
     root_rx: bool,
     control_reply: bool,
@@ -5281,9 +5456,6 @@ impl Cyw43ServiceWorkInputs {
         if self.root_wake {
             reason_mask |= CYW43_SERVICE_WORK_ROOT_WAKE;
         }
-        if self.rx_audit {
-            reason_mask |= CYW43_SERVICE_WORK_RX_AUDIT;
-        }
         if self.pre_poll {
             reason_mask |= CYW43_SERVICE_WORK_PRE_POLL;
         }
@@ -5292,6 +5464,9 @@ impl Cyw43ServiceWorkInputs {
         }
         if self.arp_tx {
             reason_mask |= CYW43_SERVICE_WORK_ARP_TX;
+        }
+        if self.rx_audit {
+            reason_mask |= CYW43_SERVICE_WORK_RX_AUDIT;
         }
         if self.runtime_descriptor {
             reason_mask |= CYW43_SERVICE_WORK_RUNTIME_DESCRIPTOR;
@@ -5544,7 +5719,8 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
     };
     let data_tx = CYW43_PENDING_DATA_TX
         .lock()
-        .is_some_and(|pending| pending.generation == generation);
+        .is_some_and(|pending| pending.generation == generation)
+        || cyw43_data_tx_queue_has_current_generation();
     let arp_tx = !CYW43_PENDING_ARP_TX.lock().is_empty();
     let root_rx = CYW43_PENDING_RX_QUEUE
         .lock()
@@ -7190,6 +7366,7 @@ fn invalidate_cyw43_data_handoff() {
     record_cyw43_stale_rx_purge(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire), stale);
     *CYW43_POSTCOMMIT_FIRST_PENDING_RX_LOSS.lock() = None;
     *baseline = Cyw43DataHandoffBaseline::initial();
+    reset_cyw43_data_tx_queue(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire));
 }
 
 #[cfg(feature = "kernel")]
@@ -7383,9 +7560,9 @@ fn cyw43_current_generation_data_rx_audit_due() -> bool {
 
 /// Claim the one watchdog probe for an exact fresh NetData ticket.
 ///
-/// Genuine DPC/root-wake levels use the same hintless op8 descriptor but do not
-/// consume this claim unless the current no-progress deadline is independently
-/// due. The retained prompt cursor remains the sole physical issuer.
+/// Root-wake queue delivery never consumes this claim. Only a genuinely due
+/// audit carries the hintless flag; the retained prompt cursor remains the
+/// sole physical issuer.
 #[cfg(feature = "kernel")]
 fn claim_cyw43_data_rx_watchdog_probe(generation: u32, ticket_id: u64) -> bool {
     if ticket_id == 0 || CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation {
@@ -7461,8 +7638,7 @@ fn cyw43_data_rx_lifetime_current_for_generation(generation: u32) -> bool {
 fn cyw43_fresh_data_rx_work_demanded() -> bool {
     let snapshot = cyw43_service_work_snapshot();
     if !snapshot.schedulable_network_work()
-        || snapshot.reason_mask()
-            & (CYW43_SERVICE_WORK_RX_SOURCE_LEVEL | CYW43_SERVICE_WORK_RX_AUDIT)
+        || snapshot.reason_mask() & (CYW43_SERVICE_WORK_ROOT_WAKE | CYW43_SERVICE_WORK_RX_AUDIT)
             == 0
     {
         return false;
@@ -7485,14 +7661,11 @@ fn cyw43_current_generation_data_rx_poll_flags(owner: Cyw43PromptPollOwner) -> u
     if let Some(descriptor) = cyw43_prompt_poll_descriptor_for_owner(owner) {
         return descriptor.flags;
     }
-    let expected_dpc_generation = cyw43_sdio_dpc_expected_generation();
-    let dpc_source_level = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
-        .is_some_and(|ring| cyw43_sdio_dpc_ring_work_pending(ring, expected_dpc_generation));
-    let force_source_probe = cyw43_current_generation_data_rx_audit_due()
-        || crate::hal::driver_task::cyw43_root_wake_pending()
-        || dpc_source_level;
+    // A root wake authorizes queue/tail delivery only. A DPC producer level is
+    // child-owner urgency and cannot create a fresh root op8. The hintless flag
+    // is reserved for the one genuinely due lost-edge source audit.
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN
-        | if force_source_probe {
+        | if cyw43_current_generation_data_rx_audit_due() {
             DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
         } else {
             0
@@ -9842,7 +10015,8 @@ pub(crate) fn cyw43_gate8_diagnostic() -> Cyw43Gate8Diagnostic {
         prompt_poll_generation_current: prompt_poll
             .is_none_or(|pending| pending.generation == generation),
         root_rx_pending: root_rx_queue_len != 0,
-        data_tx_pending: CYW43_PENDING_DATA_TX.lock().is_some(),
+        data_tx_pending: CYW43_PENDING_DATA_TX.lock().is_some()
+            || cyw43_data_tx_queue_has_current_generation(),
         arp_tx_pending: !CYW43_PENDING_ARP_TX.lock().is_empty(),
         root_rx_queue_saturated: root_rx_queue_len >= CYW43_PENDING_RX_QUEUE_CAP,
         root_rx_drop_since_baseline: data_handoff_commit_token == epoch_token
@@ -16409,13 +16583,13 @@ fn queue_cyw43_arp_frames(frames: &[[u8; 42]]) -> bool {
 
 #[cfg(feature = "kernel")]
 fn stage_one_cyw43_arp_tx_if_ready(contract: DriverTaskContract) -> bool {
-    if CYW43_PENDING_DATA_TX.lock().is_some() || CYW43_PENDING_ARP_TX.lock().is_empty() {
+    if CYW43_PENDING_ARP_TX.lock().is_empty() {
         return false;
     }
     let Some(pending) = CYW43_PENDING_ARP_TX.lock().pop_front() else {
         return false;
     };
-    if submit_cyw43_driver_task_eth_frame(contract, &pending.frame) {
+    if enqueue_unreserved_cyw43_data_tx(contract, &pending.frame, true, true) {
         record_driver_task_arp_tx(DriverTaskHotPath::Cyw43Wifi, &pending.frame);
         return true;
     }
@@ -17919,6 +18093,7 @@ fn cyw43_complete_unproven_tx_window(window: Cyw43UnprovenTxWindow) {
         Cyw43UnprovenTxWindow::Unknown => mark_one_cyw43_tx_completed(),
     }
     clear_cyw43_unproven_tx_window();
+    record_cyw43_tx_phase_credit(CYW43_CONNECTION_EPOCH.load(Ordering::Acquire));
 }
 
 #[cfg(feature = "kernel")]
@@ -17971,58 +18146,26 @@ fn cyw43_fresh_tx_admission_ready(contract: DriverTaskContract) -> bool {
 
 fn cyw43_data_tx_admission_ready(contract: DriverTaskContract) -> bool {
     #[cfg(feature = "kernel")]
-    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && service_cyw43_maintenance_turn() {
-        return false;
-    }
-    #[cfg(feature = "kernel")]
-    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && cyw43_logical_control_owner_active() {
-        return false;
-    }
-    #[cfg(feature = "kernel")]
-    if service_cyw43_pending_data_tx_turn(contract).is_some() {
-        // Servicing the retained frame consumes this outer device turn even
-        // when that service completes. A fresh smoltcp frame may only be
-        // admitted after control returns to the EventPump.
-        return false;
-    }
-    #[cfg(feature = "kernel")]
-    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && !cyw43_current_generation_data_consumer_open()
     {
-        return false;
-    }
-    #[cfg(feature = "kernel")]
-    if stage_one_cyw43_arp_tx_if_ready(contract) {
-        return false;
-    }
-    if !cyw43_data_plane_ready() {
-        return false;
-    }
-    #[cfg(feature = "kernel")]
-    {
-        cyw43_fresh_tx_admission_ready(contract) && cyw43_tx_unproven_window_ready(contract)
+        if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            return cyw43_data_plane_ready();
+        }
+        if !cyw43_data_plane_ready()
+            || !cyw43_current_generation_data_consumer_open()
+            || cyw43_recovery_required()
+        {
+            return false;
+        }
+        let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        let queue = CYW43_DATA_TX_QUEUE.lock();
+        queue.generation != generation
+            || queue.frames.len().saturating_add(queue.reservations) < CYW43_DATA_TX_QUEUE_CAP
     }
     #[cfg(not(feature = "kernel"))]
     {
         let _ = contract;
-        true
+        cyw43_data_plane_ready()
     }
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_paired_tx_owner_admission_ready(contract: DriverTaskContract) -> bool {
-    if CYW43_PENDING_DATA_TX.lock().is_some() {
-        // smoltcp's RX-associated TxToken cannot report admission failure.
-        // Advance the sole retained TX owner and preserve copied RX until a
-        // later outer turn can return a response token that is safe to use.
-        let _ = cyw43_data_tx_admission_ready(contract);
-        return false;
-    }
-    // Logical control is handled before the copied-RX dequeue. This final owner
-    // check also fences an active control or ETH_TX descriptor that is not
-    // represented by the root TX slot.
-    cyw43_data_plane_ready()
-        && cyw43_fresh_tx_admission_ready(contract)
-        && cyw43_tx_unproven_window_ready(contract)
 }
 
 #[cfg(feature = "kernel")]
@@ -19587,6 +19730,95 @@ fn cyw43_counter_freq_hz() -> Option<u64> {
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_tx_phase_elapsed_us(
+    start_ticks: Option<u64>,
+    end_ticks: Option<u64>,
+    freq_hz: Option<u64>,
+) -> Option<u64> {
+    let (start_ticks, end_ticks, freq_hz) = (start_ticks?, end_ticks?, freq_hz?);
+    if freq_hz == 0 {
+        return None;
+    }
+    let elapsed_us = u128::from(end_ticks.wrapping_sub(start_ticks))
+        .saturating_mul(1_000_000)
+        .saturating_div(u128::from(freq_hz));
+    Some(elapsed_us.min(u128::from(u64::MAX)) as u64)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_tx_phase_record_metric(metric: &mut Cyw43TxPhaseMetricDiagnostic, elapsed_us: u64) {
+    metric.samples = metric.samples.saturating_add(1);
+    metric.total_us = metric.total_us.saturating_add(elapsed_us);
+    metric.last_us = elapsed_us;
+    metric.max_us = metric.max_us.max(elapsed_us);
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_tx_phase_clock() -> (Option<u64>, Option<u64>) {
+    (cyw43_counter_ticks(), cyw43_counter_freq_hz())
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_tx_phase_accepted(generation: u32) {
+    CYW43_TX_PHASE_TRACKER.lock().record_accepted(generation);
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_tx_phase_promoted(generation: u32, ticket: u64) {
+    CYW43_TX_PHASE_TRACKER
+        .lock()
+        .record_promoted(generation, ticket);
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_tx_phase_issued(generation: u32, ticket: u64, accepted_ticks: Option<u64>) {
+    let (now_ticks, freq_hz) = cyw43_tx_phase_clock();
+    CYW43_TX_PHASE_TRACKER.lock().record_issued(
+        generation,
+        ticket,
+        accepted_ticks,
+        now_ticks,
+        freq_hz,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_tx_phase_terminal(generation: u32, ticket: u64, accepted_ticks: Option<u64>) {
+    let (now_ticks, freq_hz) = cyw43_tx_phase_clock();
+    CYW43_TX_PHASE_TRACKER.lock().record_terminal(
+        generation,
+        ticket,
+        accepted_ticks,
+        now_ticks,
+        freq_hz,
+    );
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_tx_phase_credit(generation: u32) {
+    let (now_ticks, freq_hz) = cyw43_tx_phase_clock();
+    CYW43_TX_PHASE_TRACKER
+        .lock()
+        .record_credit(generation, now_ticks, freq_hz);
+}
+
+/// Return passive generation-scoped timing for the sole CYW43 data-TX owner.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_tx_phase_diagnostic() -> Cyw43TxPhaseDiagnostic {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let tracker = CYW43_TX_PHASE_TRACKER.lock();
+    if tracker.diagnostic.generation == generation {
+        tracker.diagnostic
+    } else {
+        Cyw43TxPhaseDiagnostic {
+            generation,
+            ..Cyw43TxPhaseDiagnostic::default()
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_poll_deadline_from_millis_or_polls(ms: u64, fallback_polls: usize) -> Cyw43PollDeadline {
     match (cyw43_counter_ticks(), cyw43_counter_freq_hz()) {
         (Some(start), Some(freq_hz)) => {
@@ -19877,8 +20109,7 @@ fn fail_closed_cyw43_generation_recovery() {
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
-    CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
+    reset_cyw43_dpc_client_counters();
     CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
@@ -19891,6 +20122,7 @@ fn fail_closed_cyw43_generation_recovery() {
     };
     record_cyw43_stale_rx_purge(generation, stale);
     *CYW43_PENDING_DATA_TX.lock() = None;
+    reset_cyw43_data_tx_queue(generation);
     CYW43_PENDING_ARP_TX.lock().clear();
     clear_cyw43_pending_control_replies();
     clear_cyw43_active_prompt_poll();
@@ -20388,9 +20620,11 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
             // A completed physical lifetime is authority to service CYW43,
             // never demand for a fresh op8. Exact assigned NetData
             // continuations were admitted above. New receive work begins only
-            // from the durable DPC/root-wake level or another current owner,
-            // and only for the exact published generation, pair, and physical
-            // lifetime.
+            // from the durable root-wake level or another current owner, and
+            // only for the exact published generation, pair, and physical
+            // lifetime. DPC is producer urgency: it keeps the linked runtime
+            // scheduled, but cannot manufacture a consumer before that
+            // producer has published a frame into its queue.
             return false;
         }
     }
@@ -22752,6 +22986,7 @@ struct DriverTaskNetPendingRxToken {
 struct Cyw43PendingDataTx {
     ticket_id: u64,
     generation: u32,
+    accepted_ticks: Option<u64>,
     frame: [u8; MAX_FRAME_LEN],
     len: u16,
     payload_digest: Cyw43PayloadDigest,
@@ -22767,9 +23002,206 @@ struct Cyw43PendingDataTx {
     accepted_by_caller: bool,
 }
 
+/// One generation-scoped elapsed-time distribution for a CYW43 TX phase.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43TxPhaseMetricDiagnostic {
+    pub samples: u32,
+    pub total_us: u64,
+    pub last_us: u64,
+    pub max_us: u64,
+}
+
+impl Cyw43TxPhaseMetricDiagnostic {
+    #[must_use]
+    pub(crate) const fn average_us(self) -> u64 {
+        if self.samples == 0 {
+            0
+        } else {
+            self.total_us / self.samples as u64
+        }
+    }
+}
+
+/// Passive end-to-end timing for the single CYW43 Ethernet TX owner.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43TxPhaseDiagnostic {
+    pub generation: u32,
+    pub accepted: u32,
+    pub issued: u32,
+    pub terminals: u32,
+    pub credits: u32,
+    pub next_issues: u32,
+    pub accepted_to_issue: Cyw43TxPhaseMetricDiagnostic,
+    pub issued_to_terminal: Cyw43TxPhaseMetricDiagnostic,
+    pub terminal_to_credit: Cyw43TxPhaseMetricDiagnostic,
+    pub credit_to_next_issue: Cyw43TxPhaseMetricDiagnostic,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43TxPhaseTracker {
+    diagnostic: Cyw43TxPhaseDiagnostic,
+    current_ticket: u64,
+    issue_recorded: bool,
+    issued_ticks: Option<u64>,
+    terminal_recorded: bool,
+    terminal_ticks: Option<u64>,
+    terminal_credit_pending: bool,
+    credit_ticks: Option<u64>,
+    next_issue_pending: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43TxPhaseTracker {
+    const fn new() -> Self {
+        Self {
+            diagnostic: Cyw43TxPhaseDiagnostic {
+                generation: 0,
+                accepted: 0,
+                issued: 0,
+                terminals: 0,
+                credits: 0,
+                next_issues: 0,
+                accepted_to_issue: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                issued_to_terminal: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                terminal_to_credit: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                credit_to_next_issue: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+            },
+            current_ticket: 0,
+            issue_recorded: false,
+            issued_ticks: None,
+            terminal_recorded: false,
+            terminal_ticks: None,
+            terminal_credit_pending: false,
+            credit_ticks: None,
+            next_issue_pending: false,
+        }
+    }
+
+    fn reset_for_generation(&mut self, generation: u32) {
+        *self = Self::new();
+        self.diagnostic.generation = generation;
+    }
+
+    fn ensure_generation(&mut self, generation: u32) {
+        if self.diagnostic.generation != generation {
+            self.reset_for_generation(generation);
+        }
+    }
+
+    fn record_accepted(&mut self, generation: u32) {
+        self.ensure_generation(generation);
+        self.diagnostic.accepted = self.diagnostic.accepted.saturating_add(1);
+    }
+
+    fn record_promoted(&mut self, generation: u32, ticket: u64) {
+        self.ensure_generation(generation);
+        if ticket == 0 {
+            return;
+        }
+        self.current_ticket = ticket;
+        self.issue_recorded = false;
+        self.issued_ticks = None;
+        self.terminal_recorded = false;
+    }
+
+    fn record_issued(
+        &mut self,
+        generation: u32,
+        ticket: u64,
+        accepted_ticks: Option<u64>,
+        now_ticks: Option<u64>,
+        freq_hz: Option<u64>,
+    ) {
+        self.ensure_generation(generation);
+        if ticket == 0 || ticket != self.current_ticket || self.issue_recorded {
+            return;
+        }
+        if self.next_issue_pending {
+            self.diagnostic.next_issues = self.diagnostic.next_issues.saturating_add(1);
+            if let Some(elapsed_us) =
+                cyw43_tx_phase_elapsed_us(self.credit_ticks, now_ticks, freq_hz)
+            {
+                cyw43_tx_phase_record_metric(&mut self.diagnostic.credit_to_next_issue, elapsed_us);
+            }
+            self.credit_ticks = None;
+            self.next_issue_pending = false;
+        }
+        self.issue_recorded = true;
+        self.issued_ticks = now_ticks;
+        self.diagnostic.issued = self.diagnostic.issued.saturating_add(1);
+        if let Some(elapsed_us) = cyw43_tx_phase_elapsed_us(accepted_ticks, now_ticks, freq_hz) {
+            cyw43_tx_phase_record_metric(&mut self.diagnostic.accepted_to_issue, elapsed_us);
+        }
+    }
+
+    fn record_terminal(
+        &mut self,
+        generation: u32,
+        ticket: u64,
+        accepted_ticks: Option<u64>,
+        now_ticks: Option<u64>,
+        freq_hz: Option<u64>,
+    ) {
+        self.record_issued(generation, ticket, accepted_ticks, now_ticks, freq_hz);
+        if ticket == 0 || ticket != self.current_ticket || self.terminal_recorded {
+            return;
+        }
+        self.terminal_recorded = true;
+        self.diagnostic.terminals = self.diagnostic.terminals.saturating_add(1);
+        if let Some(elapsed_us) = cyw43_tx_phase_elapsed_us(self.issued_ticks, now_ticks, freq_hz) {
+            cyw43_tx_phase_record_metric(&mut self.diagnostic.issued_to_terminal, elapsed_us);
+        }
+        self.terminal_ticks = now_ticks;
+        self.terminal_credit_pending = true;
+    }
+
+    fn record_credit(&mut self, generation: u32, now_ticks: Option<u64>, freq_hz: Option<u64>) {
+        self.ensure_generation(generation);
+        if !self.terminal_credit_pending {
+            return;
+        }
+        self.terminal_credit_pending = false;
+        self.diagnostic.credits = self.diagnostic.credits.saturating_add(1);
+        if let Some(elapsed_us) = cyw43_tx_phase_elapsed_us(self.terminal_ticks, now_ticks, freq_hz)
+        {
+            cyw43_tx_phase_record_metric(&mut self.diagnostic.terminal_to_credit, elapsed_us);
+        }
+        self.terminal_ticks = None;
+        self.credit_ticks = now_ticks;
+        self.next_issue_pending = true;
+    }
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_TX_PHASE_TRACKER: Mutex<Cyw43TxPhaseTracker> = Mutex::new(Cyw43TxPhaseTracker::new());
+
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DataTxTurnOutcome {
+    CreditWait,
     Pending,
     Submitted,
     Failed,
@@ -22777,6 +23209,78 @@ enum Cyw43DataTxTurnOutcome {
 
 #[cfg(feature = "kernel")]
 static CYW43_PENDING_DATA_TX: Mutex<Option<Cyw43PendingDataTx>> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_QUEUE_CAP: usize = 16;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_SERVICE_BUDGET_OPS: u16 = 4;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_SERVICE_BUDGET_FRAMES: u16 = 1;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_TX_SERVICE_BUDGET_BYTES: u32 = MAX_FRAME_LEN as u32;
+
+/// One immutable, never-issued frame waiting for the sole active op7 owner.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43QueuedDataTx {
+    ticket_id: u64,
+    generation: u32,
+    accepted_ticks: Option<u64>,
+    frame: [u8; MAX_FRAME_LEN],
+    len: u16,
+    payload_digest: Cyw43PayloadDigest,
+    accepted_by_caller: bool,
+    urgent: bool,
+}
+
+#[cfg(feature = "kernel")]
+struct Cyw43DataTxQueue {
+    generation: u32,
+    reservation_epoch: u32,
+    reservations: usize,
+    high_water: u32,
+    drops: u32,
+    stale_purged: u32,
+    frames: heapless::Deque<Cyw43QueuedDataTx, CYW43_DATA_TX_QUEUE_CAP>,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43DataTxQueue {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            reservation_epoch: 0,
+            reservations: 0,
+            high_water: 0,
+            drops: 0,
+            stale_purged: 0,
+            frames: heapless::Deque::new(),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_DATA_TX_QUEUE: Mutex<Cyw43DataTxQueue> = Mutex::new(Cyw43DataTxQueue::new());
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DataTxQueueReservation {
+    generation: u32,
+    reservation_epoch: u32,
+    paired_rx: bool,
+}
+
+/// Passive generation-scoped state for the bounded CYW43 TX ingress queue.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43DataTxQueueDiagnostic {
+    pub generation: u32,
+    pub depth: u32,
+    pub reserved: u32,
+    pub high_water: u32,
+    pub drops: u32,
+    pub stale_purged: u32,
+}
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22889,10 +23393,23 @@ pub struct DriverTaskNetTxToken {
     hot_path: DriverTaskHotPath,
     tx_submitted: &'static AtomicU32,
     tx_dropped: &'static AtomicU32,
+    #[cfg(feature = "kernel")]
+    cyw43_queue_reservation: Option<Cyw43DataTxQueueReservation>,
+}
+
+impl Drop for DriverTaskNetTxToken {
+    fn drop(&mut self) {
+        #[cfg(feature = "kernel")]
+        if let Some(reservation) = self.cyw43_queue_reservation.take() {
+            // Dropping an unused smoltcp token releases only its local queue
+            // permit. It performs no HAL, linked-runtime, or physical work.
+            release_cyw43_data_tx_queue_slot(reservation);
+        }
+    }
 }
 
 impl phy::TxToken for DriverTaskNetTxToken {
-    fn consume<R, F>(self, len: usize, f: F) -> R
+    fn consume<R, F>(mut self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
     {
@@ -22920,7 +23437,24 @@ impl phy::TxToken for DriverTaskNetTxToken {
                 pending_rx,
             );
         }
-        if submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len]) {
+        #[cfg(feature = "kernel")]
+        let submitted = if self.hot_path == DriverTaskHotPath::Cyw43Wifi {
+            self.cyw43_queue_reservation
+                .take()
+                .is_some_and(|reservation| {
+                    let queued = enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len]);
+                    if queued {
+                        let _ = promote_one_cyw43_data_tx_if_ready(self.contract);
+                    }
+                    queued
+                })
+        } else {
+            submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len])
+        };
+        #[cfg(not(feature = "kernel"))]
+        let submitted =
+            submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len]);
+        if submitted {
             if self.hot_path != DriverTaskHotPath::Cyw43Wifi {
                 self.tx_submitted.fetch_add(1, Ordering::AcqRel);
             }
@@ -23059,6 +23593,24 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             pending.request.is_some() || pending.child_cursor_started,
         );
     }
+    let deadline_before_turn = pending.deadline;
+    if !cyw43_poll_deadline_open(&mut pending.deadline) {
+        let credit_wait = cyw43_unproven_tx_window().is_some();
+        return fail_cyw43_pending_data_tx(
+            &pending,
+            contract,
+            if credit_wait {
+                "credit-wait-timeout"
+            } else {
+                "retained-turn-timeout"
+            },
+            credit_wait || pending.request.is_some() || pending.child_cursor_started,
+        );
+    }
+    if !cyw43_tx_unproven_window_ready(contract) {
+        *CYW43_PENDING_DATA_TX.lock() = Some(pending);
+        return Cyw43DataTxTurnOutcome::CreditWait;
+    }
     let descriptor = cyw43_data_tx_descriptor(frame_len);
     if let Some(request) = pending.request {
         let Some((_, issued)) = cyw43_retained_descriptor_active_state_with_payload(
@@ -23073,6 +23625,11 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         let _ =
             retain_cyw43_terminal_drain_cursor(request, Cyw43TerminalDrainOwner::DataTx(pending));
         if issued {
+            record_cyw43_tx_phase_issued(
+                pending.generation,
+                pending.ticket_id,
+                pending.accepted_ticks,
+            );
             pending.child_cursor_started = true;
             let _ = cyw43_linked_action_observe_child_progress(
                 &mut pending.deadline,
@@ -23083,16 +23640,6 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             );
         }
     }
-    let deadline_before_turn = pending.deadline;
-    if !cyw43_poll_deadline_open(&mut pending.deadline) {
-        return fail_cyw43_pending_data_tx(
-            &pending,
-            contract,
-            "retained-turn-timeout",
-            pending.request.is_some() || pending.child_cursor_started,
-        );
-    }
-
     pending.turns = pending.turns.saturating_add(1);
     let completion = submit_cyw43_driver_task_eth_frame_completion(
         contract,
@@ -23148,6 +23695,13 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             pending.child_reply_latched = false;
         }
         pending.request = Some(request);
+        if issued {
+            record_cyw43_tx_phase_issued(
+                pending.generation,
+                pending.ticket_id,
+                pending.accepted_ticks,
+            );
+        }
         pending.child_cursor_started |= issued;
         let _ =
             retain_cyw43_terminal_drain_cursor(request, Cyw43TerminalDrainOwner::DataTx(pending));
@@ -23165,9 +23719,15 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
     pending.child_cursor_started = true;
     pending.child_reply_latched = false;
     if driver_task_tx_completion_submitted(completion) {
+        record_cyw43_tx_phase_terminal(
+            pending.generation,
+            pending.ticket_id,
+            pending.accepted_ticks,
+        );
         CYW43_TX_SUBMITTED.fetch_add(1, Ordering::AcqRel);
         if cyw43_data_tx_credit_proven(contract, completion) {
             clear_cyw43_unproven_tx_window();
+            record_cyw43_tx_phase_credit(pending.generation);
         } else {
             record_cyw43_unproven_tx_window(Some(completion));
         }
@@ -23193,10 +23753,48 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
 fn service_cyw43_pending_data_tx_turn(
     contract: DriverTaskContract,
 ) -> Option<Cyw43DataTxTurnOutcome> {
-    if CYW43_PENDING_DATA_TX.lock().is_none() {
+    if CYW43_PENDING_DATA_TX.lock().is_none() && !promote_one_cyw43_data_tx_if_ready(contract) {
         return None;
     }
-    Some(advance_cyw43_pending_data_tx(contract))
+    let outcome = advance_cyw43_pending_data_tx(contract);
+    if matches!(
+        outcome,
+        Cyw43DataTxTurnOutcome::Submitted | Cyw43DataTxTurnOutcome::Failed
+    ) {
+        // Promotion is bookkeeping, not another physical operation. Moving the
+        // next never-issued frame out of a full FIFO immediately releases the
+        // paired-RX permit that smoltcp needs to consume copied RX next turn.
+        let _ = promote_one_cyw43_data_tx_if_ready(contract);
+    }
+    Some(outcome)
+}
+
+/// Whether a copied RX can receive its mandatory paired smoltcp TxToken.
+///
+/// This is deliberately passive: it observes only data-plane fences and FIFO
+/// capacity. It neither probes SDIO credit nor advances the active op7 owner.
+#[cfg(feature = "kernel")]
+fn cyw43_paired_rx_response_permit_available() -> bool {
+    cyw43_data_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+}
+
+/// Advance at most one sole-owner CYW43 op7 turn from EventPump service.
+///
+/// Already root-copied RX remains first because delivering it requires no
+/// hardware action and may carry the credit needed by the queued TX head. The
+/// outer-operation claim inside the retained descriptor path prevents the
+/// following smoltcp poll from issuing a second physical command.
+#[cfg(feature = "kernel")]
+pub(crate) fn service_cyw43_data_tx_event_turn() -> bool {
+    if !cyw43_current_generation_data_consumer_open()
+        || cyw43_recovery_required()
+        || cyw43_host_eapol_runtime_work_pending()
+        || cyw43_logical_control_owner_active()
+        || (cyw43_pending_rx_token_occupied() && cyw43_paired_rx_response_permit_available())
+    {
+        return false;
+    }
+    service_cyw43_pending_data_tx_turn(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_some()
 }
 
 #[cfg(feature = "kernel")]
@@ -23637,6 +24235,373 @@ pub(crate) fn preserve_driver_task_pre_poll_completion(
 }
 
 #[cfg(feature = "kernel")]
+fn sync_cyw43_data_tx_queue_generation_locked(
+    queue: &mut Cyw43DataTxQueue,
+    generation: u32,
+) -> u32 {
+    if queue.generation == generation {
+        return 0;
+    }
+    let purged = queue.frames.len() as u32;
+    queue.frames.clear();
+    queue.generation = generation;
+    queue.reservation_epoch = queue.reservation_epoch.wrapping_add(1);
+    queue.reservations = 0;
+    queue.high_water = 0;
+    queue.drops = purged;
+    queue.stale_purged = purged;
+    purged
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_stale_data_tx_purge(purged: u32) {
+    if purged != 0 {
+        CYW43_TX_DROPPED.fetch_add(purged, Ordering::AcqRel);
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn reset_cyw43_data_tx_queue(generation: u32) {
+    let purged = {
+        let mut queue = CYW43_DATA_TX_QUEUE.lock();
+        let purged = queue.frames.len() as u32;
+        queue.frames.clear();
+        queue.generation = generation;
+        queue.reservation_epoch = queue.reservation_epoch.wrapping_add(1);
+        queue.reservations = 0;
+        queue.high_water = 0;
+        queue.drops = purged;
+        queue.stale_purged = purged;
+        purged
+    };
+    record_cyw43_stale_data_tx_purge(purged);
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_queue_has_current_generation() -> bool {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let queue = CYW43_DATA_TX_QUEUE.lock();
+    queue.generation == generation && !queue.frames.is_empty()
+}
+
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_data_tx_queue_diagnostic() -> Cyw43DataTxQueueDiagnostic {
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let queue = CYW43_DATA_TX_QUEUE.lock();
+    if queue.generation != generation {
+        return Cyw43DataTxQueueDiagnostic {
+            generation,
+            ..Cyw43DataTxQueueDiagnostic::default()
+        };
+    }
+    Cyw43DataTxQueueDiagnostic {
+        generation,
+        depth: queue.frames.len() as u32,
+        reserved: queue.reservations as u32,
+        high_water: queue.high_water,
+        drops: queue.drops,
+        stale_purged: queue.stale_purged,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn reserve_cyw43_data_tx_queue_slot(
+    contract: DriverTaskContract,
+    paired_rx: bool,
+) -> Option<Cyw43DataTxQueueReservation> {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || !cyw43_data_tx_admission_ready(contract) {
+        return None;
+    }
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let mut queue = CYW43_DATA_TX_QUEUE.lock();
+    let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
+    let admission_cap = if paired_rx {
+        CYW43_DATA_TX_QUEUE_CAP
+    } else {
+        CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1)
+    };
+    if queue.frames.len().saturating_add(queue.reservations) >= admission_cap {
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        return None;
+    }
+    queue.reservations = queue.reservations.saturating_add(1);
+    let reservation = Cyw43DataTxQueueReservation {
+        generation,
+        reservation_epoch: queue.reservation_epoch,
+        paired_rx,
+    };
+    drop(queue);
+    record_cyw43_stale_data_tx_purge(purged);
+    Some(reservation)
+}
+
+#[cfg(feature = "kernel")]
+fn release_cyw43_data_tx_queue_slot(reservation: Cyw43DataTxQueueReservation) {
+    let mut queue = CYW43_DATA_TX_QUEUE.lock();
+    if queue.generation == reservation.generation
+        && queue.reservation_epoch == reservation.reservation_epoch
+        && queue.reservations != 0
+    {
+        queue.reservations -= 1;
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn make_cyw43_queued_data_tx(
+    generation: u32,
+    frame: &[u8],
+    accepted_by_caller: bool,
+    urgent: bool,
+) -> Option<Cyw43QueuedDataTx> {
+    if frame.is_empty() || frame.len() > MAX_FRAME_LEN {
+        return None;
+    }
+    let mut retained = [0u8; MAX_FRAME_LEN];
+    retained[..frame.len()].copy_from_slice(frame);
+    Some(Cyw43QueuedDataTx {
+        ticket_id: CYW43_DATA_TX_NEXT_TICKET.fetch_add(1, Ordering::AcqRel),
+        generation,
+        accepted_ticks: cyw43_tx_phase_clock().0,
+        frame: retained,
+        len: frame.len() as u16,
+        payload_digest: cyw43_payload_digest(frame),
+        accepted_by_caller,
+        urgent,
+    })
+}
+
+/// Classify protocol-liveness frames that must not wait behind payload bulk.
+///
+/// Paired-RX responses are marked independently by their queue reservation;
+/// this parser covers unpaired ARP, DHCP, EAPOL, and TCP control-only frames.
+/// Malformed or fragmented traffic remains ordinary bulk rather than gaining
+/// priority from an incomplete header.
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_frame_is_control(frame: &[u8]) -> bool {
+    match cyw43_ethertype(frame) {
+        Some(CYW43_ETH_P_ARP) | Some(ETH_P_EAPOL) => return true,
+        Some(CYW43_ETH_P_IPV4) => {}
+        _ => return false,
+    }
+    let Some(ip_header_len) = cyw43_ipv4_header_len(frame) else {
+        return false;
+    };
+    let ip_offset = ETH_HEADER_LEN;
+    let Some(total_len) = cyw43_get_u16_be(frame, ip_offset + 2).map(usize::from) else {
+        return false;
+    };
+    if total_len < ip_header_len
+        || frame.len() < ip_offset.saturating_add(total_len)
+        || cyw43_get_u16_be(frame, ip_offset + 6).is_none_or(|fragment| fragment & 0x1fff != 0)
+    {
+        return false;
+    }
+    let Some(protocol) = frame.get(ip_offset + 9).copied() else {
+        return false;
+    };
+    let l4_offset = ip_offset + ip_header_len;
+    match protocol {
+        CYW43_IP_PROTO_UDP => {
+            let Some(src) = cyw43_get_u16_be(frame, l4_offset) else {
+                return false;
+            };
+            let Some(dst) = cyw43_get_u16_be(frame, l4_offset + 2) else {
+                return false;
+            };
+            cyw43_udp_ports_are_dhcp(src, dst)
+        }
+        CYW43_IP_PROTO_TCP => {
+            let Some(data_offset) = frame.get(l4_offset + 12).copied() else {
+                return false;
+            };
+            let tcp_header_len = usize::from(data_offset >> 4) * 4;
+            let l4_len = total_len.saturating_sub(ip_header_len);
+            if tcp_header_len < 20 || tcp_header_len > l4_len {
+                return false;
+            }
+            let flags = frame.get(l4_offset + 13).copied().unwrap_or_default();
+            flags & 0x07 != 0 || l4_len == tcp_header_len
+        }
+        _ => false,
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, frame: &[u8]) -> bool {
+    if cyw43_post_dhcp_zero_sender_arp(frame) {
+        let pending_rx = cyw43_pending_rx_token_occupied();
+        emit_cyw43_data_path_trace(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            "tx-drop",
+            "invalid-arp-spa",
+            0,
+            frame,
+            None,
+            0,
+            pending_rx,
+            pending_rx,
+        );
+        release_cyw43_data_tx_queue_slot(reservation);
+        return false;
+    }
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let Some(queued) = make_cyw43_queued_data_tx(
+        reservation.generation,
+        frame,
+        true,
+        reservation.paired_rx || cyw43_data_tx_frame_is_control(frame),
+    ) else {
+        release_cyw43_data_tx_queue_slot(reservation);
+        return false;
+    };
+    let mut queue = CYW43_DATA_TX_QUEUE.lock();
+    let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
+    let reservation_current = reservation.generation == generation
+        && queue.reservation_epoch == reservation.reservation_epoch
+        && queue.reservations != 0;
+    if !reservation_current {
+        queue.drops = queue.drops.saturating_add(1);
+        queue.stale_purged = queue.stale_purged.saturating_add(1);
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        return false;
+    }
+    queue.reservations -= 1;
+    if queue.frames.push_back(queued).is_err() {
+        queue.drops = queue.drops.saturating_add(1);
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        return false;
+    }
+    queue.high_water = queue.high_water.max(queue.frames.len() as u32);
+    drop(queue);
+    record_cyw43_stale_data_tx_purge(purged);
+    record_cyw43_tx_phase_accepted(generation);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn enqueue_unreserved_cyw43_data_tx(
+    contract: DriverTaskContract,
+    frame: &[u8],
+    accepted_by_caller: bool,
+    force_urgent: bool,
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || !cyw43_data_plane_ready()
+        || !cyw43_current_generation_data_consumer_open()
+        || cyw43_recovery_required()
+    {
+        return false;
+    }
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let Some(queued) = make_cyw43_queued_data_tx(
+        generation,
+        frame,
+        accepted_by_caller,
+        force_urgent || cyw43_data_tx_frame_is_control(frame),
+    ) else {
+        return false;
+    };
+    let mut queue = CYW43_DATA_TX_QUEUE.lock();
+    let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
+    if queue.frames.len().saturating_add(queue.reservations)
+        >= CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1)
+        || queue.frames.push_back(queued).is_err()
+    {
+        queue.drops = queue.drops.saturating_add(1);
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        return false;
+    }
+    queue.high_water = queue.high_water.max(queue.frames.len() as u32);
+    drop(queue);
+    record_cyw43_stale_data_tx_purge(purged);
+    record_cyw43_tx_phase_accepted(generation);
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn pop_next_cyw43_data_tx(
+    frames: &mut heapless::Deque<Cyw43QueuedDataTx, CYW43_DATA_TX_QUEUE_CAP>,
+) -> Option<Cyw43QueuedDataTx> {
+    let urgent_index = frames.iter().position(|queued| queued.urgent);
+    if let Some(index) = urgent_index.filter(|index| *index != 0) {
+        // Move only the oldest urgent frame ahead of its bulk prefix. Rotating
+        // that prefix preserves FIFO order within both urgency classes.
+        frames.make_contiguous()[..=index].rotate_right(1);
+    }
+    frames.pop_front()
+}
+
+#[cfg(feature = "kernel")]
+fn promote_one_cyw43_data_tx_if_ready(contract: DriverTaskContract) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || CYW43_PENDING_DATA_TX.lock().is_some()
+        || !cyw43_data_plane_ready()
+        || !cyw43_current_generation_data_consumer_open()
+        || cyw43_recovery_required()
+        || !cyw43_fresh_tx_admission_ready(contract)
+    {
+        return false;
+    }
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let queued = {
+        let mut queue = CYW43_DATA_TX_QUEUE.lock();
+        let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
+        let queued = pop_next_cyw43_data_tx(&mut queue.frames);
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        queued
+    };
+    let Some(queued) = queued else {
+        return false;
+    };
+    if queued.generation != generation {
+        if queued.accepted_by_caller {
+            CYW43_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+        }
+        return false;
+    }
+    let pending = Cyw43PendingDataTx {
+        ticket_id: queued.ticket_id,
+        generation: queued.generation,
+        accepted_ticks: queued.accepted_ticks,
+        frame: queued.frame,
+        len: queued.len,
+        payload_digest: queued.payload_digest,
+        request: None,
+        child_cursor_started: false,
+        deadline: cyw43_poll_deadline_from_millis_or_polls(
+            cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+            cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
+        ),
+        child_reply_latched: false,
+        child_reply_renewals: 0,
+        turns: 0,
+        accepted_by_caller: queued.accepted_by_caller,
+    };
+    let mut active = CYW43_PENDING_DATA_TX.lock();
+    if active.is_some() {
+        let accepted_by_caller = queued.accepted_by_caller;
+        let mut queue = CYW43_DATA_TX_QUEUE.lock();
+        if queue.frames.push_front(queued).is_err() {
+            queue.drops = queue.drops.saturating_add(1);
+            if accepted_by_caller {
+                CYW43_TX_DROPPED.fetch_add(1, Ordering::AcqRel);
+            }
+        }
+        return false;
+    }
+    *active = Some(pending);
+    drop(active);
+    record_cyw43_tx_phase_promoted(generation, queued.ticket_id);
+    true
+}
+
+#[cfg(feature = "kernel")]
 fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]) -> bool {
     if cyw43_post_dhcp_zero_sender_arp(frame) {
         let pending_rx = cyw43_pending_rx_token_occupied();
@@ -23653,62 +24618,12 @@ fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]
         );
         return false;
     }
-    if !cyw43_fresh_tx_admission_ready(contract) {
-        let pending_rx = cyw43_pending_rx_token_occupied();
-        emit_cyw43_data_path_trace(
-            contract,
-            "tx-drop",
-            cyw43_tx_no_completion_action(contract),
-            0,
-            frame,
-            None,
-            0,
-            pending_rx,
-            pending_rx,
-        );
+    if !enqueue_unreserved_cyw43_data_tx(contract, frame, true, false) {
         return false;
     }
-    if !cyw43_tx_unproven_window_ready(contract) {
-        let pending_rx = cyw43_pending_rx_token_occupied();
-        emit_cyw43_data_path_trace(
-            contract,
-            "tx-drop",
-            "credit-window-busy",
-            0,
-            frame,
-            None,
-            0,
-            pending_rx,
-            pending_rx,
-        );
-        return false;
-    }
-    if frame.is_empty() || frame.len() > MAX_FRAME_LEN || CYW43_PENDING_DATA_TX.lock().is_some() {
-        return false;
-    }
-    let mut retained = [0u8; MAX_FRAME_LEN];
-    retained[..frame.len()].copy_from_slice(frame);
-    let ticket_id = CYW43_DATA_TX_NEXT_TICKET.fetch_add(1, Ordering::AcqRel);
-    *CYW43_PENDING_DATA_TX.lock() = Some(Cyw43PendingDataTx {
-        ticket_id,
-        generation: CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
-        frame: retained,
-        len: frame.len() as u16,
-        payload_digest: cyw43_payload_digest(frame),
-        request: None,
-        child_cursor_started: false,
-        deadline: cyw43_poll_deadline_from_millis_or_polls(
-            cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
-            cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
-        ),
-        child_reply_latched: false,
-        child_reply_renewals: 0,
-        turns: 0,
-        accepted_by_caller: true,
-    });
-    // TX-token consumption only enqueues the immutable frame. The ordinary
-    // EventPump advances it on a later device turn, so smoltcp cannot submit a
-    // child operation in the same callback that constructed the payload.
+    // Promotion is local bookkeeping only. The dedicated EventPump service
+    // hook advances the sole active op7 owner on a later outer turn.
+    let _ = promote_one_cyw43_data_tx_if_ready(contract);
     true
 }
 
@@ -24311,36 +25226,10 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         defer_cyw43_precommit_data_frame(contract, flags, token);
         return None;
     }
-    let tx_terminal_this_turn = if let Some(outcome) = service_cyw43_pending_data_tx_turn(contract)
-    {
-        match outcome {
-            Cyw43DataTxTurnOutcome::Pending | Cyw43DataTxTurnOutcome::Failed => {
-                // The immutable ETH_TX owner still owns the linked runtime, or
-                // its typed failure has fenced this generation. Neither state
-                // may expose a paired smoltcp token.
-                return None;
-            }
-            Cyw43DataTxTurnOutcome::Submitted => {
-                // The TX terminal was this outer turn's sole physical
-                // operation. A frame already copied into the root RX queue is
-                // no longer an SDIO operation, so deliver it below instead of
-                // forcing an extra EventPump rotation. Its paired TxToken only
-                // enqueues an immutable response for a later turn. This is the
-                // linked-runtime equivalent of Linux draining RX after a TX
-                // completion and prevents DHCP retransmits from starving an
-                // already-received Offer.
-                if cyw43_recovery_required() {
-                    return None;
-                }
-                true
-            }
-        }
-    } else {
-        false
-    };
-    if !cyw43_paired_tx_owner_admission_ready(contract) {
-        return None;
-    }
+    // Root-copied frames are software-only. Deliver them before advancing the
+    // active op7 owner, so an on-air ACK or request cannot sit behind the TX it
+    // is intended to acknowledge. Device::receive reserved the paired TxToken
+    // queue permit before entering this function.
     while let Some((flags, token)) = take_cyw43_pending_rx_token() {
         let _ = complete_cyw43_unproven_tx_window_from_rx_flags(flags);
         if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
@@ -24369,12 +25258,14 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
         queue_cyw43_arp_assist_if_needed(contract, &token.buffer[..token.len]);
         return Some(token);
     }
-    if tx_terminal_this_turn {
-        // Falling through above is legal only for a frame already copied into
-        // root memory. With no deliverable copied data frame, end this outer
-        // turn before ARP staging, a retained prompt resume, or a fresh op8 can
-        // attempt another physical operation.
-        return None;
+    if let Some(outcome) = service_cyw43_pending_data_tx_turn(contract) {
+        if outcome != Cyw43DataTxTurnOutcome::CreditWait {
+            // Advancing the sole active op7 owner is this outer turn's only
+            // physical action, whether it remains pending or reaches a
+            // terminal. CreditWait is purely local and deliberately falls
+            // through so RX/DPC can recover the missing firmware credit.
+            return None;
+        }
     }
     if stage_one_cyw43_arp_tx_if_ready(contract) {
         return None;
@@ -25476,22 +26367,43 @@ macro_rules! driver_task_nic {
                 &mut self,
                 _timestamp: Instant,
             ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
+                #[cfg(feature = "kernel")]
+                let cyw43_queue_reservation =
+                    if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                        match reserve_cyw43_data_tx_queue_slot($contract, true) {
+                            Some(reservation) => Some(reservation),
+                            None => {
+                                let _ = service_cyw43_data_tx_event_turn();
+                                return None;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                let tx_token = DriverTaskNetTxToken {
+                    contract: $contract,
+                    hot_path: DriverTaskHotPath::$hot_path,
+                    tx_submitted: &$tx_submitted,
+                    tx_dropped: &$tx_dropped,
+                    #[cfg(feature = "kernel")]
+                    cyw43_queue_reservation,
+                };
                 let rx = receive_driver_task_frame($contract, DriverTaskHotPath::$hot_path)?;
                 record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
                 $rx_frames.fetch_add(1, Ordering::AcqRel);
                 NET_DIAG.record_rx_frame_to_stack();
-                Some((
-                    rx,
-                    DriverTaskNetTxToken {
-                        contract: $contract,
-                        hot_path: DriverTaskHotPath::$hot_path,
-                        tx_submitted: &$tx_submitted,
-                        tx_dropped: &$tx_dropped,
-                    },
-                ))
+                Some((rx, tx_token))
             }
 
             fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
+                #[cfg(feature = "kernel")]
+                let cyw43_queue_reservation =
+                    if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                        Some(reserve_cyw43_data_tx_queue_slot($contract, false)?)
+                    } else {
+                        None
+                    };
+                #[cfg(not(feature = "kernel"))]
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi)
                     && !cyw43_data_tx_admission_ready($contract)
                 {
@@ -25502,6 +26414,8 @@ macro_rules! driver_task_nic {
                     hot_path: DriverTaskHotPath::$hot_path,
                     tx_submitted: &$tx_submitted,
                     tx_dropped: &$tx_dropped,
+                    #[cfg(feature = "kernel")]
+                    cyw43_queue_reservation,
                 })
             }
 
@@ -26425,6 +27339,7 @@ mod tests {
         CYW43_ARP_TARGET_HW_ZEROED.store(0, Ordering::Release);
         CYW43_HOST_EAPOL_TX_RETRIES.store(0, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
+        reset_cyw43_data_tx_queue(0);
         CYW43_TX_SUBMITTED.store(0, Ordering::Release);
         CYW43_TX_DROPPED.store(0, Ordering::Release);
         CYW43_TX_CREDIT_COMPLETED.store(0, Ordering::Release);
@@ -26433,6 +27348,7 @@ mod tests {
         CYW43_TX_UNPROVEN_SEQ.store(0, Ordering::Release);
         CYW43_TX_UNPROVEN_COUNT.store(0, Ordering::Release);
         CYW43_DATA_TX_NEXT_TICKET.store(1, Ordering::Release);
+        *CYW43_TX_PHASE_TRACKER.lock() = Cyw43TxPhaseTracker::new();
         CYW43_BCDC_IOCTL_ID.store(0, Ordering::Release);
         *CYW43_PENDING_DATA_TX.lock() = None;
         CYW43_PENDING_ARP_TX.lock().clear();
@@ -26444,6 +27360,7 @@ mod tests {
         *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = None;
         CYW43_DATA_RX_AUDIT_PROBES.store(0, Ordering::Release);
         CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.store(0, Ordering::Release);
+        set_cyw43_service_work_snapshot_test_override(None);
         begin_cyw43_outer_event_turn();
         CYW43_RX_FRAMES.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_OP.store(0, Ordering::Release);
@@ -26456,11 +27373,7 @@ mod tests {
         CYW43_SERVICE_LAST_SOURCE_FLAGS.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_PRE_SOURCE.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_POST_SOURCE.store(0, Ordering::Release);
-        CYW43_DPC_CLIENT_CONSUMED.store(0, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
+        reset_cyw43_dpc_client_counters();
         *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = None;
         CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
         CYW43_SUPERVISOR_RING_TURNS.store(0, Ordering::Release);
@@ -26527,7 +27440,10 @@ mod tests {
         for _ in 0..max_turns {
             begin_cyw43_outer_event_turn();
             outcome = advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT);
-            if outcome != Cyw43DataTxTurnOutcome::Pending {
+            if !matches!(
+                outcome,
+                Cyw43DataTxTurnOutcome::Pending | Cyw43DataTxTurnOutcome::CreditWait
+            ) {
                 return outcome;
             }
         }
@@ -26786,6 +27702,120 @@ mod tests {
         ));
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_event_tx_hook_yields_to_deliverable_copied_rx() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(70);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"active-tcp-frame",
+        ));
+        let frame = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&frame),
+        ));
+
+        begin_cyw43_outer_event_turn();
+        assert!(
+            !service_cyw43_data_tx_event_turn(),
+            "a copied RX with paired FIFO capacity must stay RX-first"
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
+
+        let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("reserved paired capacity must expose the copied RX");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        drop(paired_tx);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn());
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_event_tx_hook_frees_full_fifo_for_pending_rx() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(71);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        for marker in 0..CYW43_DATA_TX_QUEUE_CAP {
+            let frame = [marker as u8; 64];
+            assert!(submit_cyw43_driver_task_eth_frame(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                &frame,
+            ));
+        }
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32
+        );
+
+        let frame = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&frame),
+        ));
+        let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("the final paired FIFO permit must be usable");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        paired_tx.consume(64, |bytes| bytes.fill(0xa5));
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP as u32
+        );
+
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&frame),
+        ));
+        begin_cyw43_outer_event_turn();
+        assert!(
+            service_cyw43_data_tx_event_turn(),
+            "a full FIFO must advance the active owner until paired RX capacity returns"
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32
+        );
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+
+        begin_cyw43_outer_event_turn();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(1))
+            .expect("released paired capacity must deliver the pending copied RX");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        drop(paired_tx);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+
         reset_cyw43_status_flags();
     }
 
@@ -39880,40 +40910,74 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn rx_idle_trace_v10_decodes_actual_dpc_rearms_and_retains_v9() {
-        let mut v10 = [0u8; CYW43_RX_IDLE_TRACE_V10_BYTES];
-        v10[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
-        v10[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
-        v10[180..184].copy_from_slice(&17u32.to_le_bytes());
-        v10[184..188].copy_from_slice(&2u32.to_le_bytes());
-        v10[188..192].copy_from_slice(&3u32.to_le_bytes());
-        v10[192..196].copy_from_slice(&19u32.to_le_bytes());
-        let decoded = cyw43_rx_idle_trace(&v10).expect("v10 trace must decode");
+    fn rx_idle_trace_v11_decodes_dpc_causes_and_retains_v10() {
+        let mut v11 = [0u8; CYW43_RX_IDLE_TRACE_V11_BYTES];
+        v11[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v11[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION.to_le_bytes());
+        for (offset, value) in [
+            (180, 17u32),
+            (184, 2),
+            (188, 3),
+            (192, 19),
+            (196, 23),
+            (200, 11),
+            (204, 5),
+            (208, 7),
+            (212, 6),
+            (216, 13),
+            (220, 4),
+            (224, 2),
+            (228, 31),
+            (232, 29),
+            (236, 47),
+            (240, 9),
+            (244, 27),
+            (248, 41),
+        ] {
+            v11[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let decoded = cyw43_rx_idle_trace(&v11).expect("v11 trace must decode");
         assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION);
         assert_eq!(decoded.dpc_events_consumed, 17);
         assert_eq!(decoded.dpc_epoch_errors, 2);
         assert_eq!(decoded.dpc_sequence_errors, 3);
         assert_eq!(decoded.dpc_owner_rearms, 19);
+        assert_eq!(decoded.dpc_source_samples, 23);
+        assert_eq!(decoded.dpc_source_frame, 11);
+        assert_eq!(decoded.dpc_source_hostmail, 5);
+        assert_eq!(decoded.dpc_source_fc_change, 7);
+        assert_eq!(decoded.dpc_source_fc_state, 6);
+        assert_eq!(decoded.dpc_source_chipactive, 13);
+        assert_eq!(decoded.dpc_source_other, 4);
+        assert_eq!(decoded.dpc_source_spurious, 2);
+        assert_eq!(decoded.dpc_turns, 31);
+        assert_eq!(decoded.dpc_owner_children, 29);
+        assert_eq!(decoded.dpc_owner_turns, 47);
+        assert_eq!(decoded.dpc_frames_completed, 9);
+        assert_eq!(decoded.dpc_frame_turns, 27);
+        assert_eq!(decoded.dpc_frame_owner_turns, 41);
         assert_eq!(
-            cyw43_rx_idle_trace(&v10[..CYW43_RX_IDLE_TRACE_V9_BYTES]),
+            cyw43_rx_idle_trace(&v11[..CYW43_RX_IDLE_TRACE_V10_BYTES]),
             None
         );
+
+        let mut v10 = [0u8; CYW43_RX_IDLE_TRACE_V10_BYTES];
+        v10[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
+        v10[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V10.to_le_bytes());
+        v10[180..184].copy_from_slice(&7u32.to_le_bytes());
+        v10[192..196].copy_from_slice(&8u32.to_le_bytes());
+        let decoded = cyw43_rx_idle_trace(&v10).expect("v10 trace must remain supported");
+        assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION_V10);
+        assert_eq!(decoded.dpc_events_consumed, 7);
+        assert_eq!(decoded.dpc_owner_rearms, 8);
+        assert_eq!(decoded.dpc_source_samples, 0);
 
         let mut v9 = [0u8; CYW43_RX_IDLE_TRACE_V9_BYTES];
         v9[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
         v9[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V9.to_le_bytes());
-        v9[180..184].copy_from_slice(&7u32.to_le_bytes());
         let decoded = cyw43_rx_idle_trace(&v9).expect("v9 trace must remain supported");
         assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION_V9);
-        assert_eq!(decoded.dpc_events_consumed, 7);
         assert_eq!(decoded.dpc_owner_rearms, 0);
-
-        let mut v8 = [0u8; CYW43_RX_IDLE_TRACE_V8_BYTES];
-        v8[0..4].copy_from_slice(&CYW43_RX_IDLE_TRACE_MAGIC.to_le_bytes());
-        v8[4..6].copy_from_slice(&CYW43_RX_IDLE_TRACE_VERSION_V8.to_le_bytes());
-        let decoded = cyw43_rx_idle_trace(&v8).expect("v8 trace must remain supported");
-        assert_eq!(decoded.version, CYW43_RX_IDLE_TRACE_VERSION_V8);
-        assert_eq!(decoded.dpc_events_consumed, 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -39933,10 +40997,11 @@ mod tests {
                 rearms: 10,
                 epoch_errors: 3,
                 sequence_errors: 4,
+                ..Cyw43DpcClientCounters::default()
             },
         );
         assert_eq!(diagnostic.generation, 7);
-        assert_eq!(diagnostic.captures, 14);
+        assert_eq!(diagnostic.event_attempts, 14);
         assert_eq!(diagnostic.published, 12);
         assert_eq!(diagnostic.consumed, 11);
         assert_eq!(diagnostic.sample_consumer, 11);
@@ -39962,6 +41027,7 @@ mod tests {
                 rearms: 13,
                 epoch_errors: 0,
                 sequence_errors: 0,
+                ..Cyw43DpcClientCounters::default()
             },
         );
         assert_eq!(mismatch.sample_consumer, 12);
@@ -39983,12 +41049,59 @@ mod tests {
                 rearms: 14,
                 epoch_errors: 0,
                 sequence_errors: 0,
+                ..Cyw43DpcClientCounters::default()
             },
         );
         assert_eq!(ring_poisoned.sample_consumer, 14);
         assert!(ring_poisoned.ring_poisoned);
         assert!(!ring_poisoned.client_sample_stale);
         assert!(ring_poisoned.poisoned);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_dpc_cause_diagnostic_preserves_generation_scoped_ratios() {
+        let diagnostic = cyw43_sdio_dpc_cause_diagnostic_from(
+            7,
+            Cyw43DpcClientCounters {
+                source_samples: 23,
+                source_frame: 11,
+                source_hostmail: 5,
+                source_fc_change: 7,
+                source_fc_state: 6,
+                source_chipactive: 13,
+                source_other: 4,
+                source_spurious: 4,
+                turns: 31,
+                owner_children: 29,
+                owner_turns: 47,
+                frames_completed: 9,
+                frame_turns: 27,
+                frame_owner_turns: 41,
+                ..Cyw43DpcClientCounters::default()
+            },
+        );
+
+        assert_eq!(
+            diagnostic,
+            Cyw43SdioDpcCauseDiagnostic {
+                generation: 7,
+                samples: 23,
+                frame: 11,
+                hostmail: 5,
+                fc_change: 7,
+                fc_state: 6,
+                chipactive: 13,
+                other: 4,
+                spurious: 4,
+                frames: 9,
+                dpc_turns: 31,
+                children: 29,
+                owner_turns: 47,
+                frame_dpc_turns: 27,
+                frame_owner_turns: 41,
+            }
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -40013,10 +41126,10 @@ mod tests {
         );
         assert_reason!(dpc, CYW43_SERVICE_WORK_DPC);
         assert_reason!(root_wake, CYW43_SERVICE_WORK_ROOT_WAKE);
-        assert_reason!(rx_audit, CYW43_SERVICE_WORK_RX_AUDIT);
         assert_reason!(pre_poll, CYW43_SERVICE_WORK_PRE_POLL);
         assert_reason!(data_tx, CYW43_SERVICE_WORK_DATA_TX);
         assert_reason!(arp_tx, CYW43_SERVICE_WORK_ARP_TX);
+        assert_reason!(rx_audit, CYW43_SERVICE_WORK_RX_AUDIT);
         assert_reason!(runtime_descriptor, CYW43_SERVICE_WORK_RUNTIME_DESCRIPTOR);
         assert_reason!(root_rx, CYW43_SERVICE_WORK_ROOT_RX);
         assert_reason!(control_reply, CYW43_SERVICE_WORK_CONTROL_REPLY);
@@ -40031,10 +41144,10 @@ mod tests {
         let all = Cyw43ServiceWorkInputs {
             dpc: true,
             root_wake: true,
-            rx_audit: true,
             pre_poll: true,
             data_tx: true,
             arp_tx: true,
+            rx_audit: true,
             runtime_descriptor: true,
             root_rx: true,
             control_reply: true,
@@ -40049,7 +41162,7 @@ mod tests {
         assert_eq!(
             all.reason_mask(),
             (1u64 << 16) - 1,
-            "the complete source set must remain non-overlapping",
+            "the complete source set remains non-overlapping",
         );
     }
 
@@ -40291,7 +41404,7 @@ mod tests {
 
         let healthy_diagnostic = Cyw43SdioDpcDiagnostic {
             generation: expected_generation,
-            captures: 12,
+            event_attempts: 12,
             published: 12,
             consumed: 11,
             sample_consumer: 11,
@@ -40384,7 +41497,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn dpc_client_counters_require_same_generation_v9_sample() {
+    fn dpc_client_counters_require_same_generation_v11_sample() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -40395,6 +41508,20 @@ mod tests {
         CYW43_DPC_CLIENT_REARMS.store(5, Ordering::Relaxed);
         CYW43_DPC_CLIENT_EPOCH_ERRORS.store(1, Ordering::Relaxed);
         CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(2, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(13, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_FRAME.store(7, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(8, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(9, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(10, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(11, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_OTHER.store(12, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(6, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(3, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_TURNS.store(17, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_OWNER_CHILDREN.store(18, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_OWNER_TURNS.store(19, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_FRAME_TURNS.store(20, Ordering::Relaxed);
+        CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(21, Ordering::Relaxed);
         CYW43_DPC_CLIENT_GENERATION.store(4, Ordering::Release);
         assert_eq!(
             cyw43_dpc_client_counters(4),
@@ -40403,9 +41530,29 @@ mod tests {
                 rearms: 5,
                 epoch_errors: 1,
                 sequence_errors: 2,
+                source_samples: 13,
+                source_frame: 7,
+                source_hostmail: 8,
+                source_fc_change: 9,
+                source_fc_state: 10,
+                source_chipactive: 11,
+                source_other: 12,
+                source_spurious: 6,
+                frames_completed: 3,
+                turns: 17,
+                owner_children: 18,
+                owner_turns: 19,
+                frame_turns: 20,
+                frame_owner_turns: 21,
             })
         );
         assert_eq!(cyw43_dpc_client_counters(5), None);
+        reset_cyw43_dpc_client_counters();
+        assert_eq!(CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire), 0);
+        assert_eq!(
+            cyw43_dpc_client_counters(0),
+            Some(Cyw43DpcClientCounters::default())
+        );
         reset_cyw43_status_flags();
     }
 
@@ -47579,11 +48726,132 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_tx_phase_tracker_preserves_late_credit_across_early_promotion() {
+        let mut tracker = Cyw43TxPhaseTracker::new();
+        let freq_hz = Some(1_000_000);
+
+        tracker.record_accepted(7);
+        tracker.record_promoted(7, 11);
+        tracker.record_issued(7, 11, Some(100), Some(350), freq_hz);
+        tracker.record_terminal(7, 11, Some(100), Some(400), freq_hz);
+        tracker.record_accepted(7);
+        tracker.record_promoted(7, 12);
+        tracker.record_credit(7, Some(550), freq_hz);
+        tracker.record_issued(7, 12, Some(950), Some(1_050), freq_hz);
+        tracker.record_terminal(7, 12, Some(950), Some(1_200), freq_hz);
+        tracker.record_credit(7, Some(1_200), freq_hz);
+
+        assert_eq!(tracker.diagnostic.generation, 7);
+        assert_eq!(tracker.diagnostic.accepted, 2);
+        assert_eq!(tracker.diagnostic.issued, 2);
+        assert_eq!(tracker.diagnostic.terminals, 2);
+        assert_eq!(tracker.diagnostic.credits, 2);
+        assert_eq!(tracker.diagnostic.next_issues, 1);
+        assert_eq!(tracker.diagnostic.accepted_to_issue.samples, 2);
+        assert_eq!(tracker.diagnostic.accepted_to_issue.last_us, 100);
+        assert_eq!(tracker.diagnostic.accepted_to_issue.max_us, 250);
+        assert_eq!(tracker.diagnostic.accepted_to_issue.average_us(), 175);
+        assert_eq!(tracker.diagnostic.issued_to_terminal.samples, 2);
+        assert_eq!(tracker.diagnostic.issued_to_terminal.last_us, 150);
+        assert_eq!(tracker.diagnostic.issued_to_terminal.max_us, 150);
+        assert_eq!(tracker.diagnostic.issued_to_terminal.average_us(), 100);
+        assert_eq!(tracker.diagnostic.terminal_to_credit.samples, 2);
+        assert_eq!(tracker.diagnostic.terminal_to_credit.last_us, 0);
+        assert_eq!(tracker.diagnostic.terminal_to_credit.max_us, 150);
+        assert_eq!(tracker.diagnostic.terminal_to_credit.average_us(), 75);
+        assert_eq!(tracker.diagnostic.credit_to_next_issue.samples, 1);
+        assert_eq!(tracker.diagnostic.credit_to_next_issue.last_us, 500);
+        assert_eq!(tracker.diagnostic.credit_to_next_issue.max_us, 500);
+        assert_eq!(tracker.diagnostic.credit_to_next_issue.average_us(), 500);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tx_phase_tracker_resets_all_state_at_generation_boundary() {
+        let mut tracker = Cyw43TxPhaseTracker::new();
+        let freq_hz = Some(1_000_000);
+
+        tracker.record_accepted(7);
+        tracker.record_promoted(7, 11);
+        tracker.record_terminal(7, 11, Some(100), Some(400), freq_hz);
+        tracker.record_credit(7, Some(500), freq_hz);
+        tracker.record_accepted(8);
+        tracker.record_promoted(8, 21);
+
+        assert_eq!(tracker.diagnostic.generation, 8);
+        assert_eq!(tracker.diagnostic.accepted, 1);
+        assert_eq!(tracker.diagnostic.issued, 0);
+        assert_eq!(tracker.diagnostic.terminals, 0);
+        assert_eq!(tracker.diagnostic.credits, 0);
+        assert_eq!(tracker.diagnostic.next_issues, 0);
+        assert_eq!(tracker.diagnostic.accepted_to_issue.samples, 0);
+        assert_eq!(tracker.diagnostic.issued_to_terminal.samples, 0);
+        assert_eq!(tracker.diagnostic.terminal_to_credit.samples, 0);
+        assert_eq!(tracker.diagnostic.credit_to_next_issue.samples, 0);
+        assert_eq!(tracker.current_ticket, 21);
+        assert!(!tracker.next_issue_pending);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tx_phase_hooks_measure_the_production_ticket_boundaries() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 67;
+        mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+
+        CYW43_TEST_COUNTER_TICKS.store(100, Ordering::Release);
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"first-frame"
+        ));
+        CYW43_TEST_COUNTER_TICKS.store(350, Ordering::Release);
+        assert_eq!(
+            drive_cyw43_pending_data_tx_for_test(1),
+            Cyw43DataTxTurnOutcome::Submitted
+        );
+        CYW43_TEST_COUNTER_TICKS.store(550, Ordering::Release);
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"next-frame"
+        ));
+        CYW43_TEST_COUNTER_TICKS.store(650, Ordering::Release);
+        assert_eq!(
+            drive_cyw43_pending_data_tx_for_test(1),
+            Cyw43DataTxTurnOutcome::Submitted
+        );
+
+        let diagnostic = cyw43_tx_phase_diagnostic();
+        assert_eq!(diagnostic.generation, generation);
+        assert_eq!(diagnostic.accepted, 2);
+        assert_eq!(diagnostic.issued, 2);
+        assert_eq!(diagnostic.terminals, 2);
+        assert_eq!(diagnostic.credits, 2);
+        assert_eq!(diagnostic.next_issues, 1);
+        assert_eq!(diagnostic.accepted_to_issue.samples, 2);
+        assert_eq!(diagnostic.accepted_to_issue.last_us, 100);
+        assert_eq!(diagnostic.issued_to_terminal.samples, 2);
+        assert_eq!(diagnostic.issued_to_terminal.last_us, 0);
+        assert_eq!(diagnostic.terminal_to_credit.samples, 2);
+        assert_eq!(diagnostic.terminal_to_credit.last_us, 0);
+        assert_eq!(diagnostic.credit_to_next_issue.samples, 1);
+        assert_eq!(diagnostic.credit_to_next_issue.last_us, 300);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_data_tx_retains_transient_no_credit_beyond_eight_turns() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         let pending_turns = 12;
         CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(pending_turns, Ordering::Release);
@@ -47608,7 +48876,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_accepts_submit_but_blocks_uncredited_response_token() {
+    fn cyw43_data_tx_accepts_uncredited_response_into_bounded_fifo() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -47635,22 +48903,29 @@ mod tests {
 
         let mut dev = Cyw43DriverTaskDevice::default();
         assert!(
-            dev.transmit(Instant::from_millis(0)).is_none(),
-            "the next WiFi data TX token must wait until deferred credit is proven"
+            dev.transmit(Instant::from_millis(0)).is_some(),
+            "credit wait must not prevent a bounded WiFi TX reservation"
         );
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             test_rx_token(&test_cyw43_tcp_frame()),
         ));
-        assert!(
-            dev.receive(Instant::from_millis(0)).is_none(),
-            "RX without covering credit cannot expose an unusable paired TxToken"
-        );
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("copied RX must be delivered with a reserved bounded response token");
+        rx.consume(|bytes| assert_eq!(bytes, test_cyw43_tcp_frame()));
+        paired_tx.consume(64, |bytes| bytes.fill(0x24));
         assert_eq!(
             cyw43_pending_rx_queue_len(),
-            1,
-            "the uncredited response remains preserved for a later covering-credit turn"
+            0,
+            "copied RX must not wait behind an uncredited active owner"
         );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "the sole active ticket may wait locally for credit without issuing"
+        );
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert_eq!(
             CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
             CYW43_TX_UNPROVEN_KNOWN
@@ -47727,7 +49002,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_receive_delivers_queued_rx_on_paired_tx_terminal_turn() {
+    fn cyw43_receive_delivers_copied_rx_before_retained_paired_tx() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -47755,38 +49030,43 @@ mod tests {
 
         let drops_before = CYW43_TX_DROPPED.load(Ordering::Acquire);
         begin_cyw43_outer_event_turn();
-        assert!(
-            dev.receive(Instant::from_millis(1)).is_none(),
-            "the retained paired TX owner must advance before another RX is exposed"
-        );
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(1))
+            .expect("the next copied RX must precede retained TX progress");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        drop(paired_tx);
         assert_eq!(
             cyw43_pending_rx_queue_len(),
-            1,
-            "the second copied RX must remain queued for the next outer turn"
+            0,
+            "copied RX must not remain behind retained TX"
         );
         assert!(
             CYW43_PENDING_DATA_TX.lock().is_some(),
-            "an Idle child completion retains the exact first paired TX"
+            "software-only RX delivery must leave the exact active TX untouched"
         );
         assert_eq!(
             CYW43_TX_DROPPED.load(Ordering::Acquire),
             drops_before,
-            "preserving the second RX must not fabricate a TX drop"
+            "delivering the second RX must not fabricate a TX drop"
         );
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
 
         begin_cyw43_outer_event_turn();
-        let (rx, _paired_tx) = dev
-            .receive(Instant::from_millis(2))
-            .expect("the retained TX terminal must release copied RX in the same outer turn");
-        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        assert!(service_cyw43_data_tx_event_turn());
         assert_eq!(
             cyw43_outer_event_turn_operation_count(),
             1,
-            "delivering a root-copied RX frame must not issue a second physical operation"
+            "the retained Idle continuation is the turn's sole physical operation"
         );
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn());
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
-        assert!(cyw43_data_rx_lifetime_current_for_generation(0));
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert!(
             CYW43_PENDING_PROMPT_POLL.lock().is_none(),
             "an accepted TX terminal must not synthesize an op8 owner"
@@ -47805,7 +49085,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_receive_preserves_rx_until_queued_credit_proves_paired_tx_admission() {
+    fn cyw43_receive_reserves_paired_tx_before_credit_and_defers_physical_issue() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -47831,11 +49111,26 @@ mod tests {
         assert!(store_cyw43_pending_rx_token(flags, test_rx_token(&frame)));
         let drops_before = CYW43_TX_DROPPED.load(Ordering::Acquire);
         let mut dev = Cyw43DriverTaskDevice::default();
-        assert!(
-            dev.receive(Instant::from_millis(0)).is_none(),
-            "RX without covering SDPCM credit must not expose an unusable paired TX token"
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("bounded queue capacity makes the paired TX token infallible");
+        rx.consume(|bytes| assert_eq!(bytes, &frame));
+        paired_tx.consume(64, |bytes| bytes.fill(0x24));
+        assert_eq!(cyw43_pending_rx_queue_len(), 0);
+        assert_eq!(
+            CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
+            CYW43_TX_UNPROVEN_KNOWN,
+            "a non-credit RX must not fabricate firmware credit"
         );
-        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "the paired response may become the immutable sole owner while credit is pending"
+        );
+        assert_eq!(
+            CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
+            1,
+            "only the earlier submitted frame has crossed the physical test stub"
+        );
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
 
         let credit_flags = flags | (2u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT);
@@ -47852,7 +49147,7 @@ mod tests {
             CYW43_TX_UNPROVEN_NONE
         );
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(0, Ordering::Release);
-        paired_tx.consume(64, |bytes| bytes.fill(0x24));
+        paired_tx.consume(64, |bytes| bytes.fill(0x25));
         assert!(CYW43_PENDING_DATA_TX.lock().is_some());
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
 
@@ -47887,9 +49182,14 @@ mod tests {
             test_rx_token(&test_cyw43_tcp_frame())
         ));
         let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("credit-bearing copied RX must reopen the physical TX owner");
+        rx.consume(|bytes| assert_eq!(bytes, test_cyw43_tcp_frame()));
+        drop(paired_tx);
         assert!(
-            dev.transmit(Instant::from_millis(0)).is_some(),
-            "pending RX credit that covers the submitted sequence must reopen WiFi TX admission"
+            dev.transmit(Instant::from_millis(1)).is_some(),
+            "bounded FIFO admission remains available after credit recovery"
         );
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 1);
@@ -48034,7 +49334,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_data_tx_missing_credit_proof_blocks_until_credit_observed() {
+    fn cyw43_data_tx_missing_credit_proof_blocks_issue_not_fifo_reservation() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48046,12 +49346,19 @@ mod tests {
             CYW43_TX_UNPROVEN_UNKNOWN
         );
         mark_cyw43_gate8_ready_for_test(47);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
 
         let mut dev = Cyw43DriverTaskDevice::default();
+        let tx = dev
+            .transmit(Instant::from_millis(0))
+            .expect("missing credit must not close the bounded ingress FIFO");
+        tx.consume(64, |bytes| bytes.fill(0x42));
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
         assert!(
-            dev.transmit(Instant::from_millis(0)).is_none(),
-            "missing CYW43 TX proof metadata must close WiFi TX admission"
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "the sole active ticket may wait locally for credit without issuing"
         );
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
 
         let credit_flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
             | (3u16 << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT);
@@ -48059,12 +49366,17 @@ mod tests {
             credit_flags,
             test_rx_token(&test_cyw43_tcp_frame())
         ));
-        assert!(
-            dev.transmit(Instant::from_millis(1)).is_some(),
-            "an observed SDPCM credit may reopen an unknown unproven window"
-        );
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(1))
+            .expect("credit-bearing copied RX must be delivered first");
+        rx.consume(|bytes| assert_eq!(bytes, test_cyw43_tcp_frame()));
+        drop(paired_tx);
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_TX_CREDIT_COMPLETED.load(Ordering::Acquire), 1);
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
 
         reset_cyw43_status_flags();
     }
@@ -48076,6 +49388,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -48114,6 +49427,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -48188,6 +49502,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
 
@@ -48213,6 +49528,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -48273,6 +49589,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
@@ -48386,6 +49703,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
@@ -48440,6 +49758,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(1, Ordering::Release);
 
@@ -48489,6 +49808,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAULTS_BEFORE_SUCCESS.store(
             CYW43_RUNTIME_MIN_RETAINED_TURNS.saturating_add(1) as u32,
@@ -48668,7 +49988,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_copied_rx_is_delivered_when_pending_data_tx_reaches_terminal() {
+    fn cyw43_copied_rx_is_delivered_before_pending_data_tx_progress() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48689,22 +50009,27 @@ mod tests {
         ));
 
         let token = receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .expect("the submitted TX terminal releases the copied RX in the same root turn");
+            .expect("copied RX must be returned without advancing the active TX");
         token.consume(|bytes| assert_eq!(bytes, b"tcp-ack"));
         assert!(
             !cyw43_pending_rx_token_occupied(),
             "the copied RX must not wait behind a later retransmit"
         );
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_none(),
-            "the sole retained TX owner must advance during this outer turn"
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "software-only RX delivery must leave the sole active TX intact"
         );
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
-            1,
-            "the pending TX may issue exactly once while copied RX remains preserved"
+            0,
+            "copied RX delivery must not perform hidden SDIO work"
         );
         assert!(cyw43_data_rx_lifetime_current_for_generation(generation));
+
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert!(
             CYW43_PENDING_PROMPT_POLL.lock().is_none(),
             "the accepted TX terminal must not synthesize receive demand"
@@ -48751,7 +50076,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_steady_rx_poll_forces_source_only_for_a_proved_level() {
+    fn cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48770,35 +50095,8 @@ mod tests {
         ));
         assert_eq!(
             cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
-            CYW43_DATA_RX_STEADY_POLL_FLAGS,
-            "a current root-wake level requires exactly one source probe"
-        );
-        let source_probe = Cyw43PendingPromptPoll {
-            ticket_id: 0x5352_4350,
-            owner: Cyw43PromptPollOwner::NetData,
-            generation,
-            descriptor: DriverRuntimeCyw43CommandDescriptor {
-                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
-                ..DriverRuntimeCyw43CommandDescriptor::empty()
-            },
-            request: Some(0x90),
-            issued: true,
-            deadline: cyw43_poll_deadline_from_millis_or_polls(
-                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
-                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
-            ),
-            child_reply_latched: true,
-            child_reply_renewals: 0,
-        };
-        assert!(record_cyw43_data_rx_source_probe_terminal(
-            source_probe,
-            DriverTaskCompletionRecord::idle(0x90),
-        ));
-        assert_eq!(
-            CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
-            1,
-            "the exact hintless op8 terminal records one current-level source probe"
+            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+            "a root-wake level schedules dequeue without adding source authority"
         );
         crate::hal::driver_task::test_reset_cyw43_root_wake();
         assert_eq!(
@@ -48807,24 +50105,6 @@ mod tests {
             "clearing the level returns the lifetime cursor to queue-only idle"
         );
 
-        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
-            ticket_id: 0x5155_4555,
-            owner: Cyw43PromptPollOwner::NetData,
-            generation,
-            descriptor: DriverRuntimeCyw43CommandDescriptor {
-                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-                flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
-                ..DriverRuntimeCyw43CommandDescriptor::empty()
-            },
-            request: Some(0x91),
-            issued: true,
-            deadline: cyw43_poll_deadline_from_millis_or_polls(
-                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
-                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
-            ),
-            child_reply_latched: false,
-            child_reply_renewals: 0,
-        });
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
             cursor
@@ -48832,32 +50112,15 @@ mod tests {
                 .expect("Gate 8 publishes one RX lifetime cursor")
                 .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
-        assert!(cyw43_current_generation_data_rx_audit_due());
-        assert_eq!(
-            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
-            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
-            "an exact active queue-only descriptor remains immutable when the audit expires"
-        );
-        let retained_queue_only = CYW43_PENDING_PROMPT_POLL
-            .lock()
-            .take()
-            .expect("the immutable queue-only request remains retained");
         assert!(
-            !record_cyw43_data_rx_source_probe_terminal(
-                retained_queue_only,
-                DriverTaskCompletionRecord::idle(0x91),
-            ),
-            "a queue-only terminal is not physical source-probe telemetry"
+            cyw43_current_generation_data_rx_audit_due(),
+            "an expired no-progress lifetime authorizes one lost-edge audit"
         );
-        assert_eq!(
-            CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
-            1,
-            "the queue-only terminal must not increment source-probe telemetry"
-        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
         assert_eq!(
             cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
             CYW43_DATA_RX_STEADY_POLL_FLAGS,
-            "the next fresh op8 must carry the still-due lost-edge audit"
+            "only the due audit adds hintless source inspection"
         );
         assert!(cyw43_data_rx_lifetime_current_for_generation(generation));
 
@@ -48866,7 +50129,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall() {
+    fn cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48882,18 +50145,48 @@ mod tests {
                 .expect("Gate 8 publishes one RX lifetime cursor")
                 .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
-        let due = cyw43_service_work_snapshot();
-        assert_eq!(due.generation(), generation);
+        let quiet = cyw43_service_work_snapshot();
+        assert_eq!(quiet.generation(), generation);
         assert_eq!(
-            due.reason_mask() & CYW43_SERVICE_WORK_RX_AUDIT,
-            CYW43_SERVICE_WORK_RX_AUDIT
+            quiet.reason_mask() & CYW43_SERVICE_WORK_RX_AUDIT,
+            CYW43_SERVICE_WORK_RX_AUDIT,
+            "the expired exact-lifetime watchdog is one durable audit source"
         );
         assert!(cyw43_fresh_data_rx_work_demanded());
+        assert!(driver_task_runtime_pre_poll_allowed(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
         assert_eq!(
             cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
             CYW43_DATA_RX_STEADY_POLL_FLAGS
         );
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
+        assert!(
+            CYW43_PENDING_PROMPT_POLL.lock().is_none(),
+            "passive admission inspection cannot manufacture an op8 owner"
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 23;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x28));
+        mark_cyw43_gate8_ready_for_test(generation);
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("Gate 8 publishes one RX lifetime cursor")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        assert!(cyw43_current_generation_data_rx_audit_due());
 
         let pending = Cyw43PendingPromptPoll {
             ticket_id: 0x4155_4449,
@@ -48913,43 +50206,16 @@ mod tests {
             child_reply_latched: true,
             child_reply_renewals: 0,
         };
-        assert!(
-            claim_cyw43_data_rx_watchdog_probe(generation, pending.ticket_id),
-            "the expired no-progress identity grants one exact probe ticket"
-        );
-        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
-        assert!(
-            !cyw43_current_generation_data_rx_audit_due(),
-            "an in-flight exact watchdog ticket suppresses a second issuer"
-        );
-        assert!(
-            !record_cyw43_data_rx_source_probe_terminal(
-                pending,
-                DriverTaskCompletionRecord::idle(0xa1),
-            ),
-            "the wrong sequence cannot consume the one-shot"
-        );
-        assert_eq!(
-            CYW43_DATA_RX_LIFETIME_CURSOR
-                .lock()
-                .as_ref()
-                .expect("watchdog cursor remains")
-                .watchdog_probe_ticket,
+        assert!(claim_cyw43_data_rx_watchdog_probe(
+            generation,
             pending.ticket_id
-        );
-        assert!(
-            !record_cyw43_data_rx_source_probe_terminal(
-                pending,
-                DriverTaskCompletionRecord::fault(0xa0, DriverTaskFaultCode::RejectedCommand),
-            ),
-            "a fault is not a valid watchdog terminal"
-        );
-
+        ));
+        assert!(!cyw43_current_generation_data_rx_audit_due());
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
         assert!(record_cyw43_data_rx_source_probe_terminal(
             pending,
             DriverTaskCompletionRecord::idle(0xa0),
         ));
-        assert!(!cyw43_current_generation_data_rx_audit_due());
         assert_eq!(CYW43_DATA_RX_AUDIT_PROBES.load(Ordering::Acquire), 1);
         assert_eq!(
             CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
@@ -48959,7 +50225,7 @@ mod tests {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
             let cursor = cursor
                 .as_mut()
-                .expect("the completed current watchdog remains published");
+                .expect("the completed watchdog remains generation-scoped");
             assert!(cursor.watchdog_probe_completed);
             assert_eq!(cursor.watchdog_probe_ticket, 0);
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
@@ -48968,11 +50234,6 @@ mod tests {
             !cyw43_current_generation_data_rx_audit_due(),
             "elapsed time alone cannot reissue a completed one-shot"
         );
-        assert_eq!(
-            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
-            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
-            "the exact terminal suppresses periodic source polling"
-        );
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
 
         reset_cyw43_status_flags();
@@ -48980,7 +50241,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_watchdog_progress_rebases_and_rearms_one_shot() {
+    fn cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -48989,13 +50250,24 @@ mod tests {
         let baseline = cyw43_data_rx_progress_for_test(0x30);
         *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(baseline);
         mark_cyw43_gate8_ready_for_test(generation);
+        let identity = cyw43_service_work_snapshot();
+        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
+            generation,
+            identity.pair_epoch(),
+            identity.physical_lifetime_epoch(),
+            CYW43_SERVICE_WORK_DPC,
+        )));
+        assert!(
+            !cyw43_current_generation_data_rx_audit_due(),
+            "the first current DPC observation leaves the fresh deadline open"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watching");
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
-            let cursor = cursor
+            cursor
                 .as_mut()
-                .expect("Gate 8 publishes one current watchdog");
-            cursor.watchdog_probe_completed = true;
-            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+                .expect("Gate 8 publishes one current watchdog")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         let mut progressed = baseline;
         progressed.dpc_producer = progressed.dpc_producer.wrapping_add(1);
@@ -49016,7 +50288,6 @@ mod tests {
                 .as_mut()
                 .expect("the current progress baseline stays published");
             assert_eq!(cursor.progress, progressed);
-            assert!(!cursor.watchdog_probe_completed);
             assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
@@ -49031,7 +50302,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_watchdog_never_masks_a_genuine_root_wake_level() {
+    fn cyw43_lost_edge_audit_never_masks_a_genuine_root_wake_level() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -49041,26 +50312,94 @@ mod tests {
         mark_cyw43_gate8_ready_for_test(generation);
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
-            let cursor = cursor
+            cursor
                 .as_mut()
-                .expect("Gate 8 publishes one current watchdog");
-            cursor.watchdog_probe_completed = true;
-            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+                .expect("Gate 8 publishes one current watchdog")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
             true, 7,
         ));
+        assert!(
+            cyw43_current_generation_data_rx_audit_due(),
+            "the unchanged test progress keeps the independently expired audit due"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
 
         let work = cyw43_service_work_snapshot();
         assert_eq!(
             work.reason_mask() & CYW43_SERVICE_WORK_ROOT_WAKE,
             CYW43_SERVICE_WORK_ROOT_WAKE
         );
+        assert_eq!(
+            work.reason_mask() & CYW43_SERVICE_WORK_RX_AUDIT,
+            CYW43_SERVICE_WORK_RX_AUDIT,
+            "the audit remains a separate reason from the root wake"
+        );
         assert!(cyw43_fresh_data_rx_work_demanded());
         assert_eq!(
             cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
             CYW43_DATA_RX_STEADY_POLL_FLAGS,
-            "a genuine current root-wake level wins after watchdog completion"
+            "the independently due audit, not root wake, adds source inspection"
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_due_audit_preserves_an_exact_retained_queue_only_owner() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 26;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x48));
+        mark_cyw43_gate8_ready_for_test(generation);
+        *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
+            ticket_id: 0x5245_5441,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: Some(0x82),
+            issued: true,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: true,
+            child_reply_renewals: 0,
+        });
+
+        assert!(
+            !cyw43_current_generation_data_rx_audit_due(),
+            "the initial exact retained owner still has an open audit deadline"
+        );
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watching");
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("the exact retained-owner watch stays published")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        assert!(cyw43_current_generation_data_rx_audit_due());
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
+        assert!(
+            cyw43_fresh_data_rx_work_demanded(),
+            "the audit stays due but cannot replace the retained owner"
+        );
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "the exact retained op8 remains admissible independently of telemetry"
+        );
+        assert_eq!(
+            cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+            DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN
         );
 
         reset_cyw43_status_flags();
@@ -49073,7 +50412,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
-        let generation = 26;
+        let generation = 27;
         *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x50));
         mark_cyw43_gate8_ready_for_test(generation);
         CYW43_CONNECTION_EPOCH.store(generation.wrapping_add(1), Ordering::Release);
@@ -49127,7 +50466,6 @@ mod tests {
             ("recovery", CYW43_SERVICE_WORK_RECOVERY),
             ("combined-ordinary", combined_ordinary_non_source),
         ];
-        let terminals_before = CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire);
 
         for (label, reason_mask) in non_source_cases {
             set_cyw43_service_work_snapshot_test_override(Some(
@@ -49160,11 +50498,6 @@ mod tests {
                 0,
                 "{label} must not reach either linked runtime"
             );
-            assert_eq!(
-                CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
-                terminals_before,
-                "{label} must not fabricate source-probe telemetry"
-            );
         }
 
         set_cyw43_service_work_snapshot_test_override(None);
@@ -49173,7 +50506,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_idle_lifetime_never_creates_fresh_op8_but_levels_and_continuations_do() {
+    fn cyw43_idle_and_dpc_only_lifetimes_never_create_fresh_op8() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -49189,7 +50522,6 @@ mod tests {
         );
         set_cyw43_service_work_snapshot_test_override(Some(idle));
 
-        let terminals_before = CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire);
         for _ in 0..8 {
             begin_cyw43_outer_event_turn();
             assert!(
@@ -49205,37 +50537,51 @@ mod tests {
                 "neither pre-poll admission nor Device::receive may manufacture a fresh op8"
             );
         }
+
+        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
+            generation,
+            identity.pair_epoch(),
+            identity.physical_lifetime_epoch(),
+            CYW43_SERVICE_WORK_DPC,
+        )));
+        begin_cyw43_outer_event_turn();
+        assert!(
+            !cyw43_fresh_data_rx_work_demanded(),
+            "DPC is producer urgency, never queue-consumer demand"
+        );
+        assert!(
+            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "a pending DPC cannot make root compete with its persistent RX producer"
+        );
+        assert!(
+            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
+            "DPC-only state cannot manufacture a foreground op8 owner"
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
         assert_eq!(
-            CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
-            terminals_before,
-            "idle turns cannot fabricate a source-probe terminal"
+            cyw43_outer_event_turn_operation_count(),
+            0,
+            "DPC-only state must leave both linked runtimes to the producer lane"
         );
 
-        for (label, source_reason) in [
-            ("DPC", CYW43_SERVICE_WORK_DPC),
-            ("root-wake", CYW43_SERVICE_WORK_ROOT_WAKE),
-        ] {
-            set_cyw43_service_work_snapshot_test_override(Some(
-                Cyw43ServiceWorkSnapshot::for_test(
-                    generation,
-                    identity.pair_epoch(),
-                    identity.physical_lifetime_epoch(),
-                    source_reason,
-                ),
-            ));
-            assert!(
-                cyw43_fresh_data_rx_work_demanded(),
-                "a current {label} level is fresh source-poll demand"
-            );
-            assert!(
-                driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-                "a current {label} level schedules the sole fresh NetData poll"
-            );
-            assert!(
-                CYW43_PENDING_PROMPT_POLL.lock().is_none(),
-                "admission inspection for {label} must remain passive"
-            );
-        }
+        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
+            generation,
+            identity.pair_epoch(),
+            identity.physical_lifetime_epoch(),
+            CYW43_SERVICE_WORK_ROOT_WAKE,
+        )));
+        assert!(
+            cyw43_fresh_data_rx_work_demanded(),
+            "the queue publication wake is exact fresh dequeue demand"
+        );
+        assert!(
+            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "root-wake schedules the sole fresh NetData queue poll"
+        );
+        assert!(
+            CYW43_PENDING_PROMPT_POLL.lock().is_none(),
+            "root-wake admission inspection must remain passive"
+        );
 
         set_cyw43_service_work_snapshot_test_override(Some(idle));
         *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
@@ -49424,13 +50770,23 @@ mod tests {
         );
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
         assert!(publish_cyw43_gate8_data_consumer_for_test(generation));
-        assert!(!cyw43_data_tx_admission_ready(
+        assert!(
+            cyw43_data_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "publishing the consumer opens bounded ingress without performing TX work"
+        );
+        assert_eq!(
+            CYW43_PENDING_ARP_TX.lock().len(),
+            1,
+            "the passive Gate 8 publication must not stage ARP as a hidden side effect"
+        );
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert!(stage_one_cyw43_arp_tx_if_ready(
             CYW43_WIFI_DRIVER_TASK_CONTRACT
         ));
         assert!(CYW43_PENDING_ARP_TX.lock().is_empty());
         assert!(
             CYW43_PENDING_DATA_TX.lock().is_some(),
-            "the committed turn may stage exactly one retained ARP frame"
+            "the explicit later service turn may stage exactly one retained ARP frame"
         );
 
         reset_cyw43_status_flags();
@@ -49443,6 +50799,7 @@ mod tests {
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(0);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_DATA_TX_TEST_FAILS_BEFORE_SUCCESS.store(
             CYW43_RUNTIME_MIN_RETAINED_TURNS.saturating_add(1) as u32,
