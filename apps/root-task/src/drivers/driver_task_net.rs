@@ -5391,6 +5391,8 @@ const CYW43_SERVICE_WORK_DPC: u64 = 1 << 0;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_ROOT_WAKE: u64 = 1 << 1;
 #[cfg(feature = "kernel")]
+const CYW43_SERVICE_WORK_DATA_RX_LEVEL: u64 = CYW43_SERVICE_WORK_DPC | CYW43_SERVICE_WORK_ROOT_WAKE;
+#[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_PRE_POLL: u64 = 1 << 2;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_DATA_TX: u64 = 1 << 3;
@@ -7638,7 +7640,7 @@ fn cyw43_data_rx_lifetime_current_for_generation(generation: u32) -> bool {
 fn cyw43_fresh_data_rx_work_demanded() -> bool {
     let snapshot = cyw43_service_work_snapshot();
     if !snapshot.schedulable_network_work()
-        || snapshot.reason_mask() & (CYW43_SERVICE_WORK_ROOT_WAKE | CYW43_SERVICE_WORK_RX_AUDIT)
+        || snapshot.reason_mask() & (CYW43_SERVICE_WORK_DATA_RX_LEVEL | CYW43_SERVICE_WORK_RX_AUDIT)
             == 0
     {
         return false;
@@ -7661,9 +7663,9 @@ fn cyw43_current_generation_data_rx_poll_flags(owner: Cyw43PromptPollOwner) -> u
     if let Some(descriptor) = cyw43_prompt_poll_descriptor_for_owner(owner) {
         return descriptor.flags;
     }
-    // A root wake authorizes queue/tail delivery only. A DPC producer level is
-    // child-owner urgency and cannot create a fresh root op8. The hintless flag
-    // is reserved for the one genuinely due lost-edge source audit.
+    // DPC and root-wake levels keep queue/tail delivery live, but neither gives
+    // root independent source-inspection authority. The hintless flag remains
+    // reserved for the one genuinely due lost-edge source audit.
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN
         | if cyw43_current_generation_data_rx_audit_due() {
             DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD
@@ -20620,11 +20622,11 @@ pub(crate) fn driver_task_runtime_pre_poll_allowed(contract: DriverTaskContract)
             // A completed physical lifetime is authority to service CYW43,
             // never demand for a fresh op8. Exact assigned NetData
             // continuations were admitted above. New receive work begins only
-            // from the durable root-wake level or another current owner, and
-            // only for the exact published generation, pair, and physical
-            // lifetime. DPC is producer urgency: it keeps the linked runtime
-            // scheduled, but cannot manufacture a consumer before that
-            // producer has published a frame into its queue.
+            // from a durable DPC/root-wake queue level, a due audit, or another
+            // current owner, and only for the exact published generation,
+            // pair, and physical lifetime. DPC keeps both the linked producer
+            // and its queue/tail consumer live without granting root a
+            // duplicate hintless source inspection.
             return false;
         }
     }
@@ -38554,7 +38556,7 @@ mod tests {
     fn fresh_net_data_pre_poll_yields_to_root_rx_and_retained_tx_work() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
-        mark_cyw43_data_plane_ready_for_test();
+        mark_cyw43_gate8_ready_for_test(0);
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let frame = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
@@ -50880,7 +50882,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_idle_and_dpc_only_lifetimes_never_create_fresh_op8() {
+    fn cyw43_data_levels_schedule_queue_only_op8_while_idle_stays_quiet() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -50912,50 +50914,42 @@ mod tests {
             );
         }
 
-        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
-            generation,
-            identity.pair_epoch(),
-            identity.physical_lifetime_epoch(),
-            CYW43_SERVICE_WORK_DPC,
-        )));
-        begin_cyw43_outer_event_turn();
-        assert!(
-            !cyw43_fresh_data_rx_work_demanded(),
-            "DPC is producer urgency, never queue-consumer demand"
-        );
-        assert!(
-            !driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-            "a pending DPC cannot make root compete with its persistent RX producer"
-        );
-        assert!(
-            receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
-            "DPC-only state cannot manufacture a foreground op8 owner"
-        );
-        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
-        assert_eq!(
-            cyw43_outer_event_turn_operation_count(),
-            0,
-            "DPC-only state must leave both linked runtimes to the producer lane"
-        );
-
-        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
-            generation,
-            identity.pair_epoch(),
-            identity.physical_lifetime_epoch(),
-            CYW43_SERVICE_WORK_ROOT_WAKE,
-        )));
-        assert!(
-            cyw43_fresh_data_rx_work_demanded(),
-            "the queue publication wake is exact fresh dequeue demand"
-        );
-        assert!(
-            driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
-            "root-wake schedules the sole fresh NetData queue poll"
-        );
-        assert!(
-            CYW43_PENDING_PROMPT_POLL.lock().is_none(),
-            "root-wake admission inspection must remain passive"
-        );
+        for (label, data_level) in [
+            ("DPC", CYW43_SERVICE_WORK_DPC),
+            ("root-wake", CYW43_SERVICE_WORK_ROOT_WAKE),
+        ] {
+            set_cyw43_service_work_snapshot_test_override(Some(
+                Cyw43ServiceWorkSnapshot::for_test(
+                    generation,
+                    identity.pair_epoch(),
+                    identity.physical_lifetime_epoch(),
+                    data_level,
+                ),
+            ));
+            begin_cyw43_outer_event_turn();
+            assert!(
+                cyw43_fresh_data_rx_work_demanded(),
+                "a current {label} level must keep queue/tail data service live"
+            );
+            assert!(
+                driver_task_runtime_pre_poll_allowed(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+                "a current {label} level schedules the sole fresh NetData queue poll"
+            );
+            assert_eq!(
+                cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+                DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+                "a {label}-only level cannot grant duplicate hintless source inspection"
+            );
+            assert!(
+                CYW43_PENDING_PROMPT_POLL.lock().is_none(),
+                "passive {label} admission inspection must not manufacture an op8 owner"
+            );
+            assert_eq!(
+                cyw43_outer_event_turn_operation_count(),
+                0,
+                "passive {label} admission inspection must not reach either linked runtime"
+            );
+        }
 
         set_cyw43_service_work_snapshot_test_override(Some(idle));
         *CYW43_PENDING_PROMPT_POLL.lock() = Some(Cyw43PendingPromptPoll {
