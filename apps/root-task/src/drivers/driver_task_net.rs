@@ -18143,7 +18143,7 @@ fn cyw43_tx_unproven_window_ready(contract: DriverTaskContract) -> bool {
 fn cyw43_fresh_tx_admission_ready(contract: DriverTaskContract) -> bool {
     contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
         || (!cyw43_logical_control_owner_active()
-            && !cyw43_active_descriptor_blocks_fresh_net_poll(contract))
+            && crate::hal::driver_task::active_driver_task_retained_request(contract).is_none())
 }
 
 fn cyw43_data_tx_admission_ready(contract: DriverTaskContract) -> bool {
@@ -23489,11 +23489,7 @@ impl phy::TxToken for DriverTaskNetTxToken {
             self.cyw43_queue_reservation
                 .take()
                 .is_some_and(|reservation| {
-                    let queued = enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len]);
-                    if queued {
-                        let _ = promote_one_cyw43_data_tx_if_ready(self.contract);
-                    }
-                    queued
+                    enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len])
                 })
         } else {
             submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len])
@@ -23605,7 +23601,7 @@ fn retain_cyw43_pending_data_tx(pending: Cyw43PendingDataTx) -> Cyw43DataTxTurnO
     Cyw43DataTxTurnOutcome::Pending
 }
 
-/// Execute at most one retained ETH_TX runtime turn.
+/// Promote, then execute at most one retained ETH_TX runtime turn.
 ///
 /// The exact payload, generation, ticket, and accepted request sequence remain
 /// immutable across yields. A missing or mismatched accepted request is
@@ -23616,6 +23612,9 @@ fn retain_cyw43_pending_data_tx(pending: Cyw43PendingDataTx) -> Cyw43DataTxTurnO
 /// valid progress.
 #[cfg(feature = "kernel")]
 fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTurnOutcome {
+    if CYW43_PENDING_DATA_TX.lock().is_none() && !promote_one_cyw43_data_tx_if_ready(contract) {
+        return Cyw43DataTxTurnOutcome::Submitted;
+    }
     let Some(mut pending) = CYW43_PENDING_DATA_TX.lock().take() else {
         return Cyw43DataTxTurnOutcome::Submitted;
     };
@@ -23819,11 +23818,10 @@ fn service_cyw43_pending_data_tx_turn(
         outcome,
         Cyw43DataTxTurnOutcome::Submitted | Cyw43DataTxTurnOutcome::Failed
     ) {
-        // Fold one pre-open ARP/GARP frame into the same urgent queue before
-        // selecting the successor. Both steps are local bookkeeping; the next
-        // frame remains the sole physical owner on a later EventPump turn.
+        // Fold one pre-open ARP/GARP frame into the same urgent queue. The
+        // successor remains queued until a later EventPump coordinator turn
+        // can both promote it and perform its first HAL advance.
         let _ = stage_one_cyw43_arp_tx_if_ready(contract);
-        let _ = promote_one_cyw43_data_tx_if_ready(contract);
     }
     Some(outcome)
 }
@@ -23839,10 +23837,12 @@ fn cyw43_paired_rx_response_permit_available() -> bool {
 
 /// Advance at most one sole-owner CYW43 op7 turn from EventPump service.
 ///
-/// Already root-copied RX remains first because delivering it requires no
-/// hardware action and may carry the credit needed by the queued TX head. The
-/// outer-operation claim inside the retained descriptor path prevents the
-/// following smoltcp poll from issuing a second physical command.
+/// A fresh op7 never displaces an exact foreign HAL owner. Once the lane is
+/// free, one eligible op7 quantum precedes copied-RX delivery so a replenished
+/// root queue cannot starve TX. Copied RX precedes this coordinator only while
+/// op7 is not legally runnable, including foreign-owner deferral or predecessor
+/// credit discovery. The outer-operation claim prevents the following smoltcp
+/// poll from issuing a second physical command.
 #[cfg(feature = "kernel")]
 pub(crate) fn service_cyw43_data_tx_event_turn(
     budget: &mut DriverServiceBudget,
@@ -23854,17 +23854,37 @@ pub(crate) fn service_cyw43_data_tx_event_turn(
     {
         return Ok(false);
     }
-    let copied_rx_first =
-        cyw43_pending_rx_token_occupied() && cyw43_paired_rx_response_permit_available();
+    let pending = *CYW43_PENDING_DATA_TX.lock();
+    let queued_work =
+        cyw43_data_tx_queue_has_current_generation() || !CYW43_PENDING_ARP_TX.lock().is_empty();
+    let pending_turn_ready = pending.is_some_and(|owner| {
+        owner.request.is_some()
+            || owner.child_cursor_started
+            || cyw43_fresh_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+    });
+    let queued_turn_ready = pending.is_none()
+        && queued_work
+        && cyw43_fresh_tx_admission_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        && cyw43_tx_unproven_window_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+    let copied_rx_first = !pending_turn_ready
+        && !queued_turn_ready
+        && cyw43_pending_rx_token_occupied()
+        && cyw43_paired_rx_response_permit_available();
     if copied_rx_first {
         // Do not consume the reserved final slot or its service budget before
         // smoltcp receives the copied frame and its mandatory paired TxToken.
+        // A credit-ready op7 owner is deliberately excluded: once promoted,
+        // that exact owner must not starve behind replenished copied RX.
         return Ok(false);
     }
-    let work_pending = CYW43_PENDING_DATA_TX.lock().is_some()
-        || cyw43_data_tx_queue_has_current_generation()
-        || !CYW43_PENDING_ARP_TX.lock().is_empty();
+    let work_pending = pending.is_some() || queued_work;
     if !work_pending {
+        return Ok(false);
+    }
+    if !pending_turn_ready && !queued_turn_ready {
+        // A different exact descriptor (notably a retained NetData op8) still
+        // owns HAL. Leave op7 queued/requestless and spend no deadline or
+        // service budget until that owner reaches its typed terminal.
         return Ok(false);
     }
     let predecessor_credit_required = CYW43_PENDING_DATA_TX
@@ -24712,9 +24732,8 @@ fn submit_cyw43_driver_task_eth_frame(contract: DriverTaskContract, frame: &[u8]
     if !enqueue_unreserved_cyw43_data_tx(contract, frame, true, false) {
         return false;
     }
-    // Promotion is local bookkeeping only. The dedicated EventPump service
-    // hook advances the sole active op7 owner on a later outer turn.
-    let _ = promote_one_cyw43_data_tx_if_ready(contract);
+    // Submission owns only the bounded ingress queue. The dedicated EventPump
+    // coordinator promotes and first-advances op7 together on a later turn.
     true
 }
 
@@ -27790,19 +27809,30 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_event_tx_hook_yields_to_deliverable_copied_rx() {
+    fn cyw43_event_tx_hook_prevents_copied_rx_from_starving_active_tx() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         mark_cyw43_gate8_ready_for_test(70);
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
-        assert!(submit_cyw43_driver_task_eth_frame(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            b"active-tcp-frame",
-        ));
+        let discover = test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let mut post_gate8_dhcp = [0u8; 342];
+        post_gate8_dhcp[..discover.len()].copy_from_slice(&discover);
+        let mut dev = Cyw43DriverTaskDevice::default();
+        dev.transmit(Instant::from_millis(0))
+            .expect("the bounded queue reserves one DHCP TxToken")
+            .consume(post_gate8_dhcp.len(), |frame| {
+                frame.copy_from_slice(&post_gate8_dhcp)
+            });
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "TxToken submission must remain queue-only until its coordinator turn",
+        );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         let frame = test_cyw43_tcp_frame();
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
@@ -27811,47 +27841,142 @@ mod tests {
 
         begin_cyw43_outer_event_turn();
         assert!(
-            !service_cyw43_data_tx_event_turn_for_test(),
-            "a copied RX with paired FIFO capacity must stay RX-first"
+            service_cyw43_data_tx_event_turn_for_test(),
+            "credit-ready op7 must advance before a replenished copied-RX queue",
         );
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
 
-        let mut dev = Cyw43DriverTaskDevice::default();
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn_for_test());
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+
+        begin_cyw43_outer_event_turn();
         let (rx, paired_tx) = dev
             .receive(Instant::from_millis(0))
-            .expect("reserved paired capacity must expose the copied RX");
+            .expect("copied RX drains after the exact op7 terminal");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
         drop(paired_tx);
         assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_event_tx_hook_defers_queued_tx_behind_exact_netdata_owner() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 75;
+        mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        let op8 = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            run_cyw43_owned_prompt_poll(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                Cyw43PromptPollOwner::NetData,
+                op8,
+            ),
+            None,
+        );
+        let retained_op8 = CYW43_PENDING_PROMPT_POLL
+            .lock()
+            .expect("the exact NetData op8 remains retained");
+        let op8_request = retained_op8
+            .request
+            .expect("HAL assigns the exact NetData request");
+
+        let discover = test_cyw43_dhcp_frame(1, CYW43_DHCP_CLIENT_PORT, CYW43_DHCP_SERVER_PORT);
+        let mut post_gate8_dhcp = [0u8; 342];
+        post_gate8_dhcp[..discover.len()].copy_from_slice(&discover);
+        let mut dev = Cyw43DriverTaskDevice::default();
+        dev.transmit(Instant::from_millis(0))
+            .expect("an exact op8 does not revoke bounded stack admission")
+            .consume(post_gate8_dhcp.len(), |frame| {
+                frame.copy_from_slice(&post_gate8_dhcp)
+            });
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
 
         begin_cyw43_outer_event_turn();
         let mut budget = DriverServiceBudget::new(CYW43_WIFI_DRIVER_TASK_CONTRACT)
             .expect("the static CYW43 contract is valid");
         let before = budget;
-        assert!(service_cyw43_data_tx_event_turn(&mut budget)
-            .expect("one TX quantum fits the static CYW43 contract"));
+        assert_eq!(service_cyw43_data_tx_event_turn(&mut budget), Ok(false));
+        assert_eq!(budget, before, "foreign-owner deferral spends no TX budget");
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
         assert_eq!(
-            budget.ops_left(),
-            before
-                .ops_left()
-                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_OPS)
+            crate::hal::driver_task::active_driver_task_ring_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            Some(op8_request as usize),
         );
-        assert_eq!(
-            budget.frames_left(),
-            before
-                .frames_left()
-                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_FRAMES)
-        );
-        assert_eq!(
-            budget.bytes_left(),
-            before
-                .bytes_left()
-                .saturating_sub(CYW43_DATA_TX_SERVICE_BUDGET_BYTES)
-        );
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(*CYW43_PENDING_PROMPT_POLL.lock(), Some(retained_op8));
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
 
+        let mut op8_terminal = None;
+        for _ in 0..CYW43_RUNTIME_MIN_RETAINED_TURNS {
+            begin_cyw43_outer_event_turn();
+            op8_terminal = run_cyw43_owned_prompt_poll(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                Cyw43PromptPollOwner::NetData,
+                op8,
+            );
+            if op8_terminal.is_some() {
+                break;
+            }
+        }
+        assert_eq!(
+            op8_terminal.map(|completion| completion.sequence),
+            Some(op8_request),
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+        assert!(
+            crate::hal::driver_task::active_driver_task_retained_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_none(),
+        );
+
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        assert!(service_cyw43_data_tx_event_turn_for_test());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
     }
 
@@ -27966,7 +28091,7 @@ mod tests {
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
-        for marker in 0..CYW43_DATA_TX_QUEUE_CAP {
+        for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
             let mut frame = [0u8; 64];
             frame[0] = marker as u8;
             assert!(submit_cyw43_driver_task_eth_frame(
@@ -27993,16 +28118,17 @@ mod tests {
         let mut budget = DriverServiceBudget::new(CYW43_WIFI_DRIVER_TASK_CONTRACT)
             .expect("the static CYW43 contract is valid");
         let before = budget;
-        assert_eq!(service_cyw43_data_tx_event_turn(&mut budget), Ok(false));
-        assert_eq!(budget, before, "RX-first consumes no TX service budget");
-        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
-        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
+        assert_eq!(service_cyw43_data_tx_event_turn(&mut budget), Ok(true));
+        assert_ne!(budget, before, "one op7 quantum consumes its TX budget");
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 15);
         assert_eq!(
             CYW43_PENDING_ARP_TX.lock().len(),
-            1,
-            "RX-first must return before ARP staging consumes the paired slot",
+            0,
+            "the terminal op7 may stage one ARP while preserving the paired slot",
         );
+        assert_eq!(cyw43_pending_rx_queue_len(), 1);
 
         let mut dev = Cyw43DriverTaskDevice::default();
         let (rx, paired_tx) = dev
@@ -28027,17 +28153,17 @@ mod tests {
         CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
-        for marker in 0..CYW43_DATA_TX_QUEUE_CAP {
+        for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
             let frame = [marker as u8; 64];
             assert!(submit_cyw43_driver_task_eth_frame(
                 CYW43_WIFI_DRIVER_TASK_CONTRACT,
                 &frame,
             ));
         }
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
         assert_eq!(
             cyw43_data_tx_queue_diagnostic().depth,
-            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
         );
 
         let frame = test_cyw43_tcp_frame();
@@ -28069,7 +28195,7 @@ mod tests {
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
         assert_eq!(
             cyw43_data_tx_queue_diagnostic().depth,
-            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
         );
         assert_eq!(cyw43_pending_rx_queue_len(), 1);
 
@@ -28154,10 +28280,10 @@ mod tests {
         assert!(service_cyw43_data_tx_event_turn_for_test());
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 2);
         assert_eq!(cyw43_outer_event_turn_operation_count(), 1);
-        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 14);
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 15);
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "the credit-ready successor may start its child lease after the head completes",
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "the successor remains queued until its own coordinator turn",
         );
         assert_eq!(CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire), 0);
 
@@ -49328,7 +49454,8 @@ mod tests {
             buf.fill(0x42);
         });
         assert_eq!(CYW43_TX_SUBMITTED.load(Ordering::Acquire), 1);
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(
             drive_cyw43_pending_data_tx_for_test(1),
             Cyw43DataTxTurnOutcome::Submitted
@@ -49342,7 +49469,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_receive_delivers_copied_rx_before_retained_paired_tx() {
+    fn cyw43_receive_delivers_copied_rx_without_advancing_queued_paired_tx() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -49364,7 +49491,8 @@ mod tests {
             .expect("the first copied RX receives an admissible paired TX token");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
         paired_tx.consume(64, |bytes| bytes.fill(0x42));
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), 0);
         assert_eq!(cyw43_pending_rx_queue_len(), 1);
 
@@ -49372,7 +49500,7 @@ mod tests {
         begin_cyw43_outer_event_turn();
         let (rx, paired_tx) = dev
             .receive(Instant::from_millis(1))
-            .expect("the next copied RX must precede retained TX progress");
+            .expect("direct memory-only receive must not perform hidden TX progress");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
         drop(paired_tx);
         assert_eq!(
@@ -49381,9 +49509,10 @@ mod tests {
             "copied RX must not remain behind retained TX"
         );
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "software-only RX delivery must leave the exact active TX untouched"
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "software-only RX delivery must leave the queued TX unpromoted"
         );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(
             CYW43_TX_DROPPED.load(Ordering::Acquire),
             drops_before,
@@ -49489,7 +49618,8 @@ mod tests {
         );
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(0, Ordering::Release);
         paired_tx.consume(64, |bytes| bytes.fill(0x25));
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 2);
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
 
         reset_cyw43_status_flags();
@@ -50444,9 +50574,10 @@ mod tests {
             "the copied RX must not wait behind a later retransmit"
         );
         assert!(
-            CYW43_PENDING_DATA_TX.lock().is_some(),
-            "software-only RX delivery must leave the sole active TX intact"
+            CYW43_PENDING_DATA_TX.lock().is_none(),
+            "software-only RX delivery must leave the TX queue unpromoted"
         );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(
             CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire),
             0,
@@ -50487,7 +50618,8 @@ mod tests {
             receive_cyw43_driver_task_frame(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_none(),
             "an empty receive poll has no frame to deliver"
         );
-        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(
             cyw43_outer_event_turn_operation_count(),
             0,

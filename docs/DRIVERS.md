@@ -1092,28 +1092,36 @@ hot path and avoids an unsafe shared payload pool.
 `Device::transmit` reserves only the ordinary first 15 aggregate slots,
 leaving the final slot for the mandatory TxToken paired with
 `Device::receive`; that paired token may reserve all 16 slots. Consuming a
-reserved token cannot fail merely because an older op7 owner remains active,
-and dropping an unused token releases only its local permit. EventPump is the
-sole production TX coordinator. Its Wi-Fi-only hook runs once before smoltcp
-polling and advances at most one physical turn of the active owner. If a
-root-copied RX frame is pending and its paired permit is available, the hook
-returns before staging ARP or performing TX, so `Device::receive` delivers that
-memory-only RX first even while an older op7 is active or the FIFO head is
-waiting for predecessor credit.
-Neither `Device::receive` nor a failed reservation services TX.
+reserved token only enqueues its immutable frame, cannot fail merely because an
+older op7 owner remains active, and never promotes outside EventPump. Dropping
+an unused token releases only its local permit. EventPump is the sole production
+TX coordinator. Its Wi-Fi-only hook runs once before smoltcp polling and first
+proves that no foreign exact HAL descriptor owns the lane. A retained NetData
+op8 remains non-revocable: the op7 head stays queued and requestless, and the TX
+hook spends no budget, starts no deadline, and requests no recovery until that
+op8 reaches its typed terminal.
 
-Otherwise the hook may move one eligible ARP/GARP record into the same urgent
-aggregate before advancing the one active owner. If all 16 aggregate slots are
-occupied and an active owner exists, one owner turn may reach a terminal and
-promote one queued successor as local bookkeeping, restoring the paired-RX slot
-without a second physical operation. Before charging the TX service budget or
-promoting a FIFO head, the hook proves that the predecessor SDPCM-credit window
-is closed. Without that
-proof, the immutable frame remains queued with no active op7, HAL request, or
-child deadline; the hook spends no TX budget and yields to already-authorized
-NetData RX/op8 continuation or source work. A queued frame cannot expire or
-poison the pair. Credit-bearing RX/op8 work may close the predecessor window;
-promotion then starts the op7 lifetime. Generation replacement or reset purges
+With the lane free, the hook either advances one active op7 or promotes and
+advances one credit-ready FIFO head for at most one physical turn before
+copied-RX service. This bounded
+priority prevents a continually replenished root RX queue from starving the
+first DHCP or later control TX. Copied RX precedes the coordinator's physical
+op only while no op7 is legally runnable, including predecessor-credit
+discovery or a retained foreign owner. Otherwise it remains preserved and may
+drain memory-only in the following smoltcp poll. `Device::receive` and a failed
+reservation never service TX. The hook may
+move one eligible ARP/GARP record into the same urgent aggregate before that
+single op7 advance. If all 16 aggregate slots are occupied, promotion removes
+one credit-ready head and restores a paired slot before its one advance. A
+terminal never promotes a successor; that frame remains queued until a later
+EventPump coordinator turn.
+Before charging the TX service budget or promoting a FIFO head, the hook proves
+that the predecessor SDPCM-credit window is closed. Without that proof, the
+immutable frame remains queued with no active op7, HAL request, or child
+deadline; the hook spends no TX budget and yields to already-authorized NetData
+RX/op8 continuation or source work. A queued frame cannot expire or poison the
+pair. Credit-bearing RX/op8 work may close the predecessor window; promotion
+then starts the op7 lifetime. Generation replacement or reset purges
 never-issued queued frames locally, while an active issued or otherwise
 ambiguous frame follows the existing poison-and-recovery path. GENET has no
 queue reservation, priority class, promotion, hook, or telemetry path.
@@ -2856,14 +2864,20 @@ generation and XID.
   `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery` advances
   time beyond the complete child lease before credit and proves that promotion
   and physical issue occur only after exact credit proof.
-  EventPump is the sole production TX coordinator. A copied RX frame is
-  delivered before that active command and before ARP staging whenever the
-  aggregate has the paired-response permit, without spending a physical
-  operation. A full aggregate with a sole active TX instead spends the turn on
-  that owner and promotes one successor locally after a terminal, releasing
-  paired capacity without a second physical action. A queued, unissued frame
-  has no child deadline and cannot poison the pair; `Device::receive` and reservation
-  failure never service TX. TX
+  EventPump is the sole production TX coordinator. An exact foreign HAL owner,
+  including a retained NetData op8, remains non-revocable and leaves the op7
+  head queued without spending TX budget or deadline. Once the lane is free,
+  the coordinator either advances one active op7 or promotes and advances one
+  credit-ready FIFO head before copied RX, so a replenished memory-only queue
+  cannot starve TX. Copied RX precedes that physical quantum only when no op7 is legally
+  runnable, including while RX/op8 must establish predecessor credit; otherwise
+  it remains preserved and may drain memory-only in the following smoltcp poll.
+  At full capacity, promotion
+  removes one credit-ready head and restores a paired slot before its one
+  physical advance. A terminal does not promote a successor in the same turn.
+  A queued,
+  unissued frame has no child deadline and cannot poison the pair;
+  `Device::receive` and reservation failure never service TX. TX
   completion does not manufacture a following op8, alter the lifetime cursor,
   or fence another credited TX. A later fresh op8 begins only for a current
   DPC/root-wake data level or one due progress-conditioned lost-edge audit.

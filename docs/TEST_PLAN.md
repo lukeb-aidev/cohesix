@@ -699,18 +699,23 @@ prove all of the following:
   Ordinary `Device::transmit` reservations must stop at 15 aggregate slots and
   leave the final permit for the TxToken paired with `Device::receive`;
   consuming a valid reservation must not fail merely because an older owner
-  remains active, and dropping an unused token must release only that local
-  permit. EventPump must be the sole production TX coordinator:
-  `Device::receive` and reservation failure must perform zero TX service. A
-  copied RX frame with paired capacity must be delivered before an active op7
-  or FIFO head waiting for predecessor credit and before pending ARP staging,
-  with zero physical operations. With all 16 aggregate slots occupied, an
-  existing sole active owner, and copied RX pending, the dedicated pre-smoltcp
-  EventPump hook must advance exactly one physical turn of that owner and
-  locally promote at most one successor after a terminal so paired capacity
-  returns. A later device call then delivers the preserved RX without a second
-  operation. Before charging the TX service
-  budget or promoting a FIFO head, the hook must prove that the predecessor
+  remains active, must enqueue without immediate promotion, and dropping an
+  unused token must release only that local permit. EventPump must be the sole
+  production TX coordinator: `Device::receive` and reservation failure must
+  perform zero TX service. A retained exact foreign HAL descriptor, including
+  NetData op8, must remain unchanged while the queued op7 stays requestless and
+  the TX hook spends no service budget, deadline, or recovery. After that owner
+  reaches its terminal, the coordinator must advance one active op7 or promote
+  and advance one credit-ready FIFO head before a continuously replenished
+  copied-RX queue. Copied RX may return first,
+  with zero physical operations and before pending ARP staging, only when no op7
+  is legally runnable, including predecessor-credit discovery or a retained
+  foreign owner. With all 16 aggregate slots occupied, the dedicated
+  pre-smoltcp EventPump hook must prove that promotion removes one credit-ready
+  head and restores paired capacity before exactly one physical advance. A
+  terminal must not promote a successor; that frame remains queued for a later
+  coordinator turn. Before charging the TX
+  service budget or promoting a FIFO head, the hook must prove that the predecessor
   SDPCM-credit window is closed. While it is unproved, the immutable frame must
   remain queued with no active op7, HAL request, child deadline, TX budget
   charge, drop, or recovery. Already-authorized NetData RX/op8 continuation or
@@ -1691,7 +1696,12 @@ Conversely, an already-retained immutable op7 or op8 must continue through its
 exact ticket/request/payload terminal without displacement or competing
 cursor.
 Once a valid current-generation frame has been accepted into the FIFO, its
-payload, digest, ticket, and generation must remain immutable. An unproved
+payload, digest, ticket, and generation must remain immutable, and acceptance
+must not promote it outside the EventPump coordinator. A real retained NetData
+op8 plus a queued DHCP-sized op7 must preserve the op8 request and identity,
+spend no TX budget, create no op7 request or recovery, complete op8 first, and
+only then admit op7. A sustained copied-RX queue must not starve a credit-ready
+FIFO head from promotion or an active op7 past its retained deadline. An unproved
 predecessor credit window must leave it queued with no active op7, HAL request,
 child deadline, or TX budget charge. Focused coverage must advance virtual time
 beyond the complete child lease with zero drop or recovery and unchanged TX
@@ -1823,11 +1833,12 @@ The focused acceptance tests
 `cyw43_lost_edge_audit_never_masks_a_genuine_root_wake_level`,
 `cyw43_due_audit_preserves_an_exact_retained_queue_only_owner`,
 `cyw43_lost_edge_watchdog_clears_on_generation_identity_change`,
-`cyw43_receive_delivers_copied_rx_before_retained_paired_tx`,
+`cyw43_receive_delivers_copied_rx_without_advancing_queued_paired_tx`,
 `cyw43_copied_rx_is_delivered_before_pending_data_tx_progress`,
-`cyw43_event_tx_hook_yields_to_deliverable_copied_rx`,
+`cyw43_event_tx_hook_prevents_copied_rx_from_starving_active_tx`,
+`cyw43_event_tx_hook_defers_queued_tx_behind_exact_netdata_owner`,
+`cyw43_event_tx_hook_does_not_stage_arp_into_the_paired_rx_slot`,
 `cyw43_event_tx_hook_frees_full_fifo_for_pending_rx`,
-`cyw43_data_tx_terminal_without_copied_rx_ends_outer_physical_turn`,
 `cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition`,
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
 `cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal`,
@@ -1913,8 +1924,10 @@ prove CARD_INT precedence at `CheckWake`, the final condition-before-sleep
 gate-state loss, and exact-grant preservation across repeated issued-unknown
 reap waits. TX coverage must prove
 the aggregate-capacity-16 urgent/bulk priority classes, EventPump-only
-coordination, copied-RX-before-ARP staging, and credit-timeout exact-pair
-recovery.
+coordination, queue-only TxToken consumption, exact foreign-owner preservation,
+active-op7 or credit-ready-head priority over sustained copied RX, copied RX
+before ARP only when no op7 is legally runnable, no same-turn successor
+promotion, and credit-timeout exact-pair recovery.
 
 The exact `25f406d9cc26` image (image id
 `92d8326196f954c5f56b45b092cc2b17ae7cf5ffe9bfff7bbc6df806c1030884`,
@@ -2026,9 +2039,14 @@ promotion and physical issue but not an available bounded aggregate reservation
 or memory-only copied-RX delivery. They must preserve the sole active owner,
 urgent-before-bulk selection and FIFO-within-class order, reserve paired
 response capacity before dequeueing RX, and produce zero fabricated TX drops.
-Copied RX must return before pending ARP can take the paired slot. Full-capacity
-backpressure may advance only an existing active owner and must never issue a
-second operation in the same outer turn. An unproved predecessor credit window
+TxToken consumption must remain queue-only. An exact retained op8 must defer
+op7 promotion without losing either identity or charging TX budget; once the
+lane is free, the coordinator must advance an active op7 or promote and advance
+a credit-ready FIFO head before copied RX, while copied RX
+must return before pending ARP only when no op7 is legally runnable.
+Full-capacity backpressure may promote and advance only the credit-ready head
+and must never issue a second operation or promote a successor in the same outer
+turn. An unproved predecessor credit window
 must survive longer than the complete child lease with no active op7, TX budget
 charge, child deadline, or recovery; exact credit proof must then promote the
 same immutable FIFO head and begin its op7 lifetime.

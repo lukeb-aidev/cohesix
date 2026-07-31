@@ -1000,28 +1000,37 @@ Ordinary `Device::transmit` tokens may reserve only 15 aggregate slots;
 `Device::receive` reserves its mandatory paired TxToken before removing a
 copied RX frame and may use the final slot. Dropping an unused token releases
 that local permit, and consuming a reservation cannot fail merely because an
-older op7 is active. EventPump is the sole production TX coordinator. Before
-each smoltcp poll, its one Wi-Fi-only hook may advance at most one physical turn
-of the active owner. With copied RX pending and a paired permit available, the
-hook returns before ARP staging and physical TX, so the device delivers copied
-RX first even while an older op7 is active or the FIFO head is waiting for
-predecessor credit. `Device::receive` and reservation failure never service TX.
+older op7 is active. Consuming a reservation only enqueues the immutable frame;
+it never promotes outside EventPump. EventPump is the sole production TX
+coordinator. Before each smoltcp poll, its one Wi-Fi-only hook first proves that
+no foreign exact HAL descriptor owns the lane. A retained NetData op8 remains
+non-revocable: op7 stays queued and requestless with no TX budget, deadline, or
+recovery until that op8 reaches its typed terminal.
 
-Otherwise the hook may move one eligible ARP/GARP record into the same urgent
-aggregate. With all 16 slots in use and an active owner present, it may advance
-that owner and promote one successor locally after its terminal, restoring
-paired-RX capacity without a second physical operation. Before charging the TX
-service budget or promoting a FIFO head, the hook proves that the predecessor
-SDPCM-credit window
-is closed. Without that proof, the immutable frame remains queued with no
-active op7, HAL request, or child deadline; the hook spends no TX budget and
-yields to already-authorized NetData RX/op8 continuation or source work. A
-queued frame cannot expire or poison the pair. Credit-bearing RX/op8 work may
-close the predecessor window; promotion then starts the op7 lifetime. A
-generation/reset boundary purges never-issued queued frames; issued or
-otherwise ambiguous active ownership remains fail-closed and poisons through
-the existing recovery path. This aggregate and service hook are CYW43-only;
-GENET retains its existing direct device path.
+With the lane free, the hook either advances one active op7 or promotes and
+advances one credit-ready FIFO head for at most one physical turn before
+copied-RX service. This prevents
+a replenished copied-RX queue from starving DHCP or later control TX. Copied RX
+precedes the coordinator's physical op only while no op7 is legally runnable,
+including predecessor-credit discovery or a retained foreign owner. Otherwise
+it remains preserved and may drain memory-only in the following smoltcp poll.
+`Device::receive` and reservation failure never service TX. The hook may move
+one eligible ARP/GARP
+record into the same urgent aggregate before its single op7 advance. With all 16
+slots in use, promotion removes one credit-ready head and restores a paired slot
+before its one advance. A terminal never promotes a successor; that frame
+remains queued until a later EventPump turn. Before charging the TX service
+budget or promoting a FIFO head,
+the hook proves that the predecessor SDPCM-credit window is closed. Without
+that proof, the immutable frame remains queued with no active op7, HAL request,
+or child deadline; the hook spends no TX budget and yields to already-authorized
+NetData RX/op8 continuation or source work. A queued frame cannot expire or
+poison the pair. Credit-bearing RX/op8 work may close the predecessor window;
+promotion then starts the op7 lifetime. A generation/reset boundary purges
+never-issued queued frames; issued or otherwise ambiguous active ownership
+remains fail-closed and poisons through the existing recovery path. This
+aggregate and service hook are CYW43-only; GENET retains its existing direct
+device path.
 
 Only a credit-ready FIFO head is promoted, and promotion starts the retained
 op7 owner's real virtual-counter deadline. From then on the owner keeps its
@@ -2391,14 +2400,18 @@ first on successive outer Network turns. Its terminal consumes its turn; the
 still-due audit may claim one fresh hintless op8 only on a following unowned
 turn. A current DPC producer level or root wake may schedule only a fresh
 queue/tail-drain `RX_STEADY_TAIL_DRAIN` op8; neither may add
-`RX_HINTLESS_FIRSTREAD`. Treat an
-op8 that repeatedly runs ahead of an active op7, or op7 identity that changes
-across those turns, as failed single-lifetime evidence rather than a recoverable
-RX/TX race. With a paired aggregate permit, CYW43 exposes the copied RX frame
-and smoltcp response token even while a prior op7 is active or predecessor
-credit remains unproved. The response remains queued and cannot become op7
-until that credit window closes. Only when the bounded linked TX queue is full
-does complete output remain retained. Three backlog records are
+`RX_HINTLESS_FIRSTREAD`. Treat an op8 that repeatedly runs ahead of an
+already-active op7, or op7 identity that changes across those turns, as failed
+single-lifetime evidence rather than a recoverable RX/TX race. An exact op8
+assigned before op7 promotion is instead non-revocable: the queued op7 must
+remain requestless until that owner reaches its typed terminal. With a paired
+aggregate permit, copied RX precedes the coordinator's physical op only while
+no active op7 or credit-ready FIFO head can run, including while RX may
+establish predecessor credit. Otherwise the copied frame remains preserved and
+may drain memory-only in the following smoltcp poll; its response remains queued
+and cannot become op7 until that credit window closes. Only when the bounded
+linked TX queue is full does complete output remain retained. Three backlog
+records are
 reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`
 records cannot consume them. A response-priority enqueue may preempt only the
 newest `BackgroundLine`, whose authoritative copy is already in
