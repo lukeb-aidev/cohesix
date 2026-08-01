@@ -1086,9 +1086,16 @@ op8 with flags exactly `RX_STEADY_TAIL_DRAIN`; neither adds
 `RX_HINTLESS_FIRSTREAD`. DPC also keeps its persistent child owner urgent but
 grants no duplicate source-inspection authority. That child owner
 performs source inspection and bounded drain, then rechecks the durable
-condition before sleep and rearms only when clear. The sole SDIO owner samples
-CARD_INT while masked, then samples again after the enable writes, republishing
-a latched or crossing level through the same DPC ring. Only the genuinely due
+condition before sleep and rearms only when clear. Every final-service,
+post-IRQ-ACK, and DPC-activation masked-to-unmasked exit uses one sole-owner
+operation: sample CARD_INT, establish and read back a masked pair, enable and
+read back `INT_ENABLE.CARD_INT` while signalling remains masked, resample,
+enable and read back `SIGNAL_ENABLE.CARD_INT`, and resample again. A latched or
+crossing level is read-back-remasked and published exactly once through the
+same DPC ring. A policy mismatch poisons the generation; only the all-clear
+path publishes unmasked health and increments successful rearms. A discharged
+old IRQ epoch cannot be ACKed again, and CARD_INT remains excluded from host
+W1C. Only the genuinely due
 watchdog adds the hintless flag; a quiescent source inspection performs no
 blind Function-2 read. Its exact current non-fault terminal samples the new
 baseline, arms both deadlines, and clears only its immutable ticket. An exact
@@ -1723,10 +1730,14 @@ host-control-2, and DMA transfer registers. After initialization, the SDIO
 runtime rejects every legacy aux-packed service command and admits only the
 fixed typed reciprocal descriptor. Its `DPC_ACTIVATE` turn no longer reads
 Function 1 `RFRAMEBCLO`/`RFRAMEBCHI`: it publishes a latched host `CARD_INT` or
-advances a retained masked rearm. That empty-ring rearm samples
-`INT_STATUS.CARD_INT` before changing the enables; if clear, it unmasks and
-samples again after both writes. Either a pre-latched or crossing source is
-published and left masked through the same owner/ring. One exact admitted grant runs the ordered
+advances a retained masked rearm. All four production rearm exits converge on
+one verified transition: sample `INT_STATUS.CARD_INT`; read back the masked
+pair; expose CARD_INT in `INT_ENABLE` while `SIGNAL_ENABLE` remains masked;
+read back and resample; then expose and read back `SIGNAL_ENABLE` and resample.
+Either a pre-latched or crossing source is remasked, verified, and published
+once through the same owner/ring. A readback mismatch fails closed and poisons
+the generation; only a fully clear transition publishes `masked=false`. One
+exact admitted grant runs the ordered
 state, health, `INT_ENABLE`, `SIGNAL_ENABLE`, status/ring inspection,
 publish/coalesce, exact IRQ acknowledgement, signal, and rearm policy as one
 bounded owner quantum of at most 32 phase steps. Only a failed acknowledgement

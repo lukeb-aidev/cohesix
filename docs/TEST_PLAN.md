@@ -1670,9 +1670,18 @@ level may schedule one fresh queue/tail-drain NetData op8 with flags exactly
 the persistent child owner urgent but grants no duplicate source-inspection
 authority. That child owner performs source inspection and
 bounded drain, then rechecks the durable condition before sleep and rearms only
-after it is clear. The same SDIO owner must sample CARD_INT before unmasking and
-again after both enable writes; a pre-latched or crossing source must be
-republished through the same ring and remain masked. Only a genuinely due
+after it is clear. Final empty-ring service, delivered-IRQ status-clear
+completion, DPC activation without an IRQ ACK, and DPC activation after the
+exact ACK must all call one SDIO-owner transition. Tests must assert CARD_INT
+before rearm, after the `INT_ENABLE` write, and after the `SIGNAL_ENABLE` write.
+Each case must read back the owned policy bits, publish exactly one durable
+event, remain masked, increment no successful rearm, preserve any retained
+foreground grant, and never host-W1C CARD_INT. Clean readbacks must publish
+unmasked health and increment one rearm only after the final clear sample.
+Injected mismatches at the masked baseline, interrupt-enable phase,
+signal-enable phase, and source-present remask must poison and fail closed. A
+source crossing after a successful exact IRQ ACK must publish without a second
+handler-cap ACK. Only a genuinely due
 watchdog may claim one fresh hintless
 NetData op8; a quiescent source inspection must perform no blind Function-2
 read. An already-retained exact queue-only op8 is non-revocable and cannot be
@@ -1876,6 +1885,11 @@ The focused acceptance tests
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
 `cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal`,
 `dpc_rx_queue_wait_is_fanout_aware_and_resumes_the_same_event_after_pop`,
+`sdio_card_interrupt_rearm_commits_only_after_clean_enable_readbacks`,
+`sdio_card_interrupt_rearm_recaptures_every_enable_crossing_while_masked`,
+`sdio_card_interrupt_rearm_readback_mismatch_poison_masks_fail_closed`,
+`sdio_retained_dpc_rearm_crossings_publish_once_without_replaying_irq_ack`,
+`sdio_post_ack_rearm_discovery_does_not_reuse_the_old_physical_badge`,
 `sdio_final_dpc_rearm_recaptures_card_int_crossing_the_enable_transition`,
 `cyw43_open_network_parent_requires_complete_current_identity`,
 `linked_cyw43_operator_checkpoint_preserves_quantum_composition_state`,

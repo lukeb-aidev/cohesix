@@ -1086,10 +1086,17 @@ one fresh queue/tail-drain op8 without `RX_HINTLESS_FIRSTREAD`; DPC also keeps
 its persistent child owner urgent, but grants no duplicate source-inspection
 authority. That child owner performs physical source inspection and
 bounded drain, then uses a condition-before-sleep recheck before rearming the
-sole SDIO owner. The host-side half of that recheck samples CARD_INT while
-masked, unmasks only if clear, and samples again after both enable writes; a
-latched or crossing source is republished through the same DPC ring. An exact
-current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the claimed
+sole SDIO owner. All four masked-to-unmasked exits use the same host-side
+lifetime operation. It keeps software/shared health masked, samples CARD_INT,
+establishes and reads back the masked pair, enables and reads back
+`INT_ENABLE.CARD_INT` while `SIGNAL_ENABLE.CARD_INT` remains clear, resamples,
+then enables and reads back `SIGNAL_ENABLE.CARD_INT` and resamples again. A
+latched or crossing source is read-back-remasked and republished exactly once
+through the same DPC ring; any policy or remask readback mismatch poisons the
+generation. Only the all-clear path publishes `masked=false` and advances the
+successful-rearm counter. A completed old IRQ ACK is removed from the retained
+cursor before a crossing source is published, and CARD_INT is never host-W1C'd.
+An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the claimed
 watchdog samples the post-probe progress baseline, arms fresh fast and slow
 deadlines, and clears only its matching ticket. Wrong request, wrong lifetime,
 stale, or fault completion consumes neither the claim nor either deadline. An exact current-lifetime submitted data-TX terminal
@@ -2072,11 +2079,14 @@ generation and XID.
   `INT_ENABLE`, `SIGNAL_ENABLE`, host-status/ring inspection, disposition,
   durable publish/coalesce, exact IRQ acknowledgement, signal, and rearm
   policy. The source remains masked until that ordered quantum reaches its
-  disposition. On the empty-ring rearm path, the same owner samples host
-  `INT_STATUS.CARD_INT` before changing either enable register. A set level is
-  published while still masked. Otherwise the owner programs the unmasked
-  policy and samples once more; a source crossing that enable transition is
-  immediately republished and masked through the same ring.
+  disposition. Final empty-ring service, delivered-IRQ status-clear completion,
+  and both DPC activation rearm exits converge on one transition. The owner
+  samples `INT_STATUS.CARD_INT`, verifies a masked register baseline, enables
+  and reads back `INT_ENABLE.CARD_INT` with signalling still masked, samples,
+  then enables and reads back `SIGNAL_ENABLE.CARD_INT` and samples again. A set
+  or crossing level is remasked with verified readbacks and published once;
+  readback failure poisons the generation, and only an all-clear transition
+  publishes unmasked health and increments `rearms`.
   Only a failed acknowledgement of the exact frozen IRQ epoch may return
   `Pending` and cross an outer-turn boundary; that later owner turn retries only
   the acknowledgement, without rereading status, republishing an event, or
