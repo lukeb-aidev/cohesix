@@ -12982,14 +12982,14 @@ Deliverables:
 Title/ID: m28c1-reference-admission-actions
 Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / bounded reference actions
 Goal: Prove GPU lease admission and one allowlisted `systemd.restart` remediation action end to end.
-Inputs: all prior m28c1 tasks, 28b `gpu.lease` and `systemd.restart` provider records, GPU/Worker/inventory/quota/lease fixtures, host-ticket-agent, provider receipts.
+Inputs: all prior m28c1 tasks, 28b `gpu.lease.grant` and `systemd.restart` provider-action records, GPU/Worker/inventory/quota/lease fixtures, host-ticket-agent, provider receipts.
 Changes:
   - reference policy records and fixtures — exact GPU lease and systemd restart required facts, scopes, quotas, generations, reservations/rechecks, and deterministic denial cases.
   - host-ticket-agent/provider integration — admitted existing actions only, with exact decision/grant ids and provider receipt correlation; no direct executor bypass or arbitrary shell.
   - evidence acceptance lane — mock/fixture plus host-safe live or dry-run evidence where appropriate, keeping provider and target evidence classes separate.
 Commands:
   - cargo test -p host-ticket-agent --test admission_actions
-  - scripts/ci/provider_conformance_run.sh --provider gpu.lease,systemd --admission --state-dir out/provider-conformance/m28c1-actions
+  - scripts/ci/provider_conformance_run.sh --provider gpu.lease.grant,systemd.restart --admission --state-dir out/provider-conformance/m28c1-actions
   - scripts/ci/admission_conformance_run.sh --only reference-actions --state-dir out/admission/m28c1-actions
 Checks:
   - Both actions preserve exact state-generation binding, provider receipt correlation, deterministic denial/stale-state behavior, and existing executor paths; no direct provider or Worker bypass exists.
