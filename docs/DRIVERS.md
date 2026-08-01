@@ -459,20 +459,21 @@ continuation grants, one HAL op8 owner, and one linked SDIO runtime issuer.
 Notifications are scheduling hints; no private physical drain loop may bypass
 the one-exact-grant/one-owner-quantum admission.
 
-The as-built source candidate has no post-TX receive watch and no alternate
-receive lane. Gate 8 commit retains the current lifetime identity plus one
+The as-built source candidate has no direct post-TX receive command and no
+alternate receive lane. Gate 8 commit retains the current lifetime identity plus one
 progress-conditioned, 32-ms virtual-counter-scaled lost-edge watchdog on the
-existing op8 owner. Its progress signature contains DPC presence, epoch,
-producer, consumer, and flags plus root-wake presence, hits, clears, and
-rechecks. Any external progress rebases the deadline and arms one later
-one-shot. With no progress, expiry admits exactly one
+existing op8 owner. Its lifetime progress signature contains DPC presence,
+epoch, producer, consumer, and flags; root-wake presence, hits, clears, and
+rechecks; and the exact submitted data-TX terminal watermark. Any lifetime
+progress rebases the deadline and arms one later one-shot. With no progress,
+expiry admits exactly one
 `RX_HINTLESS_FIRSTREAD` source inspection through the same HAL/SDIO chain; a
 quiescent source performs no blind Function-2 read. A current DPC producer level
 keeps both its persistent child owner and one fresh queue/tail-drain root op8
 live; a current root wake authorizes the same queue/tail-drain op8. Neither
 level adds the hintless flag; only the genuinely due watchdog may add it. The exact
-current non-fault watchdog terminal suppresses another probe until external
-progress or a replacement identity re-arms it. Queues, retained owners, and
+current non-fault watchdog terminal suppresses another probe until later
+lifetime progress or a replacement identity re-arms it. Queues, retained owners, and
 protocol continuations retain Network only for their own already-proved work.
 The 25-ms virtual-counter cap fences fresh-parent admission only; one already
 admitted exact `Prepared`/`Issued` parent continues to its typed terminal
@@ -1042,11 +1043,12 @@ on the existing sole `NetData` op8 `RX_POLL`/DPC path. The cursor binds the
 logical connection generation, linked pair epoch, and completed
 physical-lifetime epoch. It grants permission to service that lifetime and
 owns one progress-conditioned, 32-millisecond, virtual-counter-scaled lost-edge
-watchdog deadline. Its immutable identity is paired with a passive progress
-signature: DPC-ring presence, epoch, producer, consumer, and flags plus
-root-wake presence, hits, clears, and rechecks. While no probe is outstanding,
-a changed signature rebases the deadline and arms one later inspection. A
-no-progress expiry becomes one
+watchdog deadline. Its immutable identity is paired with a passive lifetime
+progress signature: DPC-ring presence, epoch, producer, consumer, and flags;
+root-wake presence, hits, clears, and rechecks; and the exact submitted data-TX
+terminal watermark. Queue, acceptance, issue, and nonterminal TX states are not
+progress. While no probe is outstanding, a changed signature rebases the
+deadline and arms one later inspection. A no-progress expiry becomes one
 durable audit reason and may claim exactly one fresh NetData op8 with
 `RX_HINTLESS_FIRSTREAD`. Once claimed, the exact nonzero probe ticket is
 immutable: progress caused by that op8 cannot rebase the cursor or erase its
@@ -1067,10 +1069,12 @@ authority. That child owner performs physical source inspection and
 bounded drain, then uses a condition-before-sleep recheck before rearming the
 sole SDIO owner. An exact current non-fault `Idle`, `Progress`, or `FrameReady`
 terminal for the claimed watchdog samples the post-probe progress baseline and
-suppresses another probe until later external progress or identity
-replacement. Wrong request, wrong lifetime, stale, or fault completion
-  consumes neither the claim nor the one-shot. An accepted data TX neither arms
-  nor re-arms the watchdog and adds no post-TX fence.
+suppresses another probe until later lifetime progress or identity replacement.
+Wrong request, wrong lifetime, stale, or fault completion consumes neither the
+claim nor the one-shot. An exact current-lifetime submitted data-TX terminal
+advances only the passive watermark and rebases one 32-ms quiescence deadline;
+it creates no immediate receive demand, post-TX retry lane, or fence. Multiple
+terminals before observation coalesce behind the latest watermark.
 
 Only connection-generation, pair, or physical-lifetime invalidation, recovery,
 quarantine, reboot, or selection of another NIC clears the identity cursor.
@@ -1150,7 +1154,7 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 The retained field names remain for diagnostic and normalizer compatibility.
 `watching` is an armed deadline, `watchdog-due` is one unclaimed expiry,
 `watchdog-probing` owns the exact op8 ticket, and `watchdog-suppressed` is the
-completed one-shot awaiting external progress or identity replacement. In
+completed one-shot awaiting later lifetime progress or identity replacement. In
 reachable steady state, `deadline_probes` and `terminals` each advance exactly
 once only when an exact current non-fault hintless op8 terminal completes the
 claimed watchdog; elapsed intervals, queue-only terminals, and stale or fault
@@ -2882,9 +2886,12 @@ generation and XID.
   A queued,
   unissued frame has no child deadline and cannot poison the pair;
   `Device::receive` and reservation failure never service TX. TX
-  completion does not manufacture a following op8, alter the lifetime cursor,
-  or fence another credited TX. A later fresh op8 begins only for a current
-  DPC/root-wake data level or one due progress-conditioned lost-edge audit.
+  completion does not manufacture an immediate op8 or fence another credited
+  TX. Only an exact current-lifetime submitted terminal advances the passive
+  lifetime watermark and rebases the 32-ms audit deadline; queue, acceptance,
+  issue, nonterminal, and fault states do not. A later fresh op8 begins only for
+  a current DPC/root-wake data level or one due progress-conditioned lost-edge
+  audit.
   DPC/root-wake requests remain queue/tail-drain only; only the audit adds
   `RX_HINTLESS_FIRSTREAD`. A DPC producer level also schedules its persistent
   child owner without creating a second source-inspection lane. Queues schedule

@@ -1650,9 +1650,11 @@ Gate 8 data-consumer publication must install one identity-only lifetime RX
 cursor bound to the current connection generation, pair epoch, and completed
 physical-lifetime epoch. It must own one progress-conditioned, 32-ms
 virtual-counter-scaled lost-edge watchdog deadline on the existing op8 owner.
-Its progress signature must include DPC presence, epoch, producer, consumer,
-and flags plus root-wake presence, hits, clears, and rechecks. A changed
-signature must rebase the deadline and arm one later one-shot. Before expiry,
+Its lifetime progress signature must include DPC presence, epoch, producer,
+consumer, and flags; root-wake presence, hits, clears, and rechecks; and the
+exact submitted data-TX terminal watermark. Queue, acceptance, issue, and
+nonterminal TX states must not advance it. A changed signature must rebase the
+deadline and arm one later one-shot. Before expiry,
 quiet turns with no root wake, queue, retained owner, or protocol continuation
 must leave the shared command sequence, op8 count, priority-lease counters, DPC
 counters, `deadline_probes`, and `terminals` unchanged. A no-progress expiry
@@ -1678,7 +1680,7 @@ steady NetData polling.
 An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the
 claimed watchdog must sample the post-probe progress baseline, suppress another
 probe, and increment `deadline_probes` and `terminals` exactly once. Elapsed
-time alone must not reissue it; only later external progress or identity
+time alone must not reissue it; only later lifetime progress or identity
 replacement may re-arm one successor. Queue-only, wrong-request,
 wrong-identity, stale, and fault terminals must not consume the claim or
 advance either counter. Tests must also change DPC and root-wake progress after
@@ -1694,8 +1696,13 @@ fail both fresh-op8 gates without creating a prompt owner, linked-runtime turn,
 or source-terminal increment. Those reasons still retain EventPump service for
 their own bounded owner work.
 
-An accepted data TX must not create receive demand, alter or re-arm the
-watchdog, force a following source probe, or fence another credited TX.
+Queued, accepted, issued, nonterminal, rejected, and faulted data TX must not
+create receive demand, alter or re-arm the watchdog, force a following source
+probe, or fence another credited TX. Only an exact current-lifetime submitted
+terminal may advance the passive watermark and rebase one 32-ms quiescence
+deadline. That rebase must create no immediate op8; multiple submitted
+terminals before observation must coalesce, and one quiet expiry may claim at
+most one successor audit.
 Conversely, an already-retained immutable op7 or op8 must continue through its
 exact ticket/request/payload terminal without displacement or competing
 cursor.
@@ -1798,7 +1805,7 @@ with
 `deadline_probes` and `terminals` each advance exactly once only for the exact
 current non-fault terminal of a claimed watchdog one-shot. Tests must prove one
 probe for a stalled identity, suppression after its exact terminal, rebase and
-re-arm only after later external progress, immutable ticket ownership when the
+re-arm only after later lifetime progress, immutable ticket ownership when the
 probe itself changes DPC/root-wake progress before its terminal, DPC and
 root-wake levels each create
 only queue/tail `RX_STEADY_TAIL_DRAIN`, a due audit alone adds
@@ -1830,11 +1837,12 @@ The focused acceptance tests
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
 `cyw43_non_source_work_reasons_cannot_manufacture_fresh_op8`,
 `cyw43_data_levels_schedule_queue_only_op8_while_idle_stays_quiet`,
-`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
+`cyw43_submitted_tx_rearms_bounded_rx_audit_without_fencing_credited_tx`,
 `cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
 `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
 `cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit`,
 `cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
+`cyw43_lost_edge_watchdog_tx_terminal_rearms_one_quiescent_audit`,
 `cyw43_lost_edge_watchdog_rejects_stale_claim_before_hal_admission`,
 `cyw43_lost_edge_watchdog_exact_release_allows_one_successor_claim`,
 `cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot`,
@@ -1984,7 +1992,7 @@ drain loop. The single progress-conditioned 32-ms one-shot on the existing op8
 owner is a lost-edge safeguard for Cohesix's extra linked notification
 boundaries, not a second poller. A quiescent inspection must stop at the source
 and its exact non-fault terminal must suppress another watchdog probe until
-external progress or identity replacement.
+later lifetime progress or identity replacement.
 
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
@@ -2029,8 +2037,10 @@ ms and at least 100 requests/s. At true idle, `rx_watch=watching` may become
 `deadline_probes`/`terminals` pair may advance at the exact current non-fault
 terminal. A quiescent inspection must perform no Function-2 read, and elapsed
 time alone must not produce a second op8, priority lease, or GENET work. Later
-external DPC/root-wake progress or identity replacement may rebase and re-arm
-one successor. DPC and root-wake levels may each demand only one queue/tail
+lifetime progress from DPC, root wake, or an exact submitted data-TX terminal,
+or identity replacement, may rebase and re-arm one successor. A TX terminal
+creates no immediate op8 and multiple terminals coalesce behind one deadline.
+DPC and root-wake levels may each demand only one queue/tail
 `RX_STEADY_TAIL_DRAIN` op8; without an independently due watchdog neither may
 add `RX_HINTLESS_FIRSTREAD`.
 The pcap must additionally show no warmed-traffic loss, sequence gap,
@@ -2250,7 +2260,7 @@ The focused adversarial cases include
 `cyw43_gate8_ready_publication_is_a_separate_retractable_consumer_fence`,
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
 `cyw43_data_levels_schedule_queue_only_op8_while_idle_stays_quiet`,
-`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
+`cyw43_submitted_tx_rearms_bounded_rx_audit_without_fencing_credited_tx`,
 `cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
 `linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
 `linked_cyw43_rx_admission_honors_input_and_clears_on_guards`,

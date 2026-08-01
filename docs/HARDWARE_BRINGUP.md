@@ -1063,10 +1063,12 @@ Gate 8 data-consumer publication installs one identity-only RX cursor bound to
 the connection generation, pair epoch, and completed physical-lifetime epoch
 on the existing sole `NetData` op8 `RX_POLL`/DPC lane. It owns one
 progress-conditioned, 32-millisecond lost-edge watchdog deadline scaled from
-the exported seL4 virtual counter. Its progress signature comprises DPC
-presence, epoch, producer, consumer, and flags plus root-wake presence, hits,
-clears, and rechecks. While no probe is outstanding, a progress change rebases
-the deadline and arms one later one-shot. With no progress, expiry becomes one
+the exported seL4 virtual counter. Its lifetime progress signature comprises
+DPC presence, epoch, producer, consumer, and flags; root-wake presence, hits,
+clears, and rechecks; and the exact submitted data-TX terminal watermark.
+Queue, acceptance, issue, and nonterminal TX states are excluded. While no
+probe is outstanding, a progress change rebases the deadline and arms one later
+one-shot. With no progress, expiry becomes one
 durable audit reason and
 may claim exactly one fresh `RX_HINTLESS_FIRSTREAD` op8 through the same sole
 owner. After that claim, the exact ticket remains immutable even when the op8
@@ -1086,10 +1088,12 @@ performs source inspection and bounded drain, then rechecks the durable
 condition before sleep and rearms only when clear. Only the genuinely due
 watchdog adds the hintless flag; a quiescent source inspection performs no
 blind Function-2 read. Its exact current non-fault terminal suppresses another
-probe until external progress or identity replacement re-arms it. Neither an
-accepted TX nor non-source queue work creates another owner. Retained owner and
-protocol continuations still advance on the sole op8/HAL/SDIO chain; GENET
-never reads or reports this state. In the
+probe until lifetime progress or identity replacement re-arms it. An exact
+current-lifetime submitted data-TX terminal only advances the passive watermark
+and rebases one 32-ms quiescence deadline; it creates no immediate owner,
+post-TX retry lane, or fence. Multiple terminals coalesce, and non-source queue
+work creates no owner. Retained owner and protocol continuations still advance
+on the sole op8/HAL/SDIO chain; GENET never reads or reports this state. In the
 paired pcap, check both that outbound TCP trains do not suppress peer ACK/FIN
 ingress and that inbound traffic after a quiet interval triggers a prompt reply
 without unrelated TX.
@@ -1114,7 +1118,7 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 The retained field names remain for diagnostic and normalizer compatibility.
 `watching` is an armed deadline, `watchdog-due` is one unclaimed expiry,
 `watchdog-probing` owns the exact op8 ticket, and `watchdog-suppressed` is the
-completed one-shot awaiting external progress or identity replacement.
+completed one-shot awaiting later lifetime progress or identity replacement.
 `deadline_probes` and `terminals` each advance exactly once only when an exact
 current non-fault hintless op8 terminal completes the claimed watchdog.
 Elapsed intervals, queue-only terminals, and stale or fault completions advance
@@ -1479,8 +1483,8 @@ bounded EventPump Network quantum with physical-console checkpoints, exact
 grants, one HAL owner, one linked SDIO runtime issuer, and no private physical
 drain loop.
 
-The as-built source candidate has no post-TX receive probe and no second
-receive lane. It preserves f4's existing ordinary CMD52/CMD53 setup invariant:
+The as-built source candidate has no direct or immediate post-TX receive probe
+and no second receive lane. It preserves f4's existing ordinary CMD52/CMD53 setup invariant:
 one exact admitted owner quantum with `PREISSUE_STEP_BOUND=16` includes the
 deterministic Linux-ordered preflight/register sequence and exactly one
 COMMAND. Only a request-owned status-clear verification that still observes
@@ -1494,9 +1498,11 @@ retain an ACK-only retry across a later turn. Exhausting
 event retained, the source masked, ACK still pending, and DPC activation
 disabled; it must not reread or republish the event. Its exact-lifetime cursor
 also carries the progress-conditioned 32-ms lost-edge watchdog described above.
-External progress rebases and re-arms one later one-shot; one no-progress
-expiry may claim exactly one hintless op8 source inspection, and its exact
-non-fault terminal suppresses repetition.
+Lifetime progress from DPC, root wake, or an exact submitted data-TX terminal
+rebases and re-arms one later one-shot; a TX terminal creates no immediate op8,
+and multiple terminals coalesce. One no-progress expiry may claim exactly one
+hintless op8 source inspection, and its exact non-fault terminal suppresses
+repetition.
 DPC producer and root-wake levels may each demand one queue/tail-drain
 `RX_STEADY_TAIL_DRAIN` op8, but neither adds source-inspection authority; only
 that due audit adds `RX_HINTLESS_FIRSTREAD`. Queues, retained owners, and
