@@ -422,6 +422,21 @@ Pi-source broadcast LLC/XID frames and no Pi EAPOL, ARP, IPv4, DHCP, ICMP, or
 TCP. Consequently `.coh` and REST pressure were correctly withheld. This 0/5
 warm result is a material pre-data regression, not TCP-quality evidence.
 
+The later exact `6cdde1b20418` / image
+`d6bd8c82cc0634de96ce121b18317bf89522fb0da923dc88b597ca37c0b3b16b`
+passed Gate 8a-8h and DHCP on cold plus all five requested warm lifetimes, but
+the five warm boots were 0/5 for usable Wi-Fi TCP: ten host pings and a TCP
+connect timed out on every boot. R02/R04 filled the 50-frame runtime RX queue,
+recorded three/one overflows, and correctly retracted Gate 8h. R01/R03/R05
+remained bound without overflow, yet direct host ARP, ICMP, and SYN frames in
+the boot-paired capture produced no later DPC, root-wake, op8, or RX-counter
+movement. TX accepted/issued/terminal/credit counts remained exact throughout.
+This localizes the first non-advance below smoltcp and above on-air ingress: the
+single CYW43/SDIO CARD_INT-to-DPC-to-queue lifetime, including finite-queue
+producer backpressure and masked-to-unmasked source recapture. `.coh` and
+REST/hive pressure were correctly withheld because raw TCP never qualified.
+GENET remains the unchanged working control.
+
 The current source therefore restores `f4fec9e80`'s proven phase separation
 under Reopened Milestone 26b task
 `m26b-wifi-sdio-notification-dpc-closure` while retaining the later immutable
@@ -461,19 +476,22 @@ the one-exact-grant/one-owner-quantum admission.
 
 The as-built source candidate has no direct post-TX receive command and no
 alternate receive lane. Gate 8 commit retains the current lifetime identity plus one
-progress-conditioned, 32-ms virtual-counter-scaled lost-edge watchdog on the
-existing op8 owner. Its lifetime progress signature contains DPC presence,
+progress-conditioned, 32-ms virtual-counter-scaled lost-edge watchdog plus an
+independent 1,024-ms physical-probe reissue-not-before gate on the existing
+op8 owner. Its lifetime progress signature contains DPC presence,
 epoch, producer, consumer, and flags; root-wake presence, hits, clears, and
 rechecks; and the exact submitted data-TX terminal watermark. Any lifetime
-progress rebases the deadline and arms one later one-shot. With no progress,
-expiry admits exactly one
+progress rebases only the fast quiescence deadline. With no progress and the
+slow reissue gate also expired, the two deadlines admit exactly one
 `RX_HINTLESS_FIRSTREAD` source inspection through the same HAL/SDIO chain; a
 quiescent source performs no blind Function-2 read. A current DPC producer level
 keeps both its persistent child owner and one fresh queue/tail-drain root op8
 live; a current root wake authorizes the same queue/tail-drain op8. Neither
-level adds the hintless flag; only the genuinely due watchdog may add it. The exact
-current non-fault watchdog terminal suppresses another probe until later
-lifetime progress or a replacement identity re-arms it. Queues, retained owners, and
+level adds the hintless flag; only the genuinely due watchdog may add it. The
+exact current non-fault watchdog terminal samples the new baseline, arms both
+deadlines, and clears its immutable ticket. The slow gate bounds later
+same-lifetime recovery even if progress repeatedly rebases the fast deadline.
+Queues, retained owners, and
 protocol continuations retain Network only for their own already-proved work.
 The 25-ms virtual-counter cap fences fresh-parent admission only; one already
 admitted exact `Prepared`/`Issued` parent continues to its typed terminal
@@ -1042,14 +1060,15 @@ Gate 8 data-consumer publication installs one identity-only lifetime RX cursor
 on the existing sole `NetData` op8 `RX_POLL`/DPC path. The cursor binds the
 logical connection generation, linked pair epoch, and completed
 physical-lifetime epoch. It grants permission to service that lifetime and
-owns one progress-conditioned, 32-millisecond, virtual-counter-scaled lost-edge
-watchdog deadline. Its immutable identity is paired with a passive lifetime
+owns one progress-conditioned, 32-millisecond, virtual-counter-scaled
+quiescence deadline and an independent 1,024-millisecond physical-probe
+reissue-not-before deadline. Its immutable identity is paired with a passive lifetime
 progress signature: DPC-ring presence, epoch, producer, consumer, and flags;
 root-wake presence, hits, clears, and rechecks; and the exact submitted data-TX
 terminal watermark. Queue, acceptance, issue, and nonterminal TX states are not
 progress. While no probe is outstanding, a changed signature rebases the
-deadline and arms one later inspection. A no-progress expiry becomes one
-durable audit reason and may claim exactly one fresh NetData op8 with
+fast deadline without shortening an open reissue gate. Expiry of both deadlines
+becomes one durable audit reason and may claim exactly one fresh NetData op8 with
 `RX_HINTLESS_FIRSTREAD`. Once claimed, the exact nonzero probe ticket is
 immutable: progress caused by that op8 cannot rebase the cursor or erase its
 owner before the matching terminal. Only that exact terminal or a
@@ -1067,19 +1086,22 @@ one fresh queue/tail-drain op8 without `RX_HINTLESS_FIRSTREAD`; DPC also keeps
 its persistent child owner urgent, but grants no duplicate source-inspection
 authority. That child owner performs physical source inspection and
 bounded drain, then uses a condition-before-sleep recheck before rearming the
-sole SDIO owner. An exact current non-fault `Idle`, `Progress`, or `FrameReady`
-terminal for the claimed watchdog samples the post-probe progress baseline and
-suppresses another probe until later lifetime progress or identity replacement.
-Wrong request, wrong lifetime, stale, or fault completion consumes neither the
-claim nor the one-shot. An exact current-lifetime submitted data-TX terminal
+sole SDIO owner. The host-side half of that recheck samples CARD_INT while
+masked, unmasks only if clear, and samples again after both enable writes; a
+latched or crossing source is republished through the same DPC ring. An exact
+current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the claimed
+watchdog samples the post-probe progress baseline, arms fresh fast and slow
+deadlines, and clears only its matching ticket. Wrong request, wrong lifetime,
+stale, or fault completion consumes neither the claim nor either deadline. An exact current-lifetime submitted data-TX terminal
 advances only the passive watermark and rebases one 32-ms quiescence deadline;
 it creates no immediate receive demand, post-TX retry lane, or fence. Multiple
 terminals before observation coalesce behind the latest watermark.
 
 Only connection-generation, pair, or physical-lifetime invalidation, recovery,
 quarantine, reboot, or selection of another NIC clears the identity cursor.
-This is Cohesix's linked-runtime translation of Linux interrupt/DPC idle, not a
-second poller, issuer, TX path, timer owner, or GENET behavior. The sole HAL
+This is Cohesix's linked-runtime translation of Linux interrupt/DPC idle with a
+low-rate same-owner lost-edge safeguard, not a second issuer, TX path, private
+drain loop, or GENET behavior. The sole HAL
 op8 owner and linked SDIO runtime remain unchanged.
 
 Root admits Wi-Fi Ethernet output through one generation-scoped bounded
@@ -1154,7 +1176,8 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 The retained field names remain for diagnostic and normalizer compatibility.
 `watching` is an armed deadline, `watchdog-due` is one unclaimed expiry,
 `watchdog-probing` owns the exact op8 ticket, and `watchdog-suppressed` is the
-completed one-shot awaiting later lifetime progress or identity replacement. In
+bounded physical-probe reissue gate after an exact terminal. Later lifetime
+progress may rebase the fast deadline but cannot shorten that gate. In
 reachable steady state, `deadline_probes` and `terminals` each advance exactly
 once only when an exact current non-fault hintless op8 terminal completes the
 claimed watchdog; elapsed intervals, queue-only terminals, and stale or fault
@@ -2049,7 +2072,11 @@ generation and XID.
   `INT_ENABLE`, `SIGNAL_ENABLE`, host-status/ring inspection, disposition,
   durable publish/coalesce, exact IRQ acknowledgement, signal, and rearm
   policy. The source remains masked until that ordered quantum reaches its
-  disposition.
+  disposition. On the empty-ring rearm path, the same owner samples host
+  `INT_STATUS.CARD_INT` before changing either enable register. A set level is
+  published while still masked. Otherwise the owner programs the unmasked
+  policy and samples once more; a source crossing that enable transition is
+  immediately republished and masked through the same ring.
   Only a failed acknowledgement of the exact frozen IRQ epoch may return
   `Pending` and cross an outer-turn boundary; that later owner turn retries only
   the acknowledgement, without rereading status, republishing an event, or
@@ -2072,6 +2099,16 @@ generation and XID.
   physical-capable commands remain serialized behind the DPC owner. Root's
   central operation permit and CYW43 pre-poll bound both remain one, so at most
   one such queue completion is admitted in one ordinary EventPump turn.
+  The persistent DPC also applies lossless producer backpressure before it
+  consumes a retained nextlen or starts a Function-2 first read. It reserves
+  `max(1, glom_subframe_count)` queue entries and parks the exact event when
+  that fanout would exceed the 50-frame private queue. Ordinary reads therefore
+  admit through depth 49 and wait at 50; an eight-subframe glom admits through
+  depth 42 and waits at 43. The parked cursor retains CARD_INT, FRAME_IND,
+  nextlen, glom, event, and ring-consumer identity. Only a queue-only pop that
+  crosses back into the safe bound schedules one local DPC continuation; it
+  sends no new root wake and performs no physical action. Queue pressure is
+  not an overflow, quarantine reason, or maximum-priority busy loop.
   Before the runtime copies the complete 140-KiB foreground rollback baseline,
   it offers a still narrower terminal shortcut to a just-intake-sealed
   `RX_POLL` whose flags are exactly `RX_STEADY_TAIL_DRAIN`. The immutable seal,
@@ -2622,10 +2659,11 @@ generation and XID.
   An accepted steady data TX does not manufacture receive demand or fence the
   next credited TX. Any already-assigned exact op8 continuation remains
   non-revocable; otherwise the sole `NetData` op8 lane starts only when a
-  current root wake requires one queue/tail-drain poll or a due
-  progress-conditioned watchdog requires one hintless source poll. A DPC
-  producer level schedules only its persistent child owner. Queues and other
-  protocol obligations schedule their own owners instead.
+  current root wake or DPC producer level requires one queue/tail-drain poll,
+  or when both deadlines of the progress-conditioned watchdog require one
+  hintless source poll. The DPC producer also retains its persistent child
+  owner; it grants no second source-inspection lane. Queues and other protocol
+  obligations schedule their own owners instead.
 - Between retained operations, live serial service is admitted only through
   the independent linked-runtime route. Physical-Pi cutover requires a matching
   linked-runtime service completion (`Idle`, `Progress`, or `FrameReady`) after

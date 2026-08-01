@@ -3207,6 +3207,7 @@ enum Cyw43DpcAction {
     FlowRead,
     HostmailRead,
     HostmailAck,
+    RxQueueWait,
     FifoWindow,
     Firstread,
     Remainder,
@@ -7290,6 +7291,7 @@ fn reset_sdio_register_shadows() {
     #[cfg(all(not(target_os = "none"), test))]
     {
         TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(0, Ordering::Release);
+        TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.store(0, Ordering::Release);
         TEST_SDIO_HOST_RESET_STUCK_MASK.store(0, Ordering::Release);
         TEST_SDIO_HOST_INT_STATUS_W1C_FAILURES_REMAINING.store(0, Ordering::Release);
         TEST_SDIO_HOST_CLOCK_STABLE.store(true, Ordering::Release);
@@ -7720,6 +7722,19 @@ const fn cyw43_dpc_rx_start_route(
     } else {
         Cyw43DpcRxStartRoute::PostStatus
     }
+}
+
+const fn cyw43_dpc_rx_queue_reserve(state: &Cyw43RuntimeState) -> usize {
+    let glom_subframes = state.glom_subframe_count as usize;
+    if glom_subframes == 0 {
+        1
+    } else {
+        glom_subframes
+    }
+}
+
+const fn cyw43_dpc_rx_queue_backpressured(state: &Cyw43RuntimeState) -> bool {
+    state.rx_queue_count as usize + cyw43_dpc_rx_queue_reserve(state) > CYW43_RX_QUEUE_CAP
 }
 
 const fn cyw43_should_run_deferred_dpc(
@@ -10451,6 +10466,20 @@ fn cyw43_dpc_start_rframe_or_post(state: &mut Cyw43RuntimeState, cursor: &mut Cy
         state.rx_service_quiescent = true;
         state.rxpending = false;
     }
+    if matches!(
+        route,
+        Cyw43DpcRxStartRoute::Firstread | Cyw43DpcRxStartRoute::NextFrame(_)
+    ) && cyw43_dpc_rx_queue_backpressured(state)
+    {
+        // Retain the event, next-length/glom hint, FRAME_IND, and masked
+        // CARD_INT until an exact queue-only root poll creates enough room for
+        // the next physical read's maximum enqueue fanout.
+        cursor.action = Cyw43DpcAction::RxQueueWait;
+        cursor.io_kind = Cyw43DpcIoKind::None;
+        cursor.io_phase = Cyw43DpcIoPhase::Idle;
+        cursor.io_preissue_retry_used = false;
+        return;
+    }
     match route {
         Cyw43DpcRxStartRoute::PostStatus => {
             // No FRAME_IND and no retained next-length means this RX episode is
@@ -11046,6 +11075,12 @@ fn cyw43_dpc_finish_action(
                 state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED;
             }
             cyw43_dpc_start_rframe_or_post(state, cursor);
+            false
+        }
+        Cyw43DpcAction::RxQueueWait => {
+            if !cyw43_dpc_rx_queue_backpressured(state) {
+                cyw43_dpc_start_rframe_or_post(state, cursor);
+            }
             false
         }
         Cyw43DpcAction::FifoWindow => {
@@ -11822,7 +11857,10 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                 }
                 if !terminal {
                     state.dpc_cursor = cursor;
-                    should_defer_local = true;
+                    // Queue pressure is a durable software level, not private
+                    // maximum-priority work. Park until a queue-only op8/op10
+                    // pop crosses the exact next-read capacity boundary.
+                    should_defer_local = cursor.action != Cyw43DpcAction::RxQueueWait;
                     return true;
                 }
             } else {
@@ -12746,16 +12784,27 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
 
     if card_irq_masked && irq_ack_epoch.is_none() {
         // The consumer has advanced the retained event and signalled the
-        // owner after clearing the dongle-side source. Match Linux's
-        // `ack_sdio_irq`: re-enable CARD_INT in both host registers without
-        // reading or W1C-clearing the still-level host status first. If the
-        // function source remains asserted, the controller will deliver a
-        // fresh IRQ after this rearm.
+        // owner after clearing the dongle-side source. A fresh CARD_INT may
+        // already be latched while both host enables remain masked. Capture
+        // that durable level before the mask transition instead of depending
+        // on an enable write to synthesize a new interrupt edge.
+        let status_before_rearm = sdio_read32(SDHCI_INT_STATUS);
+        if status_before_rearm & SDHCI_INT_CARD_INT != 0 {
+            return sdio_publish_card_interrupt_event(status_before_rearm, badge, None);
+        }
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.card_irq_masked = false;
             state.card_irq_rearms = state.card_irq_rearms.saturating_add(1);
         });
         sdio_publish_unmasked_rearm();
+        // Close the other side of condition-before-sleep. If the source crossed
+        // the first sample or the enable writes, publish it through this same
+        // sole-owner ring. A concurrently delivered kernel IRQ later coalesces
+        // with the durable event and retains its own exact ACK epoch.
+        let status_after_rearm = sdio_read32(SDHCI_INT_STATUS);
+        if status_after_rearm & SDHCI_INT_CARD_INT != 0 {
+            return sdio_publish_card_interrupt_event(status_after_rearm, badge, None);
+        }
         return true;
     }
 
@@ -32777,6 +32826,7 @@ fn cyw43_rx_queue_remove_index(state: &mut Cyw43RuntimeState, logical_index: usi
     if state.rx_queue_count == 0 || logical_index >= usize::from(state.rx_queue_count) {
         return;
     }
+    let was_dpc_backpressured = cyw43_dpc_rx_queue_backpressured(state);
     let remove_pos = (usize::from(state.rx_queue_head) + logical_index) % CYW43_RX_QUEUE_CAP;
     let freed_slot = usize::from(state.rx_queue_slots[remove_pos]);
     let last_logical_index = usize::from(state.rx_queue_count) - 1;
@@ -32790,6 +32840,12 @@ fn cyw43_rx_queue_remove_index(state: &mut Cyw43RuntimeState, logical_index: usi
     state.rx_queue_lens[freed_slot] = 0;
     state.rx_queue_flags[freed_slot] = 0;
     state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
+    if was_dpc_backpressured
+        && !cyw43_dpc_rx_queue_backpressured(state)
+        && state.dpc_cursor.action == Cyw43DpcAction::RxQueueWait
+    {
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    }
     if state.rx_queue_count == 0 {
         state.rx_queue_head = 0;
         state.rx_queue_slots = cyw43_rx_queue_initial_slots();
@@ -36436,6 +36492,9 @@ static TEST_SDIO_CMD52_NONE_RESPONSE_KEY: AtomicU32 =
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_SDIO_HOST_INT_STATUS_RESPONSE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_RUNTIME_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
@@ -44631,6 +44690,14 @@ fn sdio_read32(offset: usize) -> u32 {
 fn sdio_read32(_offset: usize) -> u32 {
     #[cfg(test)]
     if _offset == SDHCI_INT_STATUS {
+        let zero_read = TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
+                remaining.checked_sub(1)
+            })
+            .is_ok();
+        if zero_read {
+            return 0;
+        }
         return TEST_SDIO_HOST_INT_STATUS_RESPONSE.load(Ordering::Acquire);
     }
     0
@@ -49680,6 +49747,65 @@ mod tests {
             cyw43_dpc_rx_start_route(true, I_HMB_FRAME_IND, 128, false),
             Cyw43DpcRxStartRoute::PostStatus
         );
+    }
+
+    #[test]
+    fn dpc_rx_queue_wait_is_fanout_aware_and_resumes_the_same_event_after_pop() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+
+        state.rx_queue_count = (CYW43_RX_QUEUE_CAP - 1) as u8;
+        assert!(!cyw43_dpc_rx_queue_backpressured(&state));
+        state.rx_queue_count = CYW43_RX_QUEUE_CAP as u8;
+        assert!(cyw43_dpc_rx_queue_backpressured(&state));
+
+        state.glom_subframe_count = CYW43_RX_GLOM_SUBFRAME_CAP as u8;
+        state.rx_queue_count = (CYW43_RX_QUEUE_CAP - CYW43_RX_GLOM_SUBFRAME_CAP) as u8;
+        assert!(!cyw43_dpc_rx_queue_backpressured(&state));
+        state.rx_queue_count = (CYW43_RX_QUEUE_CAP - CYW43_RX_GLOM_SUBFRAME_CAP + 1) as u8;
+        assert!(cyw43_dpc_rx_queue_backpressured(&state));
+
+        let next_frame_len = 128u16;
+        state.pending_intstatus = I_HMB_FRAME_IND;
+        state.sdpcm_next_frame_len = next_frame_len;
+        let mut cursor = Cyw43DpcCursor::empty();
+        cursor.event_sequence = 0x4359_d106;
+        cyw43_dpc_start_rframe_or_post(&mut state, &mut cursor);
+        assert_eq!(cursor.action, Cyw43DpcAction::RxQueueWait);
+        assert_eq!(cursor.io_kind, Cyw43DpcIoKind::None);
+        assert_eq!(cursor.io_phase, Cyw43DpcIoPhase::Idle);
+        assert_eq!(state.sdpcm_next_frame_len, next_frame_len);
+        assert_eq!(state.glom_subframe_count, CYW43_RX_GLOM_SUBFRAME_CAP as u8);
+        assert_ne!(state.pending_intstatus & I_HMB_FRAME_IND, 0);
+        assert_eq!(state.rx_queue_overflows, 0);
+        assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 0);
+
+        state.dpc_cursor = cursor;
+        state.rx_queue_lens[0] = 1;
+        state.rx_queue_flags[0] = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 0);
+        state.rx_queue_frames[0][0] = 0xa5;
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+        assert_eq!(
+            cyw43_rx_queue_pop_front(&mut state),
+            Some(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 1,
+                flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 0),
+            })
+        );
+        assert_eq!(state.rx_queue_count as usize, CYW43_RX_QUEUE_CAP - 8);
+        assert!(CYW43_DPC_DEFERRED.load(Ordering::Acquire));
+        assert_eq!(state.dpc_cursor.action, Cyw43DpcAction::RxQueueWait);
+
+        let mut resumed = state.dpc_cursor;
+        assert!(!cyw43_dpc_finish_action(&mut state, &mut resumed, 0));
+        assert_eq!(resumed.event_sequence, cursor.event_sequence);
+        assert_eq!(resumed.action, Cyw43DpcAction::FifoWindow);
+        assert_eq!(state.sdpcm_next_frame_len, 0);
+        assert_eq!(state.glom_subframe_count, CYW43_RX_GLOM_SUBFRAME_CAP as u8);
+        assert_eq!(state.rx_queue_overflows, 0);
+        assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 0);
     }
 
     #[test]
@@ -80036,6 +80162,58 @@ mod tests {
             !sdio_final_dpc_rearm_turn_due(RuntimeNotificationRoute::SdioOwner, true),
             "one completion cannot manufacture a second rearm turn",
         );
+    }
+
+    #[test]
+    fn sdio_final_dpc_rearm_recaptures_card_int_crossing_the_enable_transition() {
+        let _guard = test_guard();
+        let epoch = 0x4359_5303;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.irq_ack_pending = false;
+            state.dpc_poisoned = false;
+            state.card_irq_rearms = 0;
+            state.card_irq_captures = 0;
+            state.dpc_events_published = 0;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert!(dpc_event_ring_set_owner_health_at(
+            dpc_base, true, false, false, false,
+        ));
+        let ring = dpc_event_ring_read_at(dpc_base);
+        assert_eq!(ring.producer, ring.consumer);
+
+        TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.store(1, Ordering::Release);
+        TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(SDHCI_INT_CARD_INT, Ordering::Release);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        assert!(sdio_final_dpc_rearm_turn_due(
+            RuntimeNotificationRoute::SdioOwner,
+            true,
+        ));
+
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert_eq!(state.card_irq_rearms, 1);
+            assert_eq!(state.card_irq_captures, 1);
+            assert_eq!(state.dpc_events_published, 1);
+            assert!(!state.dpc_poisoned);
+        });
+        let ring = dpc_event_ring_read_at(dpc_base);
+        assert_ne!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0,
+        );
+        assert_eq!(
+            TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.load(Ordering::Acquire),
+            0,
+        );
+        TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(0, Ordering::Release);
     }
 
     #[test]

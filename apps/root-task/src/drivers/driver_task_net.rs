@@ -527,14 +527,18 @@ static CYW43_GATE8_PUBLICATION_EPOCH_TOKEN: AtomicU64 = AtomicU64::new(0);
 // op8 owner carries one current-lifetime lost-edge watchdog. The watchdog
 // samples passive producer/consumer and root-wake progress plus the exact data
 // TX terminal watermark. A genuinely stalled identity gets one hintless
-// source-chain inspection; the exact terminal suppresses another inspection
-// until later lifetime progress or a replacement identity rebases the
-// watchdog. It is neither a periodic poller, a second issuer, nor a post-TX
-// retry lane.
+// source-chain inspection. Its exact terminal installs an independent slow
+// reissue-not-before gate so the same lifetime can recover a later lost edge
+// without returning to continuous source polling. It is neither a second
+// issuer nor a post-TX retry lane.
 #[cfg(feature = "kernel")]
 const CYW43_DATA_RX_LOST_EDGE_WATCHDOG_MS: u64 = 32;
 #[cfg(feature = "kernel")]
 const CYW43_DATA_RX_LOST_EDGE_WATCHDOG_FALLBACK_TURNS: usize = 16;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_RX_LOST_EDGE_REISSUE_MS: u64 = 1_024;
+#[cfg(feature = "kernel")]
+const CYW43_DATA_RX_LOST_EDGE_REISSUE_FALLBACK_TURNS: usize = 512;
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43DataRxLifetimeProgress {
@@ -559,9 +563,9 @@ struct Cyw43DataRxLifetimeCursor {
     pair_epoch: u64,
     physical_lifetime_epoch: u32,
     watchdog_deadline: Cyw43PollDeadline,
+    watchdog_reissue_deadline: Option<Cyw43PollDeadline>,
     progress: Cyw43DataRxLifetimeProgress,
     watchdog_probe_ticket: u64,
-    watchdog_probe_completed: bool,
 }
 #[cfg(feature = "kernel")]
 static CYW43_DATA_RX_LIFETIME_CURSOR: Mutex<Option<Cyw43DataRxLifetimeCursor>> = Mutex::new(None);
@@ -7490,13 +7494,29 @@ fn cyw43_data_rx_watchdog_deadline() -> Cyw43PollDeadline {
     )
 }
 
+#[cfg(feature = "kernel")]
+fn cyw43_data_rx_watchdog_reissue_deadline() -> Cyw43PollDeadline {
+    cyw43_poll_deadline_from_millis_or_polls(
+        CYW43_DATA_RX_LOST_EDGE_REISSUE_MS,
+        CYW43_DATA_RX_LOST_EDGE_REISSUE_FALLBACK_TURNS,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_rx_watchdog_reissue_is_open(cursor: &Cyw43DataRxLifetimeCursor) -> bool {
+    cursor
+        .watchdog_reissue_deadline
+        .as_ref()
+        .is_some_and(cyw43_poll_deadline_is_open)
+}
+
 /// Rebase one current watchdog after current-lifetime progress.
 ///
-/// A progress edge also clears a completed one-shot. An outstanding probe
+/// A progress edge rebases the fast quiescence deadline. An outstanding probe
 /// claim remains immutable until its exact terminal or proven-not-issued
 /// release path; the probe can advance these same progress counters before
-/// its terminal is recorded. This is the only same-identity path that can arm
-/// a later hintless watchdog probe.
+/// its terminal is recorded. Progress never shortens the independent physical
+/// probe reissue gate.
 #[cfg(feature = "kernel")]
 fn rebase_cyw43_data_rx_watchdog_on_progress(
     cursor: &mut Cyw43DataRxLifetimeCursor,
@@ -7508,7 +7528,6 @@ fn rebase_cyw43_data_rx_watchdog_on_progress(
     cursor.progress = progress;
     cursor.watchdog_deadline = cyw43_data_rx_watchdog_deadline();
     cursor.watchdog_probe_ticket = 0;
-    cursor.watchdog_probe_completed = false;
     true
 }
 
@@ -7523,18 +7542,24 @@ fn advance_cyw43_data_rx_audit_fallback_boundary() {
     let Some(mut cursor) = *slot else {
         return;
     };
-    if cursor.watchdog_probe_completed
-        || cursor.watchdog_probe_ticket != 0
-        || !matches!(cursor.watchdog_deadline, Cyw43PollDeadline::Polls { .. })
-    {
+    if cursor.watchdog_probe_ticket != 0 {
         return;
     }
     if !cyw43_data_rx_lifetime_identity_current(cursor) {
         *slot = None;
         return;
     }
+    let mut advanced = false;
     if let Cyw43PollDeadline::Polls { ref mut remaining } = cursor.watchdog_deadline {
         *remaining = remaining.saturating_sub(1);
+        advanced = true;
+    }
+    if let Some(Cyw43PollDeadline::Polls { remaining }) = cursor.watchdog_reissue_deadline.as_mut()
+    {
+        *remaining = remaining.saturating_sub(1);
+        advanced = true;
+    }
+    if advanced {
         *slot = Some(cursor);
     }
 }
@@ -7557,9 +7582,9 @@ fn cyw43_data_rx_audit_due_for_generation(generation: u32) -> bool {
         *slot = Some(cursor);
         return false;
     }
-    !cursor.watchdog_probe_completed
-        && cursor.watchdog_probe_ticket == 0
+    cursor.watchdog_probe_ticket == 0
         && !cyw43_poll_deadline_is_open(&cursor.watchdog_deadline)
+        && !cyw43_data_rx_watchdog_reissue_is_open(&cursor)
 }
 
 #[cfg(feature = "kernel")]
@@ -7587,9 +7612,9 @@ fn claim_cyw43_data_rx_watchdog_probe(generation: u32, ticket_id: u64) -> bool {
         return false;
     }
     if rebase_cyw43_data_rx_watchdog_on_progress(&mut cursor, progress)
-        || cursor.watchdog_probe_completed
         || cursor.watchdog_probe_ticket != 0
         || cyw43_poll_deadline_is_open(&cursor.watchdog_deadline)
+        || cyw43_data_rx_watchdog_reissue_is_open(&cursor)
     {
         *slot = Some(cursor);
         return false;
@@ -7692,9 +7717,9 @@ fn publish_cyw43_data_rx_lifetime_cursor(generation: u32) -> bool {
         pair_epoch,
         physical_lifetime_epoch,
         watchdog_deadline: cyw43_data_rx_watchdog_deadline(),
+        watchdog_reissue_deadline: None,
         progress: cyw43_data_rx_lifetime_progress(),
         watchdog_probe_ticket: 0,
-        watchdog_probe_completed: false,
     };
     let mut slot = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
     if !cyw43_data_rx_lifetime_identity_current(cursor) {
@@ -10187,7 +10212,7 @@ fn cyw43_data_rx_watch_diagnostic() -> (&'static str, u32, u64, u32) {
         "stale"
     } else if cursor.watchdog_probe_ticket != 0 {
         "watchdog-probing"
-    } else if cursor.watchdog_probe_completed {
+    } else if cyw43_data_rx_watchdog_reissue_is_open(&cursor) {
         "watchdog-suppressed"
     } else if cyw43_poll_deadline_is_open(&cursor.watchdog_deadline) {
         "watching"
@@ -21295,8 +21320,8 @@ fn record_cyw43_data_rx_source_probe_terminal(
         // recheck performed by the matching op8 terminal.
         cursor.progress = progress;
         cursor.watchdog_deadline = cyw43_data_rx_watchdog_deadline();
+        cursor.watchdog_reissue_deadline = Some(cyw43_data_rx_watchdog_reissue_deadline());
         cursor.watchdog_probe_ticket = 0;
-        cursor.watchdog_probe_completed = true;
     }
     *slot = Some(cursor);
     if watchdog_terminal {
@@ -50751,7 +50776,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall() {
+    fn cyw43_lost_edge_watchdog_reissues_slowly_without_overlapping_tickets() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -50811,7 +50836,7 @@ mod tests {
                 .as_ref()
                 .expect("the exact watchdog claim remains published");
             assert_eq!(cursor.watchdog_probe_ticket, pending.ticket_id);
-            assert!(!cursor.watchdog_probe_completed);
+            assert!(cursor.watchdog_reissue_deadline.is_none());
             assert_ne!(cursor.progress, probe_progress);
         }
         assert!(record_cyw43_data_rx_source_probe_terminal(
@@ -50828,16 +50853,70 @@ mod tests {
             let cursor = cursor
                 .as_mut()
                 .expect("the completed watchdog remains generation-scoped");
-            assert!(cursor.watchdog_probe_completed);
             assert_eq!(cursor.watchdog_probe_ticket, 0);
             assert_eq!(cursor.progress, probe_progress);
+            assert!(cyw43_data_rx_watchdog_reissue_is_open(cursor));
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(
             !cyw43_current_generation_data_rx_audit_due(),
-            "elapsed time alone cannot reissue a completed one-shot"
+            "the fast deadline cannot bypass the physical-probe reissue gate"
         );
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("the completed watchdog remains generation-scoped")
+                .watchdog_reissue_deadline = Some(Cyw43PollDeadline::Polls { remaining: 0 });
+        }
+        assert!(cyw43_current_generation_data_rx_audit_due());
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
+        let successor = Cyw43PendingPromptPoll {
+            ticket_id: pending.ticket_id.wrapping_add(1),
+            request: Some(0xa1),
+            ..pending
+        };
+        assert!(claim_cyw43_data_rx_watchdog_probe(
+            generation,
+            successor.ticket_id
+        ));
+        assert!(!claim_cyw43_data_rx_watchdog_probe(
+            generation,
+            successor.ticket_id.wrapping_add(1)
+        ));
+        assert!(record_cyw43_data_rx_source_probe_terminal(
+            successor,
+            DriverTaskCompletionRecord::idle(0xa1),
+        ));
+        assert_eq!(CYW43_DATA_RX_AUDIT_PROBES.load(Ordering::Acquire), 2);
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_mut()
+                .expect("the successor terminal remains lifetime-scoped");
+            cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 2 };
+            cursor.watchdog_reissue_deadline = Some(Cyw43PollDeadline::Polls { remaining: 2 });
+        }
+        advance_cyw43_data_rx_audit_fallback_boundary();
+        {
+            let cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_ref()
+                .expect("the fallback boundary retains the current lifetime");
+            assert_eq!(
+                cursor.watchdog_deadline,
+                Cyw43PollDeadline::Polls { remaining: 1 }
+            );
+            assert_eq!(
+                cursor.watchdog_reissue_deadline,
+                Some(Cyw43PollDeadline::Polls { remaining: 1 })
+            );
+        }
+        assert!(!cyw43_current_generation_data_rx_audit_due());
+        advance_cyw43_data_rx_audit_fallback_boundary();
+        assert!(cyw43_current_generation_data_rx_audit_due());
 
         reset_cyw43_status_flags();
     }
@@ -50897,7 +50976,7 @@ mod tests {
             !cyw43_current_generation_data_rx_audit_due(),
             "coalesced exact TX terminals only rebase the quiescence deadline"
         );
-        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watching");
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
         {
             let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
             let cursor = cursor
@@ -50905,14 +50984,22 @@ mod tests {
                 .expect("the TX-progress baseline remains lifetime-scoped");
             assert_eq!(cursor.progress, after_tx);
             assert_eq!(cursor.watchdog_probe_ticket, 0);
-            assert!(!cursor.watchdog_probe_completed);
             assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
+            assert!(cyw43_data_rx_watchdog_reissue_is_open(cursor));
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(
-            cyw43_current_generation_data_rx_audit_due(),
-            "one quiet interval after TX progress permits one successor audit"
+            !cyw43_current_generation_data_rx_audit_due(),
+            "TX progress cannot shorten the physical-probe reissue gate"
         );
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("the TX-progress baseline remains lifetime-scoped")
+                .watchdog_reissue_deadline = Some(Cyw43PollDeadline::Polls { remaining: 0 });
+        }
+        assert!(cyw43_current_generation_data_rx_audit_due());
 
         let second = Cyw43PendingPromptPoll {
             ticket_id: first.ticket_id.wrapping_add(1),
@@ -50936,7 +51023,7 @@ mod tests {
             let cursor = cursor
                 .as_mut()
                 .expect("the successor terminal suppresses repeated polling");
-            assert!(cursor.watchdog_probe_completed);
+            assert!(cyw43_data_rx_watchdog_reissue_is_open(cursor));
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(
@@ -51014,7 +51101,7 @@ mod tests {
                 .expect("the progressed lifetime remains published");
             assert_eq!(cursor.progress, progressed);
             assert_eq!(cursor.watchdog_probe_ticket, 0);
-            assert!(!cursor.watchdog_probe_completed);
+            assert!(cursor.watchdog_reissue_deadline.is_none());
             assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
         }
 
@@ -51093,7 +51180,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot() {
+    fn cyw43_lost_edge_watch_progress_rebases_fast_deadline_before_first_probe() {
         let _lock = CYW43_STATUS_TEST_LOCK
             .lock()
             .expect("cyw43 status test lock");
@@ -51145,7 +51232,7 @@ mod tests {
         }
         assert!(
             cyw43_current_generation_data_rx_audit_due(),
-            "a later no-progress interval may arm the next one-shot"
+            "before the first probe, a later no-progress interval may become due"
         );
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
 
@@ -51500,7 +51587,7 @@ mod tests {
                 CYW43_TX_SUBMITTED.load(Ordering::Acquire)
             );
             assert_eq!(cursor.watchdog_probe_ticket, 0);
-            assert!(!cursor.watchdog_probe_completed);
+            assert!(cursor.watchdog_reissue_deadline.is_none());
             assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }

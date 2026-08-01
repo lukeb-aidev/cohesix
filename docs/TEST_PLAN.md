@@ -1649,16 +1649,17 @@ fresh physical parent.
 Gate 8 data-consumer publication must install one identity-only lifetime RX
 cursor bound to the current connection generation, pair epoch, and completed
 physical-lifetime epoch. It must own one progress-conditioned, 32-ms
-virtual-counter-scaled lost-edge watchdog deadline on the existing op8 owner.
+virtual-counter-scaled lost-edge quiescence deadline and an independent
+1,024-ms physical-probe reissue-not-before deadline on the existing op8 owner.
 Its lifetime progress signature must include DPC presence, epoch, producer,
 consumer, and flags; root-wake presence, hits, clears, and rechecks; and the
 exact submitted data-TX terminal watermark. Queue, acceptance, issue, and
-nonterminal TX states must not advance it. A changed signature must rebase the
-deadline and arm one later one-shot. Before expiry,
+nonterminal TX states must not advance it. A changed signature must rebase only
+the fast deadline and must never shorten the slow gate. Before both expire,
 quiet turns with no root wake, queue, retained owner, or protocol continuation
 must leave the shared command sequence, op8 count, priority-lease counters, DPC
-counters, `deadline_probes`, and `terminals` unchanged. A no-progress expiry
-must become exactly one durable audit reason.
+counters, `deadline_probes`, and `terminals` unchanged. A no-progress expiry of
+both deadlines must become exactly one durable audit reason.
 
 The runtime must signal its private RX queue only on empty-to-nonempty
 transition. HAL must preserve a latched level after notification coalescing,
@@ -1669,7 +1670,10 @@ level may schedule one fresh queue/tail-drain NetData op8 with flags exactly
 the persistent child owner urgent but grants no duplicate source-inspection
 authority. That child owner performs source inspection and
 bounded drain, then rechecks the durable condition before sleep and rearms only
-after it is clear. Only a genuinely due watchdog may claim one fresh hintless
+after it is clear. The same SDIO owner must sample CARD_INT before unmasking and
+again after both enable writes; a pre-latched or crossing source must be
+republished through the same ring and remain masked. Only a genuinely due
+watchdog may claim one fresh hintless
 NetData op8; a quiescent source inspection must perform no blind Function-2
 read. An already-retained exact queue-only op8 is non-revocable and cannot be
 rewritten, so the audit remains due for a later unowned turn. Bootstrap,
@@ -1677,11 +1681,23 @@ split-control/host-EAPOL, control pre-TX, and Join-only final-fence hintless
 probes remain separately bounded and must not be generalized into periodic
 steady NetData polling.
 
+The DPC producer must also prove lossless finite-queue admission before a
+Function-2 first-read or retained-nextlen read. Its reservation is
+`max(1, glom_subframe_count)`, so an ordinary frame is admitted through depth
+49 and waits at 50, while an eight-subframe glom is admitted through depth 42
+and waits at 43. A wait must retain the same CARD_INT, FRAME_IND, nextlen,
+glom, event sequence, ring consumer, and child identity, issue no physical
+command, increment no overflow, and schedule no root wake. Exactly one
+queue-only pop crossing back into the safe bound must schedule a local DPC
+continuation that resumes that same event; remaining pressure must stay parked
+without a maximum-priority loop.
+
 An exact current non-fault `Idle`, `Progress`, or `FrameReady` terminal for the
-claimed watchdog must sample the post-probe progress baseline, suppress another
-probe, and increment `deadline_probes` and `terminals` exactly once. Elapsed
-time alone must not reissue it; only later lifetime progress or identity
-replacement may re-arm one successor. Queue-only, wrong-request,
+claimed watchdog must sample the post-probe progress baseline, arm fresh fast
+and slow deadlines, clear only its matching ticket, and increment
+`deadline_probes` and `terminals` exactly once. The slow gate must block rapid
+reissue even when later lifetime progress rebases the fast deadline; expiry of
+both deadlines may admit one successor for the same identity. Queue-only, wrong-request,
 wrong-identity, stale, and fault terminals must not consume the claim or
 advance either counter. Tests must also change DPC and root-wake progress after
 the exact ticket is claimed but before its terminal, repeatedly inspect the
@@ -1803,9 +1819,10 @@ netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery
 with
 `rx_watch=<absent|stale|watching|watchdog-due|watchdog-probing|watchdog-suppressed>`.
 `deadline_probes` and `terminals` each advance exactly once only for the exact
-current non-fault terminal of a claimed watchdog one-shot. Tests must prove one
-probe for a stalled identity, suppression after its exact terminal, rebase and
-re-arm only after later lifetime progress, immutable ticket ownership when the
+current non-fault terminal of a claimed watchdog ticket. `watchdog-suppressed`
+means the slow reissue gate is open after that terminal. Tests must prove one
+probe for a stalled identity, no overlap, slow same-lifetime reissue only after
+both deadlines expire, fast-only rebase after later lifetime progress, immutable ticket ownership when the
 probe itself changes DPC/root-wake progress before its terminal, DPC and
 root-wake levels each create
 only queue/tail `RX_STEADY_TAIL_DRAIN`, a due audit alone adds
@@ -1841,11 +1858,11 @@ The focused acceptance tests
 `cyw43_steady_rx_poll_is_hintless_only_for_a_due_audit`,
 `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
 `cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit`,
-`cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
+`cyw43_lost_edge_watchdog_reissues_slowly_without_overlapping_tickets`,
 `cyw43_lost_edge_watchdog_tx_terminal_rearms_one_quiescent_audit`,
 `cyw43_lost_edge_watchdog_rejects_stale_claim_before_hal_admission`,
 `cyw43_lost_edge_watchdog_exact_release_allows_one_successor_claim`,
-`cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot`,
+`cyw43_lost_edge_watch_progress_rebases_fast_deadline_before_first_probe`,
 `cyw43_lost_edge_audit_never_masks_a_genuine_root_wake_level`,
 `cyw43_due_audit_preserves_an_exact_retained_queue_only_owner`,
 `cyw43_lost_edge_watchdog_clears_on_generation_identity_change`,
@@ -1858,6 +1875,8 @@ The focused acceptance tests
 `cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition`,
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
 `cyw43_root_wake_clears_only_on_exact_empty_data_poll_terminal`,
+`dpc_rx_queue_wait_is_fanout_aware_and_resumes_the_same_event_after_pop`,
+`sdio_final_dpc_rearm_recaptures_card_int_crossing_the_enable_transition`,
 `cyw43_open_network_parent_requires_complete_current_identity`,
 `linked_cyw43_operator_checkpoint_preserves_quantum_composition_state`,
 `linked_cyw43_operator_probe_completes_serial_command_under_durable_pressure`,
@@ -1966,14 +1985,25 @@ is also non-passing. The power-off boot and R01 each exchanged 40 Discovers /
 4/5 bootstrap. R05 then dropped 21/21 host Echo Requests after its
 DPC/root-wake source state stopped advancing. This is the hardware evidence
 for the retained-TX/queued-Offer ordering repair and for a bounded lost-edge
-safeguard. The current safeguard is one progress-conditioned 32-ms one-shot on
-the existing op8 owner, not a periodic poller. The persistent child DPC owner
+safeguard. The current safeguard uses a progress-conditioned 32-ms fast
+deadline and an independent 1,024-ms reissue gate on the existing op8 owner.
+The persistent child DPC owner
 also rechecks its durable condition before sleep/rearm. Wi-Fi `.coh` and
 pressure remain withheld for that image. GENET on the same image passed the
 cold-neighbor request/ARP/reply
 sequence, `.coh`, and a one-minute pressure control with a clean TCP flow and
 1.216 ms p50 / 1.538 ms p95 request-to-first-Pi-payload latency. The new Wi-Fi
 source remains pending rebuild, flash, and hardware proof.
+
+The still-later exact `6cdde1b20418` image also fails this gate. Cold plus all
+five warm boots passed Gate 8a-8h and DHCP, but every warm boot lost 10/10
+pings and timed out TCP. R02/R04 filled the 50-frame child RX queue, recorded
+three/one overflows, and retracted Gate 8h. R01/R03/R05 remained bound without
+overflow, yet direct host ARP/ICMP/TCP packets visible in the paired capture
+caused no later CARD_INT/DPC, root-wake, op8, or RX-counter movement. Exact TX
+accounting stayed balanced. `.coh` and pressure were correctly withheld. A
+replacement image must prove both zero queue overflow and continued inbound
+DPC/root delivery across all reboot lifetimes before TCP quality is measured.
 
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
@@ -1987,12 +2017,12 @@ credits/glom, 32-KiB shared aperture, 512-byte Function 2 blocks, multi-block
 CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
 latch. Its scheduler form remains one bounded EventPump Network quantum with
 physical-console checkpoints, exact grants, one HAL owner, and one linked SDIO
-runtime issuer; no test may pass by adding a timer poller or private physical
-drain loop. The single progress-conditioned 32-ms one-shot on the existing op8
-owner is a lost-edge safeguard for Cohesix's extra linked notification
-boundaries, not a second poller. A quiescent inspection must stop at the source
-and its exact non-fault terminal must suppress another watchdog probe until
-later lifetime progress or identity replacement.
+runtime issuer; no test may pass by adding a normal-path timer poller or private
+physical drain loop. The 32-ms quiescence and 1,024-ms reissue deadlines on the
+existing op8 owner form a low-rate lost-edge safeguard for Cohesix's extra
+linked notification boundaries, not a second issuer. A quiescent inspection
+must stop at the source, and its exact non-fault terminal must start a fresh
+slow gate before another same-lifetime probe can be admitted.
 
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
