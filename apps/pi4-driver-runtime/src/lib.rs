@@ -1817,10 +1817,11 @@ const SDPCMD_REG_FUNCTIONINTMASK: u32 = 0x34;
 const SDPCMD_REG_TOSBMAILBOX: u32 = 0x40;
 const SDPCMD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SDPCMD_REG_TOHOSTMAILBOXDATA: u32 = 0x4c;
-// SDIO-core FUNCTIONINTMASK indexes functions from bit 0. These bits are not
-// the CCCR IOEx/IENx function bits, where Function 1/2 use 0x02/0x04.
-const SDPCMD_FUNCTION_INT_MASK_F1: u32 = 1 << 0;
-const SDPCMD_FUNCTION_INT_MASK_F2: u32 = 1 << 1;
+// SDIO-core FUNCTIONINTMASK is an 8-bit register that indexes functions from
+// bit 0. These bits are not the CCCR IOEx/IENx function bits, where Function
+// 1/2 use 0x02/0x04.
+const SDPCMD_FUNCTION_INT_MASK_F1: u8 = 1 << 0;
+const SDPCMD_FUNCTION_INT_MASK_F2: u8 = 1 << 1;
 const CC_F2RDY: u32 = 1 << 2;
 const SMB_NAK: u32 = 1 << 0;
 const SMB_INT_ACK: u32 = 1 << 1;
@@ -1840,7 +1841,7 @@ const I_HMB_FC_STATE: u32 = 1 << 4;
 const I_HMB_FC_CHANGE: u32 = 1 << 5;
 const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
-const FUNCTIONINTMASK: u32 = SDPCMD_FUNCTION_INT_MASK_F1 | SDPCMD_FUNCTION_INT_MASK_F2;
+const FUNCTIONINTMASK: u8 = SDPCMD_FUNCTION_INT_MASK_F1 | SDPCMD_FUNCTION_INT_MASK_F2;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 const CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS: u64 = 1_000;
 const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS: u64 = 20;
@@ -27511,7 +27512,7 @@ fn cyw43_release_step(
             Ok(false)
         }
         Cyw43ReleasePhase::InterruptFunctionMask => {
-            if !cyw43_backplane_write_u32(
+            if !cyw43_backplane_write_u8(
                 state,
                 CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
                 FUNCTIONINTMASK,
@@ -27683,7 +27684,7 @@ fn cyw43_release_step(
             Ok(false)
         }
         Cyw43ReleasePhase::ReprimeFunctionMask => {
-            if !cyw43_backplane_write_u32(
+            if !cyw43_backplane_write_u8(
                 state,
                 CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
                 FUNCTIONINTMASK,
@@ -28092,6 +28093,10 @@ const fn cyw43_backplane_function_addr(addr: u32) -> u32 {
     (addr & BACKPLANE_ADDRESS_MASK) | BACKPLANE_32BIT_FLAG
 }
 
+const fn cyw43_backplane_byte_function_addr(addr: u32) -> u32 {
+    addr & BACKPLANE_ADDRESS_MASK
+}
+
 const fn cyw43_backplane_cmd53_increment() -> bool {
     true
 }
@@ -28418,6 +28423,15 @@ fn cyw43_backplane_write_u32(state: &mut Cyw43RuntimeState, addr: u32, value: u3
         return true;
     }
     false
+}
+
+fn cyw43_backplane_write_u8(state: &mut Cyw43RuntimeState, addr: u32, value: u8) -> bool {
+    if !cyw43_backplane_set_window(state, addr) {
+        return false;
+    }
+    // Byte registers in the Function-1 backplane aperture must use CMD52. The
+    // 0x8000 flag selects 32-bit access and must never be present on this lane.
+    cyw43_sdio_cmd52_write(1, cyw43_backplane_byte_function_addr(addr), value)
 }
 
 fn cyw43_backplane_read_u32(state: &mut Cyw43RuntimeState, addr: u32) -> Option<u32> {
@@ -69744,7 +69758,16 @@ mod tests {
         assert_eq!(SDPCMD_FUNCTION_INT_MASK_F1, 0x01);
         assert_eq!(SDPCMD_FUNCTION_INT_MASK_F2, 0x02);
         assert_eq!(FUNCTIONINTMASK, 0x03);
-        assert_ne!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
+        assert_ne!(FUNCTIONINTMASK, SDIO_FUNC_ENABLE_2);
+        let functionintmask_addr = CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK;
+        assert_eq!(
+            cyw43_backplane_byte_function_addr(functionintmask_addr),
+            0x4034,
+        );
+        assert_eq!(
+            cyw43_backplane_byte_function_addr(functionintmask_addr) & BACKPLANE_32BIT_FLAG,
+            0,
+        );
         assert_eq!(
             cyw43_arm_post_release_function_interrupts(),
             Ok(expected_ienx)
@@ -69769,24 +69792,28 @@ mod tests {
                     == cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK)
         };
         let functionintmask_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_write(record.arg)
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg)
-                    == cyw43_backplane_function_addr(
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        cyw43_backplane_byte_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                        ),
+                        FUNCTIONINTMASK,
                     )
-                && record.payload_u32 == Some(0x03)
         };
         let legacy_functionintmask_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_write(record.arg)
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg)
-                    == cyw43_backplane_function_addr(
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        cyw43_backplane_byte_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                        ),
+                        SDIO_FUNC_ENABLE_2,
                     )
-                && record.payload_u32 == Some(u32::from(SDIO_FUNC_ENABLE_2))
         };
         let rframe_low_read = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
@@ -69818,7 +69845,7 @@ mod tests {
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK
         ));
-        assert!(test_sdio_cmd53_write_addr_seen(
+        assert!(!test_sdio_cmd53_write_addr_seen(
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK
         ));
@@ -69856,24 +69883,28 @@ mod tests {
                     == cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK)
         };
         let functionintmask_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_write(record.arg)
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg)
-                    == cyw43_backplane_function_addr(
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        cyw43_backplane_byte_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                        ),
+                        FUNCTIONINTMASK,
                     )
-                && record.payload_u32 == Some(0x03)
         };
         let legacy_functionintmask_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_write(record.arg)
-                && sdio_cmd53_arg_function(record.arg) == 1
-                && sdio_cmd53_arg_addr(record.arg)
-                    == cyw43_backplane_function_addr(
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        cyw43_backplane_byte_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                        ),
+                        SDIO_FUNC_ENABLE_2,
                     )
-                && record.payload_u32 == Some(u32::from(SDIO_FUNC_ENABLE_2))
         };
         let watermark_write = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
@@ -75977,27 +76008,19 @@ mod tests {
                         io.fifo[..core::mem::size_of::<u32>()]
                             .copy_from_slice(&value.to_le_bytes());
                     }
-                    DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                    DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE
                         if descriptor.function == 1
                             && descriptor.addr
-                                == cyw43_backplane_function_addr(
+                                == cyw43_backplane_byte_function_addr(
                                     CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
                                 ) =>
                     {
-                        assert_eq!(descriptor.len, core::mem::size_of::<u32>() as u16);
+                        assert_eq!(descriptor.len, 1);
                         let offset = usize::from(descriptor.data_offset);
-                        let payload = [
-                            read_sdio_bus_payload_byte(offset)
-                                .expect("FUNCTIONINTMASK payload byte 0"),
-                            read_sdio_bus_payload_byte(offset + 1)
-                                .expect("FUNCTIONINTMASK payload byte 1"),
-                            read_sdio_bus_payload_byte(offset + 2)
-                                .expect("FUNCTIONINTMASK payload byte 2"),
-                            read_sdio_bus_payload_byte(offset + 3)
-                                .expect("FUNCTIONINTMASK payload byte 3"),
-                        ];
-                        assert_eq!(payload, 0x03u32.to_le_bytes());
-                        assert_ne!(payload, u32::from(SDIO_FUNC_ENABLE_2).to_le_bytes());
+                        let payload = read_sdio_bus_payload_byte(offset)
+                            .expect("FUNCTIONINTMASK byte payload");
+                        assert_eq!(payload, FUNCTIONINTMASK);
+                        assert_ne!(payload, SDIO_FUNC_ENABLE_2);
                         functionintmask_payloads = functionintmask_payloads.saturating_add(1);
                     }
                     _ => {}
@@ -76024,9 +76047,11 @@ mod tests {
                 cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK),
             ),
             (
-                DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+                DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
                 1,
-                cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK),
+                cyw43_backplane_byte_function_addr(
+                    CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                ),
             ),
             (DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE, 1, SBSDIO_WATERMARK),
             (DRIVER_RUNTIME_SDIO_OP_CMD52_READ, 1, SBSDIO_DEVICE_CTL),
@@ -76073,9 +76098,11 @@ mod tests {
                 cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK),
             ),
             (
-                DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+                DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
                 1,
-                cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK),
+                cyw43_backplane_byte_function_addr(
+                    CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                ),
             ),
             (
                 DRIVER_RUNTIME_SDIO_OP_CMD52_READ,
@@ -84884,11 +84911,15 @@ mod tests {
                     == cyw43_backplane_function_addr(CYW43_SDIO_CORE_BASE + SDPCMD_REG_HOSTINTMASK)
         };
         let functionintmask_write = |record: TestSdioTransferRecord| {
-            record.cmd == SDIO_CMD53
-                && sdio_cmd53_arg_write(record.arg)
-                && sdio_cmd53_arg_addr(record.arg)
-                    == cyw43_backplane_function_addr(
-                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+            record.cmd == SDIO_CMD52
+                && record.arg
+                    == sdio_cmd52_arg(
+                        true,
+                        1,
+                        cyw43_backplane_byte_function_addr(
+                            CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                        ),
+                        FUNCTIONINTMASK,
                     )
         };
         let watermark_write = |record: TestSdioTransferRecord| {

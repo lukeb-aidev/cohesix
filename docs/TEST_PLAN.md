@@ -1256,9 +1256,10 @@ through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
 drive all 21 post-F2 release children (20 controller command issues plus the
 `DPC_ACTIVATE` child) into real retained DPC activation, inspect the actual
-SDIO-core `FUNCTIONINTMASK` payload at initial release and reprime, require
-little-endian `0x00000003` (`F1=0x01 | F2=0x02`) at both seams, reject CCCR
-Function-2 enable value `0x00000004`, and
+SDIO-core `FUNCTIONINTMASK` descriptor at initial release and reprime, require
+one unflagged Function-1 CMD52 byte carrying `0x03`
+(`F1=0x01 | F2=0x02`) at both seams, reject the 32-bit access aperture and
+CCCR Function-2 enable value `0x04`, and
 drive one DPC event through owner-backed status, F2 read, empty-confirmation,
 and post-status work before foreground queue consumption.
 Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
@@ -2067,21 +2068,30 @@ operations/s with zero failures. Wi-Fi REST/hive pressure was correctly
 withheld. These results continue to reject smoltcp and GENET as the first
 causal surface.
 
-For `63eba6204517`, the first remaining violated invariant is the linked
-runtime's register-domain error: it reused CCCR Function-2 enable value `0x04`
-for SDIO-core `FUNCTIONINTMASK` at `core + 0x34`. Its core F1/F2 bits are
-`0x01`/`0x02`, so initial release and reprime must each carry the actual
-little-endian payload `0x00000003`. Production-chain tests must inspect all
-four payload bytes at both controller seams and explicitly reject
-`0x00000004`; an assertion over a detached constant is insufficient. CCCR
-`IENx` remains the distinct read-modify-write/readback sequence requiring
-master/F1/F2 value `0x07`. Root's diagnostic model must mirror `0x03` while
+Exact image `031e49b0ce8c` corrected the earlier CCCR-domain value error to
+core F1/F2 mask `0x03`, but still fails this gate. Cold plus warm R01-R05 passed
+Gate 8a-8h and DHCP 6/6 while aggregate ICMP loss was 43.3%, SYN-to-SYNACK
+medians were 441-1,002 ms, and host-payload-to-Pi ACK p95 was
+1.289-1.344 seconds; the reverse direction remained 0.122-0.148 ms. The
+same-image GENET control stayed clean at 0.548 ms median ping, 0.526 ms median
+handshake, and zero captured benchmark TCP defect.
+
+The first remaining violated invariant is access width: SDIO-core
+`FUNCTIONINTMASK` at `core + 0x34` is an 8-bit register, but `031e49b0ce8c`
+still used an incrementing four-byte Function-1 CMD53 through the 32-bit
+backplane aperture. Production-chain tests must inspect both controller seams
+and require exactly one unflagged Function-1 CMD52 write with length one and
+payload `0x03`; they must explicitly reject the 32-bit aperture and CCCR-domain
+value `0x04`. An assertion over a detached constant is insufficient.
+`HOSTINTMASK` remains a four-byte atomic write, and CCCR `IENx` remains the
+distinct read-modify-write/readback sequence requiring master/F1/F2 value
+`0x07`. Root's diagnostic model must mirror `0x03` while
 `firmware_channel_programs_function_int_mask()` remains false, proving root is
 not a second physical writer. No test may pass by changing the sole owner,
-HAL/SDIO topology, IRQ158 route, source-probe watchdog, affinity, scheduling,
-smoltcp, GENET, or ABI. This correction requires a new built/read-back image
-and fresh serial-plus-pcap evidence; `63eba6204517` is its defect-discovery
-baseline, not acceptance proof.
+HAL/SDIO topology, IRQ158 route, source-probe watchdog, phase-separated
+authority, affinity, scheduling, smoltcp, GENET, or ABI. This correction
+requires a new built/read-back image and fresh serial-plus-pcap evidence;
+`031e49b0ce8c` is its defect-discovery baseline, not acceptance proof.
 
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
@@ -2772,8 +2782,8 @@ one incrementing, four-byte Function 1 CMD53 with the exact little-endian
 payload, never four bytewise CMD52 commands. Its adversarial cut must publish a
 new interrupt cause after sampling but before commit and prove that only the
 sampled bits clear. The release-order test must drive the production retained
-cursor through `HOSTINTMASK`, the separate Gate 10 SDIO-core
-`FUNCTIONINTMASK=0x00000003` phase,
+cursor through four-byte `HOSTINTMASK`, the separate Gate 10 SDIO-core
+`FUNCTIONINTMASK=0x03` one-byte phase,
 watermark, `DEVICE_CTL` read-modify-write clearing `CA_INT_ONLY` while adding
 `F2WM`, and a distinct readback proving both bits before `MESBUSYCTRL`,
 `WAKEUPCTRL` read-modify-write adding `HTWAIT`, `CARDCAP`, and exact
@@ -2781,9 +2791,10 @@ watermark, `DEVICE_CTL` read-modify-write clearing `CA_INT_ONLY` while adding
 of unrelated read-modify-write bits, fail-closed handling of a sticky mask or
 failed readback, stale/cached completion isolation, and no controller reissue
 when a fresh pending turn replays only the cached completed prefix. Both the
-initial and reprime mask tests must inspect the actual four-byte payload,
-require core F1/F2 bits `0x01`/`0x02`, and reject CCCR-domain value
-`0x00000004`. Root-only coverage retains diagnostic mirror `0x03` while
+initial and reprime mask tests must inspect the actual unflagged Function-1
+CMD52 descriptor and one-byte payload, require core F1/F2 bits `0x01`/`0x02`,
+and reject both the 32-bit access aperture and CCCR-domain value `0x04`.
+Root-only coverage retains diagnostic mirror `0x03` while
 proving its physical writer remains inactive. The final
 card-interrupt test must cross the same real seam as three
 distinct turns: read CCCR `IENx`, write `current | 0x07` without clearing upper

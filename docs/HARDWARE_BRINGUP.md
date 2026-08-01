@@ -22,6 +22,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 seL4 16 source, offline | Both fresh Pi profiles pass; a direct `~/seL4_16` diagnostic build completed 309 of 309 steps and passed runtime validation. Exact-image staging remains open because the shared checkout was already dirty and was preserved. | A sealed/read-back image, board boot, current-image device readiness, TCP, or benchmark result. |
 | Pi 4 exact `63eba6204517` Wi-Fi/GENET diagnostic | Cold plus five warm Wi-Fi lifetimes all passed first-pair Gate 8a-8h and DHCP: warm initialization was 5/5, but acceptable warm TCP quality was 0/5. Warm ping loss was 20-50% with 1.08-1.30-second average RTT; host-to-Pi TCP service took about 1.25-1.48 seconds while Pi-to-host ACKs returned in 0.026-0.164 ms. Source probes remained watchdog-paced with zero queue or DPC-ring faults. The same image's GENET control returned 10/10 pings at 0.917 ms average, seven 0.704-1.069-ms handshakes, `tcp_basic.coh` in about 0.5 seconds, and about 667/699 operations/s on its 500-operation checks with zero failures. Source inspection found that the runtime wrote CCCR F2 value `0x04` to the distinct SDIO-core `FUNCTIONINTMASK`; release/reprime require core F1/F2 mask `0x03`. | Acceptable Wi-Fi TCP, live proof of the new `FUNCTIONINTMASK=0x03` initial/reprime repair, REST/hive pressure, or closure of the required 10/10 cold plus 10/10 warm matrix. |
+| Pi 4 exact `031e49b0ce8c` Wi-Fi/GENET diagnostic | Cold plus warm R01-R05 passed first-pair Gate 8a-8h and DHCP 6/6 after correcting the SDIO-core mask value to `0x03`, but acceptable Wi-Fi transport remained 0/6. Aggregate ICMP loss was 43.3%; SYN-to-SYNACK medians were 441-1,002 ms; host-payload-to-Pi ACK p95 was 1.289-1.344 seconds while reverse ACK p95 was 0.122-0.148 ms. GENET passed 10/10 pings at 0.548 ms median, seven handshakes at 0.526 ms median, `tcp_basic.coh`, and the 500-operation benchmark with no captured TCP defect. The remaining source mismatch is access width: `FUNCTIONINTMASK` is an 8-bit register, but this image still used the flagged four-byte CMD53 aperture. | Live proof of the replacement unflagged Function-1 CMD52 byte access, acceptable Wi-Fi TCP, REST/hive pressure, or closure of the required 10/10 cold plus 10/10 warm matrix. |
 | Pi 4 pre-v16 live diagnostic | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | This is historical diagnostic evidence, not seL4 16 proof. No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
@@ -1510,19 +1511,29 @@ baseline/pooled checks at about 667/699 operations/s with zero failures.
 Wi-Fi REST/hive pressure was correctly withheld after the raw TCP quality gate
 failed; the GENET result authorizes no wired or common-stack change.
 
-The first source invariant violated by that exact run is a register-domain
-error in the linked runtime. CCCR `IOEx` encodes Function 2 as `0x04`, but the
-distinct SDIO-core `FUNCTIONINTMASK` at `core + 0x34` encodes Function 1 and
-Function 2 as `0x01` and `0x02`. Initial release and reprime must therefore
-write little-endian `0x00000003`, not `0x00000004`. CCCR `IENx` remains its
-separate master/F1/F2 read-modify-write/readback sequence with required mask
-`0x07`. Focused tests inspect the actual payload at both production seams and
-reject `0x04`. Root's diagnostic model mirrors `0x03`, but
-`firmware_channel_programs_function_int_mask()` remains false and root never
-writes the register. This preserves one runtime owner and the current HAL/SDIO
-topology, IRQ158 route, source-probe watchdog, affinity, scheduling, smoltcp,
-and GENET path. A new built, read-back image plus fresh serial/pcap evidence is
-required before the correction changes the live verdict.
+Exact image `031e49b0ce8c` corrected the earlier register-domain value error to
+core F1/F2 mask `0x03`. Its cold plus warm R01-R05 lifetimes passed first-pair
+Gate 8a-8h and DHCP 6/6, but acceptable transport remained 0/6: aggregate ICMP
+loss was 43.3%, SYN-to-SYNACK medians were 441-1,002 ms, and
+host-payload-to-Pi ACK p95 was 1.289-1.344 seconds while reverse ACK p95 was
+0.122-0.148 ms. The same-image GENET control remained clean at 0.548 ms median
+ping and 0.526 ms median handshake, so the common stack is not the first cause.
+
+The first remaining source invariant is access width. The distinct SDIO-core
+`FUNCTIONINTMASK` at `core + 0x34` is an 8-bit register, but `031e49b0ce8c`
+still selected the incrementing four-byte Function-1 CMD53 aperture with
+`BACKPLANE_32BIT_FLAG`. Initial release and reprime must each issue one
+unflagged Function-1 CMD52 byte carrying `0x03`. `HOSTINTMASK` remains on its
+four-byte path; CCCR `IENx` remains its separate master/F1/F2
+read-modify-write/readback sequence with required mask `0x07`. Focused tests
+inspect the real descriptor width, address, and payload at both production
+seams and reject the 32-bit aperture and `0x04`. Root's diagnostic model mirrors
+`0x03`, but `firmware_channel_programs_function_int_mask()` remains false and
+root never writes the register. This preserves one runtime owner and the
+current HAL/SDIO topology, IRQ158 route, source-probe watchdog,
+phase-separated authority, affinity, scheduling, smoltcp, and GENET path. A
+new built, read-back image plus fresh serial/pcap evidence is required before
+the correction changes the live verdict.
 
 Linux `brcmfmac` normally enables SDIO interrupts and disables polling. Its ISR
 schedules one ordered DPC worker, which performs an RX-first bounded drain
@@ -1972,15 +1983,16 @@ report terminal `Idle`.
 
 After Function 2 becomes ready, the current source expresses the pinned Linux
 BCM43455 post-F2 lifecycle as separately retained operations. The exact
-sequence is `HOSTINTMASK`, Cohesix's separate Gate 10 SDIO-core
+sequence is `HOSTINTMASK`, Cohesix's separate Gate 10 SDIO-core one-byte
 `FUNCTIONINTMASK` phase, watermark, `DEVICE_CTL` read/modify/write clearing
 `CA_INT_ONLY` while adding `F2WM`, a distinct data-mode readback, `MESBUSYCTRL`,
 `WAKEUPCTRL` read/modify/write adding `HTWAIT`, `CARDCAP`, and exact
-`FORCE_HT`. The core mask at `core + 0x34` uses F1/F2 bits `0x01`/`0x02`, so
-initial release and reprime each write little-endian `0x00000003`; they must
-not reuse CCCR Function-2 enable value `0x04`. Tests inspect both actual
-payloads and reject `0x00000004`. Root mirrors `0x03` for diagnostics while
-its physical writer remains inactive. Reprime repeats the masks as distinct
+`FORCE_HT`. The core mask at `core + 0x34` is an 8-bit register using F1/F2
+bits `0x01`/`0x02`, so initial release and reprime each issue one unflagged
+Function-1 CMD52 byte carrying `0x03`; they must not select the 32-bit aperture
+or reuse CCCR Function-2 enable value `0x04`. Tests inspect both actual
+descriptors and payloads and reject either mismatch. Root mirrors `0x03` for
+diagnostics while its physical writer remains inactive. Reprime repeats the masks as distinct
 operations, samples the low and high frame-count bytes on separate turns, then
 admits the card interrupt as
 three more retained turns: read CCCR `IENx`, write `current | 0x07`, and prove

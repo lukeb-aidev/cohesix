@@ -572,21 +572,31 @@ This direction asymmetry plus same-image GENET performance again places the
 material defect below the common smoltcp path. Wi-Fi REST/hive pressure was
 withheld after the raw quality gate failed.
 
-Source inspection found the first violated invariant at the next register-
-domain boundary. The linked runtime had reused CCCR `IOEx` Function-2 enable
-value `0x04` as the four-byte payload for the distinct SDIO-core
-`FUNCTIONINTMASK` register at `core + 0x34`. That core register defines
-Function-1 and Function-2 interrupt bits as `0x01` and `0x02`, so initial
-release and reprime must each write little-endian `0x00000003`. CCCR `IENx`
-remains a separate read-modify-write/readback operation whose master/F1/F2
-admission value is `0x07`. Focused production-chain tests inspect the actual
-payload at both mask seams and reject `0x00000004`. Root mirrors `0x03` only in
-its compatibility diagnostic model;
-`firmware_channel_programs_function_int_mask()` remains false, so the inactive
-root path cannot become a second writer. The repair changes no owner, HAL/SDIO
-topology, watchdog, smoltcp, GENET, affinity, scheduling, or ABI. Its live
-verdict requires a newly built, read-back image;
-the `63eba6204517` run is defect-discovery evidence, not proof of the repair.
+The first register-domain repair changed the distinct SDIO-core
+`FUNCTIONINTMASK` value from reused CCCR `IOEx.F2=0x04` to core F1/F2 value
+`0x03`. Exact image `031e49b0ce8c` then preserved Gate 8a-8h and DHCP on cold
+plus warm R01-R05, but acceptable transport remained 0/6: aggregate ICMP loss
+was 43.3%, SYN-to-SYNACK medians were 441-1,002 ms, and host-payload-to-Pi ACK
+p95 was 1.289-1.344 seconds while the reverse direction remained
+0.122-0.148 ms. Same-image GENET stayed clean at 0.548 ms median ping and
+0.526 ms median handshake, rejecting the common smoltcp path.
+
+The next violated invariant is the register access width. `FUNCTIONINTMASK` at
+`core + 0x34` is an 8-bit register, while the linked runtime still used the
+incrementing four-byte Function-1 CMD53 aperture selected by
+`BACKPLANE_32BIT_FLAG`. Initial release and reprime now each use exactly one
+unflagged Function-1 CMD52 byte write carrying `0x03`. `HOSTINTMASK` remains a
+four-byte atomic write, and CCCR `IENx` remains a separate
+read-modify-write/readback operation whose master/F1/F2 admission value is
+`0x07`. Focused production-chain tests inspect the real descriptor width,
+address, and payload at both mask seams and reject the 32-bit aperture and
+CCCR-domain value `0x04`. Root mirrors `0x03` only in its compatibility
+diagnostic model; `firmware_channel_programs_function_int_mask()` remains
+false, so the inactive root path cannot become a second writer. The repair
+changes no owner, HAL/SDIO topology, phase-separated authority, watchdog,
+smoltcp, GENET, affinity, scheduling, or ABI. Its live verdict requires a newly
+built, read-back image; `031e49b0ce8c` is defect-discovery evidence, not proof
+of the byte-access repair.
 
 ### QEMU network drivers
 
@@ -2128,10 +2138,12 @@ generation and XID.
   `core + 0x34` as a separate Gate 10 phase immediately after `HOSTINTMASK`;
   it is not folded into the host-mask operation and does not reuse CCCR
   Function-2 enable value `0x04`. Its core Function-1/Function-2 bits are
-  `0x01`/`0x02`, so both initial release and reprime write `0x00000003`.
-  Focused tests inspect the actual little-endian payload at both seams and
-  reject `0x00000004`. Root's diagnostic mirror is `0x03`, but its writer
-  remains disabled. Each read, write, completion observation, and later reprime
+  `0x01`/`0x02`, so both initial release and reprime issue one unflagged
+  Function-1 CMD52 byte carrying `0x03`; the four-byte access flag is forbidden
+  for this register. Focused tests inspect the actual descriptor and payload at
+  both seams and reject both the 32-bit aperture and `0x04`. Root's diagnostic
+  mirror is `0x03`, but its writer remains disabled. Each read, write,
+  completion observation, and later reprime
   phase consumes its own outer EventPump turn. Read-modify-write preserves unrelated
   `DEVICE_CTL`, `WAKEUPCTRL`, and CCCR `IENx` bits. Card-interrupt admission is
   the Linux-shaped retained sequence `IENx read -> write(current | 0x07) ->
