@@ -29,7 +29,8 @@ use log::{debug, error, info, trace, warn};
 use portable_atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 use smoltcp::config::IFACE_NEIGHBOR_CACHE_COUNT;
 use smoltcp::iface::{
-    Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
+    Config as IfaceConfig, Interface, PollIngressSingleResult, PollResult, SocketHandle, SocketSet,
+    SocketStorage,
 };
 use smoltcp::socket::raw::{
     PacketBuffer as RawPacketBuffer, PacketMetadata as RawPacketMetadata,
@@ -1713,10 +1714,15 @@ fn new_console_tcp_socket(
     rx_storage: &'static mut [u8],
     tx_storage: &'static mut [u8],
 ) -> TcpSocket<'static> {
-    TcpSocket::new(
+    let mut socket = TcpSocket::new(
         TcpSocketBuffer::new(rx_storage),
         TcpSocketBuffer::new(tx_storage),
-    )
+    );
+    // Console traffic is interactive and CYW43 preserves an RX-coupled TX
+    // permit only for the current stack poll. Emit ACKs in that same poll
+    // instead of moving a header-only response onto the later generic lane.
+    socket.set_ack_delay(None);
+    socket
 }
 
 /// Shared monotonic clock for the interface.
@@ -3152,6 +3158,8 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn abort_console_socket_pair(&mut self, reason: &'static str) {
+        #[cfg(feature = "kernel")]
+        Self::clear_cyw43_authenticated_console_peer();
         let active_state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
         if active_state != TcpState::Closed {
             self.sockets.get_mut::<TcpSocket>(self.tcp_handle).abort();
@@ -3320,8 +3328,57 @@ impl<D: NetDevice> NetStack<D> {
         true
     }
 
+    #[cfg(feature = "kernel")]
+    fn clear_cyw43_authenticated_console_peer() {
+        if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            crate::drivers::driver_task_net::clear_cyw43_authenticated_console_peer();
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn publish_cyw43_authenticated_console_peer(
+        authenticated: bool,
+        generation: u32,
+        active_client_id: Option<u64>,
+        listen_port: u16,
+        peer_endpoint: Option<(IpAddress, u16)>,
+        socket: &TcpSocket,
+    ) -> bool {
+        if D::driver_task_contract() != CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            return true;
+        }
+        let Some(connection_id) = active_client_id.filter(|_| authenticated) else {
+            Self::clear_cyw43_authenticated_console_peer();
+            return false;
+        };
+        let local_port = socket
+            .local_endpoint()
+            .map(|endpoint| endpoint.port)
+            .unwrap_or(listen_port);
+        let Some((IpAddress::Ipv4(remote_ipv4), remote_port)) = peer_endpoint.or_else(|| {
+            socket
+                .remote_endpoint()
+                .map(|endpoint| (endpoint.addr, endpoint.port))
+        }) else {
+            Self::clear_cyw43_authenticated_console_peer();
+            return false;
+        };
+        crate::drivers::driver_task_net::publish_cyw43_authenticated_console_peer(
+            generation,
+            connection_id,
+            local_port,
+            remote_ipv4.octets(),
+            remote_port,
+        )
+    }
+
     fn set_auth_state(auth_state: &mut AuthState, active_client_id: Option<u64>, next: AuthState) {
         if next != *auth_state {
+            // Authentication state is the authority boundary for standalone
+            // CYW43 response leases. Revoke the prior identity first; the
+            // exact replacement is published only by `Authenticated` below.
+            #[cfg(feature = "kernel")]
+            Self::clear_cyw43_authenticated_console_peer();
             let conn_id = active_client_id.unwrap_or(0);
             info!(
                 "[cohsh-net][auth] state: {:?} -> {:?} (conn_id={})",
@@ -3338,6 +3395,8 @@ impl<D: NetDevice> NetStack<D> {
     }
 
     fn reset_session_state(&mut self) {
+        #[cfg(feature = "kernel")]
+        Self::clear_cyw43_authenticated_console_peer();
         self.auth_state = AuthState::Start;
         let preconnect_logged = self.session_state.flush_blocked_logged_preconnect;
         self.session_state = SessionState::default();
@@ -4627,6 +4686,54 @@ impl<D: NetDevice> NetStack<D> {
         true
     }
 
+    fn poll_smoltcp_interface(&mut self, timestamp: Instant) -> PollResult {
+        self.interface.poll_maintenance(timestamp);
+        let mut result = PollResult::None;
+
+        // Keep one exact copied RX and its immediate socket egress in the same
+        // bounded device transaction. CYW43 may transfer the already-reserved
+        // paired queue slot across this boundary; every other device uses the
+        // default no-op hooks.
+        for _ in 0..MAX_CONSOLE_FRAMES_PER_POLL {
+            self.device.begin_smoltcp_rx_transaction();
+            let ingress = self.interface.poll_ingress_single(
+                timestamp,
+                self.device.as_mut(),
+                &mut self.sockets,
+            );
+            if ingress == PollIngressSingleResult::None {
+                self.device.end_smoltcp_rx_transaction();
+                break;
+            }
+            if ingress == PollIngressSingleResult::SocketStateChanged {
+                result = PollResult::SocketStateChanged;
+            }
+            if self
+                .interface
+                .poll_egress(timestamp, self.device.as_mut(), &mut self.sockets)
+                == PollResult::SocketStateChanged
+            {
+                result = PollResult::SocketStateChanged;
+            }
+            self.device.end_smoltcp_rx_transaction();
+        }
+
+        // No copied-RX authority survives into ordinary socket flushes. Keep
+        // the former repeated-egress behavior, bounded by the existing frame
+        // budget for one console poll.
+        for _ in 0..MAX_CONSOLE_FRAMES_PER_POLL {
+            match self
+                .interface
+                .poll_egress(timestamp, self.device.as_mut(), &mut self.sockets)
+            {
+                PollResult::None => break,
+                PollResult::SocketStateChanged => result = PollResult::SocketStateChanged,
+            }
+        }
+
+        result
+    }
+
     fn poll_smoltcp_once(&mut self, timestamp: Instant, now_ms: u64, label: &'static str) -> bool {
         let mut activity = self.expire_icmp_echo_if_due(now_ms);
         let icmp_echo_tx_pending_before = self
@@ -4636,9 +4743,7 @@ impl<D: NetDevice> NetStack<D> {
             != 0;
         let arp_tx_before = self.device.counters().arp_tx;
         self.bump_poll_counter();
-        let poll_result = self
-            .interface
-            .poll(timestamp, self.device.as_mut(), &mut self.sockets);
+        let poll_result = self.poll_smoltcp_interface(timestamp);
         activity |= poll_result != PollResult::None;
         self.update_icmp_echo_dispatch_state(now_ms, icmp_echo_tx_pending_before, arp_tx_before);
         activity |= self.service_icmp_echo(now_ms);
@@ -6106,9 +6211,7 @@ impl<D: NetDevice> NetStack<D> {
 
         if activity {
             self.bump_poll_counter();
-            let poll_result =
-                self.interface
-                    .poll(timestamp, self.device.as_mut(), &mut self.sockets);
+            let poll_result = self.poll_smoltcp_interface(timestamp);
             if poll_result != PollResult::None {
                 self.self_test.post_poll_flush_logs =
                     self.self_test.post_poll_flush_logs.saturating_add(1);
@@ -6251,9 +6354,7 @@ impl<D: NetDevice> NetStack<D> {
             }
 
             self.bump_poll_counter();
-            let poll_result =
-                self.interface
-                    .poll(timestamp, self.device.as_mut(), &mut self.sockets);
+            let poll_result = self.poll_smoltcp_interface(timestamp);
             if poll_result != PollResult::None {
                 activity = true;
             }
@@ -6976,6 +7077,8 @@ impl<D: NetDevice> NetStack<D> {
                     || !self.session_active
                     || peer_changed);
             if new_established {
+                #[cfg(feature = "kernel")]
+                Self::clear_cyw43_authenticated_console_peer();
                 if self.session_active {
                     if let Some(conn_id) = self.active_client_id {
                         Self::note_close_reason(
@@ -7258,6 +7361,22 @@ impl<D: NetDevice> NetStack<D> {
                                         self.active_client_id,
                                         AuthState::Attached,
                                     );
+                                    #[cfg(feature = "kernel")]
+                                    if !Self::publish_cyw43_authenticated_console_peer(
+                                        self.server.is_authenticated()
+                                            && self.auth_state == AuthState::Attached,
+                                        self.wifi_connection_generation,
+                                        self.active_client_id,
+                                        self.listen_port,
+                                        self.peer_endpoint,
+                                        socket,
+                                    ) {
+                                        warn!(
+                                            "[net-console] authenticated CYW43 peer publication rejected generation={} conn_id={}",
+                                            self.wifi_connection_generation,
+                                            conn_id,
+                                        );
+                                    }
                                     info!(
                                         target: "net-console",
                                         "[net-console] authenticated TCP session {} frame_bytes={} state={:?}",
@@ -8645,6 +8764,8 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
     fn inject_console_line(&mut self, _line: &str) {}
 
     fn reset(&mut self) {
+        #[cfg(feature = "kernel")]
+        Self::clear_cyw43_authenticated_console_peer();
         let reset_now_ms = self.last_now_ms.unwrap_or(0);
         self.reset_icmp_echo_socket("stack-reset", reset_now_ms);
         self.abort_console_socket_pair("stack-reset");
@@ -9459,6 +9580,19 @@ mod tests {
         TCP_STANDBY_TX_STORAGE_OWNER.store(0, Ordering::Release);
         TCP_STANDBY_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
         *TCP_STANDBY_TX_STORAGE_TAG_LABEL.lock() = None;
+    }
+
+    #[test]
+    fn console_tcp_socket_disables_delayed_ack() {
+        let rx = std::boxed::Box::leak(std::boxed::Box::new([0u8; 64]));
+        let tx = std::boxed::Box::leak(std::boxed::Box::new([0u8; 64]));
+        let socket = new_console_tcp_socket(rx, tx);
+
+        assert_eq!(
+            socket.ack_delay(),
+            None,
+            "interactive ACKs must remain in the receive-coupled TX poll",
+        );
     }
 
     #[test]

@@ -211,12 +211,28 @@ pub const DRIVER_RUNTIME_REJECT_SDIO_INVALID_RETAINED_PHASE: u32 = 0x5344_0009;
 pub const DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION: u32 = 0x5344_000a;
 /// A caller attempted the retired SDIO generation-commit operation.
 pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION: u32 = 0x5344_000b;
+/// The exact DPC source-W1C completed but host `CARD_INT` could not be
+/// condition-before-sleep rearmed or its crossing source could not be
+/// durably published.
+pub const DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED: u32 = 0x5344_000c;
+/// An exact event-bound DPC child remained pending after consuming its finite
+/// SDIO-owner service-lease slice budget.
+pub const DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_EXHAUSTED: u32 = 0x5344_000d;
+/// A command or descriptor carried a partial, mutated, or stale steady-service
+/// lease marker instead of one exact generation-bound owner lease.
+pub const DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_INVALID: u32 = 0x5344_000e;
 /// Maximum reciprocal SDIO actions retained by one immutable CYW43 parent command.
 ///
 /// Root uses the same bound to cap child-completion deadline renewals, so a
 /// multi-action Linux-shaped operation can outlive each legal child request
 /// without turning progress into an unbounded parent lease.
 pub const DRIVER_RUNTIME_CYW43_PARENT_MAX_SDIO_ACTIONS: u16 = 1_024;
+/// Exact HAL-operation budget for one urgent steady Ethernet TX parent lease.
+pub const DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS: u16 = 4;
+/// Exact frame budget for one urgent steady Ethernet TX parent lease.
+pub const DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES: u16 = 1;
+/// Exact byte budget for one urgent steady Ethernet TX parent lease.
+pub const DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES: u32 = 1_536;
 /// CYW43 operation: initialize the SDIO transport and firmware upload lane.
 pub const DRIVER_RUNTIME_CYW43_OP_TRANSPORT_INIT: u16 = 1;
 /// CYW43 operation: write a firmware chunk into dongle RAM.
@@ -277,6 +293,12 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
 /// CYW43 command flag: fence an association Join Function-2 transmit against
 /// a newly asserted DPC source at the final SDIO pre-issue boundary.
 pub const DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE: u16 = 1 << 5;
+/// CYW43 command flag: retain the exact urgent post-Gate-8 Ethernet TX child
+/// under one finite, generation-bound SDIO service lease.
+///
+/// Root may set this only for a latency-sensitive steady-data-plane request;
+/// the CYW43 runtime propagates it solely to that parent's Function-2 write.
+pub const DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE: u16 = 1 << 6;
 /// CYW43 positive detail: a control Function 2 TX retry recovered a transfer fault.
 pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x5801;
 /// CYW43 positive detail: an event/data frame interrupted a retained control exchange.
@@ -549,6 +571,19 @@ pub const DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET: u16 = 40;
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES: u16 = 24;
 /// Magic value for a retained-command continuation grant.
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
+/// Fixed offset of exact progress for a grant-free steady-service lease.
+///
+/// A steady lease and a continuation grant are mutually exclusive authority
+/// modes for one immutable command, so their records deliberately share the
+/// same fixed 24-byte slot. Distinct magic values make cross-mode samples fail
+/// closed.
+pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET: u16 =
+    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET;
+/// Bytes in one exact steady-service progress record.
+pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES: u16 =
+    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
+/// Magic value for a steady-service progress record.
+pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC: u32 = 0x4452_5350;
 /// Bytes in the runtime progress marker.
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 /// Runtime progress-marker magic.
@@ -1939,6 +1974,73 @@ impl DriverRuntimeContinuationGrant {
     }
 }
 
+/// Exact monotonic owner progress for one grant-free steady-service command.
+///
+/// `committed_slice` is published last. Readers accept the record only when
+/// two reads of that word agree, it equals `service_slice`, and the complete
+/// request sequence/fingerprint/generation identity matches their immutable
+/// retained parent or child ticket. Rewriting the shared slot cannot therefore
+/// extend another command's inactivity deadline.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSteadyServiceProgress {
+    /// Fixed [`DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC`] discriminator.
+    pub magic: u32,
+    /// Immutable retained command sequence.
+    pub request_sequence: u32,
+    /// Fingerprint of every command action field except the sequence.
+    pub action_fingerprint: u32,
+    /// Producer-owned runtime generation for stale-progress rejection.
+    pub generation: u32,
+    /// Nonzero monotonically increasing completed service-slice count.
+    pub service_slice: u32,
+    /// Sequence-last commit copy of [`Self::service_slice`].
+    pub committed_slice: u32,
+}
+
+impl DriverRuntimeSteadyServiceProgress {
+    /// Return a byte-zero, uncommitted progress record.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: 0,
+            request_sequence: 0,
+            action_fingerprint: 0,
+            generation: 0,
+            service_slice: 0,
+            committed_slice: 0,
+        }
+    }
+
+    /// Build one exact record whose commit copy is published last.
+    #[must_use]
+    pub const fn new(
+        request_sequence: u32,
+        action_fingerprint: u32,
+        generation: u32,
+        service_slice: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
+            request_sequence,
+            action_fingerprint,
+            generation,
+            service_slice,
+            committed_slice: service_slice,
+        }
+    }
+
+    /// Return whether the record is structurally committed.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC
+            && self.request_sequence != 0
+            && self.generation != 0
+            && self.service_slice != 0
+            && self.committed_slice == self.service_slice
+    }
+}
+
 const fn driver_runtime_continuation_fingerprint_mix(mut hash: u32, value: u32) -> u32 {
     hash ^= value;
     hash = hash.wrapping_mul(16_777_619);
@@ -2021,6 +2123,13 @@ pub const DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR: u64 = 0x70e0_1000;
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR: u64 = 0x70e0_0000;
 /// Command flag: root delivered this turn with send-only IPC and expects no reply cap.
 pub const DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY: u16 = 1 << 13;
+/// Command flag: this immutable, fingerprinted command carries typed authority
+/// for one finite steady-data-plane service lease.
+///
+/// The producer must pair this with the role-specific descriptor marker. The
+/// linked runtimes propagate it from an admitted urgent CYW43 parent to its
+/// exact SDIO child; a descriptor marker alone grants no continuation power.
+pub const DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE: u16 = 1 << 11;
 
 /// Resource range kind: memory-mapped device registers.
 pub const DRIVER_RUNTIME_RESOURCE_KIND_MMIO: u16 = 1;
@@ -2583,6 +2692,31 @@ impl DriverRuntimeSdioCommandDescriptor {
     /// HOST_CONFIG carries a read-back CCCR `BUS_INTERFACE_CONTROL` byte in
     /// `reserved[15:8]`.
     pub const FLAG_HOST_CCCR_INTERFACE_VALID: u16 = 1 << 6;
+    /// A post-activation CYW43 steady-data-plane child may retain this exact
+    /// SDIO request
+    /// across bounded owner slices without publishing a fresh continuation
+    /// grant for every internal controller phase.
+    ///
+    /// The command still names one operation, one generation, and one typed
+    /// binding: either a DPC event or an explicitly marked urgent Ethernet TX
+    /// parent. This flag is invalid for boot, host-config, card-command, and
+    /// DPC-activation descriptors.
+    pub const FLAG_STEADY_SERVICE_LEASE: u16 = 1 << 7;
+    /// This exact DPC child clears the initial CYW43 SDIO-core interrupt
+    /// status and requires the sole SDIO owner to rearm host `CARD_INT` after
+    /// the successful W1C transfer and before publishing child completion.
+    ///
+    /// The marker is valid only on the event-bound, four-byte Function-1
+    /// backplane write that carries [`Self::FLAG_STEADY_SERVICE_LEASE`].
+    pub const FLAG_DPC_SOURCE_W1C_REARM: u16 = 1 << 8;
+    /// This exact Function-2 write is the child of an explicitly marked,
+    /// urgent post-Gate-8 Ethernet TX parent and may use the same finite SDIO
+    /// service lease as an event-bound DPC child.
+    ///
+    /// The child remains identity-bound to its immutable parent sequence and
+    /// shared generation; control/EAPOL, boot, and bulk paths cannot infer the
+    /// authority from Function 2 or operation number alone.
+    pub const FLAG_STEADY_TX_SERVICE_LEASE: u16 = 1 << 9;
 
     /// Empty descriptor.
     #[must_use]
@@ -2626,6 +2760,9 @@ impl DriverRuntimeSdioCommandDescriptor {
         let cmd53 = self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_READ
             || self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
         let pre_tx_dpc_fence = self.flags & Self::FLAG_PRE_TX_DPC_FENCE != 0;
+        let steady_service_lease = self.flags & Self::FLAG_STEADY_SERVICE_LEASE != 0;
+        let dpc_source_w1c_rearm = self.flags & Self::FLAG_DPC_SOURCE_W1C_REARM != 0;
+        let steady_tx_service_lease = self.flags & Self::FLAG_STEADY_TX_SERVICE_LEASE != 0;
         let host_cccr_speed_valid = self.flags & Self::FLAG_HOST_CCCR_SPEED_VALID != 0;
         let host_cccr_interface_valid = self.flags & Self::FLAG_HOST_CCCR_INTERFACE_VALID != 0;
         let host_cccr_speed = (self.reserved & 0xff) as u8;
@@ -2696,6 +2833,22 @@ impl DriverRuntimeSdioCommandDescriptor {
                     && self.reserved == 0))
             && (!pre_tx_dpc_fence
                 || (self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE && self.function == 2))
+            && (!steady_service_lease || ((cmd52 || cmd53) && self.reserved == 0))
+            && (!steady_tx_service_lease
+                || (steady_service_lease
+                    && self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                    && self.function == 2
+                    && !dpc_source_w1c_rearm
+                    && self.reserved == 0))
+            && (!dpc_source_w1c_rearm
+                || (steady_service_lease
+                    && self.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                    && self.function == 1
+                    && self.len == 4
+                    && self.block_size == 0
+                    && self.block_count == 0
+                    && self.flags & Self::FLAG_INCREMENT != 0
+                    && self.reserved == 0))
             && (!cmd52 || (self.len == 1 && self.block_count == 0 && self.block_size == 0))
             && (!cmd53
                 || ((self.len != 0 || self.block_count != 0)
@@ -2793,6 +2946,9 @@ impl DriverRuntimeCyw43CommandDescriptor {
                         | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
                         | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE)
                     == 0
+            }
+            DRIVER_RUNTIME_CYW43_OP_ETH_TX => {
+                self.flags & !DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE == 0
             }
             DRIVER_RUNTIME_CYW43_OP_RX_POLL => {
                 self.flags
@@ -3847,8 +4003,24 @@ mod tests {
     fn continuation_grant_fits_reserved_command_slot_and_fingerprints_actions() {
         assert_eq!(core::mem::size_of::<DriverRuntimeContinuationGrant>(), 24);
         assert_eq!(core::mem::align_of::<DriverRuntimeContinuationGrant>(), 4);
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSteadyServiceProgress>(),
+            24
+        );
+        assert_eq!(
+            core::mem::align_of::<DriverRuntimeSteadyServiceProgress>(),
+            4
+        );
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, 40);
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, 24);
+        assert_eq!(
+            DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+        );
         assert!(
             usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
                 + core::mem::size_of::<DriverRuntimeContinuationGrant>()
@@ -3861,6 +4033,14 @@ mod tests {
         assert_eq!(
             core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id),
             20
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeSteadyServiceProgress, service_slice),
+            16,
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeSteadyServiceProgress, committed_slice),
+            20,
         );
 
         let fingerprint =
@@ -4798,6 +4978,115 @@ mod tests {
     }
 
     #[test]
+    fn sdio_steady_service_lease_is_scoped_to_typed_data_plane_children() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_READ,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0,
+            data_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD52_READ;
+        descriptor.function = 1;
+        descriptor.addr = 0x1000;
+        descriptor.len = 1;
+        descriptor.block_size = 0;
+        descriptor.block_count = 0;
+        assert!(descriptor.valid());
+        descriptor.reserved = 1;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE,
+            addr: 0x4359_5302,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE,
+            timeout_us: 1_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
+            addr: 50_000_000,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE,
+            timeout_us: 1_000,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0,
+            data_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            len: 64,
+            block_size: 64,
+            block_count: 1,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE
+                | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+        descriptor.flags &= !DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE;
+        assert!(!descriptor.valid());
+        descriptor.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE;
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_READ;
+        assert!(!descriptor.valid());
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
+        descriptor.function = 1;
+        assert!(!descriptor.valid());
+        descriptor.function = 2;
+        descriptor.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_DPC_SOURCE_W1C_REARM;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
+    fn sdio_dpc_source_w1c_rearm_requires_exact_event_bound_write_shape() {
+        let mut descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 1,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: 0x10_020,
+            data_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            len: 4,
+            block_size: 0,
+            block_count: 0,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE
+                | DriverRuntimeSdioCommandDescriptor::FLAG_DPC_SOURCE_W1C_REARM,
+            reserved: 0,
+            timeout_us: 1_000,
+        };
+        assert!(descriptor.valid());
+
+        descriptor.flags &= !DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE;
+        assert!(!descriptor.valid());
+        descriptor.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE;
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_READ;
+        assert!(!descriptor.valid());
+        descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE;
+        descriptor.function = 2;
+        assert!(!descriptor.valid());
+        descriptor.function = 1;
+        descriptor.len = 8;
+        assert!(!descriptor.valid());
+        descriptor.len = 4;
+        descriptor.flags &= !DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT;
+        assert!(!descriptor.valid());
+    }
+
+    #[test]
     fn sdio_command_descriptor_validates_host_config_bounds() {
         let mut descriptor = DriverRuntimeSdioCommandDescriptor {
             op: DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG,
@@ -5100,7 +5389,19 @@ mod tests {
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
         assert!(descriptor.valid());
+        descriptor.flags = DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE;
+        assert!(descriptor.valid());
         descriptor.payload_offset = DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE + 1;
+        assert!(!descriptor.valid());
+
+        descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: 64,
+            total_len: 64,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
         assert!(!descriptor.valid());
     }
 

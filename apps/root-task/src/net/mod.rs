@@ -1027,6 +1027,16 @@ pub trait NetDevice: Device {
     /// Notify the driver client that the stack has a configured IPv4 address.
     fn set_assigned_ipv4(&mut self, _ip: Ipv4Address) {}
 
+    /// Begin one exact smoltcp copied-RX to immediate-egress transaction.
+    ///
+    /// Most devices need no extra state. A device with a receive-coupled TX
+    /// permit may retain it only until the matching end hook.
+    fn begin_smoltcp_rx_transaction(&mut self) {}
+
+    /// Revoke and release any receive-coupled TX permit not consumed by the
+    /// immediate egress paired with the current ingress packet.
+    fn end_smoltcp_rx_transaction(&mut self) {}
+
     /// Total TX drops recorded by the driver.
     fn tx_drop_count(&self) -> u32;
 

@@ -26,17 +26,18 @@ use crate::drivers::cyw43_host_eapol::{
     HostEapolState, ETHER_ADDR_LEN, ETH_HEADER_LEN, ETH_P_EAPOL, WPA2_PSK_CCMP_RSN_IE,
     WSEC_KEY_PAYLOAD_LEN,
 };
+#[cfg(feature = "kernel")]
+use crate::hal::driver_task::{
+    Cyw43SdioNetworkPriorityLeasePhase, DriverServiceBudget, DriverServiceBudgetError,
+    DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot,
+    CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
+};
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
     DriverTaskCompletionCode, DriverTaskCompletionRecord, DriverTaskContract, DriverTaskFaultCode,
     DriverTaskHotPath, DriverTaskStagingSegment, CYW43_WIFI_DRIVER_TASK_CONTRACT,
     DRIVER_TASK_RING_FLAG_ONE_WAY, DRIVER_TASK_RING_FLAG_QUIET_HOT_PATH,
     GENET_DRIVER_TASK_CONTRACT, MAX_DRIVER_TASK_FRAME_BYTES, SDIO_HOST_DRIVER_TASK_CONTRACT,
-};
-#[cfg(feature = "kernel")]
-use crate::hal::driver_task::{
-    DriverServiceBudget, DriverServiceBudgetError, DriverTaskRetainedServiceTurn,
-    DriverTaskRingProgressSnapshot,
 };
 use crate::hal::{HalError, Hardware};
 use crate::net::{
@@ -67,6 +68,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE,
     DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD,
     DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
+    DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
     DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT,
@@ -651,6 +653,22 @@ static CYW43_BOOTSTRAP_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ASSOCIATED: AtomicU32 = AtomicU32::new(0);
 static CYW43_LINK_UP: AtomicU32 = AtomicU32::new(0);
 static CYW43_CONNECTION_EPOCH: AtomicU32 = AtomicU32::new(0);
+// NetStack is the sole authentication authority. It publishes one exact,
+// immutable active-peer identity here only after authentication succeeds so
+// the CYW43 TX hot path can distinguish an authenticated standalone response
+// from arbitrary traffic that merely spoofs the console source port.
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_TUPLE: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_GENERATION: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_PAIR_EPOCH: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_PHYSICAL_EPOCH: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_AUTHENTICATED_CONSOLE_PEER_CONNECTION_ID: AtomicU64 = AtomicU64::new(0);
 static CYW43_GENERATION_RECOVERY_ACTIVE: AtomicU32 = AtomicU32::new(0);
 static CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH: AtomicU32 = AtomicU32::new(0);
 static CYW43_DEFERRED_RECOVERY: Mutex<Option<Cyw43DeferredRecovery>> = Mutex::new(None);
@@ -7365,6 +7383,7 @@ fn invalidate_cyw43_data_handoff() {
     CYW43_DATA_HANDOFF_COMMIT_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_DATA_HANDOFF_BASELINE_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_GATE8_PUBLICATION_EPOCH_TOKEN.store(0, Ordering::Release);
+    clear_cyw43_authenticated_console_peer();
     clear_cyw43_data_rx_lifetime_cursor();
     CYW43_PENDING_RX_DROP_EPOCH_TOKEN.store(0, Ordering::Release);
     let mut baseline = CYW43_DATA_HANDOFF_BASELINE.lock();
@@ -8353,9 +8372,7 @@ impl Cyw43TerminalDrainCursor {
             Cyw43TerminalDrainOwner::HostEapolTx(pending) => {
                 cyw43_data_tx_descriptor(pending.len as usize)
             }
-            Cyw43TerminalDrainOwner::DataTx(pending) => {
-                cyw43_data_tx_descriptor(pending.len as usize)
-            }
+            Cyw43TerminalDrainOwner::DataTx(pending) => cyw43_pending_data_tx_descriptor(&pending),
             Cyw43TerminalDrainOwner::Maintenance(pending) => pending.descriptor,
             Cyw43TerminalDrainOwner::Bootstrap(ticket) => ticket.descriptor,
         }
@@ -10685,6 +10702,19 @@ fn run_driver_task_net_service_retained_turn_staged(
     )
 }
 
+#[cfg(feature = "kernel")]
+fn run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> DriverTaskRetainedServiceTurn {
+    crate::hal::driver_task::run_driver_task_ring_service_retained_urgent_cyw43_tx_turn_staged(
+        contract,
+        command,
+        staging_segments,
+    )
+}
+
 #[cfg(not(feature = "kernel"))]
 fn run_driver_task_net_service(
     _contract: DriverTaskContract,
@@ -11882,7 +11912,7 @@ fn fence_cyw43_retained_action_before_association_generation() -> bool {
             pending.generation,
             Cyw43RecoveryCause::DataTx,
             "cyw43-net-data-tx",
-            cyw43_data_tx_descriptor(usize::from(pending.len)),
+            cyw43_pending_data_tx_descriptor(&pending),
             pending.payload_digest,
             pending.ticket_id,
             0,
@@ -12046,8 +12076,16 @@ fn cyw43_retained_descriptor_active_state_with_payload(
     payload: &[u8],
     expected_request: Option<u32>,
 ) -> Option<(u32, bool)> {
-    let material =
-        cyw43_retained_command_material(contract, owner_generation, descriptor, payload).ok()?;
+    let steady_fast_lane =
+        descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0;
+    let material = cyw43_retained_command_material(
+        contract,
+        owner_generation,
+        descriptor,
+        payload,
+        steady_fast_lane,
+    )
+    .ok()?;
     let active = if material.payload_staged {
         let staging_segments = [
             DriverTaskStagingSegment::shared(payload, 0),
@@ -16442,8 +16480,13 @@ fn cyw43_mac_is_unicast(mac: [u8; 6]) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_tcp_dst_is_control_or_proof_port(port: u16) -> bool {
+fn cyw43_tcp_port_is_control_or_proof_port(port: u16) -> bool {
     port == COHESIX_TCP_CONSOLE_PORT || port == COHSH_TCP_PORT || port == TCP_SMOKE_PORT
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_tcp_port_is_authenticated_console_port(port: u16) -> bool {
+    port == COHESIX_TCP_CONSOLE_PORT || port == COHSH_TCP_PORT
 }
 
 #[cfg(feature = "kernel")]
@@ -16485,7 +16528,7 @@ fn record_cyw43_post_dhcp_rx_progress(
             CYW43_POST_DHCP_RX_ICMP.fetch_add(1, Ordering::AcqRel);
         }
         if info.ip_proto == CYW43_IP_PROTO_TCP
-            && cyw43_tcp_dst_is_control_or_proof_port(info.l4_dst)
+            && cyw43_tcp_port_is_control_or_proof_port(info.l4_dst)
         {
             CYW43_POST_DHCP_RX_TCP.fetch_add(1, Ordering::AcqRel);
         }
@@ -18402,6 +18445,7 @@ fn advance_cyw43_host_eapol_tx_submit(
             contract,
             pending.connection_epoch,
             &pending.frame[..usize::from(pending.len)],
+            false,
         );
         if let Some(completion) =
             completion.filter(|record| driver_task_tx_completion_submitted(*record))
@@ -21106,6 +21150,7 @@ fn service_cyw43_pair_terminal_owner_turn(
         descriptor,
         payload,
         Cyw43LogicalControlAdmissionMode::ExactIssuedTerminalDrain,
+        false,
     ) {
         Ok(turn) => turn,
         Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
@@ -23019,6 +23064,247 @@ struct DriverTaskNetPendingRxToken {
     token: DriverTaskNetRxToken,
 }
 
+/// Exact post-Gate-8 lifetime that admitted one urgent steady op7 cadence.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43SteadyTxFastLaneIdentity {
+    generation: u32,
+    pair_epoch: u64,
+    physical_lifetime_epoch: u32,
+    authenticated_console_peer: Option<Cyw43AuthenticatedConsolePeer>,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SteadyTxFastLaneIdentity {
+    fn capture(generation: u32) -> Option<Self> {
+        let (pair_epoch, physical_lifetime_epoch) = cyw43_data_rx_lifetime_identity(generation)?;
+        Some(Self {
+            generation,
+            pair_epoch,
+            physical_lifetime_epoch,
+            authenticated_console_peer: None,
+        })
+    }
+
+    fn capture_authenticated_console(
+        generation: u32,
+        peer: Cyw43AuthenticatedConsolePeer,
+    ) -> Option<Self> {
+        (peer.generation == generation && peer.authority_current()).then_some(Self {
+            generation: peer.generation,
+            pair_epoch: peer.pair_epoch,
+            physical_lifetime_epoch: peer.physical_lifetime_epoch,
+            authenticated_console_peer: Some(peer),
+        })
+    }
+
+    fn lifetime_current(self) -> bool {
+        if self.generation == 0
+            || self.pair_epoch == 0
+            || self.physical_lifetime_epoch == 0
+            || CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != self.generation
+            || CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) != self.pair_epoch
+            || CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire)
+                != self.physical_lifetime_epoch
+            || !cyw43_data_consumer_open_for_generation(self.generation)
+        {
+            return false;
+        }
+        // A coordinated lifetime cut clears the bound epoch and Gate-8
+        // publication before ordinary service can resume. Recheck the root
+        // atomics around one acquire fence without adding shared-record cache
+        // maintenance to every steady TCP turn.
+        core::sync::atomic::fence(Ordering::Acquire);
+        CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) == self.generation
+            && CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) == self.pair_epoch
+            && CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire)
+                == self.physical_lifetime_epoch
+            && cyw43_data_consumer_open_for_generation(self.generation)
+    }
+
+    fn admission_current(self) -> bool {
+        self.lifetime_current()
+            && self
+                .authenticated_console_peer
+                .is_none_or(Cyw43AuthenticatedConsolePeer::authority_current)
+    }
+
+    fn current(self) -> bool {
+        self.admission_current()
+    }
+}
+
+/// Exact authenticated active-console peer admitted for standalone CYW43 TX.
+///
+/// Paired-RX responses do not use this record: their provenance is carried by
+/// the receive-coupled token. This identity exists only for later standalone
+/// response flushes and is rebound for every console connection and complete
+/// CYW43 logical/pair/physical lifetime.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43AuthenticatedConsolePeer {
+    generation: u32,
+    pair_epoch: u64,
+    physical_lifetime_epoch: u32,
+    connection_id: u64,
+    local_port: u16,
+    remote_ipv4: u32,
+    remote_port: u16,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43AuthenticatedConsolePeer {
+    fn snapshot() -> Option<Self> {
+        let sequence = CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE.load(Ordering::Acquire);
+        if sequence & 1 != 0 {
+            return None;
+        }
+        let tuple = CYW43_AUTHENTICATED_CONSOLE_PEER_TUPLE.load(Ordering::Relaxed);
+        let peer = Self {
+            generation: CYW43_AUTHENTICATED_CONSOLE_PEER_GENERATION.load(Ordering::Relaxed),
+            pair_epoch: CYW43_AUTHENTICATED_CONSOLE_PEER_PAIR_EPOCH.load(Ordering::Relaxed),
+            physical_lifetime_epoch: CYW43_AUTHENTICATED_CONSOLE_PEER_PHYSICAL_EPOCH
+                .load(Ordering::Relaxed),
+            connection_id: CYW43_AUTHENTICATED_CONSOLE_PEER_CONNECTION_ID.load(Ordering::Relaxed),
+            local_port: ((tuple >> 16) & u64::from(u16::MAX)) as u16,
+            remote_ipv4: (tuple >> 32) as u32,
+            remote_port: (tuple & u64::from(u16::MAX)) as u16,
+        };
+        core::sync::atomic::fence(Ordering::Acquire);
+        let sequence_after = CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE.load(Ordering::Acquire);
+        (sequence == sequence_after
+            && sequence_after & 1 == 0
+            && tuple != 0
+            && peer.connection_id != 0)
+            .then_some(peer)
+    }
+
+    fn packed_tuple(self) -> u64 {
+        (u64::from(self.remote_ipv4) << 32)
+            | (u64::from(self.local_port) << 16)
+            | u64::from(self.remote_port)
+    }
+
+    fn lifetime_current(self) -> bool {
+        self.connection_id != 0
+            && cyw43_tcp_port_is_authenticated_console_port(self.local_port)
+            && Cyw43SteadyTxFastLaneIdentity {
+                generation: self.generation,
+                pair_epoch: self.pair_epoch,
+                physical_lifetime_epoch: self.physical_lifetime_epoch,
+                authenticated_console_peer: None,
+            }
+            .lifetime_current()
+    }
+
+    fn authority_current(self) -> bool {
+        self.lifetime_current() && Self::snapshot() == Some(self)
+    }
+
+    fn matches_outgoing(self, local_port: u16, remote_ipv4: [u8; 4], remote_port: u16) -> bool {
+        self.authority_current()
+            && self.local_port == local_port
+            && self.remote_ipv4 == u32::from_be_bytes(remote_ipv4)
+            && self.remote_port == remote_port
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn begin_cyw43_authenticated_console_peer_write() -> u32 {
+    loop {
+        let sequence = CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE.load(Ordering::Acquire);
+        if sequence & 1 != 0 {
+            core::hint::spin_loop();
+            continue;
+        }
+        let write_sequence = sequence.wrapping_add(1);
+        if CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE
+            .compare_exchange(
+                sequence,
+                write_sequence,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        {
+            return write_sequence;
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn write_cyw43_authenticated_console_peer(peer: Option<Cyw43AuthenticatedConsolePeer>) {
+    let write_sequence = begin_cyw43_authenticated_console_peer_write();
+    CYW43_AUTHENTICATED_CONSOLE_PEER_GENERATION
+        .store(peer.map_or(0, |peer| peer.generation), Ordering::Relaxed);
+    CYW43_AUTHENTICATED_CONSOLE_PEER_PAIR_EPOCH
+        .store(peer.map_or(0, |peer| peer.pair_epoch), Ordering::Relaxed);
+    CYW43_AUTHENTICATED_CONSOLE_PEER_PHYSICAL_EPOCH.store(
+        peer.map_or(0, |peer| peer.physical_lifetime_epoch),
+        Ordering::Relaxed,
+    );
+    CYW43_AUTHENTICATED_CONSOLE_PEER_CONNECTION_ID
+        .store(peer.map_or(0, |peer| peer.connection_id), Ordering::Relaxed);
+    CYW43_AUTHENTICATED_CONSOLE_PEER_TUPLE.store(
+        peer.map_or(0, Cyw43AuthenticatedConsolePeer::packed_tuple),
+        Ordering::Relaxed,
+    );
+    CYW43_AUTHENTICATED_CONSOLE_PEER_SEQUENCE
+        .store(write_sequence.wrapping_add(1), Ordering::Release);
+}
+
+/// Publish the exact active authenticated TCP peer for standalone CYW43 TX.
+///
+/// NetStack calls this only from its authoritative `Authenticated` event and
+/// before flushing the authenticated response. Invalid or changing lifetime
+/// evidence clears any prior peer and fails closed.
+#[cfg(feature = "kernel")]
+pub(crate) fn publish_cyw43_authenticated_console_peer(
+    generation: u32,
+    connection_id: u64,
+    local_port: u16,
+    remote_ipv4: [u8; 4],
+    remote_port: u16,
+) -> bool {
+    let Some((pair_epoch, physical_lifetime_epoch)) = cyw43_data_rx_lifetime_identity(generation)
+    else {
+        clear_cyw43_authenticated_console_peer();
+        return false;
+    };
+    if connection_id == 0
+        || !cyw43_tcp_port_is_authenticated_console_port(local_port)
+        || remote_port == 0
+        || remote_ipv4 == [0; 4]
+        || remote_ipv4 == [0xff; 4]
+        || remote_ipv4[0] & 0xf0 == 0xe0
+    {
+        clear_cyw43_authenticated_console_peer();
+        return false;
+    }
+    let peer = Cyw43AuthenticatedConsolePeer {
+        generation,
+        pair_epoch,
+        physical_lifetime_epoch,
+        connection_id,
+        local_port,
+        remote_ipv4: u32::from_be_bytes(remote_ipv4),
+        remote_port,
+    };
+    write_cyw43_authenticated_console_peer(Some(peer));
+    if peer.authority_current() {
+        true
+    } else {
+        clear_cyw43_authenticated_console_peer();
+        false
+    }
+}
+
+/// Revoke standalone authenticated-console lease eligibility immediately.
+#[cfg(feature = "kernel")]
+pub(crate) fn clear_cyw43_authenticated_console_peer() {
+    write_cyw43_authenticated_console_peer(None);
+}
+
 /// Exact Ethernet payload retained while one CYW43 runtime-ring transaction
 /// advances across ordinary EventPump turns.
 #[cfg(feature = "kernel")]
@@ -23030,6 +23316,8 @@ struct Cyw43PendingDataTx {
     frame: [u8; MAX_FRAME_LEN],
     len: u16,
     payload_digest: Cyw43PayloadDigest,
+    urgent: bool,
+    steady_fast_lane: Option<Cyw43SteadyTxFastLaneIdentity>,
     request: Option<u32>,
     /// True once any child-runtime ETH_TX cursor has accepted or advanced this
     /// immutable frame, even when an Idle/FrameReady completion released the
@@ -23259,6 +23547,25 @@ const CYW43_DATA_TX_SERVICE_BUDGET_FRAMES: u16 = 1;
 #[cfg(feature = "kernel")]
 const CYW43_DATA_TX_SERVICE_BUDGET_BYTES: u32 = MAX_FRAME_LEN as u32;
 
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SteadyTxLeaseProvenance {
+    PairedRx,
+    AuthenticatedConsole(Cyw43AuthenticatedConsolePeer),
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SteadyTxLeaseProvenance {
+    fn capture(self, generation: u32) -> Option<Cyw43SteadyTxFastLaneIdentity> {
+        match self {
+            Self::PairedRx => Cyw43SteadyTxFastLaneIdentity::capture(generation),
+            Self::AuthenticatedConsole(peer) => {
+                Cyw43SteadyTxFastLaneIdentity::capture_authenticated_console(generation, peer)
+            }
+        }
+    }
+}
+
 /// One immutable, never-issued frame waiting for the sole active op7 owner.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -23270,6 +23577,10 @@ struct Cyw43QueuedDataTx {
     len: u16,
     payload_digest: Cyw43PayloadDigest,
     accepted_by_caller: bool,
+    /// Queue-order priority is broader than service-lease authority. Only an
+    /// exact paired-RX response or the immutable authenticated peer captured
+    /// at enqueue may carry provenance into post-Gate-8 steady op7 admission.
+    steady_lease_provenance: Option<Cyw43SteadyTxLeaseProvenance>,
     urgent: bool,
 }
 
@@ -23353,6 +23664,151 @@ struct Cyw43DataTxQueueReservation {
     generation: u32,
     reservation_epoch: u32,
     paired_rx: bool,
+}
+
+/// Exact reverse IPv4/TCP tuple allowed to inherit one copied-RX permit.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RxCoupledTcpReply {
+    source_ipv4: [u8; 4],
+    destination_ipv4: [u8; 4],
+    source_port: u16,
+    destination_port: u16,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43RxCoupledTcpReply {
+    fn from_received_frame(frame: &[u8]) -> Option<Self> {
+        if cyw43_ethertype(frame) != Some(CYW43_ETH_P_IPV4) {
+            return None;
+        }
+        let ip_header_len = cyw43_ipv4_header_len(frame)?;
+        let ip_offset = ETH_HEADER_LEN;
+        let total_len = usize::from(cyw43_get_u16_be(frame, ip_offset + 2)?);
+        if total_len < ip_header_len
+            || frame.len() < ip_offset.saturating_add(total_len)
+            || frame.get(ip_offset + 9).copied() != Some(CYW43_IP_PROTO_TCP)
+            || cyw43_get_u16_be(frame, ip_offset + 6).is_none_or(|value| value & 0xbfff != 0)
+        {
+            return None;
+        }
+        let tcp_offset = ip_offset + ip_header_len;
+        let tcp_header_len = usize::from(*frame.get(tcp_offset + 12)? >> 4) * 4;
+        if tcp_header_len < 20 || total_len.saturating_sub(ip_header_len) < tcp_header_len {
+            return None;
+        }
+
+        let mut source_ipv4 = [0u8; 4];
+        source_ipv4.copy_from_slice(frame.get(ip_offset + 16..ip_offset + 20)?);
+        let mut destination_ipv4 = [0u8; 4];
+        destination_ipv4.copy_from_slice(frame.get(ip_offset + 12..ip_offset + 16)?);
+        Some(Self {
+            source_ipv4,
+            destination_ipv4,
+            source_port: cyw43_get_u16_be(frame, tcp_offset + 2)?,
+            destination_port: cyw43_get_u16_be(frame, tcp_offset)?,
+        })
+    }
+
+    fn matches_frame(self, frame: &[u8]) -> bool {
+        if cyw43_ethertype(frame) != Some(CYW43_ETH_P_IPV4) {
+            return false;
+        }
+        let Some(ip_header_len) = cyw43_ipv4_header_len(frame) else {
+            return false;
+        };
+        let ip_offset = ETH_HEADER_LEN;
+        let Some(total_len) = cyw43_get_u16_be(frame, ip_offset + 2).map(usize::from) else {
+            return false;
+        };
+        if total_len < ip_header_len
+            || frame.len() < ip_offset.saturating_add(total_len)
+            || frame.get(ip_offset + 9).copied() != Some(CYW43_IP_PROTO_TCP)
+            || frame.get(ip_offset + 12..ip_offset + 16) != Some(self.source_ipv4.as_slice())
+            || frame.get(ip_offset + 16..ip_offset + 20) != Some(self.destination_ipv4.as_slice())
+            || cyw43_get_u16_be(frame, ip_offset + 6).is_none_or(|value| value & 0xbfff != 0)
+        {
+            return false;
+        }
+        let tcp_offset = ip_offset + ip_header_len;
+        let Some(tcp_header_len) = frame
+            .get(tcp_offset + 12)
+            .map(|value| usize::from(value >> 4) * 4)
+        else {
+            return false;
+        };
+        tcp_header_len >= 20
+            && total_len.saturating_sub(ip_header_len) >= tcp_header_len
+            && cyw43_get_u16_be(frame, tcp_offset) == Some(self.source_port)
+            && cyw43_get_u16_be(frame, tcp_offset + 2) == Some(self.destination_port)
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43TransferredPairedTx {
+    reservation: Cyw43DataTxQueueReservation,
+    reply: Cyw43RxCoupledTcpReply,
+}
+
+/// One bounded smoltcp ingress-to-egress transaction.
+///
+/// The receive token owns the paired queue reservation first. If smoltcp does
+/// not dispatch a direct response, dropping that token transfers the same
+/// reservation here. Only the exact reverse TCP tuple may consume it; ending
+/// the transaction releases any unconsumed permit before standalone egress.
+#[cfg(feature = "kernel")]
+#[derive(Debug, Default)]
+struct Cyw43SmoltcpRxTransaction {
+    active: bool,
+    transferred: Option<Cyw43TransferredPairedTx>,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SmoltcpRxTransaction {
+    fn begin(&mut self) {
+        self.end();
+        self.active = true;
+    }
+
+    fn transfer(
+        &mut self,
+        reservation: Cyw43DataTxQueueReservation,
+        reply: Cyw43RxCoupledTcpReply,
+    ) -> Result<(), Cyw43DataTxQueueReservation> {
+        if !self.active || self.transferred.is_some() || !reservation.paired_rx {
+            return Err(reservation);
+        }
+        self.transferred = Some(Cyw43TransferredPairedTx { reservation, reply });
+        Ok(())
+    }
+
+    fn transfer_available(&self) -> bool {
+        self.active && self.transferred.is_some()
+    }
+
+    fn take_matching(&mut self, frame: &[u8]) -> Option<Cyw43DataTxQueueReservation> {
+        let transferred = self.transferred?;
+        if !self.active || !transferred.reply.matches_frame(frame) {
+            return None;
+        }
+        self.transferred = None;
+        Some(transferred.reservation)
+    }
+
+    fn end(&mut self) {
+        if let Some(transferred) = self.transferred.take() {
+            release_cyw43_data_tx_queue_slot(transferred.reservation);
+        }
+        self.active = false;
+    }
+}
+
+#[cfg(feature = "kernel")]
+impl Drop for Cyw43SmoltcpRxTransaction {
+    fn drop(&mut self) {
+        self.end();
+    }
 }
 
 /// Passive generation-scoped state for the bounded CYW43 TX ingress queue.
@@ -23473,27 +23929,42 @@ impl phy::RxToken for DriverTaskNetRxToken {
 }
 
 /// TX token that stages one frame into the driver-task shared ring.
-pub struct DriverTaskNetTxToken {
+pub struct DriverTaskNetTxToken<'a> {
     contract: DriverTaskContract,
     hot_path: DriverTaskHotPath,
     tx_submitted: &'static AtomicU32,
     tx_dropped: &'static AtomicU32,
+    _lifetime: core::marker::PhantomData<&'a mut ()>,
     #[cfg(feature = "kernel")]
     cyw43_queue_reservation: Option<Cyw43DataTxQueueReservation>,
+    #[cfg(feature = "kernel")]
+    cyw43_rx_transaction: Option<&'a mut Cyw43SmoltcpRxTransaction>,
+    #[cfg(feature = "kernel")]
+    cyw43_received_tcp_reply: Option<Cyw43RxCoupledTcpReply>,
+    #[cfg(feature = "kernel")]
+    cyw43_transfer_candidate: bool,
 }
 
-impl Drop for DriverTaskNetTxToken {
+impl Drop for DriverTaskNetTxToken<'_> {
     fn drop(&mut self) {
         #[cfg(feature = "kernel")]
         if let Some(reservation) = self.cyw43_queue_reservation.take() {
-            // Dropping an unused smoltcp token releases only its local queue
-            // permit. It performs no HAL, linked-runtime, or physical work.
+            if let (Some(transaction), Some(reply)) = (
+                self.cyw43_rx_transaction.as_deref_mut(),
+                self.cyw43_received_tcp_reply,
+            ) {
+                if transaction.transfer(reservation, reply).is_ok() {
+                    return;
+                }
+            }
+            // An unused non-TCP/direct token or an inactive transaction owns
+            // no future authority. Release its local queue permit immediately.
             release_cyw43_data_tx_queue_slot(reservation);
         }
     }
 }
 
-impl phy::TxToken for DriverTaskNetTxToken {
+impl phy::TxToken for DriverTaskNetTxToken<'_> {
     fn consume<R, F>(mut self, len: usize, f: F) -> R
     where
         F: FnOnce(&mut [u8]) -> R,
@@ -23524,11 +23995,24 @@ impl phy::TxToken for DriverTaskNetTxToken {
         }
         #[cfg(feature = "kernel")]
         let submitted = if self.hot_path == DriverTaskHotPath::Cyw43Wifi {
-            self.cyw43_queue_reservation
-                .take()
-                .is_some_and(|reservation| {
-                    enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len])
-                })
+            let transferred = if self.cyw43_transfer_candidate {
+                self.cyw43_rx_transaction
+                    .as_deref_mut()
+                    .and_then(|transaction| transaction.take_matching(&scratch[..frame_len]))
+            } else {
+                None
+            };
+            let reservation = if let Some(transferred) = transferred {
+                if let Some(unpaired) = self.cyw43_queue_reservation.take() {
+                    release_cyw43_data_tx_queue_slot(unpaired);
+                }
+                Some(transferred)
+            } else {
+                self.cyw43_queue_reservation.take()
+            };
+            reservation.is_some_and(|reservation| {
+                enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len])
+            })
         } else {
             submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len])
         };
@@ -23594,6 +24078,28 @@ fn cyw43_data_tx_descriptor(frame_len: usize) -> DriverRuntimeCyw43CommandDescri
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_data_tx_descriptor_for_cadence(
+    frame_len: usize,
+    steady_fast_lane: bool,
+) -> DriverRuntimeCyw43CommandDescriptor {
+    let mut descriptor = cyw43_data_tx_descriptor(frame_len);
+    if steady_fast_lane {
+        descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE;
+    }
+    descriptor
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_data_tx_descriptor(
+    pending: &Cyw43PendingDataTx,
+) -> DriverRuntimeCyw43CommandDescriptor {
+    cyw43_data_tx_descriptor_for_cadence(
+        usize::from(pending.len),
+        pending.steady_fast_lane.is_some(),
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn fail_cyw43_pending_data_tx(
     pending: &Cyw43PendingDataTx,
     contract: DriverTaskContract,
@@ -23606,7 +24112,7 @@ fn fail_cyw43_pending_data_tx(
             pending.generation,
             Cyw43RecoveryCause::DataTx,
             "cyw43-net-data-tx",
-            cyw43_data_tx_descriptor(usize::from(pending.len)),
+            cyw43_pending_data_tx_descriptor(pending),
             pending.payload_digest,
             pending.ticket_id,
             0,
@@ -23677,6 +24183,64 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
             pending.request.is_some() || pending.child_cursor_started,
         );
     }
+    if pending.steady_fast_lane.is_some() && !pending.urgent {
+        return fail_cyw43_pending_data_tx(&pending, contract, "fast-lane-not-urgent", true);
+    }
+    if pending
+        .steady_fast_lane
+        .is_some_and(|identity| !identity.lifetime_current())
+    {
+        if pending.request.is_some() || pending.child_cursor_started {
+            // Stage acceptance or child progress fixes the cadence and makes
+            // any lifetime tear issued-unknown. Never resume this request via
+            // the generic phase-separated entry or replay its Ethernet frame.
+            return fail_cyw43_pending_data_tx(
+                &pending,
+                contract,
+                "stale-fast-lane-identity",
+                true,
+            );
+        }
+        // Before HAL has accepted any request, dropping the optional cadence
+        // identity is a safe local downgrade: the immutable queued frame has
+        // not crossed an issue boundary and will Stage through the generic
+        // retained protocol if the ordinary data lifetime remains current.
+        pending.steady_fast_lane = None;
+    }
+    if pending.request.is_none()
+        && !pending.child_cursor_started
+        && pending
+            .steady_fast_lane
+            .is_some_and(|identity| !identity.admission_current())
+    {
+        // Authentication can close while an otherwise current requestless
+        // frame waits for the scheduler lease. Revoke only its optional fast
+        // cadence; the immutable frame remains legal generic TCP output. Once
+        // HAL accepts the tagged request, its exact bounded cadence completes
+        // without retroactively turning an ordinary console close into a Wi-Fi
+        // pair recovery.
+        pending.steady_fast_lane = None;
+    }
+    if pending.steady_fast_lane.is_some() {
+        let lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        let exact_parent_resume =
+            pending.request.is_some() && lease.phase == Cyw43SdioNetworkPriorityLeasePhase::Closing;
+        if lease.phase != Cyw43SdioNetworkPriorityLeasePhase::Open && !exact_parent_resume {
+            // The fast cadence is meaningful only inside the bounded Network
+            // scheduling lease. A requestless frame waits without consuming
+            // its child deadline; an accepted parent outside Open/Closing is a
+            // torn scheduler identity and must recover fail-closed.
+            if pending.request.is_some() {
+                return fail_cyw43_pending_data_tx(
+                    &pending,
+                    contract,
+                    "fast-lane-lease-lost",
+                    true,
+                );
+            }
+            return retain_cyw43_pending_data_tx(pending);
+        }
+    }
     if pending.request.is_none()
         && !pending.child_cursor_started
         && !cyw43_tx_unproven_window_ready(contract)
@@ -23706,7 +24270,7 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         *CYW43_PENDING_DATA_TX.lock() = Some(pending);
         return Cyw43DataTxTurnOutcome::CreditWait;
     }
-    let descriptor = cyw43_data_tx_descriptor(frame_len);
+    let descriptor = cyw43_pending_data_tx_descriptor(&pending);
     if let Some(request) = pending.request {
         let Some((_, issued)) = cyw43_retained_descriptor_active_state_with_payload(
             contract,
@@ -23740,6 +24304,7 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         contract,
         pending.generation,
         &pending.frame[..frame_len],
+        pending.steady_fast_lane.is_some(),
     );
     if completion.is_none() && cyw43_outer_event_turn_rejected() {
         // A later smoltcp callback re-entered the retained TX owner after this
@@ -24511,8 +25076,12 @@ fn make_cyw43_queued_data_tx(
     frame: &[u8],
     accepted_by_caller: bool,
     urgent: bool,
+    steady_lease_provenance: Option<Cyw43SteadyTxLeaseProvenance>,
 ) -> Option<Cyw43QueuedDataTx> {
-    if frame.is_empty() || frame.len() > MAX_FRAME_LEN {
+    if frame.is_empty()
+        || frame.len() > MAX_FRAME_LEN
+        || (steady_lease_provenance.is_some() && !urgent)
+    {
         return None;
     }
     let mut retained = [0u8; MAX_FRAME_LEN];
@@ -24525,6 +25094,7 @@ fn make_cyw43_queued_data_tx(
         len: frame.len() as u16,
         payload_digest: cyw43_payload_digest(frame),
         accepted_by_caller,
+        steady_lease_provenance,
         urgent,
     })
 }
@@ -24585,6 +25155,58 @@ fn cyw43_data_tx_frame_is_control(frame: &[u8]) -> bool {
     }
 }
 
+/// Parse the exact outgoing peer tuple from one payload-bearing console frame.
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_console_response_tuple(frame: &[u8]) -> Option<(u16, [u8; 4], u16)> {
+    let ip_header_len = cyw43_ipv4_header_len(frame)?;
+    let ip_offset = ETH_HEADER_LEN;
+    let total_len = cyw43_get_u16_be(frame, ip_offset + 2).map(usize::from)?;
+    if total_len < ip_header_len
+        || frame.len() < ip_offset.saturating_add(total_len)
+        || frame.get(ip_offset + 9).copied() != Some(CYW43_IP_PROTO_TCP)
+        || cyw43_get_u16_be(frame, ip_offset + 6).is_none_or(|fragment| fragment & 0xbfff != 0)
+    {
+        return None;
+    }
+    let l4_offset = ip_offset + ip_header_len;
+    let local_port = cyw43_get_u16_be(frame, l4_offset)?;
+    if !cyw43_tcp_port_is_authenticated_console_port(local_port) {
+        return None;
+    }
+    let remote_port = cyw43_get_u16_be(frame, l4_offset + 2)?;
+    let data_offset = frame.get(l4_offset + 12).copied()?;
+    let tcp_header_len = usize::from(data_offset >> 4) * 4;
+    let l4_len = total_len.saturating_sub(ip_header_len);
+    if tcp_header_len < 20 || tcp_header_len >= l4_len {
+        return None;
+    }
+    let remote_ipv4 = [
+        *frame.get(ip_offset + 16)?,
+        *frame.get(ip_offset + 17)?,
+        *frame.get(ip_offset + 18)?,
+        *frame.get(ip_offset + 19)?,
+    ];
+    Some((local_port, remote_ipv4, remote_port))
+}
+
+/// Classify one standalone authenticated-console response for urgent TX.
+///
+/// Receive-coupled replies remain independently eligible through `paired_rx`.
+/// A later standalone flush must match the exact active authenticated peer and
+/// current logical/pair/physical CYW43 lifetime; source-port ownership alone
+/// conveys no lease authority.
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_console_response_peer(frame: &[u8]) -> Option<Cyw43AuthenticatedConsolePeer> {
+    let (local_port, remote_ipv4, remote_port) = cyw43_data_tx_console_response_tuple(frame)?;
+    Cyw43AuthenticatedConsolePeer::snapshot()
+        .filter(|peer| peer.matches_outgoing(local_port, remote_ipv4, remote_port))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_frame_is_console_response(frame: &[u8]) -> bool {
+    cyw43_data_tx_console_response_peer(frame).is_some()
+}
+
 #[cfg(feature = "kernel")]
 fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, frame: &[u8]) -> bool {
     if cyw43_post_dhcp_zero_sender_arp(frame) {
@@ -24604,11 +25226,20 @@ fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, fram
         return false;
     }
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let console_peer = cyw43_data_tx_console_response_peer(frame);
+    let console_response = console_peer.is_some();
+    let urgent = reservation.paired_rx || cyw43_data_tx_frame_is_control(frame) || console_response;
+    let steady_lease_provenance = if reservation.paired_rx {
+        Some(Cyw43SteadyTxLeaseProvenance::PairedRx)
+    } else {
+        console_peer.map(Cyw43SteadyTxLeaseProvenance::AuthenticatedConsole)
+    };
     let Some(queued) = make_cyw43_queued_data_tx(
         reservation.generation,
         frame,
         true,
-        reservation.paired_rx || cyw43_data_tx_frame_is_control(frame),
+        urgent,
+        steady_lease_provenance,
     ) else {
         release_cyw43_data_tx_queue_slot(reservation);
         return false;
@@ -24654,21 +25285,27 @@ fn enqueue_unreserved_cyw43_data_tx(
         return false;
     }
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let console_peer = cyw43_data_tx_console_response_peer(frame);
+    let console_response = console_peer.is_some();
+    let urgent = force_urgent || cyw43_data_tx_frame_is_control(frame) || console_response;
     let Some(queued) = make_cyw43_queued_data_tx(
         generation,
         frame,
         accepted_by_caller,
-        force_urgent || cyw43_data_tx_frame_is_control(frame),
+        urgent,
+        // `force_urgent` is used by unpaired ARP assistance and is queue
+        // priority only. Without paired-RX provenance, only the exact active
+        // authenticated peer can receive the steady service lease.
+        console_peer.map(Cyw43SteadyTxLeaseProvenance::AuthenticatedConsole),
     ) else {
         return false;
     };
     let mut queue = CYW43_DATA_TX_QUEUE.lock();
     let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
-    let admission_cap = if force_urgent {
-        CYW43_DATA_TX_QUEUE_CAP
-    } else {
-        CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1)
-    };
+    // `force_urgent` affects FIFO ordering only. Every unpaired producer,
+    // including ARP assistance, must preserve the final slot for a copied RX's
+    // mandatory paired TxToken.
+    let admission_cap = CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1);
     if queue.len().saturating_add(queue.reservations) >= admission_cap
         || queue.push_back(queued).is_err()
     {
@@ -24714,6 +25351,9 @@ fn promote_one_cyw43_data_tx_if_ready(contract: DriverTaskContract) -> bool {
         }
         return false;
     }
+    let steady_fast_lane = queued
+        .steady_lease_provenance
+        .and_then(|provenance| provenance.capture(generation));
     let pending = Cyw43PendingDataTx {
         ticket_id: queued.ticket_id,
         generation: queued.generation,
@@ -24721,6 +25361,8 @@ fn promote_one_cyw43_data_tx_if_ready(contract: DriverTaskContract) -> bool {
         frame: queued.frame,
         len: queued.len,
         payload_digest: queued.payload_digest,
+        urgent: queued.urgent,
+        steady_fast_lane,
         request: None,
         child_cursor_started: false,
         deadline: cyw43_poll_deadline_from_millis_or_polls(
@@ -24780,6 +25422,7 @@ fn submit_cyw43_driver_task_eth_frame_completion(
     contract: DriverTaskContract,
     owner_generation: u32,
     frame: &[u8],
+    steady_fast_lane: bool,
 ) -> Option<DriverTaskCompletionRecord> {
     #[cfg(test)]
     if CYW43_DATA_TX_TEST_STUB.load(Ordering::Acquire) != 0 {
@@ -24836,12 +25479,21 @@ fn submit_cyw43_driver_task_eth_frame_completion(
         };
         return Some(completion);
     }
-    run_cyw43_runtime_descriptor_command(
-        contract,
-        owner_generation,
-        cyw43_data_tx_descriptor(frame.len()),
-        frame,
-    )
+    if steady_fast_lane {
+        run_cyw43_runtime_descriptor_command_steady_tx(
+            contract,
+            owner_generation,
+            cyw43_data_tx_descriptor(frame.len()),
+            frame,
+        )
+    } else {
+        run_cyw43_runtime_descriptor_command(
+            contract,
+            owner_generation,
+            cyw43_data_tx_descriptor(frame.len()),
+            frame,
+        )
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -24888,6 +25540,7 @@ fn submit_cyw43_host_eapol_payload_bounded_completion(
         contract,
         CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
         frame,
+        false,
     );
     if completion.is_some_and(driver_task_tx_completion_submitted) {
         CYW43_TX_SUBMITTED.fetch_add(1, Ordering::AcqRel);
@@ -24927,6 +25580,25 @@ fn run_cyw43_runtime_descriptor_command(
         descriptor,
         payload,
         &mut progress,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_cyw43_runtime_descriptor_command_steady_tx(
+    contract: DriverTaskContract,
+    owner_generation: u32,
+    descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Option<DriverTaskCompletionRecord> {
+    let mut progress = cyw43_bootstrap_progress_noop;
+    run_cyw43_runtime_descriptor_command_with_progress(
+        contract,
+        owner_generation,
+        descriptor,
+        payload,
+        &mut progress,
+        true,
     )
 }
 
@@ -24952,6 +25624,7 @@ fn cyw43_retained_command_material(
     owner_generation: u32,
     mut descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
+    steady_fast_lane: bool,
 ) -> Result<Cyw43RetainedCommandMaterial, DriverTaskNetError> {
     let desc_size = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -24994,6 +25667,9 @@ fn cyw43_retained_command_material(
         DriverTaskBudgetGrant::from_contract(contract),
         staged_descriptor,
     );
+    if steady_fast_lane {
+        command.budget = CYW43_STEADY_TX_SERVICE_LEASE_BUDGET;
+    }
     command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
     command.aux1 = owner_generation;
     if cyw43_runtime_descriptor_quiet_hot_path(descriptor.op) {
@@ -25037,6 +25713,29 @@ fn run_cyw43_runtime_descriptor_turn_raw(
         descriptor,
         payload,
         Cyw43LogicalControlAdmissionMode::Normal,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_cyw43_runtime_descriptor_turn_raw_steady_tx(
+    contract: DriverTaskContract,
+    owner_generation: u32,
+    stage: &'static str,
+    mut descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Result<Cyw43RawDescriptorTurn, DriverTaskNetError> {
+    // The marker originates only at the typed urgent-op7 entry and is sealed
+    // into the immutable parent descriptor before Stage/fingerprinting.
+    descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE;
+    run_cyw43_runtime_descriptor_turn_raw_with_admission(
+        contract,
+        owner_generation,
+        stage,
+        descriptor,
+        payload,
+        Cyw43LogicalControlAdmissionMode::Normal,
+        true,
     )
 }
 
@@ -25048,10 +25747,34 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
     admission_mode: Cyw43LogicalControlAdmissionMode,
+    steady_fast_lane: bool,
 ) -> Result<Cyw43RawDescriptorTurn, DriverTaskNetError> {
+    let descriptor_marks_steady_fast_lane =
+        descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0;
+    let cadence_valid = match admission_mode {
+        Cyw43LogicalControlAdmissionMode::Normal => {
+            descriptor_marks_steady_fast_lane == steady_fast_lane
+                && (!steady_fast_lane || descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
+        }
+        Cyw43LogicalControlAdmissionMode::ExactIssuedTerminalDrain => {
+            !steady_fast_lane
+                && (!descriptor_marks_steady_fast_lane
+                    || descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
+        }
+    };
+    if !cadence_valid {
+        return Err(DriverTaskNetError::RuntimeInit(
+            "cyw43-steady-fast-lane-invalid",
+        ));
+    }
     let source_descriptor = descriptor;
-    let material =
-        cyw43_retained_command_material(contract, owner_generation, descriptor, payload)?;
+    let material = cyw43_retained_command_material(
+        contract,
+        owner_generation,
+        descriptor,
+        payload,
+        steady_fast_lane,
+    )?;
     let logical_control_admission = match admission_mode {
         Cyw43LogicalControlAdmissionMode::Normal => {
             admit_cyw43_logical_control_owner(owner_generation, stage, source_descriptor, payload)
@@ -25130,14 +25853,38 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
                     0,
                 ),
             ];
-            run_driver_task_net_service_retained_turn_staged(contract, command, &staging_segments)
+            if steady_fast_lane {
+                run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            } else {
+                run_driver_task_net_service_retained_turn_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            }
         } else {
             let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
                 usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
                 &scratch,
                 0,
             )];
-            run_driver_task_net_service_retained_turn_staged(contract, command, &staging_segments)
+            if steady_fast_lane {
+                run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            } else {
+                run_driver_task_net_service_retained_turn_staged(
+                    contract,
+                    command,
+                    &staging_segments,
+                )
+            }
         }
     };
     let completion = match service {
@@ -25189,6 +25936,7 @@ fn run_cyw43_runtime_descriptor_command_with_progress(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
     _progress: &mut dyn Cyw43BootstrapProgress,
+    steady_fast_lane: bool,
 ) -> Option<DriverTaskCompletionRecord> {
     // Descriptor callers only latch recovery. The retained supervisor consumes
     // the sticky restart/context-replay markers on a later outer event turn.
@@ -25197,13 +25945,23 @@ fn run_cyw43_runtime_descriptor_command_with_progress(
     {
         return None;
     }
-    let turn = run_cyw43_runtime_descriptor_turn_raw(
-        contract,
-        owner_generation,
-        "cyw43-command",
-        descriptor,
-        payload,
-    )
+    let turn = if steady_fast_lane {
+        run_cyw43_runtime_descriptor_turn_raw_steady_tx(
+            contract,
+            owner_generation,
+            "cyw43-command",
+            descriptor,
+            payload,
+        )
+    } else {
+        run_cyw43_runtime_descriptor_turn_raw(
+            contract,
+            owner_generation,
+            "cyw43-command",
+            descriptor,
+            payload,
+        )
+    }
     .ok()?;
     if let Some(completion) = turn.completion {
         record_cyw43_runtime_completion(contract, completion);
@@ -26483,9 +27241,11 @@ macro_rules! driver_task_nic {
     ) => {
         /// Smoltcp device shell for a Pi 4 NIC whose hardware state lives in a
         /// driver-task runtime instead of root.
-        #[derive(Debug, Clone, Copy, Default)]
+        #[derive(Debug, Default)]
         pub struct $name {
             tx_drops: u32,
+            #[cfg(feature = "kernel")]
+            cyw43_rx_transaction: Cyw43SmoltcpRxTransaction,
         }
 
         impl Device for $name {
@@ -26494,7 +27254,7 @@ macro_rules! driver_task_nic {
             where
                 Self: 'a;
             type TxToken<'a>
-                = DriverTaskNetTxToken
+                = DriverTaskNetTxToken<'a>
             where
                 Self: 'a;
 
@@ -26512,26 +27272,65 @@ macro_rules! driver_task_nic {
                     } else {
                         None
                     };
+                let rx = match receive_driver_task_frame($contract, DriverTaskHotPath::$hot_path) {
+                    Some(rx) => rx,
+                    None => {
+                        #[cfg(feature = "kernel")]
+                        if let Some(reservation) = cyw43_queue_reservation {
+                            release_cyw43_data_tx_queue_slot(reservation);
+                        }
+                        return None;
+                    }
+                };
+                record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
+                $rx_frames.fetch_add(1, Ordering::AcqRel);
+                NET_DIAG.record_rx_frame_to_stack();
+                #[cfg(feature = "kernel")]
+                let cyw43_received_tcp_reply =
+                    if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                        Cyw43RxCoupledTcpReply::from_received_frame(&rx.buffer[..rx.len])
+                    } else {
+                        None
+                    };
                 let tx_token = DriverTaskNetTxToken {
                     contract: $contract,
                     hot_path: DriverTaskHotPath::$hot_path,
                     tx_submitted: &$tx_submitted,
                     tx_dropped: &$tx_dropped,
+                    _lifetime: core::marker::PhantomData,
                     #[cfg(feature = "kernel")]
                     cyw43_queue_reservation,
+                    #[cfg(feature = "kernel")]
+                    cyw43_rx_transaction: if matches!(
+                        DriverTaskHotPath::$hot_path,
+                        DriverTaskHotPath::Cyw43Wifi
+                    ) && self.cyw43_rx_transaction.active
+                    {
+                        Some(&mut self.cyw43_rx_transaction)
+                    } else {
+                        None
+                    },
+                    #[cfg(feature = "kernel")]
+                    cyw43_received_tcp_reply,
+                    #[cfg(feature = "kernel")]
+                    cyw43_transfer_candidate: false,
                 };
-                let rx = receive_driver_task_frame($contract, DriverTaskHotPath::$hot_path)?;
-                record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
-                $rx_frames.fetch_add(1, Ordering::AcqRel);
-                NET_DIAG.record_rx_frame_to_stack();
                 Some((rx, tx_token))
             }
 
             fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
                 #[cfg(feature = "kernel")]
+                let cyw43_transfer_candidate =
+                    matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi)
+                        && self.cyw43_rx_transaction.transfer_available();
+                #[cfg(feature = "kernel")]
                 let cyw43_queue_reservation =
                     if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
-                        Some(reserve_cyw43_data_tx_queue_slot($contract, false)?)
+                        match reserve_cyw43_data_tx_queue_slot($contract, false) {
+                            Some(reservation) => Some(reservation),
+                            None if cyw43_transfer_candidate => None,
+                            None => return None,
+                        }
                     } else {
                         None
                     };
@@ -26546,8 +27345,16 @@ macro_rules! driver_task_nic {
                     hot_path: DriverTaskHotPath::$hot_path,
                     tx_submitted: &$tx_submitted,
                     tx_dropped: &$tx_dropped,
+                    _lifetime: core::marker::PhantomData,
                     #[cfg(feature = "kernel")]
                     cyw43_queue_reservation,
+                    #[cfg(feature = "kernel")]
+                    cyw43_rx_transaction: cyw43_transfer_candidate
+                        .then_some(&mut self.cyw43_rx_transaction),
+                    #[cfg(feature = "kernel")]
+                    cyw43_received_tcp_reply: None,
+                    #[cfg(feature = "kernel")]
+                    cyw43_transfer_candidate,
                 })
             }
 
@@ -26604,6 +27411,18 @@ macro_rules! driver_task_nic {
                 if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
                     CYW43_ASSIGNED_IPV4_BE
                         .store(u32::from_be_bytes(ip.octets()), Ordering::Release);
+                }
+            }
+
+            fn begin_smoltcp_rx_transaction(&mut self) {
+                if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                    self.cyw43_rx_transaction.begin();
+                }
+            }
+
+            fn end_smoltcp_rx_transaction(&mut self) {
+                if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
+                    self.cyw43_rx_transaction.end();
                 }
             }
 
@@ -27400,6 +28219,8 @@ mod tests {
     fn reset_cyw43_status_flags() {
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::hal::driver_task::test_reset_cyw43_root_wake();
+        #[cfg(feature = "kernel")]
+        clear_cyw43_authenticated_console_peer();
         *CYW43_RUNTIME_MAC.lock() = CYW43_DRIVER_TASK_MAC;
         CYW43_ROOT_WAKE_OP8_TICKET.store(0, Ordering::Release);
         CYW43_ROOT_WAKE_OP8_GENERATION.store(0, Ordering::Relaxed);
@@ -28021,6 +28842,14 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_tx_priority_classifier_keeps_protocol_control_ahead_of_bulk() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 73;
+        let remote_ipv4 = [192, 168, 86, 102];
+        let remote_port = 49_152;
+        mark_cyw43_gate8_ready_for_test(generation);
         let arp = test_cyw43_arp_request(
             [0x02, 1, 2, 3, 4, 5],
             [192, 168, 86, 1],
@@ -28034,11 +28863,38 @@ mod tests {
 
         let mut payload_tcp = test_cyw43_tcp_frame();
         let tcp = ETH_HEADER_LEN + 20;
+        payload_tcp[tcp..tcp + 2].copy_from_slice(&32_000u16.to_be_bytes());
         payload_tcp[tcp + 12] = 5 << 4;
         payload_tcp[tcp + 13] = 0x10;
         assert!(
             !cyw43_data_tx_frame_is_control(&payload_tcp),
             "payload-bearing ACK traffic remains bulk",
+        );
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&payload_tcp),
+            "unrelated application payload remains bulk",
+        );
+
+        let console_payload =
+            test_cyw43_console_response_frame(COHSH_TCP_PORT, remote_ipv4, remote_port);
+        assert!(
+            !cyw43_data_tx_frame_is_control(&console_payload),
+            "ordinary cohsh payload is not protocol-control traffic",
+        );
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&console_payload),
+            "a declared source port alone conveys no lease authority",
+        );
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            1,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        assert!(
+            cyw43_data_tx_frame_is_console_response(&console_payload),
+            "the exact authenticated peer retains urgent standalone service",
         );
 
         let mut ack_only = payload_tcp;
@@ -28065,6 +28921,616 @@ mod tests {
             !cyw43_data_tx_frame_is_control(&fragmented_syn),
             "an MF first fragment cannot gain priority from a partial TCP header",
         );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_standalone_console_lease_requires_exact_active_authenticated_peer_lifetime() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 76;
+        let remote_ipv4 = [192, 168, 86, 102];
+        let remote_port = 49_152;
+        mark_cyw43_gate8_ready_for_test(generation);
+
+        let exact = test_cyw43_console_response_frame(COHSH_TCP_PORT, remote_ipv4, remote_port);
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&exact),
+            "pre-auth payload cannot obtain a standalone lease",
+        );
+
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            41,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        assert!(
+            cyw43_data_tx_frame_is_console_response(&exact),
+            "the exact active authenticated peer is eligible",
+        );
+
+        let wrong_address =
+            test_cyw43_console_response_frame(COHSH_TCP_PORT, [192, 168, 86, 103], remote_port);
+        let wrong_port = test_cyw43_console_response_frame(
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port.wrapping_add(1),
+        );
+        assert!(!cyw43_data_tx_frame_is_console_response(&wrong_address));
+        assert!(!cyw43_data_tx_frame_is_console_response(&wrong_port));
+
+        let admitted_peer = cyw43_data_tx_console_response_peer(&exact)
+            .expect("the exact authenticated peer is captured at enqueue");
+        let admitted_identity =
+            Cyw43SteadyTxFastLaneIdentity::capture_authenticated_console(generation, admitted_peer)
+                .expect("the exact authenticated peer is initially current");
+        assert!(enqueue_unreserved_cyw43_data_tx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &exact,
+            true,
+            false,
+        ));
+        assert_eq!(admitted_peer.connection_id, 41);
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            42,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        let replacement_peer = cyw43_data_tx_console_response_peer(&exact)
+            .expect("the identical tuple is current only for the replacement connection");
+        assert_eq!(replacement_peer.connection_id, 42);
+        assert_ne!(replacement_peer, admitted_peer);
+        assert!(
+            cyw43_data_tx_frame_is_console_response(&exact),
+            "the replacement connection may admit its own exact tuple",
+        );
+        assert!(admitted_identity.lifetime_current());
+        assert!(
+            !admitted_identity.admission_current(),
+            "connection replacement revokes old provenance without tearing the Wi-Fi lifetime",
+        );
+        assert!(promote_one_cyw43_data_tx_if_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT
+        ));
+        let requestless = CYW43_PENDING_DATA_TX
+            .lock()
+            .take()
+            .expect("the queued frame remains valid generic TCP output");
+        assert!(
+            requestless.steady_fast_lane.is_none(),
+            "an identical tuple cannot recreate authority for the old connection ID",
+        );
+
+        clear_cyw43_authenticated_console_peer();
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&exact),
+            "a standby/pre-auth socket has no active-peer publication authority",
+        );
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            43,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        assert_eq!(
+            invalidate_cyw43_root_generation_for_recovery(generation),
+            Some(generation.wrapping_add(1)),
+        );
+        assert_eq!(Cyw43AuthenticatedConsolePeer::snapshot(), None);
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&exact),
+            "generation close clears the peer and rejects stale payload",
+        );
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_smoltcp_immediate_ack_uses_receive_coupled_steady_provenance() {
+        use smoltcp::iface::{
+            Config as IfaceConfig, Interface, PollIngressSingleResult, SocketSet, SocketStorage,
+        };
+        use smoltcp::socket::tcp::{
+            Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState,
+        };
+        use smoltcp::wire::{
+            HardwareAddress, IpAddress, IpCidr, IpListenEndpoint, Ipv4Packet, TcpControl, TcpPacket,
+        };
+
+        fn poll_one_cyw43_rx_transaction(
+            interface: &mut Interface,
+            device: &mut Cyw43DriverTaskDevice,
+            sockets: &mut SocketSet<'_>,
+            now_ms: i64,
+        ) {
+            let timestamp = Instant::from_millis(now_ms);
+            interface.poll_maintenance(timestamp);
+            device.begin_smoltcp_rx_transaction();
+            assert_ne!(
+                interface.poll_ingress_single(timestamp, device, sockets),
+                PollIngressSingleResult::None,
+                "the focused turn must consume its one staged RX frame",
+            );
+            let _ = interface.poll_egress(timestamp, device, sockets);
+            device.end_smoltcp_rx_transaction();
+            let _ = interface.poll_egress(timestamp, device, sockets);
+        }
+
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+
+        let generation = 79;
+        let local_mac = CYW43_DRIVER_TASK_MAC;
+        let remote_mac = EthernetAddress([0x62, 0x72, 0x58, 0xed, 0x47, 0x5b]);
+        let local_ip = Ipv4Address::new(192, 168, 86, 154);
+        let remote_ip = Ipv4Address::new(192, 168, 86, 102);
+        let remote_port = 49_152;
+        let remote_isn = 1_000u32;
+        mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes(local_ip.octets()), Ordering::Release);
+
+        let mut device = Cyw43DriverTaskDevice::default();
+        let routed_ingress = test_cyw43_tcp_segment_token(
+            remote_mac,
+            local_mac,
+            remote_ip,
+            local_ip,
+            remote_port,
+            COHSH_TCP_PORT,
+            700,
+            Some(1),
+            TcpControl::Psh,
+            b"rx",
+        );
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            routed_ingress,
+        ));
+        device.begin_smoltcp_rx_transaction();
+        let (routed_rx, routed_paired_tx) = device
+            .receive(Instant::from_millis(0))
+            .expect("the routed tuple obtains one receive-coupled permit");
+        routed_rx.consume(|_| {});
+        drop(routed_paired_tx);
+        let routed_response = test_cyw43_tcp_segment_token(
+            EthernetAddress([0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee]),
+            EthernetAddress([0x02, 0x11, 0x22, 0x33, 0x44, 0x55]),
+            local_ip,
+            remote_ip,
+            COHSH_TCP_PORT,
+            remote_port,
+            1,
+            Some(702),
+            TcpControl::Psh,
+            b"piggyback",
+        );
+        device
+            .transmit(Instant::from_millis(0))
+            .expect("the exact routed reply may use the transferred permit")
+            .consume(routed_response.len, |frame| {
+                frame.copy_from_slice(&routed_response.buffer[..routed_response.len]);
+            });
+        let routed = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("the exact routed reply is retained");
+        assert_eq!(
+            routed.steady_lease_provenance,
+            Some(Cyw43SteadyTxLeaseProvenance::PairedRx),
+            "L2 next-hop identity cannot revoke exact causal L3/L4 provenance",
+        );
+        assert!(routed.urgent);
+        device.end_smoltcp_rx_transaction();
+        assert_eq!(cyw43_data_tx_queue_diagnostic().reserved, 0);
+
+        let config = IfaceConfig::new(HardwareAddress::Ethernet(local_mac));
+        let mut interface = Interface::new(config, &mut device, Instant::from_millis(0));
+        interface.update_ip_addrs(|addrs| {
+            addrs
+                .push(IpCidr::new(IpAddress::Ipv4(local_ip), 24))
+                .expect("one local address fits the interface");
+        });
+
+        let mut rx_storage = [0u8; 512];
+        let mut tx_storage = [0u8; 512];
+        let mut socket_storage = [SocketStorage::EMPTY; 1];
+        let mut sockets = SocketSet::new(&mut socket_storage[..]);
+        let mut socket = TcpSocket::new(
+            TcpSocketBuffer::new(&mut rx_storage[..]),
+            TcpSocketBuffer::new(&mut tx_storage[..]),
+        );
+        socket.set_ack_delay(None);
+        socket
+            .listen(IpListenEndpoint::from(COHSH_TCP_PORT))
+            .expect("console listener");
+        let socket_handle = sockets.add(socket);
+
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_cyw43_tcp_segment_token(
+                remote_mac,
+                local_mac,
+                remote_ip,
+                local_ip,
+                remote_port,
+                COHSH_TCP_PORT,
+                remote_isn,
+                None,
+                TcpControl::Syn,
+                &[],
+            ),
+        ));
+        poll_one_cyw43_rx_transaction(&mut interface, &mut device, &mut sockets, 0);
+        let neighbor_probe = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("SYN starts one bounded neighbor probe");
+        assert_eq!(
+            neighbor_probe.frame.get(12..14),
+            Some(CYW43_ETH_P_ARP.to_be_bytes().as_slice()),
+        );
+
+        let mut arp_reply =
+            test_cyw43_arp_request(remote_mac.0, remote_ip.octets(), local_ip.octets());
+        arp_reply[..6].copy_from_slice(&local_mac.0);
+        arp_reply[ETH_HEADER_LEN + 6..ETH_HEADER_LEN + 8].copy_from_slice(&2u16.to_be_bytes());
+        arp_reply[ETH_HEADER_LEN + 18..ETH_HEADER_LEN + 24].copy_from_slice(&local_mac.0);
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&arp_reply),
+        ));
+        poll_one_cyw43_rx_transaction(&mut interface, &mut device, &mut sockets, 1);
+        let syn_ack = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("SYN receives one immediate SYN-ACK");
+        let syn_ack_frame = &syn_ack.frame[..usize::from(syn_ack.len)];
+        let syn_ack_ip =
+            Ipv4Packet::new_checked(&syn_ack_frame[ETH_HEADER_LEN..]).expect("SYN-ACK IPv4");
+        let syn_ack_tcp = TcpPacket::new_checked(syn_ack_ip.payload()).expect("SYN-ACK TCP");
+        assert!(syn_ack_tcp.syn());
+        assert!(syn_ack_tcp.ack());
+        assert_eq!(syn_ack_tcp.ack_number().0 as u32, remote_isn + 1);
+        let server_isn = syn_ack_tcp.seq_number().0 as u32;
+
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_cyw43_tcp_segment_token(
+                remote_mac,
+                local_mac,
+                remote_ip,
+                local_ip,
+                remote_port,
+                COHSH_TCP_PORT,
+                remote_isn + 1,
+                Some(server_isn + 1),
+                TcpControl::None,
+                &[],
+            ),
+        ));
+        poll_one_cyw43_rx_transaction(&mut interface, &mut device, &mut sockets, 2);
+        assert_eq!(
+            sockets.get::<TcpSocket>(socket_handle).state(),
+            TcpState::Established
+        );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            51,
+            COHSH_TCP_PORT,
+            remote_ip.octets(),
+            remote_port,
+        ));
+        let payload = b"status\n";
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_cyw43_tcp_segment_token(
+                remote_mac,
+                local_mac,
+                remote_ip,
+                local_ip,
+                remote_port,
+                COHSH_TCP_PORT,
+                remote_isn + 1,
+                Some(server_isn + 1),
+                TcpControl::Psh,
+                payload,
+            ),
+        ));
+        let data_timestamp = Instant::from_millis(3);
+        interface.poll_maintenance(data_timestamp);
+        device.begin_smoltcp_rx_transaction();
+        assert_ne!(
+            interface.poll_ingress_single(data_timestamp, &mut device, &mut sockets),
+            PollIngressSingleResult::None,
+        );
+        let nonmatching = test_cyw43_tcp_segment_token(
+            local_mac,
+            remote_mac,
+            local_ip,
+            remote_ip,
+            COHSH_TCP_PORT,
+            remote_port.wrapping_add(1),
+            server_isn + 1,
+            Some(remote_isn + 1),
+            TcpControl::None,
+            &[],
+        );
+        device
+            .transmit(data_timestamp)
+            .expect("unrelated egress uses ordinary queue admission")
+            .consume(nonmatching.len, |frame| {
+                frame.copy_from_slice(&nonmatching.buffer[..nonmatching.len]);
+            });
+        let unrelated = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("unrelated header-only egress remains independently queued");
+        assert_eq!(
+            unrelated.steady_lease_provenance, None,
+            "nonmatching egress cannot steal the transferred paired permit",
+        );
+        let _ = interface.poll_egress(data_timestamp, &mut device, &mut sockets);
+        device.end_smoltcp_rx_transaction();
+        let _ = interface.poll_egress(data_timestamp, &mut device, &mut sockets);
+        assert_eq!(
+            sockets.get::<TcpSocket>(socket_handle).recv_queue(),
+            payload.len(),
+            "the ordinary in-order console segment reaches the authenticated socket",
+        );
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            1,
+            "ACK delay disabled must emit the pure ACK in the same receive poll",
+        );
+
+        let ack = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("the immediate pure ACK remains queued for op7");
+        assert!(ack.accepted_by_caller);
+        assert!(ack.urgent);
+        assert_eq!(
+            ack.steady_lease_provenance,
+            Some(Cyw43SteadyTxLeaseProvenance::PairedRx),
+        );
+        let ack_frame = &ack.frame[..usize::from(ack.len)];
+        let ack_ip = Ipv4Packet::new_checked(&ack_frame[ETH_HEADER_LEN..]).expect("ACK IPv4");
+        let ack_tcp = TcpPacket::new_checked(ack_ip.payload()).expect("ACK TCP");
+        assert!(ack_tcp.ack());
+        assert!(!ack_tcp.syn());
+        assert!(!ack_tcp.fin());
+        assert!(!ack_tcp.rst());
+        assert!(ack_tcp.payload().is_empty());
+        assert_eq!(ack_tcp.src_port(), COHSH_TCP_PORT);
+        assert_eq!(ack_tcp.dst_port(), remote_port);
+        assert_eq!(
+            ack_tcp.ack_number().0 as u32,
+            remote_isn + 1 + payload.len() as u32,
+        );
+        assert!(cyw43_data_tx_frame_is_control(ack_frame));
+        assert_eq!(
+            cyw43_data_tx_console_response_tuple(ack_frame),
+            None,
+            "a pure ACK cannot obtain standalone console-response authority",
+        );
+        assert!(!cyw43_data_tx_frame_is_console_response(ack_frame));
+        device
+            .transmit(Instant::from_millis(4))
+            .expect("the same ACK has ordinary standalone queue capacity")
+            .consume(ack_frame.len(), |frame| frame.copy_from_slice(ack_frame));
+        let standalone_ack = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("the same pure ACK is admitted without paired provenance");
+        assert_eq!(
+            standalone_ack.steady_lease_provenance, None,
+            "header-only urgency alone cannot recreate paired lease authority",
+        );
+        assert!(
+            ack.steady_lease_provenance
+                .and_then(|provenance| provenance.capture(generation))
+                .is_some_and(Cyw43SteadyTxFastLaneIdentity::current),
+            "the receive-coupled ACK retains the exact current steady lifetime",
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_authenticated_console_parent_keeps_admitted_cadence_after_auth_close() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 78;
+        let remote_ipv4 = [192, 168, 86, 102];
+        let remote_port = 49_152;
+        mark_cyw43_gate8_ready_for_test(generation);
+
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        crate::hal::driver_task::test_open_cyw43_sdio_network_priority_lease_for_current_pair();
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        assert!(publish_cyw43_authenticated_console_peer(
+            generation,
+            43,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        let response = test_cyw43_console_response_frame(COHSH_TCP_PORT, remote_ipv4, remote_port);
+        assert!(enqueue_unreserved_cyw43_data_tx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &response,
+            true,
+            false,
+        ));
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Pending,
+        );
+        let admitted = CYW43_PENDING_DATA_TX
+            .lock()
+            .clone()
+            .expect("the HAL retains the exact admitted console parent");
+        let request = admitted
+            .request
+            .expect("the typed steady turn accepts one immutable parent request");
+        let cadence = admitted
+            .steady_fast_lane
+            .expect("the admitted parent retains its exact steady cadence");
+        assert!(admitted.child_cursor_started);
+
+        clear_cyw43_authenticated_console_peer();
+        assert!(!cadence.admission_current());
+        assert!(cadence.lifetime_current());
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Pending,
+            "authentication close cannot retroactively revoke an accepted physical parent",
+        );
+        let after_auth_close = CYW43_PENDING_DATA_TX
+            .lock()
+            .clone()
+            .expect("the exact parent remains retained after authentication close");
+        assert_eq!(after_auth_close.request, Some(request));
+        assert_eq!(after_auth_close.steady_fast_lane, Some(cadence));
+        assert!(after_auth_close.child_cursor_started);
+        assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
+
+        CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.store(0, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Cyw43DataTxTurnOutcome::Failed,
+            "a physical lifetime cut still fences the issued parent fail-closed",
+        );
+        assert!(CYW43_PENDING_DATA_TX.lock().is_none());
+        let recovery = CYW43_DEFERRED_RECOVERY
+            .lock()
+            .expect("physical teardown preserves the issued parent recovery identity");
+        assert_eq!(recovery.generation, generation);
+        assert_eq!(recovery.owner_generation, generation);
+        assert_eq!(recovery.sequence, request);
+        assert_eq!(recovery.cause, Cyw43RecoveryCause::DataTx);
+        assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_tx_queue_priority_is_distinct_from_steady_lease_eligibility() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(75);
+
+        let eapol = test_cyw43_eapol_frame();
+        let arp = test_cyw43_arp_request(
+            [0x02, 1, 2, 3, 4, 5],
+            [192, 168, 86, 1],
+            [192, 168, 86, 154],
+        );
+        let remote_ipv4 = [192, 168, 86, 102];
+        let remote_port = 49_152;
+        let mut paired =
+            test_cyw43_console_response_frame(COHSH_TCP_PORT, remote_ipv4, remote_port);
+        paired[0] = 0x42;
+        paired[ETH_HEADER_LEN + 2..ETH_HEADER_LEN + 4].copy_from_slice(&40u16.to_be_bytes());
+        assert!(cyw43_data_tx_frame_is_control(&paired));
+        assert!(
+            !cyw43_data_tx_frame_is_console_response(&paired),
+            "a header-only ACK has no standalone payload authority",
+        );
+        let console_payload =
+            test_cyw43_console_response_frame(COHSH_TCP_PORT, remote_ipv4, remote_port);
+        assert!(publish_cyw43_authenticated_console_peer(
+            75,
+            1,
+            COHSH_TCP_PORT,
+            remote_ipv4,
+            remote_port,
+        ));
+        assert!(cyw43_data_tx_frame_is_console_response(&console_payload));
+
+        let eapol_slot = reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, false)
+            .expect("EAPOL queue reservation");
+        assert!(enqueue_reserved_cyw43_data_tx(eapol_slot, &eapol));
+        assert!(enqueue_unreserved_cyw43_data_tx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &arp,
+            true,
+            true,
+        ));
+        for (frame, paired_rx) in [(&paired[..], true), (&console_payload[..], false)] {
+            let reservation =
+                reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, paired_rx)
+                    .expect("priority queue reservation");
+            assert!(enqueue_reserved_cyw43_data_tx(reservation, frame));
+        }
+
+        for (expected_ethertype, expected_first, lease_eligible) in [
+            (Some(ETH_P_EAPOL), eapol[0], false),
+            (Some(CYW43_ETH_P_ARP), arp[0], false),
+            (Some(CYW43_ETH_P_IPV4), paired[0], true),
+            (Some(CYW43_ETH_P_IPV4), console_payload[0], true),
+        ] {
+            assert!(promote_one_cyw43_data_tx_if_ready(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT
+            ));
+            let pending = CYW43_PENDING_DATA_TX
+                .lock()
+                .take()
+                .expect("one urgent frame promoted");
+            assert!(pending.urgent, "all four frames retain queue priority");
+            assert_eq!(pending.frame[0], expected_first);
+            assert_eq!(
+                cyw43_ethertype(&pending.frame[..usize::from(pending.len)]),
+                expected_ethertype,
+            );
+            assert_eq!(pending.steady_fast_lane.is_some(), lease_eligible);
+            assert_eq!(
+                cyw43_pending_data_tx_descriptor(&pending).flags
+                    & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE
+                    != 0,
+                lease_eligible,
+                "only exact paired/validated response provenance may mark op7",
+            );
+        }
+        assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -28103,7 +29569,12 @@ mod tests {
                 .expect("bulk slot two");
         assert!(enqueue_reserved_cyw43_data_tx(bulk_two_slot, &bulk_two));
 
-        for expected_first in [0x22, 0xff, 0x11, 0x33] {
+        for (expected_first, urgent, fast_lane) in [
+            (0x22, true, true),
+            (0xff, true, false),
+            (0x11, false, false),
+            (0x33, false, false),
+        ] {
             assert!(promote_one_cyw43_data_tx_if_ready(
                 CYW43_WIFI_DRIVER_TASK_CONTRACT
             ));
@@ -28112,6 +29583,11 @@ mod tests {
                 .take()
                 .expect("exactly one logical frame is promoted");
             assert_eq!(pending.frame[0], expected_first);
+            assert_eq!(pending.urgent, urgent);
+            assert_eq!(pending.steady_fast_lane.is_some(), fast_lane);
+            if let Some(identity) = pending.steady_fast_lane {
+                assert!(identity.current());
+            }
         }
         assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 0);
 
@@ -28175,6 +29651,82 @@ mod tests {
         rx.consume(|bytes| assert_eq!(bytes, &copied));
         drop(paired_tx);
         assert_eq!(cyw43_pending_rx_queue_len(), 0);
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_active_owner_and_pending_arp_preserve_copied_rx_slot_under_saturation() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        mark_cyw43_gate8_ready_for_test(77);
+        CYW43_DATA_TX_TEST_STUB.store(1, Ordering::Release);
+        CYW43_DATA_TX_TEST_IDLE_BEFORE_SUCCESS.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        assert!(submit_cyw43_driver_task_eth_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            b"retained-active-owner",
+        ));
+        assert_eq!(
+            drive_cyw43_pending_data_tx_for_test(1),
+            Cyw43DataTxTurnOutcome::Pending,
+        );
+        assert!(
+            CYW43_PENDING_DATA_TX.lock().is_some(),
+            "one exact op7 owner remains active",
+        );
+
+        for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
+            let mut frame = [0u8; 64];
+            frame[0] = marker as u8;
+            assert!(submit_cyw43_driver_task_eth_frame(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                &frame,
+            ));
+        }
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
+        );
+        assert!(queue_cyw43_arp_frame(test_cyw43_arp_request(
+            [0x02, 1, 2, 3, 4, 5],
+            [192, 168, 86, 1],
+            [192, 168, 86, 154],
+        )));
+        assert!(
+            !stage_one_cyw43_arp_tx_if_ready(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            "unpaired urgent ARP cannot consume the receive-coupled slot",
+        );
+        assert_eq!(CYW43_PENDING_ARP_TX.lock().len(), 1);
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
+        );
+
+        let copied = test_cyw43_tcp_frame();
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&copied),
+        ));
+        begin_cyw43_outer_event_turn();
+        let mut dev = Cyw43DriverTaskDevice::default();
+        let (rx, paired_tx) = dev
+            .receive(Instant::from_millis(0))
+            .expect("the copied RX retains its mandatory final paired permit");
+        rx.consume(|bytes| assert_eq!(bytes, &copied));
+        paired_tx.consume(64, |bytes| bytes.fill(0xa5));
+        assert_eq!(
+            cyw43_data_tx_queue_diagnostic().depth,
+            CYW43_DATA_TX_QUEUE_CAP as u32,
+        );
+        assert_eq!(CYW43_PENDING_ARP_TX.lock().len(), 1);
+        assert!(CYW43_PENDING_DATA_TX.lock().is_some());
+        assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 1);
 
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
         reset_cyw43_status_flags();
@@ -32934,6 +34486,90 @@ mod tests {
         let tcp = ip + IPV4_HEADER_LEN;
         frame[tcp..tcp + 2].copy_from_slice(&31337u16.to_be_bytes());
         frame[tcp + 2..tcp + 4].copy_from_slice(&49152u16.to_be_bytes());
+        frame
+    }
+
+    fn test_cyw43_tcp_segment_token(
+        src_mac: EthernetAddress,
+        dst_mac: EthernetAddress,
+        src_ip: Ipv4Address,
+        dst_ip: Ipv4Address,
+        src_port: u16,
+        dst_port: u16,
+        seq_number: u32,
+        ack_number: Option<u32>,
+        control: smoltcp::wire::TcpControl,
+        payload: &[u8],
+    ) -> DriverTaskNetRxToken {
+        use smoltcp::phy::ChecksumCapabilities;
+        use smoltcp::wire::{
+            EthernetFrame, EthernetProtocol, EthernetRepr, IpAddress, IpProtocol, Ipv4Packet,
+            Ipv4Repr, TcpPacket, TcpRepr, TcpSeqNumber, ETHERNET_HEADER_LEN,
+        };
+
+        let tcp = TcpRepr {
+            src_port,
+            dst_port,
+            control,
+            seq_number: TcpSeqNumber(seq_number as i32),
+            ack_number: ack_number.map(|number| TcpSeqNumber(number as i32)),
+            window_len: 4_096,
+            window_scale: None,
+            max_seg_size: (control == smoltcp::wire::TcpControl::Syn).then_some(1_460),
+            sack_permitted: false,
+            sack_ranges: [None, None, None],
+            timestamp: None,
+            payload,
+        };
+        let ipv4 = Ipv4Repr {
+            src_addr: src_ip,
+            dst_addr: dst_ip,
+            next_header: IpProtocol::Tcp,
+            payload_len: tcp.buffer_len(),
+            hop_limit: 64,
+        };
+        let frame_len = ETHERNET_HEADER_LEN + ipv4.buffer_len() + tcp.buffer_len();
+        let mut token = DriverTaskNetRxToken {
+            len: frame_len,
+            buffer: [0; MAX_FRAME_LEN],
+        };
+        EthernetRepr {
+            src_addr: src_mac,
+            dst_addr: dst_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        }
+        .emit(&mut EthernetFrame::new_unchecked(
+            &mut token.buffer[..frame_len],
+        ));
+        let checksums = ChecksumCapabilities::default();
+        ipv4.emit(
+            &mut Ipv4Packet::new_unchecked(&mut token.buffer[ETHERNET_HEADER_LEN..frame_len]),
+            &checksums,
+        );
+        let tcp_offset = ETHERNET_HEADER_LEN + ipv4.buffer_len();
+        tcp.emit(
+            &mut TcpPacket::new_unchecked(&mut token.buffer[tcp_offset..frame_len]),
+            &IpAddress::Ipv4(src_ip),
+            &IpAddress::Ipv4(dst_ip),
+            &checksums,
+        );
+        token
+    }
+
+    fn test_cyw43_console_response_frame(
+        local_port: u16,
+        remote_ipv4: [u8; 4],
+        remote_port: u16,
+    ) -> [u8; 94] {
+        let mut frame = test_cyw43_tcp_frame();
+        let ip = ETH_HEADER_LEN;
+        frame[ip + 12..ip + 16].copy_from_slice(&[192, 168, 86, 154]);
+        frame[ip + 16..ip + 20].copy_from_slice(&remote_ipv4);
+        let tcp = ip + 20;
+        frame[tcp..tcp + 2].copy_from_slice(&local_port.to_be_bytes());
+        frame[tcp + 2..tcp + 4].copy_from_slice(&remote_port.to_be_bytes());
+        frame[tcp + 12] = 5 << 4;
+        frame[tcp + 13] = 0x10;
         frame
     }
 

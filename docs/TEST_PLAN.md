@@ -696,8 +696,9 @@ prove all of the following:
   payload-free TCP control must precede other payload-bearing TCP and ordinary
   data, while fragmented IPv4 remains bulk, a paired-RX response is
   independently urgent, and FIFO order is preserved within each class.
-  Ordinary `Device::transmit` reservations must stop at 15 aggregate slots and
-  leave the final permit for the TxToken paired with `Device::receive`;
+  Every unpaired reservation, including ordinary `Device::transmit` and
+  force-urgent ARP assistance, must stop at 15 aggregate slots and leave the
+  final permit for the TxToken paired with `Device::receive`;
   consuming a valid reservation must not fail merely because an older owner
   remains active, must enqueue without immediate promotion, and dropping an
   unused token must release only that local permit. EventPump must be the sole
@@ -1003,15 +1004,13 @@ close/drain or enter pair recovery; none may silently clear or alias ownership.
 GENET must remain outside this state machine, retain its ordinary
 single-`Network`-turn rotation, and emit no WiFi priority-lease telemetry.
 
-For every root-to-CYW43 generation, including zero, the authority edge remains
-one exact 24-byte continuation grant plus a reserved-root-badge notification
-scheduling hint; endpoint input is rejected. Cold bootstrap, recovery, and
-steady service must all preserve distinct ABI-invisible `Stage`, `CommitRing`,
-`PublishGrant`, `NotifyRing`, and `PollRing` turns around the priority
-handoffs. Tests must prove that the sequence-zero stage is invisible to the
-autonomous runtime; `CommitRing` latches issued-unknown before sequence-last
-commit; the later `PublishGrant` turn publishes initial grant 1; and the later
-`NotifyRing` turn commits `Issued` before signalling last. A completion miss
+For every root-to-CYW43 generation, including zero, endpoint input is rejected.
+Cold bootstrap, firmware, control/EAPOL, recovery, op8, op10, op11,
+ordinary/bulk op7, and GENET must preserve distinct ABI-invisible `Stage`,
+`CommitRing`, `PublishGrant`, `NotifyRing`, and `PollRing` turns around priority
+handoffs. Tests must prove sequence-zero Stage is invisible; `CommitRing`
+latches issued-unknown before sequence-last commit; later turns publish grant 1
+and signal last. A completion miss
 must change only the retained phase: `GrantRequired` for an acknowledged grant
 or `Granted` for an exact unconsumed grant. A later `PublishGrant` turn may
 publish the replacement, and a still later `NotifyRing` turn may signal; an
@@ -1022,13 +1021,40 @@ prove final revalidation advances to `Issued` with no redundant signal or
 recovery. Two grant snapshots may differ only by the consumer's legal
 `consumed_grant_id: 0 -> current` acknowledgement, which must pass one bounded
 confirmation read; reverse acknowledgement, a skipped or foreign consumed id,
-or immutable-body drift must fail closed.
+or immutable-body drift must fail closed. A separate focused case admits only a
+fresh post-Gate-8 urgent op7 that is either a copied-RX paired response or an
+authenticated `cohsh` payload bound to the exact active console connection and
+peer tuple under the exact latched generation, pair, physical lifetime, and
+already-open Network lease. That case must use one bounded root producer transaction for
+Stage/rematerialization, issued-unknown latching, sequence-last command commit,
+and the final scheduling signal. It publishes no initial or replacement root
+continuation grant; after commit root performs only `PollRing` turns while the
+exact tagged parent and Function-2 child advance across yielded lease slices.
+Matching completion wins before mutation, and the producer performs no physical
+I/O.
+The console-socket policy test must prove delayed ACK is disabled. The
+integrated production case must replace the former unbounded
+`Interface::poll` with one `poll_maintenance` call plus the existing 32-frame
+bound of per-ingress `poll_ingress_single` and immediate `poll_egress`
+transactions, then close each transaction before separately bounded
+standalone egress. It must feed an ordinary in-order console segment and prove
+that an unused receive-side `TxToken` transfers its exact already-reserved
+paired slot to the transaction; the token itself must not be treated as
+carrying the TCP ACK. Exactly one validated, nonfragmented outgoing IPv4/TCP
+frame with the reverse L3/L4 tuple may consume that slot, with or without
+payload and without using Ethernet MAC identity. Wrong-tuple, non-TCP,
+fragmented, second, late, and post-end standalone output must not borrow the
+reservation, and the end hook must release an unconsumed transfer before
+standalone egress. Standalone payload eligibility must still require the exact
+active authenticated connection and peer tuple. GENET's begin/end hooks must
+be no-ops, while fresh next-image wired control guards the shared NetStack poll
+ordering.
 The request-bound lanes must still reject a nonphysical profile, GENET, stale
 identity, non-bootstrap cold state, active recovery, or torn
 lease/reservation state.
-After the one-way owner handoff deletes root's SDIO endpoint, delegated
-CYW43-to-SDIO foreground and DPC commands use the same exact grant authority
-shape and a distinct badge-256 notification scheduling hint. Tests must
+After the one-way owner handoff deletes root's SDIO endpoint, ordinary delegated
+CYW43-to-SDIO commands use the exact grant authority shape and badge-256
+scheduling hint. Tests must
 exercise the real shared record and owner cursor: publish magic, request
 sequence, every-action fingerprint, independently authoritative SDIO
 generation, and a monotonic nonzero grant id sequence-last; let the owner publish
@@ -1039,9 +1065,9 @@ non-authorizing state until the later explicit grant turn performs publication
 or re-signal; and fail closed on
 torn, stale, mutated,
 wrong-generation, mismatched-consumed, replayed, aliased, or exhausted-id
-state. The notification is only a wake hint. For both foreground and DPC
-producers, a completion miss must freeze the retained cursor and next grant
-plan without publication. The later explicit `Grant` turn must recheck for a
+state. The notification is only a wake hint. For excluded foreground and
+nonleased producers, a completion miss must freeze the retained cursor and next
+grant plan without publication. The later explicit `Grant` turn must recheck for a
 late exact completion before publishing the acknowledged replacement or
 re-signalling the exact unconsumed grant and notifying signal-last without
 physical I/O; the following producer turn polls completion again. The owner
@@ -1053,17 +1079,38 @@ owner quantum. A pending CARD_INT at `CheckWake` must consume one separate
 service turn and leave the grant unconsumed. ACK failure must restore the exact
 pending authority while performing zero I/O, and an interrupt after the wake
 linearization point must remain durably latched.
+
+One finite `STEADY_SERVICE_LEASE` must admit exactly two typed child identities:
+the exact active DPC event bound to request/fingerprint/event/generation, and the
+exact eligible post-Gate-8 urgent-op7 foreground SDIO child bound to logical
+generation, pair, physical lifetime, open Network lease, and paired-response or
+exact authenticated-console-connection-and-peer proof. Each leased owner slice must
+require command flag bit 11 `DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE`
+and the matching `ETH_TX` descriptor marker, reject EAPOL, wrong generation,
+half-tagged or mutated pairs, and any budget other than exactly one frame with
+at most four operations. Each leased owner slice must
+yield, publish exact 24-byte sequence-last progress in the mutually exclusive
+grant slot, and retain command deadline, op/byte limits, poison behavior, and
+one physical issuer. Tests must prove only a strictly newer matching
+request/fingerprint/generation slice rebases the foreground, DPC, or root
+parent inactivity fence; repeated, torn, stale, and wrong-identity records do
+not. Slices 1 through 256 may execute, slice 257 must fault before owner
+dispatch, and the root parent must fail closed after 64 consecutive PollRing
+turns without exact progress. Boot, firmware, control/op11, EAPOL, recovery,
+op8, op10, bulk, unauthenticated/wrong-peer traffic, later events, stale/mutated identity, and
+poison must reject the lease without I/O.
 Immutable root/delegated generation-bound commands must reject endpoint wake
 even when mutable gate state is absent. Repeated issued-unknown reap waits must
-preserve/re-arm the exact continuation grant; the late exact terminal may close
-only the old parent, and no endpoint fallback may advance it. Foreground and
-DPC child timeouts
-must be inactivity fences rather than total-age limits: consumption of the
-exact retained continuation grant proves owner progress and must rebase both
-the virtual-counter start and bounded fallback-poll age.
+preserve/re-arm the ordinary exact continuation grant or retain the exact
+immutable finite lease identity; the late exact terminal may close only the old
+parent, and no endpoint fallback may advance it. Foreground and DPC child
+timeouts must be inactivity fences rather than total-age limits: consumption
+of an ordinary exact retained continuation grant or publication of one exact
+newer leased owner slice proves progress and must rebase both the
+virtual-counter start and bounded fallback-poll age.
 An event's source/frame-length hint must be copied into the DPC cursor only on
-the first admission of that exact sequence. Later completion-poll, explicit
-grant, and exact-grant owner turns must not
+the first admission of that exact sequence. Later completion-poll, ordinary
+explicit-grant/exact-grant owner turns, and leased owner slices must not
 reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed F2 read
 and create an endless same-frame drain. A different sequence while one is
 active must poison the generation rather than merge event identities.
@@ -1255,11 +1302,12 @@ Production-chain coverage must additionally drive normal control and EAPOL TX
 through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
 drive all 21 post-F2 release children (20 controller command issues plus the
-`DPC_ACTIVATE` child) into real retained DPC activation, inspect the actual
-SDIO-core `FUNCTIONINTMASK` descriptor at initial release and reprime, require
-one unflagged Function-1 CMD52 byte carrying `0x03`
-(`F1=0x01 | F2=0x02`) at both seams, reject the 32-bit access aperture and
-CCCR Function-2 enable value `0x04`, and
+`DPC_ACTIVATE` child) into real retained DPC activation, and retain focused
+domain coverage for the optional WHD-compatible SDIO-core
+`FUNCTIONINTMASK=0x03` byte at initial release and reprime. Current Linux
+`brcmfmac` omits this write, so the test preserves the chosen one-byte path and
+its distinction from CCCR `IOEx.F2=0x04` and four-byte `HOSTINTMASK` without
+classifying it as a latency repair. Then
 drive one DPC event through owner-backed status, F2 read, empty-confirmation,
 and post-status work before foreground queue consumption.
 Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
@@ -1885,6 +1933,7 @@ The focused acceptance tests
 `cyw43_event_tx_hook_prevents_copied_rx_from_starving_active_tx`,
 `cyw43_event_tx_hook_defers_queued_tx_behind_exact_netdata_owner`,
 `cyw43_event_tx_hook_does_not_stage_arp_into_the_paired_rx_slot`,
+`cyw43_active_owner_and_pending_arp_preserve_copied_rx_slot_under_saturation`,
 `cyw43_event_tx_hook_frees_full_fifo_for_pending_rx`,
 `cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition`,
 `cyw43_root_wake_clear_recheck_preserves_new_edges`,
@@ -1952,31 +2001,34 @@ request setup as the missing f4 repair: f4 already used
 `PREISSUE_STEP_BOUND=16` for one deterministic CMD52/CMD53
 preflight/register/COMMAND owner quantum, apart from the request-owned
 status-clear retry. Coverage must preserve that existing invariant without
-crediting it as a new fix. The phase-separated f4 scheduler is now the proven
-single-lifetime oracle rather than a cadence optimization target. A root parent
-crosses separate prepare, commit, grant-publication, notification, and poll
-turns; the consumer crosses separate wake, grant-check, and execute turns. A
+crediting it as a new fix. The phase-separated f4 scheduler remains the
+single-owner/fail-closed oracle, not a requirement to retain every reciprocal
+turn on the steady data plane. Ordinary root parents cross separate prepare,
+commit, grant-publication, notification, and poll turns; ordinary consumers
+cross separate wake, grant-check, and execute turns. A
 normal linked Function-2 receive uses about five physical CYW43-to-SDIO children for
 a first-read-sized frame or six with a remainder. The shared 32-KiB aperture
 means a hot DPC episode performs zero Function-1 window writes; a cold episode
 adds exactly one LOW/MID/HIGH sequence. Coverage must prove those hot/cold
-counts and that preparation, priority transitions, completion polls, and each
-physical quantum stay separate. Root coverage must prove distinct `Stage`,
-`CommitRing`, `PublishGrant`, `NotifyRing`, and `PollRing` turns. Delegated
-foreground and DPC coverage must prove distinct `Poll -> Grant -> Poll` turns,
-including the grant-turn late-completion recheck before publication. The
-consumer must prove distinct `CheckWake`, `CheckGrant`, and ACK-before-I/O
-`Execute` turns, without consuming a grant when CARD_INT wins or performing I/O
-after ACK failure. Coverage must also prove that DPC supplies both persistent
+counts and that each physical quantum stays single-owner and bounded. Root
+coverage must prove distinct phases for boot, firmware, control/EAPOL, recovery,
+op8, op10, op11, bulk, and GENET. It must separately prove an eligible fresh
+post-Gate-8 urgent op7 uses one bounded
+Stage/rematerialize/issued-latch/sequence-last-command/final-signal producer
+transaction with no root continuation grant, followed only by root `PollRing`
+turns while the tagged parent and Function-2 child advance. One finite
+`STEADY_SERVICE_LEASE` must cover only the exact active DPC child and exact
+eligible urgent-op7 foreground SDIO child, yield each bounded owner slice, and
+retain deadline/op/byte/poison/sole-issuer bounds. Coverage must also prove that DPC supplies both persistent
 child-owner urgency and queue/tail root-op8 demand, a current root wake supplies
 the same queue/tail demand, only the independently due lost-edge audit adds
 `RX_HINTLESS_FIRSTREAD`, and the 32-step `DPC_ACTIVATE`, strict queued-frame
 terminal, v11 cause/frame-turn counters, and generation-scoped TX phase
 counters remain passive and bounded. Final admission coverage must additionally
-prove CARD_INT precedence at `CheckWake`, the final condition-before-sleep
-`Wait` recheck, immutable descriptor-based rejection of endpoint fallback after
-gate-state loss, and exact-grant preservation across repeated issued-unknown
-reap waits. TX coverage must prove
+prove prompt IRQ capture without changing an active controller cursor, exact
+AckStatus W1C condition-before-sleep rearm before terminal publication, new-IRQ
+append only after proven unmask, zero/no-ack fallback, endpoint rejection, and
+issued-unknown preservation. TX coverage must prove
 the aggregate-capacity-16 urgent/bulk priority classes, EventPump-only
 coordination, queue-only TxToken consumption, exact foreign-owner preservation,
 active-op7 or credit-ready-head priority over sustained copied RX, copied RX
@@ -2068,30 +2120,20 @@ operations/s with zero failures. Wi-Fi REST/hive pressure was correctly
 withheld. These results continue to reject smoltcp and GENET as the first
 causal surface.
 
-Exact image `031e49b0ce8c` corrected the earlier CCCR-domain value error to
-core F1/F2 mask `0x03`, but still fails this gate. Cold plus warm R01-R05 passed
-Gate 8a-8h and DHCP 6/6 while aggregate ICMP loss was 43.3%, SYN-to-SYNACK
-medians were 441-1,002 ms, and host-payload-to-Pi ACK p95 was
-1.289-1.344 seconds; the reverse direction remained 0.122-0.148 ms. The
-same-image GENET control stayed clean at 0.548 ms median ping, 0.526 ms median
-handshake, and zero captured benchmark TCP defect.
-
-The first remaining violated invariant is access width: SDIO-core
-`FUNCTIONINTMASK` at `core + 0x34` is an 8-bit register, but `031e49b0ce8c`
-still used an incrementing four-byte Function-1 CMD53 through the 32-bit
-backplane aperture. Production-chain tests must inspect both controller seams
-and require exactly one unflagged Function-1 CMD52 write with length one and
-payload `0x03`; they must explicitly reject the 32-bit aperture and CCCR-domain
-value `0x04`. An assertion over a detached constant is insufficient.
-`HOSTINTMASK` remains a four-byte atomic write, and CCCR `IENx` remains the
-distinct read-modify-write/readback sequence requiring master/F1/F2 value
-`0x07`. Root's diagnostic model must mirror `0x03` while
-`firmware_channel_programs_function_int_mask()` remains false, proving root is
-not a second physical writer. No test may pass by changing the sole owner,
-HAL/SDIO topology, IRQ158 route, source-probe watchdog, phase-separated
-authority, affinity, scheduling, smoltcp, GENET, or ABI. This correction
-requires a new built/read-back image and fresh serial-plus-pcap evidence;
-`031e49b0ce8c` is its defect-discovery baseline, not acceptance proof.
+Exact image `031e49b0ce8c` corrected the SDIO-core mask to F1/F2 value `0x03`;
+exact `494e9cb0e9ad` later carried the corrected one-byte path. The byte remains
+a legitimate George Robotics/Infineon WHD initialization choice, while current
+Linux `brcmfmac` omits it. The 494 cold plus warm R01-R05 group passed first-pair
+Gate 8a-8h and DHCP 6/6 with exact DPC capture/publication/consumption/rearm and
+zero queue, overflow, drop, or owner faults, but acceptable transport remained
+0/6. Cold TCP median was about 654 ms and warm medians about 604-686 ms. R05
+accepted-to-issued averaged about 410 ms and reached 1.877 seconds, while
+issued-to-terminal averaged about 48 ms. Same-image and prior unchanged GENET
+remained sub-millisecond and about 667-701 operations/s. The mask is therefore
+neither the latency root cause nor performance proof. Focused tests retain its
+chosen one-byte descriptor, keep CCCR `IENx` and `HOSTINTMASK` domains distinct,
+and prove root is not a second writer; they must not use mask presence or
+absence to satisfy the TCP gate.
 
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
@@ -2104,8 +2146,11 @@ Cohesix must prove its translation through the existing 50-frame RX bound,
 credits/glom, 32-KiB shared aperture, 512-byte Function 2 blocks, multi-block
 CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
 latch. Its scheduler form remains one bounded EventPump Network quantum with
-physical-console checkpoints, exact grants, one HAL owner, and one linked SDIO
-runtime issuer; no test may pass by adding a normal-path timer poller or private
+physical-console checkpoints, ordinary exact grants, one finite typed
+`STEADY_SERVICE_LEASE` for only the active DPC or eligible urgent-op7 child,
+one HAL owner, and one linked SDIO runtime issuer. The AckStatus W1C child must
+rearm CARD_INT before terminal publication, and a new IRQ may append only after
+unmask proof. No test may pass by adding a normal-path timer poller or private
 physical drain loop. The 32-ms quiescence and 1,024-ms reissue deadlines on the
 existing op8 owner form a low-rate lost-edge safeguard for Cohesix's extra
 linked notification boundaries, not a second issuer. A quiescent inspection
@@ -2130,10 +2175,35 @@ work, or changing GENET scheduling.
 Run the focused source gates serially:
 
 ```bash
-cargo test -p root-task --lib --no-default-features --features net-console icmp_echo -- --test-threads=1
-cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 retained_icmp_echo_due_extends_only_the_cyw43_network_lane -- --test-threads=1
-cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 socket_capacity_covers_full_profile_with_outbound_probe -- --test-threads=1
-cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 icmp_echo_reservation_failure_releases_earlier_leases -- --test-threads=1
+cargo test -p pi4-driver-abi continuation_grant_fits_reserved_command_slot_and_fingerprints_actions
+cargo test -p pi4-driver-abi sdio_steady_service_lease_is_scoped_to_typed_data_plane_children
+cargo test -p pi4-driver-abi sdio_dpc_source_w1c_rearm_requires_exact_event_bound_write_shape
+cargo test -p pi4-driver-runtime steady_parent_lease_requires_paired_tags_and_exact_budget -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_parent_propagates_exact_identity_to_only_function2_write -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_parent_budget_blocks_fifth_child_before_frontier_publication -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_child_first_completion_miss_stays_pending_without_root_grant -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_service_progress_is_sequence_last_and_identity_exact -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_partial_steady_lease_markers_typed_reject_before_io -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_service_lease_is_finite_and_cannot_auto_renew -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_service_lease_exhaustion_poison_is_typed_and_fail_closed -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_parent_lease_exhaustion_poison_is_typed_and_fail_closed -- --test-threads=1
+cargo test -p pi4-driver-runtime dpc_steady_progress_rebases_exact_child_inactivity_fence -- --test-threads=1
+cargo test -p pi4-driver-runtime dpc_steady_lease_tag_loss_is_immediate_without_grant_fallback -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_service_lease_tracks_exact_dpc_event_across_mask_health -- --test-threads=1
+cargo test -p pi4-driver-runtime dpc_source_rearm_marker_is_only_initial_core_intstatus_ack -- --test-threads=1
+cargo test -p pi4-driver-runtime ack_status_w1c_rearms_before_completion_and_appends_crossing_event -- --test-threads=1
+cargo test -p pi4-driver-runtime only_real_irq_appends_behind_proven_unmasked_active_event -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_fresh_turn_signals_once_without_grant_then_only_polls -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_lease_requires_exact_paired_tags_budget_and_cadence -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_parent_inactivity_rebases_only_on_new_exact_progress -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_standalone_console_lease_requires_exact_active_authenticated_peer_lifetime -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_authenticated_console_parent_keeps_admitted_cadence_after_auth_close -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib console_tcp_socket_disables_delayed_ack -- --test-threads=1
+cargo test -q -p root-task --lib cyw43_smoltcp_immediate_ack_uses_receive_coupled_steady_provenance --features release-pi4 -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_tx_priority_classifier_keeps_protocol_control_ahead_of_bulk -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_tx_queue_priority_is_distinct_from_steady_lease_eligibility -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_tx_priority_uses_one_owner_and_fifo_within_each_class -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_active_owner_and_pending_arp_preserve_copied_rx_slot_under_saturation -- --test-threads=1
 ```
 
 Fresh exact-image acceptance must pair one power-off plus five first-pair warm
@@ -2168,6 +2238,20 @@ the same common cold-neighbor semantic gate while latency, throughput, and
 scheduler counters remain within its control contract. Until a rebuilt/read-back
 image produces this evidence, the cold-neighbor repair and both performance
 thresholds remain source claims rather than hardware results.
+
+For the replacement candidate, every counted lifetime must also show the exact
+`STEADY_SERVICE_LEASE` identity and finite consumed op/byte/elapsed budget for
+DPC and eligible urgent op7 separately, with zero excluded-child admission,
+overrun, auto-renew, or poison. Correlate root accepted-to-issued and
+issued-to-terminal timing with the pcap; a result that merely moves delay from
+the former into the latter still fails the 40-ms p95 gate. Validate the exact
+active authenticated `cohsh` connection and peer tuple before treating
+non-receive-coupled payload as urgent. The same workload must prove boot,
+firmware, control/EAPOL, recovery, op8, op10, bulk, wrong-peer TCP, and GENET
+never use the lease.
+The host-tool suite, `tools/cohesix-py`, `.coh` grammar/fixtures, hive/REST
+projection, and benchmark workload/report schema are reviewed-but-unaffected:
+the repair changes no external protocol or report contract.
 
 CYW43 device tests must also prove that a retained TX blocks another physical
 issue, while an unproved predecessor credit window blocks both FIFO-head
@@ -2434,7 +2518,7 @@ The focused adversarial cases include
 `mutated_action_fingerprint_poisoning_never_replays_issued_child`,
 `production_hintless_source_probe_reaps_to_one_retained_parent_terminal`,
 `consumed_foreground_grant_rebases_exact_child_inactivity_fence`,
-`consumed_dpc_grant_rebases_exact_child_inactivity_fence`,
+`dpc_steady_progress_rebases_exact_child_inactivity_fence`,
 `issued_unknown_timeout_retains_one_child_without_same_generation_replay`,
 `dpc_pair_restart_arbitration_publishes_only_released_child_terminal_cause`,
 `corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum`,
@@ -2649,12 +2733,11 @@ intake. Tests must prove that a dropped send is not queued, multiple sends
 cannot accumulate authority, and repeated doorbells never republish, mutate,
 or replay the command.
 
-Every root-to-CYW43 generation, including zero, instead advances only through
-the stable acknowledged exact shared grant. For an exact current-generation
-parent—cold, recovery, or under an already `Open` matching Network
-lease—tests must prove that HAL uses the same distinct ABI-invisible `Stage`,
-sequence-last `CommitRing`, exact `PublishGrant`, signal-last `NotifyRing`, and
-completion `PollRing` turns. Issued-unknown
+Every root-to-CYW43 generation, including zero, uses exact immutable authority.
+For cold, firmware, control/EAPOL, recovery, op8, op10, op11, ordinary/bulk op7,
+and GENET, tests must prove distinct ABI-invisible `Stage`, sequence-last
+`CommitRing`, exact `PublishGrant`, signal-last `NotifyRing`, and completion
+`PollRing` turns. Issued-unknown
 state must be latched before commit, and no administrative turn may perform a
 physical action. Typed cold provenance must not authorize another publication
 lane. After an incomplete completion read, `PollRing` must change only the
@@ -2667,60 +2750,74 @@ these CYW43 paths. The notification remains a coalescing scheduling hint and
 cannot grant authority. Tests must reject
 endpoint input, stale-sequence, changed-action, changed-generation,
 changed-flags, exhausted id, consumed or mutated grants, and prove an issued
-action cannot be replayed.
+action cannot be replayed. A separate eligible fresh post-Gate-8 urgent-op7
+case must require either consumption of the exact transferred copied-RX
+reservation by one validated reverse IPv4/TCP tuple or authenticated `cohsh`
+bound to the exact active console connection and peer tuple plus exact
+generation, pair, physical lifetime, and open Network lease, then use one bounded
+Stage/rematerialize/issued-latch/sequence-last-command/final-signal root
+producer transaction with no root continuation grant. Root must perform only
+`PollRing` turns afterward while the exact tagged parent and Function-2 child
+advance across yielded lease slices. Excluded or stale cases must reject before
+authority mutation.
 
-For delegated CYW43-to-SDIO commands, tests must prove there is no usable
-endpoint after handoff and that only the stable acknowledged shared grant can
-advance the retained owner cursor. The grant must match the command sequence,
+For ordinary delegated CYW43-to-SDIO commands, tests must prove there is no
+usable endpoint after handoff and that only the stable acknowledged shared grant
+can advance the retained owner cursor. The grant must match command sequence,
 complete action fingerprint, and the independently retained SDIO generation;
 its nonzero id is published last and must exceed the last consumed id. The
 consumer acknowledgement is irrevocable, an unacknowledged id may only be
 re-signalled, and the producer may publish the next id only after observing the
-exact acknowledgement. On a completion miss, the production foreground or DPC
+exact acknowledgement. On a completion miss, an excluded foreground or nonleased
 producer must freeze durable cursor/grant state without publication. A later
 explicit `Grant` turn must recheck for a late exact completion before
 publishing the next grant or re-signalling the exact unconsumed grant and
 notifying signal-last without physical I/O; the following producer turn polls
 again. The owner must consume at
-most one exact grant and perform at most one physical owner quantum. Foreground
-and DPC child timeout age is inactivity: consumption of that exact grant must
-rebase the counter-backed and fallback-poll fences. HAL must mint the
+most one exact grant and perform at most one physical owner quantum. Ordinary
+child timeout age is inactivity: consumption of that exact grant rebases the
+counter-backed and fallback-poll fences. One finite `STEADY_SERVICE_LEASE` may
+instead admit only the exact active DPC or eligible urgent-op7 child, yield every
+bounded owner slice, and retain deadline/op/byte, identity, poison, and
+one-issuer bounds. HAL must mint the
 CYW43 send cap from the SDIO owner's bound notification with send-only rights
 and badge 256; it must not copy the owner endpoint.
 
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
 badge 2, and the SDIO IRQ delivers badge 159. Badge 2 and badge 159 are
 service wakes. Badge 256 is a coalescing scheduling hint for an already-published
-command or grant, but is not foreground authority by itself. The reserved high
+command with ordinary exact-grant authority or exact immutable finite lease
+admission, but is not foreground authority by itself. The reserved high
 notification bit is excluded from service work. Tests must prove that one
 pending service source can consume at most one service quantum, that at least
 4,096 standalone level reassertions produce no second service quantum and lose
-no durable source, and that an exact later root or delegated grant admits only
-one foreground phase on its respective path. CYW43 root commands use the exact
-root grant plus reserved-root-badge scheduling hint and must reject endpoint
-wakes; non-CYW43 retained commands keep their endpoint coverage. Tests must
+no durable source, and that an exact later ordinary root or delegated grant
+admits only one foreground phase on its respective path. Ordinary CYW43 root
+commands use the exact root grant plus reserved-root-badge scheduling hint; the
+tagged leased root command uses its immutable finite lease identity with no
+root continuation grant. Both must reject endpoint wakes; non-CYW43 retained
+commands keep their endpoint coverage. Tests must
 also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
-preserve the exact grant across a scheduler handoff, and release exactly one
-owner quantum only after validating the already-published grant. If
+preserve ordinary grant authority across a scheduler handoff, and release
+exactly one owner quantum only after validating its admitted authority. If
 deferred notification service consumes a root scheduling edge, the same
 unconsumed exact grant remains eligible only on a later foreground turn.
 The production reciprocal-ring/controller test must also schedule CYW43 far
 enough ahead that the initial command signal and first-grant signal are both
 published before SDIO intake and collapse to one badge-256 wake—or that the
 only edge is consumed before the grant becomes observable. The delegated owner
-must then show distinct bounded `CheckWake`, `CheckGrant`, and `Execute` turns.
+must then show distinct bounded `CheckWake`, `CheckGrant`, and `Execute` turns
+for ordinary work.
 `CheckWake` polls the combined source, `CheckGrant` freezes one stable exact
 grant without physical I/O, and `Execute` performs the irrevocable ACK
-immediately before at most one physical owner quantum. For
-`DPC_ACTIVATE`, that quantum is the bounded 32-step ordered
-mask/inspect/publish-or-coalesce/ACK/signal/rearm transaction; only a failed
-exact IRQ ACK may retain the cursor for a later ACK-only retry. Empty
+immediately before at most one physical owner quantum. `DPC_ACTIVATE` retains
+its bounded activation/fallback role; normal DPC service must use the exact
+AckStatus W1C child to rearm before terminal publication. Empty
 state enters `Wait`, whose durable grant recheck performs no owner I/O and
 cannot require a second notification edge. A pending CARD_INT at `CheckWake` is
-service-first, consumes a separate service turn, and leaves the exact grant
-unconsumed for later `CheckGrant` and `Execute` turns. A later CARD_INT may
-follow at most one already-admitted owner quantum and must be observed at the
-next wake poll.
+service-first for ordinary work. With a leased DPC child, notification service
+may publish/ACK without changing the controller cursor, and a later CARD_INT may
+append behind the active event only after proven unmask.
 The consumed grant cannot replay. The actual card-init `HOST_CONFIG` producer must
 cross the production reciprocal ring and retained owner cursor under this
 ordering. Telemetry must distinguish the post-generation-admission
@@ -2732,32 +2829,33 @@ completion, and advance the CYW43 card-init parent to CMD0. Malformed idle
 badges must not be retained. Empty, stale, consumed, mutated, or
 wrong-generation grants and acknowledgement failure must execute zero owner
 operations and must not produce a private retry loop.
-CARD_INT coverage must also prove that terminal deferred service masks the host
-source before IRQ acknowledgement.
+CARD_INT coverage must prove prompt mask/publish/exact IRQ ACK with no SDIO card
+command beside a retained cursor, AckStatus-W1C rearm before child terminal, and
+fail-closed zero/no-ack fallback.
 The real SDIO post-claim priority-failure hook must prove that one episode
 cannot reclaim its sticky cutover, that each failure/restart action consumes one
 outer turn, and that only the exact SDIO-first/CYW43-second pair restart resets
 the latch before a later recovery episode may claim cutover. A precondition
 rejection without a valid restart context remains terminal.
 Autonomous committed-ring polling must preserve non-CYW43 root-command intake
-when a best-effort endpoint send is lost. Every CYW43 root generation,
-including zero, must use a reserved-root-badge notification plus an exact
-root grant and must reject endpoint continuation. Delegated initial intake must
+when a best-effort endpoint send is lost. Every CYW43 root generation must
+reject endpoint continuation and use either the ordinary exact-grant lane or
+the exact eligible urgent-op7 producer/lease seam. Delegated initial intake must
 use the coalescing badge-256 notification and sequence-last ring command. After
-`Pending`, only an exact root or delegated shared grant for the retained intake
-may grant the next foreground quantum; the notification only schedules a later
-grant check. After a completion miss, the CYW43 root `PollRing` turn must change
-only the retained phase; any required `PublishGrant` and `NotifyRing` actions
-occur on later turns, and a matching completion wins before either. Delegated
-foreground/DPC producers retain distinct `Poll -> Grant -> Poll` turns with a
-late-completion recheck before grant publication. Non-CYW43 and GENET endpoint
+`Pending`, ordinary intake requires an exact root or delegated shared grant for
+the next foreground quantum; exact tagged leased intake instead requires its
+immutable finite lease identity. The notification only schedules the relevant
+authority check. Ordinary completion misses retain separate publication/notify
+turns; the exact eligible urgent op7 publishes no root continuation grant and
+follows its scoped producer/lease rule.
+Delegated excluded foreground producers retain `Poll -> Grant -> Poll`; the
+`STEADY_SERVICE_LEASE` covers only its two typed identities. Non-CYW43 and GENET endpoint
 paths retain their existing phases.
-Pending-command DPC arbitration,
-reciprocal SDIO child-ring submission, completion polling, explicit grant, and
-owner admission remain bounded retained work. The SDIO owner must preserve
-distinct `CheckWake`, `CheckGrant`, and ACK-before-I/O `Execute` turns; no turn may
-consume more than one exact grant, execute two owner quanta, or form a
-private yield/resignal/poll loop. Issued-unknown completion reaping must run
+Pending-command arbitration, reciprocal submission, completion polling,
+ordinary explicit grants, and owner admission remain bounded retained work. The
+SDIO owner must preserve distinct grant phases for excluded work; every leased
+slice must yield. No turn may execute two owner quanta or form a private loop.
+Issued-unknown completion reaping must run
 before a pair-restart hold: a late exact child reply may prove terminal
 ownership and release the claim, but its result/payload is quarantined and only
 one exact old-parent terminal may be emitted before restart, with no
@@ -2782,18 +2880,18 @@ one incrementing, four-byte Function 1 CMD53 with the exact little-endian
 payload, never four bytewise CMD52 commands. Its adversarial cut must publish a
 new interrupt cause after sampling but before commit and prove that only the
 sampled bits clear. The release-order test must drive the production retained
-cursor through four-byte `HOSTINTMASK`, the separate Gate 10 SDIO-core
-`FUNCTIONINTMASK=0x03` one-byte phase,
+cursor through four-byte `HOSTINTMASK`, the optional WHD-compatible Gate 10
+SDIO-core `FUNCTIONINTMASK=0x03` one-byte phase,
 watermark, `DEVICE_CTL` read-modify-write clearing `CA_INT_ONLY` while adding
 `F2WM`, and a distinct readback proving both bits before `MESBUSYCTRL`,
 `WAKEUPCTRL` read-modify-write adding `HTWAIT`, `CARDCAP`, and exact
 `FORCE_HT`. It must prove one controller operation per outer turn, preservation
 of unrelated read-modify-write bits, fail-closed handling of a sticky mask or
 failed readback, stale/cached completion isolation, and no controller reissue
-when a fresh pending turn replays only the cached completed prefix. Both the
-initial and reprime mask tests must inspect the actual unflagged Function-1
-CMD52 descriptor and one-byte payload, require core F1/F2 bits `0x01`/`0x02`,
-and reject both the 32-bit access aperture and CCCR-domain value `0x04`.
+when a fresh pending turn replays only the cached completed prefix. The mask
+test preserves the selected WHD register-domain shape while current Linux's
+omission remains a valid reference; it must not claim that this optional byte
+controls TCP cadence.
 Root-only coverage retains diagnostic mirror `0x03` while
 proving its physical writer remains inactive. The final
 card-interrupt test must cross the same real seam as three
