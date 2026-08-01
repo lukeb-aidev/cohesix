@@ -5865,6 +5865,10 @@ const SDPCMD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SDPCMD_REG_TOHOSTMAILBOXDATA: u32 = 0x4C;
 const SDIO_INT_STATUS: u32 = 0x20;
 
+// SDIO-core FUNCTIONINTMASK indexes functions from bit 0. These bits are not
+// the CCCR IOEx/IENx function bits, where Function 1/2 use 0x02/0x04.
+const SDPCMD_FUNCTION_INT_MASK_F1: u32 = 1 << 0;
+const SDPCMD_FUNCTION_INT_MASK_F2: u32 = 1 << 1;
 const CC_F2RDY: u32 = 1 << 2;
 const SMB_NAK: u32 = 1 << 0;
 const SMB_INT_ACK: u32 = 1 << 1;
@@ -5874,7 +5878,7 @@ const I_HMB_FRAME_IND: u32 = 1 << 6;
 const I_HMB_HOST_INT: u32 = 1 << 7;
 const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
-const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
+const FUNCTIONINTMASK: u32 = SDPCMD_FUNCTION_INT_MASK_F1 | SDPCMD_FUNCTION_INT_MASK_F2;
 const HMB_DATA_NAKHANDLED: u32 = 0x0001;
 const HMB_DATA_DEVREADY: u32 = 0x0002;
 const HMB_DATA_FC: u32 = 0x0004;
@@ -30491,7 +30495,10 @@ mod tests {
         );
         assert!(sdio_irq_binding_failure_is_terminal());
         assert_eq!(SDPCMD_REG_FUNCTIONINTMASK, 0x34);
-        assert_eq!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
+        assert_eq!(SDPCMD_FUNCTION_INT_MASK_F1, 0x01);
+        assert_eq!(SDPCMD_FUNCTION_INT_MASK_F2, 0x02);
+        assert_eq!(FUNCTIONINTMASK, 0x03);
+        assert_ne!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
         assert!(!firmware_channel_programs_function_int_mask());
         assert_eq!(
             control_plane_snapshot_function_int_mask_label(Some(0), None, None),

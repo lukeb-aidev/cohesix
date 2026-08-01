@@ -509,8 +509,8 @@ target remains p95 at or below 10 ms and at least 100 sequential requests/s.
 One GENET control must prove the same common cold-neighbor semantics with
 unchanged wired latency, throughput, and scheduling. The exact `2ea5b593d67c`
 candidate is qualified below and rejected for transport quality. The subsequent
-`DEVICE_CTL` correction remains unproven until rebuilt, flashed, and exercised
-on Pi hardware.
+`DEVICE_CTL` correction was exercised by exact `63eba6204517` below: it
+preserved first-pair startup but did not restore acceptable transport quality.
 
 The 2026-08-01 exact `2ea5b593d67c` / image
 `32815280e425029127909a4085a5f6e2f07f4c52daa85ed2facdc035df0088d8`
@@ -555,6 +555,38 @@ fails the existing release lifetime closed. It adds no polling fallback,
 second owner, ABI change, smoltcp change, GENET change, or scheduling change.
 Root is affined to core 0 and the SDIO/CYW43 pair to core 3 on the live image,
 so the apparent root-priority hypothesis is not the first causal defect.
+
+The exact `63eba6204517` / image
+`4e9883933c56be841dc5ce191ab94ac33db0aadcce6f127c199c1b5cd2124f8d`
+hardware group preserved cold plus warm R01-R05 first-pair Gate 8a-8h and DHCP,
+so warm initialization was again 5/5, but acceptable warm TCP quality remained
+0/5. Warm ping loss was 20-50% with average RTT of 1.08-1.30 seconds.
+Host-to-Pi TCP service took about 1.25-1.48 seconds while Pi-to-host ACKs
+returned in 0.026-0.164 ms. The DPC/source-probe pattern remained
+watchdog-paced, but root/runtime queues, DPC rings, and TX accounting recorded
+zero faults. The same image's GENET control returned 10/10 pings at 0.917 ms
+average, completed seven handshakes in 0.704-1.069 ms, completed
+`tcp_basic.coh` in about 0.5 seconds, and ran the 500-operation
+baseline/pooled checks at about 667/699 operations/s with zero failures.
+This direction asymmetry plus same-image GENET performance again places the
+material defect below the common smoltcp path. Wi-Fi REST/hive pressure was
+withheld after the raw quality gate failed.
+
+Source inspection found the first violated invariant at the next register-
+domain boundary. The linked runtime had reused CCCR `IOEx` Function-2 enable
+value `0x04` as the four-byte payload for the distinct SDIO-core
+`FUNCTIONINTMASK` register at `core + 0x34`. That core register defines
+Function-1 and Function-2 interrupt bits as `0x01` and `0x02`, so initial
+release and reprime must each write little-endian `0x00000003`. CCCR `IENx`
+remains a separate read-modify-write/readback operation whose master/F1/F2
+admission value is `0x07`. Focused production-chain tests inspect the actual
+payload at both mask seams and reject `0x00000004`. Root mirrors `0x03` only in
+its compatibility diagnostic model;
+`firmware_channel_programs_function_int_mask()` remains false, so the inactive
+root path cannot become a second writer. The repair changes no owner, HAL/SDIO
+topology, watchdog, smoltcp, GENET, affinity, scheduling, or ABI. Its live
+verdict requires a newly built, read-back image;
+the `63eba6204517` run is defect-discovery evidence, not proof of the repair.
 
 ### QEMU network drivers
 
@@ -2092,10 +2124,15 @@ generation and XID.
   `CA_INT_ONLY` while setting `F2WM`, a distinct data-mode readback,
   `MESBUSYCTRL`, `WAKEUPCTRL` read-modify-write with `HTWAIT`, `CARDCAP`, and
   exact `FORCE_HT`. The readback must show `CA_INT_ONLY=0` and
-  `F2WM_ENAB=1`. Cohesix retains `FUNCTIONINTMASK` as a separate Gate 10
-  phase immediately after `HOSTINTMASK`; it is not folded into the host-mask
-  operation. Each read, write, completion observation, and later reprime phase
-  consumes its own outer EventPump turn. Read-modify-write preserves unrelated
+  `F2WM_ENAB=1`. Cohesix retains the SDIO-core `FUNCTIONINTMASK` at
+  `core + 0x34` as a separate Gate 10 phase immediately after `HOSTINTMASK`;
+  it is not folded into the host-mask operation and does not reuse CCCR
+  Function-2 enable value `0x04`. Its core Function-1/Function-2 bits are
+  `0x01`/`0x02`, so both initial release and reprime write `0x00000003`.
+  Focused tests inspect the actual little-endian payload at both seams and
+  reject `0x00000004`. Root's diagnostic mirror is `0x03`, but its writer
+  remains disabled. Each read, write, completion observation, and later reprime
+  phase consumes its own outer EventPump turn. Read-modify-write preserves unrelated
   `DEVICE_CTL`, `WAKEUPCTRL`, and CCCR `IENx` bits. Card-interrupt admission is
   the Linux-shaped retained sequence `IENx read -> write(current | 0x07) ->
   readback`; DPC activation is forbidden until the master, Function 1, and

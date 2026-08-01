@@ -1817,6 +1817,10 @@ const SDPCMD_REG_FUNCTIONINTMASK: u32 = 0x34;
 const SDPCMD_REG_TOSBMAILBOX: u32 = 0x40;
 const SDPCMD_REG_TOSBMAILBOXDATA: u32 = 0x48;
 const SDPCMD_REG_TOHOSTMAILBOXDATA: u32 = 0x4c;
+// SDIO-core FUNCTIONINTMASK indexes functions from bit 0. These bits are not
+// the CCCR IOEx/IENx function bits, where Function 1/2 use 0x02/0x04.
+const SDPCMD_FUNCTION_INT_MASK_F1: u32 = 1 << 0;
+const SDPCMD_FUNCTION_INT_MASK_F2: u32 = 1 << 1;
 const CC_F2RDY: u32 = 1 << 2;
 const SMB_NAK: u32 = 1 << 0;
 const SMB_INT_ACK: u32 = 1 << 1;
@@ -1836,7 +1840,7 @@ const I_HMB_FC_STATE: u32 = 1 << 4;
 const I_HMB_FC_CHANGE: u32 = 1 << 5;
 const I_CHIPACTIVE: u32 = 1 << 29;
 const HOSTINTMASK: u32 = I_HMB_SW_MASK | I_CHIPACTIVE;
-const FUNCTIONINTMASK: u32 = SDIO_FUNC_ENABLE_2 as u32;
+const FUNCTIONINTMASK: u32 = SDPCMD_FUNCTION_INT_MASK_F1 | SDPCMD_FUNCTION_INT_MASK_F2;
 const CYW43_POST_RELEASE_MAILBOX_POLLS: usize = 1_000;
 const CYW43_POST_RELEASE_MAILBOX_TIMEOUT_MS: u64 = 1_000;
 const CYW43_POST_RELEASE_SDONLY_FENCE_SETTLE_MS: u64 = 20;
@@ -23040,6 +23044,7 @@ fn sdio_execute_transfer_with_timeout(
         block_size,
         block_count,
         timeout_us,
+        payload_u32: test_sdio_transfer_payload_u32(cmd, flags, frame),
     };
     test_sdio_transfer_log_record(record);
     if let Some((stage, status)) = test_sdio_transfer_failure(record) {
@@ -36305,6 +36310,7 @@ struct TestSdioTransferRecord {
     block_size: u16,
     block_count: u16,
     timeout_us: u32,
+    payload_u32: Option<u32>,
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -36442,6 +36448,7 @@ static TEST_SDIO_TRANSFER_LOG: TestSdioTransferLog =
             block_size: 0,
             block_count: 0,
             timeout_us: 0,
+            payload_u32: None,
         }; TEST_SDIO_TRANSFER_LOG_CAP],
     }));
 
@@ -36634,6 +36641,31 @@ fn reset_test_sdio_transfer_failure() {
     unsafe {
         *TEST_SDIO_TRANSFER_FAILURE.0.get() = TestSdioTransferFailureState::default();
     }
+}
+
+#[cfg(all(not(target_os = "none"), test))]
+fn test_sdio_transfer_payload_u32(
+    cmd: u16,
+    flags: u16,
+    frame: DriverFrameDescriptor,
+) -> Option<u32> {
+    if cmd != SDIO_CMD53
+        || flags & DRIVER_RUNTIME_SDIO_FLAG_WRITE == 0
+        || frame.len != core::mem::size_of::<u32>() as u16
+    {
+        return None;
+    }
+    let shared_payload_bytes = RUNTIME_DESCRIPTOR.with_ref(runtime_shared_buffer_bytes);
+    if !frame.in_runtime_payload(shared_payload_bytes) {
+        return None;
+    }
+    let offset = frame.offset as usize;
+    Some(u32::from_le_bytes([
+        read_runtime_payload_byte(offset),
+        read_runtime_payload_byte(offset + 1),
+        read_runtime_payload_byte(offset + 2),
+        read_runtime_payload_byte(offset + 3),
+    ]))
 }
 
 #[cfg(all(not(target_os = "none"), test))]
@@ -69709,6 +69741,10 @@ mod tests {
         assert_eq!(SDIO_FUNCTION2_BLOCK_SIZE, 512);
         assert_eq!(SDIO_CCCR_IENX, 0x04);
         assert_eq!(SDIO_INTERRUPT_ENABLE_MASK, 0x07);
+        assert_eq!(SDPCMD_FUNCTION_INT_MASK_F1, 0x01);
+        assert_eq!(SDPCMD_FUNCTION_INT_MASK_F2, 0x02);
+        assert_eq!(FUNCTIONINTMASK, 0x03);
+        assert_ne!(FUNCTIONINTMASK, u32::from(SDIO_FUNC_ENABLE_2));
         assert_eq!(
             cyw43_arm_post_release_function_interrupts(),
             Ok(expected_ienx)
@@ -69740,6 +69776,17 @@ mod tests {
                     == cyw43_backplane_function_addr(
                         CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
                     )
+                && record.payload_u32 == Some(0x03)
+        };
+        let legacy_functionintmask_write = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(
+                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                    )
+                && record.payload_u32 == Some(u32::from(SDIO_FUNC_ENABLE_2))
         };
         let rframe_low_read = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
@@ -69775,6 +69822,7 @@ mod tests {
             1,
             CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK
         ));
+        assert!(!test_sdio_transfer_seen(legacy_functionintmask_write));
         assert!(test_sdio_transfer_seen(rframe_low_read));
         assert!(test_sdio_transfer_seen(rframe_high_read));
         reset_test_sdio_transfer_log();
@@ -69815,6 +69863,17 @@ mod tests {
                     == cyw43_backplane_function_addr(
                         CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
                     )
+                && record.payload_u32 == Some(0x03)
+        };
+        let legacy_functionintmask_write = |record: TestSdioTransferRecord| {
+            record.cmd == SDIO_CMD53
+                && sdio_cmd53_arg_write(record.arg)
+                && sdio_cmd53_arg_function(record.arg) == 1
+                && sdio_cmd53_arg_addr(record.arg)
+                    == cyw43_backplane_function_addr(
+                        CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                    )
+                && record.payload_u32 == Some(u32::from(SDIO_FUNC_ENABLE_2))
         };
         let watermark_write = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
@@ -69844,6 +69903,8 @@ mod tests {
         assert!(functionintmask_index < watermark_index);
         assert!(watermark_index < mesbusy_index);
         assert!(mesbusy_index < ienx_index);
+        assert_eq!(test_sdio_transfer_count(functionintmask_write), 2);
+        assert_eq!(test_sdio_transfer_count(legacy_functionintmask_write), 0);
         assert_eq!(test_sdio_transfer_count(ienx_write), 1);
     }
 
@@ -75865,6 +75926,7 @@ mod tests {
         let mut io = production_owner_io();
         let mut device_ctl_reads = 0u8;
         let mut ienx_reads = 0u8;
+        let mut functionintmask_payloads = 0usize;
         let trace = drive_production_foreground_parent::<21, _>(
             parent,
             generation,
@@ -75915,6 +75977,29 @@ mod tests {
                         io.fifo[..core::mem::size_of::<u32>()]
                             .copy_from_slice(&value.to_le_bytes());
                     }
+                    DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
+                        if descriptor.function == 1
+                            && descriptor.addr
+                                == cyw43_backplane_function_addr(
+                                    CYW43_SDIO_CORE_BASE + SDPCMD_REG_FUNCTIONINTMASK,
+                                ) =>
+                    {
+                        assert_eq!(descriptor.len, core::mem::size_of::<u32>() as u16);
+                        let offset = usize::from(descriptor.data_offset);
+                        let payload = [
+                            read_sdio_bus_payload_byte(offset)
+                                .expect("FUNCTIONINTMASK payload byte 0"),
+                            read_sdio_bus_payload_byte(offset + 1)
+                                .expect("FUNCTIONINTMASK payload byte 1"),
+                            read_sdio_bus_payload_byte(offset + 2)
+                                .expect("FUNCTIONINTMASK payload byte 2"),
+                            read_sdio_bus_payload_byte(offset + 3)
+                                .expect("FUNCTIONINTMASK payload byte 3"),
+                        ];
+                        assert_eq!(payload, 0x03u32.to_le_bytes());
+                        assert_ne!(payload, u32::from(SDIO_FUNC_ENABLE_2).to_le_bytes());
+                        functionintmask_payloads = functionintmask_payloads.saturating_add(1);
+                    }
                     _ => {}
                 }
                 ProductionOwnerCut::Continue
@@ -75931,6 +76016,7 @@ mod tests {
         );
         assert!(trace.parent_turns > trace.owner_turns);
         assert_eq!(io.command_issue_count(), 20);
+        assert_eq!(functionintmask_payloads, 2);
         let expected = [
             (
                 DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,

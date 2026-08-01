@@ -1255,7 +1255,10 @@ Production-chain coverage must additionally drive normal control and EAPOL TX
 through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
 drive all 21 post-F2 release children (20 controller command issues plus the
-`DPC_ACTIVATE` child) into real retained DPC activation, and
+`DPC_ACTIVATE` child) into real retained DPC activation, inspect the actual
+SDIO-core `FUNCTIONINTMASK` payload at initial release and reprime, require
+little-endian `0x00000003` (`F1=0x01 | F2=0x02`) at both seams, reject CCCR
+Function-2 enable value `0x00000004`, and
 drive one DPC event through owner-backed status, F2 read, empty-confirmation,
 and post-status work before foreground queue consumption.
 Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
@@ -2049,6 +2052,37 @@ closed on a failed read, retained mask, or missing `F2WM_ENAB`. A normal-path
 poller, second owner, smoltcp change, GENET change, or priority change cannot
 satisfy this test.
 
+The exact `63eba6204517` / image
+`4e9883933c56be841dc5ce191ab94ac33db0aadcce6f127c199c1b5cd2124f8d`
+group exercised that repaired release path but still fails this gate. Cold plus
+warm R01-R05 all passed first-pair Gate 8a-8h and DHCP, so warm initialization
+was 5/5, while acceptable warm TCP quality was 0/5. Warm ping loss was 20-50%
+with average RTT of 1.08-1.30 seconds; host-to-Pi TCP service took about
+1.25-1.48 seconds while Pi-to-host ACKs returned in 0.026-0.164 ms. Source
+probes remained watchdog-paced with zero root/runtime queue, DPC-ring, or
+TX-accounting faults. The same-image GENET control passed 10/10 pings at 0.917
+ms average, seven handshakes at 0.704-1.069 ms, `tcp_basic.coh` in about 0.5
+seconds, and the 500-operation baseline/pooled checks at about 667/699
+operations/s with zero failures. Wi-Fi REST/hive pressure was correctly
+withheld. These results continue to reject smoltcp and GENET as the first
+causal surface.
+
+For `63eba6204517`, the first remaining violated invariant is the linked
+runtime's register-domain error: it reused CCCR Function-2 enable value `0x04`
+for SDIO-core `FUNCTIONINTMASK` at `core + 0x34`. Its core F1/F2 bits are
+`0x01`/`0x02`, so initial release and reprime must each carry the actual
+little-endian payload `0x00000003`. Production-chain tests must inspect all
+four payload bytes at both controller seams and explicitly reject
+`0x00000004`; an assertion over a detached constant is insufficient. CCCR
+`IENx` remains the distinct read-modify-write/readback sequence requiring
+master/F1/F2 value `0x07`. Root's diagnostic model must mirror `0x03` while
+`firmware_channel_programs_function_int_mask()` remains false, proving root is
+not a second physical writer. No test may pass by changing the sole owner,
+HAL/SDIO topology, IRQ158 route, source-probe watchdog, affinity, scheduling,
+smoltcp, GENET, or ABI. This correction requires a new built/read-back image
+and fresh serial-plus-pcap evidence; `63eba6204517` is its defect-discovery
+baseline, not acceptance proof.
+
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
 mode has interrupts enabled and polling disabled; the ISR schedules durable
@@ -2738,14 +2772,19 @@ one incrementing, four-byte Function 1 CMD53 with the exact little-endian
 payload, never four bytewise CMD52 commands. Its adversarial cut must publish a
 new interrupt cause after sampling but before commit and prove that only the
 sampled bits clear. The release-order test must drive the production retained
-cursor through `HOSTINTMASK`, the separate Gate 10 `FUNCTIONINTMASK` phase,
+cursor through `HOSTINTMASK`, the separate Gate 10 SDIO-core
+`FUNCTIONINTMASK=0x00000003` phase,
 watermark, `DEVICE_CTL` read-modify-write clearing `CA_INT_ONLY` while adding
 `F2WM`, and a distinct readback proving both bits before `MESBUSYCTRL`,
 `WAKEUPCTRL` read-modify-write adding `HTWAIT`, `CARDCAP`, and exact
 `FORCE_HT`. It must prove one controller operation per outer turn, preservation
 of unrelated read-modify-write bits, fail-closed handling of a sticky mask or
 failed readback, stale/cached completion isolation, and no controller reissue
-when a fresh pending turn replays only the cached completed prefix. The final
+when a fresh pending turn replays only the cached completed prefix. Both the
+initial and reprime mask tests must inspect the actual four-byte payload,
+require core F1/F2 bits `0x01`/`0x02`, and reject CCCR-domain value
+`0x00000004`. Root-only coverage retains diagnostic mirror `0x03` while
+proving its physical writer remains inactive. The final
 card-interrupt test must cross the same real seam as three
 distinct turns: read CCCR `IENx`, write `current | 0x07` without clearing upper
 bits, and read it back before DPC activation. A missing required bit, failed
