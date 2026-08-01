@@ -148,6 +148,7 @@ manual availability, profile selection, implementation, and target proof.
 | [28a](#28a) | Authority Hardening: Delegated REST Identity, Fenced Failover, Idempotent Queen Intents | Pending |
 | [28b](#28b) | Host Integration Registry + Provider/Executor + Use-Case Conformance | Pending |
 | [28c](#28c) | Persistent Semantic Object Fabric + Context Capsules (Host-Side) | Pending |
+| [28c1](#28c1) | Machine-Checked Intent Admission + Decision-Bound Authority | Pending |
 | [28d](#28d) | Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT | Pending |
 | [28e](#28e) | Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) | Pending |
 | [28f](#28f) | MCP/A2A Gateway Projection: Read-Only First, Ticketed Writes Later | Pending |
@@ -9895,6 +9896,10 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
 10. a version-pinned NIST SP 800-53 LOW assessment layer that consumes named
     Cohesix claims and test-plan evidence without presenting a crosswalk as
     certification.
+11. a restricted policy-IR proof foundation whose accepted fragment,
+    consistency/non-vacuity checks, generated solver/evaluator correspondence,
+    verifier identity, and proof terminology can be consumed by Milestone
+    28c1 without issuing runtime authority.
 
 ### Deliverables
 
@@ -10006,6 +10011,20 @@ Establish a machine-checkable verification baseline for the highest-value Cohesi
   Physical-hardware objectives require fresh Pi 4 evidence only when the
   assessed claim requires hardware; routine host/QEMU changes must not fabricate
   or silently inherit that proof.
+
+#### H) Restricted policy-IR proof foundation
+- Define the accepted bounded policy fragment, policy consistency and
+  non-vacuity checks, and generated solver/evaluator correspondence claims used
+  by later runtime admission.
+- Keep decision witnesses, explanation cores, and independently checkable proof
+  artefacts as distinct evidence classes. Record verifier name/version,
+  accepted checker, bounds, assumptions, and claim id for every proof claim.
+- Fail CI deterministically when policy source, generated solver constraints,
+  deterministic evaluator, test vectors, verifier identity, or checked
+  artefacts drift.
+- This foundation owns static policy and proof vocabulary only. It does not
+  issue tickets, leases, provider actions, grants, or runtime decisions;
+  Milestone 28c1 consumes it for exact per-intent admission.
 
 ### Commands
 - `scripts/check-generated.sh`
@@ -10150,6 +10169,24 @@ Checks:
   - Reports describe a tailored evidence assessment, never certification, accreditation, authorization, or proof beyond the underlying Cohesix claim.
 Deliverables:
   - Tested NIST assessment harness, complete version-pinned LOW registry, deterministic human and machine-readable reports, and archived target-qualified assessment evidence.
+
+Title/ID: m27a-policy-ir-proof-foundation
+Milestone: Milestone 27a — Formal Verification Baseline + Proof-Carrying Manifests / restricted policy-IR proof foundation
+Goal: Define and machine-check the bounded policy fragment and proof vocabulary that Milestone 28c1 will consume for runtime per-intent admission without issuing runtime authority in 27a.
+Inputs: tools/coh-rtc/src/{ir.rs,lib.rs,codegen/**}, docs/FORMAL_VERIFICATION.md, scripts/ci/verification_gate.sh, generated manifest witnesses, policy fixtures.
+Changes:
+  - tools/coh-rtc/src/ir.rs + validation/codegen — accepted Boolean, bounded-integer, enum, registry-identifier, bounded-set, linear-comparison, Boolean-composition, and required-fact policy fragment plus deterministic canonicalization and rejection of unsupported constructs.
+  - verification tooling + canonical fixtures — policy consistency, non-vacuity, counterexample, solver/evaluator correspondence, verifier-version, and generated-output drift checks.
+  - docs/FORMAL_VERIFICATION.md + docs/TEST_PLAN.md — proof-versus-witness terminology, evidence classes, checked bounds, trusted checker, assumptions, non-claims, and deterministic CI failure contract.
+Commands:
+  - cargo test -p coh-rtc
+  - scripts/ci/verification_gate.sh --policy-ir-only --state-dir out/verification/m27a-policy-ir
+  - scripts/check-generated.sh
+Checks:
+  - The accepted fragment and verifier identity are versioned; inconsistent, vacuous, unsupported, or drifted policies fail closed; generated solver constraints and deterministic evaluators pass canonical correspondence vectors.
+  - A decision witness, explanation core, and proof artefact are never conflated, and no 27a output can issue a runtime ticket, lease, provider action, or authority grant.
+Deliverables:
+  - Checked policy-IR and proof-vocabulary foundation consumed by Milestone 28c1 per-intent admission.
 ```
 
 
@@ -11020,7 +11057,7 @@ This milestone closes those gaps using existing as-built mechanisms (`hive-gatew
 
 **As-built alignment note:** The current REST gateway requires a gateway request-auth token for mutating routes, but REST writes still execute through the gateway's configured role/ticket rather than a delegated per-request capability ticket. Host-ticket idempotency by `id + idempotency_key` and relay dedupe exist, but writer-epoch fencing and strict Queen intent dedupe are not yet implemented. Milestone 28a hardens those specific gaps; it must not present current request-auth, relay dedupe, or host-ticket idempotency as delegated REST identity or failover fencing. Because the current upstream console session still authenticates as the gateway role/ticket, 28a must also distinguish **gateway-enforced caller delegation** from any future **VM-verified caller identity** claim.
 
-**Sequencing note:** Milestone 28a closes the host/gateway authority floor required by the Milestone 28b coexistence gate and by Milestones 28d, 28f, and 29b. Milestone 26e owns complete live Worker and baseline linked-driver cap authority and basic containment; a persistence-enabled Milestone 27 profile must also have accepted its `driver-storage` bundle under that same contract. Production Worker ticket/lease ledger binding, complete driver-inventory projection for every selected accepted runtime, and structured worker/driver quarantine evidence are split into Milestone 28g so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
+**Sequencing note:** Milestone 28a closes the host/gateway authority floor required by the Milestone 28b coexistence gate, Milestone 28c1 per-intent admission, and Milestones 28d, 28f, and 29b. Milestone 26e owns complete live Worker and baseline linked-driver cap authority and basic containment; a persistence-enabled Milestone 27 profile must also have accepted its `driver-storage` bundle under that same contract. Production Worker ticket/lease ledger binding, complete driver-inventory projection for every selected accepted runtime, and structured worker/driver quarantine evidence are split into Milestone 28g so the host actuation floor can ship without bundling that production ledger work into the same atomic gate.
 
 ---
 
@@ -11215,6 +11252,26 @@ Implementation requirements:
 
 ---
 
+### 10) Durable admission-correlation substrate
+**Purpose:** Preserve the durable identity, replay, idempotency, and fencing
+fields that Milestone 28c1 will bind to a machine-checked decision without
+overloading writer ownership as state freshness.
+
+Implementation requirements:
+- Version strict Queen intents, host tickets, execution WAL entries, terminal
+  receipts, audit records, and evidence correlation so they can carry or bind
+  `admission_id`, `intent_hash`, `policy_hash`, `state_epoch`,
+  `resource_generation`, and `decision_expiry` when a later generated action
+  requires admission.
+- Keep `writer_epoch` as the writer/authority-owner fence. It must not be
+  replaced by, derived from, or overloaded as `state_epoch` or a resource
+  generation.
+- Pre-28c1 compatibility actions retain their explicitly generated posture;
+  28a does not create or simulate an admission decision. Milestone 28c1 owns
+  exact per-intent policy/state evaluation and decision-bound grant issuance.
+
+---
+
 ## Commands
 - `cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json`
 - `cargo test -p hive-gateway`
@@ -11240,6 +11297,12 @@ Implementation requirements:
 - Stale writer epoch is rejected deterministically across local and relayed host tickets.
 - Production manifest/profile fails validation if fixture/default secrets are present.
 - Production profile surfaces `/audit/*` and `/replay/*`; evidence packs include epoch and dedupe state.
+- Strict intent, WAL, receipt, audit, and evidence schemas preserve bounded
+  optional correlation for `admission_id`, `intent_hash`, `policy_hash`,
+  `state_epoch`, `resource_generation`, and `decision_expiry` without treating
+  missing pre-28c1 fields as a fabricated admission.
+- `writer_epoch` remains the writer fence and is checked independently from
+  decision state freshness and resource generations.
 - Host ticket targets and args are provider-validated before side effects; unsupported or ambiguous values fail deterministically with no executor call.
 - Host ticket crash/restart tests prove no silent duplicate host side effects after an executor succeeds but status writeback fails.
 - `gpu-bridge-host` rejects placeholder auth in live mode and refuses oversized peer frames before allocation.
@@ -11261,6 +11324,10 @@ Implementation requirements:
   - delegated-identity claim class (`gateway_enforced` versus a separately evidenced `vm_verified` path) and gateway transport-authority ceiling,
   - idempotent Queen intent envelope schema, compatibility mode, and dedupe bounds,
   - writer-epoch fencing policy and relay requirements,
+  - bounded future admission correlation fields (`admission_id`,
+    `intent_hash`, `policy_hash`, `state_epoch`, `resource_generation`, and
+    `decision_expiry`) in strict intent, WAL, receipt, audit, and evidence
+    schemas without implementing 28c1 evaluation,
   - production secret references,
   - audit/replay required defaults for release profiles,
   - host-ticket provider target/arg grammars and execution WAL policy,
@@ -11295,18 +11362,18 @@ Title/ID: m28a-queen-ctl-idempotency
 Goal: Add deterministic idempotency for Queen intents without silently breaking legacy /queen/ctl fixtures.
 Inputs: apps/root-task, apps/nine-door, docs/INTERFACES.md
 Changes:
-  - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key and dedupe guard for the versioned intent path or compatibility-gated /queen/ctl mode.
-  - apps/root-task/src/control/dedupe.rs — bounded dedupe table with deterministic eviction and audit lines.
+  - apps/root-task/src/control/queen_ctl.rs — strict envelope parser with required id/idempotency_key, bounded optional future admission correlation (`admission_id`, `intent_hash`, `policy_hash`, `state_epoch`, `resource_generation`, `decision_expiry`), and dedupe guard for the versioned intent path or compatibility-gated /queen/ctl mode.
+  - apps/root-task/src/control/dedupe.rs — bounded dedupe table with deterministic eviction and audit lines that preserve admission correlation when present without treating it as the dedupe key or a locally issued decision.
   - apps/nine-door/src/host/proc.rs — read-only dedupe status surface for operators.
 Commands: cargo test -p root-task && cargo test -p nine-door
-Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior; legacy raw /queen/ctl behavior is either preserved or changed only with schema-bump fixtures.
+Checks: Duplicate intent never repeats side effects; deterministic audit and /proc visibility prove dedupe behavior; admission correlation cannot change across a duplicate; legacy raw /queen/ctl behavior is either preserved or changed only with schema-bump fixtures.
 Deliverables: Replay-safe Queen intent grammar with bounded dedupe state and explicit compatibility posture.
 
 Title/ID: m28a-failover-epoch-fencing
 Goal: Enforce monotonic writer-epoch fencing across local and federated host ticket flows.
 Inputs: apps/host-ticket-agent, docs/FAILOVER.md, docs/INTERFACES.md
 Changes:
-  - apps/host-ticket-agent/src/spec.rs — add writer_epoch validation to host-ticket schemas.
+  - apps/host-ticket-agent/src/spec.rs — add writer_epoch validation plus bounded optional `admission_id`, `intent_hash`, `policy_hash`, `state_epoch`, `resource_generation`, and `decision_expiry` correlation to host-ticket schemas; validate writer ownership separately from decision freshness.
   - apps/host-ticket-agent/src/relay.rs — enforce stale epoch rejection and WAL replay ordering by epoch.
   - apps/host-ticket-agent/src/status.rs — expose bounded epoch/fence counters for evidence and diagnostics.
   - scripts/failover_watchdog.py — make production cutover a durable transaction: verify old-writer fence, promote the new writer epoch, require uniquely correlated terminal receipts, then and only then change routing/symlink state; missing hooks, optional fencing, ambiguous receipt, failed post-cutover health, or rollback uncertainty enters fail-safe stopped state rather than silently continuing.
@@ -11334,10 +11401,10 @@ Goal: Ship production profile with audit/replay enabled and include fencing/dedu
 Inputs: configs/root_task.toml, apps/coh, docs/TEST_PLAN.md
 Changes:
   - configs/root_task.toml — production profile audit/replay defaults and bounded retention values.
-  - apps/coh/src/evidence.rs — include writer-epoch and dedupe status snapshots in evidence export.
+  - apps/coh/src/evidence.rs — include writer-epoch and dedupe status snapshots plus bounded admission/intention/policy/state/resource/expiry correlation when present, without creating a decision locally.
   - docs/TEST_PLAN.md — add production-profile gate assertions for /audit and /replay availability.
 Commands: cargo test -p coh && cargo test -p tests --test evidence && scripts/cohsh/run_regression_batch.sh
-Checks: Evidence includes audit/replay plus fencing/dedupe state; regression pack remains byte-stable.
+Checks: Evidence includes audit/replay plus fencing/dedupe state and preserves any exact admission correlation; writer and state epochs remain distinct; regression pack remains byte-stable.
 Deliverables: Audit-first production baseline with deterministic incident reconstruction inputs.
 
 Title/ID: m28a-host-ticket-validation-replay
@@ -11346,7 +11413,7 @@ Inputs: apps/host-ticket-agent, docs/INTERFACES.md, docs/SECURITY.md, docs/FAILO
 Changes:
   - apps/host-ticket-agent/src/claim.rs — parse provider-specific target and arg newtypes with strict component, length, and token validation.
   - apps/host-ticket-agent/src/executors/mod.rs — dispatch only after manifest allowlist and provider grammar validation pass.
-  - apps/host-ticket-agent/src/wal.rs — record prepared/executed/terminal states keyed by id + idempotency_key.
+  - apps/host-ticket-agent/src/wal.rs — record prepared/executed/terminal states keyed by id + idempotency_key while preserving immutable admission/intention/policy/state/resource/expiry correlation when the generated action requires it.
   - apps/host-ticket-agent/tests/replay.rs — simulate crash after executor success but before status writeback.
   - docs/INTERFACES.md + docs/SECURITY.md — document host-ticket validation, replay states, and deterministic refusal semantics.
 Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent
@@ -11432,6 +11499,9 @@ After Milestone 28a:
 - Release profiles enforce key hygiene and enable audit-grade reconstruction by default.
 - Production coexistence is still not complete until Milestone 28b turns the hardened authority floor into provider schemas, identity mapping, deployment artifacts, and conformance evidence.
 - Host-side AI supervisors gain no special bypass: they inherit delegated identity, idempotency, fencing, and audit/replay before any live actuation is allowed.
+- Milestone 28c1 can bind its per-intent decisions to durable 28a identity,
+  idempotency, fencing, WAL, audit, and replay records without overloading
+  `writer_epoch` as state freshness.
 - Production Worker ticket/lease bundle binding, projection of the already
   complete applicable driver MMIO/DMA/shared-ring inventory, and structured quarantine/evidence remain
   explicitly pending for Milestone 28g rather than being buried inside the
@@ -11481,6 +11551,13 @@ Define and prove the production coexistence contract:
 Implementation requirements:
 - Extend `coh-rtc` with `providers.*` IR for:
   - provider id, version, enablement profile, action names, target selectors, dry-run/live mode, idempotency requirements, writer-epoch requirements, policy approval requirements, receipt schema, redaction rules, and evidence refs.
+  - admission metadata for every side-effecting action:
+    `intent_schema_ref`, `required_fact_schema_ref`, `policy_id`,
+    `decision_requirement`, `maximum_grant_scope`,
+    `state_freshness_bound`, `reservation_or_recheck_mode`, and
+    `decision_receipt_schema_ref`. Pre-28c1 actions explicitly generate
+    `decision_requirement = unavailable|not_required` according to their
+    compatibility posture; callers cannot select or weaken it.
   - supported and selected `observe|recommend|enforce` governance modes,
     authority/credential custodian, bypass posture, failure/fallback posture,
     shadow-evidence requirement, and the exact generated decision/grant/receipt
@@ -11705,6 +11782,11 @@ Implementation requirements:
 
 **Checks (Definition of Done)**
 - Provider actions and integration surfaces extend the 26e dependency graph; host-ticket-agent, REST/OpenAPI docs, FUSE, Python defaults, SwarmUI, packages, host tools, and later MCP/A2A schema inputs cannot drift independently.
+- Every side-effecting provider action carries one compiler-owned 28c1
+  admission contract covering intent/fact schemas, policy, decision
+  requirement, maximum grant scope, freshness, reservation/recheck mode, and
+  decision receipt; Rust, Python, REST, host-ticket-agent, later MCP/A2A, docs,
+  tests, and packages consume the same metadata.
 - Every REST/Python/FUSE/UI read projection is classified as public, ticket-scoped, or admin-only; cross-caller ticket, provider, evidence, audit, replay, and identity reads fail deterministic negative tests.
 - Invalid provider target, action, argument, auth, writer epoch, idempotency key, dry-run/live-mode, or identity claim fails before executor dispatch.
 - Every documented production provider has mock, dry-run, negative, and at least one live-safe conformance path or an explicit not-enabled status.
@@ -11720,7 +11802,7 @@ Implementation requirements:
 - `docs/USE_CASES.md`, `docs/HOST_TOOLS.md`, `docs/API_GUIDELINES.md`, `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, and `docs/TEST_PLAN.md` describe support levels exactly as proven.
 
 **Compiler touchpoints**
-- `coh-rtc` extends `host-integration-dependency/v1` and emits provider registry artifacts, integration-surface records, external-executor contracts, stable use-case rows, provider availability snippets, provider action schemas, supported/selected governance modes, authority-custody and bypass posture, failure/fallback posture, shadow-promotion requirements, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and exact package profile metadata.
+- `coh-rtc` extends `host-integration-dependency/v1` and emits provider registry artifacts, integration-surface records, external-executor contracts, stable use-case rows, provider availability snippets, provider action schemas, 28c1 intent/fact/policy/decision/scope/freshness/reservation metadata, supported/selected governance modes, authority-custody and bypass posture, failure/fallback posture, shadow-promotion requirements, read visibility classes, identity-mapping bounds, conformance matrix defaults, exporter schema bounds, and exact package profile metadata.
 - `coh-rtc` also emits native discovery-source/TTL contracts, GPU physical/MIG topology and workload-action bounds, authoritative receipt/evidence correlation schemas, exporter delivery/redaction policy, and generated playbook DAG/topology/recovery records; clients may format these records but cannot define parallel truth.
 - Manifest validation rejects enabled provider actions without target grammar, authority scope, idempotency policy, receipt schema, redaction policy, and evidence mapping. Enforced selection or actuation additionally fails generation without an authority custodian, bypass and failure posture, accepted provider/executor conformance, and the required shadow-promotion reference.
 - Generated docs distinguish current primitives, integration patterns, workflow templates, mock-only, read-only, not-enabled, planned, and production-proven integrations without conflating executable Workers with external execution.
@@ -11735,13 +11817,17 @@ Changes:
   - tools/coh-rtc/src/ir.rs — `providers.*` schema for action names, targets,
     evidence modes, supported/selected governance modes, authority and
     credential custodian, bypass and failure/fallback posture,
-    shadow-promotion requirements, receipts, redaction, and evidence refs.
+    shadow-promotion requirements, receipts, redaction, evidence refs, and the
+    shared 28c1 `intent_schema_ref`, `required_fact_schema_ref`, `policy_id`,
+    `decision_requirement`, `maximum_grant_scope`,
+    `state_freshness_bound`, `reservation_or_recheck_mode`, and
+    `decision_receipt_schema_ref` fields for side-effecting actions.
   - tools/coh-rtc/src/codegen/{docs,rust,cohesix_py}.rs — generated provider registry artifacts, Python defaults, and snippets.
   - apps/host-ticket-agent/src/registry.rs — consume generated provider/action metadata before executor dispatch.
   - apps/coh/src/provider.rs + apps/cohsh/src/provider.rs — display generated provider action availability without hand-maintained lists.
   - tools/cohesix-py/cohesix/integrations.py + tools/cohesix-py/tests/test_integrations.py — consume the coh-rtc-generated Python provider output for action ids, target schemas, modes, bounds, receipt refs, and typed unavailable state; reject any handwritten Python provider-action catalogue, direct edit of `generated.py`, or client-selected promotion to `live`.
 Commands: cargo test -p coh-rtc && cargo test -p host-ticket-agent && cargo test -p coh && cargo test -p cohsh && python3 -m pytest -q tools/cohesix-py/tests/test_integrations.py -k provider_registry
-Checks: Provider action schemas cannot drift between executor validation, Rust/Python host tools, docs, and future gateway protocol schema inputs; Python exposes the same generated availability, governance mode, bypass/failure posture, promotion state, and refusals; no client can promote itself from observe/recommend to enforce.
+Checks: Provider action schemas and admission metadata cannot drift between executor validation, Rust/Python host tools, REST, docs, packages, and future gateway protocol schema inputs; Python exposes the same generated availability, governance mode, decision requirement, grant ceiling, freshness/recheck posture, bypass/failure posture, promotion state, and refusals; no client can promote itself from observe/recommend to enforce or weaken required admission.
 Deliverables: Single source of truth for host-side ecosystem action semantics across Rust and Python consumers.
 
 Title/ID: m28b-integration-surface-registry
@@ -11970,7 +12056,7 @@ After Milestone 28b:
 - Provider actions, integration surfaces, exact package contents, external-executor obligations, and public use-case claims extend one compiler-owned graph shared by host tickets, REST, FUSE, Python, SwarmUI, docs, tests, release tooling, and later MCP/A2A schemas.
 - Existing ecosystems stay outside the VM TCB while still gaining delegated authority, receipts, evidence, deployment profiles, identity mapping, and observability exports.
 - Executable Worker proof remains distinct from CUDA/NVML discovery, real GPU execution/isolation, PEFT training/reload, and service/federation side effects; each production use case names and proves every required layer.
-- Semantic extraction, AI run control, inference interoperability, and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
+- Semantic extraction, 28c1 intent admission, AI run control, inference interoperability, and MCP/A2A interop can build on proven provider and integration schemas instead of inventing action catalogs or silently treating mock workflows as live.
 
 ## Milestone 28c — Persistent Semantic Object Fabric + Context Capsules (Host-Side) <a id="28c"></a>
 [Milestones](#Milestones)
@@ -12369,7 +12455,7 @@ Commands:
   - scripts/ci/semantic_perf_probe.sh --state-dir out/bench/m28c-semantic
   - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28c-semantic
 Checks: Conformance, package, authority, evidence, and performance artifacts all bind the same schema/snapshot/toolchain identities; no mock, partial, dirty, stale, or unsupported state is promoted.
-Deliverables: Accepted semantic object and Context Capsule substrate for Milestones 28d, 28e, 28f, and 29b.
+Deliverables: Accepted semantic object and Context Capsule substrate for Milestone 28c1 and Milestones 28d, 28e, 28f, and 29b.
 ```
 
 ## Outcome
@@ -12383,15 +12469,571 @@ After Milestone 28c:
   budgets, renderer, and lineage explicit and reproducible.
 - `coh`, `coh doctor`, Python helpers, evidence packs, timelines, packages, and
   downstream gateway schemas consume one generated semantic contract.
-- Milestone 28d can build run/checkpoint policy on immutable capsule refs, and
-  Milestone 28e can measure actual inference efficiency and audit receipts
-  without treating text prompts as the semantic source of truth.
+- Milestone 28c1 can bind semantic refs where relevant without treating capsule
+  contents as authoritative operational facts; Milestone 28d can then build
+  run/checkpoint policy on admitted immutable capsule refs, and Milestone 28e
+  can measure actual inference efficiency and audit receipts without treating
+  text prompts as the semantic source of truth.
+
+## Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority <a id="28c1"></a>
+[Milestones](#Milestones)
+
+**Why now (authority admission bridge):** Milestone 27a supplies the
+formal-verification vocabulary, generated proof witnesses, selected state
+models, static checks, verification gates, and the restricted policy-IR proof
+foundation. Milestone 28a supplies delegated identity, idempotency, writer
+fencing, durable execution, audit, and replay. Milestone 28b supplies the
+compiler-owned provider/action registry, authoritative receipt validation,
+external-executor contracts, identity mapping, and visibility rules. Milestone
+28c supplies immutable semantic snapshots and Context Capsules with provenance
+and visibility controls. Before Milestone 28d permits live AI-supervisor or
+agent-framework actions, Cohesix needs one reusable bridge from untrusted intent
+to bounded authority:
+
+```text
+untrusted intent
+  -> typed intent
+  -> authoritative fact snapshot
+  -> machine-checked policy decision
+  -> state-bound authority grant
+  -> ticket, lease, provider action, or later Worker authority
+  -> authoritative outcome receipt
+```
+
+The central rule is that a model, operator, workflow, MCP client, or A2A peer
+may propose an action, but it must not receive executable authority until the
+exact typed intent has been evaluated against versioned policy and
+authoritative current state. This is a Cohesix authority and admission
+primitive, not generic AI safety middleware. It applies equally to operator
+automation, GPU leases, remediation, model promotion, inference routing, MCP
+tools, A2A tasks, and later Worker ticket or lease binding.
+
+**As-built alignment note:** Cohesix already has generated policy rules,
+single-use approvals, capability tickets, host-ticket schemas, provider action
+allowlists, leases, audit/replay, evidence packs, and target/provider receipts.
+It does **not** yet have the typed-intent, authoritative-fact-snapshot,
+seven-verdict admission, decision-witness, or state-bound-grant contracts in
+this milestone. Existing policy approval, ticket validation, model confidence,
+provider success, semantic extraction, Context Capsules, or an SMT verdict
+string must not be relabelled as machine-checked intent admission. This
+milestone does not place an LLM, SMT solver, general policy engine, graph
+database, or new protocol inside the VM.
+
+**Prerequisites**
+- Milestone **27a**, including `m27a-policy-ir-proof-foundation`, completed for
+  the accepted policy fragment, consistency/non-vacuity checks, generated
+  solver/evaluator correspondence evidence, claim vocabulary, verifier
+  identity, and proof-class separation.
+- Milestone **28a** completed for delegated identity, strict idempotency,
+  writer-epoch fencing, durable execution, audit/replay, evidence correlation,
+  and production secret discipline.
+- Milestone **28b** completed for the single compiler-owned provider/action
+  registry, external-executor and authoritative-receipt contracts, identity
+  mapping, read visibility, packaging, and conformance evidence.
+- Milestone **28c** completed for immutable semantic snapshots, Context
+  Capsules, provenance, visibility/redaction, deterministic rendering, and
+  semantic evidence. Semantic snapshot or capsule references remain optional
+  for non-semantic operations.
+
+**Goal**
+1. Convert untrusted requests into bounded, versioned typed intents.
+2. Evaluate each typed intent against compiler-owned policy and an exact
+   authoritative fact snapshot.
+3. Return exactly one of `proved`, `refuted`, `under_specified`,
+   `inconsistent`, `indeterminate`, `invalid_input`, or `stale_state`.
+4. Permit authority issuance only for `proved`.
+5. Bind each successful decision to the exact intent, subject, target, policy
+   id/hash, manifest hash, fact snapshot, state epoch, relevant resource
+   generations, requested and granted scopes, expiry, idempotency state, and
+   writer epoch where applicable.
+6. Issue authority equal to or narrower than the admitted scope and limits.
+7. Preserve Queen/root authority as the final target-side mutation and
+   authority boundary; host admission never creates a parallel executor or
+   target authority path.
+8. Produce deterministic evidence reconstructable through audit, replay,
+   evidence packs, timelines, provider receipts, and later Worker receipts.
+9. Keep static verification, runtime admission, formal proof artefacts, QEMU,
+   Pi 4 hardware evidence, and host-provider evidence as separate proof
+   classes.
+
+**Non-negotiable constraints**
+- No LLM output is authority. Model confidence is never an admission result.
+- Caller assertions and model-extracted assertions are not authoritative facts.
+  Context Capsule contents are semantic inputs, not automatically operational
+  facts.
+- An admission record is not transferable between intents, targets, policies,
+  manifests, subjects, state epochs, resource generations, scopes, or
+  expiries.
+- An SMT `SAT` or `UNSAT` string from a host process is not sufficient target
+  authority. An unsat core is an explanation artefact; it is not automatically
+  minimal and is not automatically a proof object.
+- A decision witness, explanation core, and formal proof artefact are distinct
+  evidence classes. Proof claims may not exceed the exact checked artefact and
+  declared checker.
+- Large solver and model runtimes remain host-side. A target path may use a
+  generated bounded deterministic evaluator or verify a genuinely checkable
+  certificate; it must not blindly trust a host verdict string.
+- No new console verb, Secure9P verb, in-VM listener, RPC authority path,
+  mutable policy path, or alternate ticket path is introduced. Existing
+  provider, ticket, lease, host-executor, audit, replay, evidence, and Worker
+  authority paths remain canonical.
+- Missing data, stale state, contradiction, unsupported policy, verifier
+  timeout, verifier `unknown`, verifier failure, resource exhaustion, and
+  malformed input fail closed.
+- `writer_epoch` identifies the current writer or authority owner.
+  `state_epoch` and resource generations identify the state against which the
+  decision was made. They remain separate fields with separate validation.
+- QEMU, Pi 4, host provider, static verifier, bounded model-checking, and
+  inherited seL4 evidence remain separate proof classes.
+
+### 1) Canonical intent, fact, decision, witness, and grant contracts
+**Purpose:** Establish one compiler-owned contract shared by policies,
+providers, tickets, leases, host tools, later protocols, evidence, and Worker
+binding.
+
+Implementation requirements:
+- Add versioned schemas or schema families with canonical generated names
+  equivalent to:
+  - `intent-request/v1`
+  - `intent-subject/v1`
+  - `intent-target/v1`
+  - `authoritative-fact/v1`
+  - `authoritative-fact-snapshot/v1`
+  - `policy-evaluation/v1`
+  - `admission-decision/v1`
+  - `decision-witness/v1`
+  - `authority-grant/v1`.
+- An intent request includes or cryptographically binds `intent_id`,
+  `intent_schema`, `intent_hash`, `subject`, `requested_action`, `target`,
+  `requested_scope`, `requested_limits`, `idempotency_key`, `writer_epoch`,
+  `deadline`, `source_protocol`, and, when relevant,
+  `semantic_snapshot_ref` and `context_capsule_ref`.
+- An admission decision includes or binds `admission_id`, `intent_hash`,
+  `policy_id`, `policy_version`, `policy_hash`, `manifest_hash`,
+  `fact_snapshot_hash`, `state_epoch`, `resource_generations`, `verdict`,
+  `reason_codes`, `explanation_core`, `proof_artifact_ref`,
+  `requested_scope`, `granted_scope`, `grant_expiry`, and `evidence_class`.
+- Non-semantic operations must not be forced to invent a semantic snapshot or
+  Context Capsule reference. Unknown optional refs remain absent, not empty
+  evidence.
+
+### 2) Restricted policy IR and generated correspondence
+**Purpose:** Generate every checked policy representation from one bounded
+source rather than hand-maintain solver and runtime logic.
+
+Implementation requirements:
+- Initially admit only Booleans, bounded integers, enums, generated registry
+  identifiers, bounded sets, linear comparisons, conjunction, disjunction,
+  negation, and explicit required-fact declarations.
+- Exclude or defer unrestricted strings, quantifiers, arbitrary code,
+  user-supplied expressions, arbitrary solver theories, dynamic policy
+  execution, and free-form natural-language policy as runtime truth.
+- One policy source generates or checks the canonical policy representation,
+  host-side solver constraints for consistency checks and counterexamples,
+  deterministic Rust evaluator, target-compatible `no_std` policy tables or
+  evaluator where required, canonical positive/negative vectors,
+  documentation snippets, policy hashes, decision/evidence schemas, and
+  provider-action admission metadata.
+- Differential/correspondence checks cover every generated representation.
+  Hand-maintained solver logic and runtime evaluator logic may not drift
+  independently.
+- Establish base-fact and policy consistency before attempting claim proof or
+  refutation. Reject inconsistent or vacuous policy according to the declared
+  policy class and evidence rules.
+
+### 3) Authoritative fact snapshots
+**Purpose:** Bind admission to current accepted Cohesix state rather than
+caller or model assertions.
+
+Implementation requirements:
+- Every fact records fields equivalent to `source_id`, `source_class`,
+  `subject_or_resource`, `sequence`, `state_epoch`, `resource_generation`,
+  `observed_at`, `expires_at`, `value`, and `evidence_ref`.
+- Classify authoritative facts, provider-reported facts, caller assertions,
+  model-extracted assertions, derived facts, unknown facts, stale facts, and
+  contradictory facts without silently promoting one class into another.
+- Authoritative facts may come from accepted generated manifest state, Worker
+  lifecycle/generation, tickets and leases, policy approvals, provider registry
+  state, validator-accepted provider receipts, GPU/resource inventory, target
+  `/proc` state, configured attestation evidence, and bounded target/provider
+  counters.
+- A model may propose an intent or extract candidate fields, but it cannot mark
+  those values authoritative. Provider-reported facts become authoritative only
+  through the exact accepted validator/adapter rule for that policy.
+- Snapshot construction detects missing, wrong-source, forged, stale,
+  reordered, duplicate, wrong-generation, and contradictory facts before
+  evaluation.
+
+### 4) Deterministic verdict engine
+**Purpose:** Make refusal semantics explicit and prevent solver uncertainty or
+incomplete information from becoming authority.
+
+| Verdict | Required meaning | Authority result |
+| --- | --- | --- |
+| `proved` | Available authoritative facts establish the policy predicate. | Grant may proceed. |
+| `refuted` | Available authoritative facts establish the predicate is false. | Deny. |
+| `under_specified` | Available facts permit both acceptance and rejection. | Deny. |
+| `inconsistent` | Base facts or policy assumptions conflict. | Deny. |
+| `indeterminate` | Timeout, unsupported fragment, solver unknown, verifier failure, or resource bound. | Deny. |
+| `invalid_input` | Intent, facts, policy selection, or bounds are malformed. | Deny. |
+| `stale_state` | Relevant state changed or expired before grant or execution. | Deny or re-evaluate. |
+
+Only `proved` may lead to a grant. The engine first checks base-fact and policy
+consistency, then evaluates proof/refutation/under-specification. It must not
+collapse results into an incorrect three-state partition.
+
+### 5) State-bound authority issuance
+**Purpose:** Prevent a correct decision over old state from becoming authority
+over new state.
+
+Implementation requirements:
+- Use an atomic or state-bound pattern appropriate to the action:
+
+```text
+evaluate + reserve + issue
+```
+
+```text
+evaluate
+  -> compare-and-swap against state/resource generation
+  -> issue
+```
+
+```text
+evaluate
+  -> recheck bounded runtime predicates
+  -> issue or execute
+```
+
+- Enforce invariants equivalent to:
+
+```text
+grant.scope <= admitted.scope
+grant.target = admitted.target
+grant.subject = admitted.subject
+grant.policy_hash = admitted.policy_hash
+grant.intent_hash = admitted.intent_hash
+grant.state_epoch = admitted.state_epoch
+grant.resource_generation = admitted.resource_generation
+grant.expiry <= admitted.expiry
+```
+
+  Here `<=` means set/subscope containment, not string-prefix matching.
+- If relevant state changes, the grant fails, expires, or is re-evaluated. A
+  successful decision cannot be replayed against a different resource
+  generation.
+- Queen/root remains the final target-side mutation and authority boundary.
+  Host-side admission authorizes only the existing bounded ticket, lease, or
+  provider-action path selected by the generated registry.
+
+### 6) Decision evidence, audit, replay, and receipts
+**Purpose:** Extend the existing Cohesix evidence graph instead of creating a
+second admission ledger.
+
+Terminology is normative:
+- **Decision witness:** canonical facts, policy identity, bindings, result, and
+  state needed to reproduce the decision.
+- **Explanation core:** a bounded subset of relevant assertions or predicates
+  explaining denial, contradiction, or inconsistency. It need not be minimal.
+- **Proof artefact:** an independently machine-checkable derivation accepted by
+  a declared checker.
+
+Do not call every admission result a proof. “Proof-Carrying Intent” may be used
+as an external description only for policy classes that actually carry an
+independently checked proof artefact; the normative primitive remains
+Machine-Checked Intent Admission.
+
+Evidence reconstructs:
+
+```text
+caller
+  -> typed intent
+  -> authoritative facts
+  -> policy identity
+  -> admission decision
+  -> authority grant
+  -> provider, executor, or Worker outcome
+```
+
+Integrate admission records with `/audit/decisions`, `/replay/*`, evidence
+packs, evidence timelines, host-ticket receipts, provider/executor receipts,
+inference receipts, later Worker receipts, and applicable NIST/assurance
+evidence refs. Secrets, raw tickets, provider credentials, and sensitive
+payloads remain redacted. Tamper, proof-reference mismatch, missing predecessor,
+and identity mismatch fail verification.
+
+### 7) Bounded reference admission actions
+**Purpose:** Prove the contract on one resource-allocation action and one host
+remediation action before later consumers broaden adoption.
+
+#### GPU lease admission
+- Check that the selected Worker or provider is ready; the requested GPU or
+  accelerator exists; inventory generation is current; no conflicting lease
+  exists; memory/capacity and duration are within limits; subject quota is
+  sufficient; model/workload/action class is approved; and ticket/lifecycle
+  scopes are valid.
+- Reconstruct `intent -> GPU/Worker/inventory/quota/lease facts -> admission
+  decision -> lease grant -> provider execution or lease observation ->
+  provider and, where applicable, Worker receipt`.
+
+#### Bounded host remediation
+- Use the existing allowlisted `systemd.restart` provider action; never accept
+  an arbitrary shell command.
+- Check that the unit is registered and allowlisted, subject remediation scope
+  is sufficient, provider state is fresh, unit state permits restart, restart
+  budget is not exhausted, maintenance/policy window permits the action,
+  writer epoch is current, and target generation has not changed.
+
+### 8) Security, performance, and documentation ownership
+**Purpose:** Bound abuse and record exact implementation ownership without
+promoting planned documentation to as-built state.
+
+Implementation requirements:
+- Measure policy evaluation, fact snapshot construction, state recheck or
+  reservation, grant issuance, evidence emission, solver/verifier overhead,
+  and target evaluator overhead separately.
+- Do not classify host admission measurements as Pi hardware throughput proof
+  unless the exact Pi target path is exercised with fresh evidence.
+- Negative tests cover prompt injection, caller claims marked authoritative,
+  untrusted policy selection, arbitrary expression injection, oversized/fact-
+  count overflow, contradictory/stale/reordered facts, decision replay, grant
+  widening, proof substitution, solver timeout, verifier crash, target/host
+  disagreement, and secret leakage.
+- Implementation tasks later update `docs/ARCHITECTURE.md`,
+  `docs/INTERFACES.md`, `docs/SECURITY.md`, `docs/FORMAL_VERIFICATION.md`,
+  `docs/ROLES_AND_SCHEDULING.md`, `docs/WORKER_TICKETS.md`,
+  `docs/TEST_PLAN.md`, `docs/BENCHMARKS.md`, `docs/HOST_API.md`,
+  `docs/HOST_TOOLS.md`, and `docs/PYTHON_SUPPORT.md` as their owned surfaces
+  land. This planning edit does not claim those documents are already updated.
+
+**Deferred consumers**
+- Milestone **28d** owns admission for AI runs, PEFT, model promotion,
+  checkpoints, prefixes, and agent-supervisor actions.
+- Milestone **28e** owns inference-request, provider/model routing, and
+  inference-receipt admission.
+- Milestone **28f** owns MCP/A2A projection of admitted actions.
+- Milestone **28g** owns production binding from an admission decision to the
+  live Worker ticket/lease, capability bundle, generation, fault lifecycle,
+  and quarantine state. Milestone 28c1 alone is not production Worker authority
+  proof.
+- Milestone **29b** owns bounded read-only namespace projections of admission
+  state and adds no AI-specific write path.
+
+**Commands**
+- `cargo test -p coh-rtc`
+- `cargo test -p host-ticket-agent`
+- `cargo test -p coh --test admission_evidence`
+- `python3 -m pytest -q tools/cohesix-py/tests/test_admission.py`
+- `scripts/ci/verification_gate.sh --policy-ir-only --state-dir out/verification/m28c1-policy`
+- `scripts/ci/admission_conformance_run.sh --state-dir out/admission/m28c1`
+- `scripts/ci/admission_perf_probe.sh --state-dir out/bench/m28c1-admission`
+- `scripts/check-generated.sh`
+- `scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28c1-admission`
+
+**Checks (Definition of Done)**
+- One compiler-owned intent, fact, policy, decision, witness, and grant contract
+  is consumed by Rust, Python, providers, host tools, evidence, and later
+  protocol projections.
+- Identical admitted inputs produce byte-identical decisions and deterministic
+  evidence outputs.
+- Unsupported, stale, inconsistent, malformed, unknown, and under-specified
+  cases fail closed; only `proved` creates a grant.
+- Grants cannot exceed the admitted action, scope, target, subject, limits, or
+  expiry, and a state/resource generation change prevents stale issuance.
+- The target does not blindly trust host verdict text. Solver constraints and
+  runtime evaluators derive from one restricted IR and pass correspondence
+  checks.
+- Every authoritative fact has source, sequence, freshness, generation, and
+  evidence metadata. Caller/model assertions remain non-authoritative unless a
+  generated policy explicitly admits that assertion class as a non-operational
+  input; it cannot silently upgrade it to an authoritative fact.
+- GPU lease and bounded `systemd.restart` admission pass end to end with exact
+  state-generation binding, provider receipt correlation, deterministic denial,
+  and stale-state cases.
+- Evidence packs and timelines reconstruct the intent-to-outcome chain without
+  conflating decision witness, explanation core, and proof artefact.
+- No new in-VM solver, LLM, listener, protocol, provider runtime, shell
+  executor, mutable policy engine, or alternate authority path is introduced.
+- No current or planned feature becomes implemented, accepted, target-
+  qualified, or production-proven merely because this plan exists.
+
+**Compiler touchpoints**
+- Extend the current `tools/coh-rtc/src/ir.rs`, `lib.rs`, and
+  `codegen/{rust,coh,cohesix_py,docs}.rs` structure with the restricted policy,
+  intent, fact, decision, witness, grant, provider-admission metadata,
+  validation, hashes, fixtures, and deterministic generated outputs. A later
+  internal module split must not create a second source of truth.
+- Generated Rust and target-required tables remain `no_std`; host solver and
+  verifier adapters remain host-side.
+- Validation rejects unknown schemas/facts/policies/actions, unsupported
+  fragments, caller-selected policy authority, policies whose required-fact
+  declarations are missing or inconsistent,
+  decision/grant substitution, scope widening, stale generations, duplicate
+  authority, hand-edited generated output, and provider actions lacking an
+  accepted admission policy. At runtime, an absent declared fact produces the
+  specified fail-closed `under_specified`, `invalid_input`, or `stale_state`
+  verdict according to the exact schema/state condition; it is never silently
+  assumed.
+- Generated admission records extend the existing 28b
+  `host-integration-dependency/v1`, provider/action, authoritative-receipt, and
+  evidence graphs. They do not create parallel policy, provider, or evidence
+  registries.
+
+**Task Breakdown**
+```
+Title/ID: m28c1-intent-policy-ir
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / compiler-owned intent and policy contracts
+Goal: Define compiler-owned intent, subject, target, fact, policy-evaluation, admission-decision, decision-witness, and authority-grant schemas.
+Inputs: accepted m27a-policy-ir-proof-foundation, tools/coh-rtc/src/{ir.rs,lib.rs,codegen/**}, 28a authority records, 28b provider/action registry, 28c semantic/capsule schemas, docs/INTERFACES.md, docs/SECURITY.md.
+Changes:
+  - tools/coh-rtc/src/ir.rs + validation/codegen — versioned bounded schema families, canonical hashes, required/optional semantic refs, provider admission metadata, Rust/Python/manifest/docs outputs, and negative validation.
+  - generated Rust/Python/docs fixtures — canonical valid, malformed, unsupported, cross-policy, cross-target, and cross-subject vectors without hand-edited generated catalogs.
+  - docs/INTERFACES.md + docs/SECURITY.md — implementation-stage schema, authority, redaction, and refusal contract.
+Commands:
+  - cargo test -p coh-rtc
+  - scripts/check-generated.sh
+Checks:
+  - All schema ids, fields, bounds, hashes, and provider mappings are compiler-owned; unknown, malformed, overbroad, caller-selected-policy, or drifted records fail closed.
+Deliverables:
+  - One generated intent-to-grant contract for all later consumers.
+
+Title/ID: m28c1-authoritative-fact-snapshots
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / authoritative fact snapshots
+Goal: Bind policy inputs to exact source, sequence, state epoch, resource generation, TTL, provenance, and evidence class.
+Inputs: m28c1-intent-policy-ir, generated manifest/lifecycle/ticket/lease/provider registries, accepted provider receipts, target `/proc` fixtures, attestation and bounded-counter fixtures.
+Changes:
+  - admission core fact modules + generated source registry — canonical fact ingestion, source/sequence/freshness/generation checks, deterministic snapshots, contradiction detection, and evidence refs.
+  - canonical fixtures — authoritative, asserted, derived, unknown, stale, contradictory, missing, wrong-source, wrong-generation, forged, duplicate, and reordered facts.
+  - docs/ARCHITECTURE.md + docs/SECURITY.md + docs/TEST_PLAN.md — source authority, freshness, contradiction, redaction, and evidence-class rules.
+Commands:
+  - cargo test -p cohesix-admission-core --test facts
+  - scripts/ci/admission_conformance_run.sh --only facts --state-dir out/admission/m28c1-facts
+Checks:
+  - Only registered accepted sources can supply authoritative facts; every snapshot is deterministic and binds source, sequence, epoch, generation, expiry, and evidence; forged or ambiguous provenance fails closed.
+Deliverables:
+  - Reconstructable authoritative fact snapshots that never promote caller/model assertions.
+
+Title/ID: m28c1-policy-compiler-and-evaluator
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / policy compiler and deterministic evaluator
+Goal: Generate host solver constraints, deterministic Rust and target-compatible evaluators, canonical fixtures, policy hashes, and correspondence checks from one restricted IR.
+Inputs: m27a-policy-ir-proof-foundation, m28c1-intent-policy-ir, tools/coh-rtc, verifier adapters, canonical policy fixtures.
+Changes:
+  - tools/coh-rtc/src/ir.rs + codegen — restricted policy AST, required-fact declarations, canonicalization, hashes, host constraints, deterministic Rust/`no_std` tables, docs, and positive/negative vectors.
+  - verification tooling — consistency, non-vacuity, unsupported-fragment, counterexample, differential, and target/host correspondence checks.
+  - generated-output guard — reject hand-edited solver constraints, evaluator tables, hashes, docs, and vectors.
+Commands:
+  - cargo test -p coh-rtc
+  - scripts/ci/verification_gate.sh --policy-ir-only --state-dir out/verification/m28c1-policy
+  - scripts/check-generated.sh
+Checks:
+  - Generated outputs agree for every canonical vector; solver/evaluator disagreement, unsupported fragment, vacuous or inconsistent policy, and hand-edited output fail deterministically.
+Deliverables:
+  - One restricted policy source with checked host and target representations.
+
+Title/ID: m28c1-admission-verdict-engine
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / seven-verdict admission engine
+Goal: Implement all seven verdict classes with deterministic fail-closed semantics.
+Inputs: m28c1-authoritative-fact-snapshots, m28c1-policy-compiler-and-evaluator, canonical intent/fact/policy vectors.
+Changes:
+  - crates/cohesix-admission-core/src/{evaluate,verdict}.rs — base consistency, proof, refutation, under-specification, invalid-input, indeterminate, and stale-state evaluation with bounded reason codes.
+  - host and target evaluator fixtures — deterministic verdict, timeout, unknown, verifier-failure, and resource-bound parity.
+  - docs/FORMAL_VERIFICATION.md + docs/INTERFACES.md — verdict meaning, checker identity, witness/proof distinction, and non-claims.
+Commands:
+  - cargo test -p cohesix-admission-core --test verdicts
+  - scripts/ci/admission_conformance_run.sh --only verdicts --state-dir out/admission/m28c1-verdicts
+Checks:
+  - Base inconsistency, proof, refutation, under-specification, timeout/unknown, invalid input, and stale state map to exactly the declared verdict; only `proved` can proceed to issuance.
+Deliverables:
+  - Deterministic seven-verdict engine with bounded refusal evidence.
+
+Title/ID: m28c1-decision-bound-authority
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / state-bound grant issuance
+Goal: Bind proved decisions to exact tickets, leases, provider actions, targets, scopes, epochs, generations, expiries, idempotency keys, and writer epochs.
+Inputs: m28c1-admission-verdict-engine, 28a idempotency/fencing/WAL records, 28b provider registry, ticket/lease schemas, Queen/root mutation paths.
+Changes:
+  - admission grant/reservation modules + host-ticket-agent integration — evaluate/reserve/CAS/recheck patterns, scope containment, exact target/subject/policy/intent binding, expiry, idempotency, writer/state epoch separation, and stale-generation refusal.
+  - canonical race/replay fixtures — evaluation-to-grant races, duplicate requests, writer failover, target/subject substitution, scope widening, expired decisions, and cross-resource replay.
+  - docs/ROLES_AND_SCHEDULING.md + docs/WORKER_TICKETS.md + docs/SECURITY.md — grant/ticket distinction and final Queen/root authority boundary.
+Commands:
+  - cargo test -p cohesix-admission-core --test grants
+  - cargo test -p host-ticket-agent
+  - scripts/ci/admission_conformance_run.sh --only grants --state-dir out/admission/m28c1-grants
+Checks:
+  - Scope widening, target/subject substitution, expired decision, stale generation, duplicate request, stale writer, issuance race, and replay against another resource fail before authority is created.
+Deliverables:
+  - State-bound grants that can authorize only existing canonical authority paths.
+
+Title/ID: m28c1-evidence-replay-and-proof-claims
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / evidence, replay, and proof claims
+Goal: Add decision witnesses, explanation cores, optional proof references, audit/replay correlation, evidence-pack integration, and exact evidence classifications.
+Inputs: m28c1-admission-verdict-engine, m28c1-decision-bound-authority, 28b receipt/evidence core, apps/coh/src/{evidence.rs,evidence_timeline.rs}, `/audit/decisions`, `/replay/*`, NIST/assurance claim registry.
+Changes:
+  - admission evidence core — canonical witness/explanation/proof-ref records, predecessor hashes, redaction, deterministic rendering, and tamper verification.
+  - apps/coh/src/{evidence.rs,evidence_timeline.rs} — caller-to-intent-to-facts-to-policy-to-decision-to-grant-to-outcome reconstruction using existing evidence packs/timelines.
+  - docs/FORMAL_VERIFICATION.md + docs/TEST_PLAN.md + docs/BENCHMARKS.md — evidence classes, proof wording, reconstruction, redaction, and performance/non-claim lanes.
+Commands:
+  - cargo test -p coh --test admission_evidence
+  - scripts/ci/admission_conformance_run.sh --only evidence --state-dir out/admission/m28c1-evidence
+Checks:
+  - Witness reconstruction, tamper detection, proof-reference mismatch, non-minimal explanation-core handling, redaction, and deterministic evidence output pass; no ordinary decision is mislabeled as a formal proof.
+Deliverables:
+  - Admission evidence integrated with the existing audit/replay/evidence graph.
+
+Title/ID: m28c1-reference-admission-actions
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / bounded reference actions
+Goal: Prove GPU lease admission and one allowlisted `systemd.restart` remediation action end to end.
+Inputs: all prior m28c1 tasks, 28b `gpu.lease.grant` and `systemd.restart` provider-action records, GPU/Worker/inventory/quota/lease fixtures, host-ticket-agent, provider receipts.
+Changes:
+  - reference policy records and fixtures — exact GPU lease and systemd restart required facts, scopes, quotas, generations, reservations/rechecks, and deterministic denial cases.
+  - host-ticket-agent/provider integration — admitted existing actions only, with exact decision/grant ids and provider receipt correlation; no direct executor bypass or arbitrary shell.
+  - evidence acceptance lane — mock/fixture plus host-safe live or dry-run evidence where appropriate, keeping provider and target evidence classes separate.
+Commands:
+  - cargo test -p host-ticket-agent --test admission_actions
+  - scripts/ci/provider_conformance_run.sh --provider gpu.lease.grant,systemd.restart --admission --state-dir out/provider-conformance/m28c1-actions
+  - scripts/ci/admission_conformance_run.sh --only reference-actions --state-dir out/admission/m28c1-actions
+Checks:
+  - Both actions preserve exact state-generation binding, provider receipt correlation, deterministic denial/stale-state behavior, and existing executor paths; no direct provider or Worker bypass exists.
+Deliverables:
+  - Two bounded end-to-end reference flows proving resource and remediation admission.
+
+Title/ID: m28c1-admission-security-and-performance
+Milestone: Milestone 28c1 — Machine-Checked Intent Admission + Decision-Bound Authority / security and performance acceptance
+Goal: Add targeted abuse-resistance, correspondence, performance, package, and release gates for machine-checked admission.
+Inputs: all m28c1 tasks, canonical negative corpus, scripts/ci/admission_{conformance_run,perf_probe}.sh, docs/TEST_PLAN.md, docs/BENCHMARKS.md, package/evidence manifests.
+Changes:
+  - admission security corpus — injection, forged authority, untrusted policy selection, arbitrary expression, oversized/overflow/contradictory/reordered facts, replay, widening, proof substitution, timeout/crash, host/target disagreement, and secret leakage.
+  - scripts/ci/admission_perf_probe.sh — separate fact, evaluation, reservation/recheck, grant, evidence, solver/verifier, and target-evaluator timing/size metrics.
+  - docs/TEST_PLAN.md + docs/BENCHMARKS.md + package/release checks — acceptance gates, exact evidence paths, thresholds, proof-class separation, and host/Pi non-claims.
+Commands:
+  - scripts/ci/admission_conformance_run.sh --state-dir out/admission/m28c1
+  - scripts/ci/admission_perf_probe.sh --state-dir out/bench/m28c1-admission
+  - scripts/ci/test_plan_run.sh --state-dir out/test-plan/m28c1-admission
+  - scripts/check-generated.sh
+Checks:
+  - Security corpus fails closed, generated host/target decisions correspond, performance stages are separately bounded, packages contain exact generated contracts/checkers, and no host result is promoted to Pi or formal-proof evidence.
+Deliverables:
+  - Accepted, bounded, abuse-resistant admission primitive ready for 28d-28g and 29b consumers.
+```
+
+**Outcome**
+After Milestone 28c1:
+- Untrusted AI and non-AI requests can be converted into typed intents and
+  checked against versioned policy plus authoritative current state.
+- Only `proved` decisions can create state-bound grants, and those grants are
+  no broader or longer-lived than the exact admitted intent.
+- Tickets, leases, provider actions, Queen/root mutation, receipts, audit,
+  replay, and evidence remain the canonical execution and evidence paths.
+- Decision witnesses make admission reproducible without pretending every
+  result is a formal proof.
+- Later milestones can adopt one admission primitive without inventing
+  AI-specific guardrails, protocol-specific policy evaluators, or parallel
+  authority registries.
 
 ## Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT <a id="28d"></a>
 [Milestones](#Milestones)
 
 **Why now (bridge):**
-Milestone 28a makes writes attributable, replay-safe, fenced, and audit-first. Milestone 28b then freezes provider action schemas, identity mapping, deployment posture, read visibility, observability exports, and conformance evidence for the ecosystems AI supervisors will touch. Milestone 28c adds immutable semantic objects, provenance-complete snapshots, and deterministic Context Capsules without creating a second authority plane. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
+Milestone 28a makes writes attributable, replay-safe, fenced, and audit-first. Milestone 28b then freezes provider action schemas, identity mapping, deployment posture, read visibility, observability exports, and conformance evidence for the ecosystems AI supervisors will touch. Milestone 28c adds immutable semantic objects, provenance-complete snapshots, and deterministic Context Capsules without creating a second authority plane. Milestone 28c1 adds the machine-checked bridge from typed intent and authoritative current state to a decision-bound grant. Before promoting AI lifecycle state into first-class VM-visible namespace roots in 29b, Cohesix needs a host-only proving ground for the operating model refined here:
 1. Cohesix is the trusted execution, evidence, and governance layer beneath agent frameworks, not a replacement for them.
 2. Long-context cost is dominated by repeated prefill, duplicated prompt state, and lossy summarization.
 3. The highest-leverage fix is to keep durable run state, Context Capsule
@@ -12399,7 +13041,7 @@ Milestone 28a makes writes attributable, replay-safe, fenced, and audit-first. M
    prompt, then route each run to the right host-side inference strategy under
    ticketed authority.
 
-This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, the 28b provider/integration graph, the accepted 28c semantic-object and Context Capsule contracts, evidence packs, GPU leases, telemetry ingest, Python playbooks) and the accepted 26e executable Worker/receipt substrate to prove that model without adding VM AI roots yet.
+This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated REST, the 28b provider/integration graph, the accepted 28c semantic-object and Context Capsule contracts, accepted 28c1 admission decisions, evidence packs, GPU leases, telemetry ingest, Python playbooks) and the accepted 26e executable Worker/receipt substrate to prove that model without adding VM AI roots yet.
 
 **As-built alignment note:** Python orchestration currently provides typed schedule, lease, export, host-ticket, federation, and Kubernetes coexistence helpers over existing control files. Cohesix also has host-side PEFT filesystem helpers and, after 26e, an executable WorkerLora receipt path. Those substrates are useful leverage, but they are not yet the AI run/task graph envelope, checkpoint model, context-budget contract, prefix/hotset lifecycle, NeMo provider family, or production PEFT transaction described here. The accepted 28c substrate supplies semantic objects and Context Capsules, but it does not itself admit AI runs, select providers, invoke inference, or prove PEFT lifecycle execution. In particular, no existing mock playbook, local registry mutation, `/gpu/models` publication, WorkerLora receipt, semantic snapshot, or capsule proves training, evaluation, artifact scanning, inference-runtime reload, or rollback. Milestone 28d extends the 28b integration/use-case graph and consumes 28c artifacts by reference; it must not re-label generic orchestration, semantic extraction, or 26e fixture receipts as completed AI run control.
 
@@ -12410,6 +13052,9 @@ This milestone uses existing host-side surfaces (`/host/tickets/*`, delegated RE
 - Milestone **28c** completed for immutable semantic snapshots, typed object
   views and edges, provenance/redaction, deterministic Context Capsules, host
   query/render tooling, and semantic conformance evidence.
+- Milestone **28c1** completed for typed intents, authoritative fact snapshots,
+  restricted policy evaluation, seven-verdict decisions, state-bound grants,
+  and intent-to-outcome evidence.
 
 **Goal**
 Add a host-side AI run substrate that lets external supervisors and agent frameworks coordinate long-context workflows through delegated tickets and existing host-ticket flows while preserving Cohesix's single-writer, append-only, audit-first discipline:
@@ -12427,6 +13072,10 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
     while Milestone 28e owns the public OpenAI-compatible wire contract,
     streaming behavior, provider-neutral inference receipts, and compatibility
     conformance.
+11. Adapt every live AI side effect into a 28c1 typed intent and require the
+    exact accepted `admission_id`; AI may propose intent but cannot activate
+    policy, declare extracted facts authoritative, or convert confidence into
+    an admission result.
 
 **Non-Goals (Explicit)**
 - No in-VM transformer kernels, sparse-attention implementations, KV-compression implementations, or CUDA/NVML changes.
@@ -12434,6 +13083,12 @@ Add a host-side AI run substrate that lets external supervisors and agent framew
 - No direct many-agent writes to raw `/queen/ctl`; multi-agent host automation writes through delegated REST and/or `/host/tickets/spec`.
 - No active/active multi-queen control for one logical hive.
 - No live AI, PEFT, NeMo, Kubernetes, Docker, systemd, CUDA/NVML, or model-registry mutation from Python, adapters, playbooks, or framework integrations unless it appends a validated host ticket and is executed by `host-ticket-agent` under the generated provider action registry.
+- No live AI side effect without the accepted 28c1 admission required by that
+  provider action. Dry-run may show a proposed typed intent and predicted or
+  simulated outcome, but it cannot create an authority grant.
+- No AI activation or modification of policy, no model self-classification of
+  extracted facts as authoritative, and no use of model confidence as an
+  admission verdict.
 - No generic mutable `/store`, vector database, or prompt blob sink divorced from existing evidence/CAS discipline.
 - No reimplementation of the 28c semantic store, extractor registry, object
   graph, capsule planner, or renderer inside AI orchestration.
@@ -12468,7 +13123,12 @@ Implementation requirements:
   - `provider_profile_hash`, `prefix_cache_key`
   - `max_parallel_agents`, `human_attention_budget`
 - Live mutating AI flows inherit Milestone 28a safety requirements: delegated ticket, `id`, `idempotency_key`, and `writer_epoch` where applicable.
+- Every live AI side effect also carries the accepted 28c1 `admission_id`,
+  `intent_hash`, `policy_hash`, `state_epoch`, resource generations, granted
+  scope, and decision expiry required by its generated provider action.
 - Dry-run and mock playbooks validate budget/policy mismatches before any host side effect.
+  They may render a proposed intent and simulated decision but cannot mint or
+  reserve a grant.
 
 As-built leverage:
 - Reuse `cohesix` Python orchestration APIs and `/host/tickets/spec` idempotent lifecycle.
@@ -12724,6 +13384,25 @@ As-built leverage:
 
 **Task Breakdown**
 ```
+Title/ID: m28d-ai-intent-adapter
+Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / AI intent adapter
+Goal: Convert AI-supervisor proposals into 28c1 typed intents and require accepted decision-bound grants for every live AI side effect without creating an AI-specific guardrail path.
+Inputs: accepted 28c semantic/capsule schemas, accepted 28c1 intent/fact/decision/grant contracts, 28b provider/action admission metadata, 28a host-ticket identity/idempotency/fencing/WAL, AI run/PEFT/checkpoint/prefix action schemas.
+Changes:
+  - tools/coh-rtc/src/ir.rs + codegen — generated mappings from AI run, checkpoint, prefix, PEFT, model-promotion, and supervisor action records to exact 28c1 intent schemas, required fact sources, policy ids, grant ceilings, freshness/recheck modes, and receipt fields.
+  - host AI adapters and host-ticket-agent integration — accept model-drafted bounded fields as untrusted intent input, resolve authoritative facts through registered sources, attach the accepted `admission_id`, and refuse policy activation/modification, self-authoritative model facts, confidence-as-verdict, grant widening, or stale decisions.
+  - dry-run/evidence fixtures — show proposed intent plus predicted/simulated outcome without reservation or grant; bind every live side effect and high-risk PEFT promotion to the accepted 28c1 decision in addition to existing 28d transaction evidence.
+  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURITY.md + docs/PYTHON_SUPPORT.md — AI proposal/admission boundary and exact live versus dry-run semantics.
+Commands:
+  - cargo test -p coh-rtc
+  - cargo test -p host-ticket-agent --test ai_admission
+  - python3 -m pytest -q tools/cohesix-py/tests/test_integrations.py -k ai_intent
+  - scripts/check-generated.sh
+Checks:
+  - AI can draft only schema-valid intent fields; it cannot select/modify policy or promote assertions; model confidence is never a verdict; dry-run creates no grant; every live AI/PEFT/model-promotion side effect carries an accepted non-stale `admission_id` and uses the existing host-ticket/provider executor path.
+Deliverables:
+  - One 28c1-backed AI intent adapter shared by all 28d live action families.
+
 Title/ID: m28d-ai-run-envelopes
 Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28d-ai-run-envelopes
 Goal: Add typed host-side AI run/task/step envelopes with explicit handoff, dependency, and context-budget contracts.
@@ -12748,9 +13427,9 @@ Deliverables: Host-side AI runs become explicit, typed, replay-addressable, and 
 Title/ID: m28d-host-ticket-ai-actions
 Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Durable Context, Production PEFT / m28d-host-ticket-ai-actions
 Goal: Extend the host ticket plane with bounded AI control actions for inference runs, checkpoints, and prefix lifecycle.
-Inputs: apps/host-ticket-agent, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md
+Inputs: accepted m28d-ai-intent-adapter, apps/host-ticket-agent, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/HOST_TOOLS.md
 Changes:
-  - apps/host-ticket-agent/src/lib.rs — allowlist and schema validation for `infer.run|resume|abort`, `context.checkpoint|resume|evict`, and `prefix.warm|evict`.
+  - apps/host-ticket-agent/src/lib.rs — allowlist and schema validation for `infer.run|resume|abort`, `context.checkpoint|resume|evict`, and `prefix.warm|evict`, consuming the generated 28c1 `admission_id` and immutable intent/policy/state/grant bindings rather than defining a separate AI guardrail.
   - apps/host-ticket-agent/src/status.rs — bounded lifecycle/state counters for AI run, checkpoint, and prefix operations.
   - apps/host-ticket-agent/src/executors/infer.rs — host-only provider adapter contract; no VM-side model runtime.
   - docs/INTERFACES.md — canonical host-ticket AI action envelopes, receipt
@@ -12758,7 +13437,7 @@ Changes:
     semantics.
   - docs/ARCHITECTURE.md — authority flow for delegated AI runs, checkpoints, prefix lifecycle, task handoffs, and evidence correlation.
 Commands: cargo test -p host-ticket-agent && cargo test -p tests --test host_ticket_agent
-Checks: AI host tickets stay idempotent, allowlist-gated, and stale-writer safe; unsupported actions fail deterministically with no side effects; handoff/checkpoint references remain bounded and attributable.
+Checks: AI host tickets stay idempotent, allowlist-gated, stale-writer safe, and bound to a non-stale accepted 28c1 admission; unsupported, missing-admission, widened-grant, or stale-state actions fail deterministically with no side effects; handoff/checkpoint references remain bounded and attributable.
 Deliverables: `/host/tickets/spec` becomes the canonical AI actuation path before 29b VM roots exist.
 
 Title/ID: m28d-ai-evidence-checkpoints
@@ -12842,7 +13521,7 @@ Milestone: Milestone 28d — Host-Side AI + PEFT Coexistence: Delegated Runs, Du
 Goal: Make the complete PEFT export/train/evaluate/scan/import/activate/runtime-reload/canary/rollback lifecycle transactional, provenance-complete, and WorkerLora-correlated.
 Inputs: accepted 26e WorkerLora receipt path, m28b-authoritative-receipt-and-evidence-core, 28b PEFT/external-executor/use-case rows, apps/coh/src/peft, apps/coh/src/evidence.rs, apps/host-ticket-agent, apps/gpu-bridge-host, tools/cohesix-py, CAS/evidence tools, docs/GPU_NODES.md, docs/SECURITY.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/ir.rs + generated provider/integration records — bounded PEFT phase schemas, artifact/provenance refs, provider/framework profiles, evaluation/scan gates, runtime compatibility, recovery, and WorkerLora correlation.
+  - tools/coh-rtc/src/ir.rs + generated provider/integration records — bounded PEFT phase schemas, artifact/provenance refs, provider/framework profiles, evaluation/scan gates, runtime compatibility, recovery, WorkerLora correlation, and 28c1 decision requirements for promotion and every high-risk live phase.
   - apps/coh/src/peft/mod.rs — phase journal, registry lock, canonical-path/symlink confinement, unique same-filesystem temp files, file/directory fsync and rename ordering, CAS artifacts, metadata validation, compare-and-swap generations, and rollback-safe transaction records.
   - apps/coh/src/peft/activate.rs — correlate registry generation, `/gpu/models/*` publish/ack, inference-runtime reload/canary observation, WorkerLora receipt, and rollback target as one recoverable activation transaction.
   - apps/host-ticket-agent/src/executors/peft.rs — execute generated `peft.export|train|evaluate|scan|import|activate|runtime_reload|canary|rollback` phases through named host providers with crash-safe idempotency and exact 26e WorkerLora result delivery.
@@ -12945,6 +13624,9 @@ Deliverables: NeMo support is compiler-governed, optional, and demonstrably cros
 ## Outcome
 After Milestone 28d:
 - Cohesix is positioned as the trusted actuation, evidence, and governance layer beneath agent frameworks.
+- AI supervisors can propose typed intents, but every live side effect is bound
+  to an accepted 28c1 admission id; model confidence, extracted assertions, and
+  dry-run predictions remain non-authoritative.
 - WorkerLora participates as an executable, MCS-scheduled, receipt-bearing Cohesix task while datasets, frameworks, training/evaluation, adapters, weights, and inference runtimes remain in named host executors outside the TCB.
 - Every declared PEFT lifecycle is covered by one crash-safe export/train/evaluate/scan/import/activate/runtime-reload/canary/rollback transaction, and public AI/PEFT use-case maturity is generated from its live evidence rather than examples.
 - Long-context AI runs stop treating the prompt as the sole system of record.
@@ -12960,6 +13642,7 @@ After Milestone 28d:
 
 **Why now (inference ecosystem boundary):**
 Milestone 28c provides immutable semantic objects and Context Capsules.
+Milestone 28c1 provides machine-checked intent admission and state-bound grants.
 Milestone 28d provides delegated run/task/checkpoint policy, host-ticket AI
 actions, prefix/hotset lifecycle, provider selection hints, and the production
 PEFT transaction. The remaining adoption and audit gap is the model-serving
@@ -12998,6 +13681,9 @@ auditable inference gateway.
 - Milestone **28c** completed for accepted semantic snapshots, Context
   Capsules, render receipts, visibility enforcement, host tools, and semantic
   conformance/performance evidence.
+- Milestone **28c1** completed for governed inference typed intents,
+  authoritative fact snapshots, accepted policy decisions, and state-bound
+  authority grants.
 - Milestone **28d** completed for delegated AI run/task/step envelopes,
   `infer.run|resume|abort` host actions, checkpoint and prefix lifecycle,
   provider policy, production PEFT activation/reload evidence, and optional
@@ -13030,6 +13716,10 @@ efficiency and audit evidence first-class without moving models into Cohesix:
 9. Preserve explicit model requests as fixed-selection compatibility calls,
    and stage policy-selected aliases through generated `observe`, `recommend`,
    and `enforce` modes with measurable promotion evidence.
+10. Bind every governed provider call or enforced routing decision to the
+    accepted `admission_id`, intent/policy hashes, exact provider/model or alias
+    decision, Context Capsule or transcript-input identity, state and provider-
+    profile generations, deadline, and requested/granted limits.
 
 **Non-Goals (Explicit)**
 - No transformer, embedding, reranking, guardrail, training, CUDA/NVML, KV
@@ -13053,7 +13743,8 @@ efficiency and audit evidence first-class without moving models into Cohesix:
   extension field, generation configuration, or tool executor supplied by the
   inference request.
 - No execution of model-produced tool calls. Tool calls are untrusted outputs;
-  any real action proceeds later through existing Cohesix tickets and policy.
+  any real action requires a separate typed intent, accepted 28c1 admission,
+  and existing Cohesix ticket/provider path.
 - No silent prompt summarization, semantic expansion, provider fallback,
   model substitution, output reuse, or cache sharing across identity/tenant/
   ticket boundaries.
@@ -13080,6 +13771,10 @@ Implementation requirements:
   - `inference-receipt/v1`
   - `inference-stream-receipt/v1`
   - `inference-cache-decision/v1`.
+- Each governed request and routing record binds the 28c1 `admission_id`,
+  `intent_hash`, `policy_hash`, exact fixed-model or alias selection,
+  Context Capsule/render identity or transcript-input identity, `state_epoch`,
+  provider-profile generation, deadline, limits, and grant expiry.
 - Pin the accepted OpenAI-compatible Models, Chat Completions, Responses, and
   optional Embeddings paths, fields, streaming event forms, tool-call/result
   shapes, usage fields, cancellation behavior, error mapping, JSON Schema
@@ -13130,7 +13825,10 @@ Implementation requirements:
     through a bounded opt-in surface while the caller's existing selection
     remains in control;
   - `enforce` permits a generated policy alias to select only a conforming
-    provider/model candidate after exact admission.
+    provider/model candidate after an accepted machine-checked 28c1 decision.
+- `observe` and `recommend` cannot change the route, reserve a resource, create
+  a grant, or satisfy execution-authority evidence. Explicit fixed-model
+  requests remain fixed-selection admissions.
 - An explicit model request and a policy-alias request remain distinguishable
   in request identity, admission, receipt, metrics, errors, and evidence.
 - Authenticate the client at the gateway, normalize it through 28a delegated
@@ -13141,6 +13839,10 @@ Implementation requirements:
   exact request/provider digest and returns the generated execution grant/state.
   The gateway is the registered streaming executor for that action; it does not
   decide authority or call a different provider after admission.
+- Provider, model, endpoint, effective parameters, tools, Context Capsule or
+  transcript-input identity, state/provider generation, deadline, and limits
+  cannot change after admission. Any change requires a new typed intent and
+  decision.
 - Stream forwarding is incremental and bounded. Record a digest chain and byte/
   event counters without retaining full content unless an explicit encrypted
   content-retention profile authorizes it.
@@ -13306,6 +14008,10 @@ Implementation requirements:
 - Every governed provider call has a prior exact Cohesix admission record and
   execution grant; provider, model, request, capsule/render, authority, and
   deadline cannot change after admission.
+- The admission record includes the 28c1 `admission_id`, intent/policy hashes,
+  fixed-model or alias decision, transcript/capsule identity, state/provider-
+  profile generations, deadline, limits, and grant expiry; any mismatch or
+  stale generation fails before provider contact.
 - Observe/recommend modes cannot change provider execution, mint authority, or
   satisfy governed-execution proof. Enforce mode is unavailable until its
   generated alias/policy, provider conformance, bypass posture, failure posture,
@@ -13365,13 +14071,13 @@ Implementation requirements:
 Title/ID: m28e-inference-ir-and-compatibility-contract
 Milestone: Milestone 28e — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / inference IR and compatibility contract
 Goal: Define one generated request, provider-profile, admission, stream, cache-decision, and receipt contract plus a pinned OpenAI-compatible projection.
-Inputs: accepted 28b provider/integration graph, 28c Context Capsule schemas, 28d run/host-ticket/provider contracts, tools/coh-rtc/src/**, docs/HOST_API.md, docs/INTERFACES.md, docs/SECURITY.md.
+Inputs: accepted 28b provider/integration graph, 28c Context Capsule schemas, 28c1 intent/fact/decision/grant contracts, 28d run/host-ticket/provider contracts, tools/coh-rtc/src/**, docs/HOST_API.md, docs/INTERFACES.md, docs/SECURITY.md.
 Changes:
   - tools/coh-rtc/src/ir.rs + validation/codegen — Models/Chat
     Completions/Responses/Embeddings endpoint/field/event schemas,
     fixed-selection and policy-alias routing modes, versioned routing decisions,
     provider/model/runtime/weight/tokenizer profiles, capsule extension,
-    caller/provider auth separation, keyed digest policy, bounds,
+    caller/provider auth separation, 28c1 admission bindings, keyed digest policy, bounds,
     cache/content policy, shadow-promotion evidence, receipts,
     Python/coh/docs outputs.
   - crates/cohesix-inference-core/src/schema.rs — strict generated or checked host-side request/admission/receipt types.
@@ -13388,22 +14094,22 @@ Deliverables: Compiler-owned inference compatibility and receipt contract shared
 
 Title/ID: m28e-gateway-admission-and-streaming
 Milestone: Milestone 28e — Inference Interoperability + Auditable Receipts (OpenAI-Compatible Host Boundary) / host gateway admission and streaming
-Goal: Serve the compatible host API with bounded streaming while every governed provider call remains bound to an exact 28d host-ticket admission and execution grant.
-Inputs: m28e-inference-ir-and-compatibility-contract, apps/host-ticket-agent, 28d `infer.run|resume|abort` actions, accepted 28a gateway identity/fencing/WAL behavior, provider fixtures.
+Goal: Serve the compatible host API with bounded streaming while every governed provider call remains bound to an exact 28c1 admission decision and the existing 28d host-ticket execution path.
+Inputs: m28e-inference-ir-and-compatibility-contract, accepted 28c1 decision/grant contracts, apps/host-ticket-agent, 28d `infer.run|resume|abort` actions, accepted 28a gateway identity/fencing/WAL behavior, provider fixtures.
 Changes:
   - apps/inference-gateway-host/src/** — compatible Models/request/stream
     handling, conventional base-URL/bearer configuration, explicit fixed-model
     versus policy-alias requests, generated observe/recommend/enforce behavior,
     loopback/exposure policy, bounded queues, cancellation, digest chaining,
     backpressure, and response headers carrying receipt/trace refs.
-  - apps/host-ticket-agent/src/executors/infer.rs — exact request/provider admission, execution grant, WAL reconciliation, idempotency, writer fencing, cancellation, and terminal/ambiguous state.
+  - apps/host-ticket-agent/src/executors/infer.rs — exact 28c1 request/provider admission reference, fixed-model or enforced-alias grant validation, state/provider-generation recheck, execution WAL reconciliation, idempotency, writer fencing, cancellation, and terminal/ambiguous state.
   - crates/cohesix-inference-core/src/{canonical,stream,errors}.rs — stable request identity, incremental stream digest, and deterministic client/provider/Cohesix error mapping.
   - apps/inference-gateway-host/tests/** — non-streaming, streaming, cancellation, disconnect, ambiguous completion, duplicate, stale-writer, and provider-substitution fixtures.
 Commands:
   - cargo test -p inference-gateway-host
   - cargo test -p host-ticket-agent
   - cargo test -p cohesix-inference-core
-Checks: No provider request precedes exact admission; observe/recommend cannot change the existing route; enforce requires an accepted generated alias and shadow-promotion evidence; explicit model requests are never silently substituted; stream state reconciles durably; retries cannot duplicate ambiguous work; client/provider credentials and authority remain separate.
+Checks: No provider request precedes an accepted non-stale 28c1 admission; observe/recommend cannot change the existing route or create authority; enforce requires an accepted generated alias, machine-checked decision, and shadow-promotion evidence; explicit model requests are never silently substituted; any provider/model/endpoint/parameter/tool/context/generation/limit change requires a new intent; stream state reconciles durably; retries cannot duplicate ambiguous work; client/provider credentials and authority remain separate.
 Deliverables: Drop-in compatible host inference endpoint that preserves Cohesix ticket, fencing, durability, and executor discipline.
 
 Title/ID: m28e-context-efficiency-and-cache-evidence
@@ -13470,7 +14176,8 @@ After Milestone 28e:
 - Existing inference applications can adopt Cohesix through a familiar host API
   while model runtimes and credentials remain outside the VM and Cohesix TCB.
 - Every governed request is bound to delegated identity, an exact host-ticket
-  admission, a provider/model profile, and a durable terminal or ambiguous
+  action, an accepted 28c1 admission id, exact intent/policy/state/provider
+  bindings, a provider/model profile, and a durable terminal or ambiguous
   receipt.
 - Existing fixed-model clients can adopt the compatible boundary without
   accepting automatic routing; policy aliases progress from observe to
@@ -13488,7 +14195,7 @@ After Milestone 28e:
 [Milestones](#Milestones)
 
 **Why now (ecosystem boundary):**
-Milestone 28a gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 28c provides immutable semantic objects and Context Capsules. Milestone 28d defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts, and Milestone 28e provides the OpenAI-compatible inference boundary and provider-neutral inference receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane, inference protocol, semantic store, or VM grammar to satisfy them.
+Milestone 28a gives `hive-gateway` caller-attributed, fenced, audit-first write authority. Milestone 28b provides the generated provider/action and integration-surface graph, read visibility classes, identity mappings, external-executor conformance, package manifests, and use-case evidence rows that gateway protocol projections must consume. Milestone 28c provides immutable semantic objects and Context Capsules. Milestone 28c1 provides the typed-intent, authoritative-fact, decision, and state-bound-grant contract for every mutating protocol projection. Milestone 28d defines the host-side AI/provider model and complete PEFT lifecycle for delegated runs, optional NeMo providers, GPU leases, and evidence receipts, and Milestone 28e provides the OpenAI-compatible inference boundary and provider-neutral inference receipts. That is the right point to add a Model Context Protocol (MCP) server: external agent hosts need standard MCP tools, resources, and prompts, but Cohesix must not create a second authority plane, inference protocol, semantic store, policy evaluator, or VM grammar to satisfy them.
 
 MCP support belongs inside or immediately beside `hive-gateway` because the gateway is already the host-only multiplexer over existing Cohesix file semantics. This milestone makes MCP a client-facing projection over the same `LS`, `CAT`, `TAIL`, and `ECHO` paths, plus read-only adapters over accepted 28c semantic/capsule artifacts and 28e inference receipts, and the existing `/host/tickets/spec` actuation lane. It is not a new runtime, not an in-VM endpoint, and not an excuse to expose model providers, `systemctl`, `docker`, `kubectl`, CUDA, PEFT, or NeMo APIs directly to an agent.
 
@@ -13496,7 +14203,16 @@ A2A belongs in the same gateway milestone only as a companion agent-delegation f
 
 **As-built alignment note:** There is no MCP server or A2A facade in `hive-gateway` today. Current gateway behavior is REST/OpenAPI over `LS`/`CAT`/`ECHO`, and the host ecosystem already has bounded providers for CUDA/NVIDIA discovery, GPU leases, PEFT, systemd, Docker, and K8s through Cohesix host tools and `/host/tickets/*`. The accepted 28e inference endpoint remains a separate host service; 28f discovers and references it but does not proxy, reimplement, or redefine its compatible wire contract. `coh mount --rest-url` already mounts through `hive-gateway` and is the primary FUSE path for the live Cohesix namespace; Milestone 28f must not rebuild that through MCP or A2A. Milestone 28f adds MCP-compatible and A2A-compatible surfaces only after those existing flows are the implementation substrate. Older prose must not claim MCP or A2A support until the gateway exposes lifecycle/discovery/execution/authorization/conformance evidence for the relevant protocol.
 
-**Sequencing note:** Milestone 28f is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded namespace reads, accepted 28c semantic/capsule artifacts, and accepted 28e inference receipts, with every resource classified by the Milestone 28b visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28b provider/integration graph, 28a delegated authority floor, 28c artifact model, 28d run/checkpoint/evidence model, and 28e inference admission/receipt contract are proven. A projected tool/skill is omitted or reports typed unavailable when any required provider, surface, external executor, Worker tier, package, semantic artifact, or inference profile row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28g evidence. Host-ticket-only and read-only projections must not claim either class by implication.
+**Sequencing note:** Milestone 28f is staged inside one milestone. Phase 1 is read-only MCP transport/resource/prompt discovery and conformance over existing bounded namespace reads, accepted 28c semantic/capsule artifacts, and accepted 28e inference receipts, with every resource classified by the Milestone 28b visibility model. Phase 2 may add mutating MCP tools and A2A task facades only after the 28a delegated authority floor, 28b provider/integration graph, 28c artifact model, 28c1 admission primitive, 28d run/checkpoint/evidence model, and 28e inference admission/receipt contract are proven. A projected mutating tool/skill is omitted or reports typed unavailable when its provider action lacks an accepted 28c1 policy or any required provider, surface, external executor, Worker tier, package, semantic artifact, or inference profile row is not accepted. No mutating MCP/A2A path can be accepted solely because read-only protocol conformance passes, and protocol conformance cannot promote the underlying use case. A path may cite matching 26e evidence for live Worker/driver authority; if it additionally claims production Worker ticket/lease binding, complete driver-inventory projection, or structured quarantine/restart, it must cite the corresponding Milestone 28g evidence. Host-ticket-only and read-only projections must not claim either class by implication.
+
+**Prerequisites**
+- Milestone **28c1** completed for every mutating tool/skill, including the
+  generated typed-intent mapping, accepted policy, authoritative fact sources,
+  decision receipt, state-bound grant, and stale-state refusal. Read-only
+  protocol conformance does not require a mutating admission decision.
+- Milestones **28a**, **28b**, **28c**, **28d**, and **28e** completed for the
+  exact delegated-authority, registry, artifact, run/action, and inference
+  surfaces projected by the selected profile.
 
 **Goal**
 Expose Cohesix to MCP clients through standard MCP server primitives and to A2A peers through task/artifact protocol primitives while preserving Cohesix's existing grammar and authority model:
@@ -13516,6 +14232,9 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
    host-ticket receipts, not a separate scheduler or agent memory.
 8. Read-only MCP/A2A conformance is an ecosystem compatibility claim, not a write-authority claim. Mutating protocol evidence must name delegated-ticket, provider-action, idempotency, writer-epoch, audit/replay, matching 26e live-task evidence where VM execution is claimed, and 28g production-ledger/quarantine evidence only where those stronger claims are made.
 9. Tool/resource/prompt and Agent Card/skill availability derives from the accepted 28b integration and use-case rows; MCP/A2A never upgrades a mock, dry-run, integration-pattern, or not-enabled workflow into production support.
+10. Every mutating flow is `MCP tool call or A2A task -> generated typed intent
+    -> 28c1 admission -> existing host-ticket or control action`; neither MCP
+    nor A2A contains an independent policy evaluator.
 
 **Non-Goals (Explicit)**
 - No in-VM MCP endpoint, MCP listener, MCP filesystem root, or MCP-specific root-task parser.
@@ -13529,6 +14248,9 @@ Expose Cohesix to MCP clients through standard MCP server primitives and to A2A 
   inference receipt schema in `hive-gateway`; 28f consumes accepted 28c and
   28e libraries and immutable refs.
 - No MCP tool that bypasses role-scoped tickets, policy approval, writer-epoch fencing, host-ticket allowlists, or evidence exports.
+- No MCP/A2A-local policy evaluator, fact-authority classifier, grant minter, or
+  admission cache transferable across intents. Protocol metadata and model
+  text remain untrusted intent inputs.
 - No model-controlled prompt or MCP client metadata is trusted as authorization. Tool descriptions, prompts, and annotations are documentation only.
 - No CUDA/NVML, PEFT, NeMo, Kubernetes, systemd, or Docker code enters the VM TCB.
 - No implicit translation from arbitrary FUSE writes into MCP `tools/call`. Write-capable Cohesix mounts continue to use existing console/REST `ECHO` semantics and the existing append-only control files.
@@ -13623,16 +14345,21 @@ Implementation requirements:
   - `cohesix.gpu.lease_grant`, `cohesix.gpu.lease_renew`, and `cohesix.gpu.lease_release` map to existing GPU lease actions.
   - `cohesix.peft.export`, `cohesix.peft.import`, `cohesix.peft.activate`, and `cohesix.peft.rollback` map to existing PEFT ticket/action flows and 28d transaction receipts.
   - `cohesix.inference.submit` maps a fixed, generated request schema and
-    optional accepted Context Capsule ref to the existing 28d `infer.run`
-    host-ticket admission and 28e inference gateway. It never calls a provider
-    directly or executes model-produced tool calls.
+    optional accepted Context Capsule ref through 28c1 admission to the
+    existing 28d `infer.run` host-ticket action and 28e inference gateway. It
+    never calls a provider directly or executes model-produced tool calls.
   - `cohesix.nemo.probe`, `cohesix.nemo.infer`, `cohesix.nemo.guardrails`, and `cohesix.nemo.evaluate` map to 28d optional provider actions or deterministically return unavailable when NeMo is not enabled.
   - `cohesix.k8s.cordon`, `cohesix.k8s.drain`, and `cohesix.k8s.lease_sync` map to existing K8s host-ticket actions.
   - `cohesix.systemd.status_check`, `cohesix.systemd.start`, `cohesix.systemd.stop`, and `cohesix.systemd.restart` map to existing systemd host-ticket actions.
   - `cohesix.docker.status_check`, `cohesix.docker.stop`, and `cohesix.docker.restart` map to existing Docker host-ticket actions.
 - MCP tool schemas and A2A skill schemas must derive from the shared manifest/provider action and integration-surface registry. Provider action names, target selectors, dry-run flags, idempotency keys, receipt fields, Worker tier, external-executor requirement, and availability state must not be hand-maintained separately for the two protocols.
+- Every mutating schema additionally derives its exact 28c1 intent schema,
+  required facts, policy id, grant ceiling, freshness/recheck mode, and decision
+  receipt. The gateway maps the call/task into that typed intent, consumes the
+  accepted `admission_id`, then submits only the existing host-ticket or control
+  action.
 - Discovery omits or marks typed unavailable any operation whose
-  28b/28c/28d/28e dependency row is not accepted in the selected profile. A
+  28b/28c/28c1/28d/28e dependency row or admission policy is not accepted in the selected profile. A
   client cannot select `live` mode to override missing semantic, capsule,
   provider, executor, inference, or receipt evidence.
 - Every tool schema must be generated or checked against manifest/provider policy:
@@ -13691,7 +14418,7 @@ Implementation requirements:
   generated equivalents for the pinned binding/revision) create or resume 28d
   run/task envelopes only after fixed skill/action/input schema validation.
   Semantic inputs are immutable 28c snapshot/capsule refs; inference actions
-  map to the existing 28d admission and 28e gateway. Free-form natural
+  map through 28c1 admission to the existing 28d action and 28e gateway. Free-form natural
   language is never translated directly into host or provider execution.
 - A2A `GetTask`, `ListTasks`, `CancelTask`, `SubscribeToTask`,
   push-notification configuration, and streaming update operations (or their
@@ -14025,9 +14752,10 @@ Changes:
   - tools/coh-rtc/src/ir.rs — `gateway.a2a.*` schema for endpoint/binding, accepted revision, binding-specific operation mappings, Agent Card path, skill ids, task/artifact/stream/push bounds, callback allowlists, and prerequisite gates.
   - tools/coh-rtc/src/validate.rs — reject mixed-revision or mixed-binding
     operation names and reject A2A task-creating or task-mutating skills without
-    their required 28a delegated authority, 28c immutable context, 28d durable
-    run/task state, 28e inference admission/receipt, audit/replay, evidence
-    export, and provider action prerequisites.
+    their generated 28c1 intent/policy/fact/grant mapping, required 28a
+    delegated authority, 28c immutable context, 28d durable run/task state, 28e
+    inference admission/receipt, audit/replay, evidence export, and provider
+    action prerequisites.
   - tools/coh-rtc/src/codegen/* — generated A2A gateway defaults, Agent Card metadata, and docs snippets.
 Commands: cargo test -p coh-rtc && scripts/check-generated.sh
 Checks: A2A revision/binding mappings are compiler-owned and internally consistent, profile gates hold, and `cohsh-core` grammar specs and NineDoor semantics remain untouched.
@@ -14128,17 +14856,18 @@ Changes:
   - apps/hive-gateway/src/mcp/tools.rs — schema-defined tools for file reads,
     semantic/capsule inspect/query/render/verify, inference
     submit/status/receipt, CUDA/GPU inventory, host-ticket submission, GPU
-    leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries.
-  - apps/hive-gateway/src/mcp/tickets.rs — host-ticket builder with id/idempotency/writer-epoch validation, provider action mapping, and generated v1/v2 selection from the required receipt mode.
+    leases, PEFT, NeMo, K8s, systemd, Docker, and evidence summaries; each
+    mutating call is first converted into its generated 28c1 typed intent.
+  - apps/hive-gateway/src/mcp/tickets.rs — 28c1 admission-reference validator and host-ticket builder with id/idempotency/writer-epoch validation, provider action mapping, and generated v1/v2 selection from the required receipt mode; it contains no policy evaluator and cannot mint a grant.
   - apps/hive-gateway/tests/mcp_tools.rs — success and refusal fixtures for read-only, delegated mutating, duplicate, and unauthorized calls.
 Commands: cargo test -p hive-gateway --test mcp_tools && cargo test -p host-ticket-agent
-Checks: Mutating tools append only validated Cohesix ticket/control lines and
+Checks: Mutating tools require an accepted non-stale 28c1 decision, then append only validated Cohesix ticket/control lines and
 cannot downgrade a receipt-bearing v2 action to v1 or synthesize Worker binding
 fields;
-inference submission uses 28d admission and 28e receipts; provider executors
+inference submission uses 28c1 admission, the 28d host-ticket action, and 28e receipts; provider executors
 and model-produced tool calls are never invoked directly by the MCP server;
 read-only MCP acceptance and provider action registry parity evidence already
-exists.
+exists; missing admission policy makes the mutating tool typed unavailable.
 Deliverables: Tool catalog covering semantic/context, inference, CUDA/GPU,
 PEFT, NeMo, K8s, systemd, and Docker under existing Cohesix authority.
 
@@ -14253,7 +14982,7 @@ Commands: cargo test -p hive-gateway --test mcp_security && cargo test -p hive-g
 Checks: Standard MCP clients and A2A peers can discover and call allowed
 read-only/dry-run flows; unauthorized, prompt-injected, tampered-artifact,
 provider-direct, model-returned, forged callback, duplicate, or overbroad calls
-cannot bypass delegated tickets, 28d inference admission, or Cohesix policy.
+cannot bypass delegated tickets, 28c1 inference admission, the 28d host-ticket action, or Cohesix policy.
 Deliverables: Archived MCP/A2A conformance and security evidence.
 ```
 
@@ -14267,6 +14996,9 @@ After Milestone 28f:
   tasks, observe task status, and retrieve redacted semantic/capsule/inference,
   CUDA/GPU, PEFT, NeMo, K8s, systemd, Docker, and evidence artifacts.
 - All side effects still flow through Cohesix tickets, files, policy, audit, and evidence.
+- Every mutating MCP/A2A projection first produces its generated typed intent
+  and consumes an accepted 28c1 admission; neither protocol owns policy
+  evaluation or grant issuance.
 - Inference continues to use the separate accepted 28e compatibility boundary;
   MCP/A2A adds ecosystem projection, not another provider path or inference
   protocol.
@@ -14282,8 +15014,9 @@ host/gateway writes attributable, idempotent, fenced, durable, and audit-first.
 Milestone 26e also establishes the baseline linked-driver containment contract,
 and Milestone 27 may add an independently accepted `driver-storage` bundle
 under that same contract. The remaining VM-side production concern is to bind
-the proven Worker bundles to production ticket/lease ledgers, project every
-selected accepted driver authority inventory through manifest runtime-instance
+the 28c1-admitted action to the proven Worker bundles through production
+ticket/lease ledgers, project every selected accepted driver authority
+inventory through manifest runtime-instance
 ledgers, and add quarantine policy plus bounded evidence. Drivers never receive
 or own tickets. This milestone closes that ledger/projection gap; it does not
 retroactively supply security properties needed by a live 26e Worker/baseline
@@ -14312,6 +15045,9 @@ driver or a selected Milestone 27 storage runtime.
 - Milestone **26d** seL4 baseline refresh completed for the selected profiles, so CSpace/VSpace/syscall assumptions match the accepted seL4 generated artifacts.
 - Milestone **28a** completed, including audit/replay defaults and generated gates that distinguish host authority records from VM cap-backed tickets.
 - Milestone **28b** completed for the provider/integration dependency graph, external-executor classifications, exact package manifests, and stable use-case rows that will consume production Worker-bundle bindings. A PEFT/AI row additionally requires the applicable Milestone **28d** live pipeline evidence; a row claiming semantic context or compatible inference additionally requires the applicable accepted Milestone **28c** and **28e** evidence.
+- Milestone **28c1** completed for any production Worker ticket/lease action,
+  including the accepted admission id, decision witness hash, intent/policy
+  hashes, state epoch, Worker/resource generation facts, and state-bound grant.
 
 **Production authority gate:** Accepted owner-milestone evidence is sufficient
 to claim the matching live Worker/driver cap bundles and basic containment
@@ -14329,8 +15065,9 @@ separate lifecycle catalog or promote provider/external-executor support by
 itself.
 
 **Goal**
-Bind production Worker tickets/leases one-to-one to accepted live seL4 bundles;
-project each already-complete driver bundle through manifest runtime-instance,
+Bind production Worker tickets/leases one-to-one to accepted live seL4 bundles,
+bind each admitted action to the exact decision and state against which it was
+approved, project each already-complete driver bundle through manifest runtime-instance,
 scheduler, supervisor, and cap-generation ledgers without inventing driver
 tickets; and convert already-contained Worker/driver faults into structured
 terminal/quarantine evidence with fresh-ticket Worker restart and fresh driver
@@ -14359,8 +15096,11 @@ from a ticket, provider receipt, or UI state.
 **Deliverables**
 - Generated production binding records map each active Worker ticket/lease,
   role, slot, lease epoch, supervisor generation, scheduler generation, and
-  fault identity to exactly one accepted 26e instance bundle. WorkerBus remains
-  model-only and has no production VM bundle.
+  fault identity to exactly one accepted 26e instance bundle. Each admitted
+  Worker action additionally correlates `admission_id`,
+  `decision_witness_hash`, `intent_hash`, `policy_hash`, `state_epoch`,
+  `worker_generation`, `ticket_or_lease_id`, and `cap_bundle_generation`.
+  WorkerBus remains model-only and has no production VM bundle.
 - Generated driver records map manifest runtime identity plus runtime,
   scheduler, supervisor, and cap-bundle generations to the already accepted
   endpoint, notification, fault/timeout, SC/Reply, IRQ, shared-ring, data-frame,
@@ -14379,6 +15119,11 @@ from a ticket, provider receipt, or UI state.
   manifest runtime/cap generation and the accepted containment/reconstruction
   path, never a ticket. Neither may silently reuse a stale TCB, cap, Reply
   relationship, SC, DMA mapping, shared frame, or ring.
+- Milestone 28c1 proves admission against policy and state. This milestone
+  binds that decision to the actual live Worker bundle, ticket/lease,
+  capability generation, fault lifecycle, and quarantine state. A 28c1
+  decision alone is not production Worker authority proof, and any changed
+  Worker or resource generation invalidates it.
 - Emit `worker-bundle-binding` integration evidence for Heartbeat/GPU/LoRA with
   target/image/manifest hashes, ticket/lease identity, Worker slot, lease epoch,
   supervisor/scheduler/cap generations, terminal/quarantine state, and the
@@ -14411,6 +15156,10 @@ from a ticket, provider receipt, or UI state.
   binding. Complete driver-inventory profiles fail if any admitted manifest
   runtime lacks its generation-keyed accepted inventory; no driver ticket is
   generated or delivered.
+- Any admitted Worker action fails before invocation when its `admission_id`,
+  decision-witness, intent/policy hash, state epoch, Worker generation,
+  ticket/lease id, or cap-bundle generation is missing, mismatched, expired, or
+  stale.
 - Production profiles that expose AI, MCP/A2A, provider, or driver-runtime
   projections may cite matching accepted owner-milestone live authority, but
   fail if they claim 28g Worker ledger binding, complete driver-inventory
@@ -14460,6 +15209,10 @@ from a ticket, provider receipt, or UI state.
   revoke/recovery evidence, production enablement gates, terminal/quarantine
   policy, and bounded fault evidence paths. SchedControl is never emitted to a
   child bundle.
+- `coh-rtc` extends those Worker bindings with the accepted 28c1 admission and
+  decision-witness correlation fields while keeping provider admission,
+  Worker ticket/lease identity, and live seL4 cap authority as distinct
+  records.
 - `coh-rtc` emits explicit profile-state distinctions for read-only projection,
   host-ticket-only actuation, model/session-only roles, 26e isolated-task
   and linked-driver authority, conditional accepted Milestone 27
@@ -14478,9 +15231,9 @@ from a ticket, provider receipt, or UI state.
 Title/ID: m28g-production-worker-ticket-driver-inventory
 Milestone: Milestone 28g — Production Worker Ticket/Lease Binding + Driver Inventory Projection + Structured Fault Lifecycle / production live-bundle ledger binding
 Goal: Bind each production Worker ticket/lease to exactly one accepted 26e live bundle and project each selected accepted driver bundle through a ticket-free manifest-runtime ledger without reconstructing either task path or retaining metadata-only compatibility authority.
-Inputs: accepted 26e Worker and linked-driver bundle/inventory/integration evidence records, conditional accepted Milestone 27 storage-runtime bundle/inventory evidence, 28b host-integration and use-case registries, apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, tools/coh-rtc/src/**, scripts/ci/use_case_gate.sh, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
+Inputs: accepted 26e Worker and linked-driver bundle/inventory/integration evidence records, conditional accepted Milestone 27 storage-runtime bundle/inventory evidence, accepted 28c1 decision/grant/witness records, 28b host-integration and use-case registries, apps/root-task/src/lifecycle.rs, apps/root-task/src/hal/**, apps/root-task/src/generated/**, apps/root-task/src/ninedoor.rs, tools/coh-rtc/src/**, scripts/ci/use_case_gate.sh, docs/WORKER_TICKETS.md, docs/SECURITY.md, docs/HARDWARE_BRINGUP.md, docs/TEST_PLAN.md
 Changes:
-  - tools/coh-rtc/src/** — bind production Worker tickets/leases to the complete accepted 26e endpoint, lifecycle/completion notification, active SC, standard/timeout fault, frame, image, supervisor-generation, and revoke inventory. Separately project each selected accepted driver endpoint/notification/SC/Reply/fault/ring/frame/IRQ/MMIO/DMA/shared-buffer inventory, including a selected Milestone 27 storage runtime, by owner milestone, manifest runtime identity, and generation; generate no driver ticket/lease field and keep SchedControl root-only.
+  - tools/coh-rtc/src/** — bind production Worker tickets/leases to the exact accepted 28c1 admission id, decision-witness hash, intent/policy hashes, state epoch, Worker generation, ticket/lease id, cap-bundle generation, and complete accepted 26e endpoint, lifecycle/completion notification, active SC, standard/timeout fault, frame, image, supervisor-generation, and revoke inventory. Separately project each selected accepted driver endpoint/notification/SC/Reply/fault/ring/frame/IRQ/MMIO/DMA/shared-buffer inventory, including a selected Milestone 27 storage runtime, by owner milestone, manifest runtime identity, and generation; generate no driver ticket/lease field and keep SchedControl root-only.
   - apps/root-task/src/lifecycle.rs + apps/root-task/src/hal/** — reuse the sole 26e Worker constructor and accepted driver admission/containment contract, origin caps, and complete teardown for baseline and Milestone 27 storage runtimes; attach Worker live-bundle identity to the production ticket ledger and driver live-bundle identity to the manifest-runtime ledger without creating a second CSpace/VSpace, runtime descriptor, or scheduler path.
   - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — reconcile Worker ticket ledgers and driver manifest-runtime ledgers with accepted live bundle state, refuse metadata-only production authority, and ensure host/provider tickets authorize only root-projected driver actions rather than entering a driver descriptor.
   - tools/coh-rtc/src/codegen/** + scripts/ci/use_case_gate.sh — emit and consume 28g `worker-bundle-binding` integration evidence and promote only use-case rows whose remaining host/provider/executor/package dependencies also pass.
@@ -14497,6 +15250,7 @@ Commands:
   - scripts/ci/use_case_gate.sh --promote-milestone 28g --matrix configs/generated/use_case_evidence.json --state-dir out/use-case-gate/m28g
 Checks:
   - Production Worker ticket profiles fail if any executable Worker lacks a one-to-one accepted live-bundle binding; driver-inventory profiles fail if any admitted manifest runtime lacks its generation-keyed complete accepted inventory; any generated/delivered driver ticket field fails validation.
+  - A decision whose Worker/resource, ticket/lease, state, or cap-bundle generation changed is rejected; 28c1 admission evidence alone cannot satisfy live-bundle or quarantine proof.
   - Revoked Worker tickets lose their exact bound authority; quarantined driver runtime generations lose their exact endpoint/notification/SC/Reply/fault/ring/frame/IRQ/MMIO/DMA/shared authority; stale invocations, timeout events, and ring turns fail deterministically.
   - Recovery reconciles both ledger kinds with existing object state so no active Worker ticket or admitted driver generation lacks exactly one live bundle and no terminal entry retains one.
   - Host projections consume the exact binding record, and no use case is promoted by a Worker binding when any independent host integration row is missing, fixture, mock, dry-run, disabled, unknown, or otherwise below its required mode.
@@ -15153,12 +15907,12 @@ Deliverables: Repeatable host and Pi 4 validation for `hw-status`.
 [Milestones](#Milestones)
 
 **Why now (positioning):**  
-Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b proves the shared provider/integration/use-case graph, Milestone 28c proves immutable semantic objects and Context Capsules, Milestone 28d proves the host-side AI operating model and complete PEFT transaction, Milestone 28e proves the compatible inference boundary and auditable receipts, and Milestone 28f proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make the bounded control refs and evidence from that proven AI fleet state legible through the same namespace discipline without moving the semantic graph or inference data plane into the VM, creating a second executor, or exposing a namespace path whose external dependencies are missing.
+Cohesix already exposes bounded, file-shaped control surfaces for workers, GPU state, updates, models, and observability. Milestone 28b proves the shared provider/integration/use-case graph, Milestone 28c proves immutable semantic objects and Context Capsules, Milestone 28c1 proves machine-checked intent admission and state-bound grants, Milestone 28d proves the host-side AI operating model and complete PEFT transaction, Milestone 28e proves the compatible inference boundary and auditable receipts, and Milestone 28f proves that standard MCP clients and A2A peers can consume those semantics through `hive-gateway` without a new Cohesix grammar. The next strategic step is to make the bounded control refs and evidence from that proven AI fleet state legible through the same namespace discipline without moving the semantic graph or inference data plane into the VM, creating a second executor, or exposing a namespace path whose external dependencies are missing.
 
 **Goal**  
 Add a manifest-defined, role-scoped AI control namespace that lets operators and automation inspect and drive AI lifecycle state through existing Secure9P semantics. This milestone is limited to **control-plane surfaces only**: no in-VM application runtime, no general UI stack, no mutable POSIX-like filesystem, and no new transport or RPC model.
 
-**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, or `/metrics` AI namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those roots only after 28a, 28b, 28c, 28d, 28e, and 28f prove delegated authority, provider action/read-visibility conformance, semantic/capsule identity, host-ticket AI actions, checkpoints/evidence semantics, inference admission/receipts, and MCP/A2A gateway projection without grammar drift.
+**As-built alignment note:** There is no `ecosystem.ai.*` manifest IR and no `/jobs`, `/datasets`, `/experiments`, `/infer`, `/metrics`, or `/proc/admission/*` AI/admission namespace provider in the host or VM NineDoor implementations as of the 26c planning audit. Milestone 29b adds those projections only after 28a, 28b, 28c, 28c1, 28d, 28e, and 28f prove delegated authority, provider action/read-visibility conformance, semantic/capsule identity, machine-checked admission, host-ticket AI actions, checkpoints/evidence semantics, inference receipts, and MCP/A2A gateway projection without grammar drift.
 
 ### Prerequisites
 - Milestone **28a** completed (delegated REST identity, idempotent queen intents, writer-epoch fencing, audit/replay baseline).
@@ -15166,6 +15920,9 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - Milestone **28c** completed (immutable semantic snapshots/objects/views,
   Context Capsules, render receipts, visibility/provenance, host tools, and
   conformance evidence).
+- Milestone **28c1** completed (typed intent, authoritative fact snapshot,
+  policy decision, state-bound grant, witness, audit/replay, and reference
+  action evidence).
 - Milestone **28d** completed (host-side AI run envelopes, checkpoint/evidence model, complete PEFT pipeline transaction, use-case promotion, and `/host/tickets/spec` AI actuation semantics).
 - Milestone **28e** completed (compatible host inference admission,
   provider-neutral receipts, cache/stream evidence, content policy, host tools,
@@ -15199,6 +15956,15 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
   `/experiments/*`, and `/infer/*`) do not become a second source of truth for
   semantic provenance, context admission, inference facts, or execution
   authority.
+- Add only bounded read-only admission projections using the established
+  namespace families:
+  - `/proc/admission/status` for current bounded gate/version/state summaries,
+  - `/proc/admission/recent` for a bounded redacted recent-decision view,
+  - `/policy/admission/version` for the generated policy/schema/checker
+    identity, and
+  - existing `/audit/decisions` for append-only decision evidence.
+  These are projections of accepted 28c1 records, not a new AI-specific write,
+  policy mutation, grant, ticket, or replay path.
 - Manifest-gated AI control roots under the Secure9P namespace, with paths aligned to current authority rules:
   - `/jobs/*` for bounded job submission, queue state, completion records, checkpoint refs, and handoff lineage views
   - `/datasets/*` for dataset metadata, lineage pointers, and policy-visible readiness state
@@ -15221,8 +15987,8 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 - FUSE, Python, MCP/A2A, and UI views remain projections of the same admitted paths and 28b visibility classes; each is independently conformance-tested and cannot synthesize jobs, Workers, models, or successful PEFT/GPU execution from client state.
 - Canonical schemas for all new paths documented in `docs/INTERFACES.md` and emitted from `coh-rtc`.
 - Namespace state remains a projection of 28c immutable
-  snapshot/capsule/render refs, 28d run envelopes/checkpoints/retrieval
-  manifests, and 28e admission/inference receipts; it does not introduce an
+  snapshot/capsule/render refs, 28c1 admission decisions/grants, 28d run
+  envelopes/checkpoints/retrieval manifests, and 28e inference receipts; it does not introduce an
   independent semantic store, inference protocol, scheduler, or executor.
 - Namespace-scale microbenchmark evidence for representative job/run/checkpoint counts proves `ls`, `cat`, `tail`, and fixed-control-file writes remain bounded. This is a namespace/provider microbenchmark, not a full Pi hardware throughput gate, unless high-churn AI namespace paths change the root-task hot runtime path.
 
@@ -15251,8 +16017,11 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
   task/handoff/checkpoint/prefix evidence, and 28e
   admission/provider/cache/stream/output-digest receipt refs without becoming a
   second source of authority.
-- `/infer/*` writes map to the existing 28d host-ticket admission and 28e
-  gateway contract; no provider call occurs from NineDoor, and no raw
+- Admission read views expose only redacted, bounded, generated 28c1 status,
+  recent-decision, policy-version, and audit refs; they cannot accept an intent,
+  select policy, issue a grant, or trigger execution.
+- `/infer/*` writes map through accepted 28c1 admission to the existing 28d
+  host-ticket action and 28e gateway contract; no provider call occurs from NineDoor, and no raw
   prompt/output or model-produced tool call is stored or executed by the
   namespace provider.
 - No new in-VM listener, runtime, or hidden RPC behavior is introduced.
@@ -15260,16 +16029,21 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 
 **Compiler touchpoints**
 - `coh-rtc` admits `ecosystem.ai.*` IR fields for path gating, quotas, and per-surface limits.
+- `coh-rtc` emits bounded read-only `/proc/admission/status`,
+  `/proc/admission/recent`, `/policy/admission/version`, and existing
+  `/audit/decisions` projection metadata from the accepted 28c1 schemas and
+  visibility/redaction policy; no admission write field or AI-specific
+  authority path is generated.
 - Each `ecosystem.ai.*` entry references stable 28b integration/use-case ids,
   accepted 28c semantic/capsule schema refs, accepted 28d run/action refs,
-  accepted 28e admission/receipt refs, and generated Worker/executor
+  accepted 28c1 admission plus 28e receipt refs, and generated Worker/executor
   prerequisites; validation rejects independent schemas, availability, facts,
   or maturity declarations.
 - `coh-rtc` rejects AI namespace definitions that require dynamic path creation, unconstrained components, directory mutation, prompt/blob-tree storage, or side effects outside generated host-ticket-backed receipt mappings.
 - Generated snippets refresh `docs/INTERFACES.md`, `docs/ARCHITECTURE.md`, and `docs/USERLAND_AND_CLI.md` so host tools consume authoritative bounds and namespace roots.
 - Validation and generated docs make the authority mapping explicit: AI
   namespace writes that trigger external execution are projections over the
-  28d host-ticket admission and 28e receipt model, not an independent
+  28c1 decision, 28d host-ticket action, and 28e receipt model, not an independent
   inference endpoint or executor.
 - Validation rejects configurations that overload existing `/updates`, `/models`, telemetry, or spool semantics.
 
@@ -15278,14 +16052,15 @@ Add a manifest-defined, role-scoped AI control namespace that lets operators and
 Title/ID: m29b-ai-ir
 Milestone: Milestone 29b — AI-Native Namespace Surfaces (Control-Plane Only) / generated Python AI namespace contract
 Goal: Admit AI namespace surfaces in compiler IR without changing Cohesix transport or runtime boundaries.
-Inputs: accepted 28c semantic/capsule schemas, accepted 28d run/action schemas,
-accepted 28e inference receipt schemas, tools/coh-rtc,
+Inputs: accepted 28c semantic/capsule schemas, accepted 28c1 admission schemas,
+accepted 28d run/action schemas, accepted 28e inference receipt schemas, tools/coh-rtc,
 tools/cohesix-py/cohesix/generated.py, docs/ARCHITECTURE.md,
 docs/INTERFACES.md, docs/USERLAND_AND_CLI.md.
 Changes:
   - tools/coh-rtc/src/ir.rs — `ecosystem.ai.*` schema, gating,
     semantic/capsule/run/inference owner-ref mappings, receipt-projection
-    mapping, content-retention policy, and bounds validation.
+    mapping, content-retention policy, bounded read-only admission projection
+    mappings, and bounds validation.
   - tools/coh-rtc/src/codegen/{docs,rust,cohsh,cohesix_py}.rs — generated AI namespace snippets and Rust, cohsh, and Python client defaults.
 Commands:
   - cargo test -p coh-rtc
@@ -15293,7 +16068,7 @@ Commands:
 Checks:
   - AI namespace admission is compiler-defined, rejects overlap with existing
     semantic/CAS/model/spool and inference endpoint surfaces, and preserves the
-    28c artifact, 28d host-ticket admission, and 28e receipt mappings for
+    28c artifact, 28c1 decision/grant, 28d host-ticket action, and 28e receipt mappings for
     side-effecting flows and read-model projections.
   - Generated Python roots, fixed control files, gates, and bounds match the selected resolved manifest and cannot be hand-maintained independently.
 Deliverables:
@@ -15304,7 +16079,7 @@ Goal: Add bounded NineDoor providers for AI control-plane paths.
 Inputs: apps/nine-door, apps/root-task/src/ninedoor.rs, generated manifest outputs.
 Changes:
   - apps/nine-door/src/host/namespace.rs — host-mode AI namespace providers for tests.
-  - apps/root-task/src/ninedoor.rs — in-VM AI namespace provider wiring and policy enforcement.
+  - apps/root-task/src/ninedoor.rs — in-VM AI namespace provider wiring and policy enforcement plus bounded read-only `/proc/admission/status`, `/proc/admission/recent`, `/policy/admission/version`, and existing `/audit/decisions` projections over accepted 28c1 records.
 Commands:
   - cargo test -p nine-door
   - cargo test -p root-task
@@ -15315,6 +16090,8 @@ Checks:
     semantic/capsule/checkpoint/handoff/prefix/inference read views remain
     bounded verified-ref projections only.
   - Dynamic create/unlink/rename/chmod/symlink/path-component expansion and prompt/blob-tree storage are refused before any state mutation.
+  - Admission projections refuse every write and cannot evaluate policy, issue a
+    grant, append an intent, or create an alternate audit/replay path.
   - NineDoor never parses a repository, plans/renders a capsule, speaks a
     provider API, retains raw prompt/output content, or executes a
     model-produced tool call.
@@ -15336,7 +16113,7 @@ Changes:
   - apps/swarmui — optional read-only views backed by existing `/proc` and AI
     namespace tails, correlated through the accepted 28h semantic/inference
     inspector when available.
-  - tools/cohesix-py/cohesix/{backends.py,orchestration.py} + tools/cohesix-py/tests/test_ai_namespace.py — consume the coh-rtc-generated enabled/disabled profile fixtures to discover and access only generated `/jobs`, `/datasets`, `/experiments`, `/infer`, and `/metrics` roots and fixed control files through existing bounded backend operations; prove MockBackend as explicit non-proof `host-model` plus filesystem, TCP, and REST missing/disabled/denied/enabled behavior; preserve the 28c owner refs, 28d host-ticket admission, and 28e receipt mappings without hand-editing `generated.py`.
+  - tools/cohesix-py/cohesix/{backends.py,orchestration.py} + tools/cohesix-py/tests/test_ai_namespace.py — consume the coh-rtc-generated enabled/disabled profile fixtures to discover and access only generated `/jobs`, `/datasets`, `/experiments`, `/infer`, and `/metrics` roots and fixed control files through existing bounded backend operations; prove MockBackend as explicit non-proof `host-model` plus filesystem, TCP, and REST missing/disabled/denied/enabled behavior; preserve the 28c owner refs, 28c1 admission refs, 28d host-ticket actions, and 28e receipt mappings without hand-editing `generated.py`.
 Commands:
   - cargo test -p cohsh
   - python3 -m pytest -q tools/cohesix-py/tests/test_ai_namespace.py

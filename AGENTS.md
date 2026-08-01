@@ -298,6 +298,16 @@ Host tools MAY use `std` and host OS facilities, but MUST NOT:
 
 Host tools MUST remain protocol-faithful: they consume the as-built interfaces and fixtures.
 
+Any material Cohesix change — including changes to generated or as-built
+interfaces, schemas, defaults, bounds, namespaces, authority, lifecycle or
+evidence semantics, supported workflows, or performance-relevant behavior —
+MUST include a same-change compatibility review of the complete host-tool
+suite, the `tools/cohesix-py` library, and the performance benchmark scripts.
+Every affected implementation, generated contract, test or fixture, benchmark
+workload or report schema, and document MUST be updated together. The task or
+PR checks MUST identify reviewed surfaces that require no change; unexplained
+cross-surface drift blocks merge.
+
 ---
 
 ## HAL — Mandatory
