@@ -1254,7 +1254,8 @@ respectively.
 Production-chain coverage must additionally drive normal control and EAPOL TX
 through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
-drive all 20 post-F2 release children into real retained DPC activation, and
+drive all 21 post-F2 release children (20 controller command issues plus the
+`DPC_ACTIVATE` child) into real retained DPC activation, and
 drive one DPC event through owner-backed status, F2 read, empty-confirmation,
 and post-status work before foreground queue consumption.
 Exactly 256 subsequent control/RX polls must consume 256 outer turns and issue
@@ -2019,6 +2020,35 @@ accounting stayed balanced. `.coh` and pressure were correctly withheld. A
 replacement image must prove both zero queue overflow and continued inbound
 DPC/root delivery across all reboot lifetimes before TCP quality is measured.
 
+The exact `2ea5b593d67c` / image
+`32815280e425029127909a4085a5f6e2f07f4c52daa85ed2facdc035df0088d8`
+group restored that initialization boundary but still fails Wi-Fi transport
+quality. Cold plus warm R01-R05 all reached Gate 8a-8h and DHCP on pair 1 with
+zero recovery, queue overflow, or TX imbalance: warm startup was 5/5, while
+acceptable warm TCP quality was 0/5 and cold quality was also unacceptable.
+Across the six lifetimes only 38/60 pings returned, per-boot median RTT was
+694-1,395 ms, and 48 SYN packets represented 26 TCP flows. Five payload
+sessions on cold/R01/R02 measured 1.26-1.35-second client-payload-to-Pi-
+ACK/response latency; R03-R05 used probes only. GENET on the same image remained
+clean at 0.613 ms median ping and 0.421 ms median handshake, while its GENET-only
+quick benchmark sustained about 668-701 operations/s. Wi-Fi REST/hive pressure
+was withheld after the raw quality failure. R03's cached diagnostic reported
+315 captures/consumes against 314 rearms, so clean DPC diagnostic proof was 4/5
+even though the authoritative live ring reported healthy, stale-client state.
+Every warm DPC cause sample recorded exactly one chip-active cause while
+105-124 frame causes appeared at watchdog cadence. Source inspection explains
+the mismatch: the production release cursor preserved all `DEVICE_CTL` bits
+while adding `F2WM_ENAB`; the existing host fixture models input `0x85`, for
+which the old expression wrote `0x95` and retained `CA_INT_ONLY`. Live serial
+does not expose that register, and public telemetry combines CARD_INT with
+source probes (`physical_card_irq=not-exported`), so the observed one-CA/frame
+cadence is consistent source-plus-cadence evidence, not direct physical
+attribution. The replacement must clear the bit in the sole data-mode
+transition, read it back before `MESBUSYCTRL`/`IENx`/DPC activation, and fail
+closed on a failed read, retained mask, or missing `F2WM_ENAB`. A normal-path
+poller, second owner, smoltcp change, GENET change, or priority change cannot
+satisfy this test.
+
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
 mode has interrupts enabled and polling disabled; the ISR schedules durable
@@ -2709,12 +2739,14 @@ payload, never four bytewise CMD52 commands. Its adversarial cut must publish a
 new interrupt cause after sampling but before commit and prove that only the
 sampled bits clear. The release-order test must drive the production retained
 cursor through `HOSTINTMASK`, the separate Gate 10 `FUNCTIONINTMASK` phase,
-watermark, `DEVICE_CTL` read-modify-write adding `F2WM`, `MESBUSYCTRL`,
+watermark, `DEVICE_CTL` read-modify-write clearing `CA_INT_ONLY` while adding
+`F2WM`, and a distinct readback proving both bits before `MESBUSYCTRL`,
 `WAKEUPCTRL` read-modify-write adding `HTWAIT`, `CARDCAP`, and exact
 `FORCE_HT`. It must prove one controller operation per outer turn, preservation
-of unrelated read-modify-write bits, stale/cached completion isolation, and no
-controller reissue when a fresh pending turn replays only the cached completed
-prefix. The final card-interrupt test must cross the same real seam as three
+of unrelated read-modify-write bits, fail-closed handling of a sticky mask or
+failed readback, stale/cached completion isolation, and no controller reissue
+when a fresh pending turn replays only the cached completed prefix. The final
+card-interrupt test must cross the same real seam as three
 distinct turns: read CCCR `IENx`, write `current | 0x07` without clearing upper
 bits, and read it back before DPC activation. A missing required bit, failed
 access, or stale completion must terminate as exact fault `0x5339`, poison the

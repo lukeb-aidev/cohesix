@@ -1754,6 +1754,7 @@ const CYW43_SDIO_FAST_CLOCK_HZ: u32 = 50_000_000;
 const CYW43_SDIO_DEFAULT_SPEED_CLOCK_HZ: u32 = 25_000_000;
 const SBSDIO_WATERMARK: u32 = 0x10008;
 const SBSDIO_DEVICE_CTL: u32 = 0x10009;
+const SBSDIO_DEVCTL_CA_INT_ONLY: u8 = 0x04;
 const SBSDIO_DEVCTL_F2WM_ENAB: u8 = 0x10;
 const SBSDIO_FUNC1_SBADDRLOW: u32 = 0x1000a;
 const SBSDIO_FUNC1_SBADDRMID: u32 = 0x1000b;
@@ -1770,6 +1771,16 @@ const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001c;
 const SBSDIO_FUNC1_MESBUSYCTRL: u32 = 0x1001d;
 const SBSDIO_FUNC1_WAKEUPCTRL: u32 = 0x1001e;
 const SBSDIO_FUNC1_SLEEPCSR: u32 = 0x1001f;
+
+/// Enter normal Function-2 data mode without retaining the firmware-download
+/// chip-active-only host-interrupt mask.
+const fn cyw43_data_mode_device_ctl(device_ctl: u8) -> u8 {
+    (device_ctl & !SBSDIO_DEVCTL_CA_INT_ONLY) | SBSDIO_DEVCTL_F2WM_ENAB
+}
+
+const fn cyw43_data_mode_device_ctl_ready(device_ctl: u8) -> bool {
+    device_ctl & SBSDIO_DEVCTL_CA_INT_ONLY == 0 && device_ctl & SBSDIO_DEVCTL_F2WM_ENAB != 0
+}
 const SFC_RF_TERM: u8 = 1 << 0;
 #[cfg(test)]
 const SFC_WF_TERM: u8 = 1 << 1;
@@ -4019,6 +4030,7 @@ enum Cyw43ReleasePhase {
     Function2Watermark,
     Function2DeviceCtlRead,
     Function2DeviceCtlWrite,
+    Function2DeviceCtlReadback,
     Function2Mesbusy,
     Function2WakeupRead,
     Function2WakeupWrite,
@@ -27521,12 +27533,23 @@ fn cyw43_release_step(
             let Some(device_ctl) = cyw43_sdio_cmd52_read(1, SBSDIO_DEVICE_CTL) else {
                 return Err(cyw43_fail_release(state, FAULT_CYW43_BACKPLANE_DEVICE_CTL));
             };
-            state.release.last_device_ctl = device_ctl | SBSDIO_DEVCTL_F2WM_ENAB;
+            state.release.last_device_ctl = cyw43_data_mode_device_ctl(device_ctl);
             state.release.phase = Cyw43ReleasePhase::Function2DeviceCtlWrite;
             Ok(false)
         }
         Cyw43ReleasePhase::Function2DeviceCtlWrite => {
             if !cyw43_sdio_cmd52_write(1, SBSDIO_DEVICE_CTL, state.release.last_device_ctl) {
+                return Err(cyw43_fail_release(state, FAULT_CYW43_BACKPLANE_DEVICE_CTL));
+            }
+            state.release.phase = Cyw43ReleasePhase::Function2DeviceCtlReadback;
+            Ok(false)
+        }
+        Cyw43ReleasePhase::Function2DeviceCtlReadback => {
+            let Some(device_ctl) = cyw43_sdio_cmd52_read(1, SBSDIO_DEVICE_CTL) else {
+                return Err(cyw43_fail_release(state, FAULT_CYW43_BACKPLANE_DEVICE_CTL));
+            };
+            state.release.last_device_ctl = device_ctl;
+            if !cyw43_data_mode_device_ctl_ready(device_ctl) {
                 return Err(cyw43_fail_release(state, FAULT_CYW43_BACKPLANE_DEVICE_CTL));
             }
             state.release.phase = Cyw43ReleasePhase::Function2Mesbusy;
@@ -75840,8 +75863,9 @@ mod tests {
         let parent = stage_production_post_f2_release_parent(generation, parent_sequence);
         let _production_mode = ProductionForegroundModeGuard::enter();
         let mut io = production_owner_io();
+        let mut device_ctl_reads = 0u8;
         let mut ienx_reads = 0u8;
-        let trace = drive_production_foreground_parent::<20, _>(
+        let trace = drive_production_foreground_parent::<21, _>(
             parent,
             generation,
             &mut io,
@@ -75849,7 +75873,14 @@ mod tests {
                 match descriptor.op {
                     DRIVER_RUNTIME_SDIO_OP_CMD52_READ => {
                         io.command_response = u32::from(match descriptor.addr {
-                            SBSDIO_DEVICE_CTL => 0x85u8,
+                            SBSDIO_DEVICE_CTL => {
+                                device_ctl_reads = device_ctl_reads.saturating_add(1);
+                                if device_ctl_reads == 1 {
+                                    0x85u8
+                                } else {
+                                    0x91u8
+                                }
+                            }
                             SBSDIO_FUNC1_WAKEUPCTRL => 0xa1u8,
                             SBSDIO_FUNC1_RFRAMEBCLO | SBSDIO_FUNC1_RFRAMEBCHI => 0u8,
                             SDIO_CCCR_IENX => {
@@ -75891,15 +75922,15 @@ mod tests {
         );
         drop(_production_mode);
 
-        assert_eq!(trace.child_count, 20);
-        assert_eq!(trace.terminal_parent_polls, 20);
+        assert_eq!(trace.child_count, 21);
+        assert_eq!(trace.terminal_parent_polls, 21);
         assert!(!trace.issued_unknown);
         assert_eq!(
             trace.completion,
             Some(DriverTaskCompletionRecord::progress(parent_sequence, 1)),
         );
         assert!(trace.parent_turns > trace.owner_turns);
-        assert_eq!(io.command_issue_count(), 19);
+        assert_eq!(io.command_issue_count(), 20);
         let expected = [
             (
                 DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
@@ -75914,6 +75945,7 @@ mod tests {
             (DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE, 1, SBSDIO_WATERMARK),
             (DRIVER_RUNTIME_SDIO_OP_CMD52_READ, 1, SBSDIO_DEVICE_CTL),
             (DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE, 1, SBSDIO_DEVICE_CTL),
+            (DRIVER_RUNTIME_SDIO_OP_CMD52_READ, 1, SBSDIO_DEVICE_CTL),
             (
                 DRIVER_RUNTIME_SDIO_OP_CMD52_WRITE,
                 1,
@@ -75999,7 +76031,7 @@ mod tests {
         CYW43_RUNTIME_STATE.with_ref(|state| {
             assert!(state.firmware_released);
             assert_eq!(state.release.phase, Cyw43ReleasePhase::Complete);
-            assert_eq!(state.release.last_device_ctl, 0x95);
+            assert_eq!(state.release.last_device_ctl, 0x91);
             assert_eq!(state.release.last_wakeupctrl, 0xa3);
         });
     }
@@ -84598,6 +84630,78 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_data_mode_device_ctl_clears_chip_active_only_and_preserves_other_bits() {
+        for (input, expected) in [(0x00, 0x10), (0x04, 0x10), (0x85, 0x91), (0xff, 0xfb)] {
+            let normalized = cyw43_data_mode_device_ctl(input);
+            assert_eq!(normalized, expected, "DEVICE_CTL input {input:#04x}");
+            assert!(cyw43_data_mode_device_ctl_ready(normalized));
+        }
+        assert!(!cyw43_data_mode_device_ctl_ready(0x95));
+        assert!(!cyw43_data_mode_device_ctl_ready(0x81));
+    }
+
+    #[test]
+    fn cyw43_data_mode_device_ctl_readback_fails_closed_before_interrupt_activation() {
+        let _guard = test_guard();
+        for (case, readback, expected_last) in [
+            ("read-failed", None, 0x91),
+            ("mask-sticky", Some(0x95), 0x95),
+            ("watermark-missing", Some(0x81), 0x81),
+        ] {
+            reset_runtime_for_test();
+            RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET));
+            let _bridge = enable_real_sdio_controller_bridge();
+            reset_test_sdio_transfer_log();
+            test_sdio_cmd52_read_device_ctl_response(0x85);
+
+            let sequence = 0x6d50;
+            let generation = 0x4359_5350;
+            let mut state = Cyw43RuntimeState::new();
+            state.dpc_shared_epoch = generation;
+            state.firmware_execution_started = true;
+            state.release.parent_sequence = sequence;
+            state.release.generation = generation;
+            state.release.phase = Cyw43ReleasePhase::Function2DeviceCtlRead;
+
+            assert_eq!(cyw43_release_step(sequence, 0, &mut state), Ok(false));
+            assert_eq!(state.release.last_device_ctl, 0x91);
+            assert_eq!(
+                state.release.phase,
+                Cyw43ReleasePhase::Function2DeviceCtlWrite
+            );
+            assert_eq!(cyw43_release_step(sequence, 0, &mut state), Ok(false));
+            assert_eq!(
+                state.release.phase,
+                Cyw43ReleasePhase::Function2DeviceCtlReadback
+            );
+
+            match readback {
+                Some(value) => test_sdio_cmd52_read_device_ctl_response(value),
+                None => test_sdio_cmd52_read_none_once(1, SBSDIO_DEVICE_CTL),
+            }
+            assert_eq!(
+                cyw43_release_step(sequence, 0, &mut state),
+                Err(FAULT_CYW43_BACKPLANE_DEVICE_CTL),
+                "{case}"
+            );
+            assert_eq!(state.release.phase, Cyw43ReleasePhase::Failed, "{case}");
+            assert_eq!(state.release.last_device_ctl, expected_last, "{case}");
+            assert!(state.recovery_required, "{case}");
+            assert!(!state.transport_ready, "{case}");
+            assert!(!state.firmware_released, "{case}");
+            assert_eq!(test_sdio_transfer_total_count(), 3, "{case}");
+            assert!(
+                !test_sdio_cmd52_write_seen(0, SDIO_CCCR_IENX, SDIO_INTERRUPT_ENABLE_MASK),
+                "{case}"
+            );
+            assert!(
+                !SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_activation_allowed),
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
     fn release_post_f2_phases_issue_one_linux_ordered_operation_each() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -84623,6 +84727,7 @@ mod tests {
             Cyw43ReleasePhase::Function2Watermark,
             Cyw43ReleasePhase::Function2DeviceCtlRead,
             Cyw43ReleasePhase::Function2DeviceCtlWrite,
+            Cyw43ReleasePhase::Function2DeviceCtlReadback,
             Cyw43ReleasePhase::Function2Mesbusy,
             Cyw43ReleasePhase::Function2WakeupRead,
             Cyw43ReleasePhase::Function2WakeupWrite,
@@ -84709,7 +84814,7 @@ mod tests {
         };
         let device_ctl_write = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
-                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_DEVICE_CTL, 0x95)
+                && record.arg == sdio_cmd52_arg(true, 1, SBSDIO_DEVICE_CTL, 0x91)
         };
         let mesbusy_write = |record: TestSdioTransferRecord| {
             record.cmd == SDIO_CMD52
@@ -84742,8 +84847,9 @@ mod tests {
             test_sdio_first_transfer_index(hostintmask_write).expect("HOSTINTMASK write"),
             test_sdio_first_transfer_index(functionintmask_write).expect("FUNCTIONINTMASK write"),
             test_sdio_first_transfer_index(watermark_write).expect("watermark write"),
-            test_sdio_first_transfer_index(device_ctl_read).expect("DEVICE_CTL read"),
+            test_sdio_transfer_index(device_ctl_read, 0).expect("DEVICE_CTL initial read"),
             test_sdio_first_transfer_index(device_ctl_write).expect("DEVICE_CTL RMW write"),
+            test_sdio_transfer_index(device_ctl_read, 1).expect("DEVICE_CTL readback"),
             test_sdio_first_transfer_index(mesbusy_write).expect("MESBUSYCTRL write"),
             test_sdio_first_transfer_index(wakeup_read).expect("WAKEUPCTRL read"),
             test_sdio_first_transfer_index(wakeup_write).expect("WAKEUPCTRL RMW write"),
@@ -84751,11 +84857,10 @@ mod tests {
             test_sdio_first_transfer_index(sr_clock_write).expect("SR FORCE_HT write"),
         ];
         assert!(ordered.windows(2).all(|pair| pair[0] < pair[1]));
-        let operations: [fn(TestSdioTransferRecord) -> bool; 10] = [
+        let operations: [fn(TestSdioTransferRecord) -> bool; 9] = [
             hostintmask_write,
             functionintmask_write,
             watermark_write,
-            device_ctl_read,
             device_ctl_write,
             mesbusy_write,
             wakeup_read,
@@ -84770,7 +84875,8 @@ mod tests {
                 "pending reentry must not replay an already completed release operation",
             );
         }
-        assert_eq!(state.release.last_device_ctl, 0x95);
+        assert_eq!(test_sdio_transfer_count(device_ctl_read), 2);
+        assert_eq!(state.release.last_device_ctl, 0x91);
         assert_eq!(state.release.last_wakeupctrl, 0xa3);
     }
 

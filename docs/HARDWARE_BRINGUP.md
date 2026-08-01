@@ -21,6 +21,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | QEMU seL4 16 offline | All five fresh profiles and a linked GICv3 QEMU `--no-run` package build pass. Earlier Stage 01-05 records predate this refresh and are not v16 boot evidence. | A QEMU boot, target-qualified v16 Test Plan, Pi firmware, MMIO, DMA, IRQ, local-seat, GENET, or CYW43 behavior. |
 | Pi 4 historical wired GENET | Milestone 26c retained one coherent Stage 01-05, runtime/DMA, DHCP, raw TCP, and authenticated `cohsh` proof chain. See [M26C_AS_BUILT_BLOCKERS.md](audit/M26C_AS_BUILT_BLOCKERS.md). | The current source tree or a newly flashed image. |
 | Pi 4 seL4 16 source, offline | Both fresh Pi profiles pass; a direct `~/seL4_16` diagnostic build completed 309 of 309 steps and passed runtime validation. Exact-image staging remains open because the shared checkout was already dirty and was preserved. | A sealed/read-back image, board boot, current-image device readiness, TCP, or benchmark result. |
+| Pi 4 exact `2ea5b593d67c` Wi-Fi/GENET diagnostic | Cold plus five warm Wi-Fi lifetimes all passed Gate 8a-8h and DHCP on pair 1: warm startup was 5/5, but acceptable warm TCP quality was 0/5 and cold quality was also unacceptable. Wi-Fi lost 36.7% of pings and had 694-1,395 ms per-boot median RTT. The same image's GENET control returned 10/10 pings at 0.613 ms median; its GENET-only quick benchmark sustained about 668-701 operations/s without TCP defects. The production source would preserve `CA_INT_ONLY` while adding `F2WM_ENAB` (`0x85 -> 0x95` in its host fixture), and live one-CA/watchdog-paced frame behavior is consistent with that source defect; the live register and physical CARD_INT source are not exported. | Acceptable Wi-Fi TCP, direct physical CARD_INT cadence, the new `0x91` data-mode write/readback repair, or closure of the required 10/10 cold plus 10/10 warm matrix. |
 | Pi 4 pre-v16 live diagnostic | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | This is historical diagnostic evidence, not seL4 16 proof. No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
@@ -1943,14 +1944,18 @@ report terminal `Idle`.
 After Function 2 becomes ready, the current source expresses the pinned Linux
 BCM43455 post-F2 lifecycle as separately retained operations. The exact
 sequence is `HOSTINTMASK`, Cohesix's separate Gate 10 `FUNCTIONINTMASK` phase,
-watermark, `DEVICE_CTL` read/modify/write adding `F2WM`, `MESBUSYCTRL`,
+watermark, `DEVICE_CTL` read/modify/write clearing `CA_INT_ONLY` while adding
+`F2WM`, a distinct data-mode readback, `MESBUSYCTRL`,
 `WAKEUPCTRL` read/modify/write adding `HTWAIT`, `CARDCAP`, and exact
 `FORCE_HT`. Reprime repeats the masks as distinct operations, samples the low
 and high frame-count bytes on separate turns, then admits the card interrupt as
 three more retained turns: read CCCR `IENx`, write `current | 0x07`, and prove
 the required bits by readback before DPC activation. Upper bits are preserved.
-Exact fault `0x5339` rejects any failed access or bad readback and forces
-generation recovery; steady RX never mutates `IENx` as a repair. No operation
+The data-mode readback must show `CA_INT_ONLY=0` and `F2WM_ENAB=1` before any
+later interrupt activation. Exact fault `0x531e` rejects a failed or invalid
+`DEVICE_CTL` readback and forces generation recovery. The later CCCR `IENx`
+access/readback uses exact fault `0x5339`; steady RX never mutates `IENx` as a
+repair. No operation
 shares an outer EventPump turn with the next one; a fresh pending re-entry may
 consume only the cached completed prefix and cannot reissue it. Stale or
 issued-unknown work poisons the generation instead of replaying an earlier

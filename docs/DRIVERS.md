@@ -437,7 +437,7 @@ producer backpressure and masked-to-unmasked source recapture. `.coh` and
 REST/hive pressure were correctly withheld because raw TCP never qualified.
 GENET remains the unchanged working control.
 
-The current source therefore restores `f4fec9e80`'s proven phase separation
+The exact `2ea5b593d67c` source restored `f4fec9e80`'s proven phase separation
 under Reopened Milestone 26b task
 `m26b-wifi-sdio-notification-dpc-closure` while retaining the later immutable
 descriptor, `Wait` recheck, issued-unknown reaping/re-arm, bounded TX aggregate,
@@ -507,8 +507,54 @@ ms and at least 29 sequential requests/s without loss, reconnect, or benchmark
 timeout. Record the cold semantic/elapsed sample separately. The aggressive
 target remains p95 at or below 10 ms and at least 100 sequential requests/s.
 One GENET control must prove the same common cold-neighbor semantics with
-unchanged wired latency, throughput, and scheduling. These Wi-Fi source changes
-remain unproven until rebuilt, flashed, and exercised on Pi hardware.
+unchanged wired latency, throughput, and scheduling. The exact `2ea5b593d67c`
+candidate is qualified below and rejected for transport quality. The subsequent
+`DEVICE_CTL` correction remains unproven until rebuilt, flashed, and exercised
+on Pi hardware.
+
+The 2026-08-01 exact `2ea5b593d67c` / image
+`32815280e425029127909a4085a5f6e2f07f4c52daa85ed2facdc035df0088d8`
+hardware group preserved first-lifetime initialization but rejected that source
+as a transport-quality result. The cold boot plus warm R01-R05 all reached Gate
+8a-8h and DHCP on physical pair 1 without recovery, so requested warm startup
+was 5/5, but acceptable warm TCP quality was 0/5 and the cold lifetime was also
+unacceptable. Across those six lifetimes, only 38/60 Echo Requests received
+replies, median per-boot RTT was 694-1,395 ms, and 48 client SYN packets
+represented only 26 flows. Five payload sessions on cold/R01/R02 measured
+client-payload-to-Pi-ACK/response latency of about 1.26-1.35 seconds; those same
+sessions' host ACKs of Pi payload remained 0.052-0.117 ms median. R03-R05 used
+probes only. All 172 Pi TCP checksums were correct, root/runtime queues and TX
+accounting remained loss-free, and the post-issue/on-air Pi TX direction was
+clean even though accepted-to-issue latency was itself elevated. The same
+image's GENET control returned 10/10 pings at 0.613 ms median, completed 7/7
+TCP handshakes at 0.421 ms median, and its GENET-only quick benchmark sustained
+about 668-701 operations/s without TCP defects. Wi-Fi REST/hive pressure was
+withheld after the raw quality failure. R03's cached client diagnostic reported
+315 captures/consumes against 314 rearms, so clean DPC diagnostic proof was
+4/5 even though the authoritative live ring reported healthy, stale-client
+state. The common stack and same-image GENET control therefore point the first
+material defect below smoltcp, at CYW43 receive-interrupt admission.
+
+The first violated lifetime invariant was device-side interrupt admission.
+The production release cursor preserved every bit from its Function-1
+`SBSDIO_DEVICE_CTL` read and added Function-2 watermarking; the existing host
+fixture models input `0x85`, for which the old expression wrote `0x95` and
+retained bit `0x04`. Raspberry Pi Linux defines that bit as
+`SBSDIO_DEVCTL_CA_INT_ONLY`: it masks every host interrupt except chip-active.
+Live serial does not expose the register value, but all five warm diagnostics
+reported one chip-active cause while 105-124 frame causes per boot appeared at
+the source-probe-watchdog cadence, behavior consistent with the source defect.
+Because public telemetry combines physical CARD_INT and source probes and says
+`physical_card_irq=not-exported`, this is source-plus-cadence inference rather
+than direct physical attribution. The working tree now makes the sole data-mode
+transition
+`(device_ctl & !CA_INT_ONLY) | F2WM_ENAB`, so `0x85` becomes `0x91`, then uses
+one later retained CMD52 readback before `MESBUSYCTRL`, CCCR `IENx`, and DPC
+activation. A read failure, retained `CA_INT_ONLY`, or missing `F2WM_ENAB`
+fails the existing release lifetime closed. It adds no polling fallback,
+second owner, ABI change, smoltcp change, GENET change, or scheduling change.
+Root is affined to core 0 and the SDIO/CYW43 pair to core 3 on the live image,
+so the apparent root-priority hypothesis is not the first causal defect.
 
 ### QEMU network drivers
 
@@ -2042,9 +2088,11 @@ generation and XID.
   only F2-readiness polling.
 - Post-F2 configuration preserves the pinned Linux BCM43455 lifecycle as
   explicit retained phases. The Linux-ordered register work is
-  `HOSTINTMASK`, watermark, `DEVICE_CTL` read-modify-write with `F2WM`,
+  `HOSTINTMASK`, watermark, `DEVICE_CTL` read-modify-write clearing
+  `CA_INT_ONLY` while setting `F2WM`, a distinct data-mode readback,
   `MESBUSYCTRL`, `WAKEUPCTRL` read-modify-write with `HTWAIT`, `CARDCAP`, and
-  exact `FORCE_HT`. Cohesix retains `FUNCTIONINTMASK` as a separate Gate 10
+  exact `FORCE_HT`. The readback must show `CA_INT_ONLY=0` and
+  `F2WM_ENAB=1`. Cohesix retains `FUNCTIONINTMASK` as a separate Gate 10
   phase immediately after `HOSTINTMASK`; it is not folded into the host-mask
   operation. Each read, write, completion observation, and later reprime phase
   consumes its own outer EventPump turn. Read-modify-write preserves unrelated
@@ -3085,7 +3133,8 @@ through exactly one cached-window F2 CMD53 child. A separate cold-cache proof
 drives exactly three LOW/MID/HIGH CMD52 writes followed by F2, with no
 per-packet IORx child. Function 2 readiness remains an initialization/recovery
 proof, matching Linux brcmfmac's enable-once/data-lane split. The suite drives
-the 20-child post-F2 release through real DPC activation and lets a real DPC
+the 21-child post-F2 release (20 controller command issues plus the
+`DPC_ACTIVATE` child) through real DPC activation and lets a real DPC
 event consume owner-backed status/F2/empty confirmation work before a later
 queue-only foreground poll. The real DPC chain routes one exact admitted
 `DPC_ACTIVATE` through the production pending-command gate as a bounded
