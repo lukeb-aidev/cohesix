@@ -1681,7 +1681,11 @@ probe, and increment `deadline_probes` and `terminals` exactly once. Elapsed
 time alone must not reissue it; only later external progress or identity
 replacement may re-arm one successor. Queue-only, wrong-request,
 wrong-identity, stale, and fault terminals must not consume the claim or
-advance either counter.
+advance either counter. Tests must also change DPC and root-wake progress after
+the exact ticket is claimed but before its terminal, repeatedly inspect the
+passive audit state, and prove the ticket remains `watchdog-probing` with no
+second admission. Only the matching terminal or a proven-not-issued release
+may clear that outstanding claim.
 
 Every non-source durable-work reason—pre-poll, data TX, ARP TX, runtime
 descriptor, root RX, control reply, logical owner, terminal drain, host EAPOL,
@@ -1794,7 +1798,9 @@ with
 `deadline_probes` and `terminals` each advance exactly once only for the exact
 current non-fault terminal of a claimed watchdog one-shot. Tests must prove one
 probe for a stalled identity, suppression after its exact terminal, rebase and
-re-arm only after later external progress, DPC and root-wake levels each create
+re-arm only after later external progress, immutable ticket ownership when the
+probe itself changes DPC/root-wake progress before its terminal, DPC and
+root-wake levels each create
 only queue/tail `RX_STEADY_TAIL_DRAIN`, a due audit alone adds
 `RX_HINTLESS_FIRSTREAD`, a retained queue-only owner cannot be rewritten,
 identity replacement clears
@@ -1829,6 +1835,8 @@ The focused acceptance tests
 `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
 `cyw43_quiet_rx_watch_schedules_one_bounded_lost_edge_audit`,
 `cyw43_lost_edge_watchdog_issues_only_one_hintless_op8_for_a_stall`,
+`cyw43_lost_edge_watchdog_rejects_stale_claim_before_hal_admission`,
+`cyw43_lost_edge_watchdog_exact_release_allows_one_successor_claim`,
 `cyw43_lost_edge_watch_progress_rebases_and_rearms_one_shot`,
 `cyw43_lost_edge_audit_never_masks_a_genuine_root_wake_level`,
 `cyw43_due_audit_preserves_an_exact_retained_queue_only_owner`,

@@ -1044,10 +1044,14 @@ physical-lifetime epoch. It grants permission to service that lifetime and
 owns one progress-conditioned, 32-millisecond, virtual-counter-scaled lost-edge
 watchdog deadline. Its immutable identity is paired with a passive progress
 signature: DPC-ring presence, epoch, producer, consumer, and flags plus
-root-wake presence, hits, clears, and rechecks. A changed signature rebases the
-deadline and arms one later inspection. A no-progress expiry becomes one
+root-wake presence, hits, clears, and rechecks. While no probe is outstanding,
+a changed signature rebases the deadline and arms one later inspection. A
+no-progress expiry becomes one
 durable audit reason and may claim exactly one fresh NetData op8 with
-`RX_HINTLESS_FIRSTREAD`.
+`RX_HINTLESS_FIRSTREAD`. Once claimed, the exact nonzero probe ticket is
+immutable: progress caused by that op8 cannot rebase the cursor or erase its
+owner before the matching terminal. Only that exact terminal or a
+proven-not-issued local release may clear the ticket.
 
 Nonempty runtime/root queues, control replies, TX/ARP, leases, prompts, and
 other protocol obligations schedule only their own owner work; they cannot

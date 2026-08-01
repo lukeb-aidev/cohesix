@@ -7487,15 +7487,17 @@ fn cyw43_data_rx_watchdog_deadline() -> Cyw43PollDeadline {
 
 /// Rebase one current watchdog after externally owned pipeline progress.
 ///
-/// A progress edge also clears a completed one-shot and any obsolete local
-/// probe claim. This is the only same-identity path that can arm a later
-/// hintless watchdog probe.
+/// A progress edge also clears a completed one-shot. An outstanding probe
+/// claim remains immutable until its exact terminal or proven-not-issued
+/// release path; the probe can advance these same progress counters before
+/// its terminal is recorded. This is the only same-identity path that can arm
+/// a later hintless watchdog probe.
 #[cfg(feature = "kernel")]
 fn rebase_cyw43_data_rx_watchdog_on_progress(
     cursor: &mut Cyw43DataRxLifetimeCursor,
     progress: Cyw43DataRxExternalProgress,
 ) -> bool {
-    if cursor.progress == progress {
+    if cursor.progress == progress || cursor.watchdog_probe_ticket != 0 {
         return false;
     }
     cursor.progress = progress;
@@ -21349,8 +21351,14 @@ fn run_cyw43_owned_prompt_poll(
             if owner == Cyw43PromptPollOwner::NetData
                 && descriptor.op == DRIVER_RUNTIME_CYW43_OP_RX_POLL
                 && descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_RX_HINTLESS_FIRSTREAD != 0
+                && !claim_cyw43_data_rx_watchdog_probe(pending.generation, pending.ticket_id)
             {
-                let _ = claim_cyw43_data_rx_watchdog_probe(pending.generation, pending.ticket_id);
+                // The due snapshot and claim are separate passive samples.
+                // If external progress moved between them, the claim rebased
+                // and the stale hintless descriptor has no source authority.
+                // Fail locally before publishing a prompt or HAL owner; the
+                // next scheduler turn must derive fresh flags.
+                return None;
             }
             arm_cyw43_root_wake_op8_epoch(pending);
             pending
@@ -50778,6 +50786,26 @@ mod tests {
         ));
         assert!(!cyw43_current_generation_data_rx_audit_due());
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
+
+        let mut probe_progress = cyw43_data_rx_progress_for_test(0x28);
+        probe_progress.dpc_producer = probe_progress.dpc_producer.wrapping_add(1);
+        probe_progress.dpc_consumer = probe_progress.dpc_consumer.wrapping_add(1);
+        probe_progress.root_wake_hits = probe_progress.root_wake_hits.saturating_add(1);
+        probe_progress.root_wake_clears = probe_progress.root_wake_clears.saturating_add(1);
+        probe_progress.root_wake_rechecks = probe_progress.root_wake_rechecks.saturating_add(1);
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(probe_progress);
+        assert!(!cyw43_current_generation_data_rx_audit_due());
+        assert!(!cyw43_current_generation_data_rx_audit_due());
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
+        {
+            let cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_ref()
+                .expect("the exact watchdog claim remains published");
+            assert_eq!(cursor.watchdog_probe_ticket, pending.ticket_id);
+            assert!(!cursor.watchdog_probe_completed);
+            assert_ne!(cursor.progress, probe_progress);
+        }
         assert!(record_cyw43_data_rx_source_probe_terminal(
             pending,
             DriverTaskCompletionRecord::idle(0xa0),
@@ -50794,6 +50822,7 @@ mod tests {
                 .expect("the completed watchdog remains generation-scoped");
             assert!(cursor.watchdog_probe_completed);
             assert_eq!(cursor.watchdog_probe_ticket, 0);
+            assert_eq!(cursor.progress, probe_progress);
             cursor.watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
         }
         assert!(
@@ -50801,6 +50830,145 @@ mod tests {
             "elapsed time alone cannot reissue a completed one-shot"
         );
         assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-suppressed");
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_rejects_stale_claim_before_hal_admission() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 24;
+        let baseline = cyw43_data_rx_progress_for_test(0x2c);
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(baseline);
+        mark_cyw43_gate8_ready_for_test(generation);
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("Gate 8 publishes one RX lifetime cursor")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+            flags: cyw43_current_generation_data_rx_poll_flags(Cyw43PromptPollOwner::NetData),
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert_eq!(descriptor.flags, CYW43_DATA_RX_STEADY_POLL_FLAGS);
+
+        let mut progressed = baseline;
+        progressed.dpc_producer = progressed.dpc_producer.wrapping_add(1);
+        progressed.root_wake_hits = progressed.root_wake_hits.saturating_add(1);
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(progressed);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            run_cyw43_owned_prompt_poll(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                Cyw43PromptPollOwner::NetData,
+                descriptor,
+            ),
+            None
+        );
+        assert_eq!(
+            cyw43_outer_event_turn_operation_count(),
+            0,
+            "a stale hintless snapshot must fail before HAL admission"
+        );
+        assert!(CYW43_PENDING_PROMPT_POLL.lock().is_none());
+        assert!(
+            crate::hal::driver_task::active_driver_task_retained_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_none()
+        );
+        assert_eq!(
+            CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
+            0
+        );
+        {
+            let cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            let cursor = cursor
+                .as_ref()
+                .expect("the progressed lifetime remains published");
+            assert_eq!(cursor.progress, progressed);
+            assert_eq!(cursor.watchdog_probe_ticket, 0);
+            assert!(!cursor.watchdog_probe_completed);
+            assert!(cyw43_poll_deadline_is_open(&cursor.watchdog_deadline));
+        }
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_lost_edge_watchdog_exact_release_allows_one_successor_claim() {
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+        let generation = 25;
+        *CYW43_DATA_RX_PROGRESS_TEST_OVERRIDE.lock() = Some(cyw43_data_rx_progress_for_test(0x2e));
+        mark_cyw43_gate8_ready_for_test(generation);
+        {
+            let mut cursor = CYW43_DATA_RX_LIFETIME_CURSOR.lock();
+            cursor
+                .as_mut()
+                .expect("Gate 8 publishes one RX lifetime cursor")
+                .watchdog_deadline = Cyw43PollDeadline::Polls { remaining: 0 };
+        }
+        let pending = Cyw43PendingPromptPoll {
+            ticket_id: 0x5245_4c53,
+            owner: Cyw43PromptPollOwner::NetData,
+            generation,
+            descriptor: DriverRuntimeCyw43CommandDescriptor {
+                op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
+                flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                ..DriverRuntimeCyw43CommandDescriptor::empty()
+            },
+            request: None,
+            issued: false,
+            deadline: cyw43_poll_deadline_from_millis_or_polls(
+                cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+                cyw43_linked_action_fallback_polls(DRIVER_RUNTIME_CYW43_OP_RX_POLL),
+            ),
+            child_reply_latched: false,
+            child_reply_renewals: 0,
+        };
+        assert!(claim_cyw43_data_rx_watchdog_probe(
+            generation,
+            pending.ticket_id
+        ));
+        release_cyw43_data_rx_watchdog_probe(Cyw43PendingPromptPoll {
+            ticket_id: pending.ticket_id.wrapping_add(1),
+            ..pending
+        });
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-probing");
+
+        release_cyw43_data_rx_watchdog_probe(pending);
+        assert_eq!(cyw43_data_rx_watch_diagnostic().0, "watchdog-due");
+        let successor_ticket = pending.ticket_id.wrapping_add(2);
+        assert!(claim_cyw43_data_rx_watchdog_probe(
+            generation,
+            successor_ticket
+        ));
+        assert!(!claim_cyw43_data_rx_watchdog_probe(
+            generation,
+            successor_ticket.wrapping_add(1)
+        ));
+        release_cyw43_data_rx_watchdog_probe(Cyw43PendingPromptPoll {
+            ticket_id: successor_ticket,
+            ..pending
+        });
+        assert_eq!(CYW43_DATA_RX_AUDIT_PROBES.load(Ordering::Acquire), 0);
+        assert_eq!(
+            CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
+            0
+        );
 
         reset_cyw43_status_flags();
     }

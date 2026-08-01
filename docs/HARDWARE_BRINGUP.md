@@ -1065,10 +1065,14 @@ on the existing sole `NetData` op8 `RX_POLL`/DPC lane. It owns one
 progress-conditioned, 32-millisecond lost-edge watchdog deadline scaled from
 the exported seL4 virtual counter. Its progress signature comprises DPC
 presence, epoch, producer, consumer, and flags plus root-wake presence, hits,
-clears, and rechecks. Any progress change rebases the deadline and arms one
-later one-shot. With no progress, expiry becomes one durable audit reason and
+clears, and rechecks. While no probe is outstanding, a progress change rebases
+the deadline and arms one later one-shot. With no progress, expiry becomes one
+durable audit reason and
 may claim exactly one fresh `RX_HINTLESS_FIRSTREAD` op8 through the same sole
-owner.
+owner. After that claim, the exact ticket remains immutable even when the op8
+itself advances DPC or root-wake progress. Only its matching terminal or a
+proven-not-issued local release may clear the claim; passive diagnostics and
+scheduler snapshots cannot rebase it away.
 
 The runtime signals on private-RX-queue empty-to-nonempty transition, HAL
 latches that wake, and root clears and immediately rechecks it only after an
