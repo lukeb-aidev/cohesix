@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "d74971849d211cf1d0b25daeeccaff46bb9f16d2f08cd6c8a186e5a5620b3820";
+    "ab72f85eb6f433b66d33bf8d45438c182b60df51f53f8a0ffdee51c8457d60e8";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -349,7 +349,7 @@ pub const DRIVER_RUNTIME_IMAGES: [DriverRuntimeImageSpec; 7] = [
     },
 ];
 
-pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 2] = [
+pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 3] = [
     DriverRuntimeIrqSpec {
         hot_path: "serial-console",
         irq: 125,
@@ -363,6 +363,14 @@ pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 2] = [
         irq: 158,
         badge: 159,
         handler_slot: 4,
+        notification_slot: 3,
+        trigger: DriverRuntimeIrqTrigger::Level,
+    },
+    DriverRuntimeIrqSpec {
+        hot_path: "sdio-host",
+        irq: 114,
+        badge: 512,
+        handler_slot: 5,
         notification_slot: 3,
         trigger: DriverRuntimeIrqTrigger::Level,
     },
@@ -774,7 +782,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=fb62b38622b289d3f9cd3bcd7171f270b3d45849f9e556f46d8fde381b423561",
+    "manifest.sha256=d7c6a0bc9aa1a5f5666d346019d79b52bc6f056666fc0e54b5c8ad06c2eebefd",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

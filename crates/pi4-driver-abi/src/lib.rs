@@ -215,8 +215,8 @@ pub const DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION: u32 = 0x5344_0
 /// condition-before-sleep rearmed or its crossing source could not be
 /// durably published.
 pub const DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED: u32 = 0x5344_000c;
-/// An exact event-bound DPC child remained pending after consuming its finite
-/// SDIO-owner service-lease slice budget.
+/// An exact leased request remained pending beyond its finite physical
+/// controller/child lifetime.
 pub const DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_EXHAUSTED: u32 = 0x5344_000d;
 /// A command or descriptor carried a partial, mutated, or stale steady-service
 /// lease marker instead of one exact generation-bound owner lease.
@@ -571,7 +571,7 @@ pub const DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET: u16 = 40;
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES: u16 = 24;
 /// Magic value for a retained-command continuation grant.
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
-/// Fixed offset of exact progress for a grant-free steady-service lease.
+/// Fixed offset of the exact heartbeat for a grant-free steady-service lease.
 ///
 /// A steady lease and a continuation grant are mutually exclusive authority
 /// modes for one immutable command, so their records deliberately share the
@@ -579,10 +579,10 @@ pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
 /// closed.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET: u16 =
     DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET;
-/// Bytes in one exact steady-service progress record.
+/// Bytes in one exact steady-service heartbeat record.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES: u16 =
     DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
-/// Magic value for a steady-service progress record.
+/// Magic value for a steady-service heartbeat record.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC: u32 = 0x4452_5350;
 /// Bytes in the runtime progress marker.
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
@@ -1591,20 +1591,35 @@ const _: () = {
 };
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
 pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
+/// Child CSpace slot containing the SDIO owner's BCM2835 DMA IRQ handler cap.
+///
+/// The SDHCI host IRQ retains the base slot. The linked DMA engine has an
+/// independent IRQHandler capability so each physical source can be
+/// acknowledged exactly after their badges coalesce on the local notification.
+pub const DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT: u32 =
+    DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
 /// Child CSpace slot containing each runtime's local notification receive cap.
 pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
 /// BCM2711 auxiliary mini-UART interrupt used by the isolated serial runtime.
 pub const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SERIAL_IRQ`].
 pub const DRIVER_RUNTIME_SERIAL_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ + 1;
-/// CYW43 child CSpace slot containing its send-only root RX-wake notification cap.
+/// CYW43 child CSpace slot containing its send-only root Network-wake notification cap.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT: u32 = 11;
-/// Exact badge delivered to root for a CYW43 private RX queue empty-to-nonempty edge.
+/// Exact badge delivered to root after CYW43 commits Network service progress.
 pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE: u32 = 1;
 /// BCM2711 SDIO host interrupt used by the CYW43 card function.
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
 pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
+/// BCM2711 BCM2835 DMA channel 4 interrupt used by the SDIO data engine.
+pub const DRIVER_RUNTIME_SDIO_DMA_IRQ: u32 = 114;
+/// Disjoint notification bit bound to [`DRIVER_RUNTIME_SDIO_DMA_IRQ`].
+///
+/// Unlike the legacy IRQ-plus-one badge, this is deliberately one bit so a
+/// single local notification word can report SDHCI, DMA, peer, and retained
+/// root wake sources without losing their physical identity.
+pub const DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE: u32 = 1 << 9;
 /// Reserved high notification bit for root-owned retained-command scheduling.
 ///
 /// Peer and IRQ badges coalesce with bitwise OR. Keeping this bit outside their
@@ -1619,6 +1634,16 @@ pub const DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE: u32 = 2;
 /// This durable notification edge is deliberately disjoint from the SDIO IRQ,
 /// the reciprocal SDIO-to-CYW43 DPC badge, and reserved root authority.
 pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
+
+const _: () = {
+    assert!(DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT);
+    assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ != DRIVER_RUNTIME_SDIO_IRQ);
+    assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE == 0);
+    assert!(
+        DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE == 0
+    );
+    assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
+};
 
 /// SDIO-owner identity for complete physical WiFi power lifetimes.
 ///
@@ -1974,13 +1999,16 @@ impl DriverRuntimeContinuationGrant {
     }
 }
 
-/// Exact monotonic owner progress for one grant-free steady-service command.
+/// Exact monotonic owner-service heartbeat for one grant-free command.
 ///
 /// `committed_slice` is published last. Readers accept the record only when
 /// two reads of that word agree, it equals `service_slice`, and the complete
 /// request sequence/fingerprint/generation identity matches their immutable
-/// retained parent or child ticket. Rewriting the shared slot cannot therefore
-/// extend another command's inactivity deadline.
+/// retained parent or child ticket. A newer slice proves one exact changed
+/// wait, interrupt, controller/data, or pending-parent child-terminal frontier.
+/// It is diagnostic and does not renew physical authority: the command's
+/// independent deadline bounds total authority, and rewriting the slot cannot
+/// extend another command's inactivity fence.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DriverRuntimeSteadyServiceProgress {
@@ -3755,6 +3783,15 @@ impl DriverRuntimeInitDescriptor {
             if !self.irqs[index].valid() {
                 return false;
             }
+            let mut prior = 0usize;
+            while prior < index {
+                if self.irqs[prior].handler_slot == self.irqs[index].handler_slot
+                    || self.irqs[prior].badge & self.irqs[index].badge != 0
+                {
+                    return false;
+                }
+                prior += 1;
+            }
             index += 1;
         }
         true
@@ -4482,6 +4519,39 @@ mod tests {
         descriptor.root_wake_notification_badge = DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
         descriptor.hot_path = HOT_PATH_GENET_NIC;
         assert!(!descriptor.valid(), "non-CYW43 wake authority rejected");
+    }
+
+    #[test]
+    fn runtime_irq_descriptors_require_distinct_handler_slots_and_badge_bits() {
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.irq_count = 2;
+        descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
+            irq: DRIVER_RUNTIME_SDIO_IRQ,
+            badge: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+            notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+            flags: 0,
+            reserved: 0,
+        };
+        descriptor.irqs[1] = DriverRuntimeIrqDescriptor {
+            irq: DRIVER_RUNTIME_SDIO_DMA_IRQ,
+            badge: DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+            handler_slot: DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
+            notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+            trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+            flags: 0,
+            reserved: 0,
+        };
+        assert!(descriptor.valid_irqs());
+
+        let mut duplicate_handler = descriptor;
+        duplicate_handler.irqs[1].handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+        assert!(!duplicate_handler.valid_irqs());
+
+        let mut aliasing_badge = descriptor;
+        aliasing_badge.irqs[1].badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+        assert!(!aliasing_badge.valid_irqs());
     }
 
     #[test]

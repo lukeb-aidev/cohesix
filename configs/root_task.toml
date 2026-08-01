@@ -160,6 +160,14 @@ handler-slot = 4
 notification-slot = 3
 trigger = "level"
 
+[[root_task.driver_images.irqs]]
+hot-path = "sdio-host"
+irq = 114
+badge = 512
+handler-slot = 5
+notification-slot = 3
+trigger = "level"
+
 [[root_task.driver_images.bus_links]]
 channel = "cyw43-sdio"
 client-hot-path = "cyw43-wifi"

@@ -178,6 +178,14 @@
           "handler-slot": 4,
           "notification-slot": 3,
           "trigger": "level"
+        },
+        {
+          "hot-path": "sdio-host",
+          "irq": 114,
+          "badge": 512,
+          "handler-slot": 5,
+          "notification-slot": 3,
+          "trigger": "level"
         }
       ],
       "bus_links": [

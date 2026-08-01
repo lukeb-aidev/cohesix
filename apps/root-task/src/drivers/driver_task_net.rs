@@ -5694,6 +5694,54 @@ fn cyw43_completed_physical_lifetime_epoch() -> u32 {
     cyw43_completed_physical_lifetime_epoch_from_record(cyw43_owner_physical_lifetime_snapshot())
 }
 
+/// Decide whether one exact tagged TX parent must remain asleep.
+///
+/// The root wake is a scheduler edge, not operation authority. A wake already
+/// consumed by this immutable payload cannot make the parent runnable again;
+/// only a newer edge or HAL's counter-backed containment deadline may do so.
+#[cfg(feature = "kernel")]
+fn cyw43_steady_tx_waits_for_runtime_event(
+    tagged_parent: bool,
+    request: Option<u32>,
+    active_request: Option<u32>,
+    active_issued: bool,
+    consumed_wake_epoch: usize,
+    current_wake_epoch: usize,
+    physical_deadline_due: bool,
+) -> bool {
+    tagged_parent
+        && request.is_some()
+        && request == active_request
+        && active_issued
+        && consumed_wake_epoch == current_wake_epoch
+        && !physical_deadline_due
+}
+
+/// Return the request identity of a tagged TX parent sleeping in the runtime.
+///
+/// This is a passive scheduler predicate. It does not read controller state,
+/// poll the completion ring, publish a grant, or signal either runtime.
+#[cfg(feature = "kernel")]
+fn cyw43_steady_tx_runtime_event_blocked_request() -> Option<u32> {
+    let pending = *CYW43_PENDING_DATA_TX.lock();
+    let request = pending.and_then(|pending| pending.request);
+    let active = crate::hal::driver_task::active_driver_task_retained_request(
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    );
+    let active_request = active.map(|active| active.request());
+    let active_issued = active.is_some_and(|active| active.issued());
+    cyw43_steady_tx_waits_for_runtime_event(
+        pending.is_some_and(|pending| pending.steady_fast_lane.is_some()),
+        request,
+        active_request,
+        active_issued,
+        pending.map_or(0, |pending| pending.service_wake_epoch),
+        crate::hal::driver_task::cyw43_root_wake_hit_epoch(),
+        crate::hal::driver_task::cyw43_steady_service_parent_deadline_due(),
+    )
+    .then_some(request?)
+}
+
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_bound_physical_lifetime_current() -> bool {
@@ -5743,11 +5791,13 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         maintenance.generation == generation
             && (maintenance.requested != 0 || maintenance.action.is_some())
     };
-    let data_tx = CYW43_PENDING_DATA_TX
-        .lock()
-        .is_some_and(|pending| pending.generation == generation)
-        || cyw43_data_tx_queue_has_current_generation();
-    let arp_tx = !CYW43_PENDING_ARP_TX.lock().is_empty();
+    let blocked_steady_tx_request = cyw43_steady_tx_runtime_event_blocked_request();
+    let data_tx = blocked_steady_tx_request.is_none()
+        && (CYW43_PENDING_DATA_TX
+            .lock()
+            .is_some_and(|pending| pending.generation == generation)
+            || cyw43_data_tx_queue_has_current_generation());
+    let arp_tx = blocked_steady_tx_request.is_none() && !CYW43_PENDING_ARP_TX.lock().is_empty();
     let root_rx = CYW43_PENDING_RX_QUEUE
         .lock()
         .iter()
@@ -5756,15 +5806,16 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
     let logical_owner = CYW43_LOGICAL_CONTROL_OWNER
         .lock()
         .is_some_and(|owner| owner.generation == generation);
-    let terminal_drain = CYW43_TERMINAL_DRAIN_CURSOR
-        .lock()
-        .is_some_and(|cursor| cursor.generation() == generation);
+    let terminal_drain = CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
+        cursor.generation() == generation && Some(cursor.request) != blocked_steady_tx_request
+    });
     let host_eapol = cyw43_host_eapol_runtime_work_pending()
         || CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0;
-    let hal_lease = crate::hal::driver_task::active_driver_task_retained_request(
-        CYW43_WIFI_DRIVER_TASK_CONTRACT,
-    )
-    .is_some();
+    let hal_lease = blocked_steady_tx_request.is_none()
+        && crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .is_some();
     let prompt = CYW43_PENDING_PROMPT_POLL
         .lock()
         .is_some_and(|pending| pending.generation == generation);
@@ -23319,6 +23370,14 @@ struct Cyw43PendingDataTx {
     urgent: bool,
     steady_fast_lane: Option<Cyw43SteadyTxFastLaneIdentity>,
     request: Option<u32>,
+    /// Root-wake hit epoch consumed by the most recent exact parent turn.
+    ///
+    /// A tagged request that is already issued sleeps until the CYW43 runtime
+    /// publishes a newer child-to-root service edge or HAL's immutable
+    /// physical containment deadline becomes due. Keeping this epoch with the
+    /// payload/request identity prevents a latched older RX wake from turning
+    /// the EventPump Network lane into a completion poller.
+    service_wake_epoch: usize,
     /// True once any child-runtime ETH_TX cursor has accepted or advanced this
     /// immutable frame, even when an Idle/FrameReady completion released the
     /// parent ring request while retaining child-side phase.
@@ -24315,6 +24374,10 @@ fn advance_cyw43_pending_data_tx(contract: DriverTaskContract) -> Cyw43DataTxTur
         pending.turns = pending.turns.saturating_sub(1);
         return retain_cyw43_pending_data_tx(pending);
     }
+    // Consume only the wake epoch that admitted this actual HAL parent turn.
+    // If the runtime later signals terminal progress, EventPump's next passive
+    // root-wake poll advances the epoch and makes exactly one new turn due.
+    pending.service_wake_epoch = crate::hal::driver_task::cyw43_root_wake_hit_epoch();
     let pending_rx = cyw43_pending_rx_token_occupied();
     let action = match completion {
         Some(completion) if driver_task_tx_completion_submitted(completion) => "submitted",
@@ -24455,6 +24518,12 @@ pub(crate) fn service_cyw43_data_tx_event_turn(
         || cyw43_host_eapol_runtime_work_pending()
         || cyw43_logical_control_owner_active()
     {
+        return Ok(false);
+    }
+    if cyw43_steady_tx_runtime_event_blocked_request().is_some() {
+        // Other Network work may legitimately wake EventPump while this exact
+        // TX parent sleeps. It may service RX/console state, but cannot turn
+        // that unrelated wake into a completion poll for the immutable op7.
         return Ok(false);
     }
     let pending = *CYW43_PENDING_DATA_TX.lock();
@@ -25364,6 +25433,7 @@ fn promote_one_cyw43_data_tx_if_ready(contract: DriverTaskContract) -> bool {
         urgent: queued.urgent,
         steady_fast_lane,
         request: None,
+        service_wake_epoch: crate::hal::driver_task::cyw43_root_wake_hit_epoch(),
         child_cursor_started: false,
         deadline: cyw43_poll_deadline_from_millis_or_polls(
             cyw43_linked_action_child_lease_ms(DRIVER_RUNTIME_CYW43_OP_ETH_TX),
@@ -34868,22 +34938,18 @@ mod tests {
             }
             DriverTaskHotPath::SdioHost => {
                 descriptor.flags |= pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
-                descriptor.irq_count = 1;
-                let generated_irq = policy
-                    .irqs
-                    .iter()
-                    .copied()
-                    .find(|irq| irq.hot_path == DriverTaskHotPath::SdioHost.as_str())
-                    .expect("generated SDIO IRQ topology");
-                descriptor.irqs[0] = pi4_driver_abi::DriverRuntimeIrqDescriptor {
-                    irq: generated_irq.irq,
-                    badge: generated_irq.badge,
-                    handler_slot: u32::from(generated_irq.handler_slot),
-                    notification_slot: u32::from(generated_irq.notification_slot),
-                    trigger: pi4_driver_abi::DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
-                    flags: 0,
-                    reserved: 0,
-                };
+                descriptor.irq_count = 2;
+                for (index, generated_irq) in policy.irqs[1..=2].iter().copied().enumerate() {
+                    descriptor.irqs[index] = pi4_driver_abi::DriverRuntimeIrqDescriptor {
+                        irq: generated_irq.irq,
+                        badge: generated_irq.badge,
+                        handler_slot: u32::from(generated_irq.handler_slot),
+                        notification_slot: u32::from(generated_irq.notification_slot),
+                        trigger: pi4_driver_abi::DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+                        flags: 0,
+                        reserved: 0,
+                    };
+                }
                 (
                     pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
                     DriverTaskHotPath::Cyw43Wifi.as_u32(),
@@ -43247,6 +43313,27 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_steady_tx_parent_sleeps_until_new_runtime_edge_or_physical_deadline() {
+        let request = Some(41);
+        assert!(cyw43_steady_tx_waits_for_runtime_event(
+            true, request, request, true, 7, 7, false,
+        ));
+        for not_blocked in [
+            cyw43_steady_tx_waits_for_runtime_event(false, request, request, true, 7, 7, false),
+            cyw43_steady_tx_waits_for_runtime_event(true, request, Some(42), true, 7, 7, false),
+            cyw43_steady_tx_waits_for_runtime_event(true, request, request, false, 7, 7, false),
+            cyw43_steady_tx_waits_for_runtime_event(true, request, request, true, 7, 8, false),
+            cyw43_steady_tx_waits_for_runtime_event(true, request, request, true, 7, 7, true),
+        ] {
+            assert!(
+                !not_blocked,
+                "only the exact unchanged parent without a due containment deadline sleeps",
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_durable_work_reason_mask_covers_every_production_source() {
         macro_rules! assert_reason {
             ($field:ident, $reason:ident) => {{
@@ -49036,7 +49123,7 @@ mod tests {
             0x4402,
             0x4403,
             0x4404,
-            0x4405,
+            [0, 0],
             0,
         ));
         assert!(crate::hal::driver_task::publish_cyw43_sdio_restart_context(
@@ -49047,7 +49134,7 @@ mod tests {
             0x7702,
             0x7703,
             0x7704,
-            0x7705,
+            [0x7705, 0x7706],
             sdhci_page.0.as_mut_ptr() as usize,
         ));
         assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_context_available());
@@ -49274,7 +49361,7 @@ mod tests {
                 "mask-card-int",
                 "unbind-notifications",
                 "drain-notifications-before-irq",
-                "acknowledge-irqs",
+                "acknowledge-primary-irqs",
                 "drain-notifications-after-irq",
                 "rebind-notifications",
                 "clear-descriptor-seals",

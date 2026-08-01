@@ -193,18 +193,23 @@ payload does not advance a completion index.
 ### IRQs and notifications
 
 An IRQ path must be generated, admitted, and bound before it is enabled at the
-device. The owning runtime captures and clears the device source, acknowledges
-the seL4 IRQ according to the selected kernel contract, publishes bounded work,
-and reschedules remaining work when its service budget is exhausted.
+device. The owning runtime captures the exact source and either clears it before
+handler ACK or durably latches it under the source's defined mask for later
+cursor-owned W1C. It acknowledges the seL4 IRQ according to that generated
+source contract, publishes bounded work, and reschedules remaining work when
+its service budget is exhausted.
 
 Root-task may route a generated notification or consume a completion; it must
 not become a hidden polling owner for a driver that is required to own the IRQ.
 If a boot reports a deferred notification bind, notification-backed acceptance
 remains red even when a polled diagnostic makes progress.
 
-The current CYW43/SDIO topology declares one SDIO IRQ owner and a reciprocal
-CYW43/SDIO bus link with a fixed event ring. Exact IRQ numbers, badges, slots,
-offsets, and depth are compiler-owned in the selected manifest.
+The current CYW43/SDIO topology declares one SDIO runtime owner with two
+physical IRQ inputs—SDHCI IRQ 158 and BCM2835 DMA channel-4 IRQ 114—and a
+reciprocal CYW43/SDIO bus link with a fixed event ring. Both IRQs bind to the
+same runtime-local notification through disjoint generated badges and handler
+slots. Exact IRQ numbers, badges, slots, offsets, and depth are compiler-owned
+in the selected manifest.
 
 ### Time
 
@@ -452,12 +457,24 @@ SDIO child. The latter is eligible only for a copied-RX paired response or an
 authenticated `cohsh` payload bound to the exact active console connection and
 peer tuple (connection id, local port, remote IPv4 address, and remote port),
 under the exact latched generation, pair, physical lifetime, and open Network
-priority lease. Each leased owner slice yields under the original command
-deadline and op/byte limits. A fresh eligible urgent op7 uses one bounded root
+priority lease. Each leased owner quantum retains the original command deadline
+and op/byte limits, but a request that needs controller completion blocks on the
+SDIO owner's local notification slot `3` rather than returning to a runnable yield
+loop. The owner enables the exact request sources in both `INT_ENABLE` and
+`SIGNAL_ENABLE`; the delivered IRQ advances only the retained cursor for that
+immutable request. A fresh eligible urgent op7 uses one bounded root
 producer transaction for Stage/rematerialization, issued-unknown latching,
 sequence-last command commit, and the final scheduling signal. It publishes no
-root continuation grant; after that transaction root only polls while the exact
-tagged parent and its exact Function-2 child advance across yielded lease slices.
+root continuation grant; bounded root completion checks remain observation-
+only. The issued tagged TX stores the consumed CYW43 child-to-root Network
+service-wake epoch, and EventPump suppresses its pending-TX, terminal-drain, and
+HAL-lease levels until a newer epoch or the physical deadline. The wake is a
+coalescing Network scheduling edge, not RX-only authority. CNTVCT age at the ABI
+child worst-case bound may emit one identity-bound
+parent scheduling wake, which CYW43 propagates only to
+the exact retained Function-2 child for deadline sampling and containment. A
+second exact expired miss enters pair recovery. Root does not keep either
+priority-255 runtime runnable with completion polling.
 Boot, firmware, control/EAPOL, recovery, op8, op10, bulk, unauthenticated or
 wrong-peer traffic, and GENET use the full phase chain.
 
@@ -493,11 +510,12 @@ envelope, firmware credits and glom aggregation, one 32-KiB shared aperture,
 transfers. It deliberately cannot copy Linux's private workqueue or host lock.
 The linked-runtime translation is one compiler-declared child-to-root wake,
 durable DPC/root-wake and queue levels, one EventPump Network quantum, one HAL
-op8 owner, and one linked SDIO runtime issuer. Notifications remain scheduling
-hints. Ordinary work uses exact continuation grants; `STEADY_SERVICE_LEASE` is
-typed authority only for the exact active DPC or eligible urgent-op7
-child and cannot become a private physical drain loop or authorize another
-command.
+op8 owner, and one linked SDIO runtime issuer. The SDIO request itself completes
+through response/data/error and direction-correct PIO-ready interrupt sources,
+not a scheduler-driven status poll. Notifications remain scheduling hints.
+Ordinary work uses exact continuation grants; `STEADY_SERVICE_LEASE` is typed
+authority only for the exact active DPC or eligible urgent-op7 child and cannot
+become a private physical drain loop or authorize another command.
 
 The as-built source candidate has no direct post-TX receive command and no
 alternate receive lane. Gate 8 commit retains the current lifetime identity plus one
@@ -528,9 +546,12 @@ the check.
 The next read-back-proven image must preserve first-lifetime startup, retain one
 first inbound Echo Request across cold ARP and answer it exactly once without a
 host retry, then achieve ARP-warmed request-to-first-payload p95 at or below 40
-ms and at least 29 sequential requests/s without loss, reconnect, or benchmark
-timeout. Record the cold semantic/elapsed sample separately. The aggressive
-target remains p95 at or below 10 ms and at least 100 sequential requests/s.
+ms and at least 29 sequential requests/s without loss, reconnect, benchmark
+timeout, or physical-deadline wake on every counted Wi-Fi lifetime. Aggregate
+statistics cannot hide one slow or recovered boot. Record the cold
+semantic/elapsed sample separately. This per-lifetime floor is the minimum
+acceptable-norm claim. The aggressive target remains p95 at or below 10 ms and
+at least 100 sequential requests/s.
 One GENET control must prove the same common cold-neighbor semantics with
 unchanged wired latency, throughput, and scheduling. The exact `2ea5b593d67c`
 candidate is qualified below and rejected for transport quality. The subsequent
@@ -612,12 +633,26 @@ and 1.877 seconds maximum versus about 48 ms average issued-to-terminal. The
 unchanged same-image and prior GENET control remained sub-millisecond and about
 667-701 operations/s. This localizes the material defect in host-to-Pi
 CYW43/SDIO service admission, not the mask, smoltcp, or physical transaction.
-The replacement source is not accepted until a newly flashed exact image shows
-ARP-warmed request-to-first-payload p95 at or below 40 ms, at least 29
-sequential requests/s, and zero loss, reconnect, sequence fault, or timeout.
+The replacement source is not accepted until a newly flashed exact image shows,
+on every counted lifetime, ARP-warmed request-to-first-payload p95 at or below
+40 ms, at least 29 sequential requests/s, zero physical-deadline wake on
+ordinary traffic, and zero loss, reconnect, sequence fault, or timeout.
 The host-tool suite, `tools/cohesix-py`, `.coh` grammar and fixtures, hive/REST
 projection, and benchmark workload/report schema were reviewed; the internal
 lease and producer scheduling seams change none of those contracts.
+
+The next exact `0dcfe550048c` image
+(`7856d079fea3ff1f9de353d2daab3b499ed53bde293ceab4a4242e5b158c8971`)
+was 0/5 for stable warm Wi-Fi service. R01 reached Gate 8/DHCP before pair
+replacement and permanent Gate 8e failure; R02/R04/R05 failed first-pair Gate
+8e; R03 reached Gate 8/DHCP on two pairs but lost both and exhausted recovery.
+The paired cutoff contains brief DHCP but zero TCP or ICMP involving the Pi
+address. No warm lifetime retained TCP reachability, so `.coh`, ping/latency,
+REST, and hive pressure were correctly withheld. Source audit then found that
+SDHCI `DATA_END` and BCM2835 DMA channel-4 terminal are independent completion
+edges while this exact image generated only the SDHCI route. The two-IRQ design
+below closes that architecture; it remains source-only until a replacement
+exact image passes the per-lifetime gates with zero physical-deadline wake.
 
 ### QEMU network drivers
 
@@ -802,13 +837,21 @@ Root first registers both isolated services, replays the SDIO descriptor before
 the CYW43 descriptor, proves the SDIO prerequisites, and hands the mailbox to
 SDIO. Cold bootstrap then enters the retained 22-action pair transaction
 directly. It does **not** initialize either physical engine first. The canonical
-transaction suspends and fences the pair, drains and acknowledges the
-notification/IRQ state, zeroes the discarded pair-ring state while preserving
+transaction suspends and fences the pair, masks CARD_INT, drains local
+notification slot `3`, acknowledges only a retained SDHCI handler-slot-4 IRQ
+epoch, and leaves the DMA handler-slot-5 epoch unacknowledged across the
+generation cut. It zeroes the discarded pair-ring state while preserving
 only the exact 16-byte `DriverRuntimeSdioPhysicalLifetimeRecord` in the SDIO
 owner ring, restores bootstrap scheduling state, resumes and proves SDIO before
-CYW43, replays both descriptors, performs the sole SDIO engine replay and WL_ON
-power-sequence lifetime, replays the CYW43 engine, hands the producer ring to
-CYW43, and advances the pair epoch. After that exact restart completes, root
+CYW43, and replays both descriptors. The replacement SDIO `EngineInit` remains
+the sole DMA-channel owner: it aborts or resets channel 4 as needed, clears
+stale `CS.INT`, proves the channel quiescent, and then acknowledges handler slot
+5 before Ready. It next performs the sole WL_ON power-sequence lifetime,
+replays the CYW43 engine, hands the producer ring to
+CYW43, and advances the pair epoch. The old SDHCI/DMA terminal join cursor is
+cleared before replay, while physical DMA quiescence and IRQ activation happen
+inside replacement `EngineInit`; neither a stale host terminal nor a stale
+DMA-channel terminal can authorize replacement work. After that exact restart completes, root
 registers the SDIO owner state before acquiring the context-replay gate.
 Firmware and control programming then precede the two owner-first
 steady-priority cutovers.
@@ -830,6 +873,17 @@ credentials retain their non-Wi-Fi behavior. The generic root network
 engine-init lane remains available to GENET but is rejected by CYW43; the only
 CYW43 engine replay is `ReplayCyw43Engine` inside the canonical pair
 transaction.
+
+The compiler-generated SDIO runtime topology binds two level-triggered physical
+sources to local notification slot `3`: SDHCI IRQ `158`, badge `159`, child IRQ
+handler slot `4`; and BCM2835 DMA channel-4 IRQ `114`, badge `512`, child IRQ
+handler slot `5`. Handler slots and badge bits are distinct even though the
+notification object is shared. Together with mini-UART IRQ `125`, these form the
+exact three-entry generated driver-IRQ set; a missing, extra, within-runtime
+aliased-handler, or
+overlapping-badge route is invalid. Both sources remain owned by the same SDIO
+runtime and exact retained request cursor; the second IRQ is not a second
+controller or DMA issuer.
 
 The sole SDIO owner publishes a versioned physical-lifetime record in the
 reserved owner ring. `begun_epoch` is sequence-last and advances immediately
@@ -917,10 +971,10 @@ and peer tuple, under the exact latched generation, pair, physical lifetime,
 and already-open Network lease uses one bounded root producer transaction for
 Stage/rematerialization,
 issued-unknown latching, sequence-last command commit, and the final scheduling
-signal. It publishes no initial or replacement root grant; after commit root
-only polls while the exact tagged parent and Function-2 child advance across
-yielded lease slices. A matching completion always wins, and the producer seam
-performs no physical I/O.
+signal. It publishes no initial or replacement root grant; root completion
+checks are observation-only and use only the one identity-bound physical-
+deadline wake described below. A matching completion always wins, and
+the producer seam performs no physical I/O.
 Nonmatching and non-CYW43 commands retain their existing phases.
 
 The sole ordered event-drain snapshot is immediately before association Join.
@@ -1502,9 +1556,8 @@ generation and XID.
   lease. One bounded root
   producer transaction performs Stage/rematerialization, issued-unknown
   latching, sequence-last command commit, and the final scheduling signal. It
-  publishes no root continuation grant; after commit root only polls while the
-  exact tagged parent and its exact Function-2 child advance across yielded
-  lease slices.
+  publishes no root continuation grant; root completion checks are
+  observation-only, with one identity-bound physical-deadline wake only.
   No fused producer turn performs physical I/O, and boot, recovery, op8, op10,
   op11, ordinary/bulk op7, stale/closing leases, and GENET reject this seam.
   `GrantRequired` and `Granted` remain explicit scheduler-visible phases on the
@@ -1642,16 +1695,40 @@ generation and XID.
   `ETH_TX` descriptor marker; CYW43 accepts only the current non-EAPOL parent
   with the exact one-frame/four-operation budget and propagates both tags only
   to its exact Function-2 child. The lease removes only
-  reciprocal grants for internal controller phases. Each owner slice remains
-  separately scheduled and yields afterward. The runtime publishes a 24-byte
-  sequence-last progress record in the mutually exclusive continuation-grant
-  slot after every admitted pending slice. Its request, complete action
-  fingerprint, generation, service slice, and committed slice must all match;
-  only a strictly newer slice rebases the foreground or DPC child inactivity
-  fence. The parent publishes the same shape to root, whose PollRing path uses
-  a finite 64-poll no-progress fence. Exactly 256 runtime slices may execute;
-  slice 257 faults before owner dispatch. Command deadline, finite
-  operation/byte bounds, one physical issuer, and poison remain authoritative.
+  reciprocal grants for internal controller phases. Each physical owner quantum
+  remains bounded; `WaitForWake` instead blocks on local notification slot `3`,
+  which carries the generated host, DMA, and peer routes, after a final
+  request-status recheck. The runtime publishes a
+  24-byte sequence-last semantic heartbeat in the mutually exclusive
+  continuation-grant slot only when the exact request's wait arm, latched
+  interrupt status, controller/data phase, or pending-parent child-terminal
+  frontier changes. The exact parent terminal instead uses its sequence-last
+  completion and post-commit Network wake. Its
+  request, complete action fingerprint, generation, service epoch, and committed
+  phase must all match. Scheduler admission and an unchanged wait arm publish
+  nothing. An invalid, empty, or spurious wake performs no physical I/O and
+  publishes no heartbeat; a valid identity-bound peer/root containment hint may
+  perform exactly one status/deadline observation, then reblocks unchanged
+  without issuing, replaying, granting, or renewing the physical deadline. The parent
+  publishes the same shape to root. Root records CNTVCT time at the last exact
+  semantic epoch; its bounded completion checks are observation-only. The
+  issued tagged parent records the consumed CYW43 child-to-root Network
+  service-wake epoch. EventPump treats pending TX, terminal drain, and HAL lease
+  as asleep while that epoch is unchanged and the physical deadline is not due;
+  active-request presence alone is not runnable. The runtime signals the same
+  coalescing Network service wake after the exact parent terminal, so this edge
+  is not RX-only.
+  At the ABI child worst-case age it may send one scheduling wake for the
+  unchanged parent; CYW43 validates and propagates that hint only to the exact
+  child for deadline sampling. A second exact expired miss enters pair recovery.
+  The former 64-poll counter is diagnostic only, not timeout authority. A
+  heartbeat proves semantic runtime service and cannot renew total physical
+  authority. The SDIO child is bounded by its CNTVCT-scaled 20.56-second
+  complete-request lifetime; an urgent CYW43 parent is bounded by at most four
+  such child lifetimes. Expiry faults before owner dispatch. The 256-operation
+  service maximum remains a per-quantum HAL operation budget, never a scheduler
+  poll count. Command deadline, finite operation/byte bounds, one physical
+  issuer, and poison remain authoritative.
   No excluded or mutated command may borrow it.
   Completion polling observes this exact child but publishes no recurrent
   grant. Notifications remain coalescing scheduler hints.
@@ -1679,10 +1756,11 @@ generation and XID.
   never advance a retained foreground cursor. The distinct badge-256
   client-to-owner notification is a scheduling wake for an already-published
   command or grant, not a service source or foreground authority. A real SDIO
-  IRQ may consume one notification-service quantum. If CARD_INT coalesces with
-  badge 256, the runtime observes it at `CheckWake`, services exactly one IRQ
-  quantum in that slice, and leaves the exact immutable grant unconsumed for a
-  later slice. A standalone reasserted level wake cannot spend that grant.
+  IRQ may consume one notification-service quantum for its exact source. If
+  SDHCI badge 159 or DMA badge 512 coalesces with badge 256—or with each
+  other—the runtime partitions the badge at `CheckWake`, services each present
+  physical source at most once, and leaves the exact immutable grant unconsumed
+  for a later slice. A standalone reasserted level wake cannot spend that grant.
   Explicit scheduler handoffs follow
   service and rejected immediately-ready wakes, so a
   priority-255 runtime cannot form a private IRQ loop. The reserved high
@@ -1690,7 +1768,10 @@ generation and XID.
   authority. Root keeps the original unbadged notification cap private for TCB
   bind/restart, the child's bound local-notification cap is receive-only, and
   the generated child-held routes are the CYW43-to-SDIO badge-256 notification
-  and the SDIO-to-CYW43 badge-2 notification; the SDIO IRQ carries badge 159.
+  and the SDIO-to-CYW43 badge-2 notification. The two physical routes on local
+  notification slot `3` are SDHCI badge 159/handler slot 4 and DMA-channel-4
+  badge 512/handler slot 5. A coalesced badge is partitioned by source; host,
+  DMA, and badge-256 peer work cannot alias or fabricate one another's authority.
   Notification coalescing cannot replay work because the sequence-last ring
   command plus either the ordinary exact unused grant or exact immutable finite
   lease admission remain the only intake and continuation authorities. An idle runtime blocks on its combined endpoint/notification
@@ -1705,9 +1786,11 @@ generation and XID.
   grant-only requirement if mutable gate state is lost; the exact tagged lane
   instead retains its finite lease identity, so endpoint wake cannot become a
   fallback. An issued-unknown request cannot be recommitted or granted again.
-  Pair restart
-  revokes a poisoned Network scheduling lease only after both runtimes are
-  suspended, fenced, and their rings are reset.
+  Pair restart revokes a poisoned Network scheduling lease only after both
+  runtimes are suspended and fenced, both physical sources are masked, local
+  notification slot `3` is drained, any retained host and DMA IRQ epochs are
+  owner-W1C/ACKed in order, the exact two-source join cursor is cleared, and the
+  rings are reset.
   Before the runtime applies a pair-restart hold, it first completion-reaps an
   issued-unknown child. Each ordinary waiting reap arbitration re-arms the same
   exact root/delegated continuation grant before returning to wait; a leased
@@ -1735,14 +1818,15 @@ generation and XID.
   later turns. The exact post-Gate-8 paired-response or authenticated-`cohsh`
   urgent op7 exception uses
   `[bounded Stage/rematerialize/issued-latch/sequence-last-command/final-signal]
-  -> PollRing*` under the matching open pair lease, with no root continuation
-  grant and no root physical I/O. Ordinary delegated foreground-producer phase order is
+  -> observation-only PollRing or exact-deadline-wake` under the matching open pair
+  lease, with no root continuation grant and no root physical I/O. Ordinary delegated foreground-producer phase order is
   `submit+signal -> [poll -> grant-or-resignal+signal]* -> terminal-poll`, while
   the ordinary owner uses distinct
   `CheckWake -> CheckGrant -> ACK-before-I/O Execute` turns with one exact grant
   and at most one physical quantum. The `STEADY_SERVICE_LEASE` replaces only
   those per-controller-phase grant exchanges for the exact active DPC or
-  eligible urgent-op7 child and yields after every bounded owner slice. Every
+  eligible urgent-op7 child. A bounded physical quantum may advance or
+  terminate; request-waiting state blocks on local notification slot `3`. Every
   submission, completion poll, explicit grant-and-signal turn, terminal poll,
   and physical owner quantum is bounded
   retained work. These are scheduling admissions
@@ -1830,8 +1914,7 @@ generation and XID.
   `ProgramVerifyStatusClear`, yields, and remains bounded by the pre-issue
   deadline. The optional pre-TX DPC fence may instead finish unissued through
   its retained restore/terminal path, but cannot retry or issue the request.
-  External DMA retains the persistent idle interrupt policy, admits DMA
-  authority, proves the channel idle, stages the complete immutable
+  External DMA admits DMA authority, proves the channel idle, stages the complete immutable
   control-block chain, and then publishes DMA RESET, control-block address, and
   ACTIVE in Linux order in the same indivisible issue quantum. This matches how
   `bcm2835_mmc_request()` hands the issued request to dmaengine and performs no
@@ -1850,22 +1933,38 @@ generation and XID.
   Both engines independently join the exact response, complete payload
   movement, possibly coalesced `DATA_END`, and host quiescence. A terminal PIO
   snapshot restores the ordinary interrupt policy before publishing completion
-  in that same bounded terminal quantum; external DMA never changed that
-  persistent base policy. External DMA additionally requires no
+  in that same bounded terminal quantum. External DMA additionally requires no
   DMA error, `CONBLK_AD == 0`, and this request's `CS.INT`; it acknowledges that
   W1C edge with Linux's `INT | ACTIVE` value. Its final control block sets
   Linux's `INT_EN`, intermediate blocks do not, and a full store-completion
   fence plus same-channel status readback after ACTIVE prevents an immediate
-  join poll from observing a posted start as false completion. The external
+  join poll from observing a posted start as false completion. SDHCI `DATA_END`
+  and DMA channel-4 terminal may arrive in either order. IRQ 158 records the
+  host half; IRQ 114 permits only the exact active external-DMA cursor to sample
+  channel 4, latch `CONBLK_AD`/`CS` terminal or error state, perform the cursor-
+  owned `CS.INT` W1C, and then ACK handler slot 5. Whichever arrives first is
+  retained and returns to `WaitForWake`; it never polls for the other or
+  completes the request alone. The external
   engine does not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal
   DMA mode, not Linux's dmaengine path. SDHCI `readl`/`writel` and raw FIFO
-  access retain the required AArch64 device-ordering barriers. Idle and
-  external-DMA interrupt admission use the exact named Linux mask
-  `0x02ff000b`. An active retained-PIO request derives
-  its mask by removing DMA-only `DMA_END` and `ADMA_ERROR`, adding only its
-  direction-correct ready source, and preserving that source across any
-  interleaved CARD_INT policy rewrite; `SIGNAL_ENABLE` never gains a PIO
-  source. `CARD_INT` is added only while that asynchronous source is armed.
+  access retain the required AArch64 device-ordering barriers. Every active
+  request derives one exact request-owned interrupt mask. A command-only
+  request uses `RESPONSE` plus the named command errors; external DMA uses the
+  named bcm2835 request mask `0x02ff000b`; retained PIO removes DMA-only
+  `DMA_END` and `ADMA_ERROR` and adds only its direction-correct `SPACE_AVAIL`
+  or `DATA_AVAIL` source. The sole owner installs that same exact request mask
+  in both `INT_ENABLE` and `SIGNAL_ENABLE` before COMMAND while preserving
+  independently armed `CARD_INT` across either register and every interleaved
+  policy rewrite. On delivery, the IRQ path snapshots status once, partitions
+  request bits from `CARD_INT`, masks only the request's signal bits before the
+  single IRQ acknowledgement, and never W1Cs request status. The retained
+  `PollIssued` cursor alone consumes and W1Cs that snapshot, then rearms only
+  the still-needed request signal bits after a final status check. A
+  request-only IRQ never enters the DPC/no-source path, while a combined
+  request-plus-CARD_INT snapshot preserves both authorities and ACKs the seL4
+  handler-slot-4 IRQ epoch once after both are durable. A coalesced DMA badge is
+  dispatched independently and cannot be interpreted as host status. `CARD_INT` is added only while that
+  asynchronous source is armed.
   Terminal detection still observes the broad `INT_STATUS` error mask
   `0xffff8000`; request-local `DMA_END` is progress only and never substitutes
   for `DATA_END`.
@@ -1885,6 +1984,13 @@ generation and XID.
   after its one mapping into the SDIO child. This is resource ordering for the
   external-DMA engine selected above the Linux-shaped barrier, not a second
   launch path or fallback.
+- The same compiler declaration supplies both physical completion routes on the
+  owner's local notification slot `3`: level SDHCI IRQ 158/badge 159/handler
+  slot 4 and level DMA channel-4 IRQ 114/badge 512/handler slot 5. An external-
+  DMA request cannot be admitted if either route, its exact handler cap, or its
+  disjoint badge is absent. IRQ delivery is scheduling evidence only; the exact
+  retained request cursor remains the sole authority for host W1C, DMA `CS.INT`
+  W1C, terminal joining, and completion publication.
 - Cohesix intentionally has one production SDIO request lane with the
   Linux/Raspberry Pi `mmc-bcm2835` engine threshold embedded in its immutable
   request identity. A normalized host block count of at most two selects
@@ -2007,17 +2113,20 @@ generation and XID.
   segment. Writes copy the reciprocal-ring payload into the bounce arena before
   the DMA store barrier; reads apply the DMA load barrier before copying back.
   For an external-DMA request, the SDIO owner retains the exact cursor after
-  command and channel activation. Each later continuation samples one immutable
-  SDHCI plus DMA snapshot, latches response, `DATA_END`, and DMA terminal
+  command and channel activation. Each host- or DMA-IRQ continuation samples
+  only its exact immutable source, latches response, `DATA_END`, or DMA terminal
   evidence independently, and returns without a private wait loop. Lone
   `SPACE_AVAIL`/`DATA_AVAIL` observations remain outside this engine's W1C
   ownership, and block-gap control is required to remain zero.
   Completion requires `CONBLK_AD == 0`, this request's terminal DMA `CS.INT`,
   no DMA `CS.ERROR`, and SDHCI `DATA_END`, with the DMA and SDHCI terminal
-  edges accepted in either arrival order. The DMA edge is acknowledged exactly
-  once with `INT | ACTIVE`. `DMA_END` is enabled and acknowledged
+  edges accepted in either arrival order. Only the exact cursor acknowledges
+  the DMA W1C edge once with `INT | ACTIVE`, before handler-slot-5 ACK; the first
+  terminal half remains waiting for the second IRQ. `DMA_END` is enabled and acknowledged
   as Linux-shaped progress only; it cannot satisfy either terminal join
-  condition. A deadline or either-engine error records pre-containment SDHCI
+  condition. The physical deadline is lost-wake fault containment only;
+  ordinary and pressure completion must join both IRQs with zero physical-
+  deadline wake. A deadline or either-engine error records pre-containment SDHCI
   and DMA state, clears `NEXTCB`, performs the bounded channel-local
   abort/reset, resets the SDHCI command/data path, and returns an issued-unknown
   result. It never replays that action in the same generation.
@@ -2338,16 +2447,19 @@ generation and XID.
   `STEADY_SERVICE_LEASE` may retain only an exact active DPC child or exact
   eligible post-Gate-8 urgent-op7 child across controller phases; it yields
   after every bounded slice and cannot borrow or replace another cursor.
-  Badge-2 completion/DPC and badge-159 IRQ notifications are
+  Badge-2 completion/DPC, badge-159 SDHCI IRQ, and badge-512 DMA IRQ notifications are
   scheduling/service wakes, never physical-command authority.
-  Once DPC activation is open, a real SDIO IRQ arriving beside an immutable
+  Once DPC activation is open, a real SDHCI CARD_INT arriving beside an immutable
   request may be promptly masked, durably published, acknowledged, and signalled
   without issuing an SDIO card command or changing the retained controller/DMA
   cursor. Before activation, boot ordering still latches it. Dongle-side DPC I/O
   remains serialized until the active child terminal. The exact AckStatus W1C
   child then rearms CARD_INT before that terminal is published, closing the
   lifetime-wide masked interval without adding a second SDIO sequencer.
-  Each delivered IRQ acknowledgement has a nonzero wrapping epoch. The
+  A DMA badge instead selects only the exact external-DMA cursor, which records
+  channel-4 terminal state and W1Cs `CS.INT` before acknowledging handler slot
+  5; it never enters the DPC event ring. Each delivered SDHCI CARD_INT
+  acknowledgement has a nonzero wrapping epoch for handler slot 4. The
   retained SDIO cursor freezes that epoch, inspects host status and the durable
   event ring, publishes or coalesces the exact event, and only then
   acknowledges the kernel IRQ cap. Within that retained DPC cursor, an
@@ -3185,14 +3297,23 @@ acknowledgement, unacknowledged same-id re-signal, monotonic replacement after
   admitted identities: exact request/fingerprint/event/generation for DPC, and
   exact request/fingerprint/generation/pair/physical-lifetime/open-lease plus
   copied-response or exact authenticated-console-connection-and-peer proof for
-  urgent op7. Each owner slice yields, retains command/op/byte limits, and cannot be
-  borrowed by excluded or later work. A
-matching late completion suppresses both the replacement and the signal.
-Consumed exact grants rebase ordinary child inactivity fences; each admitted
-`STEADY_SERVICE_LEASE` owner slice publishes exact sequence-last progress and
-only a strictly newer matching slice rebases its leased child inactivity fence.
-The same rule bounds root's parent PollRing inactivity; repeated, torn, stale,
-or wrong-identity records do not extend either lifetime. An
+  urgent op7. Each physical owner quantum remains bounded, retains
+  command/op/byte limits, and cannot be borrowed by excluded or later work;
+  request-waiting state blocks on local notification slot `3`. A matching late
+  completion suppresses both the replacement and the signal. Consumed exact
+  grants rebase ordinary child inactivity fences; each admitted
+`STEADY_SERVICE_LEASE` publishes an exact sequence-last semantic heartbeat only
+for a changed wait/status/controller/data or pending-parent child-terminal
+epoch. The exact parent terminal uses its sequence-last completion and
+post-commit Network wake. Repeated, empty,
+torn, stale, or wrong-identity observations publish nothing and do not extend
+either inactivity diagnostic. Root's physical-time containment is the exact
+one-shot parent wake at the ABI child bound followed by pair recovery on a
+second expired miss. Focused scheduling coverage proves an issued tagged parent
+stays asleep while its consumed Network service-wake epoch is current, then
+becomes due exactly once for a newer runtime edge or physical deadline; an
+active retained request alone is insufficient. No heartbeat extends the
+independent physical deadline. An
 issued-unknown child is completion-reaped before a restart hold; a
 late exact reply may release ownership and produce one exact old-parent
 terminal but must not apply its result/payload or replay a child.
@@ -3230,9 +3351,9 @@ lifetime, and open Network lease can use the fused producer seam and
 urgent-op7 child-lease identity. One
 bounded root producer transaction performs Stage/rematerialization,
 issued-unknown latching, sequence-last command commit, and the final scheduling
-signal. It publishes no initial or replacement root continuation grant; after
-commit root only polls while the exact tagged parent and Function-2 child
-advance across yielded lease slices.
+signal. It publishes no initial or replacement root continuation grant; root
+completion checks are observation-only and permit only the exact physical-
+deadline wake for the unchanged parent.
 Late completion, unpaired non-cohsh, unauthenticated/wrong-peer, ordinary/bulk
 op7, op8, op10, op11, boot, firmware, control/EAPOL, recovery, closed or torn
 lease, stale lifetime, and GENET must execute the ordinary phases

@@ -4520,11 +4520,7 @@ where
             && crate::drivers::driver_task_net::cyw43_service_work_snapshot()
                 .ordinary_network_admissible()
             && (self.linked_runtime_cyw43_network_burst_due()
-                || self.linked_runtime_cyw43_durable_resume.is_some()
-                || crate::hal::driver_task::active_driver_task_retained_request(
-                    crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                )
-                .is_some())
+                || self.linked_runtime_cyw43_durable_resume.is_some())
     }
 
     /// Dispatch at most one network-console line already retained by the NIC

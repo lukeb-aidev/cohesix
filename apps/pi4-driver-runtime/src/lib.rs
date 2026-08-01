@@ -34,7 +34,7 @@ use core::{
 use font8x8::legacy::BASIC_LEGACY;
 #[cfg(target_os = "none")]
 use pi4_driver_abi::DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO;
-#[cfg(test)]
+#[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US;
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET;
@@ -449,6 +449,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE,
     DRIVER_RUNTIME_SDIO_CONTAINMENT_ATTEMPT_LIMIT, DRIVER_RUNTIME_SDIO_CONTAINMENT_TIMEOUT_US,
+    DRIVER_RUNTIME_SDIO_DMA_IRQ, DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_CONTAINED,
     DRIVER_RUNTIME_SDIO_FAULT_FRAME_FLAG_OWNER_PATH_POISONED, DRIVER_RUNTIME_SDIO_FLAG_DATA,
     DRIVER_RUNTIME_SDIO_FLAG_RESP_LONG, DRIVER_RUNTIME_SDIO_FLAG_RESP_NONE,
@@ -536,8 +537,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
-    HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC, HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT,
-    HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE, HOT_PATH_USB_KEYBOARD,
+    DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT, HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC,
+    HOT_PATH_HDMI_TEXT, HOT_PATH_PCIE_ROOT, HOT_PATH_SDIO_HOST, HOT_PATH_SERIAL_CONSOLE,
+    HOT_PATH_USB_KEYBOARD,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -553,8 +555,6 @@ use pi4_driver_abi::{
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
     DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
-    DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES, DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES,
-    DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -590,6 +590,10 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_FRAME,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_FIRSTREAD_INVALID,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_CONTROL_RX_REMAINDER_FAILED,
+};
+use pi4_driver_abi::{
+    DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES, DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES,
+    DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -2831,9 +2835,16 @@ struct SdioExternalDmaRequestCursor {
     data_end_seen: bool,
     dma_terminal_interrupt_seen: bool,
     dma_complete: bool,
+    dma_irq_cs_snapshot: u32,
+    dma_irq_conblk_snapshot: u32,
+    dma_irq_acknowledged: bool,
+    dma_irq_ack_failed: bool,
+    dma_irq_terminal_invalid: bool,
     pio_offset: u16,
     pio_block_end: u16,
     pio_ready_interrupt_required: bool,
+    request_irq_live: bool,
+    request_irq_masked: bool,
     issued: bool,
     pre_issue_attempt: u8,
     poll_turns: u32,
@@ -2869,9 +2880,16 @@ impl SdioExternalDmaRequestCursor {
             data_end_seen: false,
             dma_terminal_interrupt_seen: false,
             dma_complete: false,
+            dma_irq_cs_snapshot: 0,
+            dma_irq_conblk_snapshot: 0,
+            dma_irq_acknowledged: false,
+            dma_irq_ack_failed: false,
+            dma_irq_terminal_invalid: false,
             pio_offset: 0,
             pio_block_end: 0,
             pio_ready_interrupt_required: true,
+            request_irq_live: false,
+            request_irq_masked: false,
             issued: false,
             pre_issue_attempt: 0,
             poll_turns: 0,
@@ -2946,6 +2964,10 @@ struct SdioRuntimeState {
     shared_epoch: u32,
     irq_badge: u32,
     irq_handler_slot: u32,
+    dma_irq_badge: u32,
+    dma_irq_handler_slot: u32,
+    dma_irq_ack_pending: bool,
+    dma_irq_ready: bool,
     peer_notification_slot: u32,
     card_irq_masked: bool,
     dpc_activation_allowed: bool,
@@ -2973,6 +2995,10 @@ impl SdioRuntimeState {
             shared_epoch: 0,
             irq_badge: 0,
             irq_handler_slot: 0,
+            dma_irq_badge: 0,
+            dma_irq_handler_slot: 0,
+            dma_irq_ack_pending: false,
+            dma_irq_ready: false,
             peer_notification_slot: 0,
             card_irq_masked: false,
             dpc_activation_allowed: false,
@@ -3041,6 +3067,17 @@ enum SdioPwrseqPhase {
     FinalStatusRewrite,
     FinalStatusPublish,
     EngineInitValidateDpc,
+    EngineInitDmaStatePrepare,
+    EngineInitDmaInspect,
+    EngineInitDmaAbortIssue,
+    EngineInitDmaAbortPoll,
+    EngineInitDmaStop,
+    EngineInitDmaClearStale,
+    EngineInitDmaReset,
+    EngineInitDmaVerify,
+    EngineInitDmaIrqAck,
+    EngineInitDmaAckState,
+    EngineInitDmaAckHealth,
     EngineInitStatePrepare,
     EngineInitHealthBefore,
     EngineInitPolicyEnableBeforeAck,
@@ -3173,6 +3210,9 @@ struct SdioPwrseqCursor {
     clock_retry: u8,
     pending_status: u32,
     irq_acked: bool,
+    dma_authority: SdioExternalDmaAuthority,
+    dma_cs: u32,
+    dma_irq_acked: bool,
 }
 
 impl SdioPwrseqCursor {
@@ -3193,6 +3233,9 @@ impl SdioPwrseqCursor {
             clock_retry: 0,
             pending_status: 0,
             irq_acked: false,
+            dma_authority: SdioExternalDmaAuthority::empty(),
+            dma_cs: 0,
+            dma_irq_acked: false,
         }
     }
 
@@ -3216,6 +3259,9 @@ impl SdioPwrseqCursor {
             clock_retry: 0,
             pending_status: 0,
             irq_acked: false,
+            dma_authority: SdioExternalDmaAuthority::empty(),
+            dma_cs: 0,
+            dma_irq_acked: false,
         }
     }
 
@@ -6491,6 +6537,156 @@ enum RuntimeRetainedOwnerPhase {
     Execute(DriverRuntimeContinuationGrant),
 }
 
+/// Compact hardware-semantic state for one retained steady SDIO request.
+///
+/// Scheduler polls and timer samples are deliberately absent. Two snapshots
+/// compare equal until the controller cursor, interrupt ownership, response,
+/// or data frontier actually changes.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeSteadySdioSnapshot {
+    sequence: u32,
+    action_fingerprint: u32,
+    generation: u32,
+    phase: SdioExternalDmaRequestPhase,
+    response_seen: bool,
+    response0: u32,
+    data_end_seen: bool,
+    dma_terminal_interrupt_seen: bool,
+    dma_complete: bool,
+    dma_irq_cs_snapshot: u32,
+    dma_irq_conblk_snapshot: u32,
+    dma_irq_acknowledged: bool,
+    dma_irq_ack_failed: bool,
+    dma_irq_terminal_invalid: bool,
+    pio_offset: u16,
+    pio_block_end: u16,
+    pio_ready_interrupt_required: bool,
+    request_irq_live: bool,
+    request_irq_masked: bool,
+    issued: bool,
+    pre_issue_attempt: u8,
+    containment_resume: SdioRetainedContainmentResume,
+    containment_dma_ok: bool,
+    containment_host_ok: bool,
+    dpc_disposition: SdioDpcCaptureDisposition,
+    dpc_irq_acked: bool,
+}
+
+/// Compact semantic frontier for one exact retained CYW43 foreground parent.
+///
+/// `turn_id`, deadline storage, and raw frontier poll counts are intentionally
+/// excluded: they describe scheduling/time passage, not transport progress.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeSteadyCyw43ForegroundSnapshot {
+    parent_sequence: u32,
+    generation: u32,
+    active: bool,
+    executing: bool,
+    pending: bool,
+    replay_index: u16,
+    replayed_count: u16,
+    completed_count: u16,
+    action_consumed: bool,
+    issued_unknown: bool,
+    poisoned: bool,
+    prepared_sequence: u32,
+    prepared_descriptor_valid: bool,
+    frontier_sequence: u32,
+    frontier_ordinal: u16,
+    frontier_valid: bool,
+    frontier_submitted: bool,
+    frontier_continuation_grant_required: bool,
+    frontier_service_progress_slice: u32,
+    child_active: bool,
+    child_expected_sequence: u32,
+    child_issued_unknown: bool,
+    eth_tx_phase: u8,
+    f2_tx_phase: u8,
+    f2_tx_generation: u32,
+    f2_tx_len: u16,
+    f2_tx_sdpcm_seq: u8,
+    sdpcm_seq: u8,
+    flowcontrol: u8,
+    flowcontrol_all: bool,
+}
+
+/// Compact semantic frontier for a CYW43 DPC cursor's exact steady SDIO child.
+///
+/// The child fallback-poll count and timeout samples are not progress. The
+/// identity-bound owner heartbeat is included because it proves a newer
+/// controller semantic revision without renewing either physical deadline.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RuntimeSteadyCyw43DpcSnapshot {
+    event_sequence: u32,
+    action: Cyw43DpcAction,
+    io_kind: Cyw43DpcIoKind,
+    io_phase: Cyw43DpcIoPhase,
+    captured_status: u32,
+    mailbox_data: u32,
+    actual_frame_len: u16,
+    child_sequence: u32,
+    child_generation: u32,
+    child_action_fingerprint: u32,
+    child_service_progress_slice: u32,
+    child_active: bool,
+    child_issued_unknown: bool,
+    global_child_active: bool,
+    global_child_expected_sequence: u32,
+    global_child_issued_unknown: bool,
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSteadySemanticSnapshot {
+    Sdio(RuntimeSteadySdioSnapshot),
+    Cyw43Foreground(RuntimeSteadyCyw43ForegroundSnapshot),
+    Cyw43Dpc(RuntimeSteadyCyw43DpcSnapshot),
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSteadyPendingDisposition {
+    SemanticProgress,
+    WaitForWake,
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSteadyPendingRoute {
+    YieldAfterProgress,
+    BlockOnLocalNotification,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_steady_pending_route(
+    disposition: RuntimeSteadyPendingDisposition,
+) -> RuntimeSteadyPendingRoute {
+    match disposition {
+        RuntimeSteadyPendingDisposition::SemanticProgress => {
+            RuntimeSteadyPendingRoute::YieldAfterProgress
+        }
+        RuntimeSteadyPendingDisposition::WaitForWake => {
+            RuntimeSteadyPendingRoute::BlockOnLocalNotification
+        }
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_semantic_disposition(
+    previous: &mut Option<RuntimeSteadySemanticSnapshot>,
+    current: RuntimeSteadySemanticSnapshot,
+) -> RuntimeSteadyPendingDisposition {
+    if *previous == Some(current) {
+        RuntimeSteadyPendingDisposition::WaitForWake
+    } else {
+        *previous = Some(current);
+        RuntimeSteadyPendingDisposition::SemanticProgress
+    }
+}
+
 /// Identity-bound authority for one retained steady-data-plane SDIO child.
 ///
 /// The lease never authorizes another command. It only lets the SDIO owner
@@ -6498,6 +6694,9 @@ enum RuntimeRetainedOwnerPhase {
 /// slice without a reciprocal grant round trip for every internal phase. The
 /// marker is admitted either from an exact DPC event or from an explicitly
 /// marked urgent post-Gate-8 Ethernet TX parent; no operation is inferred.
+/// Its total lifetime follows the existing CNTVCT-scaled controller/child
+/// deadline. `max_ops` remains a HAL-operation budget and is deliberately not
+/// reused as a scheduler-poll count.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct RuntimeSteadyServiceLease {
@@ -6505,20 +6704,27 @@ struct RuntimeSteadyServiceLease {
     action_fingerprint: u32,
     generation: u32,
     binding_sequence: u32,
-    turns_remaining: u16,
+    service_slices: u32,
+    semantic_snapshot: Option<RuntimeSteadySemanticSnapshot>,
+    deadline: RuntimeDeadline,
+    exhausted: bool,
 }
 
 #[cfg(any(target_os = "none", test))]
 impl RuntimeSteadyServiceLease {
-    const TURN_BUDGET: u16 = DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS;
-
     const fn empty() -> Self {
         Self {
             request_sequence: 0,
             action_fingerprint: 0,
             generation: 0,
             binding_sequence: 0,
-            turns_remaining: 0,
+            service_slices: 0,
+            semantic_snapshot: None,
+            deadline: RuntimeDeadline::Counter {
+                start: 0,
+                cycles: 0,
+            },
+            exhausted: false,
         }
     }
 
@@ -6531,11 +6737,12 @@ impl RuntimeSteadyServiceLease {
     }
 
     const fn active_for(self, command: DriverTaskCommandRecord) -> bool {
-        self.matches(command) && self.turns_remaining != 0
+        self.matches(command) && !self.exhausted
     }
 
+    #[cfg(test)]
     const fn exhausted_for(self, command: DriverTaskCommandRecord) -> bool {
-        self.matches(command) && self.turns_remaining == 0
+        self.matches(command) && self.exhausted
     }
 
     fn admit(&mut self, command: DriverTaskCommandRecord) -> bool {
@@ -6547,25 +6754,123 @@ impl RuntimeSteadyServiceLease {
             action_fingerprint: runtime_continuation_action_fingerprint(command),
             generation: command.aux1,
             binding_sequence: command.aux0,
-            turns_remaining: Self::TURN_BUDGET,
+            service_slices: 0,
+            semantic_snapshot: None,
+            deadline: steady_service_lease_deadline(command),
+            exhausted: false,
         };
         true
     }
 
-    fn record_bounded_turn(&mut self) -> bool {
-        if self.turns_remaining == 0 {
+    fn admit_next_slice(&mut self, command: DriverTaskCommandRecord) -> bool {
+        if !self.matches(command) {
+            return true;
+        }
+        if self.exhausted || steady_service_lease_deadline_expired(&mut self.deadline) {
+            self.exhausted = true;
             return false;
         }
-        self.turns_remaining -= 1;
         true
     }
 
-    const fn completed_turns(self) -> u32 {
-        (Self::TURN_BUDGET - self.turns_remaining) as u32
+    fn record_service_slice(&mut self) -> bool {
+        if self.exhausted {
+            return false;
+        }
+        let Some(next) = self.service_slices.checked_add(1) else {
+            self.exhausted = true;
+            return false;
+        };
+        self.service_slices = next;
+        true
+    }
+
+    const fn completed_slices(self) -> u32 {
+        self.service_slices
+    }
+
+    fn record_semantic_progress_with<P>(
+        &mut self,
+        command: DriverTaskCommandRecord,
+        current: RuntimeSteadySemanticSnapshot,
+        publish: P,
+    ) -> Option<RuntimeSteadyPendingDisposition>
+    where
+        P: FnOnce(DriverTaskCommandRecord, u32, u32) -> bool,
+    {
+        let disposition = runtime_steady_semantic_disposition(&mut self.semantic_snapshot, current);
+        if disposition == RuntimeSteadyPendingDisposition::WaitForWake {
+            return Some(disposition);
+        }
+        if !self.record_service_slice() {
+            return None;
+        }
+        // Progress publication is diagnostic-only. The immutable request
+        // deadline and exact lease identity remain authoritative even if this
+        // best-effort sequence-last record cannot be written.
+        let _ = publish(command, command.aux1, self.completed_slices());
+        Some(disposition)
     }
 
     fn clear(&mut self) {
         *self = Self::empty();
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn steady_service_lease_lifetime_us(command: DriverTaskCommandRecord) -> u32 {
+    let child_lifetimes = if command.arg0 == HOT_PATH_CYW43_WIFI && command.arg1 == ROLE_NET {
+        DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS as u32
+    } else {
+        1
+    };
+    DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US.saturating_mul(child_lifetimes)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn steady_service_lease_fallback_slices(command: DriverTaskCommandRecord) -> usize {
+    let child_lifetimes = if command.arg0 == HOT_PATH_CYW43_WIFI && command.arg1 == ROLE_NET {
+        DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS as usize
+    } else {
+        1
+    };
+    (DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS as usize).saturating_mul(child_lifetimes)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn steady_service_lease_deadline(command: DriverTaskCommandRecord) -> RuntimeDeadline {
+    let start = runtime_timer_counter_ticks();
+    let cycles = runtime_micros_to_cycles(u64::from(steady_service_lease_lifetime_us(command)));
+    if start != 0 && cycles != 0 {
+        RuntimeDeadline::Counter { start, cycles }
+    } else {
+        // Hardware profiles require exported CNTVCT. Keep a finite host-test
+        // and fail-closed fallback without pretending that this scheduler-call
+        // count is the physical request's normal authority bound.
+        RuntimeDeadline::Iterations {
+            remaining: steady_service_lease_fallback_slices(command),
+        }
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn steady_service_lease_deadline_expired(deadline: &mut RuntimeDeadline) -> bool {
+    // Do not use `runtime_deadline_expired`: a CYW43 foreground transaction
+    // deliberately suspends its replay-local deadlines after consuming one
+    // action. This lease is the enclosing physical lifetime and must sample
+    // only its own immutable counter/fallback state.
+    match deadline {
+        RuntimeDeadline::Counter { start, cycles } => {
+            runtime_counter_deadline_expired(*start, *cycles, runtime_timer_counter_ticks())
+        }
+        RuntimeDeadline::Iterations { remaining } => {
+            if *remaining == 0 {
+                true
+            } else {
+                *remaining = remaining.saturating_sub(1);
+                false
+            }
+        }
     }
 }
 
@@ -7286,12 +7591,39 @@ fn poll_runtime_command_or_notification(_last_sequence: u32) -> RuntimeWake {
 }
 
 #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeBlockingWaitTarget {
+    CommandOrNotification,
+    LocalNotification,
+}
+
+#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+fn runtime_blocking_wait(
+    target: RuntimeBlockingWaitTarget,
+    badge: &mut sel4_sys::seL4_Word,
+) -> sel4_sys::seL4_MessageInfo {
+    // SAFETY: Root installs the command endpoint in fixed child slot 2 and
+    // HAL installs the generated local notification in fixed child slot 3,
+    // binding that same notification to this TCB. The typed target admits
+    // only those two capabilities: Recv preserves the combined endpoint plus
+    // bound-notification intake, while Wait observes only slot 3 and cannot
+    // consume or replace a retained endpoint reply capability.
+    unsafe {
+        match target {
+            RuntimeBlockingWaitTarget::CommandOrNotification => {
+                sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, badge)
+            }
+            RuntimeBlockingWaitTarget::LocalNotification => {
+                sel4_sys::seL4_Wait(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, badge)
+            }
+        }
+    }
+}
+
+#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
 fn wait_runtime_command_or_notification(last_sequence: u32) -> RuntimeWake {
     let mut badge: sel4_sys::seL4_Word = 0;
-    // SAFETY: The generated local notification is bound to this TCB and root
-    // installs the command endpoint in slot 2. A notification therefore wakes
-    // this receive with a zero-length tag; endpoint sends/calls carry MR0.
-    let tag = unsafe { sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
+    let tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::CommandOrNotification, &mut badge);
     runtime_wake_from_received_tag(tag, badge, last_sequence)
 }
 
@@ -7560,6 +7892,13 @@ fn reset_sdio_register_shadows() {
         TEST_SDIO_HOST_CLOCK_STABLE.store(true, Ordering::Release);
         TEST_RUNTIME_IRQ_ACK_CALLS.store(0, Ordering::Release);
         TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING.store(0, Ordering::Release);
+        TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.store(0, Ordering::Release);
+        TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.store(0, Ordering::Release);
+        TEST_SDIO_DMA_CS_RESPONSE.store(0, Ordering::Release);
+        TEST_SDIO_DMA_CONBLK_RESPONSE.store(0, Ordering::Release);
+        TEST_SDIO_DMA_INIT_ABORT_WRITES.store(0, Ordering::Release);
+        TEST_SDIO_DMA_INIT_W1C_WRITES.store(0, Ordering::Release);
+        TEST_SDIO_DMA_INIT_RESET_WRITES.store(0, Ordering::Release);
     }
 }
 
@@ -9118,7 +9457,7 @@ fn descriptor_sdio_irq(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> Option<DriverRuntimeIrqDescriptor> {
     if descriptor.hot_path != HOT_PATH_SDIO_HOST
-        || descriptor.irq_count != 1
+        || descriptor.irq_count != 2
         || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
         || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
     {
@@ -9129,6 +9468,26 @@ fn descriptor_sdio_irq(
         && irq.irq == DRIVER_RUNTIME_SDIO_IRQ
         && irq.badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE
         && irq.handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && irq.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL)
+        .then_some(irq)
+}
+
+fn descriptor_sdio_dma_irq(
+    descriptor: &DriverRuntimeInitDescriptor,
+) -> Option<DriverRuntimeIrqDescriptor> {
+    if descriptor.hot_path != HOT_PATH_SDIO_HOST
+        || descriptor.irq_count != 2
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND == 0
+        || descriptor.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY != 0
+    {
+        return None;
+    }
+    let irq = descriptor.irqs[1];
+    (irq.valid()
+        && irq.irq == DRIVER_RUNTIME_SDIO_DMA_IRQ
+        && irq.badge == DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE
+        && irq.handler_slot == DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
         && irq.notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
         && irq.trigger == DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL)
         .then_some(irq)
@@ -9164,7 +9523,8 @@ fn runtime_notification_route(
         }
         HOT_PATH_SDIO_HOST
             if descriptor_notification_dpc_link(descriptor).is_some()
-                && descriptor_sdio_irq(descriptor).is_some() =>
+                && descriptor_sdio_irq(descriptor).is_some()
+                && descriptor_sdio_dma_irq(descriptor).is_some() =>
         {
             RuntimeNotificationRoute::SdioOwner
         }
@@ -12184,7 +12544,12 @@ const fn runtime_notification_service_badge(
         RuntimeNotificationRoute::Serial if service_badge == DRIVER_RUNTIME_SERIAL_IRQ_BADGE => {
             Some(service_badge)
         }
-        RuntimeNotificationRoute::SdioOwner if service_badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE => {
+        RuntimeNotificationRoute::SdioOwner
+            if service_badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE
+                || service_badge == DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE
+                || service_badge
+                    == DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE =>
+        {
             Some(service_badge)
         }
         RuntimeNotificationRoute::Cyw43Client
@@ -12212,18 +12577,16 @@ const fn runtime_notification_wake_badge(route: RuntimeNotificationRoute, badge:
             }
         }
         RuntimeNotificationRoute::SdioOwner => {
-            if badge == 0
-                || badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE
-                || badge == DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
-                || badge
-                    == DRIVER_RUNTIME_SDIO_IRQ_BADGE
-                        | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
-            {
+            let orthogonal_badges =
+                DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE;
+            let sdhci_badge = badge & !orthogonal_badges;
+            if sdhci_badge == 0 || sdhci_badge == DRIVER_RUNTIME_SDIO_IRQ_BADGE {
                 badge | root_badge
             } else {
-                // The IRQ badge is a generated numeric value, not a one-hot
-                // mask. Accept only the three complete typed encodings so a
-                // stray subset cannot alias a legitimate wake.
+                // The SDHCI IRQ badge is a generated numeric value, not a
+                // one-hot mask. DMA and the peer use disjoint generated bits;
+                // after stripping those, accept only zero or the complete
+                // SDHCI encoding so a stray subset cannot alias a real wake.
                 0
             }
         }
@@ -12248,6 +12611,122 @@ const fn runtime_pending_wake_for_route(
             RuntimeWake::Notification(runtime_notification_wake_badge(route, badge))
         }
         RuntimeWake::Command(_) | RuntimeWake::None => wake,
+    }
+}
+
+/// Result of one local-notification wait while a semantic steady frontier is
+/// parked.
+///
+/// Peer and root notifications are scheduling hints only. The sole exception
+/// is one of the SDIO owner's exact physical IRQ badges. SDHCI runs the
+/// canonical mask-before-ACK turn while its request cursor retains status-W1C
+/// authority; DMA channel 4 snapshots and W1Cs only its own terminal `CS.INT`
+/// before ACKing the disjoint handler cap.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeSteadyWaitWake {
+    Resume,
+    ServiceSdioIrq(u32),
+    RetryLocalNotificationWait,
+    CooperativeFallback,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_steady_local_notification_wake_route(
+    route: RuntimeNotificationRoute,
+    raw_badge: u32,
+) -> RuntimeSteadyWaitWake {
+    // Every normal steady-lifetime producer is explicitly badged. An
+    // unbadged bind/restart edge cannot authorize another observation of a
+    // retained controller cursor, so consume it by waiting again.
+    if raw_badge == 0 {
+        return RuntimeSteadyWaitWake::RetryLocalNotificationWait;
+    }
+    let badge = runtime_notification_wake_badge(route, raw_badge);
+    if badge == 0 {
+        return RuntimeSteadyWaitWake::RetryLocalNotificationWait;
+    }
+    match route {
+        RuntimeNotificationRoute::SdioOwner => {
+            match runtime_notification_service_badge(route, badge) {
+                Some(service_badge) => RuntimeSteadyWaitWake::ServiceSdioIrq(service_badge),
+                None => RuntimeSteadyWaitWake::Resume,
+            }
+        }
+        // The CYW43 peer edge only schedules the foreground/DPC cursor
+        // that already owns exact semantic state. It never performs a
+        // physical operation or grants another turn by itself.
+        RuntimeNotificationRoute::Cyw43Client
+        | RuntimeNotificationRoute::Serial
+        | RuntimeNotificationRoute::Unavailable => RuntimeSteadyWaitWake::Resume,
+    }
+}
+
+#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+fn wait_runtime_local_notification() -> Option<u32> {
+    let mut badge: sel4_sys::seL4_Word = 0;
+    let _tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::LocalNotification, &mut badge);
+    Some(badge as u32)
+}
+
+#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+const fn wait_runtime_local_notification() -> Option<u32> {
+    None
+}
+
+#[cfg(target_os = "none")]
+fn runtime_block_on_steady_semantic_wake(
+    route: RuntimeNotificationRoute,
+    exact_steady_cyw43_parent: Option<DriverTaskCommandRecord>,
+) -> RuntimeSteadyWaitWake {
+    loop {
+        let Some(raw_badge) = wait_runtime_local_notification() else {
+            return RuntimeSteadyWaitWake::CooperativeFallback;
+        };
+        let admitted_badge = runtime_notification_wake_badge(route, raw_badge);
+        if route == RuntimeNotificationRoute::Cyw43Client
+            && admitted_badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0
+        {
+            if let Some(parent) = exact_steady_cyw43_parent {
+                // The helper revalidates the exact foreground child twice.
+                // Its result is scheduling-only and is never physical
+                // authority for either linked runtime.
+                let _ = cyw43_forward_root_deadline_wake_to_exact_sdio_child(parent);
+            }
+        }
+        match runtime_steady_local_notification_wake_route(route, raw_badge) {
+            RuntimeSteadyWaitWake::RetryLocalNotificationWait => continue,
+            routed => return routed,
+        }
+    }
+}
+
+#[cfg(target_os = "none")]
+fn runtime_handoff_steady_pending(
+    disposition: RuntimeSteadyPendingDisposition,
+    route: RuntimeNotificationRoute,
+    exact_steady_cyw43_parent: Option<DriverTaskCommandRecord>,
+) {
+    match runtime_steady_pending_route(disposition) {
+        RuntimeSteadyPendingRoute::YieldAfterProgress => runtime_yield_current_tcb(),
+        RuntimeSteadyPendingRoute::BlockOnLocalNotification => {
+            match runtime_block_on_steady_semantic_wake(route, exact_steady_cyw43_parent) {
+                RuntimeSteadyWaitWake::ServiceSdioIrq(badge) => {
+                    // This consumes the notification-service quantum only.
+                    // PollIssued observes/W1Cs/rearms request state after a
+                    // scheduler handoff on the next owner turn.
+                    let _ = service_runtime_notification(badge);
+                    runtime_yield_current_tcb();
+                }
+                RuntimeSteadyWaitWake::CooperativeFallback => runtime_yield_current_tcb(),
+                RuntimeSteadyWaitWake::Resume => {}
+                RuntimeSteadyWaitWake::RetryLocalNotificationWait => {
+                    // The blocking helper consumes invalid badges internally.
+                    // Keep an explicit fail-closed fallback for exhaustiveness.
+                    runtime_yield_current_tcb();
+                }
+            }
+        }
     }
 }
 
@@ -12544,7 +13023,8 @@ fn runtime_signal_notification(slot: u32) {
     // SAFETY: Generated topology and init-descriptor admission prove that
     // `slot` is one send-only notification cap. Reciprocal CYW43/SDIO routes
     // use badge 256 for the SDIO owner and badge 2 for completion/DPC; the
-    // distinct CYW43-to-root RX wake object uses child slot 11 and badge 1.
+    // distinct CYW43-to-root Network wake object uses child slot 11 and badge
+    // 1 for both RX readiness and exact steady-TX terminal publication.
     // None of these child caps carries receive or control rights.
     unsafe {
         sel4_sys::seL4_Signal(slot as sel4_sys::seL4_CPtr);
@@ -12557,7 +13037,7 @@ fn runtime_signal_notification(_slot: u32) {}
 #[cfg(test)]
 static TEST_CYW43_ROOT_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
 
-fn cyw43_root_rx_wake_notification_slot() -> Option<u32> {
+fn cyw43_root_network_wake_notification_slot() -> Option<u32> {
     RUNTIME_DESCRIPTOR.with_ref(|descriptor| {
         (descriptor.hot_path == HOT_PATH_CYW43_WIFI
             && descriptor.root_wake_notification_slot
@@ -12568,8 +13048,8 @@ fn cyw43_root_rx_wake_notification_slot() -> Option<u32> {
     })
 }
 
-fn cyw43_signal_root_rx_wake() {
-    let Some(slot) = cyw43_root_rx_wake_notification_slot() else {
+fn cyw43_signal_root_network_wake() {
+    let Some(slot) = cyw43_root_network_wake_notification_slot() else {
         return;
     };
     #[cfg(test)]
@@ -12976,23 +13456,28 @@ fn sdio_steady_service_lease_admitted_with_ring(
         && cyw43_dpc_event_has_source(event.flags)
 }
 
+const fn cyw43_steady_parent_command_shape(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+        && command.arg0 == HOT_PATH_CYW43_WIFI
+        && command.arg1 == ROLE_NET
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        && command.aux1 != 0
+        && command.budget.max_ops == DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS
+        && command.budget.max_frames == DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES
+        && command.budget.max_bytes == DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES
+        && cyw43_command_uses_foreground_transaction(command)
+}
+
 #[cfg(any(target_os = "none", test))]
 fn cyw43_steady_parent_service_lease_admitted(
     command: DriverTaskCommandRecord,
     generation: u32,
 ) -> bool {
     if generation == 0
-        || command.sequence == 0
-        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
-        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
-        || command.arg0 != HOT_PATH_CYW43_WIFI
-        || command.arg1 != ROLE_NET
-        || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
         || command.aux1 != generation
-        || command.budget.max_ops != DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS
-        || command.budget.max_frames != DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES
-        || command.budget.max_bytes != DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES
-        || !cyw43_command_uses_foreground_transaction(command)
+        || !cyw43_steady_parent_command_shape(command)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
     {
@@ -13039,10 +13524,10 @@ fn cyw43_steady_parent_service_lease_admitted(
 fn steady_service_lease_exhaustion_completion(
     command: DriverTaskCommandRecord,
 ) -> DriverTaskCompletionRecord {
-    // The finite lease is a hard authority bound, not a timer hint. Fence the
+    // The request/child CNTVCT lifetime is a hard authority bound. Fence the
     // complete owner generation while retaining any issued controller cursor
-    // for pair-restart containment; no notification or local loop may renew
-    // the exhausted request.
+    // for pair-restart containment; no heartbeat, notification, or local loop
+    // may renew the exhausted request.
     if command.arg0 == HOT_PATH_CYW43_WIFI && command.arg1 == ROLE_NET {
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.poisoned = true;
@@ -13061,20 +13546,21 @@ fn steady_service_lease_exhaustion_completion(
     )
 }
 
-/// Refuse an exhausted retained lease before dispatch can touch its owner.
+/// Refuse an expired retained lease before dispatch can touch its owner.
 ///
-/// The last declared slice is valid. A later invocation for the same immutable
-/// request faults here, before `service_command_turn` can issue or poll SDHCI.
+/// Scheduler yields and service heartbeats cannot renew the immutable physical
+/// deadline. Once it expires, the same request faults here before
+/// `service_command_turn` can issue or poll SDHCI.
 #[cfg(any(target_os = "none", test))]
 fn steady_service_lease_preflight_turn<F>(
-    lease: RuntimeSteadyServiceLease,
+    lease: &mut RuntimeSteadyServiceLease,
     command: DriverTaskCommandRecord,
     service: F,
 ) -> RuntimeCommandTurn
 where
     F: FnOnce() -> RuntimeCommandTurn,
 {
-    if lease.exhausted_for(command) {
+    if !lease.admit_next_slice(command) {
         RuntimeCommandTurn::Complete(steady_service_lease_exhaustion_completion(command))
     } else {
         service()
@@ -13153,16 +13639,86 @@ fn sdio_final_dpc_rearm_turn_due(route: RuntimeNotificationRoute, command_pendin
     true
 }
 
-fn sdio_runtime_service_notification(badge: u32) -> bool {
+#[cfg(any(target_os = "none", test))]
+fn sdio_runtime_service_dma_notification(badge: u32) -> bool {
+    let (shared_epoch, expected_badge, handler_slot, irq_ready, irq_ack_pending, cursor) =
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            (
+                state.shared_epoch,
+                state.dma_irq_badge,
+                state.dma_irq_handler_slot,
+                state.dma_irq_ready,
+                state.dma_irq_ack_pending,
+                state.external_dma_request,
+            )
+        });
+    if badge != expected_badge
+        || expected_badge != DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE
+        || handler_slot != DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
+        || !irq_ready
+        || irq_ack_pending
+    {
+        return false;
+    }
+
+    let mut io = SdioMmioTransferIo;
+    let result = if sdio_external_dma_irq_cursor_admitted(cursor, shared_epoch) {
+        sdio_external_dma_irq_service_with(
+            cursor,
+            shared_epoch,
+            &mut io,
+            |committed| {
+                SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request = committed);
+            },
+            || runtime_irq_handler_ack(handler_slot),
+        )
+    } else {
+        let active = cursor.active();
+        let exact_late_clear = sdio_external_dma_late_clear_cursor_admitted(cursor, shared_epoch);
+        if active && !exact_late_clear {
+            // An active PIO/command request, wrong generation, invalid DMA
+            // terminal, or already-ACKed callback cannot borrow the late-clear
+            // escape hatch. Keep the delivered handler masked for recovery.
+            return false;
+        }
+        let Some(authority) =
+            RUNTIME_DESCRIPTOR.with_ref(sdio_external_dma_authority_from_descriptor)
+        else {
+            return false;
+        };
+        let result = sdio_external_dma_late_cleared_irq_with(authority, &mut io, || {
+            runtime_irq_handler_ack(handler_slot)
+        });
+        if exact_late_clear && matches!(result, SdioExternalDmaIrqServiceResult::Acked) {
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                let mut committed = state.external_dma_request;
+                if sdio_external_dma_late_clear_cursor_admitted(committed, state.shared_epoch) {
+                    committed.dma_irq_acknowledged = true;
+                    state.external_dma_request = committed;
+                }
+            });
+        }
+        result
+    };
+    matches!(result, SdioExternalDmaIrqServiceResult::Acked)
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
+const fn sdio_runtime_service_dma_notification(_badge: u32) -> bool {
+    false
+}
+
+fn sdio_runtime_service_sdhci_notification(badge: u32) -> bool {
     if !sdio_notification_dpc_ready() {
         return false;
     }
-    let (irq_badge, owner_request_active, dpc_activation_allowed) =
+    let (irq_badge, owner_request_active, dpc_activation_allowed, handler_slot) =
         SDIO_RUNTIME_STATE.with_ref(|state| {
             (
                 state.irq_badge,
                 state.external_dma_request.active(),
                 state.dpc_activation_allowed,
+                state.irq_handler_slot,
             )
         });
     let real_irq = badge == irq_badge && irq_badge != 0;
@@ -13171,6 +13727,23 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
     } else {
         sdio_pending_irq_ack_epoch()
     };
+    let mut sampled_host_int_status = None;
+    if real_irq {
+        let host_int_status = sdio_read32(SDHCI_INT_STATUS);
+        sampled_host_int_status = Some(host_int_status);
+        let mut io = SdioMmioTransferIo;
+        match sdio_partition_request_irq_with(&mut io, host_int_status, |_| {
+            runtime_irq_handler_ack(handler_slot)
+        }) {
+            SdioRequestIrqPartition::RequestOnlyAcked(acked) => {
+                if let Some(epoch) = irq_ack_epoch {
+                    sdio_record_irq_ack_result_for_epoch(epoch, acked);
+                }
+                return acked;
+            }
+            SdioRequestIrqPartition::RequestAndCard | SdioRequestIrqPartition::NotRequest => {}
+        }
+    }
     if irq_ack_epoch.is_some()
         && !dpc_activation_allowed
         && (owner_request_active || sdio_durable_owner_command_pending())
@@ -13185,8 +13758,7 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         // No SDIO card command is issued from this notification path.
         return true;
     }
-    let (poisoned, handler_slot) =
-        SDIO_RUNTIME_STATE.with_ref(|state| (state.dpc_poisoned, state.irq_handler_slot));
+    let poisoned = SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned);
     if poisoned {
         sdio_record_dpc_health(false);
         return false;
@@ -13259,7 +13831,7 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
         };
     }
 
-    let host_int_status = sdio_read32(SDHCI_INT_STATUS);
+    let host_int_status = sampled_host_int_status.unwrap_or_else(|| sdio_read32(SDHCI_INT_STATUS));
     if host_int_status & SDHCI_INT_CARD_INT != 0 {
         return sdio_publish_card_interrupt_event(host_int_status, badge, irq_ack_epoch);
     }
@@ -13283,6 +13855,41 @@ fn sdio_runtime_service_notification(badge: u32) -> bool {
     }
 
     true
+}
+
+fn sdio_runtime_service_notification_with<Dma, Sdhci>(
+    badge: u32,
+    mut service_dma: Dma,
+    mut service_sdhci: Sdhci,
+) -> bool
+where
+    Dma: FnMut(u32) -> bool,
+    Sdhci: FnMut(u32) -> bool,
+{
+    let dma_due = badge & DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE != 0;
+    let sdhci_badge = badge & !DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+    let sdhci_due = sdhci_badge != 0;
+    if sdhci_due && sdhci_badge != DRIVER_RUNTIME_SDIO_IRQ_BADGE {
+        return false;
+    }
+    if badge == 0 {
+        return service_sdhci(0);
+    }
+
+    // Coalesced channel-4 and SDHCI badges are independent physical sources on
+    // one generated local notification. Consume each once in its own exact
+    // handler lane; neither callback issues or replays an SDIO command.
+    let dma_serviced = !dma_due || service_dma(DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE);
+    let sdhci_serviced = !sdhci_due || service_sdhci(DRIVER_RUNTIME_SDIO_IRQ_BADGE);
+    dma_serviced && sdhci_serviced
+}
+
+fn sdio_runtime_service_notification(badge: u32) -> bool {
+    sdio_runtime_service_notification_with(
+        badge,
+        sdio_runtime_service_dma_notification,
+        sdio_runtime_service_sdhci_notification,
+    )
 }
 
 fn service_sdio_host(command: DriverTaskCommandRecord) -> DriverTaskCompletionRecord {
@@ -14001,11 +14608,55 @@ fn sdio_external_dma_store_cursor(cursor: SdioExternalDmaRequestCursor) {
 }
 
 #[cfg(any(target_os = "none", test))]
+fn sdio_quiesce_request_interrupt_policy_with<I: SdioTransferIo>(
+    cursor: &mut SdioExternalDmaRequestCursor,
+    io: &mut I,
+) {
+    if !cursor.request_irq_live {
+        return;
+    }
+    cursor.request_irq_live = false;
+    cursor.request_irq_masked = true;
+    sdio_external_dma_store_cursor(*cursor);
+    let (int_enable, signal_enable) = sdio_interrupt_policy_registers(
+        sdio_notification_dpc_ready(),
+        SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+    );
+    // Suppress request delivery before removing its status-latch enables. This
+    // is the same ordering used by the IRQ partition and prevents a terminal
+    // edge from being delivered after the immutable cursor is released.
+    io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
+    io.write32(SDHCI_INT_ENABLE, int_enable);
+}
+
+#[cfg(any(target_os = "none", test))]
+fn sdio_rearm_request_interrupt_after_poll_with<I: SdioTransferIo>(
+    cursor: &mut SdioExternalDmaRequestCursor,
+    io: &mut I,
+) {
+    if !cursor.request_irq_live || !cursor.request_irq_masked {
+        return;
+    }
+    cursor.request_irq_masked = false;
+    let (base_int_enable, base_signal_enable) = sdio_interrupt_policy_registers(
+        sdio_notification_dpc_ready(),
+        SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+    );
+    let (_, signal_enable) =
+        sdio_request_interrupt_policy_registers(base_int_enable, base_signal_enable, *cursor);
+    // PollIssued has already consumed and W1C'd its immutable snapshot. Re-arm
+    // only the same request identity; a condition that asserted while masked
+    // is level-latched in INT_STATUS and immediately redelivers after this.
+    io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
+}
+
+#[cfg(any(target_os = "none", test))]
 fn sdio_external_dma_success<I: SdioTransferIo>(
-    cursor: SdioExternalDmaRequestCursor,
+    mut cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
     let identity = cursor.identity;
+    sdio_quiesce_request_interrupt_policy_with(&mut cursor, io);
     let source_w1c_rearm_failed = if identity.descriptor.flags
         & DriverRuntimeSdioCommandDescriptor::FLAG_DPC_SOURCE_W1C_REARM
         != 0
@@ -14139,9 +14790,10 @@ fn sdio_external_dma_fresh_preissue_ticket_matches(
 #[cfg(any(target_os = "none", test))]
 fn sdio_external_dma_fail_with<I: SdioTransferIo>(
     mut cursor: SdioExternalDmaRequestCursor,
-    _io: &mut I,
+    io: &mut I,
     failure_result: u32,
 ) -> RuntimeCommandTurn {
+    sdio_quiesce_request_interrupt_policy_with(&mut cursor, io);
     sdio_record_transfer_failure_result(failure_result);
     cursor.failure_result = failure_result;
     cursor.containment_resume = if !cursor.issued
@@ -14229,6 +14881,11 @@ fn sdio_retained_containment_finish(
                 cursor.data_end_seen = false;
                 cursor.dma_terminal_interrupt_seen = false;
                 cursor.dma_complete = false;
+                cursor.dma_irq_cs_snapshot = 0;
+                cursor.dma_irq_conblk_snapshot = 0;
+                cursor.dma_irq_acknowledged = false;
+                cursor.dma_irq_ack_failed = false;
+                cursor.dma_irq_terminal_invalid = false;
                 cursor.pio_offset = 0;
                 cursor.pio_block_end = 0;
                 cursor.pio_ready_interrupt_required = true;
@@ -15321,22 +15978,22 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                     SDHCI_TRANSFER_MODE,
                     if has_data { identity.transfer_mode } else { 0 },
                 );
-                cursor.phase = if sdio_request_uses_pio(identity) {
-                    SdioExternalDmaRequestPhase::ProgramInterruptEnable
-                } else {
-                    SdioExternalDmaRequestPhase::IssueCommand
-                };
+                cursor.phase = SdioExternalDmaRequestPhase::ProgramInterruptEnable;
             }
             SdioExternalDmaRequestPhase::ProgramInterruptEnable => {
-                let (base, _) = sdio_interrupt_policy_registers(
+                let (base_int_enable, base_signal_enable) = sdio_interrupt_policy_registers(
                     sdio_notification_dpc_ready(),
                     SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
                 );
-                let ready = sdhci_pio_interrupt_ready_mask(identity.write);
-                io.write32(
-                    SDHCI_INT_ENABLE,
-                    sdio_pio_request_interrupt_enable(base, ready),
+                cursor.request_irq_live = true;
+                cursor.request_irq_masked = false;
+                let (int_enable, signal_enable) = sdio_request_interrupt_policy_registers(
+                    base_int_enable,
+                    base_signal_enable,
+                    cursor,
                 );
+                io.write32(SDHCI_INT_ENABLE, int_enable);
+                io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
                 cursor.phase = SdioExternalDmaRequestPhase::IssueCommand;
             }
             SdioExternalDmaRequestPhase::IssueCommand => {
@@ -15372,10 +16029,13 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                 cursor.deadline = sdio_fresh_owner_deadline(identity.owner_timeout_us);
             }
             SdioExternalDmaRequestPhase::PreIssueDpcFenceRestorePolicy => {
-                let (int_enable, _) = sdio_interrupt_policy_registers(
+                cursor.request_irq_live = false;
+                cursor.request_irq_masked = true;
+                let (int_enable, signal_enable) = sdio_interrupt_policy_registers(
                     sdio_notification_dpc_ready(),
                     SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
                 );
+                io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
                 io.write32(SDHCI_INT_ENABLE, int_enable);
                 cursor.phase = SdioExternalDmaRequestPhase::PreIssueDpcFenceComplete;
             }
@@ -15434,6 +16094,24 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     let has_data = identity.flags & DRIVER_RUNTIME_SDIO_FLAG_DATA != 0;
     let uses_pio = sdio_request_uses_pio(identity);
     let uses_external_dma = sdio_request_uses_external_dma(identity);
+    if uses_external_dma
+        && (cursor.dma_irq_ack_failed
+            || cursor.dma_irq_terminal_invalid
+            || cursor.dma_irq_cs_snapshot & BCM2835_DMA_CS_ERR != 0)
+    {
+        // The dedicated callback committed its exact channel snapshot before
+        // releasing (or failing to release) the seL4 IRQ mask. Preserve that
+        // evidence across this join even if the live CS register has changed.
+        snapshot.dma_cs = cursor.dma_irq_cs_snapshot;
+        snapshot.dma_conblk = cursor.dma_irq_conblk_snapshot;
+        cursor.failure_snapshot = snapshot;
+        cursor.failure_snapshot_valid = true;
+        let failure = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT,
+            cursor.dma_irq_cs_snapshot,
+        );
+        return sdio_external_dma_fail_with(cursor, io, failure);
+    }
     let pio_ready_interrupt = if uses_pio {
         sdhci_pio_interrupt_ready_mask(identity.write)
     } else {
@@ -15475,13 +16153,11 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     }
     cursor.failure_snapshot = snapshot;
     cursor.failure_snapshot_valid = true;
-    if uses_external_dma && snapshot.dma_cs & BCM2835_DMA_CS_INT != 0 {
-        io.external_dma_write32(
-            cursor.authority.channel_vaddr + BCM2835_DMA_CS,
-            BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE,
-        );
-        cursor.dma_terminal_interrupt_seen = true;
-    }
+    // Channel 4 is interrupt-bound for the complete SDIO runtime lifetime and
+    // every admitted external-DMA terminal CB carries INT_EN. PollIssued may
+    // inspect CS/CONBLK for error and quiescence evidence, but the IRQ114
+    // callback is the sole owner allowed to W1C CS.INT, commit terminal state,
+    // and ACK handler slot 5.
     if snapshot.status & SDHCI_INT_ALL_ERROR_MASK != 0 {
         let stage = if cursor.response_seen {
             SDIO_TRANSFER_FAILURE_STAGE_DATA_END
@@ -15494,6 +16170,16 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     if uses_external_dma && snapshot.dma_cs & BCM2835_DMA_CS_ERR != 0 {
         let failure =
             sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT, snapshot.dma_cs);
+        return sdio_external_dma_fail_with(cursor, io, failure);
+    }
+    if uses_external_dma && cursor.dma_irq_terminal_invalid {
+        // The admitted chain is finite and non-cyclic. A terminal callback
+        // with a live CONBLK_AD is therefore an ownership invariant failure,
+        // not a second wait frontier: the one IRQ was already consumed.
+        let failure = sdio_transfer_failure_result(
+            SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT,
+            cursor.dma_irq_cs_snapshot,
+        );
         return sdio_external_dma_fail_with(cursor, io, failure);
     }
     if !cursor.response_seen && snapshot.status & SDHCI_INT_RESPONSE != 0 {
@@ -15519,10 +16205,6 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     if has_data {
         cursor.data_end_seen |= snapshot.status & SDHCI_INT_DATA_END != 0;
     }
-    if uses_external_dma {
-        cursor.dma_complete |= cursor.dma_terminal_interrupt_seen && snapshot.dma_conblk == 0;
-    }
-
     if uses_pio && cursor.response_seen {
         let ready_interrupt = pio_ready_interrupt;
         let present_ready = sdhci_pio_present_ready_mask(identity.write);
@@ -15607,7 +16289,9 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     let data_complete = match identity.engine {
         SdioRequestEngine::CommandOnly => true,
         SdioRequestEngine::Pio => cursor.pio_offset == identity.frame.len && cursor.data_end_seen,
-        SdioRequestEngine::ExternalDma => cursor.dma_complete && cursor.data_end_seen,
+        SdioRequestEngine::ExternalDma => {
+            cursor.dma_complete && cursor.data_end_seen && cursor.dma_irq_acknowledged
+        }
     };
     if cursor.response_seen && data_complete && host_quiescent && dma_quiescent {
         if uses_external_dma
@@ -15635,7 +16319,9 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
                 SdioRequestEngine::Pio if cursor.pio_offset != identity.frame.len => {
                     SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
                 }
-                SdioRequestEngine::ExternalDma if !cursor.dma_complete => {
+                SdioRequestEngine::ExternalDma
+                    if !cursor.dma_complete || !cursor.dma_irq_acknowledged =>
+                {
                     SDIO_TRANSFER_FAILURE_STAGE_DATA_WAIT
                 }
                 SdioRequestEngine::Pio | SdioRequestEngine::ExternalDma => {
@@ -15646,6 +16332,7 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
         let failure = sdio_transfer_failure_result(stage, snapshot.status);
         return sdio_external_dma_fail_with(cursor, io, failure);
     }
+    sdio_rearm_request_interrupt_after_poll_with(&mut cursor, io);
     sdio_external_dma_store_cursor(cursor);
     RuntimeCommandTurn::Pending
 }
@@ -15655,11 +16342,6 @@ fn sdio_retained_restore_interrupt_policy_with<I: SdioTransferIo>(
     cursor: SdioExternalDmaRequestCursor,
     io: &mut I,
 ) -> RuntimeCommandTurn {
-    let (int_enable, _) = sdio_interrupt_policy_registers(
-        sdio_notification_dpc_ready(),
-        SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
-    );
-    io.write32(SDHCI_INT_ENABLE, int_enable);
     sdio_external_dma_success(cursor, io)
 }
 
@@ -22433,8 +23115,9 @@ fn cyw43_dpc_child_poll_once(cursor: &mut Cyw43DpcCursor) -> Cyw43DpcChildPoll {
     }
     if steady_progress_slice.is_some() {
         // A strictly newer exact leased slice proves that the immutable SDIO
-        // owner advanced. The cross-runtime watchdog is an inactivity fence,
-        // not a total-age limit.
+        // owner serviced this request. It is a cross-runtime liveness
+        // heartbeat, not a claim that controller state advanced; the owner's
+        // request deadline remains the independent total-age bound.
         cursor.child.fallback_polls = 0;
         if now != 0 {
             cursor.child.started_ticks = now;
@@ -23061,14 +23744,14 @@ where
     if let Some(service_slice) = steady_progress_slice {
         transaction.frontier_service_progress_slice = service_slice;
     }
-    let owner_progressed = steady_progress_slice.is_some()
+    let owner_serviced = steady_progress_slice.is_some()
         || (transaction.frontier_grant_id != 0
             && matches!(plan, Some(RuntimeContinuationGrantPlan::Publish(_))));
-    if owner_progressed {
-        // Match Linux's request watchdog semantics across the linked runtime:
-        // either an exact consumed grant or a strictly newer identity-bound
-        // leased slice is durable forward progress. Only a later interval
-        // with no exact owner progress may become ambiguous.
+    if owner_serviced {
+        // The exact consumed grant or identity-bound service heartbeat proves
+        // that the reciprocal owner remains live. It rebases only this client
+        // inactivity fence; the owner's independent controller/child deadline
+        // still bounds the request's total physical lifetime.
         transaction.frontier_polls = 0;
         if now != 0 {
             transaction.frontier_started_ticks = now;
@@ -23171,6 +23854,249 @@ fn cyw43_foreground_published_frontier_is_immutable(
             && grant.action_fingerprint == runtime_continuation_action_fingerprint(entry.command)
             && grant.generation == entry.ticket.generation
     })
+}
+
+/// Read-only facts sampled at the CYW43-to-SDIO deadline-wake boundary.
+///
+/// The notification itself carries no request identity. The retained parent,
+/// frontier ticket, owner ring, and single global child claim remain the sole
+/// authority; these facts only let the pure matcher reject a stale or already
+/// terminal scheduling hint.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43RootDeadlineWakeFacts {
+    generation_current: bool,
+    published_child_immutable: bool,
+    child_active: bool,
+    expected_child_sequence: u32,
+    child_issued_unknown: bool,
+    pair_restart_required: bool,
+    exact_completion_visible: bool,
+}
+
+/// Select only the immutable Function-2 child retained by this exact parent.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_root_deadline_wake_exact_child_sequence(
+    transaction: &Cyw43ForegroundTransaction,
+    parent: DriverTaskCommandRecord,
+    facts: Cyw43RootDeadlineWakeFacts,
+) -> Option<u32> {
+    let entry = transaction.frontier;
+    if parent.sequence == 0
+        || !transaction.active
+        || transaction.executing
+        || !transaction.turn.pending
+        || !transaction.parent_input_sealed
+        || transaction.parent != parent
+        || transaction.generation == 0
+        || transaction.generation != parent.aux1
+        || transaction.issued_unknown
+        || transaction.poisoned
+        || !transaction.steady_tx_service_lease_parent_authorized()
+        || !transaction.frontier_valid
+        || !transaction.frontier_submitted
+        || transaction.frontier_continuation_grant_required
+        || transaction.frontier_continuation_grant_publish
+        || transaction.frontier_grant_id != 0
+        || !transaction.frontier_ticket_valid()
+        || !cyw43_foreground_steady_service_lease_child(entry)
+        || !facts.generation_current
+        || !facts.published_child_immutable
+        || !facts.child_active
+        || facts.expected_child_sequence == 0
+        || facts.expected_child_sequence != entry.command.sequence
+        || facts.child_issued_unknown
+        || facts.pair_restart_required
+        || facts.exact_completion_visible
+    {
+        return None;
+    }
+    Some(entry.command.sequence)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_root_deadline_wake_child_candidate(parent: DriverTaskCommandRecord) -> Option<u32> {
+    if !cyw43_steady_parent_service_lease_admitted(parent, parent.aux1) {
+        return None;
+    }
+    CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        let child_sequence = transaction.frontier.command.sequence;
+        let exact_completion_visible = child_sequence != 0
+            && matches!(
+                cyw43_sdio_child_poll_exact(Cyw43SdioChildState::new(child_sequence)),
+                Cyw43SdioChildCompletion::Exact(_)
+            );
+        cyw43_root_deadline_wake_exact_child_sequence(
+            transaction,
+            parent,
+            Cyw43RootDeadlineWakeFacts {
+                generation_current: cyw43_foreground_retained_generation_is_current(transaction),
+                published_child_immutable: cyw43_foreground_published_frontier_is_immutable(
+                    transaction,
+                ),
+                child_active: CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                expected_child_sequence: CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+                child_issued_unknown: CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
+                pair_restart_required: CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire),
+                exact_completion_visible,
+            },
+        )
+    })
+}
+
+/// Forward one reserved-root lost-wake hint to the exact retained SDIO child.
+///
+/// This is deliberately scheduling-only: it publishes no command or grant and
+/// changes no cursor, deadline, or ownership state. A stable matching terminal
+/// wins both before and immediately before the signal.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_forward_root_deadline_wake_to_exact_sdio_child(parent: DriverTaskCommandRecord) -> bool {
+    let Some(first_sequence) = cyw43_root_deadline_wake_child_candidate(parent) else {
+        return false;
+    };
+    core::sync::atomic::compiler_fence(Ordering::Acquire);
+    let Some(second_sequence) = cyw43_root_deadline_wake_child_candidate(parent) else {
+        return false;
+    };
+    if first_sequence != second_sequence {
+        return false;
+    }
+    runtime_signal_sdio_owner_doorbell(second_sequence);
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_sdio_semantic_snapshot() -> RuntimeSteadySemanticSnapshot {
+    SDIO_RUNTIME_STATE.with_ref(|state| {
+        let cursor = state.external_dma_request;
+        RuntimeSteadySemanticSnapshot::Sdio(RuntimeSteadySdioSnapshot {
+            sequence: cursor.identity.sequence,
+            action_fingerprint: cursor.identity.action_fingerprint,
+            generation: cursor.identity.generation,
+            phase: cursor.phase,
+            response_seen: cursor.response_seen,
+            response0: cursor.response0,
+            data_end_seen: cursor.data_end_seen,
+            dma_terminal_interrupt_seen: cursor.dma_terminal_interrupt_seen,
+            dma_complete: cursor.dma_complete,
+            dma_irq_cs_snapshot: cursor.dma_irq_cs_snapshot,
+            dma_irq_conblk_snapshot: cursor.dma_irq_conblk_snapshot,
+            dma_irq_acknowledged: cursor.dma_irq_acknowledged,
+            dma_irq_ack_failed: cursor.dma_irq_ack_failed,
+            dma_irq_terminal_invalid: cursor.dma_irq_terminal_invalid,
+            pio_offset: cursor.pio_offset,
+            pio_block_end: cursor.pio_block_end,
+            pio_ready_interrupt_required: cursor.pio_ready_interrupt_required,
+            request_irq_live: cursor.request_irq_live,
+            request_irq_masked: cursor.request_irq_masked,
+            issued: cursor.issued,
+            pre_issue_attempt: cursor.pre_issue_attempt,
+            containment_resume: cursor.containment_resume,
+            containment_dma_ok: cursor.containment_dma_ok,
+            containment_host_ok: cursor.containment_host_ok,
+            dpc_disposition: cursor.dpc_disposition,
+            dpc_irq_acked: cursor.dpc_irq_acked,
+        })
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySemanticSnapshot {
+    CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            RuntimeSteadySemanticSnapshot::Cyw43Foreground(RuntimeSteadyCyw43ForegroundSnapshot {
+                parent_sequence: transaction.parent.sequence,
+                generation: transaction.generation,
+                active: transaction.active,
+                executing: transaction.executing,
+                pending: transaction.turn.pending,
+                replay_index: transaction.turn.replay_index,
+                replayed_count: transaction.turn.replayed_count,
+                completed_count: transaction.turn.completed_count,
+                action_consumed: transaction.turn.action_consumed,
+                issued_unknown: transaction.issued_unknown,
+                poisoned: transaction.poisoned,
+                prepared_sequence: transaction.prepared_sequence,
+                prepared_descriptor_valid: transaction.prepared_descriptor_valid,
+                frontier_sequence: transaction.frontier.command.sequence,
+                frontier_ordinal: transaction.frontier.ticket.ordinal,
+                frontier_valid: transaction.frontier_valid,
+                frontier_submitted: transaction.frontier_submitted,
+                frontier_continuation_grant_required: transaction
+                    .frontier_continuation_grant_required,
+                frontier_service_progress_slice: transaction.frontier_service_progress_slice,
+                child_active: CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                child_expected_sequence: CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire),
+                child_issued_unknown: CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
+                eth_tx_phase: state.eth_tx_phase,
+                f2_tx_phase: state.f2_tx_phase,
+                f2_tx_generation: state.f2_tx_generation,
+                f2_tx_len: state.f2_tx_len,
+                f2_tx_sdpcm_seq: state.f2_tx_sdpcm_seq,
+                sdpcm_seq: state.sdpcm_seq,
+                flowcontrol: state.flowcontrol,
+                flowcontrol_all: state.flowcontrol_all,
+            })
+        })
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_command_semantic_snapshot(
+    route: RuntimeNotificationRoute,
+) -> Option<RuntimeSteadySemanticSnapshot> {
+    match route {
+        RuntimeNotificationRoute::SdioOwner => Some(runtime_steady_sdio_semantic_snapshot()),
+        RuntimeNotificationRoute::Cyw43Client => {
+            Some(runtime_steady_cyw43_foreground_semantic_snapshot())
+        }
+        RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => None,
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_cyw43_dpc_semantic_snapshot() -> Option<RuntimeSteadySemanticSnapshot> {
+    CYW43_RUNTIME_STATE.with_ref(|state| {
+        let cursor = state.dpc_cursor;
+        if !cursor.child.active || !cyw43_dpc_child_steady_service_lease_exact(&cursor) {
+            return None;
+        }
+        Some(RuntimeSteadySemanticSnapshot::Cyw43Dpc(
+            RuntimeSteadyCyw43DpcSnapshot {
+                event_sequence: cursor.event_sequence,
+                action: cursor.action,
+                io_kind: cursor.io_kind,
+                io_phase: cursor.io_phase,
+                captured_status: cursor.captured_status,
+                mailbox_data: cursor.mailbox_data,
+                actual_frame_len: cursor.actual_frame_len,
+                child_sequence: cursor.child.expected_sequence,
+                child_generation: cursor.child.generation,
+                child_action_fingerprint: runtime_continuation_action_fingerprint(
+                    cursor.child.command,
+                ),
+                child_service_progress_slice: cursor.child.service_progress_slice,
+                child_active: cursor.child.active,
+                child_issued_unknown: cursor.child.issued_unknown,
+                global_child_active: CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                global_child_expected_sequence: CYW43_SDIO_CHILD_EXPECTED_SEQUENCE
+                    .load(Ordering::Acquire),
+                global_child_issued_unknown: CYW43_SDIO_CHILD_ISSUED_UNKNOWN
+                    .load(Ordering::Acquire),
+            },
+        ))
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_steady_cyw43_dpc_pending_disposition(
+    previous: &mut Option<RuntimeSteadySemanticSnapshot>,
+) -> Option<RuntimeSteadyPendingDisposition> {
+    let Some(current) = runtime_steady_cyw43_dpc_semantic_snapshot() else {
+        *previous = None;
+        return None;
+    };
+    Some(runtime_steady_semantic_disposition(previous, current))
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -24069,8 +24995,22 @@ impl SdioTransferIo for SdioMmioTransferIo {
         }
         #[cfg(not(target_os = "none"))]
         {
-            let _ = addr;
-            0
+            #[cfg(test)]
+            {
+                let channel_vaddr = DRIVER_TASK_DEVICE_MMIO_VADDR
+                    + SDIO_DMA_MMIO_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES
+                    + BCM2835_DMA_CHANNEL_OFFSET;
+                return match addr.saturating_sub(channel_vaddr) {
+                    BCM2835_DMA_CS => TEST_SDIO_DMA_CS_RESPONSE.load(Ordering::Acquire),
+                    BCM2835_DMA_CONBLK_AD => TEST_SDIO_DMA_CONBLK_RESPONSE.load(Ordering::Acquire),
+                    _ => 0,
+                };
+            }
+            #[cfg(not(test))]
+            {
+                let _ = addr;
+                0
+            }
         }
     }
 
@@ -24089,7 +25029,47 @@ impl SdioTransferIo for SdioMmioTransferIo {
         }
         #[cfg(not(target_os = "none"))]
         {
-            let _ = (addr, value);
+            #[cfg(test)]
+            {
+                let channel_vaddr = DRIVER_TASK_DEVICE_MMIO_VADDR
+                    + SDIO_DMA_MMIO_PAGE_INDEX * DRIVER_TASK_RING_PAGE_BYTES
+                    + BCM2835_DMA_CHANNEL_OFFSET;
+                match addr.saturating_sub(channel_vaddr) {
+                    BCM2835_DMA_CS if value == BCM2835_DMA_CS_RESET => {
+                        TEST_SDIO_DMA_INIT_RESET_WRITES.fetch_add(1, Ordering::AcqRel);
+                        TEST_SDIO_DMA_CS_RESPONSE.store(0, Ordering::Release);
+                        TEST_SDIO_DMA_CONBLK_RESPONSE.store(0, Ordering::Release);
+                    }
+                    BCM2835_DMA_CS if value & BCM2835_DMA_CS_ABORT != 0 => {
+                        TEST_SDIO_DMA_INIT_ABORT_WRITES.fetch_add(1, Ordering::AcqRel);
+                        TEST_SDIO_DMA_CS_RESPONSE.store(
+                            value & !(BCM2835_DMA_CS_ABORT | BCM2835_DMA_CS_ACTIVE),
+                            Ordering::Release,
+                        );
+                        TEST_SDIO_DMA_CONBLK_RESPONSE.store(0, Ordering::Release);
+                    }
+                    BCM2835_DMA_CS
+                        if value & (BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE)
+                            == (BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE) =>
+                    {
+                        TEST_SDIO_DMA_INIT_W1C_WRITES.fetch_add(1, Ordering::AcqRel);
+                        TEST_SDIO_DMA_CS_RESPONSE.fetch_and(
+                            !(BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE),
+                            Ordering::AcqRel,
+                        );
+                    }
+                    BCM2835_DMA_CS => {
+                        TEST_SDIO_DMA_CS_RESPONSE.store(value, Ordering::Release);
+                    }
+                    BCM2835_DMA_NEXTCONBK => {}
+                    _ => {}
+                }
+                return;
+            }
+            #[cfg(not(test))]
+            {
+                let _ = (addr, value);
+            }
         }
     }
 
@@ -33374,7 +34354,7 @@ fn cyw43_rx_queue_push_from_runtime(
         cyw43_dpc_record_completed_frame(state);
     }
     if queue_was_empty {
-        cyw43_signal_root_rx_wake();
+        cyw43_signal_root_network_wake();
     }
     true
 }
@@ -34966,12 +35946,16 @@ fn sdio_runtime_prepare(
         .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
     let irq = descriptor_sdio_irq(descriptor)
         .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
+    let dma_irq = descriptor_sdio_dma_irq(descriptor)
+        .ok_or(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR)?;
     SDIO_RUNTIME_STATE.with_mut(|state| {
         state.reset();
         state.dpc_link_ready = true;
         state.shared_epoch = link.shared_epoch;
         state.irq_badge = irq.badge;
         state.irq_handler_slot = irq.handler_slot;
+        state.dma_irq_badge = dma_irq.badge;
+        state.dma_irq_handler_slot = dma_irq.handler_slot;
         state.peer_notification_slot = link.peer_notification_slot;
         state.card_irq_masked = true;
     });
@@ -37260,6 +38244,27 @@ static TEST_RUNTIME_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_RUNTIME_SDIO_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_DMA_CS_RESPONSE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_DMA_CONBLK_RESPONSE: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_DMA_INIT_ABORT_WRITES: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_DMA_INIT_W1C_WRITES: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_SDIO_DMA_INIT_RESET_WRITES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_STATE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -45868,6 +46873,176 @@ enum SdioCardInterruptRearmResult {
     Fault,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioRequestIrqPartition {
+    NotRequest,
+    RequestOnlyAcked(bool),
+    RequestAndCard,
+}
+
+/// Outcome of the dedicated BCM2835 DMA channel-4 interrupt callback.
+///
+/// The kernel keeps a delivered level IRQ masked until its handler cap is
+/// acknowledged. Only the immutable issued ExternalDma cursor may clear the
+/// channel's terminal `CS.INT` source and release that mask.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioExternalDmaIrqServiceResult {
+    Rejected,
+    SourceNotPending,
+    SourceClearFailed,
+    Acked,
+    AckFailed,
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn sdio_external_dma_irq_cursor_admitted(
+    cursor: SdioExternalDmaRequestCursor,
+    shared_epoch: u32,
+) -> bool {
+    shared_epoch != 0
+        && matches!(cursor.phase, SdioExternalDmaRequestPhase::PollIssued)
+        && cursor.identity.generation == shared_epoch
+        && matches!(cursor.identity.engine, SdioRequestEngine::ExternalDma)
+        && cursor.authority.channel_vaddr != 0
+        && cursor.issued
+        && cursor.request_irq_live
+        && !cursor.dma_terminal_interrupt_seen
+        && !cursor.dma_irq_ack_failed
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn sdio_external_dma_late_clear_cursor_admitted(
+    cursor: SdioExternalDmaRequestCursor,
+    shared_epoch: u32,
+) -> bool {
+    shared_epoch != 0
+        && matches!(cursor.phase, SdioExternalDmaRequestPhase::PollIssued)
+        && cursor.identity.generation == shared_epoch
+        && matches!(cursor.identity.engine, SdioRequestEngine::ExternalDma)
+        && cursor.issued
+        && cursor.dma_terminal_interrupt_seen
+        && cursor.dma_complete
+        && cursor.dma_irq_cs_snapshot & BCM2835_DMA_CS_INT != 0
+        && cursor.dma_irq_conblk_snapshot == 0
+        && !cursor.dma_irq_acknowledged
+        && !cursor.dma_irq_ack_failed
+        && !cursor.dma_irq_terminal_invalid
+}
+
+/// Consume one exact external-DMA terminal IRQ without polling or reissuing.
+///
+/// The callback follows Linux's `bcm2835_dma_callback` source order: snapshot
+/// this request's private channel, W1C `CS.INT` with the callback-shaped
+/// `INT | ACTIVE` write, prove the source clear, commit the terminal evidence,
+/// and only then acknowledge the exact seL4 handler cap once. `PollIssued`
+/// remains the sole join for SDHCI response/DATA_END and request completion.
+#[cfg(any(target_os = "none", test))]
+fn sdio_external_dma_irq_service_with<I, Commit, Ack>(
+    mut cursor: SdioExternalDmaRequestCursor,
+    shared_epoch: u32,
+    io: &mut I,
+    mut commit: Commit,
+    mut ack: Ack,
+) -> SdioExternalDmaIrqServiceResult
+where
+    I: SdioTransferIo,
+    Commit: FnMut(SdioExternalDmaRequestCursor),
+    Ack: FnMut() -> bool,
+{
+    if !sdio_external_dma_irq_cursor_admitted(cursor, shared_epoch) {
+        return SdioExternalDmaIrqServiceResult::Rejected;
+    }
+
+    let channel = cursor.authority.channel_vaddr;
+    io.external_dma_load_barrier();
+    let dma_cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+    let dma_conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
+    if dma_cs & BCM2835_DMA_CS_INT == 0 {
+        // A stale handler delivery cannot borrow the live request's authority.
+        // Leave the seL4 source masked so the physical-lifetime watchdog owns
+        // fail-closed recovery; do not touch the channel or ACK the cap.
+        return SdioExternalDmaIrqServiceResult::SourceNotPending;
+    }
+
+    io.external_dma_write32(
+        channel + BCM2835_DMA_CS,
+        BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE,
+    );
+    io.external_dma_store_completion_barrier();
+    if io.external_dma_read32(channel + BCM2835_DMA_CS) & BCM2835_DMA_CS_INT != 0 {
+        cursor.dma_terminal_interrupt_seen = true;
+        cursor.dma_complete = false;
+        cursor.dma_irq_cs_snapshot = dma_cs;
+        cursor.dma_irq_conblk_snapshot = dma_conblk;
+        cursor.dma_irq_terminal_invalid = true;
+        cursor.failure_snapshot.dma_cs = dma_cs;
+        cursor.failure_snapshot.dma_conblk = dma_conblk;
+        cursor.failure_snapshot_valid = true;
+        // The source was not proven clear, so the handler cap must remain
+        // masked. Persist a typed terminal failure so PollIssued enters pair
+        // containment instead of later completing with an unusable IRQ lane.
+        commit(cursor);
+        return SdioExternalDmaIrqServiceResult::SourceClearFailed;
+    }
+
+    cursor.dma_terminal_interrupt_seen = true;
+    cursor.dma_complete = dma_conblk == 0;
+    cursor.dma_irq_cs_snapshot = dma_cs;
+    cursor.dma_irq_conblk_snapshot = dma_conblk;
+    cursor.dma_irq_terminal_invalid = dma_conblk != 0;
+    cursor.failure_snapshot.dma_cs = dma_cs;
+    cursor.failure_snapshot.dma_conblk = dma_conblk;
+    cursor.failure_snapshot_valid = true;
+    // Commit before IRQHandler_Ack: a redelivery or immediate SDHCI crossing
+    // must observe this exact terminal frontier rather than consume CS.INT a
+    // second time.
+    commit(cursor);
+
+    if ack() {
+        cursor.dma_irq_acknowledged = true;
+        commit(cursor);
+        SdioExternalDmaIrqServiceResult::Acked
+    } else {
+        cursor.dma_irq_ack_failed = true;
+        commit(cursor);
+        SdioExternalDmaIrqServiceResult::AckFailed
+    }
+}
+
+/// Release a coalesced handler delivery whose channel source was already
+/// cleared by the terminal callback before the request cursor was retired.
+///
+/// This read-only path carries no request authority. Any asserted, active, or
+/// erroneous channel state remains masked for fail-closed pair recovery.
+#[cfg(any(target_os = "none", test))]
+fn sdio_external_dma_late_cleared_irq_with<I, Ack>(
+    authority: SdioExternalDmaAuthority,
+    io: &mut I,
+    mut ack: Ack,
+) -> SdioExternalDmaIrqServiceResult
+where
+    I: SdioTransferIo,
+    Ack: FnMut() -> bool,
+{
+    if authority.channel_vaddr == 0 {
+        return SdioExternalDmaIrqServiceResult::Rejected;
+    }
+    io.external_dma_load_barrier();
+    let dma_cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+    let dma_conblk = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD);
+    if dma_cs & (BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ERR | BCM2835_DMA_CS_ACTIVE) != 0
+        || dma_conblk != 0
+    {
+        return SdioExternalDmaIrqServiceResult::Rejected;
+    }
+    if ack() {
+        SdioExternalDmaIrqServiceResult::Acked
+    } else {
+        SdioExternalDmaIrqServiceResult::AckFailed
+    }
+}
+
 const SDIO_CARD_INTERRUPT_REARM_INT_VERIFY_MASK: u32 =
     SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_PIO_READY_MASK | SDHCI_INT_CARD_INT;
 
@@ -45877,31 +47052,50 @@ const fn sdio_interrupt_policy_registers(dpc_ready: bool, card_irq_masked: bool)
     } else {
         0
     };
-    // This is the idle/DMA policy. A retained short-request PIO cursor adds
-    // only its direction-matched ready source to INT_ENABLE for that immutable
-    // request, leaves SIGNAL_ENABLE unchanged, and restores this base before
-    // publishing completion.
+    // This is the idle policy. One retained request replaces the broad request
+    // portion with its exact command/data engine mask in both INT_ENABLE and
+    // SIGNAL_ENABLE, while CARD_INT remains an independent DPC source.
     (SDHCI_INT_BCM2835_DMA_ENABLE_MASK | card_enable, card_enable)
 }
 
-const fn sdio_pio_request_interrupt_enable(base: u32, ready: u32) -> u32 {
-    (base & !SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK) | ready
+const SDHCI_INT_REQUEST_POLICY_MASK: u32 =
+    SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_PIO_READY_MASK;
+
+const fn sdhci_request_interrupt_mask(identity: SdioExternalDmaRequestIdentity) -> u32 {
+    match identity.engine {
+        SdioRequestEngine::CommandOnly => SDHCI_INT_CMD_MASK,
+        SdioRequestEngine::Pio => {
+            (SDHCI_INT_BCM2835_DMA_ENABLE_MASK & !SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK)
+                | sdhci_pio_interrupt_ready_mask(identity.write)
+        }
+        SdioRequestEngine::ExternalDma => SDHCI_INT_BCM2835_DMA_ENABLE_MASK,
+    }
 }
 
-fn sdio_active_pio_ready_interrupt() -> u32 {
-    SDIO_RUNTIME_STATE.with_ref(|state| {
-        let cursor = state.external_dma_request;
-        if sdio_request_uses_pio(cursor.identity)
-            && matches!(
-                cursor.phase,
-                SdioExternalDmaRequestPhase::IssueCommand | SdioExternalDmaRequestPhase::PollIssued
-            )
-        {
-            sdhci_pio_interrupt_ready_mask(cursor.identity.write)
-        } else {
+const fn sdio_request_interrupt_policy_registers(
+    base_int_enable: u32,
+    base_signal_enable: u32,
+    cursor: SdioExternalDmaRequestCursor,
+) -> (u32, u32) {
+    if !cursor.request_irq_live {
+        return (base_int_enable, base_signal_enable);
+    }
+    let request = sdhci_request_interrupt_mask(cursor.identity);
+    let int_enable = (base_int_enable & !SDHCI_INT_REQUEST_POLICY_MASK) | request;
+    let signal_enable = base_signal_enable
+        | if cursor.request_irq_masked {
             0
-        }
-    })
+        } else {
+            request
+        };
+    (int_enable, signal_enable)
+}
+
+fn sdio_current_interrupt_policy_registers(dpc_ready: bool, card_irq_masked: bool) -> (u32, u32) {
+    let (base_int_enable, base_signal_enable) =
+        sdio_interrupt_policy_registers(dpc_ready, card_irq_masked);
+    let cursor = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+    sdio_request_interrupt_policy_registers(base_int_enable, base_signal_enable, cursor)
 }
 
 fn sdio_program_interrupt_policy() {
@@ -45912,15 +47106,55 @@ fn sdio_program_interrupt_policy() {
 fn sdio_program_interrupt_policy_with<I: SdioTransferIo>(io: &mut I) {
     let dpc_ready = sdio_notification_dpc_ready();
     let card_irq_masked = SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked);
-    let (base, signal_enable) = sdio_interrupt_policy_registers(dpc_ready, card_irq_masked);
-    let ready = sdio_active_pio_ready_interrupt();
-    let int_enable = if ready == 0 {
-        base
-    } else {
-        sdio_pio_request_interrupt_enable(base, ready)
-    };
+    let (int_enable, signal_enable) =
+        sdio_current_interrupt_policy_registers(dpc_ready, card_irq_masked);
     io.write32(SDHCI_INT_ENABLE, int_enable);
     io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
+}
+
+fn sdio_partition_request_irq_with<I, A>(
+    io: &mut I,
+    host_int_status: u32,
+    ack: A,
+) -> SdioRequestIrqPartition
+where
+    I: SdioTransferIo,
+    A: FnOnce(&mut I) -> bool,
+{
+    let signal_enable = SDIO_RUNTIME_STATE.with_mut(|state| {
+        let mut cursor = state.external_dma_request;
+        if !cursor.request_irq_live
+            || host_int_status & sdhci_request_interrupt_mask(cursor.identity) == 0
+        {
+            return None;
+        }
+
+        // INT_STATUS remains the immutable request owner's evidence. Suppress
+        // only this request's kernel signal before acknowledging the shared IRQ
+        // cap; PollIssued will take the snapshot, perform the sole W1C, and
+        // rearm the same exact signal set if the request is still pending.
+        cursor.request_irq_masked = true;
+        state.external_dma_request = cursor;
+        let dpc_ready = state.dpc_link_ready
+            && state.shared_epoch != 0
+            && state.irq_handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+            && state.peer_notification_slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+        let (base_int_enable, base_signal_enable) =
+            sdio_interrupt_policy_registers(dpc_ready, state.card_irq_masked);
+        let (_, signal_enable) =
+            sdio_request_interrupt_policy_registers(base_int_enable, base_signal_enable, cursor);
+        Some(signal_enable)
+    });
+    let Some(signal_enable) = signal_enable else {
+        return SdioRequestIrqPartition::NotRequest;
+    };
+
+    io.write32(SDHCI_SIGNAL_ENABLE, signal_enable);
+    if host_int_status & SDHCI_INT_CARD_INT != 0 {
+        SdioRequestIrqPartition::RequestAndCard
+    } else {
+        SdioRequestIrqPartition::RequestOnlyAcked(ack(io))
+    }
 }
 
 fn sdio_card_interrupt_policy_readback_matches(
@@ -45985,19 +47219,8 @@ fn sdio_rearm_card_interrupt_with<I: SdioTransferIo>(io: &mut I) -> SdioCardInte
         return SdioCardInterruptRearmResult::Fault;
     }
 
-    let ready = sdio_active_pio_ready_interrupt();
-    let (masked_base, masked_signal) = sdio_interrupt_policy_registers(true, true);
-    let masked_int = if ready == 0 {
-        masked_base
-    } else {
-        sdio_pio_request_interrupt_enable(masked_base, ready)
-    };
-    let (unmasked_base, unmasked_signal) = sdio_interrupt_policy_registers(true, false);
-    let unmasked_int = if ready == 0 {
-        unmasked_base
-    } else {
-        sdio_pio_request_interrupt_enable(unmasked_base, ready)
-    };
+    let (masked_int, masked_signal) = sdio_current_interrupt_policy_registers(true, true);
+    let (unmasked_int, unmasked_signal) = sdio_current_interrupt_policy_registers(true, false);
 
     let status_before = io.read32(SDHCI_INT_STATUS);
     if status_before & SDHCI_INT_CARD_INT != 0 {
@@ -46011,7 +47234,8 @@ fn sdio_rearm_card_interrupt_with<I: SdioTransferIo>(io: &mut I) -> SdioCardInte
     // Establish and read back the masked baseline first. SIGNAL_ENABLE is
     // masked before INT_ENABLE so an already-level source cannot notify the
     // kernel between the two writes. The request-owned PIO ready bit, if any,
-    // remains present in INT_ENABLE throughout the transition.
+    // remains present in INT_ENABLE throughout the transition; its SIGNAL bit
+    // remains in the exact armed/masked state owned by the request cursor.
     if !sdio_write_card_interrupt_masked_policy_with(io, masked_int, masked_signal) {
         return sdio_fail_card_interrupt_rearm_with(io, masked_int, masked_signal);
     }
@@ -46098,10 +47322,15 @@ fn runtime_irq_handler_ack(handler_slot: u32) -> bool {
 }
 
 #[cfg(not(target_os = "none"))]
-fn runtime_irq_handler_ack(_handler_slot: u32) -> bool {
+fn runtime_irq_handler_ack(handler_slot: u32) -> bool {
     #[cfg(test)]
     {
         TEST_RUNTIME_IRQ_ACK_CALLS.fetch_add(1, Ordering::AcqRel);
+        if handler_slot == DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT {
+            TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.fetch_add(1, Ordering::AcqRel);
+        } else if handler_slot == DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT {
+            TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.fetch_add(1, Ordering::AcqRel);
+        }
         return TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |remaining| {
                 remaining.checked_sub(1)
@@ -46110,6 +47339,7 @@ fn runtime_irq_handler_ack(_handler_slot: u32) -> bool {
     }
     #[cfg(not(test))]
     {
+        let _ = handler_slot;
         true
     }
 }
@@ -46948,6 +48178,136 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             if !sdio_notification_dpc_ready() {
                 return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
             }
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaStatePrepare;
+        }
+        SdioPwrseqPhase::EngineInitDmaStatePrepare => {
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                state.dma_irq_ack_pending = true;
+                state.dma_irq_ready = false;
+            });
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaInspect;
+        }
+        SdioPwrseqPhase::EngineInitDmaInspect => {
+            let mut io = SdioMmioTransferIo;
+            let Some(authority) = io.external_dma_authority() else {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            };
+            io.external_dma_load_barrier();
+            let dma_cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+            let dma_conblk =
+                io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD);
+            cursor.dma_authority = authority;
+            cursor.dma_cs = dma_cs;
+            cursor.phase = if dma_conblk != 0 || dma_cs & BCM2835_DMA_CS_ACTIVE != 0 {
+                SdioPwrseqPhase::EngineInitDmaAbortIssue
+            } else if dma_cs & BCM2835_DMA_CS_INT != 0 {
+                SdioPwrseqPhase::EngineInitDmaClearStale
+            } else {
+                SdioPwrseqPhase::EngineInitDmaReset
+            };
+        }
+        SdioPwrseqPhase::EngineInitDmaAbortIssue => {
+            let mut io = SdioMmioTransferIo;
+            let channel = cursor.dma_authority.channel_vaddr;
+            if channel == 0 {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
+            io.external_dma_write32(channel + BCM2835_DMA_NEXTCONBK, 0);
+            io.external_dma_write32(
+                channel + BCM2835_DMA_CS,
+                cursor.dma_cs | BCM2835_DMA_CS_ABORT | BCM2835_DMA_CS_ACTIVE,
+            );
+            cursor.deadline = runtime_deadline_from_millis_or_iterations(
+                BCM2835_SDIO_RECOVERY_TIMEOUT_MS,
+                BCM2835_DMA_ABORT_FALLBACK_POLLS,
+            );
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaAbortPoll;
+        }
+        SdioPwrseqPhase::EngineInitDmaAbortPoll => {
+            let mut io = SdioMmioTransferIo;
+            let channel = cursor.dma_authority.channel_vaddr;
+            let dma_cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+            cursor.dma_cs = dma_cs;
+            if dma_cs & BCM2835_DMA_CS_ABORT == 0 {
+                cursor.phase = SdioPwrseqPhase::EngineInitDmaStop;
+            } else if io.deadline_expired(&mut cursor.deadline) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
+            }
+        }
+        SdioPwrseqPhase::EngineInitDmaStop => {
+            let mut io = SdioMmioTransferIo;
+            io.external_dma_write32(
+                cursor.dma_authority.channel_vaddr + BCM2835_DMA_CS,
+                cursor.dma_cs & !BCM2835_DMA_CS_ACTIVE,
+            );
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaReset;
+        }
+        SdioPwrseqPhase::EngineInitDmaClearStale => {
+            let mut io = SdioMmioTransferIo;
+            // Match Linux's callback-shaped terminal source clear before the
+            // channel reset. The IRQ handler remains masked throughout this
+            // owner-only init/replay phase.
+            io.external_dma_write32(
+                cursor.dma_authority.channel_vaddr + BCM2835_DMA_CS,
+                BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE,
+            );
+            io.external_dma_store_completion_barrier();
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaReset;
+        }
+        SdioPwrseqPhase::EngineInitDmaReset => {
+            let mut io = SdioMmioTransferIo;
+            let channel = cursor.dma_authority.channel_vaddr;
+            if channel == 0 {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
+            io.external_dma_write32(channel + BCM2835_DMA_CS, BCM2835_DMA_CS_RESET);
+            io.external_dma_store_completion_barrier();
+            cursor.deadline = runtime_deadline_from_millis_or_iterations(
+                BCM2835_SDIO_RECOVERY_TIMEOUT_MS,
+                BCM2835_DMA_ABORT_FALLBACK_POLLS,
+            );
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaVerify;
+        }
+        SdioPwrseqPhase::EngineInitDmaVerify => {
+            let mut io = SdioMmioTransferIo;
+            let channel = cursor.dma_authority.channel_vaddr;
+            io.external_dma_load_barrier();
+            let dma_cs = io.external_dma_read32(channel + BCM2835_DMA_CS);
+            let dma_conblk = io.external_dma_read32(channel + BCM2835_DMA_CONBLK_AD);
+            cursor.dma_cs = dma_cs;
+            let not_quiescent = dma_conblk != 0
+                || dma_cs
+                    & (BCM2835_DMA_CS_RESET
+                        | BCM2835_DMA_CS_ABORT
+                        | BCM2835_DMA_CS_ACTIVE
+                        | BCM2835_DMA_CS_INT
+                        | BCM2835_DMA_CS_ERR)
+                    != 0;
+            if !not_quiescent {
+                cursor.phase = SdioPwrseqPhase::EngineInitDmaIrqAck;
+            } else if io.deadline_expired(&mut cursor.deadline) {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_RESET_ALL_FAILED);
+            }
+        }
+        SdioPwrseqPhase::EngineInitDmaIrqAck => {
+            let handler_slot = SDIO_RUNTIME_STATE.with_ref(|state| state.dma_irq_handler_slot);
+            if handler_slot != DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
+            cursor.dma_irq_acked = runtime_irq_handler_ack(handler_slot);
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaAckState;
+        }
+        SdioPwrseqPhase::EngineInitDmaAckState => {
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                state.dma_irq_ack_pending = !cursor.dma_irq_acked;
+                state.dma_irq_ready = cursor.dma_irq_acked;
+            });
+            cursor.phase = SdioPwrseqPhase::EngineInitDmaAckHealth;
+        }
+        SdioPwrseqPhase::EngineInitDmaAckHealth => {
+            if !cursor.dma_irq_acked {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
             cursor.phase = SdioPwrseqPhase::EngineInitStatePrepare;
         }
         SdioPwrseqPhase::EngineInitStatePrepare => {
@@ -47004,6 +48364,11 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             cursor.phase = SdioPwrseqPhase::EngineInitComplete;
         }
         SdioPwrseqPhase::EngineInitComplete => {
+            if !SDIO_RUNTIME_STATE
+                .with_ref(|state| state.dma_irq_ready && !state.dma_irq_ack_pending)
+            {
+                return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_INVALID_DESCRIPTOR);
+            }
             if !sdio_physical_lifetime_complete(cursor.physical_lifetime_epoch) {
                 return sdio_pwrseq_fail(DRIVER_RUNTIME_SDIO_INIT_DETAIL_WIFI_PWRSEQ_FAILED);
             }
@@ -47422,11 +48787,11 @@ fn serial_write_frame(frame: DriverFrameDescriptor, limit: usize) -> usize {
 }
 
 #[cfg(target_os = "none")]
-fn publish_runtime_completion_sequence_last(completion: DriverTaskCompletionRecord) {
+fn publish_runtime_completion_sequence_last(completion: DriverTaskCompletionRecord) -> bool {
     let staged = runtime_staged_completion(completion);
     let mut ring = RuntimeRingWindow::local();
     if !runtime_ring_write_completion_staged(&mut ring, staged) {
-        return;
+        return false;
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
@@ -47434,13 +48799,14 @@ fn publish_runtime_completion_sequence_last(completion: DriverTaskCompletionReco
         core::mem::size_of::<DriverTaskCompletionRecord>(),
     );
     if !runtime_ring_commit_completion_sequence(&mut ring, completion.sequence) {
-        return;
+        return false;
     }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         DRIVER_TASK_RING_VADDR + DRIVER_TASK_RING_COMPLETION_OFFSET,
         core::mem::size_of::<u32>(),
     );
+    true
 }
 
 const fn sdio_owner_completion_requires_precommit_signal(
@@ -47450,6 +48816,39 @@ const fn sdio_owner_completion_requires_precommit_signal(
     command.arg0 == HOT_PATH_SDIO_HOST
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
         && matches!(route, RuntimeNotificationRoute::SdioOwner)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimeCompletionWakeOrder {
+    None,
+    BeforeCommitCyw43Peer,
+    AfterCommitRootNetwork,
+}
+
+const fn runtime_completion_wake_order(
+    command: DriverTaskCommandRecord,
+    route: RuntimeNotificationRoute,
+) -> RuntimeCompletionWakeOrder {
+    if sdio_owner_completion_requires_precommit_signal(command, route) {
+        RuntimeCompletionWakeOrder::BeforeCommitCyw43Peer
+    } else if matches!(route, RuntimeNotificationRoute::Cyw43Client)
+        && cyw43_steady_parent_command_shape(command)
+    {
+        // Root suppresses unchanged active TX/HAL levels while sleeping. The
+        // terminal edge must therefore follow the sequence-last completion
+        // commit so every wake observes either that exact terminal or a later
+        // command; ordinary CYW43 completions retain their existing behavior.
+        RuntimeCompletionWakeOrder::AfterCommitRootNetwork
+    } else {
+        RuntimeCompletionWakeOrder::None
+    }
+}
+
+const fn runtime_completion_postcommit_network_wake_due(
+    order: RuntimeCompletionWakeOrder,
+    completion_committed: bool,
+) -> bool {
+    completion_committed && matches!(order, RuntimeCompletionWakeOrder::AfterCommitRootNetwork)
 }
 
 /// Run the isolated driver runtime receive/service loop.
@@ -47485,6 +48884,7 @@ pub fn runtime_main(task_key: usize) -> ! {
     let mut pending_intake: Option<RuntimeCommandIntake> = None;
     let mut pending_command_gate = RuntimePendingCommandGate::new();
     let mut steady_service_lease = RuntimeSteadyServiceLease::empty();
+    let mut steady_dpc_semantic_snapshot: Option<RuntimeSteadySemanticSnapshot> = None;
     let mut foreground_dpc_watermark = Cyw43ForegroundDpcWatermark::empty();
     publish_runtime_progress(
         0,
@@ -47989,7 +49389,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                     // non-empty queue pop admitted above: it is software-only
                     // and cannot touch the reciprocal SDIO owner. A non-DPC
                     // child already owns the bus, so it is only waited on here.
-                    if cyw43_dpc_wait_services_cursor(dpc_cursor_active, blocking_child_active) {
+                    let serviced_cursor =
+                        cyw43_dpc_wait_services_cursor(dpc_cursor_active, blocking_child_active);
+                    if serviced_cursor {
                         let _ = cyw43_runtime_service_dpc_event();
                     } else if blocking_child_active {
                         // The global claim belongs to the retained foreground
@@ -48010,6 +49412,24 @@ pub fn runtime_main(task_key: usize) -> ! {
                             intake,
                             notification_route,
                         );
+                    }
+                    if serviced_cursor {
+                        if let Some(disposition) = runtime_steady_cyw43_dpc_pending_disposition(
+                            &mut steady_dpc_semantic_snapshot,
+                        ) {
+                            // The exact DPC child is already the sole global
+                            // SDIO owner. A changed semantic frontier gets one
+                            // fairness handoff; an identical completion miss
+                            // parks on CYW43's local notification without
+                            // touching the retained command endpoint/reply cap.
+                            runtime_handoff_steady_pending(disposition, notification_route, None);
+                            continue;
+                        }
+                        runtime_yield_current_tcb();
+                    } else if blocking_child_active {
+                        // A non-DPC global child is a durable wait condition,
+                        // not permission for a priority-255 private retry loop.
+                        runtime_yield_current_tcb();
                     }
                     continue;
                 }
@@ -48049,6 +49469,13 @@ pub fn runtime_main(task_key: usize) -> ! {
                         notification_route,
                     );
                 }
+                if let Some(disposition) =
+                    runtime_steady_cyw43_dpc_pending_disposition(&mut steady_dpc_semantic_snapshot)
+                {
+                    runtime_handoff_steady_pending(disposition, notification_route, None);
+                } else {
+                    runtime_yield_current_tcb();
+                }
                 continue;
             }
         }
@@ -48067,7 +49494,11 @@ pub fn runtime_main(task_key: usize) -> ! {
             // Linux services latched DPC work as scheduled quanta. A queued
             // command remains retained until the cursor reaches terminal.
             let _ = cyw43_runtime_service_dpc_event();
-            if CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence != 0) {
+            if let Some(disposition) =
+                runtime_steady_cyw43_dpc_pending_disposition(&mut steady_dpc_semantic_snapshot)
+            {
+                runtime_handoff_steady_pending(disposition, notification_route, None);
+            } else if CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.event_sequence != 0) {
                 // One bounded cursor quantum completed. Yield before the next
                 // scheduled quantum so recovery settle intervals are time-based
                 // rather than a tight local polling loop.
@@ -48232,11 +49663,11 @@ pub fn runtime_main(task_key: usize) -> ! {
                 )
             }))
         } else {
-            steady_service_lease_preflight_turn(steady_service_lease, command, || {
+            steady_service_lease_preflight_turn(&mut steady_service_lease, command, || {
                 service_command_turn(task_key, command)
             })
         };
-        let mut steady_lease_pending = false;
+        let mut steady_lease_pending = None;
         if matches!(turn, RuntimeCommandTurn::Pending) {
             let steady_lease_admitted =
                 match (notification_route, delegated_generation, root_generation) {
@@ -48262,16 +49693,26 @@ pub fn runtime_main(task_key: usize) -> ! {
                         steady_service_lease_exhaustion_completion(command),
                     );
                 } else {
-                    let within_bound = steady_service_lease.record_bounded_turn();
-                    let progress_published = publish_runtime_steady_service_progress_at(
-                        DRIVER_TASK_RING_VADDR,
-                        command,
-                        command.aux1,
-                        steady_service_lease.completed_turns(),
-                    );
-                    if within_bound && progress_published {
-                        steady_lease_pending = true;
-                    } else {
+                    let snapshot = runtime_steady_command_semantic_snapshot(notification_route);
+                    if let Some(snapshot) = snapshot {
+                        steady_lease_pending = steady_service_lease.record_semantic_progress_with(
+                            command,
+                            snapshot,
+                            |command, generation, service_slice| {
+                                publish_runtime_steady_service_progress_at(
+                                    DRIVER_TASK_RING_VADDR,
+                                    command,
+                                    generation,
+                                    service_slice,
+                                )
+                            },
+                        );
+                    }
+                    if steady_lease_pending.is_none() {
+                        // Losing the exact semantic cursor or overflowing its
+                        // monotonic revision is an identity failure. Fence the
+                        // generation through the existing typed lease terminal;
+                        // never fall back to an ordinary polling lane.
                         turn = RuntimeCommandTurn::Complete(
                             steady_service_lease_exhaustion_completion(command),
                         );
@@ -48288,17 +49729,26 @@ pub fn runtime_main(task_key: usize) -> ! {
             // An ordinary root-granted command re-arms from the next producer
             // snapshot. A leased parent preserves its intake watermark for
             // the complete transaction so later IRQs cannot starve it.
-            if !steady_lease_pending {
+            if steady_lease_pending.is_none() {
                 foreground_dpc_watermark = Cyw43ForegroundDpcWatermark::empty();
             }
-            if steady_lease_pending {
+            if let Some(disposition) = steady_lease_pending {
                 // The exact fingerprinted command lease, not mutable
                 // notification history, owns the next slice. DPC-event and
                 // urgent-parent bindings are typed separately at admission.
-                // Every pending phase still performs this scheduler handoff;
-                // exhaustion is typed and generation-poisoning, never renewed.
+                // Only a changed controller/frontier snapshot publishes and
+                // yields. An identical snapshot parks on the local notification
+                // cap, preserving this intake/reply cap and immutable deadline.
                 pending_command_gate.complete();
-                runtime_yield_current_tcb();
+                let exact_steady_cyw43_parent = (notification_route
+                    == RuntimeNotificationRoute::Cyw43Client
+                    && steady_service_lease.active_for(command))
+                .then_some(command);
+                runtime_handoff_steady_pending(
+                    disposition,
+                    notification_route,
+                    exact_steady_cyw43_parent,
+                );
                 continue;
             }
             // One bounded physical action or one deadline sample was completed.
@@ -48355,11 +49805,11 @@ pub fn runtime_main(task_key: usize) -> ! {
                 command.aux0,
             );
         }
-        let signal_cyw43_before_commit = sdio_owner_completion_requires_precommit_signal(
+        let completion_wake_order = runtime_completion_wake_order(
             command,
             runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
         );
-        if signal_cyw43_before_commit {
+        if completion_wake_order == RuntimeCompletionWakeOrder::BeforeCommitCyw43Peer {
             // Publish the wake edge before the sequence-last commit. If equal
             // priority boosting preempts SDIO here, CYW43 sees a pending edge
             // but cannot accept the incomplete record; after SDIO commits, the
@@ -48367,7 +49817,17 @@ pub fn runtime_main(task_key: usize) -> ! {
             // commit-then-late-signal race without relying on priority order.
             runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT);
         }
-        publish_runtime_completion_sequence_last(completion);
+        let completion_committed = publish_runtime_completion_sequence_last(completion);
+        if runtime_completion_postcommit_network_wake_due(
+            completion_wake_order,
+            completion_committed,
+        ) {
+            // Root suppresses an unchanged active steady-TX level while it is
+            // asleep. Publish one Network scheduling edge only after the exact
+            // parent terminal is sequence-last committed, so the awakened
+            // EventPump can consume terminal truth immediately.
+            cyw43_signal_root_network_wake();
+        }
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -48484,6 +49944,7 @@ mod tests {
         dma_debug: u32,
         dma_started: usize,
         dma_terminal_interrupt_acks: usize,
+        dma_terminal_interrupt_w1c_failures_remaining: usize,
         dma_store_completion_barriers: usize,
         dma_start_readbacks: usize,
         dma_post_start_until_readback: bool,
@@ -48553,6 +50014,7 @@ mod tests {
                 dma_debug: 0,
                 dma_started: 0,
                 dma_terminal_interrupt_acks: 0,
+                dma_terminal_interrupt_w1c_failures_remaining: 0,
                 dma_store_completion_barriers: 0,
                 dma_start_readbacks: 0,
                 dma_post_start_until_readback: false,
@@ -49147,7 +50609,11 @@ mod tests {
                 {
                     self.dma_terminal_interrupt_acks =
                         self.dma_terminal_interrupt_acks.saturating_add(1);
-                    self.dma_cs = (self.dma_cs & !BCM2835_DMA_CS_INT) | BCM2835_DMA_CS_ACTIVE;
+                    if self.dma_terminal_interrupt_w1c_failures_remaining != 0 {
+                        self.dma_terminal_interrupt_w1c_failures_remaining -= 1;
+                    } else {
+                        self.dma_cs = (self.dma_cs & !BCM2835_DMA_CS_INT) | BCM2835_DMA_CS_ACTIVE;
+                    }
                 }
                 BCM2835_DMA_CS if value & BCM2835_DMA_CS_ACTIVE != 0 => {
                     if self.dma_post_start_until_readback {
@@ -49656,6 +51122,13 @@ mod tests {
         assert_eq!(
             runtime_notification_route(&malformed),
             RuntimeNotificationRoute::Unavailable
+        );
+
+        let mut malformed_dma = owner;
+        malformed_dma.irqs[1].badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
+        assert_eq!(
+            runtime_notification_route(&malformed_dma),
+            RuntimeNotificationRoute::Unavailable,
         );
 
         let mut poll_only_serial = serial;
@@ -50181,6 +51654,57 @@ mod tests {
         }
     }
 
+    fn install_steady_tx_pending_child_fixture(
+        parent_sequence: u32,
+        child_sequence: u32,
+        generation: u32,
+    ) -> (DriverTaskCommandRecord, DriverTaskCommandRecord) {
+        initialize_production_foreground_pair(generation);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_released = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = generation;
+            state.recovery_required = false;
+            state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
+            state.sdpcm_tx_write_ambiguous = false;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+            state.card_irq_masked = false;
+        });
+        sdio_record_dpc_health(false);
+        let parent =
+            install_steady_tx_parent_fixture(parent_sequence, generation, CYW43_ETH_P_IPV4);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(parent.sequence, Ordering::Release);
+        let child = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 1));
+            let descriptor = cyw43_foreground_scope_prepared_descriptor(
+                transaction,
+                steady_tx_function2_descriptor(),
+            )
+            .expect("exact steady parent scopes one Function-2 child");
+            transaction.prepared_sequence = child_sequence;
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+            transaction.prepared_write_len = descriptor.len;
+            transaction.prepared_write[..usize::from(descriptor.len)].fill(0x5a);
+            let mut child = stage_sdio_descriptor_service_command(child_sequence, descriptor);
+            child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+            let child = cyw43_foreground_bind_prepared_command(transaction, child)
+                .expect("exact child inherits the immutable parent identity");
+            assert!(cyw43_foreground_reserve_frontier(transaction, child));
+            assert!(cyw43_foreground_submit_frontier(transaction));
+            assert!(transaction.turn.pending);
+            transaction.executing = false;
+            child
+        });
+        (parent, child)
+    }
+
     #[test]
     fn steady_parent_propagates_exact_identity_to_only_function2_write() {
         let _guard = test_guard();
@@ -50588,6 +52112,129 @@ mod tests {
     }
 
     #[test]
+    fn root_deadline_wake_matcher_accepts_only_exact_pending_steady_child() {
+        let _guard = test_guard();
+        let generation = 0x4359_5175;
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let (parent, child) =
+            install_steady_tx_pending_child_fixture(0x4359_5176, 0x8000_5177, generation);
+        let exact = Cyw43RootDeadlineWakeFacts {
+            generation_current: true,
+            published_child_immutable: true,
+            child_active: true,
+            expected_child_sequence: child.sequence,
+            child_issued_unknown: false,
+            pair_restart_required: false,
+            exact_completion_visible: false,
+        };
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(transaction, parent, exact),
+                Some(child.sequence),
+            );
+
+            let mut wrong_parent = parent;
+            wrong_parent.sequence = wrong_parent.sequence.wrapping_add(1);
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(transaction, wrong_parent, exact),
+                None,
+            );
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(
+                    transaction,
+                    parent,
+                    Cyw43RootDeadlineWakeFacts {
+                        expected_child_sequence: child.sequence.wrapping_add(1),
+                        ..exact
+                    },
+                ),
+                None,
+            );
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(
+                    transaction,
+                    parent,
+                    Cyw43RootDeadlineWakeFacts {
+                        published_child_immutable: false,
+                        ..exact
+                    },
+                ),
+                None,
+            );
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(
+                    transaction,
+                    parent,
+                    Cyw43RootDeadlineWakeFacts {
+                        child_issued_unknown: true,
+                        ..exact
+                    },
+                ),
+                None,
+            );
+            assert_eq!(
+                cyw43_root_deadline_wake_exact_child_sequence(
+                    transaction,
+                    parent,
+                    Cyw43RootDeadlineWakeFacts {
+                        exact_completion_visible: true,
+                        ..exact
+                    },
+                ),
+                None,
+            );
+        });
+
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier_continuation_grant_required = true;
+        });
+        assert_eq!(
+            CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+                cyw43_root_deadline_wake_exact_child_sequence(transaction, parent, exact)
+            }),
+            None,
+            "a root wake cannot borrow the ordinary continuation-grant lane",
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier_continuation_grant_required = false;
+        });
+
+        assert!(cyw43_sdio_child_release_exact_or_restart(child.sequence));
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn root_deadline_wake_forwards_one_scheduling_only_exact_child_doorbell() {
+        let _guard = test_guard();
+        let generation = 0x4359_5178;
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let (parent, child) =
+            install_steady_tx_pending_child_fixture(0x4359_5179, 0x8000_517a, generation);
+        reset_test_sdio_owner_doorbells();
+
+        assert!(cyw43_forward_root_deadline_wake_to_exact_sdio_child(parent));
+        assert_eq!(TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire), 1);
+        assert_eq!(
+            test_sdio_owner_doorbell(0),
+            Some(runtime_sdio_owner_doorbell(child.sequence)),
+        );
+
+        let mut stale_parent = parent;
+        stale_parent.aux1 = stale_parent.aux1.wrapping_add(1);
+        assert!(!cyw43_forward_root_deadline_wake_to_exact_sdio_child(
+            stale_parent,
+        ));
+        assert_eq!(
+            TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire),
+            1,
+            "wrong-parent root wakes publish no peer scheduling edge",
+        );
+
+        assert!(cyw43_sdio_child_release_exact_or_restart(child.sequence));
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
+    }
+
+    #[test]
     fn sdio_partial_steady_lease_markers_typed_reject_before_io() {
         let _guard = test_guard();
         let generation = 0x4359_5181;
@@ -50654,32 +52301,251 @@ mod tests {
         }
     }
 
+    fn install_test_steady_sdio_semantic_snapshot(
+        command: DriverTaskCommandRecord,
+        phase: SdioExternalDmaRequestPhase,
+        pio_offset: u16,
+    ) -> RuntimeSteadySemanticSnapshot {
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            let mut cursor = SdioExternalDmaRequestCursor::idle();
+            cursor.identity.sequence = command.sequence;
+            cursor.identity.action_fingerprint = runtime_continuation_action_fingerprint(command);
+            cursor.identity.generation = command.aux1;
+            cursor.phase = phase;
+            cursor.pio_offset = pio_offset;
+            cursor.pio_block_end = 64;
+            cursor.request_irq_live = true;
+            cursor.issued = true;
+            state.external_dma_request = cursor;
+        });
+        runtime_steady_sdio_semantic_snapshot()
+    }
+
     #[test]
-    fn steady_service_lease_is_finite_and_cannot_auto_renew() {
+    fn steady_pending_identical_semantic_snapshot_blocks_without_progress_publication() {
         let _guard = test_guard();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
+        let command = dpc_source_w1c_command(0x8000_50f1, 0x4359_50f1, 7);
+        let snapshot = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::PollIssued,
+            16,
+        );
+        let mut lease = RuntimeSteadyServiceLease::empty();
+        assert!(lease.admit(command));
+        let publications = core::cell::Cell::new(0u32);
+
+        assert_eq!(
+            lease.record_semantic_progress_with(command, snapshot, |_, _, _| {
+                publications.set(publications.get().saturating_add(1));
+                true
+            }),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+        );
+        assert_eq!(lease.completed_slices(), 1);
+        assert_eq!(publications.get(), 1);
+        assert_eq!(
+            lease.record_semantic_progress_with(command, snapshot, |_, _, _| {
+                publications.set(publications.get().saturating_add(1));
+                true
+            }),
+            Some(RuntimeSteadyPendingDisposition::WaitForWake),
+        );
+        assert_eq!(lease.completed_slices(), 1);
+        assert_eq!(publications.get(), 1);
+        assert_eq!(
+            runtime_steady_pending_route(RuntimeSteadyPendingDisposition::WaitForWake),
+            RuntimeSteadyPendingRoute::BlockOnLocalNotification,
+        );
+    }
+
+    #[test]
+    fn steady_pending_semantic_change_publishes_one_progress_revision() {
+        let _guard = test_guard();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
+        let command = dpc_source_w1c_command(0x8000_50f2, 0x4359_50f2, 8);
+        let first = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::PollIssued,
+            16,
+        );
+        let changed = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::PollIssued,
+            32,
+        );
+        let mut lease = RuntimeSteadyServiceLease::empty();
+        assert!(lease.admit(command));
+        let publications = core::cell::Cell::new(0u32);
+
+        for snapshot in [first, changed] {
+            assert_eq!(
+                lease.record_semantic_progress_with(command, snapshot, |_, _, slice| {
+                    publications.set(publications.get().saturating_add(1));
+                    slice == publications.get()
+                }),
+                Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+            );
+        }
+        assert_eq!(lease.completed_slices(), 2);
+        assert_eq!(publications.get(), 2);
+    }
+
+    #[test]
+    fn steady_progress_publication_failure_is_diagnostic_only() {
+        let _guard = test_guard();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
+        let command = dpc_source_w1c_command(0x8000_50f3, 0x4359_50f3, 9);
+        let first = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::IssueCommand,
+            0,
+        );
+        let changed = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::PollIssued,
+            0,
+        );
+        let mut lease = RuntimeSteadyServiceLease::empty();
+        assert!(lease.admit(command));
+
+        assert_eq!(
+            lease.record_semantic_progress_with(command, first, |_, _, _| false),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+        );
+        assert!(lease.active_for(command));
+        assert!(!lease.exhausted_for(command));
+        assert_eq!(lease.completed_slices(), 1);
+        assert_eq!(
+            lease.record_semantic_progress_with(command, changed, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+        );
+        assert!(lease.active_for(command));
+        assert_eq!(lease.completed_slices(), 2);
+    }
+
+    #[test]
+    fn steady_pending_wait_route_blocks_on_local_notification_including_dpc_child() {
+        let _guard = test_guard();
+        let dpc_snapshot = RuntimeSteadySemanticSnapshot::Cyw43Dpc(RuntimeSteadyCyw43DpcSnapshot {
+            event_sequence: 1,
+            action: Cyw43DpcAction::CaptureStatus,
+            io_kind: Cyw43DpcIoKind::BackplaneRead32,
+            io_phase: Cyw43DpcIoPhase::Transfer,
+            captured_status: 0,
+            mailbox_data: 0,
+            actual_frame_len: 0,
+            child_sequence: 2,
+            child_generation: 3,
+            child_action_fingerprint: 4,
+            child_service_progress_slice: 1,
+            child_active: true,
+            child_issued_unknown: false,
+            global_child_active: true,
+            global_child_expected_sequence: 2,
+            global_child_issued_unknown: false,
+        });
+        let mut previous = Some(dpc_snapshot);
+        let disposition = runtime_steady_semantic_disposition(&mut previous, dpc_snapshot);
+        assert_eq!(disposition, RuntimeSteadyPendingDisposition::WaitForWake);
+        assert_eq!(
+            runtime_steady_pending_route(disposition),
+            RuntimeSteadyPendingRoute::BlockOnLocalNotification,
+            "an unchanged exact DPC child must not self-yield poll",
+        );
+        assert_eq!(
+            runtime_steady_local_notification_wake_route(RuntimeNotificationRoute::SdioOwner, 0,),
+            RuntimeSteadyWaitWake::RetryLocalNotificationWait,
+            "an unbadged restart wake must not authorize owner MMIO",
+        );
+        assert_eq!(
+            runtime_steady_local_notification_wake_route(
+                RuntimeNotificationRoute::Cyw43Client,
+                DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_BADGE,
+            ),
+            RuntimeSteadyWaitWake::Resume,
+            "the CYW43 peer doorbell is scheduling-only",
+        );
+        assert_eq!(
+            runtime_steady_local_notification_wake_route(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+            ),
+            RuntimeSteadyWaitWake::ServiceSdioIrq(DRIVER_RUNTIME_SDIO_IRQ_BADGE),
+        );
+    }
+
+    #[test]
+    fn steady_sdio_semantic_snapshot_ignores_poll_counter_and_deadline() {
+        let _guard = test_guard();
+        let command = dpc_source_w1c_command(0x8000_50f4, 0x4359_50f4, 10);
+        let first = install_test_steady_sdio_semantic_snapshot(
+            command,
+            SdioExternalDmaRequestPhase::PollIssued,
+            16,
+        );
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.external_dma_request.poll_turns = 1234;
+            state.external_dma_request.deadline = RuntimeDeadline::Counter {
+                start: 55,
+                cycles: 66,
+            };
+            state.external_dma_request.settle_deadline =
+                RuntimeDeadline::Iterations { remaining: 77 };
+        });
+        assert_eq!(runtime_steady_sdio_semantic_snapshot(), first);
+    }
+
+    #[test]
+    fn steady_service_lease_uses_request_deadline_not_scheduler_poll_count() {
+        let _guard = test_guard();
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
         let command = dpc_source_w1c_command(0x8000_5101, 0x4359_5101, 7);
         let mut lease = RuntimeSteadyServiceLease::empty();
         assert!(lease.admit(command));
         assert!(lease.active_for(command));
+        let (start, cycles) = match lease.deadline {
+            RuntimeDeadline::Counter { start, cycles } => (start, cycles),
+            RuntimeDeadline::Iterations { .. } => {
+                panic!("exported virtual counter must select the physical deadline")
+            }
+        };
+        assert_eq!(start, 1);
+        assert_eq!(
+            cycles,
+            runtime_micros_to_cycles(u64::from(DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US)),
+        );
 
-        for completed in 1..=RuntimeSteadyServiceLease::TURN_BUDGET {
+        let service_calls = core::cell::Cell::new(0u32);
+        for completed in 1..=u32::from(DRIVER_RUNTIME_SDIO_SERVICE_MAX_OPS) + 1 {
             assert!(
                 lease.active_for(command),
                 "slice {completed} must be admitted before it executes",
             );
-            assert!(lease.record_bounded_turn());
-            assert_eq!(lease.completed_turns(), u32::from(completed));
+            assert_eq!(
+                steady_service_lease_preflight_turn(&mut lease, command, || {
+                    service_calls.set(service_calls.get().saturating_add(1));
+                    RuntimeCommandTurn::Pending
+                }),
+                RuntimeCommandTurn::Pending,
+            );
+            assert!(lease.record_service_slice());
+            assert_eq!(lease.completed_slices(), completed);
         }
-        assert!(lease.exhausted_for(command));
-        assert!(!lease.active_for(command));
-        assert!(!lease.record_bounded_turn(), "slice 257 cannot auto-renew");
+        assert_eq!(service_calls.get(), 257);
+        assert!(lease.active_for(command));
+        assert!(!lease.exhausted_for(command));
 
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(start.wrapping_add(cycles), Ordering::Release);
         let service_called = core::cell::Cell::new(false);
-        let preflight = steady_service_lease_preflight_turn(lease, command, || {
+        let preflight = steady_service_lease_preflight_turn(&mut lease, command, || {
             service_called.set(true);
             RuntimeCommandTurn::Pending
         });
-        assert!(!service_called.get(), "slice 257 reached owner dispatch");
+        assert!(
+            !service_called.get(),
+            "expired request reached owner dispatch"
+        );
         assert_eq!(
             preflight,
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
@@ -50688,16 +52554,42 @@ mod tests {
                 DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_EXHAUSTED,
             )),
         );
+        assert!(lease.exhausted_for(command));
+        assert!(!lease.active_for(command));
+        assert!(
+            !lease.record_service_slice(),
+            "an expired physical lifetime cannot auto-renew",
+        );
 
         let mut aliased = command;
         aliased.aux0 = aliased.aux0.wrapping_add(1);
         assert!(!lease.admit(command));
         assert!(!lease.admit(aliased));
         assert!(lease.exhausted_for(command));
-        assert_eq!(lease.turns_remaining, 0);
+        assert_eq!(lease.completed_slices(), 257);
         lease.clear();
         assert_eq!(lease, RuntimeSteadyServiceLease::empty());
         assert!(!lease.matches(command));
+
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(1, Ordering::Release);
+        let parent = install_steady_tx_parent_fixture(0x4359_5102, 0x4359_5103, CYW43_ETH_P_IPV4);
+        assert!(lease.admit(parent));
+        let RuntimeDeadline::Counter {
+            start: parent_start,
+            cycles: parent_cycles,
+        } = lease.deadline
+        else {
+            panic!("exported virtual counter must select the parent physical deadline")
+        };
+        assert_eq!(parent_start, 1);
+        assert_eq!(
+            parent_cycles,
+            runtime_micros_to_cycles(
+                u64::from(DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US)
+                    * u64::from(DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS),
+            ),
+            "the parent may retain at most its four exact child lifetimes",
+        );
     }
 
     #[test]
@@ -55360,6 +57252,62 @@ mod tests {
     }
 
     #[test]
+    fn steady_cyw43_parent_terminal_wakes_root_only_after_sequence_last_commit() {
+        let _guard = test_guard();
+        let parent = install_steady_tx_parent_fixture(0x4359_50e1, 0x4359_50e2, CYW43_ETH_P_IPV4);
+        assert!(cyw43_steady_parent_command_shape(parent));
+        assert_eq!(
+            runtime_completion_wake_order(parent, RuntimeNotificationRoute::Cyw43Client),
+            RuntimeCompletionWakeOrder::AfterCommitRootNetwork,
+        );
+        assert!(!runtime_completion_postcommit_network_wake_due(
+            RuntimeCompletionWakeOrder::AfterCommitRootNetwork,
+            false,
+        ));
+        assert!(runtime_completion_postcommit_network_wake_due(
+            RuntimeCompletionWakeOrder::AfterCommitRootNetwork,
+            true,
+        ));
+
+        let sdio_child = DriverTaskCommandRecord {
+            sequence: 0x8000_50e3,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: parent.sequence,
+            aux1: parent.aux1,
+            budget: DriverTaskBudgetGrant {
+                max_ops: 1,
+                max_frames: 1,
+                max_bytes: 0,
+            },
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert_eq!(
+            runtime_completion_wake_order(sdio_child, RuntimeNotificationRoute::SdioOwner),
+            RuntimeCompletionWakeOrder::BeforeCommitCyw43Peer,
+        );
+        assert!(!runtime_completion_postcommit_network_wake_due(
+            RuntimeCompletionWakeOrder::BeforeCommitCyw43Peer,
+            true,
+        ));
+
+        let mut ordinary = parent;
+        ordinary.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
+        assert_eq!(
+            runtime_completion_wake_order(ordinary, RuntimeNotificationRoute::Cyw43Client),
+            RuntimeCompletionWakeOrder::None,
+            "ordinary CYW43 completions retain their existing no-extra-wake behavior",
+        );
+        assert_eq!(
+            runtime_completion_wake_order(parent, RuntimeNotificationRoute::SdioOwner),
+            RuntimeCompletionWakeOrder::None,
+            "the post-commit Network edge belongs only to the CYW43 parent runtime",
+        );
+    }
+
+    #[test]
     fn cyw43_sdio_bus_link_accepts_only_stable_exact_completion() {
         let child = Cyw43SdioChildState::new(0x8000_0042);
         let exact = DriverTaskCompletionRecord::progress(0x8000_0042, 7);
@@ -55791,11 +57739,20 @@ mod tests {
                 descriptor.flags &= !DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
                 descriptor.flags |=
                     DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS | DRIVER_RUNTIME_INIT_FLAG_IRQS_BOUND;
-                descriptor.irq_count = 1;
+                descriptor.irq_count = 2;
                 descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
                     irq: DRIVER_RUNTIME_SDIO_IRQ,
                     badge: DRIVER_RUNTIME_SDIO_IRQ_BADGE,
                     handler_slot: DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
+                    notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
+                    trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
+                    flags: 0,
+                    reserved: 0,
+                };
+                descriptor.irqs[1] = DriverRuntimeIrqDescriptor {
+                    irq: DRIVER_RUNTIME_SDIO_DMA_IRQ,
+                    badge: DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+                    handler_slot: DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
                     notification_slot: DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
                     trigger: DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL,
                     flags: 0,
@@ -55901,7 +57858,29 @@ mod tests {
     ) -> DriverTaskCompletionRecord {
         for _ in 0..64 {
             match service_sdio_external_dma_command_turn_with_io(command, descriptor, io) {
-                RuntimeCommandTurn::Pending => {}
+                RuntimeCommandTurn::Pending => {
+                    let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+                    if retained.active()
+                        && matches!(retained.identity.engine, SdioRequestEngine::ExternalDma)
+                        && io.dma_cs & BCM2835_DMA_CS_INT != 0
+                    {
+                        assert_eq!(
+                            sdio_external_dma_irq_service_with(
+                                retained,
+                                retained.identity.generation,
+                                io,
+                                |snapshot| {
+                                    SDIO_RUNTIME_STATE.with_mut(|state| {
+                                        state.external_dma_request = snapshot;
+                                    });
+                                },
+                                || true,
+                            ),
+                            SdioExternalDmaIrqServiceResult::Acked,
+                            "test driver must service the lifetime-owned DMA IRQ",
+                        );
+                    }
+                }
                 RuntimeCommandTurn::Complete(completion) => return completion,
             }
         }
@@ -56033,6 +58012,50 @@ mod tests {
         init_runtime_for_test(HOT_PATH_SDIO_HOST, ROLE_SDIO);
         SDIO_RUNTIME_FLAGS.store(ENGINE_STATE_INITIALIZED, Ordering::Release);
         establish_completed_sdio_physical_lifetime_for_test(1);
+    }
+
+    fn sdio_external_dma_irq_cursor_for_test(
+        generation: u32,
+        io: &TestSdioHostIo,
+    ) -> SdioExternalDmaRequestCursor {
+        let frame = DriverFrameDescriptor {
+            offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+            len: 64,
+            flags: 0,
+        };
+        SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::PollIssued,
+            identity: SdioExternalDmaRequestIdentity {
+                sequence: 0x8000_d114,
+                action_fingerprint: 0xd114_0001,
+                generation,
+                descriptor: DriverRuntimeSdioCommandDescriptor {
+                    op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+                    function: 2,
+                    len: frame.len,
+                    block_size: frame.len,
+                    block_count: 1,
+                    data_offset: frame.offset as u16,
+                    ..DriverRuntimeSdioCommandDescriptor::empty()
+                },
+                frame,
+                cmd: SDIO_CMD53,
+                flags: DRIVER_RUNTIME_SDIO_FLAG_DATA
+                    | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                    | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+                block_size: frame.len,
+                block_count: 1,
+                write: true,
+                owner_timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+                engine: SdioRequestEngine::ExternalDma,
+                ..SdioExternalDmaRequestIdentity::empty()
+            },
+            authority: io.external_dma_authority_value(),
+            deadline: RuntimeDeadline::Iterations { remaining: 32 },
+            request_irq_live: true,
+            issued: true,
+            ..SdioExternalDmaRequestCursor::idle()
+        }
     }
 
     fn stage_u16(offset: usize, value: u16) {
@@ -67846,10 +69869,10 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_root_rx_wake_route_requires_exact_cyw43_descriptor() {
+    fn cyw43_root_network_wake_route_requires_exact_cyw43_descriptor() {
         let _guard = test_guard();
         reset_runtime_for_test();
-        assert_eq!(cyw43_root_rx_wake_notification_slot(), None);
+        assert_eq!(cyw43_root_network_wake_notification_slot(), None);
 
         let mut exact = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
         exact.root_wake_notification_slot =
@@ -67858,7 +69881,7 @@ mod tests {
             pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE;
         RUNTIME_DESCRIPTOR.store(exact);
         assert_eq!(
-            cyw43_root_rx_wake_notification_slot(),
+            cyw43_root_network_wake_notification_slot(),
             Some(pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_SLOT)
         );
 
@@ -67866,12 +69889,12 @@ mod tests {
         absent.root_wake_notification_slot = 0;
         absent.root_wake_notification_badge = 0;
         RUNTIME_DESCRIPTOR.store(absent);
-        assert_eq!(cyw43_root_rx_wake_notification_slot(), None);
+        assert_eq!(cyw43_root_network_wake_notification_slot(), None);
 
         let mut non_cyw43 = exact;
         non_cyw43.hot_path = HOT_PATH_GENET_NIC;
         RUNTIME_DESCRIPTOR.store(non_cyw43);
-        assert_eq!(cyw43_root_rx_wake_notification_slot(), None);
+        assert_eq!(cyw43_root_network_wake_notification_slot(), None);
     }
 
     #[test]
@@ -68858,10 +70881,13 @@ mod tests {
     fn sdio_wifi_power_sequence_advances_one_bounded_action_per_turn() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO));
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.dpc_link_ready = true;
             state.shared_epoch = 1;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+            state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
             state.pwrseq = SdioPwrseqCursor::begin(
                 SdioPwrseqPurpose::EngineInit,
@@ -68905,6 +70931,13 @@ mod tests {
             SdioPwrseqPhase::FinalStatusVerify,
             SdioPwrseqPhase::FinalStatusPublish,
             SdioPwrseqPhase::EngineInitValidateDpc,
+            SdioPwrseqPhase::EngineInitDmaStatePrepare,
+            SdioPwrseqPhase::EngineInitDmaInspect,
+            SdioPwrseqPhase::EngineInitDmaReset,
+            SdioPwrseqPhase::EngineInitDmaVerify,
+            SdioPwrseqPhase::EngineInitDmaIrqAck,
+            SdioPwrseqPhase::EngineInitDmaAckState,
+            SdioPwrseqPhase::EngineInitDmaAckHealth,
             SdioPwrseqPhase::EngineInitStatePrepare,
             SdioPwrseqPhase::EngineInitHealthBefore,
             SdioPwrseqPhase::EngineInitPolicyEnableBeforeAck,
@@ -68928,12 +70961,143 @@ mod tests {
         assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CONFIGS.load(Ordering::Acquire), 1);
         assert_eq!(TEST_SDIO_WIFI_PWRSEQ_CALLS.load(Ordering::Acquire), 2);
         assert_eq!(TEST_SDIO_WIFI_PWRSEQ_LEVELS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            1,
+            "DMA4 is quiescent before its exact handler is enabled once",
+        );
+        assert_eq!(
+            TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            1,
+            "SDHCI keeps its independent exact init ACK",
+        );
+    }
+
+    #[test]
+    fn sdio_dma_irq_activation_is_quiesced_and_acked_once_per_cold_or_replay_lifetime() {
+        let _guard = test_guard();
+        for replay in [false, true] {
+            if replay {
+                reset_cyw43_sdio_pair_runtime_entry_state();
+            } else {
+                reset_runtime_for_test();
+            }
+            RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO));
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                state.dpc_link_ready = true;
+                state.shared_epoch = if replay { 2 } else { 1 };
+                state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+                state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+                state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
+                state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+                state.pwrseq = SdioPwrseqCursor::begin(
+                    SdioPwrseqPurpose::EngineInit,
+                    if replay { 0x7142 } else { 0x7141 },
+                    DRIVER_RUNTIME_ENGINE_INIT_AUX,
+                );
+                state.pwrseq.phase = SdioPwrseqPhase::EngineInitDmaStatePrepare;
+            });
+            TEST_SDIO_DMA_CS_RESPONSE.store(
+                BCM2835_DMA_CS_INT | if replay { 0 } else { BCM2835_DMA_CS_ACTIVE },
+                Ordering::Release,
+            );
+            TEST_SDIO_DMA_CONBLK_RESPONSE.store(
+                if replay {
+                    0
+                } else {
+                    TEST_SDIO_DMA_CONTROL_BLOCK_BUS
+                },
+                Ordering::Release,
+            );
+
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                SdioPwrseqPhase::EngineInitDmaInspect,
+            );
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                if replay {
+                    SdioPwrseqPhase::EngineInitDmaClearStale
+                } else {
+                    SdioPwrseqPhase::EngineInitDmaAbortIssue
+                },
+            );
+            if replay {
+                assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            } else {
+                for phase in [
+                    SdioPwrseqPhase::EngineInitDmaAbortPoll,
+                    SdioPwrseqPhase::EngineInitDmaStop,
+                    SdioPwrseqPhase::EngineInitDmaReset,
+                ] {
+                    assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+                    assert_eq!(
+                        SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                        phase,
+                    );
+                }
+            }
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                SdioPwrseqPhase::EngineInitDmaReset,
+            );
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                SdioPwrseqPhase::EngineInitDmaVerify,
+            );
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                SdioPwrseqPhase::EngineInitDmaIrqAck,
+            );
+            assert_eq!(
+                TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
+                0,
+                "slot5 remains masked until DMA4 quiescence is verified",
+            );
+            SDIO_RUNTIME_STATE.with_ref(|state| {
+                assert!(state.dma_irq_ack_pending);
+                assert!(!state.dma_irq_ready);
+            });
+
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
+                1,
+                "one physical lifetime ACKs slot5 exactly once",
+            );
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            SDIO_RUNTIME_STATE.with_ref(|state| {
+                assert!(!state.dma_irq_ack_pending);
+                assert!(state.dma_irq_ready);
+                assert_eq!(state.pwrseq.phase, SdioPwrseqPhase::EngineInitDmaAckHealth);
+            });
+            assert_eq!(sdio_linux_wifi_power_cycle_turn(), SdioPwrseqTurn::Pending);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.pwrseq.phase),
+                SdioPwrseqPhase::EngineInitStatePrepare,
+            );
+            assert_eq!(
+                TEST_SDIO_DMA_INIT_ABORT_WRITES.load(Ordering::Acquire),
+                u32::from(!replay),
+            );
+            assert_eq!(
+                TEST_SDIO_DMA_INIT_W1C_WRITES.load(Ordering::Acquire),
+                u32::from(replay),
+            );
+            assert_eq!(TEST_SDIO_DMA_INIT_RESET_WRITES.load(Ordering::Acquire), 1,);
+            assert_eq!(TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire), 0);
+        }
     }
 
     #[test]
     fn sdio_physical_lifetime_completes_once_for_one_low_high_cycle() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO));
         assert_eq!(
             sdio_physical_lifetime_snapshot(),
             Some(DriverRuntimeSdioPhysicalLifetimeRecord::empty()),
@@ -68943,6 +71107,8 @@ mod tests {
             state.dpc_link_ready = true;
             state.shared_epoch = 1;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+            state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
         });
 
@@ -69065,8 +71231,11 @@ mod tests {
             state.dpc_link_ready = true;
             state.shared_epoch = 2;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+            state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
         });
+        RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO));
         assert_eq!(
             sdio_runtime_init_hw(0x713, DRIVER_RUNTIME_ENGINE_INIT_AUX),
             Ok(()),
@@ -69446,10 +71615,13 @@ mod tests {
     fn sdio_engine_init_does_not_issue_cmd_data_reset_before_clock_failure() {
         let _guard = test_guard();
         reset_runtime_for_test();
+        RUNTIME_DESCRIPTOR.store(descriptor_for(HOT_PATH_SDIO_HOST, ROLE_SDIO));
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.dpc_link_ready = true;
             state.shared_epoch = 0x4359_5301;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+            state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
             state.card_irq_masked = true;
         });
@@ -70334,8 +72506,8 @@ mod tests {
         );
         assert_eq!(
             io.register(SDHCI_SIGNAL_ENABLE) & SDHCI_INT_PIO_READY_MASK,
-            0,
-            "the retained owner polls PIO and never delegates it to a second IRQ lane",
+            SDHCI_INT_SPACE_AVAIL,
+            "the retained owner arms only its direction-exact wake source",
         );
 
         assert_eq!(
@@ -72205,6 +74377,650 @@ mod tests {
                 | upper_error
         );
         assert_ne!(SDHCI_INT_COMMAND_DATA_CLEAR_MASK & upper_error, 0);
+    }
+
+    #[test]
+    fn sdio_request_irq_policy_is_exact_for_command_pio_and_external_dma() {
+        let _guard = test_guard();
+        let mut identity = SdioExternalDmaRequestIdentity::empty();
+
+        identity.engine = SdioRequestEngine::CommandOnly;
+        assert_eq!(
+            sdhci_request_interrupt_mask(identity),
+            SDHCI_INT_CMD_MASK,
+            "command-only work must not signal unrelated data sources",
+        );
+
+        identity.engine = SdioRequestEngine::Pio;
+        identity.write = true;
+        let pio_write = sdhci_request_interrupt_mask(identity);
+        assert_eq!(pio_write & SDHCI_INT_PIO_READY_MASK, SDHCI_INT_SPACE_AVAIL);
+        assert_eq!(pio_write & SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK, 0);
+        identity.write = false;
+        let pio_read = sdhci_request_interrupt_mask(identity);
+        assert_eq!(pio_read & SDHCI_INT_PIO_READY_MASK, SDHCI_INT_DATA_AVAIL);
+        assert_eq!(pio_read & SDHCI_INT_BCM2835_PIO_EXCLUDED_MASK, 0);
+
+        identity.engine = SdioRequestEngine::ExternalDma;
+        assert_eq!(
+            sdhci_request_interrupt_mask(identity),
+            SDHCI_INT_BCM2835_DMA_ENABLE_MASK,
+        );
+
+        let mut cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::PollIssued,
+            identity,
+            request_irq_live: true,
+            request_irq_masked: false,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+        let (int_enable, signal_enable) = sdio_request_interrupt_policy_registers(
+            SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_CARD_INT,
+            SDHCI_INT_CARD_INT,
+            cursor,
+        );
+        assert_eq!(
+            (int_enable, signal_enable),
+            (
+                SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_CARD_INT,
+                SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_CARD_INT,
+            ),
+            "an armed request signals only its exact bits beside CARD_INT",
+        );
+        cursor.request_irq_masked = true;
+        let (int_enable, signal_enable) = sdio_request_interrupt_policy_registers(
+            SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_CARD_INT,
+            SDHCI_INT_CARD_INT,
+            cursor,
+        );
+        assert_eq!(
+            int_enable,
+            SDHCI_INT_BCM2835_DMA_ENABLE_MASK | SDHCI_INT_CARD_INT,
+            "masking delivery must preserve request status latching",
+        );
+        assert_eq!(
+            signal_enable, SDHCI_INT_CARD_INT,
+            "request masking must not disturb independent CARD_INT delivery",
+        );
+    }
+
+    #[test]
+    fn sdio_request_irq_masks_before_ack_without_w1c_and_poll_rearms() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_53d1;
+        let identity = SdioExternalDmaRequestIdentity {
+            sequence: 0x8000_53d1,
+            action_fingerprint: 0x53d1_0001,
+            generation,
+            frame: DriverFrameDescriptor {
+                offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u32,
+                len: 4,
+                flags: 0,
+            },
+            cmd: SDIO_CMD53,
+            flags: DRIVER_RUNTIME_SDIO_FLAG_DATA | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            block_size: 4,
+            block_count: 1,
+            write: true,
+            owner_timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            engine: SdioRequestEngine::Pio,
+            ..SdioExternalDmaRequestIdentity::empty()
+        };
+        let request_mask = sdhci_request_interrupt_mask(identity);
+        let cursor = SdioExternalDmaRequestCursor {
+            phase: SdioExternalDmaRequestPhase::PollIssued,
+            identity,
+            deadline: RuntimeDeadline::Iterations { remaining: 32 },
+            request_irq_live: true,
+            request_irq_masked: false,
+            issued: true,
+            ..SdioExternalDmaRequestCursor::idle()
+        };
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.shared_epoch = generation;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.external_dma_request = cursor;
+        });
+        let mut io = TestSdioHostIo::new();
+        io.set_register(SDHCI_INT_ENABLE, request_mask | SDHCI_INT_CARD_INT);
+        io.set_register(SDHCI_SIGNAL_ENABLE, request_mask | SDHCI_INT_CARD_INT);
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE);
+        let ack_observed = core::cell::Cell::new(false);
+
+        assert_eq!(
+            sdio_partition_request_irq_with(&mut io, SDHCI_INT_RESPONSE, |io| {
+                assert_eq!(
+                    io.register(SDHCI_SIGNAL_ENABLE) & request_mask,
+                    0,
+                    "the exact request signal must be masked before IRQ ACK",
+                );
+                assert_eq!(
+                    io.register(SDHCI_INT_STATUS),
+                    SDHCI_INT_RESPONSE,
+                    "the IRQ partition may not W1C request-owned status",
+                );
+                ack_observed.set(true);
+                true
+            }),
+            SdioRequestIrqPartition::RequestOnlyAcked(true),
+        );
+        assert!(ack_observed.get());
+        assert_eq!(io.register(SDHCI_INT_STATUS), SDHCI_INT_RESPONSE);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.external_dma_request.request_irq_masked);
+            assert!(state.external_dma_request.request_irq_live);
+        });
+
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(retained, &mut io),
+            RuntimeCommandTurn::Pending,
+        );
+        assert_eq!(
+            io.register(SDHCI_INT_STATUS) & SDHCI_INT_RESPONSE,
+            0,
+            "only PollIssued consumes the immutable request snapshot",
+        );
+        assert_eq!(
+            io.register(SDHCI_SIGNAL_ENABLE) & request_mask,
+            request_mask,
+            "a still-pending owner rearms its exact wake sources after W1C",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.external_dma_request.request_irq_masked);
+            assert!(state.external_dma_request.request_irq_live);
+        });
+    }
+
+    #[test]
+    fn sdio_request_and_card_irq_partition_preserves_both_owner_sources() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        let generation = 0x4359_53d2;
+        let mut identity = SdioExternalDmaRequestIdentity::empty();
+        identity.engine = SdioRequestEngine::CommandOnly;
+        identity.generation = generation;
+        let request_mask = sdhci_request_interrupt_mask(identity);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.shared_epoch = generation;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = false;
+            state.external_dma_request = SdioExternalDmaRequestCursor {
+                phase: SdioExternalDmaRequestPhase::PollIssued,
+                identity,
+                request_irq_live: true,
+                request_irq_masked: false,
+                issued: true,
+                ..SdioExternalDmaRequestCursor::idle()
+            };
+        });
+        let status = SDHCI_INT_RESPONSE | SDHCI_INT_CARD_INT;
+        let mut io = TestSdioHostIo::new();
+        io.set_register(SDHCI_SIGNAL_ENABLE, request_mask | SDHCI_INT_CARD_INT);
+        io.set_register(SDHCI_INT_STATUS, status);
+        let ack_called = core::cell::Cell::new(false);
+
+        assert_eq!(
+            sdio_partition_request_irq_with(&mut io, status, |_| {
+                ack_called.set(true);
+                true
+            }),
+            SdioRequestIrqPartition::RequestAndCard,
+        );
+        assert!(
+            !ack_called.get(),
+            "CARD_INT publication owns the shared ACK"
+        );
+        assert_eq!(
+            io.register(SDHCI_SIGNAL_ENABLE),
+            SDHCI_INT_CARD_INT,
+            "request delivery is masked while CARD_INT remains independently visible",
+        );
+        assert_eq!(
+            io.register(SDHCI_INT_STATUS),
+            status,
+            "partitioning never consumes either owner's status evidence",
+        );
+    }
+
+    #[test]
+    fn sdio_dma_irq_only_commits_terminal_before_exact_ack_without_reissue() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let generation = 0xd114_0001;
+        let mut io = TestSdioHostIo::new();
+        io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+        io.dma_conblk = 0;
+        let cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
+        let committed = core::cell::Cell::new(SdioExternalDmaRequestCursor::idle());
+        let commit_count = core::cell::Cell::new(0u32);
+        let ack_count = core::cell::Cell::new(0u32);
+        let acked_slot = core::cell::Cell::new(0u32);
+
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                cursor,
+                generation,
+                &mut io,
+                |snapshot| {
+                    if commit_count.get() == 0 {
+                        assert_eq!(ack_count.get(), 0, "terminal evidence precedes IRQ ACK");
+                    } else {
+                        assert_eq!(ack_count.get(), 1, "ACK result follows the exact IRQ ACK");
+                    }
+                    committed.set(snapshot);
+                    commit_count.set(commit_count.get().saturating_add(1));
+                },
+                || {
+                    assert!(committed.get().dma_terminal_interrupt_seen);
+                    acked_slot.set(DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT);
+                    ack_count.set(ack_count.get().saturating_add(1));
+                    true
+                },
+            ),
+            SdioExternalDmaIrqServiceResult::Acked,
+        );
+
+        let committed = committed.get();
+        assert_eq!(
+            commit_count.get(),
+            2,
+            "pre-ACK and ACK-result commits are exact"
+        );
+        assert_eq!(ack_count.get(), 1);
+        assert_eq!(
+            acked_slot.get(),
+            DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
+        );
+        assert!(committed.dma_terminal_interrupt_seen);
+        assert!(committed.dma_complete);
+        assert!(committed.dma_irq_acknowledged);
+        assert_eq!(
+            committed.dma_irq_cs_snapshot,
+            BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT
+        );
+        assert_eq!(committed.dma_irq_conblk_snapshot, 0);
+        assert_eq!(io.dma_terminal_interrupt_acks, 1);
+        assert_eq!(io.dma_cs & BCM2835_DMA_CS_INT, 0);
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        assert!(io.writes[..io.write_count].iter().any(|write| {
+            write.offset == TEST_SDIO_DMA_CHANNEL_VADDR + BCM2835_DMA_CS
+                && write.value == BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ACTIVE
+        }));
+
+        let mut uncleared = TestSdioHostIo::new();
+        uncleared.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+        uncleared.dma_terminal_interrupt_w1c_failures_remaining = 1;
+        let cursor = sdio_external_dma_irq_cursor_for_test(generation, &uncleared);
+        let committed = core::cell::Cell::new(cursor);
+        let ack_count = core::cell::Cell::new(0u32);
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                cursor,
+                generation,
+                &mut uncleared,
+                |snapshot| committed.set(snapshot),
+                || {
+                    ack_count.set(ack_count.get().saturating_add(1));
+                    true
+                },
+            ),
+            SdioExternalDmaIrqServiceResult::SourceClearFailed,
+        );
+        let committed = committed.get();
+        assert!(committed.dma_terminal_interrupt_seen);
+        assert!(committed.dma_irq_terminal_invalid);
+        assert!(!committed.dma_complete);
+        assert_eq!(ack_count.get(), 0, "an asserted source keeps IRQ masked");
+        assert_ne!(uncleared.dma_cs & BCM2835_DMA_CS_INT, 0);
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(committed, &mut uncleared),
+            RuntimeCommandTurn::Pending,
+            "failed source clear enters typed pair containment",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.external_dma_request.phase,
+                SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
+            );
+        });
+
+        let mut impossible = TestSdioHostIo::new();
+        impossible.dma_cs = BCM2835_DMA_CS_INT;
+        impossible.dma_conblk = TEST_SDIO_DMA_CONTROL_BLOCK_BUS;
+        let cursor = sdio_external_dma_irq_cursor_for_test(generation, &impossible);
+        let committed = core::cell::Cell::new(cursor);
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                cursor,
+                generation,
+                &mut impossible,
+                |snapshot| committed.set(snapshot),
+                || true,
+            ),
+            SdioExternalDmaIrqServiceResult::Acked,
+        );
+        let committed = committed.get();
+        assert!(committed.dma_irq_terminal_invalid);
+        assert!(!committed.dma_complete);
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(committed, &mut impossible),
+            RuntimeCommandTurn::Pending,
+            "a non-cyclic terminal with live CONBLK enters typed containment",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.external_dma_request.phase,
+                SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
+            );
+        });
+    }
+
+    #[test]
+    fn sdio_coalesced_dma_and_sdhci_badges_service_both_exact_sources() {
+        let dma_calls = core::cell::Cell::new(0u32);
+        let sdhci_calls = core::cell::Cell::new(0u32);
+        let service_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE | DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+
+        assert_eq!(
+            runtime_notification_wake_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                    | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                    | service_badge,
+            ),
+            DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                | service_badge,
+        );
+        assert_eq!(
+            runtime_notification_service_badge(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_RESERVED_ROOT_BADGE
+                    | DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE
+                    | service_badge,
+            ),
+            Some(service_badge),
+        );
+        assert_eq!(
+            runtime_steady_local_notification_wake_route(
+                RuntimeNotificationRoute::SdioOwner,
+                DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE | service_badge,
+            ),
+            RuntimeSteadyWaitWake::ServiceSdioIrq(service_badge),
+        );
+        assert!(sdio_runtime_service_notification_with(
+            service_badge,
+            |badge| {
+                assert_eq!(badge, DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE);
+                dma_calls.set(dma_calls.get().saturating_add(1));
+                true
+            },
+            |badge| {
+                assert_eq!(badge, DRIVER_RUNTIME_SDIO_IRQ_BADGE);
+                sdhci_calls.set(sdhci_calls.get().saturating_add(1));
+                true
+            },
+        ));
+        assert_eq!(dma_calls.get(), 1);
+        assert_eq!(sdhci_calls.get(), 1);
+    }
+
+    #[test]
+    fn sdio_dma_irq_stale_clear_acks_but_asserted_inactive_fails_closed() {
+        let mut clear = TestSdioHostIo::new();
+        let authority = clear.external_dma_authority_value();
+        let clear_acks = core::cell::Cell::new(0u32);
+        assert_eq!(
+            sdio_external_dma_late_cleared_irq_with(authority, &mut clear, || {
+                clear_acks.set(clear_acks.get().saturating_add(1));
+                true
+            }),
+            SdioExternalDmaIrqServiceResult::Acked,
+        );
+        assert_eq!(clear_acks.get(), 1);
+        assert_eq!(clear.write_count, 0, "late-clear inspection is read-only");
+
+        let generation = 0xd114_3001;
+        let mut exact_late_cursor = sdio_external_dma_irq_cursor_for_test(generation, &clear);
+        exact_late_cursor.dma_terminal_interrupt_seen = true;
+        exact_late_cursor.dma_complete = true;
+        exact_late_cursor.dma_irq_cs_snapshot = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+        exact_late_cursor.dma_irq_conblk_snapshot = 0;
+        assert!(sdio_external_dma_late_clear_cursor_admitted(
+            exact_late_cursor,
+            generation,
+        ));
+        let exact_late_acks = core::cell::Cell::new(0u32);
+        assert_eq!(
+            sdio_external_dma_late_cleared_irq_with(authority, &mut clear, || {
+                exact_late_acks.set(exact_late_acks.get().saturating_add(1));
+                true
+            }),
+            SdioExternalDmaIrqServiceResult::Acked,
+        );
+        assert_eq!(exact_late_acks.get(), 1);
+
+        let mut wrong_generation = exact_late_cursor;
+        wrong_generation.identity.generation = generation.wrapping_add(1);
+        assert!(!sdio_external_dma_late_clear_cursor_admitted(
+            wrong_generation,
+            generation,
+        ));
+
+        for asserted in [BCM2835_DMA_CS_INT, BCM2835_DMA_CS_ERR] {
+            let mut io = TestSdioHostIo::new();
+            io.dma_cs = asserted;
+            let acks = core::cell::Cell::new(0u32);
+            assert_eq!(
+                sdio_external_dma_late_cleared_irq_with(authority, &mut io, || {
+                    acks.set(acks.get().saturating_add(1));
+                    true
+                }),
+                SdioExternalDmaIrqServiceResult::Rejected,
+            );
+            assert_eq!(acks.get(), 0);
+            assert_eq!(io.write_count, 0);
+        }
+
+        let mut asserted = TestSdioHostIo::new();
+        asserted.dma_cs = BCM2835_DMA_CS_INT;
+        let acked = core::cell::Cell::new(false);
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                SdioExternalDmaRequestCursor::idle(),
+                1,
+                &mut asserted,
+                |_| panic!("inactive DMA delivery must not commit a request cursor"),
+                || {
+                    acked.set(true);
+                    true
+                },
+            ),
+            SdioExternalDmaIrqServiceResult::Rejected,
+        );
+        assert!(!acked.get());
+        assert_eq!(asserted.write_count, 0);
+    }
+
+    #[test]
+    fn sdio_dma_irq_crosses_data_end_in_either_order_without_poll_loop() {
+        let _guard = test_guard();
+        for data_end_first in [true, false] {
+            reset_runtime_for_test();
+            let generation = if data_end_first {
+                0xd114_1001
+            } else {
+                0xd114_1002
+            };
+            let mut io = TestSdioHostIo::new();
+            io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+            io.dma_conblk = 0;
+            let mut cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
+            cursor.response_seen = true;
+            cursor.data_end_seen = data_end_first;
+            let committed = core::cell::Cell::new(cursor);
+            assert_eq!(
+                sdio_external_dma_irq_service_with(
+                    cursor,
+                    generation,
+                    &mut io,
+                    |snapshot| committed.set(snapshot),
+                    || true,
+                ),
+                SdioExternalDmaIrqServiceResult::Acked,
+            );
+            let committed = committed.get();
+            assert!(committed.dma_complete);
+            assert_eq!(committed.data_end_seen, data_end_first);
+            if !data_end_first {
+                io.set_register(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+            }
+
+            assert_eq!(
+                sdio_external_dma_poll_issued_with(committed, &mut io),
+                RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+                    committed.identity.sequence,
+                    u32::from(committed.identity.frame.len),
+                )),
+            );
+            assert_eq!(io.polls, 0, "event crossings require no private poll loop");
+            assert_eq!(io.command_issue_count(), 0);
+            assert_eq!(io.dma_started, 0);
+        }
+    }
+
+    #[test]
+    fn sdio_dma_terminal_cannot_retire_before_exact_ack_or_alias_next_request() {
+        let _guard = test_guard();
+        let generation = 0xd114_4001;
+
+        reset_runtime_for_test();
+        let mut io = TestSdioHostIo::new();
+        io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+        io.dma_conblk = 0;
+        io.set_register(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+        let mut cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
+        cursor.response_seen = true;
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(cursor, &mut io),
+            RuntimeCommandTurn::Pending,
+            "PollIssued cannot consume or retire the IRQ-owned terminal",
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        assert!(!retained.dma_terminal_interrupt_seen);
+        assert!(!retained.dma_complete);
+        assert!(!retained.dma_irq_acknowledged);
+        assert_ne!(io.dma_cs & BCM2835_DMA_CS_INT, 0);
+        assert_eq!(io.dma_terminal_interrupt_acks, 0);
+
+        let committed = core::cell::Cell::new(retained);
+        let ack_count = core::cell::Cell::new(0u32);
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                retained,
+                generation,
+                &mut io,
+                |snapshot| {
+                    committed.set(snapshot);
+                    SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request = snapshot);
+                },
+                || {
+                    ack_count.set(ack_count.get().saturating_add(1));
+                    true
+                },
+            ),
+            SdioExternalDmaIrqServiceResult::Acked,
+        );
+        let committed = committed.get();
+        assert!(committed.dma_complete);
+        assert!(committed.dma_irq_acknowledged);
+        assert_eq!(ack_count.get(), 1);
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(committed, &mut io),
+            RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
+                committed.identity.sequence,
+                u32::from(committed.identity.frame.len),
+            )),
+            "retirement follows the committed terminal and exact ACK",
+        );
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
+
+        reset_runtime_for_test();
+        let mut failed_ack_io = TestSdioHostIo::new();
+        failed_ack_io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+        failed_ack_io.dma_conblk = 0;
+        failed_ack_io.set_register(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
+        let mut cursor =
+            sdio_external_dma_irq_cursor_for_test(generation.wrapping_add(1), &failed_ack_io);
+        cursor.response_seen = true;
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(cursor, &mut failed_ack_io),
+            RuntimeCommandTurn::Pending,
+        );
+        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+        let committed = core::cell::Cell::new(retained);
+        assert_eq!(
+            sdio_external_dma_irq_service_with(
+                retained,
+                generation.wrapping_add(1),
+                &mut failed_ack_io,
+                |snapshot| committed.set(snapshot),
+                || false,
+            ),
+            SdioExternalDmaIrqServiceResult::AckFailed,
+        );
+        let committed = committed.get();
+        assert!(committed.dma_irq_ack_failed);
+        assert_eq!(
+            sdio_external_dma_poll_issued_with(committed, &mut failed_ack_io),
+            RuntimeCommandTurn::Pending,
+            "failed ACK contains the owner instead of opening a next request",
+        );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(
+                state.external_dma_request.phase,
+                SdioExternalDmaRequestPhase::CaptureFailureTelemetry,
+            );
+        });
+    }
+
+    #[test]
+    fn sdio_dma_irq_rejects_pio_and_command_cursors_without_consuming_terminal() {
+        let generation = 0xd114_2001;
+        for engine in [SdioRequestEngine::Pio, SdioRequestEngine::CommandOnly] {
+            let mut io = TestSdioHostIo::new();
+            io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
+            let mut cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
+            cursor.identity.engine = engine;
+            let commits = core::cell::Cell::new(0u32);
+            let acks = core::cell::Cell::new(0u32);
+
+            assert_eq!(
+                sdio_external_dma_irq_service_with(
+                    cursor,
+                    generation,
+                    &mut io,
+                    |_| commits.set(commits.get().saturating_add(1)),
+                    || {
+                        acks.set(acks.get().saturating_add(1));
+                        true
+                    },
+                ),
+                SdioExternalDmaIrqServiceResult::Rejected,
+            );
+            assert_eq!(commits.get(), 0);
+            assert_eq!(acks.get(), 0);
+            assert_eq!(io.write_count, 0);
+            assert_eq!(io.dma_cs, BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT);
+        }
     }
 
     #[test]
@@ -76122,7 +78938,7 @@ mod tests {
                     assert!(state.dpc_cursor.child.active);
                     assert_eq!(
                         state.dpc_cursor.child.service_progress_slice,
-                        owner_lease.completed_turns(),
+                        owner_lease.completed_slices(),
                     );
                 });
                 assert!(
@@ -76164,12 +78980,12 @@ mod tests {
                             <= 1,
                         "one retained owner turn may perform at most one controller action",
                     );
-                    assert!(owner_lease.record_bounded_turn());
+                    assert!(owner_lease.record_service_slice());
                     assert!(publish_runtime_steady_service_progress_at(
                         DRIVER_TASK_SDIO_BUS_RING_VADDR,
                         command,
                         generation,
-                        owner_lease.completed_turns(),
+                        owner_lease.completed_slices(),
                     ));
                     owner_started = true;
                 }
@@ -76430,12 +79246,12 @@ mod tests {
                         if !owner_lease.matches(command) {
                             assert!(owner_lease.admit(command));
                         }
-                        assert!(owner_lease.record_bounded_turn());
+                        assert!(owner_lease.record_service_slice());
                         assert!(publish_runtime_steady_service_progress_at(
                             DRIVER_TASK_SDIO_BUS_RING_VADDR,
                             command,
                             generation,
-                            owner_lease.completed_turns(),
+                            owner_lease.completed_slices(),
                         ));
                         assert!(
                             read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR,)
@@ -81813,11 +84629,31 @@ mod tests {
             outer_turns += 1;
             match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
                 RuntimeCommandTurn::Pending => {
-                    assert_eq!(
-                        io.dma_dreq_snapshots,
-                        snapshots_before + 1,
-                        "one continuation consumes one immutable hardware snapshot"
-                    );
+                    if io.dma_cs & BCM2835_DMA_CS_INT != 0 {
+                        let retained =
+                            SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+                        assert_eq!(
+                            sdio_external_dma_irq_service_with(
+                                retained,
+                                retained.identity.generation,
+                                &mut io,
+                                |snapshot| {
+                                    SDIO_RUNTIME_STATE.with_mut(|state| {
+                                        state.external_dma_request = snapshot;
+                                    });
+                                },
+                                || true,
+                            ),
+                            SdioExternalDmaIrqServiceResult::Acked,
+                            "the terminal notification owns CS.INT and slot5",
+                        );
+                    } else {
+                        assert_eq!(
+                            io.dma_dreq_snapshots,
+                            snapshots_before + 1,
+                            "one continuation consumes one immutable hardware snapshot"
+                        );
+                    }
                     assert_eq!(io.command_issue_count(), 1);
                 }
                 RuntimeCommandTurn::Complete(completion) => break completion,
@@ -81828,7 +84664,11 @@ mod tests {
             completion,
             DriverTaskCompletionRecord::progress(0x5306_0020, LEN as u32)
         );
-        assert_eq!(outer_turns, preissue_turns + LEN / FIFO_QUANTUM);
+        assert_eq!(
+            outer_turns,
+            preissue_turns + LEN / FIFO_QUANTUM + 1,
+            "the IRQ callback commits terminal state before one final join turn",
+        );
         assert_eq!(io.dma_dreq_snapshots, LEN / FIFO_QUANTUM);
         assert_eq!(io.command_issue_count(), 1);
         assert_eq!(io.dma_started, 1);
@@ -81929,7 +84769,27 @@ mod tests {
                 outer_turns += 1;
                 let accesses_before_turn = io.sdhci_buffer_accesses;
                 match service_sdio_external_dma_command_turn_with_io(command, descriptor, &mut io) {
-                    RuntimeCommandTurn::Pending => {}
+                    RuntimeCommandTurn::Pending => {
+                        if !pio && io.dma_cs & BCM2835_DMA_CS_INT != 0 {
+                            let retained =
+                                SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
+                            assert_eq!(
+                                sdio_external_dma_irq_service_with(
+                                    retained,
+                                    retained.identity.generation,
+                                    &mut io,
+                                    |snapshot| {
+                                        SDIO_RUNTIME_STATE.with_mut(|state| {
+                                            state.external_dma_request = snapshot;
+                                        });
+                                    },
+                                    || true,
+                                ),
+                                SdioExternalDmaIrqServiceResult::Acked,
+                                "child {ordinal} terminal notification owns DMA completion",
+                            );
+                        }
+                    }
                     RuntimeCommandTurn::Complete(completion) => break completion,
                 }
                 assert!(
@@ -81961,7 +84821,7 @@ mod tests {
 
         assert_eq!(
             outer_turns,
-            1 + CHILDREN[0].1.div_ceil(FIFO_QUANTUM) + 1 + 2,
+            1 + CHILDREN[0].1.div_ceil(FIFO_QUANTUM) + 1 + 1 + 2,
         );
         assert_eq!(io.command_issue_count(), 2);
         assert_eq!(io.dma_started, 1);

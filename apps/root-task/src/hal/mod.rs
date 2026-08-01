@@ -87,10 +87,11 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RESOURCE_TAG_PCIE_HOST, DRIVER_RUNTIME_RESOURCE_TAG_SDIO_HOST,
     DRIVER_RUNTIME_RESOURCE_TAG_SERIAL_MINI_UART, DRIVER_RUNTIME_RESOURCE_TAG_SHARED_CONTROL,
     DRIVER_RUNTIME_RESOURCE_TAG_USB_XHCI, DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ,
-    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_IRQ,
-    DRIVER_RUNTIME_SDIO_IRQ_BADGE, DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES,
-    DRIVER_RUNTIME_SERIAL_IRQ, DRIVER_RUNTIME_SERIAL_IRQ_BADGE,
-    DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_RUNTIME_RESOURCE_TAG_WIFI_PWRSEQ_REQUEST, DRIVER_RUNTIME_SDIO_DMA_IRQ,
+    DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES, DRIVER_RUNTIME_SERIAL_IRQ,
+    DRIVER_RUNTIME_SERIAL_IRQ_BADGE, DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+    DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
 #[cfg(feature = "kernel")]
 use sel4_sys::{seL4_ARM_VMAttributes, seL4_CPtr, seL4_Error, seL4_NoError, seL4_Word};
@@ -1440,7 +1441,7 @@ struct KernelDriverTaskHandle {
     notification: seL4_CPtr,
     root_notification: seL4_CPtr,
     root_wake_notification: seL4_CPtr,
-    runtime_irq: Option<RuntimeIrqBinding>,
+    runtime_irqs: [Option<RuntimeIrqBinding>; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
     reciprocal_link_caps: [Option<InstalledChildCap>; 2],
     fault_slot: seL4_CPtr,
     ipc_frame: seL4_CPtr,
@@ -1502,9 +1503,31 @@ fn release_runtime_irq_binding(binding: RuntimeIrqBinding) -> Result<(), seL4_Er
 }
 
 #[cfg(feature = "kernel")]
-struct RuntimeIrqInstallGuard {
-    binding: Option<RuntimeIrqBinding>,
+fn release_runtime_irq_bindings(
+    bindings: [Option<RuntimeIrqBinding>; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
+) -> Result<(), seL4_Error> {
+    let mut first_error = seL4_NoError;
+    for binding in bindings.into_iter().flatten() {
+        if let Err(err) = release_runtime_irq_binding(binding) {
+            if first_error == seL4_NoError {
+                first_error = err;
+            }
+        }
+    }
+    if first_error == seL4_NoError {
+        Ok(())
+    } else {
+        Err(first_error)
+    }
 }
+
+#[cfg(feature = "kernel")]
+struct RuntimeIrqInstallGuard {
+    bindings: [Option<RuntimeIrqBinding>; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
+}
+
+#[cfg(feature = "kernel")]
+const DRIVER_RUNTIME_IRQ_BINDING_CAPACITY: usize = 2;
 
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug)]
@@ -1552,26 +1575,41 @@ impl Drop for ReciprocalLinkCapGuard {
 #[cfg(feature = "kernel")]
 impl RuntimeIrqInstallGuard {
     const fn empty() -> Self {
-        Self { binding: None }
-    }
-
-    const fn new(binding: RuntimeIrqBinding) -> Self {
         Self {
-            binding: Some(binding),
+            bindings: [None; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
         }
     }
 
-    fn commit(mut self) -> Option<RuntimeIrqBinding> {
-        self.binding.take()
+    fn push(&mut self, binding: RuntimeIrqBinding) -> Result<(), HalError> {
+        let Some(slot) = self.bindings.iter_mut().find(|slot| slot.is_none()) else {
+            let _ = release_runtime_irq_binding(binding);
+            return Err(HalError::Unsupported("driver-runtime-irq-binding-overflow"));
+        };
+        *slot = Some(binding);
+        Ok(())
+    }
+
+    fn root_handler_slots(&self) -> [usize; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY] {
+        self.bindings
+            .map(|binding| binding.map_or(0, |binding| binding.kernel.handler_slot as usize))
+    }
+
+    fn commit(mut self) -> [Option<RuntimeIrqBinding>; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY] {
+        core::mem::replace(
+            &mut self.bindings,
+            [None; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
+        )
     }
 }
 
 #[cfg(feature = "kernel")]
 impl Drop for RuntimeIrqInstallGuard {
     fn drop(&mut self) {
-        if let Some(binding) = self.binding.take() {
-            let _ = release_runtime_irq_binding(binding);
-        }
+        let bindings = core::mem::replace(
+            &mut self.bindings,
+            [None; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
+        );
+        let _ = release_runtime_irq_bindings(bindings);
     }
 }
 
@@ -1780,6 +1818,10 @@ const BCM2711_SDIO_IRQ: u32 = DRIVER_RUNTIME_SDIO_IRQ;
 #[cfg(feature = "kernel")]
 const BCM2711_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
 #[cfg(feature = "kernel")]
+const BCM2711_SDIO_DMA_IRQ: u32 = DRIVER_RUNTIME_SDIO_DMA_IRQ;
+#[cfg(feature = "kernel")]
+const BCM2711_SDIO_DMA_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+#[cfg(feature = "kernel")]
 const BCM2711_MINI_UART_IRQ: u32 = DRIVER_RUNTIME_SERIAL_IRQ;
 #[cfg(feature = "kernel")]
 const BCM2711_MINI_UART_IRQ_BADGE: u32 = DRIVER_RUNTIME_SERIAL_IRQ_BADGE;
@@ -1791,29 +1833,58 @@ const DRIVER_RUNTIME_IRQ_TRIGGER_EDGE: u16 = 1;
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug)]
 struct GeneratedCyw43SdioTopology {
-    irq: crate::generated::DriverRuntimeIrqSpec,
+    irqs: [crate::generated::DriverRuntimeIrqSpec; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
     link: crate::generated::DriverRuntimeBusLinkSpec,
 }
 
 #[cfg(feature = "kernel")]
 fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalError> {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required || policy.irqs.len() != 2 || policy.bus_links.len() != 1 {
+    if !policy.required || policy.irqs.len() != 3 || policy.bus_links.len() != 1 {
         return Err(HalError::Unsupported(
             "driver-runtime-cyw43-sdio-topology-count",
         ));
     }
-    let irq = generated_runtime_irq_for_hot_path(driver_task::DriverTaskHotPath::SdioHost)?;
+    let mut sdio_irqs = policy
+        .irqs
+        .iter()
+        .copied()
+        .filter(|irq| irq.hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str());
+    let Some(sdhci_irq) = sdio_irqs.next() else {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-topology-missing",
+        ));
+    };
+    let Some(dma_irq) = sdio_irqs.next() else {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-dma-topology-missing",
+        ));
+    };
+    if sdio_irqs.next().is_some() {
+        return Err(HalError::Unsupported(
+            "driver-runtime-cyw43-sdio-topology-duplicate",
+        ));
+    }
     let link = policy.bus_links[0];
-    let irq_valid = irq.hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str()
-        && irq.irq == BCM2711_SDIO_IRQ
-        && irq.badge == BCM2711_SDIO_IRQ_BADGE
-        && u32::from(irq.handler_slot) == pi4_driver_abi::DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
-        && u32::from(irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+    let sdhci_irq_valid = sdhci_irq.irq == BCM2711_SDIO_IRQ
+        && sdhci_irq.badge == BCM2711_SDIO_IRQ_BADGE
+        && u32::from(sdhci_irq.handler_slot)
+            == pi4_driver_abi::DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        && u32::from(sdhci_irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
         && matches!(
-            irq.trigger,
+            sdhci_irq.trigger,
             crate::generated::DriverRuntimeIrqTrigger::Level
         );
+    let dma_irq_valid = dma_irq.irq == BCM2711_SDIO_DMA_IRQ
+        && dma_irq.badge == BCM2711_SDIO_DMA_IRQ_BADGE
+        && u32::from(dma_irq.handler_slot) == DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
+        && u32::from(dma_irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+        && matches!(
+            dma_irq.trigger,
+            crate::generated::DriverRuntimeIrqTrigger::Level
+        )
+        && sdhci_irq.handler_slot != dma_irq.handler_slot
+        && sdhci_irq.badge & dma_irq.badge == 0;
     let link_valid = link.channel == "cyw43-sdio"
         && link.client_hot_path == driver_task::DriverTaskHotPath::Cyw43Wifi.as_str()
         && link.owner_hot_path == driver_task::DriverTaskHotPath::SdioHost.as_str()
@@ -1827,20 +1898,21 @@ fn generated_cyw43_sdio_topology() -> Result<GeneratedCyw43SdioTopology, HalErro
         && link.event_offset == DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET
         && link.event_len == DRIVER_RUNTIME_DPC_EVENT_RING_BYTES
         && usize::from(link.event_depth) == DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH;
-    if !irq_valid || !link_valid {
+    if !sdhci_irq_valid || !dma_irq_valid || !link_valid {
         return Err(HalError::Unsupported(
             "driver-runtime-cyw43-sdio-topology-invalid",
         ));
     }
-    Ok(GeneratedCyw43SdioTopology { irq, link })
+    Ok(GeneratedCyw43SdioTopology {
+        irqs: [sdhci_irq, dma_irq],
+        link,
+    })
 }
 
 #[cfg(feature = "kernel")]
-fn generated_runtime_irq_for_hot_path(
-    hot_path: driver_task::DriverTaskHotPath,
-) -> Result<crate::generated::DriverRuntimeIrqSpec, HalError> {
+fn generated_serial_runtime_irq() -> Result<crate::generated::DriverRuntimeIrqSpec, HalError> {
     let policy = crate::generated::driver_runtime_image_policy();
-    if !policy.required || policy.irqs.len() != 2 {
+    if !policy.required || policy.irqs.len() != 3 {
         return Err(HalError::Unsupported(
             "driver-runtime-generated-irq-topology-count",
         ));
@@ -1849,7 +1921,7 @@ fn generated_runtime_irq_for_hot_path(
         .irqs
         .iter()
         .copied()
-        .filter(|irq| irq.hot_path == hot_path.as_str());
+        .filter(|irq| irq.hot_path == driver_task::DriverTaskHotPath::SerialConsole.as_str());
     let irq = matches.next().ok_or(HalError::Unsupported(
         "driver-runtime-generated-irq-missing",
     ))?;
@@ -1858,19 +1930,8 @@ fn generated_runtime_irq_for_hot_path(
             "driver-runtime-generated-irq-duplicate",
         ));
     }
-    let expected = match hot_path {
-        driver_task::DriverTaskHotPath::SerialConsole => {
-            (BCM2711_MINI_UART_IRQ, BCM2711_MINI_UART_IRQ_BADGE)
-        }
-        driver_task::DriverTaskHotPath::SdioHost => (BCM2711_SDIO_IRQ, BCM2711_SDIO_IRQ_BADGE),
-        _ => {
-            return Err(HalError::Unsupported(
-                "driver-runtime-generated-irq-hot-path",
-            ));
-        }
-    };
-    let valid = irq.irq == expected.0
-        && irq.badge == expected.1
+    let valid = irq.irq == BCM2711_MINI_UART_IRQ
+        && irq.badge == BCM2711_MINI_UART_IRQ_BADGE
         && u32::from(irq.handler_slot) == pi4_driver_abi::DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
         && u32::from(irq.notification_slot) == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
         && matches!(
@@ -3045,7 +3106,7 @@ fn generated_driver_tcb_notification_binding_source(
     contract: DriverTaskContract,
 ) -> Result<Option<&'static str>, HalError> {
     if contract == SERIAL_DRIVER_TASK_CONTRACT {
-        let _ = generated_runtime_irq_for_hot_path(driver_task::DriverTaskHotPath::SerialConsole)?;
+        let _ = generated_serial_runtime_irq()?;
         return Ok(Some("generated-serial-irq-topology"));
     }
 
@@ -3369,7 +3430,8 @@ impl<'a> KernelHal<'a> {
             match created {
                 Ok(handle) => {
                     let _ = driver_task::register_pi4_bus_ring_service(*contract);
-                    if self.driver_tasks.push(handle).is_err() {
+                    if let Err(rejected_handle) = self.driver_tasks.push(handle) {
+                        let _ = release_runtime_irq_bindings(rejected_handle.runtime_irqs);
                         report.failed_count = report.failed_count.saturating_add(1);
                         if let Some(task_key) = driver_task::driver_task_contract_key(*contract) {
                             driver_task::publish_wifi_driver_task_bootstrap_failure(
@@ -3536,7 +3598,8 @@ impl<'a> KernelHal<'a> {
         for contract in DRIVER_TASK_BOOTSTRAP_CONTRACTS {
             match self.create_isolated_driver_task(*contract, fault_endpoint) {
                 Ok(handle) => {
-                    if self.driver_tasks.push(handle).is_err() {
+                    if let Err(rejected_handle) = self.driver_tasks.push(handle) {
+                        let _ = release_runtime_irq_bindings(rejected_handle.runtime_irqs);
                         report.failed_count = report.failed_count.saturating_add(1);
                         let mut line = heapless::String::<192>::new();
                         let _ = fmt::write(
@@ -3783,7 +3846,7 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: None,
             code_frame: None,
-            runtime_irq: None,
+            runtime_irqs: [None; DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
             reciprocal_link_caps: [None; 2],
             runtime_image_spec,
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
@@ -4880,10 +4943,7 @@ impl<'a> KernelHal<'a> {
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
         if let Some(recovery_endpoint) = recovery_endpoint {
-            let irq_handler = runtime_irq
-                .binding
-                .map(|binding| binding.kernel.handler_slot as usize)
-                .unwrap_or(0);
+            let irq_handlers = runtime_irq.root_handler_slots();
             if !driver_task::publish_cyw43_sdio_restart_context(
                 contract,
                 runtime_load.entry,
@@ -4892,7 +4952,7 @@ impl<'a> KernelHal<'a> {
                 recovery_endpoint as usize,
                 command_endpoint as usize,
                 notification as usize,
-                irq_handler,
+                irq_handlers,
                 restart_sdhci_root_ptr,
             ) {
                 return Err(HalError::Unsupported("driver-runtime-restart-context"));
@@ -5125,9 +5185,6 @@ impl<'a> KernelHal<'a> {
         } else {
             0
         };
-        let runtime_irq = runtime_irq.commit();
-        let reciprocal_link_caps = reciprocal_link_caps.commit();
-
         driver_task::publish_driver_task_root_notification(contract, root_notification as usize);
         if root_wake_notification != 0
             && !driver_task::publish_driver_task_root_wake_notification(
@@ -5138,6 +5195,8 @@ impl<'a> KernelHal<'a> {
         {
             return Err(HalError::Unsupported("driver-runtime-root-wake-publish"));
         }
+        let runtime_irqs = runtime_irq.commit();
+        let reciprocal_link_caps = reciprocal_link_caps.commit();
         Ok(KernelDriverTaskHandle {
             contract,
             role_bit,
@@ -5153,7 +5212,7 @@ impl<'a> KernelHal<'a> {
             ring_frame: Some(ring_frame.cap()),
             vspace: Some(vspace),
             code_frame: mapped_code_frame,
-            runtime_irq,
+            runtime_irqs,
             reciprocal_link_caps,
             runtime_image_spec,
             runtime_image_declared_region_mask: runtime_image_declared_region_mask(
@@ -5185,96 +5244,102 @@ impl<'a> KernelHal<'a> {
         notification: seL4_CPtr,
         builder: &mut RuntimeInitDescriptorBuilder,
     ) -> Result<RuntimeIrqInstallGuard, HalError> {
-        let irq = if contract == SERIAL_DRIVER_TASK_CONTRACT {
-            generated_runtime_irq_for_hot_path(driver_task::DriverTaskHotPath::SerialConsole)?
+        let irqs = if contract == SERIAL_DRIVER_TASK_CONTRACT {
+            [Some(generated_serial_runtime_irq()?), None]
         } else if contract == SDIO_HOST_DRIVER_TASK_CONTRACT {
-            generated_cyw43_sdio_topology()?.irq
+            generated_cyw43_sdio_topology()?.irqs.map(Some)
         } else {
             return Ok(RuntimeIrqInstallGuard::empty());
         };
-        let kernel = match self.bind_irq_to_notification_with_badge(
-            Irq(irq.irq),
-            generated_irq_trigger(irq.trigger),
-            seL4_Word::from(irq.badge),
-            notification,
-            false,
-        ) {
-            Ok(binding) => binding,
-            Err(err) => {
+        let mut guard = RuntimeIrqInstallGuard::empty();
+        for irq in irqs.into_iter().flatten() {
+            let kernel = match self.bind_irq_to_notification_with_badge(
+                Irq(irq.irq),
+                generated_irq_trigger(irq.trigger),
+                seL4_Word::from(irq.badge),
+                notification,
+                false,
+            ) {
+                Ok(binding) => binding,
+                Err(err) => {
+                    let mut line = heapless::String::<224>::new();
+                    let _ = fmt::write(
+                        &mut line,
+                        format_args!(
+                            "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} status=failed proof_effect=acceptance-red err={}",
+                            contract.name, irq.irq, irq.badge, err,
+                        ),
+                    );
+                    crate::bootstrap::log::force_uart_line(line.as_str());
+                    return Err(err);
+                }
+            };
+            let child_handler_slot = seL4_CPtr::from(irq.handler_slot);
+            let root_cnode = self.env.init_cnode_cap();
+            let root_depth = sel4::word_bits() as u8;
+            let copy_err = sel4::cnode_mint_depth(
+                child_cnode,
+                child_handler_slot,
+                child_depth,
+                root_cnode,
+                kernel.handler_slot,
+                root_depth,
+                sel4_sys::seL4_CapRights_All,
+                0,
+            );
+            if copy_err != seL4_NoError {
+                let _ = self.release_irq_notification(kernel);
                 let mut line = heapless::String::<224>::new();
                 let _ = fmt::write(
-                    &mut line,
-                    format_args!(
-                        "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} status=failed proof_effect=acceptance-red err={}",
-                        contract.name, irq.irq, irq.badge, err,
-                    ),
-                );
-                crate::bootstrap::log::force_uart_line(line.as_str());
-                return Err(err);
-            }
-        };
-        let child_handler_slot = seL4_CPtr::from(irq.handler_slot);
-        let root_cnode = self.env.init_cnode_cap();
-        let root_depth = sel4::word_bits() as u8;
-        let copy_err = sel4::cnode_mint_depth(
-            child_cnode,
-            child_handler_slot,
-            child_depth,
-            root_cnode,
-            kernel.handler_slot,
-            root_depth,
-            sel4_sys::seL4_CapRights_All,
-            0,
-        );
-        if copy_err != seL4_NoError {
-            let _ = self.release_irq_notification(kernel);
-            let mut line = heapless::String::<224>::new();
-            let _ = fmt::write(
                     &mut line,
                     format_args!(
                         "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} status=failed proof_effect=acceptance-red err=handler-cap-mint-{}",
                         contract.name, irq.irq, irq.badge, copy_err,
                     ),
                 );
-            crate::bootstrap::log::force_uart_line(line.as_str());
-            return Err(HalError::Sel4(copy_err));
-        }
-        if let Err(err) = builder.add_irq(irq) {
+                crate::bootstrap::log::force_uart_line(line.as_str());
+                return Err(HalError::Sel4(copy_err));
+            }
+            if let Err(err) = builder.add_irq(irq) {
+                let runtime = RuntimeIrqBinding {
+                    kernel,
+                    child_cnode,
+                    child_handler_slot,
+                    child_depth,
+                };
+                let _ = release_runtime_irq_binding(runtime);
+                return Err(err);
+            }
             let runtime = RuntimeIrqBinding {
                 kernel,
                 child_cnode,
                 child_handler_slot,
                 child_depth,
             };
-            let _ = release_runtime_irq_binding(runtime);
-            return Err(err);
+            guard.push(runtime)?;
+            let mut line = heapless::String::<224>::new();
+            let proof_effect = if contract == SERIAL_DRIVER_TASK_CONTRACT {
+                "irq-rx-ready"
+            } else if irq.irq == BCM2711_SDIO_DMA_IRQ {
+                "dma-completion-ready"
+            } else {
+                "notification-dpc-ready"
+            };
+            let _ = fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} handler_slot={} notification_slot={} trigger=level status=bound proof_effect={}",
+                    contract.name,
+                    irq.irq,
+                    irq.badge,
+                    irq.handler_slot,
+                    irq.notification_slot,
+                    proof_effect,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line(line.as_str());
         }
-        let runtime = RuntimeIrqBinding {
-            kernel,
-            child_cnode,
-            child_handler_slot,
-            child_depth,
-        };
-        let mut line = heapless::String::<224>::new();
-        let proof_effect = if contract == SERIAL_DRIVER_TASK_CONTRACT {
-            "irq-rx-ready"
-        } else {
-            "notification-dpc-ready"
-        };
-        let _ = fmt::write(
-            &mut line,
-            format_args!(
-                "DRIVER_TASK_IRQ_TOPOLOGY contract={} irq={} badge={} handler_slot={} notification_slot={} trigger=level status=bound proof_effect={}",
-                contract.name,
-                irq.irq,
-                irq.badge,
-                irq.handler_slot,
-                irq.notification_slot,
-                proof_effect,
-            ),
-        );
-        crate::bootstrap::log::force_uart_line(line.as_str());
-        Ok(RuntimeIrqInstallGuard::new(runtime))
+        Ok(guard)
     }
 
     /// Creates an IRQHandler and badged notification cap for a device IRQ.
@@ -5637,7 +5702,7 @@ mod tests {
             ring_frame: None,
             vspace: None,
             code_frame: None,
-            runtime_irq: None,
+            runtime_irqs: [None; super::DRIVER_RUNTIME_IRQ_BINDING_CAPACITY],
             reciprocal_link_caps: [None; 2],
             runtime_image_spec,
             runtime_image_declared_region_mask: super::runtime_image_declared_region_mask(
@@ -6717,14 +6782,11 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn generated_serial_and_sdio_irqs_are_exact_distinct_owner_lanes() {
-        let serial = super::generated_runtime_irq_for_hot_path(
-            super::driver_task::DriverTaskHotPath::SerialConsole,
-        )
-        .expect("generated Pi 4 serial IRQ topology must remain valid");
-        let sdio = super::generated_runtime_irq_for_hot_path(
-            super::driver_task::DriverTaskHotPath::SdioHost,
-        )
-        .expect("generated Pi 4 SDIO IRQ topology must remain valid");
+        let serial = super::generated_serial_runtime_irq()
+            .expect("generated Pi 4 serial IRQ topology must remain valid");
+        let topology = super::generated_cyw43_sdio_topology()
+            .expect("generated Pi 4 SDIO IRQ topology must remain valid");
+        let [sdio, dma] = topology.irqs;
 
         assert_eq!(serial.irq, pi4_driver_abi::DRIVER_RUNTIME_SERIAL_IRQ);
         assert_eq!(
@@ -6739,6 +6801,19 @@ mod tests {
         );
         assert_ne!(serial.irq, sdio.irq);
         assert_ne!(serial.badge, sdio.badge);
+        assert_eq!(dma.irq, pi4_driver_abi::DRIVER_RUNTIME_SDIO_DMA_IRQ);
+        assert_eq!(dma.badge, pi4_driver_abi::DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE);
+        assert_eq!(
+            u32::from(dma.handler_slot),
+            pi4_driver_abi::DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
+        );
+        assert_eq!(dma.notification_slot, sdio.notification_slot);
+        assert_eq!(
+            dma.trigger,
+            crate::generated::DriverRuntimeIrqTrigger::Level
+        );
+        assert_ne!(dma.handler_slot, sdio.handler_slot);
+        assert_eq!(dma.badge & sdio.badge, 0);
     }
 
     #[cfg(feature = "kernel")]

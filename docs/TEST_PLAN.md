@@ -804,16 +804,35 @@ the child boundary. Multi-child parent coverage must prove that only a fresh
 same-request `OWNER_REPLY` edge renews a 30.56-second child lease, that a
 repeated reply cannot renew twice, stale/wrong-sequence progress cannot arm a
 renewal, and the shared 1,024-action trace bound ends renewal deterministically.
-Idle and external-DMA requests must retain the exact named persistent
-`INT_ENABLE=0x02ff000b` policy without a per-request rewrite. Active retained
-PIO must remove DMA-only `DMA_END` and `ADMA_ERROR`, add only the
-direction-correct `SPACE_AVAIL`/`DATA_AVAIL` source, and preserve that source
-across an interleaved CARD_INT policy rewrite without adding it to
-`SIGNAL_ENABLE`. `CARD_INT` is added only while that asynchronous source is
-armed. The terminal PIO snapshot must restore ordinary interrupt policy before
-publishing completion in the same bounded terminal quantum. Terminal
-classification must still recognize every bit in broad `INT_STATUS` error mask
-`0xffff8000`.
+Each active request must derive and install the same exact request-owned mask in
+both `INT_ENABLE` and `SIGNAL_ENABLE` before COMMAND. Command-only uses
+`RESPONSE` plus named command errors; external DMA uses the exact named
+bcm2835 mask `0x02ff000b`; retained PIO removes DMA-only `DMA_END` and
+`ADMA_ERROR` and adds only the direction-correct
+`SPACE_AVAIL`/`DATA_AVAIL` source. Independently armed `CARD_INT` must survive
+both register writes and an interleaved policy rewrite. The terminal PIO
+snapshot must restore ordinary interrupt policy before publishing completion
+in the same bounded terminal quantum. Terminal classification must still
+recognize every bit in broad `INT_STATUS` error mask `0xffff8000`.
+
+Request-IRQ tests must snapshot `INT_STATUS` once and partition exact request
+bits from `CARD_INT`. They must prove the SDHCI IRQ-158 path masks only the delivered
+request bits in `SIGNAL_ENABLE` before one handler-slot-4 acknowledgement, performs no
+request W1C, and never routes a request-only IRQ through DPC/no-source handling.
+The exact retained `PollIssued` cursor alone consumes and W1Cs the request
+snapshot, then rearms only still-required signal bits after a final status
+check. A combined request-plus-CARD_INT snapshot must preserve the existing
+CARD_INT mask/durable-publish ordering and both authorities before exactly one
+handler-slot-4 acknowledgement. A status edge crossing issue or wait-arm must be caught by
+the final condition check rather than requiring another edge.
+
+Generated-topology tests must require exactly two level-triggered `sdio-host`
+routes on local notification slot `3`: SDHCI IRQ 158/badge 159/handler slot 4
+and BCM2835 DMA channel-4 IRQ 114/badge 512/handler slot 5. Along with serial
+IRQ 125, these are the exact three generated driver IRQs. Missing, extra,
+overlapping-badge, or within-runtime aliased-handler routes must fail IR
+validation, generated
+HAL admission, descriptor sealing, and pair-restart construction.
 
 External-DMA lifecycle coverage must prove the exact Linux order within one
 bounded preissue/issue owner quantum with `PREISSUE_STEP_BOUND=16`: SDHCI
@@ -839,9 +858,14 @@ final BCM2835 control block must set Linux's `INT_EN`, intermediate blocks must
 not, and every case must prove `SDHCI_TRNS_DMA` remains clear. A posted-start adversary must hold
 control-block and ACTIVE writes invisible until the full store-completion fence
 and same-channel readback, then prove the join cannot accept the initial zero
-`CONBLK_AD`. Completion must require the terminal `CS.INT` edge and acknowledge
-it exactly once with `INT | ACTIVE`, including immediate-terminal and delayed-
-DREQ schedules. Failure coverage must separately retain telemetry capture, DMA
+`CONBLK_AD`. Completion must require the terminal `CS.INT` edge. DMA IRQ-114
+tests must permit only the exact active external-DMA cursor to sample channel 4,
+latch terminal/error evidence, W1C `CS.INT` exactly once with `INT | ACTIVE`,
+and only then ACK handler slot 5. They must force both `DATA_END`-then-DMA and
+DMA-then-`DATA_END` schedules: the first terminal half remains durable and
+blocks on local notification slot `3` without polling or completing until the
+second IRQ arrives. Immediate-terminal and delayed-DREQ schedules remain
+mandatory. Failure coverage must separately retain telemetry capture, DMA
 inspect/abort/poll/stop/reset/verify, host acknowledgement/reset, clock restore,
 final inhibit, and final snapshot phases; no containment phase may replay the
 issued command.
@@ -1028,8 +1052,8 @@ peer tuple under the exact latched generation, pair, physical lifetime, and
 already-open Network lease. That case must use one bounded root producer transaction for
 Stage/rematerialization, issued-unknown latching, sequence-last command commit,
 and the final scheduling signal. It publishes no initial or replacement root
-continuation grant; after commit root performs only `PollRing` turns while the
-exact tagged parent and Function-2 child advance across yielded lease slices.
+continuation grant; root completion checks are observation-only and may send
+only the identity-bound physical-deadline wake for the unchanged parent.
 Matching completion wins before mutation, and the producer performs no physical
 I/O.
 The console-socket policy test must prove delayed ACK is disabled. The
@@ -1084,19 +1108,43 @@ One finite `STEADY_SERVICE_LEASE` must admit exactly two typed child identities:
 the exact active DPC event bound to request/fingerprint/event/generation, and the
 exact eligible post-Gate-8 urgent-op7 foreground SDIO child bound to logical
 generation, pair, physical lifetime, open Network lease, and paired-response or
-exact authenticated-console-connection-and-peer proof. Each leased owner slice must
+exact authenticated-console-connection-and-peer proof. Each leased owner quantum must
 require command flag bit 11 `DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE`
 and the matching `ETH_TX` descriptor marker, reject EAPOL, wrong generation,
 half-tagged or mutated pairs, and any budget other than exactly one frame with
-at most four operations. Each leased owner slice must
-yield, publish exact 24-byte sequence-last progress in the mutually exclusive
-grant slot, and retain command deadline, op/byte limits, poison behavior, and
-one physical issuer. Tests must prove only a strictly newer matching
-request/fingerprint/generation slice rebases the foreground, DPC, or root
-parent inactivity fence; repeated, torn, stale, and wrong-identity records do
-not. Slices 1 through 256 may execute, slice 257 must fault before owner
-dispatch, and the root parent must fail closed after 64 consecutive PollRing
-turns without exact progress. Boot, firmware, control/op11, EAPOL, recovery,
+at most four operations. Each leased physical owner quantum must return an
+advance, wait, or terminal disposition and retain command deadline, op/byte
+limits, poison behavior, and one physical issuer. An exact unchanged request
+wait must block on local notification slot `3` after a final status recheck; it
+must not self-yield, consume another owner quantum, or remain runnable. An exact
+24-byte sequence-last semantic heartbeat may publish only when wait-arm,
+latched interrupt status, controller/data phase, or a pending parent's
+child-terminal frontier changes. The exact parent terminal must use its
+sequence-last completion and post-commit Network wake.
+Repeated admission and unchanged wait publish nothing. Invalid, empty, and
+spurious wakes must perform zero physical I/O and publish no heartbeat. A valid
+identity-bound peer/root containment hint may perform exactly one request-
+status/deadline observation, then must reblock unchanged without issue, replay,
+grant, or deadline renewal. Tests must prove only a strictly newer matching
+request/fingerprint/generation semantic epoch updates the foreground, DPC, or
+root diagnostic age; repeated, torn, stale, and wrong-identity records do not.
+More than 256 scheduler wakes must remain legal because the 256-operation
+service maximum is a per-quantum HAL budget, not a scheduler count. The exact CNTVCT child/parent
+lifetime must fault before owner dispatch and no heartbeat or scheduling wake
+may renew that deadline. Root must measure physical age from the last exact
+semantic epoch, send exactly one unchanged-parent scheduling wake at the ABI
+child worst-case bound, and CYW43 must propagate it only to the exact active
+SDIO child for deadline sampling. A second exact expired miss with no terminal
+must enter pair recovery. EventPump tests must record the consumed child-to-root
+Network service-wake epoch on the issued tagged TX, suppress pending-TX,
+terminal-drain, and HAL-lease runnable levels while that epoch is unchanged and
+the physical deadline is not due, and reject active-request presence alone as
+work. Exact steady-parent terminal publication must signal the existing
+coalescing Network service wake; the edge is not RX-only authority. The former
+64-PollRing counter is diagnostic only and
+must not expire, wake, or recover blocked physical work. A missed heartbeat
+publication must not itself poison physical state. Boot, firmware,
+control/op11, EAPOL, recovery,
 op8, op10, bulk, unauthenticated/wrong-peer traffic, later events, stale/mutated identity, and
 poison must reject the lease without I/O.
 Immutable root/delegated generation-bound commands must reject endpoint wake
@@ -1104,10 +1152,10 @@ even when mutable gate state is absent. Repeated issued-unknown reap waits must
 preserve/re-arm the ordinary exact continuation grant or retain the exact
 immutable finite lease identity; the late exact terminal may close only the old
 parent, and no endpoint fallback may advance it. Foreground and DPC child
-timeouts must be inactivity fences rather than total-age limits: consumption
-of an ordinary exact retained continuation grant or publication of one exact
-newer leased owner slice proves progress and must rebase both the
-virtual-counter start and bounded fallback-poll age.
+diagnostics may measure inactivity, but leased physical authority is always
+total-age bounded by the immutable request deadline. Consumption of an ordinary
+exact retained continuation grant or one changed leased semantic epoch may
+update diagnostic age only; neither rebases the physical deadline.
 An event's source/frame-length hint must be copied into the DPC cursor only on
 the first admission of that exact sequence. Later completion-poll, ordinary
 explicit-grant/exact-grant owner turns, and leased owner slices must not
@@ -2015,17 +2063,20 @@ coverage must prove distinct phases for boot, firmware, control/EAPOL, recovery,
 op8, op10, op11, bulk, and GENET. It must separately prove an eligible fresh
 post-Gate-8 urgent op7 uses one bounded
 Stage/rematerialize/issued-latch/sequence-last-command/final-signal producer
-transaction with no root continuation grant, followed only by root `PollRing`
-turns while the tagged parent and Function-2 child advance. One finite
+transaction with no root continuation grant, followed by observation-only
+completion checks and at most one unchanged-identity physical-deadline wake.
+One finite
 `STEADY_SERVICE_LEASE` must cover only the exact active DPC child and exact
-eligible urgent-op7 foreground SDIO child, yield each bounded owner slice, and
-retain deadline/op/byte/poison/sole-issuer bounds. Coverage must also prove that DPC supplies both persistent
+eligible urgent-op7 foreground SDIO child. Each physical owner quantum remains
+bounded, and an unchanged request wait blocks on local notification slot `3`.
+Coverage must retain deadline/op/byte/poison/sole-issuer bounds and also prove that DPC supplies both persistent
 child-owner urgency and queue/tail root-op8 demand, a current root wake supplies
 the same queue/tail demand, only the independently due lost-edge audit adds
 `RX_HINTLESS_FIRSTREAD`, and the 32-step `DPC_ACTIVATE`, strict queued-frame
 terminal, v11 cause/frame-turn counters, and generation-scoped TX phase
 counters remain passive and bounded. Final admission coverage must additionally
-prove prompt IRQ capture without changing an active controller cursor, exact
+prove prompt request and CARD_INT IRQ partition without changing the wrong
+cursor, mask-before-ACK with request W1C left to `PollIssued`, exact
 AckStatus W1C condition-before-sleep rearm before terminal publication, new-IRQ
 append only after proven unmask, zero/no-ack fallback, endpoint rejection, and
 issued-unknown preservation. TX coverage must prove
@@ -2135,6 +2186,17 @@ chosen one-byte descriptor, keep CCCR `IENx` and `HOSTINTMASK` domains distinct,
 and prove root is not a second writer; they must not use mask presence or
 absence to satisfy the TCP gate.
 
+Exact image `0dcfe550048c` / image id
+`7856d079fea3ff1f9de353d2daab3b499ed53bde293ceab4a4242e5b158c8971`
+also fails this gate: stable warm service was 0/5. R01 reached Gate 8/DHCP and
+then lost its pair before permanent Gate 8e failure; R02/R04/R05 failed at
+first-pair Gate 8e; R03 reached Gate 8/DHCP on two pairs, lost both, and
+exhausted recovery. Its paired Wi-Fi cutoff contains brief DHCP but zero TCP or
+ICMP involving the Pi address. Because no warm lifetime retained TCP
+reachability, `.coh`, ping/latency, REST, and hive pressure were correctly
+withheld. A replacement must first prove the generated dual-IRQ lifetime and
+stable TCP; no higher-layer test may be used to mask this lower-layer failure.
+
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
 mode has interrupts enabled and polling disabled; the ISR schedules durable
@@ -2145,10 +2207,21 @@ pending, a 2,048-entry TX queue, 32-KiB aggregation, and block-mode CMD53.
 Cohesix must prove its translation through the existing 50-frame RX bound,
 credits/glom, 32-KiB shared aperture, 512-byte Function 2 blocks, multi-block
 CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
-latch. Its scheduler form remains one bounded EventPump Network quantum with
+latch. The same child-to-root Network service wake must be emitted after an
+exact steady-parent terminal and is therefore not RX-only. Its scheduler form
+remains one bounded EventPump Network quantum with
 physical-console checkpoints, ordinary exact grants, one finite typed
 `STEADY_SERVICE_LEASE` for only the active DPC or eligible urgent-op7 child,
-one HAL owner, and one linked SDIO runtime issuer. The AckStatus W1C child must
+one HAL owner, and one linked SDIO runtime issuer. Its compiler-generated
+local-notification topology has SDHCI IRQ 158/badge 159/handler slot 4 and DMA
+IRQ 114/badge 512/handler slot 5. Every issued steady request
+must enable its exact response/data/error and direction-correct PIO-ready
+sources in both host interrupt registers, block when unchanged, and resume from
+the exact required physical IRQ rather than a runnable status poll. Request and
+CARD_INT causes must be partitioned from one host snapshot under one handler-
+slot-4 acknowledgement. External DMA must join the independently delivered host
+and DMA terminal halves in either order; its cursor owns DMA `CS.INT` W1C before
+handler-slot-5 acknowledgement. The AckStatus W1C child must
 rearm CARD_INT before terminal publication, and a new IRQ may append only after
 unmask proof. No test may pass by adding a normal-path timer poller or private
 physical drain loop. The 32-ms quiescence and 1,024-ms reissue deadlines on the
@@ -2175,6 +2248,9 @@ work, or changing GENET scheduling.
 Run the focused source gates serially:
 
 ```bash
+cargo test -p coh-rtc driver_runtime_policy_requires_exact_cyw43_sdio_irq_pair
+cargo test -p coh-rtc driver_runtime_policy_rejects_aliasing_runtime_irq_routes
+cargo test -p coh-rtc --test pi4_profile pi4_uboot_profile_emits_network_policy
 cargo test -p pi4-driver-abi continuation_grant_fits_reserved_command_slot_and_fingerprints_actions
 cargo test -p pi4-driver-abi sdio_steady_service_lease_is_scoped_to_typed_data_plane_children
 cargo test -p pi4-driver-abi sdio_dpc_source_w1c_rearm_requires_exact_event_bound_write_shape
@@ -2183,8 +2259,12 @@ cargo test -p pi4-driver-runtime steady_parent_propagates_exact_identity_to_only
 cargo test -p pi4-driver-runtime steady_parent_budget_blocks_fifth_child_before_frontier_publication -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_child_first_completion_miss_stays_pending_without_root_grant -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_service_progress_is_sequence_last_and_identity_exact -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_pending_identical_semantic_snapshot_blocks_without_progress_publication -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_pending_semantic_change_publishes_one_progress_revision -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_pending_wait_route_blocks_on_local_notification_including_dpc_child -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_cyw43_parent_terminal_wakes_root_only_after_sequence_last_commit -- --test-threads=1
 cargo test -p pi4-driver-runtime sdio_partial_steady_lease_markers_typed_reject_before_io -- --test-threads=1
-cargo test -p pi4-driver-runtime steady_service_lease_is_finite_and_cannot_auto_renew -- --test-threads=1
+cargo test -p pi4-driver-runtime steady_service_lease_uses_request_deadline_not_scheduler_poll_count -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_service_lease_exhaustion_poison_is_typed_and_fail_closed -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_parent_lease_exhaustion_poison_is_typed_and_fail_closed -- --test-threads=1
 cargo test -p pi4-driver-runtime dpc_steady_progress_rebases_exact_child_inactivity_fence -- --test-threads=1
@@ -2193,11 +2273,24 @@ cargo test -p pi4-driver-runtime steady_service_lease_tracks_exact_dpc_event_acr
 cargo test -p pi4-driver-runtime dpc_source_rearm_marker_is_only_initial_core_intstatus_ack -- --test-threads=1
 cargo test -p pi4-driver-runtime ack_status_w1c_rearms_before_completion_and_appends_crossing_event -- --test-threads=1
 cargo test -p pi4-driver-runtime only_real_irq_appends_behind_proven_unmasked_active_event -- --test-threads=1
-cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_fresh_turn_signals_once_without_grant_then_only_polls -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_request_irq_policy_is_exact_for_command_pio_and_external_dma -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_request_irq_masks_before_ack_without_w1c_and_poll_rearms -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_request_and_card_irq_partition_preserves_both_owner_sources -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_irq_only_commits_terminal_before_exact_ack_without_reissue -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_coalesced_dma_and_sdhci_badges_service_both_exact_sources -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_irq_stale_clear_acks_but_asserted_inactive_fails_closed -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_irq_activation_is_quiesced_and_acked_once_per_cold_or_replay_lifetime -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_terminal_cannot_retire_before_exact_ack_or_alias_next_request -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_irq_crosses_data_end_in_either_order_without_poll_loop -- --test-threads=1
+cargo test -p pi4-driver-runtime sdio_dma_irq_rejects_pio_and_command_cursors_without_consuming_terminal -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_parent_sleeps_until_new_runtime_edge_or_physical_deadline -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_lease_requires_exact_paired_tags_budget_and_cadence -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_steady_tx_parent_inactivity_rebases_only_on_new_exact_progress -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_standalone_console_lease_requires_exact_active_authenticated_peer_lifetime -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_authenticated_console_parent_keeps_admitted_cadence_after_auth_close -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib generated_serial_and_sdio_irqs_are_exact_distinct_owner_lanes -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_sdio_runtime_descriptor_seal_requires_exact_irq_pair -- --test-threads=1
+cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib pair_restart_notification_injection_preserves_runtime_dma_irq_ownership -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib console_tcp_socket_disables_delayed_ack -- --test-threads=1
 cargo test -q -p root-task --lib cyw43_smoltcp_immediate_ack_uses_receive_coupled_steady_provenance --features release-pi4 -- --test-threads=1
 cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib cyw43_tx_priority_classifier_keeps_protocol_control_ahead_of_bulk -- --test-threads=1
@@ -2208,7 +2301,9 @@ cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib 
 
 Fresh exact-image acceptance must pair one power-off plus five first-pair warm
 WiFi boots with one GENET control and then run the same sequential request and
-no-retry pressure workloads. Before ping, TCP, `cohsh`, or benchmark traffic
+no-retry pressure workloads. Every WiFi lifetime must pass independently;
+aggregating fast boots to hide one slow, polling-paced, or recovered lifetime
+is forbidden. Before ping, TCP, `cohsh`, or benchmark traffic
 warms the Pi's host-neighbor entry on each lifetime, send exactly one ICMPv4
 Echo Request. The boot-paired pcap must show that request, the Pi's ARP request,
 the matching host ARP reply, and exactly one Echo Reply with the original
@@ -2218,8 +2313,10 @@ lifetime independently of CYW43 ingress and warmed cadence. Record its elapsed
 time separately; use only subsequent ARP-warmed ping, SYN, and
 request-to-first-payload samples for the CYW43 cadence threshold. The mandatory
 tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
-29 sequential requests/s. The aggressive low-overhead target is p95 at most 10
-ms and at least 100 requests/s. At true idle, `rx_watch=watching` may become
+29 sequential requests/s on every counted lifetime. This is the minimum
+acceptable-norm claim, not an aspirational average. The aggressive low-overhead
+target is p95 at most 10 ms and at least 100 requests/s. At true idle,
+`rx_watch=watching` may become
 `watchdog-due` after one 32-ms no-progress interval, then
 `watchdog-probing` and `watchdog-suppressed`. Exactly one
 `deadline_probes`/`terminals` pair may advance at the exact current non-fault
@@ -2231,7 +2328,15 @@ creates no immediate op8 and multiple terminals coalesce behind one deadline.
 DPC and root-wake levels may each demand only one queue/tail
 `RX_STEADY_TAIL_DRAIN` op8; without an independently due watchdog neither may
 add `RX_HINTLESS_FIRSTREAD`.
-The pcap must additionally show no warmed-traffic loss, sequence gap,
+For ordinary warmed samples, runtime evidence must show request-IRQ-driven
+resume with zero root physical-deadline wakes, zero second expired misses, zero
+pair recovery, and zero unchanged-wait heartbeats. A sample completed by the
+20.56-second containment wake is a failure, never a latency outlier that can be
+discarded. Ordinary and pressure runs must prove external-DMA completion is
+entirely IRQ-driven: force both SDHCI-`DATA_END`-first and DMA-channel-4-
+terminal-first requests, retain the first half without polling, and complete
+only after the second exact IRQ. Any missing DMA route, deadline wake, runnable
+completion poll, or one-sided terminal completion fails the candidate. The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
 the same common cold-neighbor semantic gate while latency, throughput, and
@@ -2242,9 +2347,16 @@ thresholds remain source claims rather than hardware results.
 For the replacement candidate, every counted lifetime must also show the exact
 `STEADY_SERVICE_LEASE` identity and finite consumed op/byte/elapsed budget for
 DPC and eligible urgent op7 separately, with zero excluded-child admission,
-overrun, auto-renew, or poison. Correlate root accepted-to-issued and
-issued-to-terminal timing with the pcap; a result that merely moves delay from
-the former into the latter still fails the 40-ms p95 gate. Validate the exact
+overrun, auto-renew, or poison. It must also show exact request IRQ enable,
+delivery, mask-before-ACK, cursor W1C/rearm, block, and terminal counters for
+SDHCI IRQ 158 plus DMA IRQ 114. DMA telemetry must prove cursor-owned `CS.INT`
+W1C before handler-slot-5 ACK, both terminal arrival orders, and zero physical-
+deadline wakes under ordinary and pressure load, with
+zero request-only DPC/no-source classifications and zero empty/spurious
+heartbeat publications. Correlate root accepted-to-issued,
+issued-to-request-IRQ, IRQ-to-terminal, and terminal-to-first-payload timing with
+the pcap; a result that merely moves delay between those phases still fails the
+40-ms p95 gate. Validate the exact
 active authenticated `cohsh` connection and peer tuple before treating
 non-receive-coupled payload as urgent. The same workload must prove boot,
 firmware, control/EAPOL, recovery, op8, op10, bulk, wrong-peer TCP, and GENET
@@ -2756,10 +2868,11 @@ reservation by one validated reverse IPv4/TCP tuple or authenticated `cohsh`
 bound to the exact active console connection and peer tuple plus exact
 generation, pair, physical lifetime, and open Network lease, then use one bounded
 Stage/rematerialize/issued-latch/sequence-last-command/final-signal root
-producer transaction with no root continuation grant. Root must perform only
-`PollRing` turns afterward while the exact tagged parent and Function-2 child
-advance across yielded lease slices. Excluded or stale cases must reject before
-authority mutation.
+producer transaction with no root continuation grant. Root may perform bounded
+observation-only `PollRing` checks afterward, plus at most the identity-bound
+physical-deadline wake for the unchanged parent. Those checks must not schedule
+the exact tagged parent or Function-2 child while they wait. Excluded or
+stale cases must reject before authority mutation.
 
 For ordinary delegated CYW43-to-SDIO commands, tests must prove there is no
 usable endpoint after handoff and that only the stable acknowledged shared grant
@@ -2777,15 +2890,17 @@ again. The owner must consume at
 most one exact grant and perform at most one physical owner quantum. Ordinary
 child timeout age is inactivity: consumption of that exact grant rebases the
 counter-backed and fallback-poll fences. One finite `STEADY_SERVICE_LEASE` may
-instead admit only the exact active DPC or eligible urgent-op7 child, yield every
-bounded owner slice, and retain deadline/op/byte, identity, poison, and
-one-issuer bounds. HAL must mint the
+instead admit only the exact active DPC or eligible urgent-op7 child. Each
+physical owner quantum remains bounded; unchanged controller-waiting state must
+block on local notification slot `3` and retain deadline/op/byte, identity,
+poison, and one-issuer bounds. HAL must mint the
 CYW43 send cap from the SDIO owner's bound notification with send-only rights
 and badge 256; it must not copy the owner endpoint.
 
 Send-only reciprocal caps deliver CYW43-to-SDIO badge 256 and SDIO-to-CYW43
-badge 2, and the SDIO IRQ delivers badge 159. Badge 2 and badge 159 are
-service wakes. Badge 256 is a coalescing scheduling hint for an already-published
+badge 2. The shared local notification slot `3` receives SDHCI request/CARD_INT
+IRQ 158 as badge 159 on handler slot 4 and BCM2835 DMA channel-4 IRQ 114 as
+badge 512 on handler slot 5. Badges 2, 159, and 512 are service wakes. Badge 256 is a coalescing scheduling hint for an already-published
 command with ordinary exact-grant authority or exact immutable finite lease
 admission, but is not foreground authority by itself. The reserved high
 notification bit is excluded from service work. Tests must prove that one
@@ -2797,7 +2912,9 @@ commands use the exact root grant plus reserved-root-badge scheduling hint; the
 tagged leased root command uses its immutable finite lease identity with no
 root continuation grant. Both must reject endpoint wakes; non-CYW43 retained
 commands keep their endpoint coverage. Tests must
-also coalesce badge 159 with badge 256, service exactly one IRQ quantum,
+also coalesce badges 159 and 512 independently with badge 256, partition host
+request/CARD_INT and DMA-channel causes without aliasing, service at most one
+bounded quantum per physical source,
 preserve ordinary grant authority across a scheduler handoff, and release
 exactly one owner quantum only after validating its admitted authority. If
 deferred notification service consumes a root scheduling edge, the same
@@ -2812,9 +2929,12 @@ for ordinary work.
 grant without physical I/O, and `Execute` performs the irrevocable ACK
 immediately before at most one physical owner quantum. `DPC_ACTIVATE` retains
 its bounded activation/fallback role; normal DPC service must use the exact
-AckStatus W1C child to rearm before terminal publication. Empty
-state enters `Wait`, whose durable grant recheck performs no owner I/O and
-cannot require a second notification edge. A pending CARD_INT at `CheckWake` is
+AckStatus W1C child to rearm before terminal publication. Empty state enters
+`Wait`, whose durable grant recheck performs no owner I/O and cannot require a
+second notification edge. A leased `PollIssued` request with unchanged status
+must also enter blocking `Wait`; only its exact required host or DMA IRQ, peer
+completion, or identity-bound fault-containment wake may resume it. Ordinary and
+pressure completion must use zero such containment wakes. A pending CARD_INT at `CheckWake` is
 service-first for ordinary work. With a leased DPC child, notification service
 may publish/ACK without changing the controller cursor, and a later CARD_INT may
 append behind the active event only after proven unmask.
@@ -2831,7 +2951,20 @@ wrong-generation grants and acknowledgement failure must execute zero owner
 operations and must not produce a private retry loop.
 CARD_INT coverage must prove prompt mask/publish/exact IRQ ACK with no SDIO card
 command beside a retained cursor, AckStatus-W1C rearm before child terminal, and
-fail-closed zero/no-ack fallback.
+fail-closed zero/no-ack fallback. Request-IRQ coverage must prove exact
+command/PIO/external-DMA masks in both enable registers, request signal masking
+before one handler-slot-4 ACK with no IRQ-path W1C, cursor-owned W1C and conditional
+rearm, request-only exclusion from DPC/no-source, and mixed-cause preservation.
+DMA-IRQ coverage must prove exact active-cursor and channel-4 identity, terminal
+and error latching, cursor-owned `CS.INT` W1C before handler-slot-5 ACK, both
+host-first and DMA-first terminal joins, and correct host/DMA/peer badge
+coalescing. Pair-restart coverage must suspend both runtimes, mask CARD_INT,
+drain local notification slot `3`, and prove root ACKs only SDHCI IRQ 158
+handler slot 4. DMA IRQ 114 handler slot 5 must remain unacknowledged across the
+generation cut. Replacement `EngineInit` must abort or reset channel 4 as
+required, clear stale `CS.INT`, prove the channel quiescent, and ACK handler
+slot 5 exactly once before Ready; cold `EngineInit` must use the same
+quiesce-before-ACK seam. No old-generation terminal may enter either lifetime.
 The real SDIO post-claim priority-failure hook must prove that one episode
 cannot reclaim its sticky cutover, that each failure/restart action consumes one
 outer turn, and that only the exact SDIO-first/CYW43-second pair restart resets
@@ -2853,8 +2986,9 @@ Delegated excluded foreground producers retain `Poll -> Grant -> Poll`; the
 paths retain their existing phases.
 Pending-command arbitration, reciprocal submission, completion polling,
 ordinary explicit grants, and owner admission remain bounded retained work. The
-SDIO owner must preserve distinct grant phases for excluded work; every leased
-slice must yield. No turn may execute two owner quanta or form a private loop.
+SDIO owner must preserve distinct grant phases for excluded work; a leased
+physical quantum advances once and an unchanged wait blocks. No turn may
+execute two owner quanta or form a private loop.
 Issued-unknown completion reaping must run
 before a pair-restart hold: a late exact child reply may prove terminal
 ownership and release the claim, but its result/payload is quarantined and only
@@ -3592,7 +3726,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:fb62b38622b289d3f9cd3bcd7171f270b3d45849f9e556f46d8fde381b423561`
+- `configs/generated/root_task_resolved.json` — `sha256:d7c6a0bc9aa1a5f5666d346019d79b52bc6f056666fc0e54b5c8ad06c2eebefd`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
