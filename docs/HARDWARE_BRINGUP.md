@@ -1220,14 +1220,23 @@ their steady priorities, an actionable selected-WiFi `Network` quantum acquires
 one pair-epoch-bound scheduling lease. HAL reserves both scheduling envelopes,
 then boosts SDIO and CYW43 exactly once before the first parent is admitted.
 Each exact current-generation root-to-CYW43 parent reuses that lease while
-retaining its own immutable sequence-zero prepare, nonzero issue commit, grant,
-notification, and completion state. Every parent uses separate sequence-zero
-prepare, sequence-last commit, exact-grant publication, signal-last
-notification, and later completion-poll turns. Once priority admission is
-complete, `CommitRing` refreshes the immutable record, latches issued-unknown,
-and commits the sequence last; the later `PublishGrant` turn publishes initial
-grant 1, and the later `NotifyRing` turn commits `Issued` before signalling
-last.
+retaining its own immutable sequence-zero prepare, nonzero issue commit,
+selected ordinary-grant or persistent-marker contract, notification, and
+completion state. Non-op11 retained parents outside finite op7, including
+non-op11 bootstrap and recovery parents, keep separate sequence-zero prepare, sequence-last
+commit, exact-grant publication, signal-last notification, and later
+completion-poll turns. The finite urgent op7 steady lease is unchanged. Every
+exact op11 instead uses one
+HAL-derived persistent marker: after invisible `Stage`, HAL cleans/barriers the
+full descriptor and payload, commits the command sequence last, records
+`Issued`, and signals exactly once. Its later completion polls publish no grant
+or notification. The marker also binds the exact shared 192-operation,
+64-frame, 65,536-byte budget. Generation zero alone binds to the current
+private physical epoch; a stale nonzero generation fails before child issue.
+One non-renewable 30-second root CNTVCT deadline starts immediately before the
+sequence-last commit. It is fault containment only: a double stable terminal
+miss enters coordinated pair recovery without another signal, grant, replay,
+or runtime wake, while a matching terminal always wins.
 Cold-bootstrap priority `255`, recovery, and an already `Open` steady Network
 lease differ only in scheduling context; they do not select different
 publication protocols. Issued-unknown state is latched before commit, retained
@@ -1248,33 +1257,30 @@ The sequence-zero prepare remains invisible to an autonomously polling child,
 and commit remains the issued-unknown boundary. GENET does not acquire or
 inspect this lease and its service rotation is unchanged.
 
-Every root-to-CYW43 descriptor, including generation zero, uses the shared
-continuation record and the reserved root badge on CYW43's bound notification.
-The exact grant binds the immutable command, request, and logical connection
-generation; CYW43 acknowledges it before one continuation quantum. After a
-completion miss, `PollRing` records only `GrantRequired` for a consumed grant or
-`Granted` for an exact unconsumed grant. The later `PublishGrant` turn
-double-checks for a matching completion before publishing a replacement, and
-the later `NotifyRing` turn commits `Issued` before signalling last. An
-unconsumed grant skips replacement publication and is re-signalled only on the
-later notify turn. If the runtime acknowledges the exact grant between
-publication and notification, final revalidation advances to `Issued` without
-a redundant signal and the next turn polls completion. A consumer acknowledgement
-observed between stable grant snapshots is legal only as
-`consumed_grant_id: 0 -> current` and must remain current on one bounded
-confirmation read; reverse, skipped, foreign, or body-mutated observations fail
-closed. The notification can coalesce or arrive before intake
-  because it is only a scheduling hint; the durable grant is rechecked before
-  quiescence. Endpoint delivery is rejected for this lane.
-Other retained runtimes keep their endpoint rendezvous. No completion is
+Every root-to-CYW43 descriptor, including generation zero, uses its immutable
+sequence and the reserved root badge on CYW43's bound notification. Non-op11
+retained descriptors outside finite op7, including non-op11 bootstrap and recovery
+descriptors, keep the shared
+continuation record: their exact grant binds command, request, and logical
+generation, and their existing acknowledge/replace/re-signal cadence remains
+unchanged. Every exact op11, including logical generation zero and any
+bootstrap/recovery lifecycle use, has no root continuation grant. HAL derives its
+persistent marker from the complete staged op11 only, commits the full body and
+payload before the sequence-last word, records `Issued`, and signals once. A
+completion miss leaves it `Issued`; no grant 19, replacement grant, re-signal,
+or endpoint send can advance it. Missing, coalesced, or repeated notifications
+only prompt re-reading the committed parent and terminal state. Endpoint
+delivery is rejected for this lane. Other retained runtimes keep their endpoint
+rendezvous. No completion is
 exposed until all leased priorities have returned to their manifest values. An
 unresolved lease is cleared only inside fenced pair restart after both runtimes
 are suspended.
 
 HAL creates the reserved-root-badge send cap only for CYW43 and only at the
 final successful runtime-construction boundary. Each retained root cursor
-carries its original logical generation explicitly through every later grant,
-active-request check, and completion poll. Never substitute the currently
+carries its original logical generation explicitly through every later
+ordinary grant or persistent-state check, active-request check, and completion
+poll. Never substitute the currently
 published connection epoch for that field: an association or EAPOL epoch can
 advance while an older exact cursor is still draining, but its ring command
 must keep the old `aux1` and its terminal result must be rejected as stale
@@ -1282,41 +1288,41 @@ before it can update the replacement session.
 
 Delegated CYW43-to-SDIO work cannot use that endpoint rule. The one-way owner
 handoff deletes and zeros root's SDIO endpoint authority, and CYW43 has only its
-shared owner window plus the send-only reciprocal notification cap. A retained
-multi-phase SDIO command therefore uses one fixed 24-byte continuation-grant
-record in reserved shared-ring bytes 40 through 63. Its magic, request sequence,
-complete action fingerprint, authoritative SDIO generation, monotonic nonzero
-grant id, and consumer-published consumed id make the notification only a wake
-hint. CYW43 publishes the immutable body and grant id last, never overwrites an
-unacknowledged grant, re-signals only that same id while acknowledgement is
-absent, and publishes a new id only after the preceding id is consumed. Torn,
-stale, wrong-generation, mutated, replayed, already-consumed, and exhausted-id
-states fail closed.
+shared owner window plus the send-only reciprocal notification cap. Non-op11
+delegated foreground and DPC commands keep the fixed 24-byte acknowledged
+continuation-grant record in reserved shared-ring bytes 40 through 63. Their
+magic, request sequence, complete fingerprint, authoritative SDIO generation,
+monotonic id, and consumer acknowledgement remain the exact authority; this
+repair does not alter their cadence.
 
-The SDIO owner validates the delegated command against its independently
-retained generation before executing the first action, binds that generation at
-the first `Pending`, and irrevocably acknowledges exactly one exact grant before
-physical issue. On a stable completion miss, the producer freezes only the
-retained cursor and next grant plan. Before publishing a replacement or
-re-signalling the exact unconsumed grant, it rechecks for a matching completion,
-commits durable producer state, and signals last. Foreground and DPC-owned
-children follow the same persistent transaction. A notification by itself
-cannot advance either cursor, and a coalesced or already-consumed prompt cannot
-be required after an exact grant becomes durable. Immediately before `Wait`,
-the owner stable-reads the exact grant, committed completion sequence, and
-hardware work condition again. A pending CARD_INT is serviced first while the
-grant remains unconsumed, after which that same grant can proceed without a new
-notification.
+Every CMD52, CMD53, or `DPC_ACTIVATE` child derived from an exact persistent
+op11 instead carries a descriptor marker paired with the parent's command
+marker. The pair has no independent authority: CYW43 derives it only from the
+sealed parent, and SDIO validates the command, descriptor, parent binding,
+request, one-way ownership, and independently retained generation before I/O.
+Partial, stale, mutated, replayed, unrelated-primitive, or finite-lease-mixed
+markers fail closed.
+
+CYW43 cleans and barriers the complete child command, commits its sequence last,
+and may signal badge 256 once. The SDIO owner binds that child on first intake
+and retains it to one terminal with zero delegated grants or re-signals. Each
+scheduler turn performs at most one bounded physical owner quantum. Immediately
+before `Wait`, the owner stable-reads the matching completion, joined IRQ state,
+CARD_INT/DPC work, and retained child frontier again. Visible work continues
+without a new prompt; unchanged state blocks. A pending CARD_INT is serviced
+first and the persistent child remains authoritative afterward.
 
 The SDIO-to-CYW43 badge-2 completion/DPC notification and CYW43-to-SDIO
 badge-256 notification are coalescing prompts only. SDHCI IRQ158 (currently
 badge 159) and DMA channel-4 IRQ116 are distinct physical sources bound to the
-same SDIO owner; they join the immutable request into exactly one terminal in
-either arrival order. No notification grants authority, counts work, or records
+same SDIO owner. PIO terminalizes from IRQ158/host state without DMA; external
+DMA joins IRQ158 and IRQ116 into exactly one immutable terminal in either
+arrival order. No notification grants authority, counts work, or records
 history. The reserved high notification bit is excluded from service work. If
 an IRQ and a scheduling prompt coalesce, SDIO reads hardware plus committed
-state and preserves any unconsumed exact grant. A standalone repeated prompt
-cannot spend that grant. An interrupt arriving after the condition check stays
+state and preserves the exact persistent child or any unconsumed ordinary
+grant. A standalone repeated prompt cannot advance either authority. An
+interrupt arriving after the condition check stays
 visible in hardware or committed state and is delayed by at most one
 already-admitted physical owner quantum. Scheduler handoffs after bounded
 service prevent a priority-255 private IRQ loop. Idle runtimes block only after
@@ -1324,23 +1330,22 @@ the final condition recheck rather than depending on a future edge. An idle
 CARD_INT episode completes active transfer state, drains bounded RX, updates
 credits, admits an already-ready urgent TX, and reaches committed quiescence
 before blocking; it does not create a second physical owner or fallback lane.
-The immutable root/delegated command descriptor makes every generation-bound
-CYW43 lane grant-only even if mutable gate state was lost or reset; endpoint
-wake is not a fallback. Issued-unknown completion reaping consumes one
-arbitration turn and then preserves/re-arms the exact continuation grant before
-waiting for a late terminal or the canonical pair restart.
+The immutable root/delegated command descriptor preserves the selected
+ordinary-grant or persistent-marker contract even if mutable gate state was
+lost or reset; endpoint wake is not a fallback. Issued-unknown completion
+reaping consumes one arbitration turn and then preserves the exact transaction
+before waiting for a late terminal or the canonical pair restart.
 Pending-command DPC arbitration performs at most one retained physical action
 per released owner quantum. A reciprocal CYW43-to-SDIO transaction submits one
 immutable child-ring command and retains that identity until its single
-terminal. A completion miss changes only durable transaction state; the next
-bounded owner turn rechecks for a late terminal before publishing or
-re-signalling the exact grant, and signals only after commit. DPC and foreground
-routes have identical grant bounds. Neither path may privately yield, resignal,
-or poll itself into another owner quantum. A trace that shows multiple
-non-CYW43 foreground phases after one endpoint rendezvous, multiple physical
-actions after one exact CYW43 grant, or foreground progress caused by a
-scheduling badge without a valid grant fails the one-operation-per-turn
-contract.
+terminal. A completion miss changes only durable transaction state. An ordinary
+child keeps its existing late-terminal-before-grant-publication ordering; a
+persistent op11-derived child publishes no continuation grant at all. Neither
+path may privately yield, re-signal, or poll itself into another owner quantum.
+A trace that shows multiple non-CYW43 foreground phases after one endpoint
+rendezvous, two physical actions in one scheduler turn, or foreground progress
+caused by a scheduling badge without a valid ordinary grant or paired
+persistent marker fails the one-operation-per-turn contract.
 
 The 2026-07-31 exact `0b15321d0c12` /
 `ee68c7c6faeb83b76934df87caea9f93feed94f8355b7286f999da51652a7753`
@@ -1415,17 +1420,20 @@ claim.
 
 The current source preserves `f4fec9e80`'s immutable request discipline while
 replacing its consumable scheduling edges with one persistent transaction.
-Root retains bounded stage, commit, exact-grant, signal-last, and completion
-phases. Delegated foreground and DPC producers preserve the same request across
-bounded grant and completion phases. The SDIO owner stable-reads the exact
-grant and committed condition, services CARD_INT first without consuming that
-grant, acknowledges immediately before physical I/O, and performs the final
-condition-before-sleep recheck. A later interrupt remains visible in hardware
-or committed state behind at most one already-admitted physical quantum; ACK
-failure performs zero I/O. The immutable command itself keeps every
-generation-bound lane grant-only after mutable gate loss, and issued-unknown
-reaping preserves the exact continuation until a late terminal or the canonical
-restart.
+Non-op11 commands outside finite op7, including non-op11 bootstrap and recovery commands, retain their bounded grant
+cadence, and the finite op7 steady lease remains unchanged. Every exact op11,
+regardless of logical generation or lifecycle, uses
+one sequence-last parent commit, one notification, persistent `Issued` state,
+and no recurrent root grants. Every exact derived SDIO child carries the paired
+persistent marker and advances under the sole owner with zero delegated grants,
+at most one bounded physical quantum per scheduler turn. PIO terminalizes from
+IRQ158/host state without DMA; external DMA joins IRQ158 and IRQ116. The owner
+commits the terminal before signalling, services CARD_INT first,
+and performs the final condition-before-sleep recheck. A later interrupt remains
+visible in hardware or committed state behind at most one already-admitted
+physical quantum. The immutable marker pair survives mutable gate loss, and
+issued-unknown containment preserves the exact transaction until a late
+terminal or canonical restart.
 
 R06 deliberately sent TCP before ping: the Pi ARP-resolved the host 130.616 ms
 after the SYN, retained that SYN across neighbor resolution, returned one
@@ -1740,24 +1748,22 @@ work as the one nonblocking continuation send occurs. The July 10 compatibility
 oracle hid this edge by repeatedly sending inside private yield/poll loops.
 
 The single production lane now keeps endpoint rendezvous only for non-CYW43
-root-to-runtime commands. Root-to-CYW43 continuations use a send-only
-reserved-root-badge cap to CYW43's own bound notification and an exact grant in
-the CYW43 ring. HAL separately mints CYW43 one send-only badge-256 cap from the
-SDIO owner's bound notification. The shared command or exact unused generation
-grant remains the sole authority; the notification is a coalescing prompt with
-no work count or history. Badge 256 is disjoint from CARD_INT badge 159. When
-they coalesce, the SDIO owner services bounded IRQ work, preserves the exact
-grant, and continues from durable state without requiring another prompt. A
-root completion miss changes only the retained transaction phase; any required
-grant publication commits before a later signal, and a matching completion wins
-first. Delegated foreground/DPC producers retain the same immutable transaction
-across bounded grant and completion phases, while non-CYW43 and GENET endpoint
-paths retain their existing phases.
-Stale, malformed, wrong-generation, mismatched-consumed, and replayed grants
-still reject.
-Foreground and DPC child deadlines contain an exact already-issued request and
-do not drive traffic: consuming the exact continuation grant proves owner
-progress and may rebase its counter-backed deadline. No fallback poll creates
+root-to-runtime commands. Non-op11 root-to-CYW43 continuations outside finite
+op7 retain the send-only reserved-root-badge cap plus exact ring grant. An exact op11 instead
+uses its HAL-derived persistent marker, one committed command, and exactly one
+root notification. HAL separately mints CYW43 one send-only badge-256 cap from
+the SDIO owner's bound notification. Each op11-derived SDIO child carries the
+paired marker and advances to terminal with zero delegated grants; non-op11
+delegated commands retain their exact-grant cadence. The shared command and
+selected authority contract remain durable, while every notification is a
+coalescing prompt with no work count or history. Badge 256 is disjoint from
+CARD_INT badge 159. When they coalesce, the SDIO owner services bounded IRQ work
+and continues the exact child or preserves the ordinary grant without requiring
+another prompt. A persistent op11 completion miss leaves root `Issued` and
+creates no publication or signal edge; stale, malformed, wrong-generation,
+partially marked, and replayed state rejects.
+Physical child deadlines contain an exact already-issued request and do not
+drive traffic. No fallback poll, forced source probe, or deadline rescue creates
 work. The runtime
 also completion-reaps issued-unknown work before applying the pair-restart
 hold. A late exact child completion is ownership proof only; its result and
@@ -2444,17 +2450,24 @@ failure-cut tests, supervisor-only generation transitions from immutable
 deferred-recovery records after steady-path guards unwind, preservation of an
 unresolved association cursor across logical epoch changes, exact immutable
 endpoint-rendezvous gating after every retained non-CYW43 root-command
-`Pending` quantum, acknowledged sequence-last shared grants plus signal-last
-notification hints,
-separate root ABI-invisible `Stage`, `CommitRing`, `PublishGrant`, `NotifyRing`,
-and completion `PollRing` phases, delegated persistent-transaction parity, and
-owner stable-condition/exact-grant reads with ACK immediately before I/O and at
-most one physical owner quantum per bounded turn, authoritative
+`Pending` quantum, ordinary acknowledged sequence-last shared grants plus
+signal-last notification hints, and the unchanged finite op7 steady lease. It
+also requires exact op11 `Stage -> sequence-last commit -> one notification ->
+Issued -> terminal` with no grant 19 or recurrent root edge, paired persistent
+markers on every derived CMD52/CMD53/`DPC_ACTIVATE` child, zero delegated grants,
+and owner stable-condition reads with at most one physical owner quantum per
+bounded turn. PIO must terminalize from IRQ158/host state with zero DMA use;
+external DMA must join IRQ158/IRQ116 in both arrival orders into one terminal.
+The terminal body/cache clean/barrier precede sequence-last commit and signal.
+An immediate pre-wait terminal and missing/coalesced/repeated hints must preserve
+the same outcome, while ordinary post-TX `WaitReply` blocks on unchanged durable
+CARD_INT/DPC/RX/credit/child-terminal state with zero forced source probes or
+deadline-rescue wakes. Closure further requires authoritative
 owner-generation rejection, and the one-pair-restart-per-attempt bound until
 attached address/TCP readiness,
 retained generation-bound ALP/backplane attach with one request, deadline poll,
-CMD52/CMD53 child action, completion poll, explicit later grant/re-signal, or
-exact-grant owner quantum per outer turn, terminal poll
+CMD52/CMD53 child action, completion poll, ordinary later grant/re-signal, or
+persistent-child owner quantum per outer turn, terminal poll
 separation, per-poll cursor checkpointing beyond the 1,024-action trace
 capacity, exact window/ChipCommon progress, and exact one-shot pull-up-clear
 completion with any fault poisoning the generation,
@@ -2466,10 +2479,11 @@ keyboard and HDMI attach/service cursors, sole linked-runtime UART ownership,
 terminal-output retention, exact UART wire-idle reboot-ACK fencing followed by
 a later reset-only turn, exact clean image identity, and all repository gates to
 pass. Host tests cover the initial root CYW43 scheduling-edge loss path,
-non-CYW43 endpoint rendezvous, root and delegated shared-grant
-publication/acknowledgement/re-signal, exact-consumed predecessor waiting
-without re-execution, stale/mutated/mismatched-consumed/wrong-generation grant
-rejection, grant-id exhaustion,
+non-CYW43 endpoint rendezvous, ordinary root and delegated shared-grant
+publication/acknowledgement/re-signal, persistent op11 one-shot publication and
+marker pairing, exact-consumed predecessor waiting without re-execution,
+stale/mutated/mismatched-consumed/wrong-generation authority rejection, grant-id
+exhaustion,
 real foreground and DPC owner cursors, recurring replay-fault termination,
 pre-issue and issued live-epoch cuts that preserve the old request and `aux1`,
 network-ready streak reset, peer/IRQ coalescing priority, contract-local

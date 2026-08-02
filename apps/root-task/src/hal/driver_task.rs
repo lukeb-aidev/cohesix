@@ -32,11 +32,15 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
     DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
     DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET,
-    DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+    DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+    DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
+    DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
+    DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
@@ -2785,6 +2789,49 @@ fn driver_task_steady_service_inactivity_expired(slot: &DriverTaskCommandSlot) -
     Some(cycles != 0 && now.wrapping_sub(start) >= cycles)
 }
 
+/// Record the sequence-last issue boundary of one persistent op11 parent.
+///
+/// This timestamp is never rebased by scheduler turns, notifications, generic
+/// progress breadcrumbs, or physical-child completions. It bounds the whole
+/// immutable parent lifetime rather than one child or one inactivity period.
+#[cfg(feature = "kernel")]
+fn record_driver_task_persistent_transaction_start_time(slot: &DriverTaskCommandSlot) {
+    if let Some(now) = driver_task_counter_ticks() {
+        // Zero is the inactive sentinel. CNTVCT may legally be zero at very
+        // early boot, so retain one as the equivalent origin.
+        slot.retained_persistent_transaction_start_ticks
+            .store(now.max(1), Ordering::Release);
+    }
+}
+
+/// Return whether one exact persistent op11 exceeded its full parent lifetime.
+///
+/// The shared 30-second bound covers the 2.5-second pre-TX protocol deadline,
+/// one complete 20.56-second worst-case exact SDIO child, and a 2.5-second
+/// reply/scheduling margin, rounded upward. Unbound-reply grace is already an
+/// error-handling tail and is intentionally contained. This is fault
+/// containment only: ordinary progress is driven entirely by durable
+/// conditions and physical interrupts.
+#[cfg(feature = "kernel")]
+fn driver_task_persistent_transaction_lifetime_expired(
+    slot: &DriverTaskCommandSlot,
+) -> Option<bool> {
+    let start = slot
+        .retained_persistent_transaction_start_ticks
+        .load(Ordering::Acquire);
+    let now = driver_task_counter_ticks()?;
+    let frequency = driver_task_counter_frequency()?;
+    if start == 0 || frequency == 0 {
+        return None;
+    }
+    let cycles = u128::from(DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US)
+        .saturating_mul(u128::from(frequency))
+        .saturating_add(999_999)
+        / 1_000_000;
+    let cycles = cycles.min(u128::from(u64::MAX)) as u64;
+    Some(cycles != 0 && now.wrapping_sub(start) >= cycles)
+}
+
 #[cfg(feature = "kernel")]
 fn driver_task_ring_exact_command_is_stable(
     ring_root_ptr: usize,
@@ -2843,6 +2890,49 @@ fn driver_task_steady_service_parent_identity_matches(
         && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
 }
 
+#[cfg(feature = "kernel")]
+fn driver_task_persistent_transaction_parent_identity_matches(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    ring_root_ptr: usize,
+    request: u32,
+    command_fingerprint: u32,
+) -> bool {
+    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        && command.budget == DriverTaskBudgetGrant::from_contract(contract)
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+        && !driver_task_retained_uses_root_grant(contract, command)
+        && driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+        && request != 0
+        && command.sequence == request
+        && ring_root_ptr != 0
+        && command_fingerprint != 0
+        && slot.active.load(Ordering::Acquire) != 0
+        && slot.ring_root_ptr.load(Ordering::Acquire) == ring_root_ptr
+        && slot.request_seq.load(Ordering::Acquire) == request as usize
+        && slot.active_command_fingerprint.load(Ordering::Acquire) == command_fingerprint
+        && driver_task_retained_lease_identity_matches(
+            slot,
+            contract,
+            request as usize,
+            command_fingerprint,
+        )
+        && DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) == Some(DriverTaskRetainedLeasePhase::Issued)
+        && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
+        && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) == 0
+        && slot.retained_grant_id.load(Ordering::Acquire) == 0
+        && slot
+            .retained_persistent_transaction_start_ticks
+            .load(Ordering::Acquire)
+            != 0
+        && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+}
+
 /// Root-side condition for one immutable issued CYW43 steady-service parent.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2854,6 +2944,20 @@ pub(crate) enum Cyw43SteadyServiceParentCondition {
     /// A stable sequence-last terminal is visible and must be consumed.
     TerminalVisible,
     /// The exact parent missed its containment deadline and pair recovery was latched.
+    DeadlineFault,
+}
+
+/// Root-side durable condition for one immutable issued op11 transaction.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43PersistentTransactionParentCondition {
+    /// No current issued parent matches the caller's exact request identity.
+    NotExact,
+    /// The exact parent remains live and has no committed terminal yet.
+    Waiting,
+    /// A stable sequence-last terminal is visible and must be consumed.
+    TerminalVisible,
+    /// The exact parent exceeded its full lifetime and pair recovery was latched.
     DeadlineFault,
 }
 
@@ -2925,6 +3029,53 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     driver_task_counter_add(&slot.counters.aborts, 1);
     fail_driver_task_retained_priority_lease(slot, CYW43_WIFI_DRIVER_TASK_CONTRACT);
     Cyw43SteadyServiceParentCondition::DeadlineFault
+}
+
+/// Recheck durable terminal state before retaining one issued persistent op11.
+///
+/// The parent sequence and stable completion ring are authoritative. The
+/// absolute CNTVCT deadline is sampled only after a stable terminal miss, and
+/// expiry is closed by the same stable read fence before coordinated pair
+/// recovery. This path never signals, grants, polls a new source, or replays.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_persistent_transaction_parent_condition(
+    expected_request: u32,
+) -> Cyw43PersistentTransactionParentCondition {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let Some(DriverTaskRetainedRequestState::Issued { request, command }) =
+        active_driver_task_retained_request_for_slot(slot)
+    else {
+        return Cyw43PersistentTransactionParentCondition::NotExact;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    if request != expected_request
+        || !driver_task_persistent_transaction_parent_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            command_fingerprint,
+        )
+    {
+        return Cyw43PersistentTransactionParentCondition::NotExact;
+    }
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43PersistentTransactionParentCondition::TerminalVisible;
+    }
+    if !driver_task_persistent_transaction_lifetime_expired(slot).unwrap_or(false) {
+        return Cyw43PersistentTransactionParentCondition::Waiting;
+    }
+    // Close the expiry race. A terminal committed while CNTVCT was sampled
+    // always wins over fault containment.
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43PersistentTransactionParentCondition::TerminalVisible;
+    }
+    driver_task_counter_add(&slot.counters.aborts, 1);
+    fail_driver_task_retained_priority_lease(slot, CYW43_WIFI_DRIVER_TASK_CONTRACT);
+    Cyw43PersistentTransactionParentCondition::DeadlineFault
 }
 
 #[cfg(feature = "kernel")]
@@ -3434,6 +3585,7 @@ struct DriverTaskCommandSlot {
     retained_steady_tx_fast_lane: AtomicUsize,
     retained_steady_tx_last_progress_slice: AtomicU32,
     retained_steady_tx_last_progress_ticks: AtomicU64,
+    retained_persistent_transaction_start_ticks: AtomicU64,
     endpoint: AtomicUsize,
     root_notification: AtomicUsize,
     root_wake_notification: AtomicUsize,
@@ -3924,6 +4076,7 @@ impl DriverTaskCommandSlot {
             retained_steady_tx_fast_lane: AtomicUsize::new(0),
             retained_steady_tx_last_progress_slice: AtomicU32::new(0),
             retained_steady_tx_last_progress_ticks: AtomicU64::new(0),
+            retained_persistent_transaction_start_ticks: AtomicU64::new(0),
             endpoint: AtomicUsize::new(0),
             root_notification: AtomicUsize::new(0),
             root_wake_notification: AtomicUsize::new(0),
@@ -5153,11 +5306,26 @@ pub(crate) fn active_driver_task_retained_request_matches_staging(
     mut command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> Option<DriverTaskRetainedRequestState> {
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        return None;
+    }
     let snapshot = active_driver_task_retained_request_snapshot(contract)?;
     let request = snapshot.state.request();
     let mut active_command = snapshot.state.command()?;
     command.flags =
         driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags);
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0
+        && driver_task_cyw43_persistent_transaction_requested(
+            contract,
+            command,
+            DriverTaskRingCommandMode::RetainedTurn,
+            staging_segments,
+        )
+    {
+        // Passive reconstruction derives the same immutable op11 authority as
+        // the fresh producer path. It never trusts a caller-supplied tag.
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+    }
     if active_command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
         && driver_task_slot_for_contract(contract)
             .is_some_and(|slot| slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0)
@@ -7274,6 +7442,8 @@ fn reset_driver_task_retained_priority_lease_slot(slot: &DriverTaskCommandSlot) 
         .store(0, Ordering::Release);
     slot.retained_steady_tx_last_progress_ticks
         .store(0, Ordering::Release);
+    slot.retained_persistent_transaction_start_ticks
+        .store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -8170,6 +8340,7 @@ fn driver_task_retained_uses_root_grant(
 ) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
         && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
 }
 
@@ -8290,12 +8461,20 @@ fn initialize_driver_task_retained_priority_lease(
     fingerprint: u32,
     closing_parent_resume: bool,
 ) -> bool {
-    if driver_task_retained_uses_root_grant(contract, command) {
-        if !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
-            || slot.root_notification.load(Ordering::Acquire) == 0
-        {
-            return false;
-        }
+    let persistent_transaction =
+        command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
+    if persistent_transaction
+        && (contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+            || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+            || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0)
+    {
+        return false;
+    }
+    if (driver_task_retained_uses_root_grant(contract, command) || persistent_transaction)
+        && (!driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+            || slot.root_notification.load(Ordering::Acquire) == 0)
+    {
+        return false;
     }
     let Some(mask) = retained_priority_lease_target_mask(contract, command, closing_parent_resume)
     else {
@@ -8877,6 +9056,78 @@ where
     true
 }
 
+/// Immutable identity for the sole notification of one complete op11 parent.
+#[cfg(feature = "kernel")]
+struct Cyw43PersistentTransactionSignal<'a> {
+    slot: &'a DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    request: usize,
+    fingerprint: u32,
+    ring_root_ptr: usize,
+}
+
+/// Signal one sequence-last persistent op11 transaction exactly once.
+///
+/// The descriptor and payload were already sealed into `fingerprint` before
+/// publication. After this signal root owns no continuation edge; it may only
+/// observe the durable terminal or contain a fault.
+#[cfg(feature = "kernel")]
+fn signal_cyw43_persistent_transaction_with<B, F>(
+    context: Cyw43PersistentTransactionSignal<'_>,
+    before_signal: B,
+    signal: F,
+) -> bool
+where
+    B: FnOnce(),
+    F: FnOnce(usize),
+{
+    let Cyw43PersistentTransactionSignal {
+        slot,
+        contract,
+        command,
+        request,
+        fingerprint,
+        ring_root_ptr,
+    } = context;
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        || command.budget != DriverTaskBudgetGrant::from_contract(contract)
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+        || driver_task_retained_uses_root_grant(contract, command)
+        || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+        || request == 0
+        || fingerprint == 0
+        || command.sequence as usize != request
+        || ring_root_ptr == 0
+        || slot.ring_root_ptr.load(Ordering::Acquire) != ring_root_ptr
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != request
+        || slot.active_command_fingerprint.load(Ordering::Acquire) != fingerprint
+        || !driver_task_retained_lease_identity_matches(slot, contract, request, fingerprint)
+        || DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) != Some(DriverTaskRetainedLeasePhase::Committed)
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+        || slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
+        || slot.retained_grant_id.load(Ordering::Acquire) != 0
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+    {
+        return false;
+    }
+    let notification = slot.root_notification.load(Ordering::Acquire);
+    if notification == 0 || !mark_driver_task_retained_priority_lease_issued(slot, false) {
+        return false;
+    }
+    before_signal();
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    #[cfg(test)]
+    TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    signal(notification);
+    true
+}
+
 /// Re-arm one immutable retained continuation after a completion poll miss.
 ///
 /// Every retained contract advances only the local phase in this poll-miss
@@ -8896,6 +9147,18 @@ fn arm_driver_task_retained_priority_lease_wake_retry(
         || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
     {
         return false;
+    }
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        // The immutable op11 sequence is durable authority for the complete
+        // transaction. A completion miss is condition-only: retain Issued and
+        // never manufacture another grant or notification edge.
+        return contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+            && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+            && DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ) == Some(DriverTaskRetainedLeasePhase::Issued)
+            && slot.retained_grant_id.load(Ordering::Acquire) == 0
+            && driver_task_ring_exact_command_is_stable(ring_root_ptr, command);
     }
     let next = if driver_task_retained_uses_root_grant(contract, command) {
         let grant_id = slot.retained_grant_id.load(Ordering::Acquire);
@@ -14651,6 +14914,93 @@ fn driver_task_staged_cyw43_descriptor_header(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_staged_cyw43_descriptor(
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> Option<DriverRuntimeCyw43CommandDescriptor> {
+    let descriptor_offset = usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET);
+    let descriptor_len = core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>();
+    if command.frame.offset as usize != descriptor_offset
+        || usize::from(command.frame.len) != descriptor_len
+    {
+        return None;
+    }
+    let payload = staging_segments.iter().find_map(|segment| match segment {
+        DriverTaskStagingSegment::Ring {
+            offset,
+            payload,
+            flags,
+        } if *offset == descriptor_offset
+            && payload.len() == descriptor_len
+            && *flags == command.frame.flags =>
+        {
+            Some(*payload)
+        }
+        DriverTaskStagingSegment::Ring { .. } | DriverTaskStagingSegment::Shared { .. } => None,
+    })?;
+    let read_u16 = |offset: usize| u16::from_le_bytes([payload[offset], payload[offset + 1]]);
+    let read_u32 = |offset: usize| {
+        u32::from_le_bytes([
+            payload[offset],
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ])
+    };
+    let descriptor = DriverRuntimeCyw43CommandDescriptor {
+        op: read_u16(0),
+        flags: read_u16(2),
+        target_addr: read_u32(4),
+        payload_offset: read_u16(8),
+        payload_len: read_u16(10),
+        total_len: read_u32(12),
+        arg0: read_u32(16),
+        arg1: read_u32(20),
+        reserved: read_u32(24),
+    };
+    descriptor.valid().then_some(descriptor)
+}
+
+/// Derive the command half of one persistent CYW43 transaction from its exact
+/// staged op11 descriptor and payload. No caller-supplied flag is trusted.
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_persistent_transaction_requested(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    mode: DriverTaskRingCommandMode,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> bool {
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || mode != DriverTaskRingCommandMode::RetainedTurn
+        || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+        || command.budget != DriverTaskBudgetGrant::from_contract(contract)
+        || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+        || staging_segments.len() != 2
+    {
+        return false;
+    }
+    let Some(descriptor) = driver_task_staged_cyw43_descriptor(command, staging_segments) else {
+        return false;
+    };
+    if descriptor.op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE
+        || descriptor.payload_offset != DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+        || descriptor.payload_len == 0
+        || descriptor.total_len != u32::from(descriptor.payload_len)
+        || descriptor.reserved != 0
+    {
+        return false;
+    }
+    staging_segments.iter().any(|segment| {
+        matches!(
+            segment,
+            DriverTaskStagingSegment::Shared { payload, flags }
+                if payload.len() == usize::from(descriptor.payload_len) && *flags == 0
+        )
+    })
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_cyw43_steady_data_plane_command_matches(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
@@ -14976,11 +15326,50 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         );
         return None;
     }
-    command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
-    let steady_tx_descriptor_marked = contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        && driver_task_staged_cyw43_descriptor_header(command, staging_segments).is_some_and(
-            |(_, flags)| flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0,
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        // The op11 authority is derived from the exact staged descriptor and
+        // payload below. A caller-provided command bit could alias unrelated
+        // work and is never accepted.
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "caller-supplied-persistent-transaction",
         );
+        return None;
+    }
+    command.flags = driver_task_ring_flags_for_mode(mode, command.flags);
+    let staged_cyw43_descriptor_header =
+        driver_task_staged_cyw43_descriptor_header(command, staging_segments);
+    let steady_tx_descriptor_marked = contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && staged_cyw43_descriptor_header.is_some_and(|(_, flags)| {
+            flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0
+        });
+    let staged_control_exchange = contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && staged_cyw43_descriptor_header
+            .is_some_and(|(op, _)| op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
+    let persistent_transaction_candidate = staged_control_exchange;
+    let persistent_transaction_requested = driver_task_cyw43_persistent_transaction_requested(
+        contract,
+        command,
+        mode,
+        staging_segments,
+    );
+    if persistent_transaction_candidate != persistent_transaction_requested {
+        // An op11 header is not sufficient. The complete descriptor, exact
+        // command budget, retained mode, and matching shared payload must form
+        // one sealed authority statement before HAL mints the command flag.
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "persistent-transaction-descriptor-mismatch",
+        );
+        return None;
+    }
+    if persistent_transaction_requested {
+        command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+    }
     let typed_steady_tx_entry = steady_data_plane_operation.is_some();
     let terminal_drain_candidate = !typed_steady_tx_entry
         && steady_tx_descriptor_marked
@@ -15113,6 +15502,17 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         );
         return None;
     }
+    if persistent_transaction_requested && slot.root_notification.load(Ordering::Acquire) == 0 {
+        // Persistent op11 has one hint edge and no grant/endpoint fallback.
+        // Reject before Stage makes any identity active.
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "persistent-transaction-root-notification-missing",
+        );
+        return None;
+    }
     if steady_data_plane_operation.is_some() && !steady_tx_fast_lane_requested {
         // The specialized entry is a cadence class, not an optional hint.
         // Fresh requests require an open exact-pair Network lease; a resumed
@@ -15197,6 +15597,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 .store(0, Ordering::Release);
             slot.retained_steady_tx_last_progress_ticks
                 .store(0, Ordering::Release);
+            slot.retained_persistent_transaction_start_ticks
+                .store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -15222,6 +15624,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 .store(0, Ordering::Release);
             slot.retained_steady_tx_last_progress_ticks
                 .store(0, Ordering::Release);
+            slot.retained_persistent_transaction_start_ticks
+                .store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -15243,6 +15647,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_steady_tx_last_progress_slice
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
+            .store(0, Ordering::Release);
+        slot.retained_persistent_transaction_start_ticks
             .store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
@@ -15301,6 +15707,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
             .store(0, Ordering::Release);
+        slot.retained_persistent_transaction_start_ticks
+            .store(0, Ordering::Release);
         return None;
     }
     // Resumed callers rebuild the immutable command with sequence zero. Keep
@@ -15309,6 +15717,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     command.sequence = request as u32;
     let steady_tx_fast_lane = steady_tx_fast_lane_requested
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0;
+    let persistent_transaction = persistent_transaction_requested
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
     if retained_request_prepared && !steady_tx_fast_lane {
         // Generic, cold, control, EAPOL, bulk, and recovery commands keep Stage
         // as their own retained outer turn. The exact tagged urgent op7 path is
@@ -15371,8 +15781,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // them child-visible. CYW43's dedicated descriptor and shared parent
         // payload remain disjoint from DPC writers after this boundary. The
         // generic wake notification remains deferred to the next turn. The
-        // tagged urgent op7 lease completes this one producer transaction with
-        // its single final signal below.
+        // tagged urgent op7 lease and persistent op11 transaction each
+        // complete this one producer transaction with their single final
+        // signal below.
         if !driver_task_ring_prepare_retained_issue(
             slot,
             ring_root_ptr,
@@ -15398,6 +15809,12 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         #[cfg(test)]
         if steady_tx_fast_lane {
             record_test_cyw43_steady_tx_lease_action(3);
+        }
+        if persistent_transaction {
+            // Start the full-parent containment clock before sequence-last
+            // publication: the autonomously polling runtime may observe that
+            // commit before the notification hint below.
+            record_driver_task_persistent_transaction_start_time(slot);
         }
         driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, request as u32);
         #[cfg(test)]
@@ -15426,6 +15843,34 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             cache_counter_batch.flush(slot);
             if !signal_cyw43_steady_tx_service_lease_with(
                 Cyw43SteadyTxServiceLeaseSignal {
+                    slot,
+                    contract,
+                    command,
+                    request,
+                    fingerprint: command_fingerprint,
+                    ring_root_ptr,
+                },
+                || {
+                    if trace_call {
+                        emit_driver_task_ring_call_begin(contract, endpoint, request, command);
+                    }
+                },
+                |notification| {
+                    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+                },
+            ) {
+                fail_driver_task_retained_priority_lease(slot, contract);
+            }
+            return None;
+        }
+        if persistent_transaction {
+            // The complete op11 descriptor and payload are now visible behind
+            // the sequence-last commit. Transfer its full durable authority
+            // with one scheduling hint; all later root turns are PollRing-only.
+            crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
+            cache_counter_batch.flush(slot);
+            if !signal_cyw43_persistent_transaction_with(
+                Cyw43PersistentTransactionSignal {
                     slot,
                     contract,
                     command,
@@ -15533,6 +15978,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
 
     if retained_notify_turn {
         let root_grant = driver_task_retained_uses_root_grant(contract, command);
+        if persistent_transaction {
+            // Persistent op11 must cross Committed -> Issued in the same
+            // sequence-last producer transaction. Reaching a later notify turn
+            // would create a second scheduling edge, so fail closed.
+            fail_driver_task_retained_priority_lease(slot, contract);
+            cache_counter_batch.flush(slot);
+            return None;
+        }
         // The command is already immutable and visible. Root-generation
         // CYW43 descriptor continuations signal the child-bound notification;
         // unrelated runtime contracts retain their endpoint rendezvous.
@@ -15769,9 +16222,59 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         driver_task_counter_add(&slot.counters.yield_count, yield_count);
     }
 
+    let mut persistent_transaction_waiting = false;
+    if persistent_transaction
+        && completion.sequence != request as u32
+        && retained_lease_turn == Some(DriverTaskRetainedLeaseTurn::PollRing)
+    {
+        match cyw43_persistent_transaction_parent_condition(request as u32) {
+            Cyw43PersistentTransactionParentCondition::Waiting => {
+                // EventPump already revisits this durable condition. The poll
+                // neither ages a scheduler counter nor creates new authority.
+                persistent_transaction_waiting = true;
+            }
+            Cyw43PersistentTransactionParentCondition::TerminalVisible => {
+                completion = read_driver_task_ring_completion(
+                    &mut cache_counter_batch,
+                    ring_root_ptr,
+                    completion_ptr,
+                    request,
+                );
+                if completion.sequence != request as u32 {
+                    // A sequence-last terminal is immutable. Losing it after a
+                    // stable read is an issued-unknown transport violation.
+                    fail_driver_task_retained_priority_lease(slot, contract);
+                    cache_counter_batch.flush(slot);
+                    return None;
+                }
+            }
+            Cyw43PersistentTransactionParentCondition::DeadlineFault => {
+                emit_driver_task_ring_call_abort(
+                    contract,
+                    endpoint,
+                    request,
+                    command,
+                    mode,
+                    "persistent-transaction-lifetime",
+                    1,
+                    timeout_progress,
+                );
+                cache_counter_batch.flush(slot);
+                return None;
+            }
+            Cyw43PersistentTransactionParentCondition::NotExact => {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                cache_counter_batch.flush(slot);
+                return None;
+            }
+        }
+    }
+
     let mut timeout_count = 0usize;
     let mut timeout_keep_limit = 0usize;
-    let mut keep_active_on_timeout = if completion.sequence != request as u32 {
+    let mut keep_active_on_timeout = if persistent_transaction_waiting {
+        true
+    } else if completion.sequence != request as u32 {
         let (keep_active, count) = driver_task_ring_timeout_keep_decision(
             slot,
             contract,
@@ -15974,6 +16477,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_steady_tx_last_progress_slice
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
+            .store(0, Ordering::Release);
+        slot.retained_persistent_transaction_start_ticks
             .store(0, Ordering::Release);
         if completion.sequence != request as u32 && timeout_count != 0 {
             driver_task_counter_add(&slot.counters.aborts, 1);
@@ -16254,11 +16759,22 @@ pub fn run_driver_task_ring_service_retained_service_turn_staged(
     command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> DriverTaskRetainedServiceTurn {
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        return DriverTaskRetainedServiceTurn::Failed;
+    }
     let mut fingerprint_command = command;
     fingerprint_command.flags = driver_task_ring_flags_for_mode(
         DriverTaskRingCommandMode::RetainedTurn,
         fingerprint_command.flags,
     );
+    if driver_task_cyw43_persistent_transaction_requested(
+        contract,
+        fingerprint_command,
+        DriverTaskRingCommandMode::RetainedTurn,
+        staging_segments,
+    ) {
+        fingerprint_command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+    }
     let expected_command_fingerprint = driver_task_ring_command_fingerprint(
         fingerprint_command,
         driver_task_staging_segments_fingerprint(staging_segments),
@@ -16274,7 +16790,7 @@ pub fn run_driver_task_ring_service_retained_service_turn_staged(
     classify_driver_task_retained_service_turn(
         completion,
         active,
-        command,
+        fingerprint_command,
         expected_command_fingerprint,
     )
 }
@@ -18621,7 +19137,11 @@ pub const CYW43_WIFI_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContra
     class: DriverTaskClass::NetworkData,
     authority: DriverTaskAuthority::NetworkFrameTransport,
     isolation: DriverTaskIsolation::DedicatedSeL4Task,
-    budget: DriverTaskBudget::preemptible(192, 65_536, 64),
+    budget: DriverTaskBudget::preemptible(
+        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
+        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
+        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
+    ),
     queue_depth: 128,
 };
 
@@ -19297,6 +19817,9 @@ fn driver_task_acceptance_next_action(reason: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "kernel")]
+    static PERSISTENT_OP11_DEADLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -21290,6 +21813,132 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn persistent_transaction_test_descriptor_bytes(
+        payload_len: u16,
+    ) -> [u8; core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()] {
+        let mut bytes = [0u8; core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()];
+        bytes[0..2].copy_from_slice(&DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE.to_le_bytes());
+        bytes[8..10].copy_from_slice(&DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE.to_le_bytes());
+        bytes[10..12].copy_from_slice(&payload_len.to_le_bytes());
+        bytes[12..16].copy_from_slice(&u32::from(payload_len).to_le_bytes());
+        bytes[16..20].copy_from_slice(&2u32.to_le_bytes());
+        bytes[20..24].copy_from_slice(&1u32.to_le_bytes());
+        bytes
+    }
+
+    #[cfg(feature = "kernel")]
+    fn persistent_transaction_test_command(generation: u32) -> DriverTaskCommandRecord {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::Cyw43Wifi,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: u32::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                len: core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>() as u16,
+                flags: 0,
+            },
+        );
+        command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
+        command.aux1 = generation;
+        command
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_persistent_transaction_is_derived_only_from_exact_staged_op11() {
+        let payload = [0x5au8; 16];
+        let descriptor = persistent_transaction_test_descriptor_bytes(payload.len() as u16);
+        let command = persistent_transaction_test_command(31);
+        let segments = [
+            DriverTaskStagingSegment::shared(&payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &descriptor,
+                0,
+            ),
+        ];
+        assert!(driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &segments,
+        ));
+        let mut caller_tagged = command;
+        caller_tagged.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        assert!(!driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            caller_tagged,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &segments,
+        ));
+        assert!(!driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::PromptSlice,
+            &segments,
+        ));
+
+        let mut generation_zero = persistent_transaction_test_command(0);
+        assert!(driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            generation_zero,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &segments,
+        ));
+        generation_zero.flags = driver_task_ring_flags_for_mode(
+            DriverTaskRingCommandMode::RetainedTurn,
+            generation_zero.flags,
+        );
+        generation_zero.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        assert!(!driver_task_retained_uses_root_grant(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            generation_zero,
+        ));
+
+        let mut wrong_budget = command;
+        wrong_budget.budget.max_ops = wrong_budget.budget.max_ops.saturating_sub(1);
+        assert!(!driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            wrong_budget,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &segments,
+        ));
+
+        let short_payload = &payload[..payload.len() - 1];
+        let mismatched_payload = [
+            DriverTaskStagingSegment::shared(short_payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &descriptor,
+                0,
+            ),
+        ];
+        assert!(!driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &mismatched_payload,
+        ));
+
+        let mut op7 = descriptor;
+        op7[0..2].copy_from_slice(&DRIVER_RUNTIME_CYW43_OP_ETH_TX.to_le_bytes());
+        let wrong_op = [
+            DriverTaskStagingSegment::shared(&payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &op7,
+                0,
+            ),
+        ];
+        assert!(!driver_task_cyw43_persistent_transaction_requested(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            DriverTaskRingCommandMode::RetainedTurn,
+            &wrong_op,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_steady_tx_lease_requires_exact_paired_tags_budget_and_cadence() {
         let marked = steady_tx_test_descriptor_bytes(true);
@@ -23180,6 +23829,299 @@ mod tests {
         // test-owned ring page.
         assert_eq!(unsafe { core::ptr::read_volatile(command_ptr) }, command);
         assert_eq!(staged_descriptor, descriptor);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn persistent_op11_commits_then_signals_once_and_poll_miss_creates_no_edge() {
+        use core::cell::Cell;
+
+        reset_cyw43_sdio_pair_recovery_for_test();
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut command = persistent_transaction_test_command(7);
+        command.sequence = 73;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags)
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        let fingerprint = driver_task_ring_command_fingerprint(command, 0x4359_0011);
+        driver_task_ring_publish_command_record(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+
+        slot.active.store(1, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.root_notification.store(0x77, Ordering::Release);
+        slot.request_seq
+            .store(command.sequence as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(command.sequence as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::ReadyToIssue.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+
+        assert!(!driver_task_retained_uses_root_grant(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+        ));
+        let mut ordinary = command;
+        ordinary.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        assert!(driver_task_retained_uses_root_grant(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ordinary,
+        ));
+        assert!(mark_driver_task_retained_priority_lease_committed(
+            &slot, false,
+        ));
+        assert_eq!(slot.retained_grant_id.load(Ordering::Acquire), 0);
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+
+        let signals = Cell::new(0usize);
+        let context = || Cyw43PersistentTransactionSignal {
+            slot: &slot,
+            contract: CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            request: command.sequence as usize,
+            fingerprint,
+            ring_root_ptr,
+        };
+        assert!(signal_cyw43_persistent_transaction_with(
+            context(),
+            || {},
+            |_| {
+                assert_eq!(
+                    DriverTaskRetainedLeasePhase::from_usize(
+                        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+                    ),
+                    Some(DriverTaskRetainedLeasePhase::Issued),
+                    "durable state commits before the notification hint",
+                );
+                signals.set(signals.get().saturating_add(1));
+            },
+        ));
+        assert_eq!(signals.get(), 1);
+        assert!(!signal_cyw43_persistent_transaction_with(
+            context(),
+            || {},
+            |_| signals.set(signals.get().saturating_add(1)),
+        ));
+        assert_eq!(signals.get(), 1, "issued authority cannot re-signal");
+
+        assert!(arm_driver_task_retained_priority_lease_wake_retry(
+            &slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            command.sequence as usize,
+            fingerprint,
+        ));
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Issued),
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::Issued.operation(),
+            DriverTaskRetainedLeaseOperation::PollRing,
+        );
+        assert_eq!(slot.retained_grant_id.load(Ordering::Acquire), 0);
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+        assert_eq!(signals.get(), 1, "poll miss creates no grant or wake edge");
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn seed_persistent_op11_deadline_parent(
+        ring_root_ptr: usize,
+        request: u32,
+    ) -> DriverTaskCommandRecord {
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+        test_reset_root_grant_action_counts();
+
+        let slot = &DRIVER_TASK_SLOT_CYW43455;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut command = persistent_transaction_test_command(7);
+        command.sequence = request;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags)
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        let fingerprint = driver_task_ring_command_fingerprint(command, 0x4359_0011);
+        driver_task_ring_publish_command_record(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+
+        slot.active.store(1, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.root_notification.store(0x77, Ordering::Release);
+        slot.request_seq.store(request as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(request as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_grant_id.store(0, Ordering::Release);
+        slot.retained_steady_tx_fast_lane
+            .store(0, Ordering::Release);
+        record_driver_task_persistent_transaction_start_time(slot);
+        command
+    }
+
+    #[cfg(feature = "kernel")]
+    fn expire_persistent_op11_parent_deadline(command: DriverTaskCommandRecord) {
+        let frequency = driver_task_counter_frequency().expect("test counter frequency");
+        let deadline_cycles = (u128::from(DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US)
+            * u128::from(frequency)
+            + 999_999)
+            / 1_000_000;
+        let now = driver_task_counter_ticks().expect("test counter sample");
+        DRIVER_TASK_SLOT_CYW43455
+            .retained_persistent_transaction_start_ticks
+            .store(now.wrapping_sub(deadline_cycles as u64), Ordering::Release);
+        assert_eq!(
+            command.budget,
+            DriverTaskBudgetGrant::from_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn persistent_op11_deadline_completion_wins_without_resignal_or_grant() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("persistent op11 deadline test lock");
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command = seed_persistent_op11_deadline_parent(ring_root_ptr, 0x4359_7311);
+        expire_persistent_op11_parent_deadline(command);
+
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut terminal = DriverTaskCompletionRecord::progress(command.sequence, 1);
+        terminal.sequence = 0;
+        // SAFETY: This is the fixed completion record in the aligned,
+        // test-owned ring. The body is written before the sequence-last commit.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, command.sequence);
+        }
+
+        assert_eq!(
+            cyw43_persistent_transaction_parent_condition(command.sequence),
+            Cyw43PersistentTransactionParentCondition::TerminalVisible,
+        );
+        assert!(!cyw43_sdio_pair_restart_required());
+        assert_eq!(test_root_grant_action_counts(), (0, 0));
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn persistent_op11_deadline_stable_miss_faults_pair_without_resignal_or_grant() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("persistent op11 deadline test lock");
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command = seed_persistent_op11_deadline_parent(ring_root_ptr, 0x4359_7312);
+        expire_persistent_op11_parent_deadline(command);
+
+        assert_eq!(
+            cyw43_persistent_transaction_parent_condition(command.sequence),
+            Cyw43PersistentTransactionParentCondition::DeadlineFault,
+        );
+        assert!(cyw43_sdio_pair_restart_required());
+        assert_eq!(test_root_grant_action_counts(), (0, 0));
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn persistent_op11_deadline_preserves_ordinary_non_op11_grant_lane() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("persistent op11 deadline test lock");
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let mut ordinary = network_priority_test_cyw43_command(7);
+        ordinary.sequence = 0x4359_7313;
+        ordinary.flags = driver_task_ring_flags_for_mode(
+            DriverTaskRingCommandMode::RetainedTurn,
+            ordinary.flags,
+        );
+        assert!(driver_task_retained_uses_root_grant(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ordinary,
+        ));
+        assert!(driver_task_ring_publish_continuation_grant(
+            &slot,
+            ring_root_ptr,
+            ordinary,
+            1,
+        ));
+        let grant = driver_task_ring_read_continuation_grant(ring_root_ptr)
+            .expect("ordinary non-op11 retained work keeps its existing root grant");
+        assert!(driver_task_continuation_grant_matches(grant, ordinary, 1,));
+        assert_eq!(
+            slot.retained_persistent_transaction_start_ticks
+                .load(Ordering::Acquire),
+            0,
+        );
     }
 
     #[cfg(feature = "kernel")]
