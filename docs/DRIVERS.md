@@ -687,6 +687,72 @@ steady flag `0x0040` and its terminal was unobserved. The clean cutoff contains
 30 Pi-source LLC/XID probes, those four R02 data frames, and zero Pi TCP.
 Consequently `.coh`, TCP quality, and pressure remained correctly gated.
 
+#### Durable reciprocal completion contract
+
+The next exact `78d5195582c7` image exposed a narrower linked-runtime
+completion defect after restoring first-pair Gate 8 and DHCP. Warm R02 and R04
+each entered recovery during the passive 130-second post-ready window, before
+any host TCP test, with an exact steady op7 descriptor of 54 bytes and no
+observed parent completion. That small transfer uses the PIO request path, so
+neither smoltcp delayed ACK nor the DMA4 terminal join is required to trigger
+the failure. R03 retained the lifetime long enough to measure op7
+accepted-to-issue at 675,970 us average and 1,831,668 us maximum, versus
+58,357 us average issue-to-terminal and approximately 1 us
+terminal-to-credit. The current first defect is therefore linked-runtime
+completion liveness, with the multi-turn service cadence remaining a separate
+latency amplifier.
+
+Source audit found that `78d519` treated the SDIO-child-to-CYW43 notification
+as a pre-commit edge: the SDIO runtime could signal its peer before the child
+completion's sequence-last word was durable. A scheduled CYW43 peer could
+consume that coalescing edge, reject the still-staged completion, and later
+block with no second edge after SDIO committed it. The CYW43-parent-to-root
+path already used the opposite and correct order. This is a violated
+condition/wake contract, not evidence of frame corruption, firmware-credit
+delay, RF loss, or a second smoltcp defect.
+
+Every reciprocal CYW43/SDIO completion must therefore use one durable
+condition and one coalescing scheduling hint in this order:
+
+1. The sole producer writes the complete immutable terminal body.
+2. It performs the required shared-memory store barrier and cache clean.
+3. It publishes and cleans the matching nonzero sequence as the sequence-last
+   commit.
+4. Only a successful commit may signal the exact CYW43 peer or root Network
+   notification. A failed commit emits no wake.
+5. The consumer accepts only a stable exact sequence/fingerprint/generation
+   match. It may block only while a final stable read shows no committed
+   terminal; a concurrent post-commit signal must remain sufficient to resume
+   that retained cursor.
+
+The notification is never completion truth, a counted grant, or replay
+authority. The immutable root parent, CYW43 parent, SDIO child, generation,
+fingerprint, and parent/child sequence relationship remain one retained
+end-to-end transaction until the exact terminal is consumed or the existing
+issued-unknown recovery fence takes ownership. No endpoint fallback, second
+physical issuer, same-generation replay, or deadline-paced normal path is
+permitted.
+
+The same durable-level rule applies to receive service. One physical CARD_INT
+may schedule a bounded DPC quantum, and the DPC may publish a bounded batch of
+frames, but the upward queue level remains authoritative when notifications
+coalesce. Root must consume a bounded software batch from an already-nonempty
+queue before clearing and rechecking that level; it must not require one fresh
+physical op8 solely to expose each frame already committed by the DPC. SDPCM
+credit state is likewise durable protocol state: an already-ready urgent op7
+may advance under the one retained transaction, while absent credit or an
+unchanged hardware request blocks rather than self-yield polling.
+
+Physical deadlines remain lost-wake containment only. Normal PIO, DMA, DPC,
+RX, and urgent-TX service must complete from physical IRQs plus durable ring or
+queue levels with zero deadline wake. Acceptance must separately prove the
+signal-before-commit interleaving cannot strand a consumer, both PIO and DMA
+terminal paths publish before signalling, a final consumer recheck cannot
+sleep over an exact completion, and coalesced wakes drain all bounded durable
+work. Fresh exact-image cold and warm Pi evidence remains mandatory; this
+architecture and its hardware-free tests do not claim that `78d519` achieved
+repeatable Wi-Fi or normal TCP latency.
+
 This evidence exposes three lifetime boundaries rather than another smoltcp
 tuning problem. First, the `0dcfe` change made every DPC SDIO child use the
 steady lease, including association and host EAPOL, contrary to the required
