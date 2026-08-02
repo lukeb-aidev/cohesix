@@ -23722,7 +23722,19 @@ static CYW43_DATA_TX_QUEUE: Mutex<Cyw43DataTxQueue> = Mutex::new(Cyw43DataTxQueu
 struct Cyw43DataTxQueueReservation {
     generation: u32,
     reservation_epoch: u32,
-    paired_rx: bool,
+    copied_rx_capacity: bool,
+}
+
+/// Lease authority carried separately from one bounded TX queue reservation.
+///
+/// A copied RX reserves capacity before smoltcp decides what to emit, but that
+/// capacity alone cannot authorize steady service. Only an exact reverse
+/// IPv4/TCP response may inherit the paired-RX lease.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43ReservedTxLeaseProvenance {
+    Ordinary,
+    ExactPairedRx,
 }
 
 /// Exact reverse IPv4/TCP tuple allowed to inherit one copied-RX permit.
@@ -23835,7 +23847,7 @@ impl Cyw43SmoltcpRxTransaction {
         reservation: Cyw43DataTxQueueReservation,
         reply: Cyw43RxCoupledTcpReply,
     ) -> Result<(), Cyw43DataTxQueueReservation> {
-        if !self.active || self.transferred.is_some() || !reservation.paired_rx {
+        if !self.active || self.transferred.is_some() || !reservation.copied_rx_capacity {
             return Err(reservation);
         }
         self.transferred = Some(Cyw43TransferredPairedTx { reservation, reply });
@@ -24061,16 +24073,27 @@ impl phy::TxToken for DriverTaskNetTxToken<'_> {
             } else {
                 None
             };
-            let reservation = if let Some(transferred) = transferred {
+            let (reservation, lease_provenance) = if let Some(transferred) = transferred {
                 if let Some(unpaired) = self.cyw43_queue_reservation.take() {
                     release_cyw43_data_tx_queue_slot(unpaired);
                 }
-                Some(transferred)
+                (
+                    Some(transferred),
+                    Cyw43ReservedTxLeaseProvenance::ExactPairedRx,
+                )
             } else {
-                self.cyw43_queue_reservation.take()
+                let lease_provenance = if self
+                    .cyw43_received_tcp_reply
+                    .is_some_and(|reply| reply.matches_frame(&scratch[..frame_len]))
+                {
+                    Cyw43ReservedTxLeaseProvenance::ExactPairedRx
+                } else {
+                    Cyw43ReservedTxLeaseProvenance::Ordinary
+                };
+                (self.cyw43_queue_reservation.take(), lease_provenance)
             };
             reservation.is_some_and(|reservation| {
-                enqueue_reserved_cyw43_data_tx(reservation, &scratch[..frame_len])
+                enqueue_reserved_cyw43_data_tx(reservation, lease_provenance, &scratch[..frame_len])
             })
         } else {
             submit_driver_task_frame(self.contract, self.hot_path, &scratch[..frame_len])
@@ -24492,7 +24515,7 @@ fn service_cyw43_pending_data_tx_turn(
     Some(outcome)
 }
 
-/// Whether a copied RX can receive its mandatory paired smoltcp TxToken.
+/// Whether a copied RX can reserve its mandatory smoltcp response capacity.
 ///
 /// This is deliberately passive: it observes only data-plane fences and FIFO
 /// capacity. It neither probes SDIO credit nor advances the active op7 owner.
@@ -24544,7 +24567,7 @@ pub(crate) fn service_cyw43_data_tx_event_turn(
         && cyw43_paired_rx_response_permit_available();
     if copied_rx_first {
         // Do not consume the reserved final slot or its service budget before
-        // smoltcp receives the copied frame and its mandatory paired TxToken.
+        // smoltcp receives the copied frame and its mandatory response TxToken.
         // A credit-ready op7 owner is deliberately excluded: once promoted,
         // that exact owner must not starve behind replenished copied RX.
         return Ok(false);
@@ -25099,7 +25122,7 @@ pub(crate) fn cyw43_data_tx_queue_diagnostic() -> Cyw43DataTxQueueDiagnostic {
 #[cfg(feature = "kernel")]
 fn reserve_cyw43_data_tx_queue_slot(
     contract: DriverTaskContract,
-    paired_rx: bool,
+    copied_rx_capacity: bool,
 ) -> Option<Cyw43DataTxQueueReservation> {
     if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT || !cyw43_data_tx_admission_ready(contract) {
         return None;
@@ -25107,7 +25130,7 @@ fn reserve_cyw43_data_tx_queue_slot(
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let mut queue = CYW43_DATA_TX_QUEUE.lock();
     let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
-    let admission_cap = if paired_rx {
+    let admission_cap = if copied_rx_capacity {
         CYW43_DATA_TX_QUEUE_CAP
     } else {
         CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1)
@@ -25121,7 +25144,7 @@ fn reserve_cyw43_data_tx_queue_slot(
     let reservation = Cyw43DataTxQueueReservation {
         generation,
         reservation_epoch: queue.reservation_epoch,
-        paired_rx,
+        copied_rx_capacity,
     };
     drop(queue);
     record_cyw43_stale_data_tx_purge(purged);
@@ -25260,7 +25283,8 @@ fn cyw43_data_tx_console_response_tuple(frame: &[u8]) -> Option<(u16, [u8; 4], u
 
 /// Classify one standalone authenticated-console response for urgent TX.
 ///
-/// Receive-coupled replies remain independently eligible through `paired_rx`.
+/// Exact receive-coupled TCP replies remain independently eligible through
+/// validated paired-RX provenance.
 /// A later standalone flush must match the exact active authenticated peer and
 /// current logical/pair/physical CYW43 lifetime; source-port ownership alone
 /// conveys no lease authority.
@@ -25277,7 +25301,11 @@ fn cyw43_data_tx_frame_is_console_response(frame: &[u8]) -> bool {
 }
 
 #[cfg(feature = "kernel")]
-fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, frame: &[u8]) -> bool {
+fn enqueue_reserved_cyw43_data_tx(
+    reservation: Cyw43DataTxQueueReservation,
+    lease_provenance: Cyw43ReservedTxLeaseProvenance,
+    frame: &[u8],
+) -> bool {
     if cyw43_post_dhcp_zero_sender_arp(frame) {
         let pending_rx = cyw43_pending_rx_token_occupied();
         emit_cyw43_data_path_trace(
@@ -25294,11 +25322,19 @@ fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, fram
         release_cyw43_data_tx_queue_slot(reservation);
         return false;
     }
+    let paired_rx = matches!(
+        lease_provenance,
+        Cyw43ReservedTxLeaseProvenance::ExactPairedRx
+    );
+    if paired_rx && !reservation.copied_rx_capacity {
+        release_cyw43_data_tx_queue_slot(reservation);
+        return false;
+    }
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let console_peer = cyw43_data_tx_console_response_peer(frame);
     let console_response = console_peer.is_some();
-    let urgent = reservation.paired_rx || cyw43_data_tx_frame_is_control(frame) || console_response;
-    let steady_lease_provenance = if reservation.paired_rx {
+    let urgent = paired_rx || cyw43_data_tx_frame_is_control(frame) || console_response;
+    let steady_lease_provenance = if paired_rx {
         Some(Cyw43SteadyTxLeaseProvenance::PairedRx)
     } else {
         console_peer.map(Cyw43SteadyTxLeaseProvenance::AuthenticatedConsole)
@@ -25326,6 +25362,17 @@ fn enqueue_reserved_cyw43_data_tx(reservation: Cyw43DataTxQueueReservation, fram
         return false;
     }
     queue.reservations -= 1;
+    let admission_cap = if paired_rx {
+        CYW43_DATA_TX_QUEUE_CAP
+    } else {
+        CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1)
+    };
+    if queue.len().saturating_add(queue.reservations) >= admission_cap {
+        queue.drops = queue.drops.saturating_add(1);
+        drop(queue);
+        record_cyw43_stale_data_tx_purge(purged);
+        return false;
+    }
     if queue.push_back(queued).is_err() {
         queue.drops = queue.drops.saturating_add(1);
         drop(queue);
@@ -25373,7 +25420,8 @@ fn enqueue_unreserved_cyw43_data_tx(
     let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
     // `force_urgent` affects FIFO ordering only. Every unpaired producer,
     // including ARP assistance, must preserve the final slot for a copied RX's
-    // mandatory paired TxToken.
+    // mandatory response TxToken. The reserved capacity carries no lease by
+    // itself.
     let admission_cap = CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1);
     if queue.len().saturating_add(queue.reservations) >= admission_cap
         || queue.push_back(queued).is_err()
@@ -26204,8 +26252,9 @@ fn receive_cyw43_driver_task_frame(contract: DriverTaskContract) -> Option<Drive
     }
     // Root-copied frames are software-only. EventPump has already yielded its
     // sole TX coordinator when a paired permit exists, so Device::receive only
-    // dequeues copied data and never advances op7. The paired TxToken queue
-    // permit was reserved before entering this function.
+    // dequeues copied data and never advances op7. The response TxToken queue
+    // capacity was reserved before entering this function; exact frame
+    // provenance is decided only if that token emits.
     while let Some((flags, token)) = take_cyw43_pending_rx_token() {
         let _ = complete_cyw43_unproven_tx_window_from_rx_flags(flags);
         if cyw43_frame_channel(flags) != DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA {
@@ -29104,6 +29153,180 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_direct_rx_tx_token_grants_lease_only_to_exact_reverse_tcp() {
+        use smoltcp::wire::TcpControl;
+
+        let _lock = CYW43_STATUS_TEST_LOCK
+            .lock()
+            .expect("cyw43 status test lock");
+        reset_cyw43_status_flags();
+
+        let generation = 80;
+        let local_mac = CYW43_DRIVER_TASK_MAC;
+        let remote_mac = EthernetAddress([0x62, 0x72, 0x58, 0xed, 0x47, 0x5b]);
+        let local_ip = Ipv4Address::new(192, 168, 86, 154);
+        let remote_ip = Ipv4Address::new(192, 168, 86, 102);
+        let local_port = COHSH_TCP_PORT;
+        let remote_port = 49_152;
+        mark_cyw43_gate8_ready_for_test(generation);
+
+        fn fill_ordinary_tx_capacity() {
+            for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
+                let mut frame = [0u8; 64];
+                frame[0] = marker as u8;
+                assert!(enqueue_unreserved_cyw43_data_tx(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    &frame,
+                    true,
+                    false,
+                ));
+            }
+            assert_eq!(
+                cyw43_data_tx_queue_diagnostic().depth,
+                CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
+            );
+        }
+
+        fill_ordinary_tx_capacity();
+        let arp_drops_before = cyw43_data_tx_queue_diagnostic().drops;
+        let inbound_arp =
+            test_cyw43_arp_request(remote_mac.0, remote_ip.octets(), local_ip.octets());
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            test_rx_token(&inbound_arp),
+        ));
+        let mut device = Cyw43DriverTaskDevice::default();
+        let (arp_rx, arp_direct_tx) = device
+            .receive(Instant::from_millis(0))
+            .expect("copied ARP receives mandatory direct TX capacity");
+        arp_rx.consume(|frame| assert_eq!(frame, &inbound_arp));
+        let outbound_arp =
+            test_cyw43_arp_request(local_mac.0, local_ip.octets(), remote_ip.octets());
+        arp_direct_tx.consume(outbound_arp.len(), |frame| {
+            frame.copy_from_slice(&outbound_arp)
+        });
+        let arp_diagnostic = cyw43_data_tx_queue_diagnostic();
+        assert_eq!(
+            arp_diagnostic.depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
+            "a 42-byte ARP cannot consume the protected paired-response slot",
+        );
+        assert_eq!(arp_diagnostic.reserved, 0);
+        assert_eq!(arp_diagnostic.drops, arp_drops_before.saturating_add(1));
+
+        CYW43_DATA_TX_QUEUE.lock().clear();
+        fill_ordinary_tx_capacity();
+        let wrong_tuple_drops_before = cyw43_data_tx_queue_diagnostic().drops;
+
+        let inbound_tcp = test_cyw43_tcp_segment_token(
+            remote_mac,
+            local_mac,
+            remote_ip,
+            local_ip,
+            remote_port,
+            local_port,
+            1_000,
+            Some(2_000),
+            TcpControl::Psh,
+            b"request",
+        );
+        let inbound_tcp_len = inbound_tcp.len;
+        let inbound_tcp_frame = inbound_tcp.buffer;
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            inbound_tcp,
+        ));
+        let (tcp_rx, tcp_direct_tx) = device
+            .receive(Instant::from_millis(1))
+            .expect("copied TCP receives mandatory direct TX capacity");
+        tcp_rx.consume(|frame| assert_eq!(frame, &inbound_tcp_frame[..inbound_tcp_len]));
+        let wrong_tuple_tcp = test_cyw43_tcp_segment_token(
+            local_mac,
+            remote_mac,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port.wrapping_add(1),
+            2_000,
+            Some(1_007),
+            TcpControl::None,
+            &[],
+        );
+        tcp_direct_tx.consume(wrong_tuple_tcp.len, |frame| {
+            frame.copy_from_slice(&wrong_tuple_tcp.buffer[..wrong_tuple_tcp.len]);
+        });
+        let wrong_tuple_diagnostic = cyw43_data_tx_queue_diagnostic();
+        assert_eq!(
+            wrong_tuple_diagnostic.depth,
+            CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
+            "a wrong reverse TCP port cannot consume the protected paired-response slot",
+        );
+        assert_eq!(wrong_tuple_diagnostic.reserved, 0);
+        assert_eq!(
+            wrong_tuple_diagnostic.drops,
+            wrong_tuple_drops_before.saturating_add(1),
+        );
+
+        CYW43_DATA_TX_QUEUE.lock().clear();
+        fill_ordinary_tx_capacity();
+
+        let exact_inbound_tcp = test_cyw43_tcp_segment_token(
+            remote_mac,
+            local_mac,
+            remote_ip,
+            local_ip,
+            remote_port,
+            local_port,
+            1_000,
+            Some(2_000),
+            TcpControl::Psh,
+            b"request",
+        );
+        assert!(store_cyw43_pending_rx_token(
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            exact_inbound_tcp,
+        ));
+        let (_, exact_direct_tx) = device
+            .receive(Instant::from_millis(2))
+            .expect("second copied TCP receives mandatory direct TX capacity");
+        let exact_outbound_tcp = test_cyw43_tcp_segment_token(
+            local_mac,
+            remote_mac,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
+            2_000,
+            Some(1_007),
+            TcpControl::None,
+            &[],
+        );
+        exact_direct_tx.consume(exact_outbound_tcp.len, |frame| {
+            frame.copy_from_slice(&exact_outbound_tcp.buffer[..exact_outbound_tcp.len]);
+        });
+        let exact_diagnostic = cyw43_data_tx_queue_diagnostic();
+        assert_eq!(
+            exact_diagnostic.depth, CYW43_DATA_TX_QUEUE_CAP as u32,
+            "only exact reverse TCP may consume protected slot 16",
+        );
+        assert_eq!(exact_diagnostic.reserved, 0);
+        let queued_tcp = CYW43_DATA_TX_QUEUE
+            .lock()
+            .pop_next()
+            .expect("exact direct reverse TCP response remains admitted");
+        assert!(queued_tcp.urgent);
+        assert_eq!(
+            queued_tcp.steady_lease_provenance,
+            Some(Cyw43SteadyTxLeaseProvenance::PairedRx),
+            "only the exact reverse IPv4/TCP tuple inherits paired steady service",
+        );
+        assert_eq!(cyw43_data_tx_queue_diagnostic().reserved, 0);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_smoltcp_immediate_ack_uses_receive_coupled_steady_provenance() {
         use smoltcp::iface::{
             Config as IfaceConfig, Interface, PollIngressSingleResult, SocketSet, SocketStorage,
@@ -29557,18 +29780,39 @@ mod tests {
 
         let eapol_slot = reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, false)
             .expect("EAPOL queue reservation");
-        assert!(enqueue_reserved_cyw43_data_tx(eapol_slot, &eapol));
+        assert!(enqueue_reserved_cyw43_data_tx(
+            eapol_slot,
+            Cyw43ReservedTxLeaseProvenance::Ordinary,
+            &eapol,
+        ));
         assert!(enqueue_unreserved_cyw43_data_tx(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             &arp,
             true,
             true,
         ));
-        for (frame, paired_rx) in [(&paired[..], true), (&console_payload[..], false)] {
-            let reservation =
-                reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, paired_rx)
-                    .expect("priority queue reservation");
-            assert!(enqueue_reserved_cyw43_data_tx(reservation, frame));
+        for (frame, copied_rx_capacity, lease_provenance) in [
+            (
+                &paired[..],
+                true,
+                Cyw43ReservedTxLeaseProvenance::ExactPairedRx,
+            ),
+            (
+                &console_payload[..],
+                false,
+                Cyw43ReservedTxLeaseProvenance::Ordinary,
+            ),
+        ] {
+            let reservation = reserve_cyw43_data_tx_queue_slot(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                copied_rx_capacity,
+            )
+            .expect("priority queue reservation");
+            assert!(enqueue_reserved_cyw43_data_tx(
+                reservation,
+                lease_provenance,
+                frame,
+            ));
         }
 
         for (expected_ethertype, expected_first, lease_eligible) in [
@@ -29627,17 +29871,33 @@ mod tests {
         let bulk_one_slot =
             reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, false)
                 .expect("bulk slot one");
-        assert!(enqueue_reserved_cyw43_data_tx(bulk_one_slot, &bulk_one));
+        assert!(enqueue_reserved_cyw43_data_tx(
+            bulk_one_slot,
+            Cyw43ReservedTxLeaseProvenance::Ordinary,
+            &bulk_one,
+        ));
         let paired_slot = reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, true)
             .expect("paired urgent slot");
-        assert!(enqueue_reserved_cyw43_data_tx(paired_slot, &paired));
+        assert!(enqueue_reserved_cyw43_data_tx(
+            paired_slot,
+            Cyw43ReservedTxLeaseProvenance::ExactPairedRx,
+            &paired,
+        ));
         let arp_slot = reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, false)
             .expect("ARP control slot");
-        assert!(enqueue_reserved_cyw43_data_tx(arp_slot, &arp));
+        assert!(enqueue_reserved_cyw43_data_tx(
+            arp_slot,
+            Cyw43ReservedTxLeaseProvenance::Ordinary,
+            &arp,
+        ));
         let bulk_two_slot =
             reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, false)
                 .expect("bulk slot two");
-        assert!(enqueue_reserved_cyw43_data_tx(bulk_two_slot, &bulk_two));
+        assert!(enqueue_reserved_cyw43_data_tx(
+            bulk_two_slot,
+            Cyw43ReservedTxLeaseProvenance::Ordinary,
+            &bulk_two,
+        ));
 
         for (expected_first, urgent, fast_lane) in [
             (0x22, true, true),

@@ -698,7 +698,14 @@ prove all of the following:
   independently urgent, and FIFO order is preserved within each class.
   Every unpaired reservation, including ordinary `Device::transmit` and
   force-urgent ARP assistance, must stop at 15 aggregate slots and leave the
-  final permit for the TxToken paired with `Device::receive`;
+  final permit for the TxToken paired with `Device::receive`. That permit is
+  capacity, not lease provenance: a direct TxToken may keep paired authority
+  only when its emitted nonfragmented IPv4/TCP frame exactly reverses the saved
+  L3/L4 tuple. All other direct output must remain ordinary/unpaired, retain
+  its normal priority classification, relinquish slot-16 authority, and fail
+  closed when the ordinary 15-slot cap is full: ARP/DHCP/control may remain
+  urgent, while fragmented or payload-bearing bulk remains bulk. The
+  transferred-token path must enforce the same exact reverse-tuple rule;
   consuming a valid reservation must not fail merely because an older owner
   remains active, must enqueue without immediate promotion, and dropping an
   unused token must release only that local permit. EventPump must be the sole
@@ -837,15 +844,22 @@ The selected Pi 4 DTS maps `dma4` to GIC SPI `0x54`; adding the GIC SPI base
 `32` yields seL4 IRQ `116`. IRQ `114` names `dma2` in that DTS and must be
 rejected for the channel-4 owner.
 
-DMA terminal-condition tests must treat IRQ116 as the normal scheduling wake,
-not as consumable completion history. With an exact issued external-DMA cursor,
-`CS.INT | END` and `CONBLK_AD == 0` must complete through the same terminal
-consumer when reached from the DMA badge, a coalesced host/DMA/peer badge, an
-already-admitted peer/root wake, or the final condition-before-sleep check. A
-condition-first crossing followed by a late DMA badge must perform exactly one
-`INT | ACTIVE` W1C and one handler-slot-5 ACK total. Wrong generation, inactive
-cursor, missing `CS.INT`, live `CONBLK_AD`, DMA error, source-clear failure, and
-handler-ACK failure must remain fail closed and issue no command.
+DMA terminal-condition tests must model request terminal and delivered GIC
+state independently. With an exact issued external-DMA cursor, either a badge
+service or a pre-block condition sample that observes `CS.INT | END` and
+`CONBLK_AD == 0` must perform exactly one `INT | ACTIVE` W1C, source-clear proof,
+and terminal commit. Condition-first consumption performs zero handler-slot-5
+ACK and may complete the durable request join without waiting for notification
+history. Every actually delivered DMA badge, including a coalesced
+host/DMA/peer badge, must receive exactly one handler-slot-5 ACK after source
+handling. Tests must cover badge-first, condition-first without a badge before
+the next request, a source-clear late badge during idle or a nonterminal next
+request, and a late badge after the next exact request has become terminal. In
+the last case the current request owns the asserted source and consumes it
+before the delivered badge is ACKed. All paths must remain idempotent with one
+W1C/commit per request and one ACK per delivered badge. Wrong generation,
+inactive or unowned asserted source, live `CONBLK_AD`, DMA error, source-clear
+failure, and handler-ACK failure must remain fail closed and issue no command.
 
 External-DMA lifecycle coverage must prove the exact Linux order within one
 bounded preissue/issue owner quantum with `PREISSUE_STEP_BOUND=16`: SDHCI
@@ -1074,11 +1088,13 @@ integrated production case must replace the former unbounded
 `Interface::poll` with one `poll_maintenance` call plus the existing 32-frame
 bound of per-ingress `poll_ingress_single` and immediate `poll_egress`
 transactions, then close each transaction before separately bounded
-standalone egress. It must feed an ordinary in-order console segment and prove
-that an unused receive-side `TxToken` transfers its exact already-reserved
-paired slot to the transaction; the token itself must not be treated as
-carrying the TCP ACK. Exactly one validated, nonfragmented outgoing IPv4/TCP
-frame with the reverse L3/L4 tuple may consume that slot, with or without
+standalone egress. It must feed direct ARP and exact reverse-TCP responses and
+prove the receive-side reservation is capacity only: direct ARP has no paired
+lease, while direct exact reverse TCP retains it. It must also prove that an
+unused receive-side `TxToken` transfers its exact already-reserved slot to the
+transaction; the token itself must not be treated as carrying the TCP ACK.
+Exactly one validated, nonfragmented outgoing IPv4/TCP frame with the reverse
+L3/L4 tuple may consume paired authority, with or without
 payload and without using Ethernet MAC identity. Wrong-tuple, non-TCP,
 fragmented, second, late, and post-end standalone output must not borrow the
 reservation, and the end hook must release an unconsumed transfer before
@@ -1117,8 +1133,13 @@ service turn and leave the grant unconsumed. ACK failure must restore the exact
 pending authority while performing zero I/O, and an interrupt after the wake
 linearization point must remain durably latched.
 
-One finite `STEADY_SERVICE_LEASE` must admit exactly two typed child identities:
-the exact active DPC event bound to request/fingerprint/event/generation, and the
+Every generation must begin with DPC on the exact ordinary continuation-grant
+chain. Only an accepted exact current-generation `RX_POLL` carrying
+`RX_STEADY_TAIL_DRAIN` may latch data-plane DPC steady admission; `EngineInit`,
+recovery, and generation replacement must revoke it. One finite
+`STEADY_SERVICE_LEASE` must then admit exactly two typed child identities: an
+exact active DPC event created after that latch and bound to
+request/fingerprint/event/generation, and the
 exact eligible post-Gate-8 urgent-op7 foreground SDIO child bound to logical
 generation, pair, physical lifetime, open Network lease, and paired-response or
 exact authenticated-console-connection-and-peer proof. Each leased owner quantum must
@@ -2079,7 +2100,7 @@ Stage/rematerialize/issued-latch/sequence-last-command/final-signal producer
 transaction with no root continuation grant, followed by observation-only
 completion checks and at most one unchanged-identity physical-deadline wake.
 One finite
-`STEADY_SERVICE_LEASE` must cover only the exact active DPC child and exact
+`STEADY_SERVICE_LEASE` must cover only an exact data-plane-latched active DPC child and exact
 eligible urgent-op7 foreground SDIO child. Each physical owner quantum remains
 bounded, and an unchanged request wait blocks on local notification slot `3`.
 Coverage must retain deadline/op/byte/poison/sole-issuer bounds and also prove that DPC supplies both persistent
@@ -2210,6 +2231,18 @@ reachability, `.coh`, ping/latency, REST, and hive pressure were correctly
 withheld. A replacement must first prove the generated dual-IRQ lifetime and
 stable TCP; no higher-layer test may be used to mask this lower-layer failure.
 
+Exact image `7e042363b446` / image id
+`b7c22ac451d4fb4597f2375b94755a746de602edc0a2cbdafdcdbb02257d35e6`
+also fails: all six observed lifetimes completed Gates 1-7, but warm stable
+service was 0/5. R01/R03/R04/R05 terminated at generation 6 Gate 8e with exact
+loss-free DPC accounting. R02 reached generation-5 Ready and emitted DHCP/ARP,
+then retracted when a direct 42-byte ARP response carried paired steady flag
+`0x0040` and its terminal was unobserved. The clean cutoff contains zero Pi TCP.
+The replacement tests must therefore prove ordinary pre-data-plane DPC,
+tail-drain-scoped steady admission, direct-response reverse-TCP provenance, and
+independent DMA terminal/delivered-handler closure before raw TCP can open
+`.coh` or pressure.
+
 The source-shape test must preserve Linux `brcmfmac`'s relevant performance
 invariants without importing its private workqueue or host lock. Normal SDIO
 mode has interrupts enabled and polling disabled; the ISR schedules durable
@@ -2225,7 +2258,7 @@ latch. The same child-to-root Network service wake must be emitted after an
 exact steady-parent terminal and is therefore not RX-only. Its scheduler form
 remains one bounded EventPump Network quantum with
 physical-console checkpoints, ordinary exact grants, one finite typed
-`STEADY_SERVICE_LEASE` for only the active DPC or eligible urgent-op7 child,
+`STEADY_SERVICE_LEASE` for only the data-plane-latched active DPC or eligible urgent-op7 child,
 one HAL owner, and one linked SDIO runtime issuer. Its compiler-generated
 local-notification topology has SDHCI IRQ 158/badge 159/handler slot 4 and DMA
 IRQ 116/badge 512/handler slot 5. Every issued steady request
@@ -2236,11 +2269,14 @@ status poll. Before blocking, and on any already-admitted owner wake, its exact
 cursor must resample the durable DMA terminal condition once so a coalesced or
 crossing notification cannot strand completed hardware. Request and
 CARD_INT causes must be partitioned from one host snapshot under one handler-
-slot-4 acknowledgement. External DMA must join the independently delivered host
-and DMA terminal halves in either order; its cursor owns DMA `CS.INT` W1C before
-handler-slot-5 acknowledgement. DMA-badge-first and condition-first cases must
-share one terminal consumer and prove one total W1C/ACK even if a late badge is
-then delivered. The AckStatus W1C child must
+slot-4 acknowledgement. External DMA must join the independent durable host
+and DMA terminal halves in either order. The exact cursor owns DMA `CS.INT`
+W1C/commit from either badge service or condition-before-sleep, while handler-
+slot-5 acknowledgement is legal only for an actually delivered badge. A
+condition-first sample may consume and commit the current terminal with zero
+handler ACK; a later source-clear badge is ACK-only, and a current asserted
+source always belongs to the exact current request. Badge-first, condition-
+first, late, and coalesced cases must remain idempotent. The AckStatus W1C child must
 rearm CARD_INT before terminal publication, and a new IRQ may append only after
 unmask proof. No test may pass by adding a normal-path timer poller or private
 physical drain loop. The 32-ms quiescence and 1,024-ms reissue deadlines on the
@@ -2367,8 +2403,12 @@ normally IRQ-woken and always condition-driven: force both SDHCI-`DATA_END`-
 first and DMA-channel-4-terminal-first requests, retain the first half without
 polling, and complete only after the second exact durable condition. Include a
 condition-first crossing reached on another admitted owner wake and prove it
-does not wait for a timeout or duplicate W1C/ACK when its badge is later
-consumed. Any missing DMA route, deadline wake, runnable
+performs one W1C/terminal commit, zero handler ACK, and completes without
+waiting for a badge or timeout. Later delivered badges must be ACKed exactly
+once without mutating a nonterminal next request or duplicating a consumed
+terminal; if the next exact request has become terminal, its asserted source
+must be consumed before that delivered badge is ACKed. Any missing
+DMA route, deadline wake, runnable
 completion poll, or one-sided terminal completion fails the candidate. The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
@@ -2383,8 +2423,10 @@ DPC and eligible urgent op7 separately, with zero excluded-child admission,
 overrun, auto-renew, or poison. It must also show exact request IRQ enable,
 delivery, mask-before-ACK, cursor W1C/rearm, block, and terminal counters for
 SDHCI IRQ 158 plus DMA IRQ 116. DMA telemetry must prove cursor-owned `CS.INT`
-W1C before handler-slot-5 ACK, both terminal arrival orders, condition-first
-and badge-first consumption counts, no duplicate W1C/ACK, and zero physical-
+W1C and terminal commit exactly once per request, both terminal arrival orders,
+condition-first consumption with zero pre-delivery handler ACK, badge-first and
+late-badge consumption counts, exactly one ACK per delivered badge, no
+duplicate W1C/commit/ACK, and zero physical-
 deadline wakes under ordinary and pressure load, with
 zero request-only DPC/no-source classifications and zero empty/spurious
 heartbeat publications. Correlate root accepted-to-issued,
@@ -2897,8 +2939,8 @@ cannot grant authority. Tests must reject
 endpoint input, stale-sequence, changed-action, changed-generation,
 changed-flags, exhausted id, consumed or mutated grants, and prove an issued
 action cannot be replayed. A separate eligible fresh post-Gate-8 urgent-op7
-case must require either consumption of the exact transferred copied-RX
-reservation by one validated reverse IPv4/TCP tuple or authenticated `cohsh`
+case must require exact reverse-tuple proof from a direct or transferred copied-
+RX reservation, or authenticated `cohsh`
 bound to the exact active console connection and peer tuple plus exact
 generation, pair, physical lifetime, and open Network lease, then use one bounded
 Stage/rematerialize/issued-latch/sequence-last-command/final-signal root
@@ -2924,7 +2966,7 @@ again. The owner must consume at
 most one exact grant and perform at most one physical owner quantum. Ordinary
 child timeout age is inactivity: consumption of that exact grant rebases the
 counter-backed and fallback-poll fences. One finite `STEADY_SERVICE_LEASE` may
-instead admit only the exact active DPC or eligible urgent-op7 child. Each
+instead admit only the exact data-plane-latched active DPC or eligible urgent-op7 child. Each
 physical owner quantum remains bounded; unchanged controller-waiting state must
 block on local notification slot `3` and retain deadline/op/byte, identity,
 poison, and one-issuer bounds. HAL must mint the
@@ -2993,8 +3035,10 @@ DMA-IRQ coverage must prove exact active-cursor and channel-4 identity, terminal
 and error latching, cursor-owned `CS.INT` W1C before handler-slot-5 ACK, both
 host-first and DMA-first terminal joins, and correct host/DMA/peer badge
 coalescing. It must also prove a terminal condition reached from a peer/root
-wake and condition-before-sleep, plus an idempotent late DMA badge, without a
-second W1C, ACK, issue, or completion. Pair-restart coverage must suspend both runtimes, mask CARD_INT,
+wake and condition-before-sleep performs one cursor-owned W1C/commit with no
+handler ACK, can retire without a delivered badge, and lets every later
+delivered badge take exactly one ACK-only or current-source-consume-then-ACK
+path without a second issue or duplicate completion. Pair-restart coverage must suspend both runtimes, mask CARD_INT,
 drain local notification slot `3`, and prove root ACKs only SDHCI IRQ 158
 handler slot 4. DMA IRQ 116 handler slot 5 must remain unacknowledged across the
 generation cut. Replacement `EngineInit` must abort or reset channel 4 as

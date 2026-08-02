@@ -453,9 +453,9 @@ issued-unknown reaping, bounded TX aggregation, and v11 telemetry. Cold, boot,
 recovery, op8, op10, op11, ordinary/bulk op7, and GENET retain distinct
 ABI-invisible `Stage`, `CommitRing`, `PublishGrant`, signal-last `NotifyRing`,
 and `PollRing` producer turns plus exact delegated grants. Two bounded changes
-now remove measured scheduler amplification without another issuer. One finite
+now remove measured scheduler amplification without another issuer. Each generation keeps DPC on the exact ordinary continuation lane until a current-generation `RX_STEADY_TAIL_DRAIN` handoff proves the post-Gate-8 data plane. One finite
 `STEADY_SERVICE_LEASE` admits exactly two typed child identities: the
-exact DPC event/generation child and the exact post-Gate-8 urgent-op7 foreground
+exact later DPC event/generation child and the exact post-Gate-8 urgent-op7 foreground
 SDIO child. The latter is eligible only for a copied-RX paired response or an
 authenticated `cohsh` payload bound to the exact active console connection and
 peer tuple (connection id, local port, remote IPv4 address, and remote port),
@@ -478,7 +478,7 @@ parent scheduling wake, which CYW43 propagates only to
 the exact retained Function-2 child for deadline sampling and containment. A
 second exact expired miss enters pair recovery. Root does not keep either
 priority-255 runtime runnable with completion polling.
-Boot, firmware, control/EAPOL, recovery, op8, op10, bulk, unauthenticated or
+Boot, firmware, control/EAPOL, pre-data-plane DPC, recovery, op8, op10, bulk, unauthenticated or
 wrong-peer traffic, and GENET use the full phase chain.
 
 The shared authenticated TCP-console socket disables smoltcp's delayed-ACK
@@ -486,15 +486,19 @@ timer. The common NetStack also replaces the former unbounded
 `Interface::poll` call with one `poll_maintenance` call plus the existing
 32-frame bound of per-ingress `poll_ingress_single` and immediate `poll_egress`
 transactions, followed by separately bounded standalone egress. On CYW43,
-`Device::receive` still reserves the paired queue slot before removing copied
-RX. If smoltcp leaves that receive-side `TxToken` unused, dropping it transfers
-the same already-reserved slot into the current transaction; the token does
-not itself carry a TCP ACK. Exactly one outgoing, nonfragmented IPv4/TCP frame
-whose L3/L4 tuple is the reverse of the received tuple may claim that slot,
-with or without payload and independently of next-hop MAC identity. The
-transaction-end hook releases an unconsumed slot before standalone egress, so
-a wrong tuple, non-TCP frame, fragment, second or late frame, or standalone
-flush cannot borrow copied-RX provenance. A later standalone authenticated
+`Device::receive` still reserves the final queue slot before removing copied
+RX, but that reservation is capacity, not paired-TCP provenance. When smoltcp
+consumes the receive-side `TxToken` directly, only an emitted nonfragmented
+IPv4/TCP frame whose L3/L4 tuple exactly reverses the received tuple may keep
+paired steady authority. A direct ARP, DHCP, fragment, or wrong tuple remains
+urgent when appropriate but is re-admitted only within the ordinary 15-slot
+capacity; otherwise it fails closed instead of spending slot 16. If smoltcp
+leaves the token unused, dropping it transfers the same reservation into the
+current transaction, where the identical exact reverse-tuple check applies.
+The token itself carries no TCP ACK. The transaction-end hook releases an
+unconsumed slot before standalone egress, so a wrong tuple, non-TCP frame,
+fragment, second or late frame, or standalone flush cannot borrow copied-RX
+provenance. A later standalone authenticated
 payload may enter the steady seam only when its complete outgoing tuple
 matches the exact active authenticated connection and the same logical, pair,
 and physical Wi-Fi lifetime. GENET's transaction hooks are no-ops and its
@@ -516,8 +520,8 @@ durable DPC/root-wake and queue levels, one EventPump Network quantum, one HAL
 op8 owner, and one linked SDIO runtime issuer. The SDIO request itself completes
 through response/data/error and direction-correct PIO-ready interrupt sources,
 not a scheduler-driven status poll. Notifications remain scheduling hints.
-Ordinary work uses exact continuation grants; `STEADY_SERVICE_LEASE` is typed
-authority only for the exact active DPC or eligible urgent-op7 child and cannot
+Ordinary work, including every pre-data-plane DPC child, uses exact continuation grants; `STEADY_SERVICE_LEASE` is typed
+authority only for an exact active DPC after the exact-generation tail-drain latch or eligible urgent-op7 child and cannot
 become a private physical drain loop or authorize another command.
 
 The production DPC RX bound is cursor-local and independent of the 50-entry
@@ -668,6 +672,34 @@ SDHCI `DATA_END` and BCM2835 DMA channel-4 terminal are independent completion
 edges while this exact image generated only the SDHCI route. The two-IRQ design
 below closes that architecture; it remains source-only until a replacement
 exact image passes the per-lifetime gates with zero physical-deadline wake.
+
+The exact `7e042363b446` image
+(`b7c22ac451d4fb4597f2375b94755a746de602edc0a2cbdafdcdbb02257d35e6`)
+proved that the corrected DMA4 IRQ identity and durable terminal source can
+complete firmware transfer and Gates 1-7 on the settled cold boot plus warm
+R01-R05, but warm usable service remained 0/5. Cold, R01, R03, R04, and R05
+all reached association/link and then terminated at generation 6 with
+`host-eapol-prerequisite-required`; their DPC capture/publication/consumption/
+rearm totals remained exact and loss-free. R02 alone passed Gate 8a-8h and
+reached Ready at generation 5, emitted two DHCP and two ARP frames, then
+retracted Ready when a direct 42-byte ARP response entered op7 with paired-
+steady flag `0x0040` and its terminal was unobserved. The clean cutoff contains
+30 Pi-source LLC/XID probes, those four R02 data frames, and zero Pi TCP.
+Consequently `.coh`, TCP quality, and pressure remained correctly gated.
+
+This evidence exposes three lifetime boundaries rather than another smoltcp
+tuning problem. First, the `0dcfe` change made every DPC SDIO child use the
+steady lease, including association and host EAPOL, contrary to the required
+ordinary pre-data phase; the replacement latches steady DPC only after the
+exact current-generation `RX_STEADY_TAIL_DRAIN` handoff. Second, the receive-
+side slot reservation is capacity and cannot confer paired-TCP provenance on a
+direct ARP response. Third, DMA request-terminal state and delivered-handler
+state are independent: the exact current cursor may consume durable `CS.INT`
+before badge delivery but must not ACK the handler until a badge is actually
+delivered; every delivered badge is then ACKed exactly once after source
+handling. These repairs retain one physical owner and the post-Gate-8 fast
+path; they require a newly flashed 5/5 candidate gate plus latency/pressure run
+before canonical acceptance.
 
 ### QEMU network drivers
 
@@ -1294,8 +1326,8 @@ Root admits Wi-Fi Ethernet output through one generation-scoped bounded
 aggregate of 16 immutable frames. The aggregate uses two heapless FIFO classes:
 urgent control and bulk. ARP, EAPOL, DHCP, TCP SYN/FIN/RST, and payload-free TCP
 control segments are urgent; other payload-bearing TCP, fragmented IPv4, and
-ordinary traffic remain bulk. An exact reverse IPv4/TCP egress that consumes
-the transferred copied-RX reservation is urgent independently, preserving
+ordinary traffic remain bulk. An exact reverse IPv4/TCP egress whose direct or
+transferred copied-RX reservation proves that tuple is urgent independently, preserving
 response liveness; payload is permitted and MAC identity is not part of this
 causal match. Urgent frames are
 selected before bulk while FIFO order is preserved within each class. This is
@@ -1700,8 +1732,10 @@ generation and XID.
   `CheckWake -> CheckGrant -> ACK-before-I/O Execute` owner turns. A notification
   is never authority by itself.
 
-  One finite `STEADY_SERVICE_LEASE` may instead admit either the active DPC
-  child or one eligible post-Gate-8 urgent-op7 foreground SDIO child. The typed
+  Pre-data-plane DPC retains that ordinary grant chain. After exact current-
+  generation `RX_STEADY_TAIL_DRAIN` admission, one finite
+  `STEADY_SERVICE_LEASE` may instead admit either the active DPC child or one
+  eligible post-Gate-8 urgent-op7 foreground SDIO child. The typed
   descriptor binds request sequence, complete fingerprint and owner generation;
   DPC additionally binds event sequence, while op7 binds the exact logical
   generation, pair, physical lifetime, open Network lease, and copied-response
@@ -1839,7 +1873,7 @@ generation and XID.
   the ordinary owner uses distinct
   `CheckWake -> CheckGrant -> ACK-before-I/O Execute` turns with one exact grant
   and at most one physical quantum. The `STEADY_SERVICE_LEASE` replaces only
-  those per-controller-phase grant exchanges for the exact active DPC or
+  those per-controller-phase grant exchanges for the exact data-plane-latched active DPC or
   eligible urgent-op7 child. A bounded physical quantum may advance or
   terminate; request-waiting state blocks on local notification slot `3`. Every
   submission, completion poll, explicit grant-and-signal turn, terminal poll,
@@ -1955,15 +1989,20 @@ generation and XID.
   fence plus same-channel status readback after ACTIVE prevents an immediate
   join poll from observing a posted start as false completion. SDHCI `DATA_END`
   and DMA channel-4 terminal may arrive in either order. IRQ 158 records the
-  host half; IRQ 116 is the normal low-latency wake for the exact active
-  external-DMA cursor to sample channel 4, latch `CONBLK_AD`/`CS` terminal or
-  error state, perform the cursor-owned `CS.INT` W1C, and then ACK handler slot
-  5. `CS.INT` is durable source truth rather than notification-history truth:
-  the same exact-generation cursor also resamples it on any already-admitted
-  SDIO-owner wake and in the final condition-before-sleep check. Both entry
-  points use one terminal consumer, so a condition-first crossing or later
-  coalesced DMA badge performs no second W1C, handler ACK, command issue, or
-  completion publication. Whichever durable terminal half is observed first is
+  host half; IRQ 116 is the normal low-latency wake, while the exact active
+  external-DMA cursor owns durable request-terminal state independently of GIC
+  delivery. A badge or the pre-block condition sample may observe exact
+  current-request `CS.INT`, validate `CONBLK_AD`/`CS`, perform the cursor-owned
+  `INT | ACTIVE` W1C, prove the source clear, and commit terminal evidence once.
+  Condition-first consumption performs no handler ACK and need not wait for a
+  later badge before the hardware-terminal join completes. Every actually
+  delivered badge is ACKed exactly once after source handling: a source-clear
+  late badge is ACK-only, while an asserted exact current request is consumed
+  before that badge is ACKed. This ordering lets seL4/GICv3 deactivate only an
+  IRQ that has actually been delivered; badge-first, condition-first, late,
+  and coalesced paths remain idempotent without a second W1C, handler ACK,
+  command issue, or completion publication. Whichever
+  durable terminal half is observed first is
   retained and returns to `WaitForWake`; it never runs a private poll loop for
   the other or completes the request alone. The external
   engine does not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal
@@ -2013,8 +2052,9 @@ generation and XID.
   retained request cursor remains the sole authority for host W1C, DMA `CS.INT`
   W1C, terminal joining, and completion publication. A DMA badge drives the
   fast path, but it is not a consumable history counter: every admitted owner
-  wake rechecks the exact cursor's level condition before blocking, and only an
-  asserted current-request `CS.INT` may advance that cursor.
+  wake rechecks the exact cursor's level condition before blocking. Only the
+  exact current cursor may advance on asserted current-request `CS.INT`; only
+  an actually delivered badge creates a handler-ACK obligation.
 - Cohesix intentionally has one production SDIO request lane with the
   Linux/Raspberry Pi `mmc-bcm2835` engine threshold embedded in its immutable
   request identity. A normalized host block count of at most two selects
@@ -2139,17 +2179,23 @@ generation and XID.
   For an external-DMA request, the SDIO owner retains the exact cursor after
   command and channel activation. Each admitted host, DMA, peer, or root wake
   runs one bounded condition-before-sleep sample of only that exact immutable
-  source, latches response, `DATA_END`, or DMA terminal evidence independently,
-  and returns without a private wait loop. Lone
+  source and may latch response or `DATA_END` independently. Either the DMA
+  badge path or another admitted owner wake may consume asserted terminal
+  `CS.INT` through the same exact cursor; the condition-first path commits the
+  terminal without ACKing an undelivered handler and returns without a private
+  wait loop. Lone
   `SPACE_AVAIL`/`DATA_AVAIL` observations remain outside this engine's W1C
   ownership, and block-gap control is required to remain zero.
   Completion requires `CONBLK_AD == 0`, this request's terminal DMA `CS.INT`,
   no DMA `CS.ERROR`, and SDHCI `DATA_END`, with the DMA and SDHCI terminal
-  edges accepted in either arrival order. Only the exact cursor acknowledges
-  the DMA W1C edge once with `INT | ACTIVE`, before handler-slot-5 ACK; the first
-  terminal half remains waiting for the second durable condition. A condition-
-  first completion consumes a later coalesced badge as scheduling history only,
-  without a second W1C or ACK. `DMA_END` is enabled and acknowledged
+  edges accepted in either arrival order. A condition sample reached before
+  badge delivery may clear the exact request's DMA source once with
+  `INT | ACTIVE`, prove the clear, and commit terminal evidence, but performs no
+  handler ACK. The first terminal half remains waiting only for the other
+  durable request condition, never for notification history. A later delivered
+  source-clear badge performs no second W1C and is ACKed exactly once; if a new
+  exact request has asserted `CS.INT`, the current request owns that source and
+  consumes it before the delivered badge is ACKed. `DMA_END` is enabled and acknowledged
   as Linux-shaped progress only; it cannot satisfy either terminal join
   condition. The physical deadline is lost-wake fault containment only;
   ordinary and pressure completion must join both IRQs with zero physical-
@@ -2471,7 +2517,7 @@ generation and XID.
   do not alter Wi-Fi or GENET scheduling.
   Pending-command arbitration remains single-owner. Excluded foreground work
   requires an exact reciprocal grant for each bounded controller phase. The
-  `STEADY_SERVICE_LEASE` may retain only an exact active DPC child or exact
+  `STEADY_SERVICE_LEASE` may retain only an exact data-plane-latched active DPC child or exact
   eligible post-Gate-8 urgent-op7 child across controller phases; it yields
   after every bounded slice and cannot borrow or replace another cursor.
   Badge-2 completion/DPC, badge-159 SDHCI IRQ, and badge-512 DMA IRQ notifications are
@@ -3371,7 +3417,8 @@ no physical I/O, a pending CARD_INT still wins before that grant, and a consumed
 grant cannot replay. This is Cohesix's
 linked-runtime form of Linux's condition-before-sleep workqueue rule.
 Focused urgent-response tests prove that only the exact post-Gate-8 reverse
-IPv4/TCP egress that consumes the transferred copied-RX reservation, or an
+IPv4/TCP egress whose direct or transferred copied-RX response matches that
+tuple, or an
 authenticated `cohsh` payload bound to the exact active console
 connection and peer tuple under the current generation, pair, physical
 lifetime, and open Network lease can use the fused producer seam and
