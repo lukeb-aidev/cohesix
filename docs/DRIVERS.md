@@ -507,8 +507,8 @@ pending work before sleeping; TX completion does not itself require a physical
 receive-source read. Its SDIO cadence is RX-first with `BRCMF_RXBOUND=50`,
 `BRCMF_TXBOUND=20`, `BRCMF_TXMINMAX=1` while RX remains pending, a 2,048-entry
 TX queue, a 32-KiB aggregation buffer, and block-mode CMD53 transfers. Cohesix
-already carries the material transport shapes: one 50-frame child/root RX
-envelope, firmware credits and glom aggregation, one 32-KiB shared aperture,
+already carries the material transport shapes: firmware credits and glom
+aggregation, one 32-KiB shared aperture,
 512-byte Function 2 blocks, multi-block CMD53, and external DMA for larger
 transfers. It deliberately cannot copy Linux's private workqueue or host lock.
 The linked-runtime translation is one compiler-declared child-to-root wake,
@@ -519,6 +519,18 @@ not a scheduler-driven status poll. Notifications remain scheduling hints.
 Ordinary work uses exact continuation grants; `STEADY_SERVICE_LEASE` is typed
 authority only for the exact active DPC or eligible urgent-op7 child and cannot
 become a private physical drain loop or authorize another command.
+
+The production DPC RX bound is cursor-local and independent of the 50-entry
+software queue. Each valid completed physical frame charges at least one unit;
+admitted glom packets charge individually. At 50 units the same event parks at
+a child-free complete-frame boundary before preparing its next SDIO operation.
+Only one already intake-sealed parent that independently passes the exact
+post-Gate-8 steady urgent-`ETH_TX` lease may consume that opportunity. The
+runtime resets the bound before executing that parent, then resumes the same
+cursor and event without advancing the ring consumer or changing the current
+healthy CARD_INT arm/mask state. Ordinary, boot, control, EAPOL, bulk, stale,
+quarantined, or active-child work cannot borrow this Linux-style TX-minimum
+interleave; no second issuer, tag, grant cadence, or 20-parent burst exists.
 
 The as-built source candidate has no direct post-TX receive command and no
 alternate receive lane. Gate 8 commit retains the current lifetime identity plus one

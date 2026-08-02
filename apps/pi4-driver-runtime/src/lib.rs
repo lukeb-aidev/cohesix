@@ -1485,8 +1485,16 @@ const CYW43_SDPCM_NEXT_FRAME_LEN_UNIT_BYTES: usize = 16;
 // including hints carried by glom frames. Keep this protocol boundary separate
 // from buffer capacity so a larger shared RX window cannot widen readahead.
 const CYW43_SDPCM_NEXT_FRAME_MAX_BYTES: usize = 2_048;
+/// Linux `brcmf_sdio_dpc()` RX quantum before one pending TX receives service.
+///
+/// This is a scheduler bound, not queue capacity: root may concurrently drain
+/// the software RX queue while one captured DPC event remains active. Saturating
+/// the retained cursor at this bound creates one safe post-frame opportunity
+/// for an already-authorized steady TX without advancing the event or changing
+/// its current race-closed CARD_INT rearm state.
+const CYW43_DPC_RX_BOUND: u8 = 50;
 #[cfg(test)]
-const CYW43_RX_DRAIN_BUDGET: usize = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP;
+const CYW43_RX_DRAIN_BUDGET: usize = CYW43_DPC_RX_BOUND as usize;
 const CYW43_DPC_CHILD_FALLBACK_POLLS: u32 = 1_048_576;
 const CYW43_SERVICE_PROGRESS_CREDIT: u32 = 1 << 0;
 const CYW43_SERVICE_PROGRESS_QUEUE_DEPTH: u32 = 1 << 1;
@@ -3279,6 +3287,7 @@ enum Cyw43DpcAction {
     FlowRead,
     HostmailRead,
     HostmailAck,
+    RxQuantumBoundary,
     RxQueueWait,
     FifoWindow,
     Firstread,
@@ -3471,6 +3480,7 @@ struct Cyw43DpcCursor {
     rframe_low: u8,
     actual_frame_len: u16,
     frame_from_nextlen: bool,
+    rx_quantum_frames: u8,
     recovery_retransmit: bool,
     recovery_drain_polls: usize,
     recovery_deadline: RuntimeDeadline,
@@ -3501,6 +3511,7 @@ impl Cyw43DpcCursor {
             rframe_low: 0,
             actual_frame_len: 0,
             frame_from_nextlen: false,
+            rx_quantum_frames: 0,
             recovery_retransmit: false,
             recovery_drain_polls: 0,
             recovery_deadline: RuntimeDeadline::Iterations { remaining: 0 },
@@ -3513,6 +3524,33 @@ impl Cyw43DpcCursor {
     fn reset(&mut self) {
         *self = Self::empty();
     }
+}
+
+/// Charge one successfully completed physical RX frame to the retained DPC
+/// quantum. Glom subframes admitted by that physical frame count separately;
+/// a locally consumed or dropped valid frame still charges at least one.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_charge_rx_quantum(cursor: &mut Cyw43DpcCursor, admitted_packets: u32) -> bool {
+    let charge = admitted_packets.max(1).min(u32::from(CYW43_DPC_RX_BOUND)) as u8;
+    cursor.rx_quantum_frames = cursor
+        .rx_quantum_frames
+        .saturating_add(charge)
+        .min(CYW43_DPC_RX_BOUND);
+    cursor.rx_quantum_frames == CYW43_DPC_RX_BOUND
+}
+
+/// Park only at a complete-frame boundary. No SDIO descriptor or backplane
+/// window phase is staged here, so one exact foreground TX may borrow the sole
+/// issuer without aliasing DPC payload or controller state.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_park_rx_quantum(cursor: &mut Cyw43DpcCursor) {
+    cursor.action = Cyw43DpcAction::RxQuantumBoundary;
+    cursor.io_kind = Cyw43DpcIoKind::None;
+    cursor.io_phase = Cyw43DpcIoPhase::Idle;
+    cursor.io_frame = DriverFrameDescriptor::empty();
+    cursor.io_block_size = 0;
+    cursor.io_block_count = 0;
+    cursor.io_preissue_retry_used = false;
 }
 
 const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
@@ -8361,9 +8399,114 @@ const fn cyw43_dpc_wait_services_cursor(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43DpcPendingCommandRoute {
     Execute,
+    ExecuteTxInterleave,
     Wait,
     ExecuteRecovery,
     FailQuarantined,
+}
+
+/// Immutable permission for one Linux-style TX interleave at an RX quantum
+/// boundary. It names the retained event and exact sealed foreground parent;
+/// consuming it changes only the cursor's fairness count.
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43DpcTxInterleavePermit {
+    generation: u32,
+    event_sequence: u32,
+    parent_sequence: u32,
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_tx_interleave_permit(
+    command: DriverTaskCommandRecord,
+    global_child_active: bool,
+    quarantined: bool,
+) -> Option<Cyw43DpcTxInterleavePermit> {
+    if global_child_active
+        || quarantined
+        || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
+        || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+    {
+        return None;
+    }
+    let permit = CYW43_RUNTIME_STATE.with_ref(|state| {
+        let cursor = state.dpc_cursor;
+        if !state.initialized
+            || !state.transport_ready
+            || !state.firmware_released
+            || !state.dpc_link_ready
+            || state.dpc_shared_epoch == 0
+            || state.recovery_required
+            || state.dpc_terminal_cause.active()
+            || state.control_exchange.active()
+            || state.sdpcm_tx_write_ambiguous
+            || !state.rx_service_active
+            || state.dpc_active_sequence == 0
+            || state.dpc_active_sequence != cursor.event_sequence
+            || cursor.event_sequence == 0
+            || cursor.action != Cyw43DpcAction::RxQuantumBoundary
+            || cursor.io_kind != Cyw43DpcIoKind::None
+            || cursor.io_phase != Cyw43DpcIoPhase::Idle
+            || cursor.child.active
+            || cursor.child.issued_unknown
+            || cursor.rx_quantum_frames != CYW43_DPC_RX_BOUND
+        {
+            return None;
+        }
+        Some(Cyw43DpcTxInterleavePermit {
+            generation: state.dpc_shared_epoch,
+            event_sequence: cursor.event_sequence,
+            parent_sequence: command.sequence,
+        })
+    })?;
+    if !cyw43_steady_parent_service_lease_admitted(command, permit.generation) {
+        return None;
+    }
+    let ring = dpc_event_ring_read_at(
+        DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+    );
+    if !ring.valid()
+        || ring.epoch != permit.generation
+        || ring.consumer.wrapping_add(1) != permit.event_sequence
+    {
+        return None;
+    }
+    match cyw43_runtime_dpc_event_peek() {
+        DpcRingConsumeResult::Event(event) if event.sequence == permit.event_sequence => {
+            Some(permit)
+        }
+        DpcRingConsumeResult::Event(_)
+        | DpcRingConsumeResult::Empty
+        | DpcRingConsumeResult::BadEpoch
+        | DpcRingConsumeResult::BadSequence => None,
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_consume_tx_interleave_permit(
+    state: &mut Cyw43RuntimeState,
+    command: DriverTaskCommandRecord,
+    permit: Cyw43DpcTxInterleavePermit,
+) -> bool {
+    let cursor = &mut state.dpc_cursor;
+    if command.sequence != permit.parent_sequence
+        || command.aux1 != permit.generation
+        || state.dpc_shared_epoch != permit.generation
+        || state.dpc_active_sequence != permit.event_sequence
+        || cursor.event_sequence != permit.event_sequence
+        || cursor.action != Cyw43DpcAction::RxQuantumBoundary
+        || cursor.io_kind != Cyw43DpcIoKind::None
+        || cursor.io_phase != Cyw43DpcIoPhase::Idle
+        || cursor.child.active
+        || cursor.child.issued_unknown
+        || cursor.rx_quantum_frames != CYW43_DPC_RX_BOUND
+        || state.recovery_required
+        || state.dpc_terminal_cause.active()
+    {
+        return false;
+    }
+    cursor.rx_quantum_frames = 0;
+    true
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -8429,6 +8572,7 @@ const fn cyw43_dpc_pending_command_route(
     quarantined: bool,
     explicit_recovery: bool,
     queue_only_ready: bool,
+    tx_interleave_ready: bool,
 ) -> Cyw43DpcPendingCommandRoute {
     if queue_only_ready && !quarantined {
         Cyw43DpcPendingCommandRoute::Execute
@@ -8438,6 +8582,8 @@ const fn cyw43_dpc_pending_command_route(
         Cyw43DpcPendingCommandRoute::ExecuteRecovery
     } else if quarantined {
         Cyw43DpcPendingCommandRoute::FailQuarantined
+    } else if cursor_active && tx_interleave_ready {
+        Cyw43DpcPendingCommandRoute::ExecuteTxInterleave
     } else if cursor_active || child_active {
         Cyw43DpcPendingCommandRoute::Wait
     } else {
@@ -8491,6 +8637,7 @@ fn cyw43_dpc_pending_intake_route(
     child_active: bool,
     quarantined: bool,
     explicit_recovery: bool,
+    tx_interleave_ready: bool,
 ) -> Cyw43DpcPendingCommandRoute {
     cyw43_dpc_pending_command_route(
         cursor_active,
@@ -8498,6 +8645,7 @@ fn cyw43_dpc_pending_intake_route(
         quarantined,
         explicit_recovery,
         cyw43_dpc_queue_only_delivery_ready(intake.command, state, quarantined),
+        tx_interleave_ready,
     )
 }
 
@@ -11557,6 +11705,7 @@ fn cyw43_dpc_complete_frame(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43Dpc
     let expected_glom_superframe = header.channel == CYW43_SDPCM_CHANNEL_GLOM
         && !header.glom_descriptor
         && state.glom_subframe_count != 0;
+    let completed_packets_before = state.dpc_frames_completed;
     let decoded = cyw43_runtime_decode_rx_frame_detailed_for(
         state,
         CYW43_RUNTIME_RX_BUFFER_OFFSET,
@@ -11599,6 +11748,18 @@ fn cyw43_dpc_complete_frame(state: &mut Cyw43RuntimeState, cursor: &mut Cyw43Dpc
             );
             return false;
         }
+    }
+    let admitted_packets = state
+        .dpc_frames_completed
+        .saturating_sub(completed_packets_before);
+    if cyw43_dpc_charge_rx_quantum(cursor, admitted_packets) {
+        // Match Linux's RX-first bounded worker without creating another
+        // physical lane. The same event remains the consumer head while the
+        // outer arbiter considers exactly one already-authorized steady TX
+        // parent. AckStatus may already have race-closed and rearmed CARD_INT;
+        // this boundary preserves whichever healthy state the owner published.
+        cyw43_dpc_park_rx_quantum(cursor);
+        return true;
     }
     cyw43_dpc_start_rframe_or_post(state, cursor);
     true
@@ -11723,6 +11884,14 @@ fn cyw43_dpc_finish_action(
                 state.rxpending = true;
                 state.rx_trace_flags |= CYW43_RX_IDLE_TRACE_FLAG_RETRANSMIT_ACKED;
             }
+            cyw43_dpc_start_rframe_or_post(state, cursor);
+            false
+        }
+        Cyw43DpcAction::RxQuantumBoundary => {
+            // No exact eligible TX was admitted in the intervening scheduler
+            // turn, or that one TX has now completed. Start a fresh RX quantum
+            // from the same event and cursor without advancing/rearming it.
+            cursor.rx_quantum_frames = 0;
             cyw43_dpc_start_rframe_or_post(state, cursor);
             false
         }
@@ -49366,6 +49535,9 @@ pub fn runtime_main(task_key: usize) -> ! {
                 .map(|intake| cyw43_dpc_explicit_recovery_command(intake.command))
                 .unwrap_or(false)
                 && recovery_admissible;
+            let tx_interleave_permit = pending_intake.and_then(|intake| {
+                cyw43_dpc_tx_interleave_permit(intake.command, child_active, dpc_quarantined)
+            });
             let pending_route = if let Some(intake) = pending_intake {
                 CYW43_RUNTIME_STATE.with_ref(|state| {
                     cyw43_dpc_pending_intake_route(
@@ -49375,6 +49547,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                         child_active,
                         dpc_quarantined,
                         explicit_recovery,
+                        tx_interleave_permit.is_some(),
                     )
                 })
             } else {
@@ -49435,6 +49608,40 @@ pub fn runtime_main(task_key: usize) -> ! {
                 }
                 Cyw43DpcPendingCommandRoute::FailQuarantined => {
                     quarantine_command_fault = true;
+                }
+                Cyw43DpcPendingCommandRoute::ExecuteTxInterleave => {
+                    let admitted =
+                        pending_intake
+                            .zip(tx_interleave_permit)
+                            .is_some_and(|(intake, permit)| {
+                                CYW43_RUNTIME_STATE.with_mut(|state| {
+                                    cyw43_dpc_consume_tx_interleave_permit(
+                                        state,
+                                        intake.command,
+                                        permit,
+                                    )
+                                })
+                            });
+                    if !admitted {
+                        // Identity changed after the passive classification.
+                        // Retain the parent and event unchanged; neither is
+                        // fallback authority for the other.
+                        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+                        if let Some(intake) = pending_intake {
+                            retain_runtime_command_after_arbitration_turn(
+                                &mut pending_command_gate,
+                                intake,
+                                notification_route,
+                            );
+                        }
+                        runtime_yield_current_tcb();
+                        continue;
+                    }
+                    // The event remains active while this one exact parent
+                    // owns the existing foreground transaction. Preserve its
+                    // current healthy CARD_INT arm/mask state and resume the
+                    // same cursor after the parent terminal publication.
+                    CYW43_DPC_DEFERRED.store(true, Ordering::Release);
                 }
                 Cyw43DpcPendingCommandRoute::Execute
                 | Cyw43DpcPendingCommandRoute::ExecuteRecovery => {}
@@ -51705,6 +51912,173 @@ mod tests {
         (parent, child)
     }
 
+    fn install_dpc_rx_quantum_boundary(generation: u32, card_irq_masked: bool) -> u32 {
+        let event_sequence = initialize_production_dpc_source_event(generation, 0);
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let mut ring = dpc_event_ring_read_at(dpc_base);
+        dpc_event_ring_set_owner_health(&mut ring, card_irq_masked, false, false, false);
+        assert!(dpc_event_ring_encode(
+            RuntimeRingWindow::dpc_at(dpc_base).expect("generated DPC ring window"),
+            ring,
+        ));
+        SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = card_irq_masked);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_active_sequence = event_sequence;
+            state.rx_service_active = true;
+            state.rx_service_quiescent = false;
+            state.pending_intstatus = I_HMB_FRAME_IND;
+            state.dpc_cursor = Cyw43DpcCursor {
+                event_sequence,
+                action: Cyw43DpcAction::RxQuantumBoundary,
+                rx_quantum_frames: CYW43_DPC_RX_BOUND,
+                ..Cyw43DpcCursor::empty()
+            };
+        });
+        event_sequence
+    }
+
+    #[test]
+    fn dpc_rxbound_admits_one_exact_steady_tx_and_resumes_same_event() {
+        let _guard = test_guard();
+        assert_eq!(CYW43_DPC_RX_BOUND, 50);
+
+        let mut accounting = Cyw43DpcCursor {
+            event_sequence: 1,
+            ..Cyw43DpcCursor::empty()
+        };
+        assert!(!cyw43_dpc_charge_rx_quantum(&mut accounting, 48));
+        assert_eq!(accounting.rx_quantum_frames, 48);
+        assert!(!cyw43_dpc_charge_rx_quantum(&mut accounting, 1));
+        assert_eq!(accounting.rx_quantum_frames, CYW43_DPC_RX_BOUND - 1);
+        assert!(cyw43_dpc_charge_rx_quantum(&mut accounting, 3));
+        assert_eq!(accounting.rx_quantum_frames, CYW43_DPC_RX_BOUND);
+        cyw43_dpc_park_rx_quantum(&mut accounting);
+        assert_eq!(accounting.action, Cyw43DpcAction::RxQuantumBoundary);
+
+        for card_irq_masked in [true, false] {
+            let generation = if card_irq_masked {
+                0x4359_5191
+            } else {
+                0x4359_5192
+            };
+            let event_sequence = install_dpc_rx_quantum_boundary(generation, card_irq_masked);
+            let _production_mode = ProductionForegroundModeGuard::enter();
+            let parent =
+                install_steady_tx_parent_fixture(0x4359_5193, generation, CYW43_ETH_P_IPV4);
+            let permit = cyw43_dpc_tx_interleave_permit(parent, false, false)
+                .expect("the exact tagged steady TX may use the RXBOUND opportunity");
+            assert_eq!(permit.event_sequence, event_sequence);
+            assert_eq!(permit.parent_sequence, parent.sequence);
+            assert_eq!(
+                SDIO_RUNTIME_STATE.with_ref(|state| state.card_irq_masked),
+                card_irq_masked,
+            );
+            assert_eq!(
+                cyw43_dpc_pending_command_route(true, false, false, false, false, true),
+                Cyw43DpcPendingCommandRoute::ExecuteTxInterleave,
+            );
+
+            let dpc_base =
+                DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+            let ring_before = dpc_event_ring_read_at(dpc_base);
+            let cursor_before = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor);
+            assert!(CYW43_RUNTIME_STATE.with_mut(|state| {
+                cyw43_dpc_consume_tx_interleave_permit(state, parent, permit)
+            }));
+            let cursor_after = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor);
+            assert_eq!(cursor_after.event_sequence, cursor_before.event_sequence);
+            assert_eq!(cursor_after.action, cursor_before.action);
+            assert_eq!(cursor_after.io_kind, cursor_before.io_kind);
+            assert_eq!(cursor_after.io_phase, cursor_before.io_phase);
+            assert_eq!(cursor_after.rx_quantum_frames, 0);
+            assert_eq!(dpc_event_ring_read_at(dpc_base), ring_before);
+            assert_eq!(
+                ring_before.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0,
+                card_irq_masked,
+            );
+            assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+
+            CYW43_RUNTIME_STATE.with_mut(|state| {
+                let mut cursor = state.dpc_cursor;
+                assert!(!cyw43_dpc_finish_action(state, &mut cursor, 0));
+                assert_eq!(cursor.event_sequence, event_sequence);
+                assert_ne!(cursor.action, Cyw43DpcAction::RxQuantumBoundary);
+                state.dpc_cursor = cursor;
+            });
+            let ring_after_resume = dpc_event_ring_read_at(dpc_base);
+            assert_eq!(ring_after_resume.consumer, ring_before.consumer);
+            assert_eq!(ring_after_resume.producer, ring_before.producer);
+            assert_eq!(
+                ring_after_resume.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0,
+                card_irq_masked,
+            );
+        }
+    }
+
+    #[test]
+    fn dpc_rxbound_rejects_noneligible_or_owned_foreground_work() {
+        let _guard = test_guard();
+        let generation = 0x4359_51a1;
+        let _event_sequence = install_dpc_rx_quantum_boundary(generation, false);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        let parent = install_steady_tx_parent_fixture(0x4359_51a2, generation, CYW43_ETH_P_IPV4);
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_some());
+        assert!(cyw43_dpc_tx_interleave_permit(parent, true, false).is_none());
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, true).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| state.recovery_required = true);
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| state.recovery_required = false);
+        CYW43_SDIO_CHILD_ISSUED_UNKNOWN.store(true, Ordering::Release);
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+        CYW43_SDIO_CHILD_ISSUED_UNKNOWN.store(false, Ordering::Release);
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(false, Ordering::Release);
+        assert_eq!(
+            cyw43_dpc_pending_command_route(true, true, false, false, false, true),
+            Cyw43DpcPendingCommandRoute::Wait,
+        );
+        assert_eq!(
+            cyw43_dpc_pending_command_route(true, false, true, false, false, true),
+            Cyw43DpcPendingCommandRoute::FailQuarantined,
+        );
+
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_cursor.rx_quantum_frames = CYW43_DPC_RX_BOUND - 1;
+        });
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_cursor.rx_quantum_frames = CYW43_DPC_RX_BOUND;
+            state.dpc_cursor.child.active = true;
+        });
+        assert!(cyw43_dpc_tx_interleave_permit(parent, false, false).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| state.dpc_cursor.child.active = false);
+
+        let mut stale = parent;
+        stale.aux1 = generation.wrapping_add(1);
+        assert!(cyw43_dpc_tx_interleave_permit(stale, false, false).is_none());
+
+        let eapol = install_steady_tx_parent_fixture(0x4359_51a3, generation, CYW43_ETH_P_EAPOL);
+        assert!(cyw43_dpc_tx_interleave_permit(eapol, false, false).is_none());
+
+        let mut ordinary =
+            install_steady_tx_parent_fixture(0x4359_51a4, generation, CYW43_ETH_P_IPV4);
+        ordinary.flags &= !DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.parent = ordinary;
+            transaction.parent_descriptor.flags &=
+                !DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE;
+        });
+        assert!(cyw43_dpc_tx_interleave_permit(ordinary, false, false).is_none());
+
+        let control = install_steady_tx_parent_fixture(0x4359_51a5, generation, CYW43_ETH_P_IPV4);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.parent_descriptor.op = DRIVER_RUNTIME_CYW43_OP_CONTROL_FRAME;
+        });
+        assert!(cyw43_dpc_tx_interleave_permit(control, false, false).is_none());
+    }
+
     #[test]
     fn steady_parent_propagates_exact_identity_to_only_function2_write() {
         let _guard = test_guard();
@@ -53869,48 +54243,48 @@ mod tests {
         assert!(runtime_command_poll_due(false));
         assert!(!runtime_command_poll_due(true));
         assert_eq!(
-            cyw43_dpc_pending_command_route(true, false, false, false, false),
+            cyw43_dpc_pending_command_route(true, false, false, false, false, false),
             Cyw43DpcPendingCommandRoute::Wait
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(true, false, true, false, false),
+            cyw43_dpc_pending_command_route(true, false, true, false, false, false),
             Cyw43DpcPendingCommandRoute::FailQuarantined
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(true, false, true, true, false),
+            cyw43_dpc_pending_command_route(true, false, true, true, false, false),
             Cyw43DpcPendingCommandRoute::ExecuteRecovery
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, false, false, false, false),
+            cyw43_dpc_pending_command_route(false, false, false, false, false, false),
             Cyw43DpcPendingCommandRoute::Execute
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, false, true, false, false),
+            cyw43_dpc_pending_command_route(false, false, true, false, false, false),
             Cyw43DpcPendingCommandRoute::FailQuarantined
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, false, true, true, false),
+            cyw43_dpc_pending_command_route(false, false, true, true, false, false),
             Cyw43DpcPendingCommandRoute::ExecuteRecovery
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, true, false, false, false),
+            cyw43_dpc_pending_command_route(false, true, false, false, false, false),
             Cyw43DpcPendingCommandRoute::Wait
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, true, true, false, false),
+            cyw43_dpc_pending_command_route(false, true, true, false, false, false),
             Cyw43DpcPendingCommandRoute::Wait
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(false, true, true, true, false),
+            cyw43_dpc_pending_command_route(false, true, true, true, false, false),
             Cyw43DpcPendingCommandRoute::Wait
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(true, true, false, false, true),
+            cyw43_dpc_pending_command_route(true, true, false, false, true, false),
             Cyw43DpcPendingCommandRoute::Execute,
             "a proven non-empty queue pop is software-only even while the DPC child owns SDIO",
         );
         assert_eq!(
-            cyw43_dpc_pending_command_route(true, true, true, false, true),
+            cyw43_dpc_pending_command_route(true, true, true, false, true, false),
             Cyw43DpcPendingCommandRoute::Wait,
             "quarantine always fences queue delivery",
         );
@@ -54090,7 +54464,7 @@ mod tests {
             .with_ref(|state| cyw43_dpc_queue_only_delivery_ready(command, state, false));
         assert!(ready);
         let retained_route = CYW43_RUNTIME_STATE.with_ref(|state| {
-            cyw43_dpc_pending_intake_route(intake, state, true, true, false, false)
+            cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false)
         });
         assert_eq!(retained_route, Cyw43DpcPendingCommandRoute::Execute);
 
@@ -54105,7 +54479,7 @@ mod tests {
         };
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(stale_intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(stale_intake, state, true, true, false, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );
@@ -54123,7 +54497,15 @@ mod tests {
         };
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(mismatched_intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(
+                    mismatched_intake,
+                    state,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                )
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );
@@ -54139,7 +54521,8 @@ mod tests {
         let empty_route = CYW43_RUNTIME_STATE.with_mut(|state| {
             let queue_count = state.rx_queue_count;
             state.rx_queue_count = 0;
-            let route = cyw43_dpc_pending_intake_route(intake, state, true, true, false, false);
+            let route =
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false);
             state.rx_queue_count = queue_count;
             route
         });
@@ -54154,7 +54537,8 @@ mod tests {
         assert!(!recovery_ready);
         let recovery_route = CYW43_RUNTIME_STATE.with_mut(|state| {
             state.recovery_required = true;
-            let route = cyw43_dpc_pending_intake_route(intake, state, true, true, true, false);
+            let route =
+                cyw43_dpc_pending_intake_route(intake, state, true, true, true, false, false);
             state.recovery_required = false;
             route
         });
@@ -54163,14 +54547,15 @@ mod tests {
             .with_ref(|state| cyw43_dpc_queue_only_delivery_ready(command, state, true)));
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(intake, state, true, true, true, false)
+                cyw43_dpc_pending_intake_route(intake, state, true, true, true, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );
 
         let control_exchange_route = CYW43_RUNTIME_STATE.with_mut(|state| {
             state.control_exchange.phase = Cyw43ControlExchangePhase::WaitCredit;
-            let route = cyw43_dpc_pending_intake_route(intake, state, true, true, false, false);
+            let route =
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false);
             state.reset_control_exchange();
             route
         });
@@ -54187,7 +54572,8 @@ mod tests {
                 generation,
                 descriptor: strict_descriptor,
             };
-            let route = cyw43_dpc_pending_intake_route(intake, state, true, true, false, false);
+            let route =
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false);
             state.prompt_poll.reset();
             route
         });
@@ -54208,7 +54594,7 @@ mod tests {
         assert!(control_ready);
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Execute,
             "strict queued op10 is the same software-only delivery lane as op8",
@@ -54222,7 +54608,7 @@ mod tests {
         assert!(!hintless_ready);
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );
@@ -54242,7 +54628,7 @@ mod tests {
         assert!(!physical_ready);
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );
@@ -54256,7 +54642,7 @@ mod tests {
         assert!(!unsealed_ready);
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| {
-                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false)
+                cyw43_dpc_pending_intake_route(intake, state, true, true, false, false, false)
             }),
             Cyw43DpcPendingCommandRoute::Wait,
         );

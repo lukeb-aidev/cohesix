@@ -2207,8 +2207,9 @@ DPC/pending work, the ordered worker performs an RX-first bounded drain, and TX
 completion does not mandate a physical receive-source read. Preserve
 `BRCMF_RXBOUND=50`, `BRCMF_TXBOUND=20`, `BRCMF_TXMINMAX=1` while RX remains
 pending, a 2,048-entry TX queue, 32-KiB aggregation, and block-mode CMD53.
-Cohesix must prove its translation through the existing 50-frame RX bound,
-credits/glom, 32-KiB shared aperture, 512-byte Function 2 blocks, multi-block
+Cohesix must prove its translation through a cursor-local 50-service-unit RX
+bound distinct from the 50-entry queue capacity, credits/glom, a 32-KiB shared
+aperture, 512-byte Function 2 blocks, multi-block
 CMD53, external DMA, empty-to-nonempty child wake, and clear/recheck root-wake
 latch. The same child-to-root Network service wake must be emitted after an
 exact steady-parent terminal and is therefore not RX-only. Its scheduler form
@@ -2232,6 +2233,15 @@ existing op8 owner form a low-rate lost-edge safeguard for Cohesix's extra
 linked notification boundaries, not a second issuer. A quiescent inspection
 must stop at the source, and its exact non-fault terminal must start a fresh
 slow gate before another same-lifetime probe can be admitted.
+
+The RX-bound regression charges every valid completed physical frame at least
+once and admitted glom packets individually. At 50 it must park after decode,
+admit at most one already intake-sealed exact steady urgent-`ETH_TX` parent,
+consume the opportunity before execution, and resume the same cursor/event and
+ring consumer without changing the current healthy CARD_INT arm/mask state.
+Queue depth is not this bound. Ordinary, control, EAPOL, bulk, stale,
+quarantined/recovery, issued-unknown, and active-child work must not bypass it;
+the one-parent minimum must not become a 20-parent burst or second issuer.
 
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
@@ -2258,6 +2268,8 @@ cargo test -p pi4-driver-abi continuation_grant_fits_reserved_command_slot_and_f
 cargo test -p pi4-driver-abi sdio_steady_service_lease_is_scoped_to_typed_data_plane_children
 cargo test -p pi4-driver-abi sdio_dpc_source_w1c_rearm_requires_exact_event_bound_write_shape
 cargo test -p pi4-driver-runtime steady_parent_lease_requires_paired_tags_and_exact_budget -- --test-threads=1
+cargo test -p pi4-driver-runtime dpc_rxbound_admits_one_exact_steady_tx_and_resumes_same_event -- --test-threads=1
+cargo test -p pi4-driver-runtime dpc_rxbound_rejects_noneligible_or_owned_foreground_work -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_parent_propagates_exact_identity_to_only_function2_write -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_parent_budget_blocks_fifth_child_before_frontier_publication -- --test-threads=1
 cargo test -p pi4-driver-runtime steady_child_first_completion_miss_stays_pending_without_root_grant -- --test-threads=1

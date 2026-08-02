@@ -1626,7 +1626,7 @@ before sleep; TX completion does not require a physical receive-source read.
 The bounds remain `BRCMF_RXBOUND=50`, `BRCMF_TXBOUND=20`, and
 `BRCMF_TXMINMAX=1` while RX remains pending, backed by a 2,048-entry TX queue,
 32-KiB aggregation, and block-mode CMD53. Cohesix already has the transport
-equivalents: a 50-frame RX bound, credits and glom, a 32-KiB shared aperture,
+equivalents: credits and glom, a 32-KiB shared aperture,
 512-byte Function 2 blocks, multi-block CMD53, and external DMA. The Pi test
 must verify the linked-runtime translation: the compiler-declared child-to-root
 Network service wake for empty-to-nonempty RX and exact steady-parent terminal,
@@ -1634,6 +1634,18 @@ durable DPC/root-wake and queue levels, one
 bounded EventPump Network quantum with physical-console checkpoints, ordinary
 exact grants plus the typed `STEADY_SERVICE_LEASE`, one HAL owner, one linked
 SDIO runtime issuer, and no private physical drain loop.
+
+The linked-runtime RX bound is a production cursor counter, not the 50-entry
+queue's backpressure threshold. A valid completed physical frame charges at
+least one unit and admitted glom packets charge individually. At 50 units the
+same event parks after complete-frame decode and before its next SDIO child.
+Exactly one already intake-sealed parent that independently satisfies the
+steady urgent-`ETH_TX` lease may consume/reset that opportunity. The DPC then
+resumes the same cursor/event and ring consumer, preserving either the healthy
+masked state or the already race-closed/rearmed CARD_INT state. This implements
+Linux's minimum one-TX interleave without a second lane, replay, rearm, new
+grant, or 20-parent burst; every ordinary/control/EAPOL/bulk/stale/recovery or
+active-child command remains excluded.
 
 The as-built source candidate has no direct or immediate post-TX receive probe
 and no second receive lane. It preserves f4's existing ordinary CMD52/CMD53 setup invariant:
