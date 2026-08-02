@@ -10115,7 +10115,7 @@ fn acknowledge_cyw43_sdio_restart_primary_irqs_with(
     io: &mut impl Cyw43SdioRestartNotificationIo,
 ) -> bool {
     // Attempt both runtime-primary handlers even after one ACK fails. The
-    // SDIO runtime deliberately retains DMA IRQ114 masked across the
+    // SDIO runtime deliberately retains DMA IRQ116 masked across the
     // generation cut: only that physical owner may reset/clear channel 4 and
     // ACK its child handler during engine replay.
     let cyw43_acked = io.acknowledge_irq(Cyw43SdioPairMember::Cyw43);
@@ -20134,7 +20134,7 @@ mod tests {
         assert_eq!(
             cyw43_sdio_root_restart_ack_handler(Cyw43SdioPairMember::Sdio, [0x100, 0x200],),
             Some(0x100),
-            "root must leave DMA IRQ114 masked until runtime replay clears its source",
+            "root must leave DMA IRQ116 masked until runtime replay clears its source",
         );
     }
 

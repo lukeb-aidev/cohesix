@@ -16155,7 +16155,7 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     cursor.failure_snapshot_valid = true;
     // Channel 4 is interrupt-bound for the complete SDIO runtime lifetime and
     // every admitted external-DMA terminal CB carries INT_EN. PollIssued may
-    // inspect CS/CONBLK for error and quiescence evidence, but the IRQ114
+    // inspect CS/CONBLK for error and quiescence evidence, but the IRQ116
     // callback is the sole owner allowed to W1C CS.INT, commit terminal state,
     // and ACK handler slot 5.
     if snapshot.status & SDHCI_INT_ALL_ERROR_MASK != 0 {
@@ -77934,6 +77934,11 @@ mod tests {
         let cb1 = cb0 + SDIO_DMA_CONTROL_BLOCK_BYTES;
 
         assert_eq!(BCM2835_DMA_CHANNEL_OFFSET, 0x400);
+        // DMA0 is SPI 0x50, and seL4/GIC IRQ IDs add the 32-ID SPI offset.
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_DMA_IRQ,
+            32 + 0x50 + BCM2835_DMA_CHANNEL as u32
+        );
         assert_eq!(BCM2835_DMA_FIFO_BUS_ADDR, 0x7e30_0020);
         assert_eq!(BCM2835_DMA_TI_WRITE, 0x000b_0148);
         assert_eq!(BCM2835_DMA_TI_READ, 0x000b_0418);

@@ -91,7 +91,12 @@ const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 const DRIVER_RUNTIME_SERIAL_BADGE: u32 = 126;
 const DRIVER_RUNTIME_CYW43_SDIO_IRQ: u32 = 158;
 const DRIVER_RUNTIME_CYW43_SDIO_BADGE: u32 = 159;
-const DRIVER_RUNTIME_CYW43_SDIO_DMA_IRQ: u32 = 114;
+// BCM2711 device-tree SPI values become seL4 IRQ IDs after the GIC SPI offset.
+const BCM2711_GIC_SPI_IRQ_BASE: u32 = 32;
+const BCM2835_DMA0_SPI: u32 = 0x50;
+const BCM2835_SDIO_DMA_CHANNEL: u32 = 4;
+const DRIVER_RUNTIME_CYW43_SDIO_DMA_IRQ: u32 =
+    BCM2711_GIC_SPI_IRQ_BASE + BCM2835_DMA0_SPI + BCM2835_SDIO_DMA_CHANNEL;
 const DRIVER_RUNTIME_CYW43_SDIO_DMA_BADGE: u32 = 1 << 9;
 const DRIVER_RUNTIME_CYW43_SDIO_CLIENT_TO_OWNER_SLOT: u8 = 8;
 const DRIVER_RUNTIME_CYW43_SDIO_OWNER_TO_CLIENT_SLOT: u8 = 10;
@@ -105,6 +110,7 @@ const DRIVER_RUNTIME_RING_FRAME_OFFSET: u16 = 256;
 const DRIVER_RUNTIME_DPC_EVENT_OFFSET: u16 = 160;
 const DRIVER_RUNTIME_DPC_EVENT_LEN: u16 = 96;
 const DRIVER_RUNTIME_DPC_EVENT_DEPTH: u16 = 4;
+const _: () = assert!(DRIVER_RUNTIME_CYW43_SDIO_DMA_IRQ == 116);
 const MAX_WORKER_RUNTIME_ROLES: usize = 8;
 const MAX_WORKER_RUNTIME_TEXT_LEN: usize = 96;
 const REQUIRED_WORKER_ROLE_RECORDS: [Role; 3] =
@@ -2632,7 +2638,7 @@ impl DriverRuntimeImagePolicy {
                 .iter()
                 .any(DriverRuntimeIrqSpec::is_cyw43_sdio_dma_irq);
             if !has_sdio_dma_irq {
-                bail!("root_task.driver_images.required missing SDIO DMA IRQ 114 topology");
+                bail!("root_task.driver_images.required missing SDIO DMA IRQ 116 topology");
             }
             if self.irqs.len() != 3
                 || !self.irqs[0].is_serial_console_irq()
@@ -2640,7 +2646,7 @@ impl DriverRuntimeImagePolicy {
                 || !self.irqs[2].is_cyw43_sdio_dma_irq()
             {
                 bail!(
-                    "root_task.driver_images.required IRQ topology must contain serial-console IRQ 125, SDIO IRQ 158, and SDIO DMA IRQ 114 in canonical order"
+                    "root_task.driver_images.required IRQ topology must contain serial-console IRQ 125, SDIO IRQ 158, and SDIO DMA IRQ 116 in canonical order"
                 );
             }
             let has_cyw43_sdio_link = self
@@ -2798,7 +2804,7 @@ impl DriverRuntimeBusLinkSpec {
                 .any(DriverRuntimeIrqSpec::is_cyw43_sdio_host_irq)
                 || !irqs.iter().any(DriverRuntimeIrqSpec::is_cyw43_sdio_dma_irq)
             {
-                bail!("cyw43-sdio bus link requires generated level-triggered SDIO IRQ 158 and DMA IRQ 114");
+                bail!("cyw43-sdio bus link requires generated level-triggered SDIO IRQ 158 and DMA IRQ 116");
             }
         } else {
             bail!("unknown driver runtime bus-link channel {}", self.channel);
@@ -3289,7 +3295,7 @@ mod tests {
             .expect_err("missing generated SDIO IRQ rejected");
         assert!(err
             .to_string()
-            .contains("requires generated level-triggered SDIO IRQ 158 and DMA IRQ 114"));
+            .contains("requires generated level-triggered SDIO IRQ 158 and DMA IRQ 116"));
 
         let mut invalid_link = cyw43_sdio_link();
         invalid_link.event_depth = 8;
@@ -3383,19 +3389,26 @@ mod tests {
         let err = required_policy(vec![serial_irq(), sdio_irq()])
             .validate()
             .expect_err("missing SDIO DMA IRQ rejected");
-        assert!(err.to_string().contains("DMA IRQ 114"), "{err}");
+        assert!(err.to_string().contains("DMA IRQ 116"), "{err}");
 
         let err = required_policy(vec![serial_irq(), sdio_dma_irq()])
             .validate()
             .expect_err("missing SDHCI IRQ rejected");
         assert!(err.to_string().contains("SDIO IRQ 158"), "{err}");
 
+        let mut wrong_dma_channel = sdio_dma_irq();
+        wrong_dma_channel.irq = 114;
+        let err = required_policy(vec![serial_irq(), sdio_irq(), wrong_dma_channel])
+            .validate()
+            .expect_err("DMA channel 2 IRQ route rejected");
+        assert!(err.to_string().contains("DMA IRQ 116"), "{err}");
+
         let mut wrong_slot = sdio_dma_irq();
         wrong_slot.handler_slot = super::DRIVER_RUNTIME_SDIO_DMA_IRQ_HANDLER_SLOT + 1;
         let err = required_policy(vec![serial_irq(), sdio_irq(), wrong_slot])
             .validate()
             .expect_err("noncanonical DMA handler slot rejected");
-        assert!(err.to_string().contains("DMA IRQ 114"), "{err}");
+        assert!(err.to_string().contains("DMA IRQ 116"), "{err}");
     }
 
     #[test]

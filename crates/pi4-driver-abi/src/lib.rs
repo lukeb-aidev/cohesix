@@ -1612,8 +1612,13 @@ pub const DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE: u32 = 1;
 pub const DRIVER_RUNTIME_SDIO_IRQ: u32 = 158;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SDIO_IRQ`].
 pub const DRIVER_RUNTIME_SDIO_IRQ_BADGE: u32 = DRIVER_RUNTIME_SDIO_IRQ + 1;
+// BCM2711 device-tree SPI values become seL4 IRQ IDs after the GIC SPI offset.
+const BCM2711_GIC_SPI_IRQ_BASE: u32 = 32;
+const BCM2835_DMA0_SPI: u32 = 0x50;
+const BCM2835_SDIO_DMA_CHANNEL: u32 = 4;
 /// BCM2711 BCM2835 DMA channel 4 interrupt used by the SDIO data engine.
-pub const DRIVER_RUNTIME_SDIO_DMA_IRQ: u32 = 114;
+pub const DRIVER_RUNTIME_SDIO_DMA_IRQ: u32 =
+    BCM2711_GIC_SPI_IRQ_BASE + BCM2835_DMA0_SPI + BCM2835_SDIO_DMA_CHANNEL;
 /// Disjoint notification bit bound to [`DRIVER_RUNTIME_SDIO_DMA_IRQ`].
 ///
 /// Unlike the legacy IRQ-plus-one badge, this is deliberately one bit so a
@@ -1637,6 +1642,7 @@ pub const DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE: u32 = 1 << 8;
 
 const _: () = {
     assert!(DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT);
+    assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ == 116);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ != DRIVER_RUNTIME_SDIO_IRQ);
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_SDIO_IRQ_BADGE == 0);
     assert!(

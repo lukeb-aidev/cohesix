@@ -162,7 +162,7 @@ trigger = "level"
 
 [[root_task.driver_images.irqs]]
 hot-path = "sdio-host"
-irq = 114
+irq = 116
 badge = 512
 handler-slot = 5
 notification-slot = 3

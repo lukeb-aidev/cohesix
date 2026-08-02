@@ -31,7 +31,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "ab72f85eb6f433b66d33bf8d45438c182b60df51f53f8a0ffdee51c8457d60e8";
+    "5439b6183538998544a48ccc0aadc337b4783de7b24a2c0e8d9f8bb57b07567b";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -368,7 +368,7 @@ pub const DRIVER_RUNTIME_IRQS: [DriverRuntimeIrqSpec; 3] = [
     },
     DriverRuntimeIrqSpec {
         hot_path: "sdio-host",
-        irq: 114,
+        irq: 116,
         badge: 512,
         handler_slot: 5,
         notification_slot: 3,
@@ -782,7 +782,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 42] = [
     "manifest.schema=1.6",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=d7c6a0bc9aa1a5f5666d346019d79b52bc6f056666fc0e54b5c8ad06c2eebefd",
+    "manifest.sha256=2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

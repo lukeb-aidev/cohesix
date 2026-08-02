@@ -126,15 +126,16 @@ fn pi4_uboot_profile_emits_network_policy() {
     assert_eq!(sdio_irq["trigger"], "level");
     let sdio_dma_irq = irqs
         .iter()
-        .find(|irq| irq["hot-path"] == "sdio-host" && irq["irq"] == 114)
+        .find(|irq| irq["hot-path"] == "sdio-host" && irq["irq"] == 116)
         .expect("SDIO DMA IRQ topology");
+    assert_eq!(sdio_dma_irq["irq"], 32 + 0x50 + 4);
     assert_eq!(sdio_dma_irq["badge"], 512);
     assert_eq!(sdio_dma_irq["handler-slot"], 5);
     assert_eq!(sdio_dma_irq["notification-slot"], 3);
     assert_eq!(sdio_dma_irq["trigger"], "level");
     assert_eq!(irqs[0]["irq"], 125);
     assert_eq!(irqs[1]["irq"], 158);
-    assert_eq!(irqs[2]["irq"], 114);
+    assert_eq!(irqs[2]["irq"], 116);
 
     let bus_links = manifest["root_task"]["driver_images"]["bus_links"]
         .as_array()

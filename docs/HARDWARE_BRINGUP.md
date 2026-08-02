@@ -1391,7 +1391,7 @@ unauthenticated/wrong-peer, stale, overlap, poison, and exhausted identity are
 excluded or fail closed under the sole physical issuer.
 
 The compiler-generated SDIO runtime topology binds level SDHCI IRQ `158`, badge
-`159`, handler slot `4`, and level BCM2835 DMA channel-4 IRQ `114`, badge `512`,
+`159`, handler slot `4`, and level BCM2835 DMA channel-4 IRQ `116`, badge `512`,
 handler slot `5`, to the same local notification slot `3`. Together with serial
 IRQ `125`, they are the exact three generated driver-IRQ entries. The SDIO-to-
 CYW43 badge-2 completion/DPC notification and both physical SDIO-runtime IRQs
@@ -1408,6 +1408,9 @@ open, prompt service may mask, durably publish, ACK the exact IRQ epoch, and
 signal CYW43 while preserving an active controller/DMA cursor; it issues no
 SDIO card command. The exact AckStatus W1C child later rearms CARD_INT before
 its terminal is published, and a new IRQ may append only after proven unmask.
+The selected Pi 4 DTS maps `dma4` to GIC SPI `0x54`; adding the GIC SPI base
+`32` yields seL4 IRQ `116`. IRQ `114` names `dma2` in that DTS and is invalid
+for this channel-4 owner.
 Scheduler handoffs after service and
 rejected ready wakes prevent a priority-255 private IRQ loop. Idle runtimes
 block on their combined endpoint/notification receive rather than spinning.

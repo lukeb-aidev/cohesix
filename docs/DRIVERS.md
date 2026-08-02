@@ -205,11 +205,14 @@ If a boot reports a deferred notification bind, notification-backed acceptance
 remains red even when a polled diagnostic makes progress.
 
 The current CYW43/SDIO topology declares one SDIO runtime owner with two
-physical IRQ inputs—SDHCI IRQ 158 and BCM2835 DMA channel-4 IRQ 114—and a
+physical IRQ inputs—SDHCI IRQ 158 and BCM2835 DMA channel-4 IRQ 116—and a
 reciprocal CYW43/SDIO bus link with a fixed event ring. Both IRQs bind to the
 same runtime-local notification through disjoint generated badges and handler
 slots. Exact IRQ numbers, badges, slots, offsets, and depth are compiler-owned
 in the selected manifest.
+The selected Pi 4 DTS maps `dma4` to GIC SPI `0x54`; adding the GIC SPI base
+`32` yields seL4 IRQ `116`. IRQ `114` names `dma2` in that DTS and is invalid
+for this channel-4 owner.
 
 ### Time
 
@@ -876,7 +879,7 @@ transaction.
 
 The compiler-generated SDIO runtime topology binds two level-triggered physical
 sources to local notification slot `3`: SDHCI IRQ `158`, badge `159`, child IRQ
-handler slot `4`; and BCM2835 DMA channel-4 IRQ `114`, badge `512`, child IRQ
+handler slot `4`; and BCM2835 DMA channel-4 IRQ `116`, badge `512`, child IRQ
 handler slot `5`. Handler slots and badge bits are distinct even though the
 notification object is shared. Together with mini-UART IRQ `125`, these form the
 exact three-entry generated driver-IRQ set; a missing, extra, within-runtime
@@ -1940,7 +1943,7 @@ generation and XID.
   fence plus same-channel status readback after ACTIVE prevents an immediate
   join poll from observing a posted start as false completion. SDHCI `DATA_END`
   and DMA channel-4 terminal may arrive in either order. IRQ 158 records the
-  host half; IRQ 114 permits only the exact active external-DMA cursor to sample
+  host half; IRQ 116 permits only the exact active external-DMA cursor to sample
   channel 4, latch `CONBLK_AD`/`CS` terminal or error state, perform the cursor-
   owned `CS.INT` W1C, and then ACK handler slot 5. Whichever arrives first is
   retained and returns to `WaitForWake`; it never polls for the other or
@@ -1986,7 +1989,7 @@ generation and XID.
   launch path or fallback.
 - The same compiler declaration supplies both physical completion routes on the
   owner's local notification slot `3`: level SDHCI IRQ 158/badge 159/handler
-  slot 4 and level DMA channel-4 IRQ 114/badge 512/handler slot 5. An external-
+  slot 4 and level DMA channel-4 IRQ 116/badge 512/handler slot 5. An external-
   DMA request cannot be admitted if either route, its exact handler cap, or its
   disjoint badge is absent. IRQ delivery is scheduling evidence only; the exact
   retained request cursor remains the sole authority for host W1C, DMA `CS.INT`
