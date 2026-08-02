@@ -95,6 +95,13 @@ fn generated_doc_snippets_match_codegen() {
             "cohsh_ticket_policy.md",
             "docs/snippets/cohsh_ticket_policy.md",
         ),
+        ("ticket_quotas.md", "docs/snippets/ticket_quotas.md"),
+        ("coh_policy.md", "docs/snippets/coh_policy.md"),
+        ("coh_doctor_checks.md", "docs/snippets/coh_doctor_checks.md"),
+        (
+            "cohesix_py_defaults.md",
+            "docs/snippets/cohesix_py_defaults.md",
+        ),
         ("swarmui_defaults.md", "docs/snippets/swarmui_defaults.md"),
     ] {
         let generated = fs::read_to_string(temp_dir.path().join(generated_name))
@@ -110,22 +117,7 @@ fn generated_doc_snippets_match_codegen() {
 }
 
 #[test]
-fn userland_swarmui_snippet_matches_repo() {
-    let userland_path = repo_path("docs/USERLAND_AND_CLI.md");
-    let contents = fs::read_to_string(&userland_path).expect("read userland docs");
-    let extracted = extract_snippet(
-        &contents,
-        "<!-- coh-rtc:swarmui-defaults:start -->",
-        "<!-- coh-rtc:swarmui-defaults:end -->",
-    );
-    let repo_snippet = fs::read_to_string(repo_path("docs/snippets/swarmui_defaults.md"))
-        .expect("read repo swarmui defaults");
-    let normalized_repo = strip_header_comments(&repo_snippet);
-    assert_eq!(extracted.trim(), normalized_repo.trim());
-}
-
-#[test]
-fn userland_cohsh_snippets_match_repo() {
+fn userland_generated_snippets_match_repo() {
     let userland_path = repo_path("docs/USERLAND_AND_CLI.md");
     let contents = fs::read_to_string(&userland_path).expect("read userland docs");
     for (marker, snippet_path) in [
@@ -136,6 +128,11 @@ fn userland_cohsh_snippets_match_repo() {
             "cohsh-ticket-policy",
             "docs/snippets/cohsh_ticket_policy.md",
         ),
+        ("ticket-quotas", "docs/snippets/ticket_quotas.md"),
+        ("coh-policy", "docs/snippets/coh_policy.md"),
+        ("coh-doctor", "docs/snippets/coh_doctor_checks.md"),
+        ("cohesix-py", "docs/snippets/cohesix_py_defaults.md"),
+        ("swarmui-defaults", "docs/snippets/swarmui_defaults.md"),
     ] {
         let extracted = extract_snippet(
             &contents,

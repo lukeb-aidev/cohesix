@@ -1314,12 +1314,10 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
         let _ = crate::sel4::recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
         let _ = badge;
         let result = service_pending_driver_task_command(task_key);
-        // SAFETY: The command was delivered by `seL4_Call`; the kernel
-        // installed a reply capability for this TCB, and the single reply word
-        // mirrors the already-published completion slot result.
-        unsafe {
-            sel4_sys::seL4_SetMR(0, result as sel4_sys::seL4_Word);
-        }
+        // The command was delivered by `seL4_Call`; the kernel installed a
+        // reply capability for this TCB, and the single reply word mirrors the
+        // already-published completion slot result.
+        crate::sel4::set_message_register(0, result as sel4_sys::seL4_Word);
         crate::sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
         DRIVER_TASK_ENTRY_HEARTBEATS.fetch_add(1, Ordering::AcqRel);
     }
@@ -2627,45 +2625,43 @@ fn driver_task_ring_clear_continuation_grant(slot: &DriverTaskCommandSlot, ring_
 fn driver_task_ring_read_continuation_grant(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeContinuationGrant> {
-    let base = ring_root_ptr + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let base_offset = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET);
+    let base = ring_root_ptr + base_offset;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
     driver_task_ring_invalidate_root_range(
         base,
         usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES),
     );
-    let word = |offset: usize| {
-        // SAFETY: Every requested offset is a u32-aligned field of the fixed
-        // primitive-only continuation record inside the admitted ring page.
-        unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
-    };
+    let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
     let grant_id_offset = core::mem::offset_of!(DriverRuntimeContinuationGrant, grant_id);
-    let first_grant_id = word(grant_id_offset);
+    let first_grant_id = word(grant_id_offset)?;
     if first_grant_id == 0 {
         return None;
     }
     driver_task_shared_load_barrier();
     let grant = DriverRuntimeContinuationGrant {
-        magic: word(core::mem::offset_of!(DriverRuntimeContinuationGrant, magic)),
+        magic: word(core::mem::offset_of!(DriverRuntimeContinuationGrant, magic))?,
         request_sequence: word(core::mem::offset_of!(
             DriverRuntimeContinuationGrant,
             request_sequence
-        )),
+        ))?,
         action_fingerprint: word(core::mem::offset_of!(
             DriverRuntimeContinuationGrant,
             action_fingerprint
-        )),
+        ))?,
         generation: word(core::mem::offset_of!(
             DriverRuntimeContinuationGrant,
             generation
-        )),
+        ))?,
         grant_id: first_grant_id,
         consumed_grant_id: word(core::mem::offset_of!(
             DriverRuntimeContinuationGrant,
             consumed_grant_id
-        )),
+        ))?,
     };
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(base + grant_id_offset, core::mem::size_of::<u32>());
-    (word(grant_id_offset) == first_grant_id
+    (word(grant_id_offset)? == first_grant_id
         && grant.magic == DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC)
         .then_some(grant)
 }
@@ -2680,18 +2676,16 @@ fn driver_task_ring_read_continuation_grant(
 fn driver_task_ring_read_steady_service_progress(
     ring_root_ptr: usize,
 ) -> Option<DriverRuntimeSteadyServiceProgress> {
-    let base = ring_root_ptr + usize::from(DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET);
+    let base_offset = usize::from(DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET);
+    let base = ring_root_ptr + base_offset;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
     driver_task_ring_invalidate_root_range(
         base,
         usize::from(DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES),
     );
-    let word = |offset: usize| {
-        // SAFETY: Every requested offset is a u32-aligned field of the fixed
-        // primitive-only progress record inside the admitted ring page.
-        unsafe { core::ptr::read_volatile((base + offset) as *const u32) }
-    };
+    let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
     let commit_offset = core::mem::offset_of!(DriverRuntimeSteadyServiceProgress, committed_slice);
-    let first_commit = word(commit_offset);
+    let first_commit = word(commit_offset)?;
     if first_commit == 0 {
         return None;
     }
@@ -2700,28 +2694,28 @@ fn driver_task_ring_read_steady_service_progress(
         magic: word(core::mem::offset_of!(
             DriverRuntimeSteadyServiceProgress,
             magic
-        )),
+        ))?,
         request_sequence: word(core::mem::offset_of!(
             DriverRuntimeSteadyServiceProgress,
             request_sequence
-        )),
+        ))?,
         action_fingerprint: word(core::mem::offset_of!(
             DriverRuntimeSteadyServiceProgress,
             action_fingerprint
-        )),
+        ))?,
         generation: word(core::mem::offset_of!(
             DriverRuntimeSteadyServiceProgress,
             generation
-        )),
+        ))?,
         service_slice: word(core::mem::offset_of!(
             DriverRuntimeSteadyServiceProgress,
             service_slice
-        )),
+        ))?,
         committed_slice: first_commit,
     };
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
-    (word(commit_offset) == first_commit
+    (word(commit_offset)? == first_commit
         && progress.magic == DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC
         && progress.valid())
     .then_some(progress)
@@ -3069,7 +3063,12 @@ struct DriverTaskRingView {
 #[cfg(feature = "kernel")]
 impl DriverTaskRingView {
     fn new(ring_root_ptr: usize) -> Option<Self> {
-        match super::MappedRegisterWindow::new(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES) {
+        #[cfg(not(test))]
+        let admitted = super::MappedRegisterWindow::new(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
+        #[cfg(test)]
+        let admitted =
+            super::MappedRegisterWindow::new_test(ring_root_ptr, DRIVER_TASK_RING_PAGE_BYTES);
+        match admitted {
             Ok(window) => Some(Self { window }),
             Err(_) => None,
         }
@@ -3124,6 +3123,21 @@ impl DriverTaskRingView {
                 )?,
             },
             frame: self.read_frame(core::mem::offset_of!(DriverTaskCommandRecord, frame))?,
+        })
+    }
+
+    fn read_completion_snapshot(&self) -> Option<DriverTaskCompletionRecord> {
+        let base = DRIVER_TASK_RING_COMPLETION_OFFSET;
+        Some(DriverTaskCompletionRecord {
+            sequence: self
+                .read_u32(base + core::mem::offset_of!(DriverTaskCompletionRecord, sequence))?,
+            code: self.read_u16(base + core::mem::offset_of!(DriverTaskCompletionRecord, code))?,
+            detail: self
+                .read_u16(base + core::mem::offset_of!(DriverTaskCompletionRecord, detail))?,
+            result: self
+                .read_u32(base + core::mem::offset_of!(DriverTaskCompletionRecord, result))?,
+            frame: self
+                .read_frame(base + core::mem::offset_of!(DriverTaskCompletionRecord, frame))?,
         })
     }
 
@@ -15144,10 +15158,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         }
         let active_request = slot.request_seq.load(Ordering::Acquire);
         cache_counter_batch.record_completion_invalidate(ring_root_ptr);
-        // SAFETY: The completion pointer addresses the validated shared ring
-        // page. This read drains a late completion before declaring the ring
-        // busy so one delayed driver turn cannot permanently block a hot path.
-        let active_completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        // Drain a late completion before declaring the ring busy so one delayed
+        // driver turn cannot permanently block a hot path.
+        let active_completion =
+            DriverTaskRingView::new(ring_root_ptr)?.read_completion_snapshot()?;
         if active_request == 0 || active_completion.sequence != active_request as u32 {
             driver_task_counter_add(&slot.counters.busy_conflicts, 1);
             cache_counter_batch.flush(slot);
@@ -15406,11 +15420,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             // transition or continuation grant. Commit -> Issued and signal
             // exactly once in this sole producer transaction; all later root
             // turns are completion polls.
-            // SAFETY: MR0 carries only the immutable request identity; the
-            // child notification itself carries no message registers.
-            unsafe {
-                sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
-            }
+            // MR0 carries only the immutable request identity; the child
+            // notification itself carries no message registers.
+            crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
             cache_counter_batch.flush(slot);
             if !signal_cyw43_steady_tx_service_lease_with(
                 Cyw43SteadyTxServiceLeaseSignal {
@@ -15514,12 +15526,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         }
     }
 
-    // SAFETY: MR0 carries only the current ring request sequence. Rewriting it
-    // before each send is harmless and keeps resumed prompt slices aligned with
-    // the already staged command.
-    unsafe {
-        sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
-    }
+    // MR0 carries only the current ring request sequence. Rewriting it before
+    // each send is harmless and keeps resumed prompt slices aligned with the
+    // already staged command.
+    crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
 
     if retained_notify_turn {
         let root_grant = driver_task_retained_uses_root_grant(contract, command);
@@ -15711,12 +15721,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         if mode.records_latency() {
             start_ticks = driver_task_counter_ticks();
         }
-        // SAFETY: The fixed ABI uses MR0 as the request sequence. Re-writing it
+        // The fixed ABI uses MR0 as the request sequence. Re-writing it
         // immediately before the blocking call keeps diagnostic UART emission
         // out of the message-register contract.
-        unsafe {
-            sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
-        }
+        crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
         let _ = crate::sel4::call_unchecked(
             endpoint as sel4_sys::seL4_CPtr,
             sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
@@ -16892,17 +16900,14 @@ fn service_pending_driver_task_ring_command(task_key: usize) -> Option<usize> {
         return None;
     }
     let context = slot.ring_context.load(Ordering::Acquire);
-    let command_ptr = ring_root_ptr as *const DriverTaskCommandRecord;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
     let completion_ptr =
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
-    // SAFETY: The ring page is HAL-owned and page-local. Root writes the command
-    // before sending IPC to this TCB; volatile access preserves that boundary.
-    let command = unsafe { core::ptr::read_volatile(command_ptr) };
+    let command = ring.read_command()?;
     if command.sequence == 0 {
         return None;
     }
-    // SAFETY: Same page-local completion record as above.
-    let current = unsafe { core::ptr::read_volatile(completion_ptr) };
+    let current = ring.read_completion_snapshot()?;
     if current.sequence == command.sequence {
         return Some(current.result as usize);
     }
@@ -17164,18 +17169,16 @@ unsafe fn run_driver_task_service(
     slot.result.store(0, Ordering::Release);
     slot.request_seq.store(request, Ordering::Release);
 
-    // SAFETY: `endpoint` is the root-held command endpoint cap published by
+    crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
+    // `endpoint` is the root-held command endpoint cap published by
     // `KernelHal::create_driver_task`; the call carries no caps and all service
     // payload is in the shared command slot above. Blocking the root here is
     // deliberate: it hands CPU time to lower-priority driver TCBs instead of
     // relying on `Yield`, which is not a cross-priority rendezvous.
-    unsafe {
-        sel4_sys::seL4_SetMR(0, request as sel4_sys::seL4_Word);
-        let _ = crate::sel4::call_unchecked(
-            endpoint as sel4_sys::seL4_CPtr,
-            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
-        );
-    }
+    let _ = crate::sel4::call_unchecked(
+        endpoint as sel4_sys::seL4_CPtr,
+        sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+    );
 
     let completed = (slot.done_seq.load(Ordering::Acquire) == request)
         .then(|| slot.result.load(Ordering::Acquire));

@@ -799,6 +799,17 @@ impl MappedRegisterWindow {
         Ok(Self { base_vaddr, size })
     }
 
+    #[cfg(test)]
+    fn new_test(base_vaddr: usize, size: usize) -> Result<Self, HalError> {
+        if base_vaddr == 0 || size == 0 {
+            return Err(HalError::Unsupported("register-window-empty"));
+        }
+        if !base_vaddr.is_multiple_of(core::mem::align_of::<u32>()) {
+            return Err(HalError::Unsupported("register-window-base-unaligned"));
+        }
+        Ok(Self { base_vaddr, size })
+    }
+
     fn checked_register_ptr<T>(&self, offset: usize) -> Result<*mut T, HalError> {
         let width = core::mem::size_of::<T>();
         let align = core::mem::align_of::<T>();
