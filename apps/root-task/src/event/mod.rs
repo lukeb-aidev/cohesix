@@ -4436,11 +4436,10 @@ where
         &self,
         serial_rx_activity: bool,
     ) -> bool {
-        crate::drivers::driver_task_net::cyw43_service_work_snapshot().schedulable_network_work()
+        crate::drivers::driver_task_net::cyw43_service_work_snapshot().ordinary_network_admissible()
             && (self.linked_runtime_cyw43_rx_admission_pending
                 || self.linked_runtime_cyw43_durable_resume.is_some()
-                || (self.linked_runtime_network_consecutive_turns != 0
-                    && self.linked_runtime_cyw43_priority_work_due()))
+                || self.linked_runtime_cyw43_priority_work_due())
             && self.linked_runtime_cyw43_lane_selected()
             && !self.network_service_quarantined
             && !self.reboot_pending
@@ -33427,6 +33426,9 @@ mod tests {
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(70, 16, 1, 0),
+        ));
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
         let driver = LoopbackSerial::<32768>::new();
@@ -33443,6 +33445,10 @@ mod tests {
         assert!(
             !pump.linked_runtime_cyw43_network_burst_due(),
             "authentication alone cannot keep an idle Network quantum alive"
+        );
+        assert!(
+            !pump.linked_runtime_cyw43_rx_admission_can_follow_serial(false),
+            "a healthy but idle physical lifetime must not reopen Network after Serial"
         );
     }
 
@@ -33494,7 +33500,20 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn linked_cyw43_association_claim_preopens_priority_lane() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(71, 17, 1, 0),
+        ));
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
             32768,
         >::new());
@@ -33509,7 +33528,17 @@ mod tests {
         wifi.status.address_source = "wifi-associating";
         wifi.status.dhcp_phase = "associating";
 
-        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
+        let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+        assert!(snapshot.ordinary_network_admissible());
+        assert!(
+            !snapshot.schedulable_network_work(),
+            "association must not depend on a pre-existing driver-local reason"
+        );
+        assert!(!pump.linked_runtime_cyw43_rx_admission_pending);
+        assert!(pump.linked_runtime_cyw43_durable_resume.is_none());
+        assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
         assert!(
             pump.linked_runtime_cyw43_network_burst_due(),
             "the first association owner turn must open the CYW43 priority lane before preparing Join"
@@ -33518,12 +33547,27 @@ mod tests {
             pump.linked_runtime_cyw43_priority_work_due(),
             "association actionability must reach the lease admission decision"
         );
+        assert!(
+            pump.linked_runtime_cyw43_rx_admission_can_follow_serial(false),
+            "durable association state must admit Network without a notification hint"
+        );
+
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+        pump.poll_with_linked_serial_runtime();
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Network,
+            "Serial must hand the healthy lifetime directly to the durable association owner"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn linked_cyw43_host_eapol_pending_preopens_priority_lane() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(72, 18, 1, 0),
+        ));
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
             32768,
         >::new());
@@ -33540,12 +33584,21 @@ mod tests {
 
         let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
         assert!(
+            !crate::drivers::driver_task_net::cyw43_service_work_snapshot()
+                .schedulable_network_work(),
+            "host EAPOL must not require a pre-existing driver-local reason"
+        );
+        assert!(
             pump.linked_runtime_cyw43_network_burst_due(),
             "pending host-EAPOL work must retain the bounded CYW43 Network quantum"
         );
         assert!(
             pump.linked_runtime_cyw43_priority_work_due(),
             "pending host-EAPOL actionability must reach priority-lease admission"
+        );
+        assert!(
+            pump.linked_runtime_cyw43_rx_admission_can_follow_serial(false),
+            "durable host-EAPOL state must admit Network without a notification hint"
         );
     }
 
