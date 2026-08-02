@@ -463,8 +463,10 @@ second consumption must fail. Exclusive SDIO mapping must remove the admission
 record exactly once. Coverage must also prove that the already root-preseeded
 mailbox frame remains available for a child capability copy after fresh
 device-untyped coverage is consumed; no second retype is permitted. Runtime
-staging coverage must traverse all eight published root aliases for the exact
-32-KiB shared aperture. Clearing a partial transport must also zero cached
+staging coverage must traverse all twelve published root aliases: the first
+eight cover the exact 32-KiB owner aperture and the final four cover the RX
+batch payload plus disjoint ACK region. Clearing a partial transport must also
+zero cached
 progress magic, sequence, phase, and auxiliary identity before a replacement
 generation can observe it. Production AArch64 coverage must configure the
 EventPump in place, borrow it through both ordinary and deferred console loops,
@@ -536,11 +538,15 @@ real descriptor/controller service path rather than fabricating a direct
 result.
 Physical mapped addresses, cache-maintenance effects, seL4 notification
 send/receive, and target transaction entry/exit remain target-compile checked
-and require Pi proof. Under the ordinary EventPump, each
-outer turn opens one monotonic CYW43 operation permit and may execute no more
-than one child-runtime or HAL operation; a rejected second attempt must leave
-the retained ticket, deadline, payload fingerprint, generation, and cursor
-unchanged.
+and require Pi proof. Under the ordinary EventPump, each outer turn opens at
+most one monotonic CYW43 parent-operation permit; a rejected second parent
+attempt must leave the retained ticket, deadline, payload fingerprint,
+generation, and cursor unchanged. Once admitted, persistent op11, the separate
+finite urgent-op7 lease, and a post-release DPC event lease advance inside the
+linked runtimes from changed durable state to the first unchanged external
+wait. Every helper remains bounded and each immutable hardware request may
+issue at most once, but no scheduler turn, yield, or notification is a required
+edge between semantic phases.
 
 Ordered Gate 8 coverage must exercise one production diagnostic snapshot with
 these exact subgates: `8a-pair-generation`, `8b-control-program`,
@@ -563,17 +569,22 @@ prove all of the following:
   work, no maintenance or logical control owner, no prompt-poll or
   terminal-drain cursor, no retained HAL driver-task request, and no
   recovery/rejoin. The linked SDIO DPC ring must have producer equal to
-  consumer, zero current-generation flags, and the same nonzero epoch, producer
-  watermark, and cumulative overrun/IRQ-ACK-failure counts on both
-  observations. Stable historical nonzero counters after typed recovery are
-  admissible; new counter movement is not. Any owner activity, DPC publication,
+  consumer, zero current-pair flags, zero current-pair overruns, and the same
+  nonzero epoch, producer watermark, and per-pair IRQ-ACK-failure count on both
+  observations. `ack_failures` is attempt history, not current fault authority:
+  after an exact ACK retry succeeds and pending/fault flags clear, a stable
+  nonzero value does not by itself block Gate 8 or healthy work. Final hardware
+  acceptance still requires zero. Pair replacement resets these ring counters;
+  cross-pair history remains in root first-cause recovery records. New counter
+  movement is not admissible. Any owner activity, DPC publication,
   counter movement, DPC epoch change, or logical/pair generation change resets
   the candidate. The producer revalidates the exact
   pair/generation/DPC/history receipt and commits that snapshot before
   `CYW43_GATE8_COMMIT`, then rechecks it after consumer-token publication.
-  Tests must reject pending, flagged, torn, zero-epoch, producer-advanced,
-  epoch-advanced, and counter-advanced DPC snapshots while allowing stable
-  historical counters and normal DPC activity after accepted commit.
+  Tests must reject pending, flagged, overrun, torn, zero-epoch,
+  producer-advanced, epoch-advanced, and counter-advanced DPC snapshots while
+  allowing stable per-pair ACK-attempt history after exact recovery and normal
+  DPC activity after accepted commit.
   First-cause deferred-recovery and terminal-drain diagnostics must survive a
   rejected exact receipt, consumer publication, or commit output preflight and
   clear only after the complete retained commit transaction linearizes.
@@ -921,7 +932,7 @@ supervisor through every retained yield and prove exactly one owner-published
 `begun_epoch`, followed by either the matching `completed_epoch` or matching
 `failed_epoch`. It must prove pair-ring reset preserves only the exact 16-byte
 `DriverRuntimeSdioPhysicalLifetimeRecord` and zeroes every command, completion,
-DPC, grant, continuation, fault-telemetry, and cumulative-counter byte outside
+DPC, grant, continuation, fault-telemetry, and pair-generation-counter byte outside
 it. Restart must immediately publish `failed_epoch = begun_epoch` for an active
 lifetime before clearing volatile state, including when its runtime cursor is
 already missing. A later replacement lifetime must advance the epoch without
@@ -980,19 +991,23 @@ boosts SDIO then CYW43 exactly once, and admits only exact root-to-CYW43 parents
 from that current pair generation. Those parents reuse the quantum lease but
 retain separate immutable request, command fingerprint, issue, grant,
 notification, and completion identities. Every outer EventPump turn still
-executes at most one CYW43/SDIO child physical operation.
+admits at most one root CYW43 parent operation. The linked runtimes may then
+advance an already-admitted persistent or finite event lifetime through
+consecutive bounded helpers while durable semantic state changes; each
+immutable physical request remains single-issue.
 
 Closing the quantum must fence fresh pair work. An exact already-`Prepared` or
 already-`Issued` parent may drain alone. Tests must prove that an ABI-invisible
 sequence-zero `Prepared` parent keeps an open quantum actionable and that a
-closing parent advances in successive bounded Network turns rather than one
-turn per physical-operator rotation. Every turn must admit at most one child
-physical operation and revalidate the same request plus a monotonic
-`Prepared`-to-`Issued` state. The 25-ms virtual-counter cap must fence only
-fresh-parent admission and must not interrupt that exact parent. A pending
-physical or buffered-console response or the hard 192-turn bound may yield,
-but the next admitted slice must resume only the same fenced parent. Restore
-order is CYW43 then SDIO after its exact terminal.
+closing parent does not depend on one Network turn per physical-operator
+rotation. Every root turn must admit at most one parent operation and revalidate
+the same request plus a monotonic `Prepared`-to-`Issued` state. The 25-ms
+virtual-counter cap must fence only fresh-parent admission and must not
+interrupt that exact parent. A pending physical or buffered-console response
+may yield only at a stable external wait. The immutable 192-operation budget is
+a HAL-operation bound, not a scheduler-turn or notification count; any resumed
+slice must retain the same fenced parent. Restore order is CYW43 then SDIO after
+its exact terminal.
 Tests must reject a fresh or switched parent during close, issue-state
 regression, wrong-generation reuse, torn phase/reservation state, invalid
 active-parent state, and partial acquisition or restore. A clean partial
@@ -1003,13 +1018,15 @@ close/drain or enter pair recovery; none may silently clear or alias ownership.
 GENET must remain outside this state machine, retain its ordinary
 single-`Network`-turn rotation, and emit no WiFi priority-lease telemetry.
 
-For every root-to-CYW43 generation, including zero, non-op11 retained commands
-outside finite op7, including non-op11 bootstrap and recovery commands, keep their exact
-endpoint/grant authority and ABI-invisible `Stage`, `CommitRing`,
-`PublishGrant`, `NotifyRing`, and `PollRing` cadence. The finite urgent op7
-steady-service lease also remains unchanged. Tests must retain their current
-grant acknowledgement, replacement, re-signal, identity, exhaustion, and
-endpoint-fallback rejection coverage.
+For every root-to-CYW43 generation, including zero, non-op11 retained foreground
+commands outside finite op7, including non-op11 bootstrap and recovery
+commands, keep their exact endpoint/grant authority and ABI-invisible `Stage`,
+`CommitRing`, `PublishGrant`, `NotifyRing`, and `PollRing` cadence. The finite
+urgent op7 steady-service lease retains its distinct identity, admission, and
+budget, while changed durable semantic state now continues locally to its first
+unchanged external wait. Tests must retain current grant acknowledgement,
+replacement, re-signal, identity, exhaustion, and endpoint-fallback rejection
+coverage for the ordinary foreground path.
 
 Every exact op11, including logical generation zero and bootstrap/recovery
 lifecycle use, uses the narrower persistent contract. Tests must prove that HAL
@@ -1036,6 +1053,31 @@ issue: a stable terminal at expiry must win, while a double stable miss must
 request the existing pair recovery with zero added grant, signal, replay, or
 runtime wake.
 
+Interleaved EVENT/DATA before the exact BCDC reply must not produce an op11
+terminal or a replacement parent sequence. CYW43 must publish one through eight
+frames through a stable sequence-last `DriverRuntimeCyw43RxBatchRecord` while
+preserving the op11 descriptor, payload, BCDC id, deadlines, and child frontier.
+Root must first reserve capacity for the complete batch. If capacity is
+insufficient, it must copy nothing, leave the child commit visible, and withhold
+the ACK until one later all-or-nothing copy. Root then validates, copies,
+post-copy re-reads, and delivers the batch once before publishing a
+cache-line-disjoint `DriverRuntimeCyw43RxBatchAck` by clearing its
+commit, writing exact generation/parent/queue-commit/count, cleaning/barriering,
+and committing `queue_commit_sequence` last. CYW43 may advance or reuse the
+batch only after two stable ACK samples match every field. Torn, stale,
+wrong-generation, wrong-parent, wrong-queue-commit, wrong-count, duplicate, and
+missing ACKs must retain both batch and parent and perform zero SDIO operations.
+
+Root scheduling coverage must stable-read the exact issued op11 parent
+condition. `Waiting` masks only that parent's descriptor, logical-owner, and HAL
+lease self-demand, so repeated root completion polls cannot become its service
+clock. The mask must leave every other reason unchanged; specifically,
+independent committed DPC/RX, exact terminal-drain work, sideband-batch
+consumption/ACK, and an expired exact deadline-arm fault hint must remain
+schedulable. `TerminalVisible` must unmask the exact terminal consumer, while
+`DeadlineFault` and `NotExact` must follow existing typed containment. The same
+mask must not apply to an op7 parent or to an ordinary foreground command.
+
 After the one-way owner handoff deletes root's SDIO endpoint, every CMD52,
 CMD53, or `DPC_ACTIVATE` child derived from that op11 must carry
 `FLAG_PERSISTENT_TRANSACTION` paired with the parent marker. Tests must reject a
@@ -1043,8 +1085,9 @@ partial pair, unrelated primitive, changed command/body, stale generation,
 replay, mixed finite steady-service marker, or wrong parent binding before I/O.
 The real shared ring and owner cursor must commit the complete child command
 sequence last, optionally signal badge 256 once, and retain the exact child to
-terminal with zero delegated grants. Each scheduler turn performs at most one
-bounded physical owner quantum. The owner re-reads the matching completion,
+terminal with zero delegated grants. Every service helper remains bounded and
+each immutable hardware request may issue at most once; changed semantic state
+may continue locally without a scheduler handoff. The owner re-reads the matching completion,
 joined IRQ state, CARD_INT/DPC work, and child frontier immediately before
 `Wait`; visible work continues without a new notification, while unchanged
 state blocks. Tests must prove the PIO CMD53 path reaches one terminal with
@@ -1052,18 +1095,48 @@ IRQ158/host state and zero DMA use, and prove the external-DMA CMD53 path joins
 IRQ158/IRQ116 in both arrival orders into exactly one terminal. The completion
 body/cache clean/barrier must precede sequence-last commit and any signal.
 
-Non-op11 delegated foreground/DPC commands retain their acknowledged shared
-grant tests, including exact identity, commit-before-signal, irrevocable ACK,
-replacement only after consumption, and zero I/O on mismatch. Immutable
+Every active autonomous SDIO phase that can remain blocked must publish
+`DriverRuntimeSdioDeadlineArm` body before its final request-sequence commit at
+the condition-before-sleep boundary. The body contains the current nonzero
+physical-lifetime epoch, immutable request sequence, and that phase's exact
+64-bit counter expiry. Coverage must include pre-issue inhibit/status-clear,
+issued polling, containment/reset polls, and host-clock polls; containment clock
+settle must publish the earlier settle/overall expiry. A blockable phase without
+the required counter must fail closed rather than sleep. Phase progress must
+refresh or clear the arm, and terminal/reset must clear it before publication.
+Normal IRQ- and durable-level-driven requests must record zero fault hints. A stable unchanged
+expired arm may produce at most one reserved-root hint; CYW43 must stable-read
+the same epoch/request/commit/expiry plus terminal and restart state before
+forwarding its existing badge-256 hint, and SDIO must recheck terminal before
+deadline before containing the exact request. Tests must cover torn, zero,
+stale-epoch, wrong-request, cleared, repeated, restarted, and terminal-racing
+arms. None may create a new request, grant, replay, poll, source probe, direct
+root-to-SDIO operation, or second hint.
+
+Non-op11 delegated foreground commands retain their acknowledged shared-grant
+tests, including exact identity, commit-before-signal, irrevocable ACK,
+replacement only after consumption, and zero I/O on mismatch. From the first
+post-release event, production DPC instead binds the exact event sequence and
+physical generation to the finite steady-service child marker before or after
+Gate 8. Mutable `steady_data_plane_live` state must never select the ordinary
+continuation-grant mode; the DPC semantic snapshot must remain authoritative
+between exact children until the event terminal. Immutable
 root/delegated commands must reject endpoint fallback even when mutable gate
 state is absent. All physical deadlines remain fault-containment limits for the
-exact already-issued request, not traffic-progress mechanisms. In particular,
+exact active autonomous phase or ambiguous request, not traffic-progress
+mechanisms. In particular,
 an op11 post-TX `WaitReply` with unchanged durable CARD_INT/DPC/RX/credit and
-child-terminal state must block without a forced source probe, deadline-rescue
-wake, synthetic DPC, or manufactured completion.
+child-terminal state must block without a forced source probe, ordinary-traffic
+deadline hint, synthetic DPC, or manufactured completion.
+Focused runtime coverage must include
+`persistent_control_semantic_progress_runs_to_first_external_wait` and
+`post_release_dpc_child_uses_exact_event_lease_before_gate8`: the first must
+exercise two successive semantic changes followed by the first stable external
+wait, and the second must prove a pre-Gate-8 event uses the exact DPC lease with
+zero ordinary continuation grants.
 An event's source/frame-length hint must be copied into the DPC cursor only on
-the first admission of that exact sequence. Later completion-poll, explicit
-grant, and exact-grant owner turns must not
+the first admission of that exact sequence. Later completion-poll,
+legacy ordinary-mode test, or durable-condition recheck turns must not
 reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed F2 read
 and create an endless same-frame drain. A different sequence while one is
 active must poison the generation rather than merge event identities.
@@ -1096,12 +1169,13 @@ failure and every command-or-later, owner-poisoned, malformed, timed-out, or
 issued-unknown cut must fence the pair without advancing the event.
 These explicitly scoped descriptors cover bootstrap/control/host-EAPOL and
 Join-specific protocol fences; they must not authorize fresh steady NetData
-work. A DPC producer level retains only its persistent child owner. A stable
+work. A post-release DPC producer level retains only its exact event-sequence
+lease. A stable
 nonempty committed queue record may admit one immutable op8 batch parent with
 one through eight entries. Notifications only prompt that stable read, and no
 steady deadline may add source-inspection authority or create a rescue op8.
 
-One admitted `DPC_ACTIVATE` grant must execute the Linux-ordered mask,
+One admitted `DPC_ACTIVATE` authority must execute the Linux-ordered mask,
 host-status/ring inspect, durable publish/coalesce, exact IRQ ACK, signal, and
 rearm policy as a single bounded owner quantum with
 `SDIO_DPC_ACTIVATE_STEP_BOUND=32`. Only failure of the frozen exact IRQ
@@ -1123,6 +1197,11 @@ cursor and child identity byte-for-byte. The parent produces one terminal,
 never one terminal per frame. Root copying that batch consumes no physical
 owner operation and does not disturb the active DPC cursor.
 
+Repeat the same memory-only publication with one exact persistent op11 instead
+of op8. It must produce no op11 terminal, preserve the complete control cursor,
+deliver the batch once, and advance only after root commits the exact disjoint
+ACK last. The later exact CONTROL reply alone closes op11.
+
 The focused case must drive the production state, not a fabricated completion:
 clear the queue commit before mutation, write the body, clean/barrier, commit a
 new nonzero sequence last; write all batch entries/payloads, clean/barrier, and
@@ -1130,9 +1209,10 @@ commit the matching parent sequence last. Root must double-sample queue state,
 validate generation/queue-commit/parent/count/remaining/entry bounds, copy all
 frames, and reject delivery if the header changes on its post-copy re-read.
 Empty, torn, stale, mismatched, unsealed, out-of-bounds, physical-capable,
-control-exchange, recovery, issued-unknown, restart, and quarantine cases fail
-closed. The former one-frame active-DPC exception and pre-baseline rollback
-shortcut are retired.
+unrelated-control-exchange, recovery, issued-unknown, restart, and quarantine
+cases fail closed. Exact active-op11 sideband accepts only its immutable parent
+identity and matching root ACK. The former one-frame active-DPC exception and
+pre-baseline rollback shortcut are retired.
 
 Issued-unknown arbitration must completion-reap the immutable child before
 applying the pair-restart hold. A late exact completion is terminal ownership
@@ -1216,8 +1296,10 @@ again. No fabricated direct completion may satisfy this coverage.
 
 Firmware-release coverage must drive the production release cursor through the
 production parent-command plus staged-owner-descriptor/controller seam. Prove
-one new child issue per outer EventPump turn and exact Linux ordering from
-stale interrupt clear to DPC activation. Exercise 51 retained ARMCR4
+that every immutable child request issues at most once and that the persistent
+parent advances through changed durable child state without requiring another
+EventPump turn, notification, or yield between semantic phases. Preserve exact
+Linux ordering from stale interrupt clear to DPC activation. Exercise 51 retained ARMCR4
 clear/settle/read cycles, the exact
 200-attempt no-counter HT fallback, final-success Function 2 readiness on poll
 3,000, and final-success firmware readiness on poll 1,000 without trace or
@@ -1235,12 +1317,17 @@ Production-chain coverage must additionally drive normal control and EAPOL TX
 through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
 drive all 20 post-F2 release children into real retained DPC activation, and
-drive one DPC event through owner-backed status, F2 read, empty-confirmation,
-and post-status work before committed queue/batch publication. Drive eight real
+drive one pre-Gate-8 DPC event under its exact event-sequence steady lease
+through owner-backed status, F2 read, empty-confirmation, and post-status work
+before committed queue/batch publication. That event must use zero recurrent
+continuation grants and retain the same lease between exact children. Drive eight real
 RX frames through one immutable op8 parent, one sequence-last batch commit, and
 one detail-`0x5803` terminal with `result=8`; copying all eight frames must issue
 zero SDIO-owner operations. A full 256-frame software backlog uses 32 full batch
 parents rather than 256 per-frame polls, grants, terminals, or signals.
+Repeat the batch with an exact active op11, require zero op11 terminal until its
+matching CONTROL reply, and require one cache-line-disjoint root ACK after the
+post-copy header recheck before CYW43 may publish another batch.
 Pre-issue terminal, post-issue unknown, torn queue/batch state, stale generation,
 action-fingerprint, timeout, and continuation-grant cuts must not issue a second
 child or mutate the replacement generation. Exercise the
@@ -1253,8 +1340,9 @@ must additionally prove that an exact HAL-issued Join at
 `CONTROL_TX_BEGIN` remains event-unarmed, stale sequence or route progress
 cannot arm it, and only its exact post-Function-2 progress can do so. Inject an
 EVENT after the initial pre-TX drain while the cursor is waiting for credit;
-that event must complete with zero Function 2 writes before the single Join
-write is admitted. At the later final SDIO pre-issue boundary, assert host
+that event must commit and be root-consumed through the sideband batch/ACK with
+zero Function 2 writes and zero op11 terminals before the single Join write is
+admitted. At the later final SDIO pre-issue boundary, assert host
 `CARD_INT` for a Join-marked Function 2 child and prove a typed not-issued
 terminal, zero controller/DMA/FIFO work, unchanged operation-11 parent and
 absolute counter deadline, no SDPCM advance or pair recovery, one forced
@@ -1362,7 +1450,9 @@ and fresh-parent time cap must retain unfinished Wi-Fi work behind a fence and
 prove `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded
 turn before Network re-admission. The 25-ms time cap must not interrupt an exact
 already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
-the hard 192-turn bound may yield it only with the same identity retained. A
+the hard ordinary-EventPump turn cap may yield root admission only with the same
+identity retained. That fairness cap is not the persistent parent's
+192-operation budget and cannot become a runtime progress clock. A
 queued USB report and a buffered complete network command must not be bypassed.
 GENET must neither sample nor retain the CYW43 queue/batch snapshot and must
 leave its own operator-fence state untouched. CYW43 diagnostics must report
@@ -1401,8 +1491,10 @@ Host-EAPOL timing tests must prove the retained PAE multicast refresh keeps
 Association-supervisor tests must hold an exact host-EAPOL prompt poll across
 the absolute join timeout and terminal-event edge, prove the ordinary
 host-EAPOL lane drains it through the real ring service without replacement or
-pair recovery, one child operation on each successive outer turn, and allow
-authentication suspension/backoff only after that retained action is gone.
+pair recovery, advances the same persistent op11 from changed durable state
+with every immutable child single-issue, and allow authentication
+suspension/backoff only after that retained action is gone. An unchanged
+external wait must block locally rather than require successive root turns.
 They must prove an ordinary AUTH timeout is telemetry, while unsuccessful
 SET_SSID, link-down/no-network, deauthentication, and disassociation remain
 same-pair logical retry inputs and make Gate 8 report
@@ -1612,10 +1704,12 @@ one retained USB keyboard turn so fresh physical input is buffered before the
 network quantum. USB service debt may request that turn but cannot itself count
 as input. `Dispatch` may consume one serial, buffered local-seat, or buffered
 network command without polling the NIC or flushing TCP. `Network` may
-perform exactly one ordinary NIC service
-or one retained GENET response flush and must leave any received command
-buffered for a later `Dispatch` turn. NIC polling, TCP flushing, and command
-dispatch must occupy distinct outer turns. A dispatched GENET command must
+admit exactly one ordinary NIC service or one retained GENET response flush and
+must leave any received command buffered for a later `Dispatch` turn. One
+CYW43 admission may let the linked runtimes follow an already-authorized
+persistent op11, urgent op7, or DPC event lifetime through changed durable state
+to bounded quiescence; it cannot admit a second root parent. NIC admission, TCP
+flushing, and command dispatch must occupy distinct outer turns. A dispatched GENET command must
 schedule zero same-turn flushes and retain a cursor owned by its active
 connection. Each later
 `Network` phase consumes exactly one flush attempt, bounded to eight phases
@@ -1625,9 +1719,18 @@ connection rejects stale cursor work. A data-ready CYW43 connection must not
 create the GENET cursor. A response flush, exact socket/parser work,
 runtime/root RX backlog, current valid pending or masked SDIO DPC event, or
 retained CYW43 NetData/TX continuation may retain `Network` subject to the
-compiler-declared CYW43 `max_ops_per_turn` hard bound (currently 192 successive
-outer turns). A separate 25-ms seL4 virtual-counter cap fences admission of a
-fresh physical parent.
+compiler-declared CYW43 operation/frame/byte budgets. The 192-operation parent
+bound counts admitted HAL operations, not root polls, scheduler turns, or
+notification hints. A separate 25-ms seL4 virtual-counter cap fences admission
+of a fresh physical parent.
+
+An exact issued persistent op11 whose stable HAL condition is `Waiting` must
+not retain `Network` merely because its runtime descriptor, logical owner, or
+HAL lease exists. That mask is exact-parent self-demand suppression only:
+every other reason remains unchanged, committed DPC/RX and exact terminal-drain
+work retain their ordinary scheduling authority, and `TerminalVisible` admits
+the exact terminal consumer. Tests must prove that op7 and ordinary foreground
+owners never enter this op11-only mask.
 
 Gate 8 data-consumer publication must bind the queue and batch records to the
 current connection generation, pair epoch, and completed physical-lifetime
@@ -1646,10 +1749,23 @@ batch must deliver once with its notification delivered, suppressed,
 coalesced, or repeated. No wake-hit, pending, clear, recheck, or per-frame
 terminal state may influence the result.
 
-The persistent DPC child owner must complete joined interrupt work, drain
-bounded RX, update SDPCM credits, admit an already-ready urgent TX, and recheck
-completion/queue state immediately before blocking. A nonempty committed queue
-retains the next batch parent; exact committed empty state ends RX service.
+Sideband coverage must then reuse that batch layout under one still-active
+persistent op11. It must prove EVENT/DATA before the exact BCDC reply commits a
+batch without publishing any op11 terminal or new parent sequence. Root copies
+and delivers the frames once, then writes the separate 64-byte-aligned ACK body,
+cleans/barriers only that line, and commits its queue sequence last. CYW43 must
+not advance the op11 cursor or overwrite the batch until the exact stable ACK is
+visible. Producer and consumer writes must remain cache-line disjoint. Missing,
+torn, stale, wrong-parent, wrong-generation, wrong-queue-commit, wrong-count,
+duplicate, and notification-independent ACK schedules preserve the batch and
+op11. The later exact CONTROL reply alone terminalizes that parent.
+
+From the first post-release event, the exact event-sequence DPC lease must
+complete joined interrupt work, drain bounded RX, update SDPCM credits, admit
+an already-ready urgent TX, and recheck completion/queue/event state immediately
+before blocking. Changed semantic state must continue locally across exact
+children; only the first unchanged external condition may block. A nonempty
+committed queue retains the next batch parent; exact committed empty state ends RX service.
 Bootstrap, split-control/host-EAPOL, control pre-TX, and Join-only fences remain
 separately bounded and must not become periodic steady NetData polling.
 
@@ -1714,13 +1830,15 @@ immutable fingerprint, matching request and logical generation, current pair
 epoch, open priority
 reservations, and no pair restart or context replay. This identity must remain
 stable across the EventPump's before/after snapshot. If close has already
-fenced it, successive admitted `Network` turns may advance only that same
-parent, by at most one child physical operation per turn, while rechecking
-request identity and monotonic issue state after every turn. Elapsed 25-ms time
-must not interrupt that parent. An operator response or the hard 192-turn cap
-may yield to `Serial` and `LocalSeat`, but the next Network slice must resume
-the same parent; when elapsed and hard bounds coincide, telemetry must classify
-the yield as `turn_cap`, not `time_cap`. Request substitution,
+fenced it, successive admitted `Network` turns may advance only that same root
+parent while rechecking request identity and monotonic issue state after every
+turn. Inside an admitted persistent or finite event lifetime, bounded linked
+runtime helpers may continue while durable semantic state changes and each
+immutable hardware request may issue at most once. Elapsed 25-ms time must not
+interrupt that parent. An operator response or the hard ordinary-EventPump
+turn cap may yield to `Serial` and `LocalSeat`, but the next Network slice must
+resume the same parent; when elapsed and hard bounds coincide, telemetry must
+classify the yield as `turn_cap`, not `time_cap`. Request substitution,
 `Issued`-to-`Prepared` regression, or disappearance without a typed terminal
 must request pair recovery. After the exact parent terminates, restore order
 must be CYW43 then SDIO before the EventPump exits the slice.
@@ -1866,8 +1984,12 @@ Function-2 children cross the bounded SDIO owner. A normal first-read-sized
 receive uses about five physical CYW43-to-SDIO children, or six with a
 remainder. The shared 32-KiB aperture means a hot DPC episode performs zero
 Function-1 window writes; a cold episode adds exactly one LOW/MID/HIGH
-sequence. Coverage must prove those hot/cold counts, exact child identity
-across every grant and completion, and no replay after an issued-unknown cut.
+sequence. Coverage must prove those hot/cold counts, exact child identity across
+ordinary foreground grants, persistent markers, DPC event leases, and terminal
+completions, and no replay after an issued-unknown cut. Production DPC must use
+the same exact event-sequence lease from the first post-release event before
+Gate 8 through steady traffic; mutable data-plane readiness cannot select a
+second continuation-grant path.
 SDIO IRQ158 and DMA channel-4 IRQ116 must join in the same physical owner and
 yield exactly one terminal in either arrival order. The CYW43 producer must
 clear the queue or batch commit before body mutation, write and clean the
@@ -1875,11 +1997,20 @@ complete body, execute the publication barrier, write the new nonzero commit
 sequence last, and only then signal its consumer. The consumer must treat that
 notification as a coalescing hint, stable-read the durable condition, and make
 progress even when the hint is missing, coalesced, or repeated. Coverage must
+also drive the same batch as persistent-op11 sideband, commit the disjoint
+root-owned ACK line last after post-copy validation, and prove the CONTROL reply
+alone terminalizes op11. Coverage must
 also prove one hardware wake services the active transfer, a bounded RX batch,
 SDPCM credit updates, and an already-ready urgent TX before the final
 condition-before-sleep recheck. The 32-step `DPC_ACTIVATE`, v11
 cause/frame-turn counters, and generation-scoped TX phase counters remain
 passive and bounded; none authorizes progress or reconstructs history.
+The DPC overrun and ACK-attempt counters are per-pair telemetry. Current flags
+and exact pending state authorize service; a recovered historical ACK attempt
+cannot disable healthy work, while accepted hardware evidence still requires
+zero errors. The phase-authoritative SDIO deadline arm must clear on ordinary
+terminal with zero fault hints; only a stable expired exact arm may cause the one-shot
+root-to-CYW43-to-SDIO containment hint.
 Immutable descriptor checks must reject endpoint fallback after gate-state
 loss, and repeated issued-unknown reap waits must preserve the exact grant and
 parent identity. The historical phase count is non-authoritative; current tests
@@ -1931,8 +2062,11 @@ TX queue, 32-KiB aggregation, and block-mode CMD53. Cohesix must prove its
 translation through the existing 50-frame RX bound, credits/glom, 32-KiB shared
 aperture, 512-byte Function 2 blocks, multi-block CMD53, external DMA, stable
 queue level, and one committed root batch. Its scheduler form remains one
-bounded EventPump Network quantum with physical-console checkpoints, exact
-grants, one HAL owner, and one linked SDIO runtime issuer; no test may pass by
+bounded EventPump root-parent admission with physical-console checkpoints,
+ordinary foreground grants, persistent op11 and urgent-op7 parents, an exact
+event-sequence DPC lease, one HAL owner, and one linked SDIO runtime issuer.
+Changed durable state continues inside the admitted runtime lifetime to the
+first unchanged external wait; no test may pass by
 adding a timer poller, rescue inspection, private physical drain loop, or a
 second transaction lane. Notifications may prompt a durable-state check but
 carry no authority, work count, or history. At quiescence the final stable
@@ -1986,6 +2120,11 @@ produce one immutable op8 parent whose single `0x5803` terminal carries up to
 eight real frames, and a remaining nonzero level must be serviced again without
 requiring a fresh notification. Missing, coalesced, and repeated hints must
 produce the same frame order and terminal count.
+If op11 is active, the visible queue may instead produce the same batch as
+nonterminal sideband; its exact disjoint root ACK must release the batch without
+changing parent identity. Ordinary acceptance also requires
+`sdio_deadline_hints=0`; a nonzero value is fault-containment evidence and fails
+the normal-latency sample even if the request eventually completes.
 The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
@@ -2493,21 +2632,26 @@ full-body clean/barrier, sequence-last `CommitRing`, `Issued`, exactly one
 signal-last notification, and terminal polling with no `PublishGrant`, grant 19,
 replacement grant, or later `NotifyRing`. The request must remain `Issued`
 through incomplete completion reads. GENET cannot acquire or inspect this state,
-the finite op7 steady lease is unchanged, and typed cold provenance cannot
-authorize another publication lane. Tests must reject caller-supplied or partial
+the finite op7 steady lease retains its separate identity, admission, and
+budget while using the common condition-driven continuation route, and typed
+cold provenance cannot authorize another publication lane. Tests must reject caller-supplied or partial
 persistent flags, endpoint input, stale sequence, changed action/generation/body,
 and replay of an issued parent.
 
 For delegated CYW43-to-SDIO commands, tests must prove there is no usable
-endpoint after handoff. Non-op11 delegated foreground/DPC work keeps its exact
-acknowledged shared grant coverage. Every child derived from the persistent
+endpoint after handoff. Non-op11 delegated foreground work keeps its exact
+acknowledged shared-grant coverage. Every child derived from the persistent
 op11 instead requires the paired descriptor marker and advances from its
 sequence-last committed command plus durable owner state, with zero delegated
 grants. A completion miss retains the exact child frontier; no explicit `Grant`
-phase or re-signal may appear. The owner performs at most one bounded physical
-quantum per scheduler turn and preserves the same request until one terminal.
-Its physical deadline contains only the already-issued fault and cannot
-manufacture traffic work. HAL must mint the CYW43 send cap from the SDIO
+phase or re-signal may appear. Every post-release DPC event carries the finite
+steady-service marker bound to its exact event sequence and physical
+generation, including before Gate 8, with zero recurrent grants. The owner uses
+bounded helpers, issues each immutable hardware request at most once, and
+continues on changed semantic state while preserving the same request until one terminal.
+Its physical deadline contains only the exact active autonomous phase or
+ambiguous fault and cannot manufacture traffic work. Pre-issue
+inhibit/status-clear coverage must not create a traffic cadence. HAL must mint the CYW43 send cap from the SDIO
 owner's bound notification with send-only rights and badge 256; it must not copy
 the owner endpoint.
 
@@ -2516,8 +2660,8 @@ badge 2. SDHCI IRQ158 delivers its generated SDIO IRQ badge (currently 159),
 and DMA channel-4 IRQ116 has a distinct generated IRQ source bound to that same
 SDIO physical owner. Every notification is a coalescing prompt to re-read
 durable state; none grants authority, counts work, records history, or replaces
-the immutable request identity, generation, selected ordinary-grant or
-persistent-marker contract, hardware status, or sequence-last committed ring
+the immutable request identity, generation, selected ordinary-grant,
+persistent-marker, or DPC event-lease contract, hardware status, or sequence-last committed ring
 state. The reserved high notification
 bit is excluded from service work. Tests must deliver, omit, coalesce, and
 repeat each prompt at least 4,096 times and obtain the same terminal count,
@@ -2538,12 +2682,17 @@ and the same owner joins them into exactly one terminal.
 For `DPC_ACTIVATE`, the bounded ordered transaction masks, inspects, commits or
 coalesces durable work, acknowledges the exact IRQ, signals only after commit,
 and rearms. A failed exact IRQ acknowledgement may retain only that immutable
-ACK transaction for a later retry. Before `Wait`, the owner must re-read both
-the matching persistent-child or ordinary-grant identity, completion sequence,
+ACK transaction for a later retry. Inject one failure followed by an exact
+successful retry: `ack_failures` must remain one as per-pair telemetry while
+current ACK-pending/fault flags clear, and op11, steady TX, DPC urgency, and RX
+batching must all remain admissible. Pending, poisoned, and overrun state must
+still fail closed. Pair replacement must zero the DPC ring counters and retain
+the old cause only in root's first-cause recovery record. Before `Wait`, the owner must re-read both
+the matching persistent-child, DPC event-lease, or ordinary-grant identity, completion sequence,
 and committed work condition. Visible work continues without another
 notification. A pending CARD_INT is serviced first; afterward the owner
-rechecks durable state and may continue the exact persistent child, or preserve
-an unconsumed ordinary grant, without waiting for a new edge.
+rechecks durable state and may continue the exact persistent child or DPC event
+lease, or preserve an unconsumed ordinary grant, without waiting for a new edge.
 The consumed grant cannot replay. The actual card-init `HOST_CONFIG` producer must
 cross the production reciprocal ring and retained owner cursor under this
 ordering. Telemetry must distinguish the post-generation-admission
@@ -2555,6 +2704,22 @@ completion, and advance the CYW43 card-init parent to CMD0. Malformed idle
 badges must not be retained. Empty, stale, consumed, mutated, or
 wrong-generation grants and acknowledgement failure must execute zero owner
 operations and must not produce a private retry loop.
+
+Physical-deadline coverage must use the 20-byte
+`DriverRuntimeSdioDeadlineArm` at owner-ring offset 2,028. Tests must prove the
+phase plan exports the exact counter expiry for every timed autonomous owner
+wait, including pre-issue inhibit/status-clear, issued polling,
+containment/reset, and host-clock polls; containment clock settle must select
+the earlier settle/overall expiry, while a blockable phase without a counter
+fails closed. Publication writes epoch, request, and expiry body before
+committing request sequence last; phase progress refreshes or clears the arm,
+and terminal/reset clears commit before publication. Root stable-reads the
+record and may send one reserved-root fault hint only for an unchanged expired
+exact identity. CYW43 must recheck before forwarding its existing badge-256
+hint, and SDIO must recheck terminal before deadline. Missing, torn, stale,
+cleared, repeated, restarted, wrong-request, and terminal-racing arms must
+produce no second hint or device action. Ordinary traffic must produce zero such hints.
+The diagnostic assertion is the exact `sdio_deadline_hints=0` field.
 CARD_INT coverage must also prove that terminal deferred service masks the host
 source before IRQ acknowledgement.
 The real SDIO post-claim priority-failure hook must prove that one episode
@@ -2572,15 +2737,26 @@ intake uses the coalescing badge-256 notification and sequence-last ring
 command. After `Pending`, a persistent op11 parent or child continues only when
 its semantic condition changes; an unchanged post-TX `WaitReply` blocks on
 CARD_INT/DPC/RX/credit/child-terminal state with no forced source probe or
-deadline-rescue wake. Non-op11 delegated foreground/DPC producers retain their
-existing `Poll -> Grant -> Poll` coverage. Non-CYW43, GENET, and the finite op7
-steady lease retain their existing phases.
+ordinary-traffic deadline hint. Interleaved EVENT/DATA uses the durable
+sideband batch and exact ACK without terminating op11. While HAL reports exact
+op11 `Waiting`, root must mask
+only that parent's descriptor/logical-owner/HAL-lease self-demand; independent
+DPC/RX/sideband/deadline/terminal work remains schedulable, and
+`TerminalVisible` restores the
+exact terminal consumer. Non-op11 delegated foreground producers retain their
+existing `Poll -> Grant -> Poll` coverage. Production DPC instead uses the
+event-sequence steady lease from its first post-release event with no mutable
+Gate-8 mode switch or recurrent grant. Non-CYW43 and GENET retain their existing
+phases; finite op7 keeps its separate identity and bounds while continuing
+changed durable state locally.
 Pending-command DPC arbitration, reciprocal SDIO child-ring submission,
 completion checks, and owner admission remain bounded retained work. The SDIO
-owner must stable-read the durable condition and selected persistent-marker or
-ordinary-grant identity and recheck completion/work state immediately before
-blocking; no turn may execute two physical owner quanta or form a private
-yield/resignal/poll loop. Issued-unknown completion reaping must run
+owner must stable-read the durable condition and selected persistent-marker,
+DPC event-lease, or ordinary-grant identity and recheck completion/work state
+immediately before blocking. No immutable hardware request may issue twice, and
+no private fallback or recurrent yield/resignal/poll lane may form; consecutive
+bounded helpers on changed semantic state remain the same transaction.
+Issued-unknown completion reaping must run
 before a pair-restart hold: a late exact child reply may prove terminal
 ownership and release the claim, but its result/payload is quarantined and only
 one exact old-parent terminal may be emitted before restart, with no
@@ -2636,7 +2812,11 @@ source=card-int-or-source-probe physical_card_irq=not-exported`. The scope line
 is mandatory because the compatibility key `captures` means
 `ring.producer + ring.overruns`, includes hardware CARD_INT and authorized
 SOURCE_PENDING attempts, and is not a physical IRQ counter. The fixed v2 ring
-exports no cumulative physical CARD_INT count. The scope line is followed by
+exports no cumulative physical CARD_INT count. Its overrun and ACK-failure
+fields are scoped to the current physical pair and reset at replacement;
+cross-pair first-cause history belongs to root recovery diagnostics. Current
+flags/pending state remain authority, but accepted hardware evidence requires
+`overruns=0 ack_failures=0`. The scope line is followed by
 `CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no
 client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>
 sample_reason=<reason> authority=live-ring action=<action>` plus
@@ -2646,6 +2826,9 @@ those three lines byte-stable and appends
 `CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n>
 other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n>
 fown=<n>`. All five lines must remain complete at maximum counter widths. The
+same `wifi diag` lifetime must report `sdio_deadline_hints=<count>` from the
+fault-only arm relay; ordinary accepted traffic requires zero and a nonzero
+value cannot be normalized away as a successful transport wake. The
 accounting `poisoned` value is the
 fail-closed aggregate of a live poisoned ring, a stale client sample, and
 client epoch errors; the truth line distinguishes those causes without
@@ -3126,6 +3309,21 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-usb-ready --require-wired-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=genet --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
   - The minimum 26b Wi-Fi closure command is:
     - `scripts/pi4_gate_proof.sh --log <fresh-pi4-serial.log> --require-ready --require-driver-task-proof --require-input-responsive --expect DRIVER_TASK_ACTIVE_NET=cyw43 --expect ROOT_PROMPT_SEEN=yes --expect SERIAL_CLEAN=yes --expect USB_BOOTLOADER_HANDOFF_SEEN=no --expect USB_COLD_BOOT_SEEN=yes`
+  - Full-lifecycle CYW43/SDIO proof must combine the focused source tests with
+    the boot-paired serial/pcap lifetime. Before Gate 8 and during steady
+    traffic, every production DPC event must retain one exact event-sequence
+    lease with no ordinary continuation grant; persistent op11 and urgent op7
+    must likewise reach the first unchanged external wait from durable state,
+    not recurrent scheduler edges. An exact op11 `Waiting` parent must create no
+    root self-poll amplification while independent DPC/RX/sideband/deadline/
+    terminal work remains live. Interleaved EVENT/DATA must cross one durable
+    sideband batch and disjoint root ACK without an op11 terminal. Ordinary
+    traffic must record `sdio_deadline_hints=0`, zero timer-created source
+    probes, sequence defects, fallback-lane issues, or notification-count
+    dependence. Every accepted physical pair must report zero overruns and ACK
+    failures; counters reset rather than accumulating across replacement pairs.
+    Hardware counters and the paired pcap must agree with the accepted frame
+    order and one terminal per immutable physical request.
   - Cold-neighbor reply-retention gate:
     - Before any host probe or TCP/`cohsh` connection on each accepted WiFi
       lifetime and the GENET control, send one ICMPv4 Echo Request while the

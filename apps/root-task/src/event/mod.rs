@@ -3445,6 +3445,8 @@ where
         }
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        #[cfg(feature = "kernel")]
+        let _ = crate::hal::driver_task::poll_driver_task_sdio_deadline_fault_hint();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         self.poll_linked_runtime_cyw43_rx_admission();
         #[cfg(feature = "kernel")]
@@ -4421,6 +4423,8 @@ where
         }
 
         let hinted = crate::hal::driver_task::poll_cyw43_root_wake_notification();
+        let sideband_rx =
+            crate::drivers::driver_task_net::consume_cyw43_persistent_sideband_rx_batch();
         self.refresh_linked_runtime_cyw43_durable_resume();
         let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
         if !snapshot.ordinary_network_admissible() {
@@ -4428,7 +4432,7 @@ where
             return;
         }
         self.linked_runtime_cyw43_rx_admission_pending =
-            hinted && snapshot.schedulable_network_work();
+            (hinted || sideband_rx) && snapshot.schedulable_network_work();
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -13429,7 +13433,7 @@ where
         handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: data_handoff lane consumer={} rx_watch={} rx_generation={} rx_pair={} rx_physical={} deadline_probes={} terminals={} control_progress=ordinary-network-turn",
+            "wifi: data_handoff lane consumer={} rx_watch={} rx_generation={} rx_pair={} rx_physical={} deadline_probes={} sdio_deadline_hints={} terminals={} control_progress=ordinary-network-turn",
             if handoff.consumer_open {
                 "open"
             } else {
@@ -13440,6 +13444,7 @@ where
             handoff.rx_watch_pair_epoch,
             handoff.rx_watch_physical_lifetime_epoch,
             handoff.rx_watch_deadline_probes,
+            handoff.sdio_deadline_hints,
             handoff.rx_watch_terminals,
         ))
     }
@@ -25446,6 +25451,7 @@ mod tests {
             rx_watch_pair_epoch: u64::MAX,
             rx_watch_physical_lifetime_epoch: u32::MAX,
             rx_watch_deadline_probes: 0,
+            sdio_deadline_hints: 0,
             rx_watch_terminals: u32::MAX,
             baseline_generation: u32::MAX,
             root_rx_queue_len: 50,
@@ -25497,9 +25503,9 @@ mod tests {
         assert!(handoff_lane.contains(
             "consumer=open rx_watch=idle rx_generation=4294967295 rx_pair=18446744073709551615"
         ));
-        assert!(
-            handoff_lane.contains("rx_physical=4294967295 deadline_probes=0 terminals=4294967295")
-        );
+        assert!(handoff_lane.contains(
+            "rx_physical=4294967295 deadline_probes=0 sdio_deadline_hints=0 terminals=4294967295"
+        ));
         assert!(handoff_lane.ends_with("control_progress=ordinary-network-turn"));
         let handoff_counters = KernelConsoleTestPump::wifi_diag_data_handoff_counters_line(handoff);
         assert!(!handoff_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER));

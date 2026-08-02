@@ -579,6 +579,14 @@ pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES: u16 = 44;
 pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC: u32 = 0x5344_434b;
 /// Layout version for [`DriverRuntimeSdioClockSnapshot`].
 pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION: u16 = 1;
+/// Fixed offset of the SDIO owner's fault-containment deadline arm.
+///
+/// The record occupies the complete unused tail between the passive clock
+/// snapshot and CYW43's disjoint SDPCM transmit aperture. Only the isolated
+/// SDIO owner writes it; root and CYW43 may stable-read it as a condition.
+pub const DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET: u16 = 2028;
+/// Bytes in one sequence-last SDIO fault-containment deadline arm.
+pub const DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES: u16 = 20;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 /// Fixed offset of the CYW43 private-RX queue's durable root-visible level.
@@ -1612,6 +1620,12 @@ pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 1;
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP: usize = 8;
 /// Bytes reserved for each exact RX frame slot in a batch.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES: u16 = 1_536;
+/// Magic value for one root-owned CYW43 RX batch acknowledgement.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC: u32 = 0x4359_414b;
+/// Layout version for [`DriverRuntimeCyw43RxBatchAck`].
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION: u16 = 1;
+/// Exact bytes in one cache-line-isolated CYW43 RX batch acknowledgement.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES: u16 = 64;
 /// First shared-buffer page reserved exclusively for CYW43 RX batching.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
@@ -1630,6 +1644,11 @@ pub const DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET: u16 =
 /// Distance in bytes between exact CYW43 RX batch payload slots.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE: u16 =
     DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES;
+/// Fixed offset of the root-owned CYW43 RX batch acknowledgement.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET: u16 =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET
+        + DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u16
+            * DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE;
 /// Bytes reserved for the complete CYW43 RX batch header and payload region.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_REGION_BYTES: u16 =
     DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES as u16 * DRIVER_RUNTIME_RING_PAGE_BYTES;
@@ -1690,10 +1709,11 @@ const _: () = {
     assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET.is_multiple_of(64));
     assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES == 128);
     assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES == 64);
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET.is_multiple_of(64));
     assert!(
-        DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET as u32
-            + DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u32
-                * DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE as u32
+        DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES as u32
             <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
     );
     assert!(
@@ -1970,8 +1990,11 @@ impl DriverRuntimeCyw43RxBatchEntry {
 /// the body, writes every payload and header body field, cleans and barriers the
 /// full region, then repeats `parent_sequence` in the final field. Root accepts
 /// only two identical records whose final commit matches the immutable parent.
-/// A completion reports the entry count in `result`, points `frame` at this
-/// header, and uses [`DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL`].
+/// A terminal op8 completion reports the entry count in `result`, points
+/// `frame` at this header, and uses
+/// [`DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL`]. A retained op11 transaction may
+/// instead expose the same immutable batch as sideband state and continue only
+/// after root publishes an exact [`DriverRuntimeCyw43RxBatchAck`].
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DriverRuntimeCyw43RxBatchRecord {
@@ -1981,7 +2004,7 @@ pub struct DriverRuntimeCyw43RxBatchRecord {
     pub version: u16,
     /// Exact record size in bytes.
     pub len: u16,
-    /// Immutable nonzero op8 parent-command sequence.
+    /// Immutable nonzero CYW43 parent-command sequence.
     pub parent_sequence: u32,
     /// Nonzero CYW43 runtime generation owning this batch.
     pub generation: u32,
@@ -2147,6 +2170,142 @@ impl DriverRuntimeCyw43RxBatchRecord {
     }
 }
 
+/// Root-owned acknowledgement for one exact CYW43 RX sideband batch.
+///
+/// Root clears `committed_queue_commit_sequence` before changing the body,
+/// writes the complete immutable batch identity, cleans and barriers this
+/// dedicated cache line, then repeats `queue_commit_sequence` in the final
+/// word. The CYW43 producer accepts only two identical samples which exactly
+/// match its still-published batch. This durable acknowledgement is authority;
+/// a notification can only prompt the producer to sample it again.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43RxBatchAck {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero CYW43 runtime generation owning the acknowledged batch.
+    pub generation: u32,
+    /// Immutable nonzero CYW43 parent-command sequence.
+    pub parent_sequence: u32,
+    /// Exact private-queue commit sequence named by the acknowledged batch.
+    pub queue_commit_sequence: u32,
+    /// Exact number of batch entries consumed by root.
+    pub count: u16,
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 38],
+    /// Sequence-last commit; exactly repeats `queue_commit_sequence`.
+    pub committed_queue_commit_sequence: u32,
+}
+
+impl DriverRuntimeCyw43RxBatchAck {
+    /// Canonical uncommitted empty acknowledgement.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION,
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES,
+            generation: 0,
+            parent_sequence: 0,
+            queue_commit_sequence: 0,
+            count: 0,
+            reserved: [0; 38],
+            committed_queue_commit_sequence: 0,
+        }
+    }
+
+    /// Construct an uncommitted body for one immutable RX batch identity.
+    #[must_use]
+    pub const fn staged(
+        generation: u32,
+        parent_sequence: u32,
+        queue_commit_sequence: u32,
+        count: u16,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION,
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES,
+            generation,
+            parent_sequence,
+            queue_commit_sequence,
+            count,
+            reserved: [0; 38],
+            committed_queue_commit_sequence: 0,
+        }
+    }
+
+    /// Whether every acknowledgement body field is internally consistent.
+    ///
+    /// This deliberately ignores the sequence-last field so root can validate
+    /// the staged body before committing it.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC
+            || self.version != DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION
+            || self.len != DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES
+            || self.generation == 0
+            || self.parent_sequence == 0
+            || self.queue_commit_sequence == 0
+            || self.count == 0
+            || self.count as usize > DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP
+        {
+            return false;
+        }
+
+        let mut index = 0;
+        while index < self.reserved.len() {
+            if self.reserved[index] != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Whether this is one complete, sequence-last committed acknowledgement.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed_queue_commit_sequence == self.queue_commit_sequence
+    }
+
+    /// Return this valid staged body with its queue sequence committed last.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_queue_commit_sequence = self.queue_commit_sequence;
+        }
+        self
+    }
+
+    /// Whether this committed acknowledgement names exactly `batch`.
+    #[must_use]
+    pub const fn matches_batch(self, batch: DriverRuntimeCyw43RxBatchRecord) -> bool {
+        self.valid()
+            && batch.valid()
+            && self.generation == batch.generation
+            && self.parent_sequence == batch.parent_sequence
+            && self.queue_commit_sequence == batch.queue_commit_sequence
+            && self.count == batch.count
+    }
+
+    /// Accept two identical valid samples as one stable acknowledgement.
+    ///
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first == second && first.valid() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
 const _: () = {
     assert!(
         DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET + DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
@@ -2160,6 +2319,14 @@ const _: () = {
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>() == 4);
     assert!(
         core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence) == 124
+    );
+    assert!(core::mem::size_of::<DriverRuntimeCyw43RxBatchAck>() == 64);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchAck>() == 64);
+    assert!(
+        core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            committed_queue_commit_sequence
+        ) == 60
     );
 };
 
@@ -2448,6 +2615,108 @@ impl DriverRuntimeSdioClockSnapshot {
             && first.cccr_interface == second.cccr_interface
             && first.flags == second.flags
             && first.reserved == second.reserved
+            && first.valid()
+        {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
+/// Durable fault-containment deadline for one exact issued SDIO request.
+///
+/// The isolated SDIO owner writes the body while
+/// `committed_request_sequence` is zero, cleans and orders those fields, then
+/// commits the immutable request sequence last. Root may use an expired stable
+/// snapshot only to prompt the existing CYW43-to-SDIO condition recheck; the
+/// notification carries no authority and the SDIO owner remains the sole
+/// terminal decision-maker. The owner clears the commit word before exposing
+/// a terminal or resetting the request cursor.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSdioDeadlineArm {
+    /// Completed physical WiFi lifetime that owns this request.
+    pub physical_lifetime_epoch: u32,
+    /// Immutable retained SDIO request sequence.
+    pub request_sequence: u32,
+    /// Low 32 bits of the absolute `CNTVCT_EL0` expiry tick.
+    pub expiry_ticks_lo: u32,
+    /// High 32 bits of the absolute `CNTVCT_EL0` expiry tick.
+    pub expiry_ticks_hi: u32,
+    /// Sequence-last commit; must equal `request_sequence` when visible.
+    pub committed_request_sequence: u32,
+}
+
+impl DriverRuntimeSdioDeadlineArm {
+    /// Empty or explicitly cleared form.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            physical_lifetime_epoch: 0,
+            request_sequence: 0,
+            expiry_ticks_lo: 0,
+            expiry_ticks_hi: 0,
+            committed_request_sequence: 0,
+        }
+    }
+
+    /// Staged body before the sequence-last commit.
+    #[must_use]
+    pub const fn staged(
+        physical_lifetime_epoch: u32,
+        request_sequence: u32,
+        expiry_ticks: u64,
+    ) -> Self {
+        Self {
+            physical_lifetime_epoch,
+            request_sequence,
+            expiry_ticks_lo: expiry_ticks as u32,
+            expiry_ticks_hi: (expiry_ticks >> 32) as u32,
+            committed_request_sequence: 0,
+        }
+    }
+
+    /// Return the immutable absolute expiry tick.
+    #[must_use]
+    pub const fn expiry_ticks(self) -> u64 {
+        (self.expiry_ticks_hi as u64) << 32 | self.expiry_ticks_lo as u64
+    }
+
+    /// Whether the staged body is complete before commit.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        self.physical_lifetime_epoch != 0
+            && self.request_sequence != 0
+            && self.committed_request_sequence == 0
+    }
+
+    /// Return the sequence-last committed form of a valid staged body.
+    #[must_use]
+    pub const fn commit(mut self) -> Option<Self> {
+        if !self.body_valid() {
+            return None;
+        }
+        self.committed_request_sequence = self.request_sequence;
+        Some(self)
+    }
+
+    /// Whether this is one complete committed deadline identity.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.physical_lifetime_epoch != 0
+            && self.request_sequence != 0
+            && self.committed_request_sequence == self.request_sequence
+    }
+
+    /// Accept only two identical, complete volatile samples.
+    #[must_use]
+    pub const fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first.physical_lifetime_epoch == second.physical_lifetime_epoch
+            && first.request_sequence == second.request_sequence
+            && first.expiry_ticks_lo == second.expiry_ticks_lo
+            && first.expiry_ticks_hi == second.expiry_ticks_hi
+            && first.committed_request_sequence == second.committed_request_sequence
             && first.valid()
         {
             Some(first)
@@ -2775,9 +3044,16 @@ const _: () = {
             <= DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET
     );
     assert!(
-        DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + 64
-            <= DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+        DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES
+            == DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET
     );
+    assert!(
+        DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET + DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES
+            == DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+    );
+    assert!(core::mem::size_of::<DriverRuntimeSdioDeadlineArm>() == 20);
+    assert!(core::mem::align_of::<DriverRuntimeSdioDeadlineArm>() == 4);
+    assert!(core::mem::offset_of!(DriverRuntimeSdioDeadlineArm, committed_request_sequence) == 16);
 };
 /// Fixed number of producer entries in the bounded DPC event ring.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH: usize = 4;
@@ -4589,6 +4865,8 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES, 128);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET, 36_992);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE, 1_536);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET, 49_280);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES, 64);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET, 53_248);
         assert!(
             DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
@@ -4616,6 +4894,11 @@ mod tests {
             )
             .unwrap()
                 + DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES as u32
+                == DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
+        );
+        assert!(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
+                + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES as u32
                 <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
         );
     }
@@ -4813,6 +5096,117 @@ mod tests {
         let mut nonzero_reserved = committed;
         nonzero_reserved.reserved[0] = 1;
         assert!(!nonzero_reserved.body_valid());
+    }
+
+    #[test]
+    fn cyw43_rx_batch_ack_commits_last_and_matches_exact_batch() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchAck>(), 64);
+        assert_eq!(core::mem::align_of::<DriverRuntimeCyw43RxBatchAck>(), 64);
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeCyw43RxBatchAck,
+                committed_queue_commit_sequence
+            ),
+            60
+        );
+
+        let empty = DriverRuntimeCyw43RxBatchAck::empty();
+        assert!(!empty.body_valid());
+        assert!(!empty.valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchAck::stable_snapshot(empty, empty),
+            None
+        );
+
+        let mut entries =
+            [DriverRuntimeCyw43RxBatchEntry::empty(); DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+        entries[0] = DriverRuntimeCyw43RxBatchEntry {
+            offset: driver_runtime_cyw43_rx_batch_payload_offset(0).unwrap(),
+            len: 96,
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT | (4 << 8),
+        };
+        entries[1] = DriverRuntimeCyw43RxBatchEntry {
+            offset: driver_runtime_cyw43_rx_batch_payload_offset(1).unwrap(),
+            len: 512,
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA | (5 << 8),
+        };
+        let batch = DriverRuntimeCyw43RxBatchRecord::staged(73, 11, 19, 2, 4, entries).commit();
+        assert!(batch.valid());
+
+        let staged = DriverRuntimeCyw43RxBatchAck::staged(
+            batch.generation,
+            batch.parent_sequence,
+            batch.queue_commit_sequence,
+            batch.count,
+        );
+        assert!(staged.body_valid());
+        assert!(!staged.valid());
+        assert!(!staged.matches_batch(batch));
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchAck::stable_snapshot(staged, staged),
+            None
+        );
+
+        let committed = staged.commit();
+        assert!(committed.body_valid());
+        assert!(committed.valid());
+        assert!(committed.matches_batch(batch));
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchAck::stable_snapshot(committed, committed),
+            Some(committed)
+        );
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchAck::stable_snapshot(staged, committed),
+            None,
+            "a reader cannot combine staged and committed ACK samples"
+        );
+
+        let wrong_generation = DriverRuntimeCyw43RxBatchAck {
+            generation: committed.generation + 1,
+            ..committed
+        };
+        assert!(wrong_generation.valid());
+        assert!(!wrong_generation.matches_batch(batch));
+        let wrong_parent = DriverRuntimeCyw43RxBatchAck {
+            parent_sequence: committed.parent_sequence + 1,
+            ..committed
+        };
+        assert!(wrong_parent.valid());
+        assert!(!wrong_parent.matches_batch(batch));
+        let wrong_queue = DriverRuntimeCyw43RxBatchAck::staged(
+            committed.generation,
+            committed.parent_sequence,
+            committed.queue_commit_sequence + 1,
+            committed.count,
+        )
+        .commit();
+        assert!(wrong_queue.valid());
+        assert!(!wrong_queue.matches_batch(batch));
+        let wrong_count = DriverRuntimeCyw43RxBatchAck {
+            count: committed.count - 1,
+            ..committed
+        };
+        assert!(wrong_count.valid());
+        assert!(!wrong_count.matches_batch(batch));
+
+        let torn_commit = DriverRuntimeCyw43RxBatchAck {
+            committed_queue_commit_sequence: committed.queue_commit_sequence + 1,
+            ..committed
+        };
+        assert!(torn_commit.body_valid());
+        assert!(!torn_commit.valid());
+        assert!(!torn_commit.matches_batch(batch));
+
+        let mut nonzero_reserved = staged;
+        nonzero_reserved.reserved[0] = 1;
+        assert!(!nonzero_reserved.body_valid());
+        assert!(!nonzero_reserved.commit().valid());
+
+        let uncommitted_batch = DriverRuntimeCyw43RxBatchRecord {
+            committed_parent_sequence: 0,
+            ..batch
+        };
+        assert!(!committed.matches_batch(uncommitted_batch));
     }
 
     #[test]
@@ -5125,9 +5519,9 @@ mod tests {
             DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET + 64
                 <= DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET
         );
-        assert!(
-            DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + 64
-                <= DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET + DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+            DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET
         );
 
         let snapshot = DriverRuntimeSdioClockSnapshot {
@@ -5173,6 +5567,44 @@ mod tests {
         torn = snapshot;
         torn.clock_control &= !DriverRuntimeSdioClockSnapshot::CLOCK_CONTROL_CARD_ENABLE;
         assert!(!torn.valid());
+    }
+
+    #[test]
+    fn sdio_deadline_arm_fills_ring_tail_and_rejects_torn_identity() {
+        assert_eq!(
+            DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET + DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES,
+            DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET
+        );
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSdioDeadlineArm>(),
+            usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES)
+        );
+        assert!(!DriverRuntimeSdioDeadlineArm::empty().valid());
+
+        let staged = DriverRuntimeSdioDeadlineArm::staged(3, 0x8000_0042, 0x1234_5678_9abc_def0);
+        assert!(staged.body_valid());
+        assert!(!staged.valid());
+        assert_eq!(staged.expiry_ticks(), 0x1234_5678_9abc_def0);
+        let committed = staged.commit().expect("valid deadline body commits");
+        assert!(committed.valid());
+        assert_eq!(
+            DriverRuntimeSdioDeadlineArm::stable_snapshot(committed, committed),
+            Some(committed)
+        );
+
+        let mut torn = committed;
+        torn.committed_request_sequence = 0;
+        assert_eq!(
+            DriverRuntimeSdioDeadlineArm::stable_snapshot(committed, torn),
+            None
+        );
+        torn = committed;
+        torn.request_sequence = torn.request_sequence.wrapping_add(1);
+        assert!(!torn.valid());
+        assert_eq!(
+            DriverRuntimeSdioDeadlineArm::stable_snapshot(torn, torn),
+            None
+        );
     }
 
     #[test]

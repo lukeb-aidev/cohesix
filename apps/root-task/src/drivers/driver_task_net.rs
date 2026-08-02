@@ -28,9 +28,9 @@ use crate::drivers::cyw43_host_eapol::{
 };
 #[cfg(feature = "kernel")]
 use crate::hal::driver_task::{
-    Cyw43SdioNetworkPriorityLeasePhase, DriverServiceBudget, DriverServiceBudgetError,
-    DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot,
-    CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
+    Cyw43PersistentTransactionParentCondition, Cyw43SdioNetworkPriorityLeasePhase,
+    DriverServiceBudget, DriverServiceBudgetError, DriverTaskRetainedServiceTurn,
+    DriverTaskRingProgressSnapshot, CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
 };
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
@@ -45,6 +45,8 @@ use crate::net::{
     WifiCredentials, COHESIX_TCP_CONSOLE_PORT, COHSH_TCP_PORT, MAX_FRAME_LEN, NET_DIAG,
     TCP_SMOKE_PORT,
 };
+#[cfg(feature = "kernel")]
+use pi4_driver_abi::DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
 use pi4_driver_abi::{
     driver_runtime_cyw43_armcr4_reset_result_edge, driver_runtime_genet_result_is_packed,
     driver_runtime_genet_result_rx_byte_budget_hit,
@@ -109,7 +111,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F1_ENABLED,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_F2_BLOCK_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
-    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
+    DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN,
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_NET_INIT_AUX,
     DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH, DRIVER_RUNTIME_REJECT_OUTER_GENERATION,
@@ -702,6 +704,7 @@ pub(crate) struct Cyw43DataHandoffDiagnostic {
     pub rx_watch_pair_epoch: u64,
     pub rx_watch_physical_lifetime_epoch: u32,
     pub rx_watch_deadline_probes: u32,
+    pub sdio_deadline_hints: u32,
     pub rx_watch_terminals: u32,
     pub baseline_generation: u32,
     pub root_rx_queue_len: u32,
@@ -2382,6 +2385,21 @@ impl Cyw43BootstrapSupervisor {
             Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
                 pending.deadline = deadline_before_turn;
                 return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
+            }
+            Err(DriverTaskNetError::RuntimePending("cyw43-persistent-transaction-waiting")) => {
+                // HAL's immutable parent deadline remains the sole physical
+                // lifetime bound. A scheduling recheck cannot age the legacy
+                // root poll counter or turn durable identity into work.
+                pending.deadline = deadline_before_turn;
+                return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
+            }
+            Err(DriverTaskNetError::RuntimeInit("cyw43-persistent-transaction-deadline")) => {
+                return self
+                    .poison_pending_action(pending, "cyw43-persistent-transaction-deadline");
+            }
+            Err(DriverTaskNetError::RuntimeInit("cyw43-persistent-transaction-identity")) => {
+                return self
+                    .poison_pending_action(pending, "cyw43-persistent-transaction-identity");
             }
             Err(DriverTaskNetError::RuntimeInit("cyw43-retained-service-failed")) => {
                 record_cyw43_runtime_command_no_reply(
@@ -5363,9 +5381,9 @@ fn cyw43_sdio_dpc_ring_work_pending(
 ) -> bool {
     expected_generation.is_some_and(|generation| ring.epoch == generation)
         && ring.overruns == 0
-        && ring.ack_failures == 0
         && ring.flags
             & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
             == 0
         && (ring.producer != ring.consumer
@@ -5407,6 +5425,10 @@ const CYW43_SERVICE_WORK_PROMPT: u64 = 1 << 13;
 const CYW43_SERVICE_WORK_MAINTENANCE: u64 = 1 << 14;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_RECOVERY: u64 = 1 << 15;
+#[cfg(feature = "kernel")]
+const CYW43_SERVICE_WORK_PERSISTENT_PARENT_LIVENESS: u64 = CYW43_SERVICE_WORK_RUNTIME_DESCRIPTOR
+    | CYW43_SERVICE_WORK_LOGICAL_OWNER
+    | CYW43_SERVICE_WORK_HAL_LEASE;
 
 /// Passive source predicates used to compose the CYW43 durable-work level.
 ///
@@ -5484,6 +5506,22 @@ impl Cyw43ServiceWorkInputs {
             reason_mask |= CYW43_SERVICE_WORK_RECOVERY;
         }
         reason_mask
+    }
+
+    /// Compose the root scheduling level while one immutable op11 is asleep.
+    ///
+    /// The descriptor, logical owner, and HAL lease are durable identity, not
+    /// work. They remain available to diagnostics but cannot by themselves
+    /// retain EventPump's Network phase. Independent queue, DPC, urgent-TX,
+    /// terminal-drain, and recovery levels keep their ordinary authority.
+    #[must_use]
+    const fn schedulable_reason_mask(self, persistent_parent_waiting: bool) -> u64 {
+        let reason_mask = self.reason_mask();
+        if persistent_parent_waiting {
+            reason_mask & !CYW43_SERVICE_WORK_PERSISTENT_PARENT_LIVENESS
+        } else {
+            reason_mask
+        }
     }
 }
 
@@ -5653,6 +5691,73 @@ fn cyw43_completed_physical_lifetime_epoch() -> u32 {
     cyw43_completed_physical_lifetime_epoch_from_record(cyw43_owner_physical_lifetime_snapshot())
 }
 
+#[cfg(all(feature = "kernel", test))]
+static CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE: Mutex<
+    Option<(u32, Cyw43PersistentTransactionParentCondition)>,
+> = Mutex::new(None);
+
+/// Read the durable condition of the exact active persistent op11 parent.
+///
+/// HAL-minted command authority selects this lane. The returned condition is
+/// the sole root scheduling authority: notification history, logical-owner
+/// presence, and the live descriptor cannot make a waiting parent runnable.
+#[cfg(feature = "kernel")]
+fn cyw43_active_persistent_parent_condition(
+) -> Option<(u32, Cyw43PersistentTransactionParentCondition)> {
+    #[cfg(test)]
+    if let Some(condition) = *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() {
+        return Some(condition);
+    }
+    let active = crate::hal::driver_task::active_driver_task_retained_request(
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    )?;
+    let command = active.command()?;
+    if !active.issued() || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION == 0 {
+        return None;
+    }
+    let request = active.request();
+    Some((
+        request,
+        crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request),
+    ))
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43PersistentParentTurnRoute {
+    Inactive,
+    Wait,
+    ConsumeTerminal,
+    DeadlineFault,
+    IdentityFault,
+}
+
+/// Classify whether a root op11 turn may cross the HAL operation boundary.
+#[cfg(feature = "kernel")]
+const fn cyw43_persistent_parent_turn_route(
+    op: u16,
+    condition: Option<Cyw43PersistentTransactionParentCondition>,
+) -> Cyw43PersistentParentTurnRoute {
+    if op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+        return Cyw43PersistentParentTurnRoute::Inactive;
+    }
+    match condition {
+        None => Cyw43PersistentParentTurnRoute::Inactive,
+        Some(Cyw43PersistentTransactionParentCondition::Waiting) => {
+            Cyw43PersistentParentTurnRoute::Wait
+        }
+        Some(Cyw43PersistentTransactionParentCondition::TerminalVisible) => {
+            Cyw43PersistentParentTurnRoute::ConsumeTerminal
+        }
+        Some(Cyw43PersistentTransactionParentCondition::DeadlineFault) => {
+            Cyw43PersistentParentTurnRoute::DeadlineFault
+        }
+        Some(Cyw43PersistentTransactionParentCondition::NotExact) => {
+            Cyw43PersistentParentTurnRoute::IdentityFault
+        }
+    }
+}
+
 /// Decide whether one exact tagged TX parent must remain asleep.
 ///
 /// Notifications are scheduler hints, not operation authority or history. The
@@ -5787,6 +5892,10 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         maintenance.generation == generation
             && (maintenance.requested != 0 || maintenance.action.is_some())
     };
+    let persistent_parent_waiting =
+        cyw43_active_persistent_parent_condition().is_some_and(|(_, condition)| {
+            condition == Cyw43PersistentTransactionParentCondition::Waiting
+        });
     let blocked_steady_tx_request = cyw43_steady_tx_condition_blocked_request();
     let data_tx = blocked_steady_tx_request.is_none()
         && (CYW43_PENDING_DATA_TX
@@ -5842,7 +5951,7 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         pair_epoch,
         physical_lifetime_epoch,
         bound_physical_lifetime_epoch: CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire),
-        reason_mask: inputs.reason_mask(),
+        reason_mask: inputs.schedulable_reason_mask(persistent_parent_waiting),
     }
 }
 
@@ -5855,7 +5964,6 @@ fn cyw43_sdio_dpc_diagnostic_work_pending(
         && snapshot.overruns == 0
         && snapshot.epoch_errors == 0
         && snapshot.sequence_errors == 0
-        && snapshot.ack_failures == 0
         && !snapshot.ring_poisoned
         && !snapshot.client_sample_stale
         && !snapshot.poisoned
@@ -10111,6 +10219,7 @@ pub(crate) fn cyw43_data_handoff_diagnostic() -> Cyw43DataHandoffDiagnostic {
         rx_watch_pair_epoch,
         rx_watch_physical_lifetime_epoch,
         rx_watch_deadline_probes: CYW43_DATA_RX_AUDIT_PROBES.load(Ordering::Acquire),
+        sdio_deadline_hints: crate::hal::driver_task::driver_task_sdio_deadline_hint_count(),
         rx_watch_terminals: CYW43_DATA_RX_SOURCE_PROBE_TERMINALS.load(Ordering::Acquire),
         baseline_generation: baseline.generation,
         root_rx_queue_len,
@@ -12245,7 +12354,9 @@ fn advance_cyw43_pending_association_join(
             pending.deadline = deadline_before_turn;
             return Cyw43AssociationJoinStep::LogicalOwnerBusy;
         }
-        Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
+        Err(DriverTaskNetError::RuntimePending(
+            "cyw43-outer-event-turn-claimed" | "cyw43-persistent-transaction-waiting",
+        )) => {
             pending.deadline = deadline_before_turn;
             return Cyw43AssociationJoinStep::Pending { activity: false };
         }
@@ -13255,7 +13366,9 @@ pub(crate) fn service_cyw43_maintenance_turn() -> bool {
             *CYW43_MAINTENANCE_CURSOR.lock() = snapshot;
             return false;
         }
-        Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
+        Err(DriverTaskNetError::RuntimePending(
+            "cyw43-outer-event-turn-claimed" | "cyw43-persistent-transaction-waiting",
+        )) => {
             action.turns = action.turns.saturating_sub(1);
             action.deadline = deadline_before_turn;
             snapshot.action = Some(action);
@@ -13879,7 +13992,9 @@ fn advance_cyw43_wsec_key_control_exchange_slice(
             pending.deadline = deadline_before_turn;
             return Ok(Cyw43IncrementalKeyPollResult::Pending { activity: false });
         }
-        Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
+        Err(DriverTaskNetError::RuntimePending(
+            "cyw43-outer-event-turn-claimed" | "cyw43-persistent-transaction-waiting",
+        )) => {
             pending.deadline = deadline_before_turn;
             return Ok(Cyw43IncrementalKeyPollResult::Pending { activity: false });
         }
@@ -24778,6 +24893,63 @@ fn preserve_cyw43_rx_batch_completion(
     Some(true)
 }
 
+/// Consume one durable sideband RX batch without terminating its op11 parent.
+///
+/// The batch header and payload are CYW43-owned; the disjoint ACK cache line is
+/// root-owned. A wake only prompts this stable read. Exact active parent,
+/// generation, header commit, payload copy, and sequence-last ACK decide
+/// progress, so a coalesced notification cannot lose or duplicate a batch.
+#[cfg(feature = "kernel")]
+pub(crate) fn consume_cyw43_persistent_sideband_rx_batch() -> bool {
+    let Some((request, condition)) = cyw43_active_persistent_parent_condition() else {
+        return false;
+    };
+    if !matches!(
+        condition,
+        Cyw43PersistentTransactionParentCondition::Waiting
+            | Cyw43PersistentTransactionParentCondition::TerminalVisible
+    ) {
+        return false;
+    }
+    let Some(queue_state) = crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot()
+    else {
+        return false;
+    };
+    let Some(batch) =
+        crate::hal::driver_task::driver_task_cyw43_rx_batch_snapshot(request, queue_state)
+    else {
+        return false;
+    };
+    if !cyw43_pending_rx_batch_count_capacity_available(usize::from(batch.count)) {
+        // Root must be able to retain the complete batch before it copies the
+        // first frame. Leaving the child-owned commit visible and withholding
+        // the ACK applies durable backpressure without partial delivery,
+        // duplicate replay, or a second transport lane.
+        return false;
+    }
+    if crate::hal::driver_task::driver_task_cyw43_rx_batch_acknowledged(batch) {
+        return false;
+    }
+    let completion = DriverTaskCompletionRecord {
+        sequence: request,
+        code: DriverTaskCompletionCode::FrameReady.as_u16(),
+        detail: DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL,
+        result: u32::from(batch.count),
+        frame: DriverFrameDescriptor {
+            offset: u32::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET),
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
+            flags: 0,
+        },
+    };
+    if preserve_cyw43_rx_batch_completion(CYW43_WIFI_DRIVER_TASK_CONTRACT, completion) != Some(true)
+        || !crate::hal::driver_task::acknowledge_driver_task_cyw43_rx_sideband_batch(batch)
+    {
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        return false;
+    }
+    true
+}
+
 #[cfg(feature = "kernel")]
 pub(crate) fn preserve_driver_task_pre_poll_completion(
     contract: DriverTaskContract,
@@ -25712,6 +25884,33 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
         // Model the child TCB's autonomous shared-ring poll between outer root
         // turns. The root turn below then performs only its retained poll.
         let _ = crate::hal::driver_task::test_service_pending_driver_task_ring_command(contract);
+    }
+    let persistent_parent_condition = (admission_mode == Cyw43LogicalControlAdmissionMode::Normal)
+        .then(cyw43_active_persistent_parent_condition)
+        .flatten()
+        .map(|(_, condition)| condition);
+    match cyw43_persistent_parent_turn_route(source_descriptor.op, persistent_parent_condition) {
+        Cyw43PersistentParentTurnRoute::Inactive
+        | Cyw43PersistentParentTurnRoute::ConsumeTerminal => {}
+        Cyw43PersistentParentTurnRoute::Wait => {
+            // The immutable parent and its logical owner are identity, not a
+            // consumable scheduling edge. Keep the caller's cursor intact and
+            // let the linked runtimes advance from their physical interrupts;
+            // a terminal notification merely prompts this durable recheck.
+            return Err(DriverTaskNetError::RuntimePending(
+                "cyw43-persistent-transaction-waiting",
+            ));
+        }
+        Cyw43PersistentParentTurnRoute::DeadlineFault => {
+            return Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-persistent-transaction-deadline",
+            ));
+        }
+        Cyw43PersistentParentTurnRoute::IdentityFault => {
+            return Err(DriverTaskNetError::RuntimeInit(
+                "cyw43-persistent-transaction-identity",
+            ));
+        }
     }
     if !claim_cyw43_outer_event_turn() {
         if logical_control_admission == Cyw43LogicalControlAdmission::Acquired {
@@ -26843,15 +27042,24 @@ fn cyw43_pending_rx_queue_len() -> u64 {
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_pending_rx_batch_capacity_available() -> bool {
+const fn cyw43_pending_rx_batch_fits(queue_len: usize, batch_count: usize) -> bool {
+    batch_count != 0
+        && batch_count <= DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP
+        && queue_len.saturating_add(batch_count) <= CYW43_PENDING_RX_QUEUE_CAP
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_rx_batch_count_capacity_available(batch_count: usize) -> bool {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     let mut queue = CYW43_PENDING_RX_QUEUE.lock();
     let stale = purge_stale_cyw43_pending_rx_locked(&mut queue, generation);
     record_cyw43_stale_rx_purge(generation, stale);
-    queue
-        .len()
-        .saturating_add(DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP)
-        <= CYW43_PENDING_RX_QUEUE_CAP
+    cyw43_pending_rx_batch_fits(queue.len(), batch_count)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_pending_rx_batch_capacity_available() -> bool {
+    cyw43_pending_rx_batch_count_capacity_available(DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP)
 }
 
 #[cfg(feature = "kernel")]
@@ -27927,6 +28135,25 @@ mod tests {
     const CYW43_MAINTENANCE_INTERLEAVED_EVENT_OFFSET: usize =
         crate::hal::driver_task::DRIVER_TASK_RING_FRAME_OFFSET + MAX_DRIVER_TASK_FRAME_BYTES;
 
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_sideband_batch_requires_atomic_root_capacity_before_ack() {
+        assert!(cyw43_pending_rx_batch_fits(0, 1));
+        assert!(cyw43_pending_rx_batch_fits(
+            CYW43_PENDING_RX_QUEUE_CAP - DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP,
+            DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP,
+        ));
+        assert!(!cyw43_pending_rx_batch_fits(
+            CYW43_PENDING_RX_QUEUE_CAP - DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP + 1,
+            DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP,
+        ));
+        assert!(!cyw43_pending_rx_batch_fits(0, 0));
+        assert!(!cyw43_pending_rx_batch_fits(
+            0,
+            DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP + 1,
+        ));
+    }
+
     struct Cyw43SupervisorTestHal;
 
     impl crate::hal::DeviceHal for Cyw43SupervisorTestHal {
@@ -28159,6 +28386,7 @@ mod tests {
         crate::hal::driver_task::enable_driver_task_test_counter_for_current_thread();
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::hal::driver_task::test_reset_cyw43_root_wake();
+        *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() = None;
         #[cfg(feature = "kernel")]
         clear_cyw43_authenticated_console_peer();
         *CYW43_RUNTIME_MAC.lock() = CYW43_DRIVER_TASK_MAC;
@@ -43647,6 +43875,133 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_persistent_parent_wait_masks_identity_but_preserves_real_work() {
+        let identity_only = Cyw43ServiceWorkInputs {
+            runtime_descriptor: true,
+            logical_owner: true,
+            hal_lease: true,
+            ..Cyw43ServiceWorkInputs::default()
+        };
+        assert_eq!(
+            identity_only.schedulable_reason_mask(true),
+            0,
+            "an immutable waiting parent cannot keep Network runnable",
+        );
+        assert_eq!(
+            identity_only.schedulable_reason_mask(false),
+            CYW43_SERVICE_WORK_PERSISTENT_PARENT_LIVENESS,
+            "terminal visibility restores the ordinary consume turn",
+        );
+
+        let independent_work = Cyw43ServiceWorkInputs {
+            dpc: true,
+            runtime_rx_queue: true,
+            data_tx: true,
+            root_rx: true,
+            terminal_drain: true,
+            recovery: true,
+            ..identity_only
+        };
+        assert_eq!(
+            independent_work.schedulable_reason_mask(true),
+            CYW43_SERVICE_WORK_DPC
+                | CYW43_SERVICE_WORK_RUNTIME_RX_QUEUE
+                | CYW43_SERVICE_WORK_DATA_TX
+                | CYW43_SERVICE_WORK_ROOT_RX
+                | CYW43_SERVICE_WORK_TERMINAL_DRAIN
+                | CYW43_SERVICE_WORK_RECOVERY,
+            "waiting suppresses only generic parent liveness",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_persistent_parent_turn_requires_a_durable_terminal() {
+        assert_eq!(
+            cyw43_persistent_parent_turn_route(
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                Some(Cyw43PersistentTransactionParentCondition::Waiting),
+            ),
+            Cyw43PersistentParentTurnRoute::Wait,
+        );
+        assert_eq!(
+            cyw43_persistent_parent_turn_route(
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                Some(Cyw43PersistentTransactionParentCondition::TerminalVisible),
+            ),
+            Cyw43PersistentParentTurnRoute::ConsumeTerminal,
+        );
+        assert_eq!(
+            cyw43_persistent_parent_turn_route(
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                Some(Cyw43PersistentTransactionParentCondition::DeadlineFault),
+            ),
+            Cyw43PersistentParentTurnRoute::DeadlineFault,
+        );
+        assert_eq!(
+            cyw43_persistent_parent_turn_route(
+                DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                Some(Cyw43PersistentTransactionParentCondition::NotExact),
+            ),
+            Cyw43PersistentParentTurnRoute::IdentityFault,
+        );
+        assert_eq!(
+            cyw43_persistent_parent_turn_route(
+                DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+                Some(Cyw43PersistentTransactionParentCondition::Waiting),
+            ),
+            Cyw43PersistentParentTurnRoute::Inactive,
+            "the persistent op11 condition cannot suppress another operation kind",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_persistent_parent_wait_does_not_claim_a_root_operation() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() = Some((
+            0x4359_8101,
+            Cyw43PersistentTransactionParentCondition::Waiting,
+        ));
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            arg0: 0x107,
+            arg1: 1,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            run_cyw43_runtime_descriptor_turn_raw(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                0,
+                "cyw43-persistent-wait-test",
+                descriptor,
+                b"persistent-op11",
+            ),
+            Err(DriverTaskNetError::RuntimePending(
+                "cyw43-persistent-transaction-waiting",
+            )),
+        );
+        assert_eq!(
+            cyw43_outer_event_turn_operation_count(),
+            0,
+            "condition recheck must remain outside the HAL operation boundary",
+        );
+        assert_eq!(
+            CYW43_TEST_PROGRESS_OPERATION_COUNT.load(Ordering::Acquire),
+            0,
+            "a waiting parent cannot perform another retained PollRing turn",
+        );
+        assert!(cyw43_logical_control_owner_active());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_durable_work_snapshot_samples_live_rx_and_tx_without_nested_locks() {
         let _guard = CYW43_STATUS_TEST_LOCK
             .lock()
@@ -43789,7 +44144,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn steady_network_dpc_urgency_rejects_stale_and_faulted_states() {
+    fn steady_network_dpc_urgency_uses_current_flags_not_recovered_ack_history() {
         let expected_generation =
             cyw43_sdio_dpc_expected_generation().expect("generated CYW43/SDIO link epoch");
         let healthy_ring = crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
@@ -43815,9 +44170,16 @@ mod tests {
         counted_overrun_ring.overruns = 1;
         let mut ack_failed_ring = healthy_ring;
         ack_failed_ring.ack_failures = 1;
+        let mut ack_pending_ring = healthy_ring;
+        ack_pending_ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING;
         let mut idle_ring = healthy_ring;
         idle_ring.producer = idle_ring.consumer;
         idle_ring.flags = 0;
+
+        assert!(
+            cyw43_sdio_dpc_ring_work_pending(ack_failed_ring, Some(expected_generation)),
+            "a recovered ACK failure remains telemetry, not current veto authority",
+        );
 
         for (reason, ring, expected) in [
             ("missing-generation", healthy_ring, None),
@@ -43829,7 +44191,7 @@ mod tests {
                 counted_overrun_ring,
                 Some(expected_generation),
             ),
-            ("ack-failed", ack_failed_ring, Some(expected_generation)),
+            ("ack-pending", ack_pending_ring, Some(expected_generation)),
             ("idle", idle_ring, Some(expected_generation)),
         ] {
             assert!(
@@ -43858,6 +44220,13 @@ mod tests {
             healthy_diagnostic,
             Some(expected_generation)
         ));
+        assert!(cyw43_sdio_dpc_diagnostic_work_pending(
+            Cyw43SdioDpcDiagnostic {
+                ack_failures: 1,
+                ..healthy_diagnostic
+            },
+            Some(expected_generation),
+        ));
 
         for (reason, snapshot) in [
             (
@@ -43885,13 +44254,6 @@ mod tests {
                 "sequence-error",
                 Cyw43SdioDpcDiagnostic {
                     sequence_errors: 1,
-                    ..healthy_diagnostic
-                },
-            ),
-            (
-                "ack-failed",
-                Cyw43SdioDpcDiagnostic {
-                    ack_failures: 1,
                     ..healthy_diagnostic
                 },
             ),

@@ -25,13 +25,13 @@ use pi4_driver_abi::{
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43CommandDescriptor, DriverRuntimeDpcEventRing,
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DriverRuntimeSdioClockSnapshot, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DriverRuntimeSdioClockSnapshot, DriverRuntimeSdioDeadlineArm,
+    DriverRuntimeSdioPhysicalLifetimeRecord, DriverRuntimeSteadyServiceProgress,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
@@ -425,7 +425,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_ACCESS_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
     DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
-    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET, DRIVER_RUNTIME_SDIO_DMA_IRQ,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET, DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES,
+    DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET, DRIVER_RUNTIME_SDIO_DMA_IRQ,
     DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE, DRIVER_RUNTIME_SDIO_INIT_DETAIL_READY,
     DRIVER_RUNTIME_SDIO_IRQ, DRIVER_RUNTIME_SDIO_IRQ_BADGE,
     DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES, DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_OFFSET,
@@ -438,8 +439,9 @@ use pi4_driver_abi::{
 };
 #[cfg(feature = "kernel")]
 use pi4_driver_abi::{
-    DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
-    DriverRuntimeCyw43RxQueueState, DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET,
+    DriverRuntimeCyw43RxBatchAck, DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
+    DriverRuntimeCyw43RxQueueState, DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET, DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET,
     DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE, DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET,
     DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
@@ -3380,6 +3382,39 @@ impl DriverTaskRingView {
         driver_task_shared_load_barrier();
         let second = read()?;
         DriverRuntimeSdioPhysicalLifetimeRecord::stable_snapshot(first, second)
+    }
+
+    fn read_sdio_deadline_arm(&self) -> Option<DriverRuntimeSdioDeadlineArm> {
+        let base = usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET);
+        let read = || {
+            Some(DriverRuntimeSdioDeadlineArm {
+                physical_lifetime_epoch: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioDeadlineArm,
+                        physical_lifetime_epoch
+                    ),
+                )?,
+                request_sequence: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioDeadlineArm, request_sequence),
+                )?,
+                expiry_ticks_lo: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioDeadlineArm, expiry_ticks_lo),
+                )?,
+                expiry_ticks_hi: self.read_u32(
+                    base + core::mem::offset_of!(DriverRuntimeSdioDeadlineArm, expiry_ticks_hi),
+                )?,
+                committed_request_sequence: self.read_u32(
+                    base + core::mem::offset_of!(
+                        DriverRuntimeSdioDeadlineArm,
+                        committed_request_sequence
+                    ),
+                )?,
+            })
+        };
+        let first = read()?;
+        driver_task_shared_load_barrier();
+        let second = read()?;
+        DriverRuntimeSdioDeadlineArm::stable_snapshot(first, second)
     }
 
     fn read_sdio_clock_snapshot(&self) -> Option<DriverRuntimeSdioClockSnapshot> {
@@ -6776,6 +6811,149 @@ pub(crate) fn driver_task_cyw43_rx_batch_snapshot(
     batch
         .valid_for_parent_and_queue_state(expected_parent_sequence, current_queue_state)
         .then_some(batch)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_ack_snapshot_for_slot(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverRuntimeCyw43RxBatchAck> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES);
+    let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET),
+        record_bytes,
+    )?;
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43RxBatchAck>()) {
+        return None;
+    }
+    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    // SAFETY: The ACK occupies one dedicated, aligned root-owned cache line in
+    // the HAL-published CYW43 shared mapping. It contains only primitive fields.
+    let first =
+        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchAck) };
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    // SAFETY: This second sample uses the same validated fixed-layout mapping;
+    // sequence-last validation rejects a torn root publication.
+    let second =
+        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchAck) };
+    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+    driver_task_counter_add(
+        &slot.counters.cache_invalidate_bytes,
+        record_bytes.saturating_mul(2),
+    );
+    DriverRuntimeCyw43RxBatchAck::stable_snapshot(first, second)
+}
+
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_rx_batch_acknowledged(
+    batch: DriverRuntimeCyw43RxBatchRecord,
+) -> bool {
+    driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        .and_then(driver_task_cyw43_rx_batch_ack_snapshot_for_slot)
+        .is_some_and(|ack| ack.matches_batch(batch))
+}
+
+/// Commit root's acknowledgement of one exact op11 sideband RX batch.
+///
+/// The dedicated ACK cache line is disjoint from the CYW43-owned batch header.
+/// Root writes the body, cleans/barriers it, commits the queue sequence last,
+/// then signals CYW43 only as a hint. The still-issued op11 identity and stable
+/// batch header remain authoritative throughout.
+#[cfg(feature = "kernel")]
+pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
+    batch: DriverRuntimeCyw43RxBatchRecord,
+) -> bool {
+    if !batch.valid() {
+        return false;
+    }
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let Some(DriverTaskRetainedRequestState::Issued { request, command }) =
+        active_driver_task_retained_request_for_slot(slot)
+    else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    if request != batch.parent_sequence
+        || !driver_task_persistent_transaction_parent_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            fingerprint,
+        )
+        || driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot) != Some(batch)
+        || !driver_task_cyw43_rx_queue_state_snapshot()
+            .is_some_and(|queue| batch.valid_for_parent_and_queue_state(request, queue))
+    {
+        return false;
+    }
+    if driver_task_cyw43_rx_batch_ack_snapshot_for_slot(slot)
+        .is_some_and(|ack| ack.matches_batch(batch))
+    {
+        // The durable ACK, not the notification edge, is the complete
+        // history. Re-consuming a coalesced hint must not signal again.
+        return true;
+    }
+
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES);
+    let Some(record_ptr) = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET),
+        record_bytes,
+    ) else {
+        return false;
+    };
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43RxBatchAck>()) {
+        return false;
+    }
+    let staged = DriverRuntimeCyw43RxBatchAck::staged(
+        batch.generation,
+        batch.parent_sequence,
+        batch.queue_commit_sequence,
+        batch.count,
+    );
+    if !staged.body_valid() {
+        return false;
+    }
+    // SAFETY: `record_ptr` names the complete aligned root-owned ACK cache line
+    // proven above. Writing staged commit zero cannot alias the child-owned
+    // batch header or payload cache lines.
+    unsafe {
+        core::ptr::write_volatile(record_ptr as *mut DriverRuntimeCyw43RxBatchAck, staged);
+    }
+    driver_task_ring_clean_root_range(record_ptr, record_bytes);
+    let commit_ptr = record_ptr
+        + core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            committed_queue_commit_sequence
+        );
+    // SAFETY: The aligned final u32 is inside the validated ACK record. The body
+    // clean above precedes this sequence-last commit.
+    unsafe {
+        core::ptr::write_volatile(commit_ptr as *mut u32, batch.queue_commit_sequence);
+    }
+    driver_task_ring_clean_root_range(commit_ptr, core::mem::size_of::<u32>());
+    driver_task_counter_add(&slot.counters.cache_clean_ops, 2);
+    driver_task_counter_add(
+        &slot.counters.cache_clean_bytes,
+        record_bytes.saturating_add(core::mem::size_of::<u32>()),
+    );
+    if !driver_task_cyw43_rx_batch_ack_snapshot_for_slot(slot)
+        .is_some_and(|ack| ack.matches_batch(batch))
+    {
+        return false;
+    }
+    let notification = slot.root_notification.load(Ordering::Acquire);
+    if notification == 0 {
+        return false;
+    }
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+    true
 }
 
 #[cfg(feature = "kernel")]
@@ -10824,6 +11002,114 @@ pub fn driver_task_sdio_physical_lifetime_snapshot(
         usize::from(DRIVER_RUNTIME_SDIO_PHYSICAL_LIFETIME_BYTES),
     );
     ring.read_sdio_physical_lifetime()
+}
+
+#[cfg(feature = "kernel")]
+static SDIO_DEADLINE_HINT_LAST_PHYSICAL_EPOCH: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SDIO_DEADLINE_HINT_LAST_REQUEST_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static SDIO_DEADLINE_HINT_LAST_EXPIRY_TICKS: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "kernel")]
+static SDIO_DEADLINE_HINT_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Return a passive, stable copy of the sole SDIO owner's deadline arm.
+///
+/// This record never authorizes root to issue, complete, or recover SDIO work.
+/// It can only schedule one later condition recheck through the existing
+/// root-to-CYW43-to-SDIO notification chain after exact expiry.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_sdio_deadline_arm_snapshot() -> Option<DriverRuntimeSdioDeadlineArm> {
+    let slot = driver_task_slot_for_contract(SDIO_HOST_DRIVER_TASK_CONTRACT)?;
+    if slot.root_ring_writers.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let offset = usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET);
+    driver_task_ring_invalidate_root_range(
+        ring_root_ptr.checked_add(offset)?,
+        usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_BYTES),
+    );
+    ring.read_sdio_deadline_arm()
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_task_sdio_deadline_arm_expired(
+    arm: DriverRuntimeSdioDeadlineArm,
+    lifetime: DriverRuntimeSdioPhysicalLifetimeRecord,
+    now_ticks: u64,
+) -> bool {
+    arm.valid()
+        && lifetime.valid()
+        && !lifetime.active()
+        && lifetime.begun_epoch == arm.physical_lifetime_epoch
+        && lifetime.completed_epoch == arm.physical_lifetime_epoch
+        && lifetime.failed_epoch != arm.physical_lifetime_epoch
+        && now_ticks != 0
+        && now_ticks.wrapping_sub(arm.expiry_ticks()) < (1u64 << 63)
+}
+
+/// Emit at most one fault-only wake for one exact expired SDIO deadline arm.
+///
+/// Root does not inspect controller state and cannot decide the terminal. The
+/// CYW43 consumer rechecks this exact record and its active child identity
+/// before forwarding the hint, then SDIO rechecks its private deadline before
+/// any containment action. Healthy traffic therefore records zero such wakes.
+#[cfg(feature = "kernel")]
+pub fn poll_driver_task_sdio_deadline_fault_hint() -> bool {
+    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) != 0
+        || CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) != 0
+        || CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) != 0
+    {
+        return false;
+    }
+    let Some(arm) = driver_task_sdio_deadline_arm_snapshot() else {
+        return false;
+    };
+    let Some(lifetime) = driver_task_sdio_physical_lifetime_snapshot() else {
+        return false;
+    };
+    let Some(now_ticks) = driver_task_counter_ticks() else {
+        return false;
+    };
+    if !driver_task_sdio_deadline_arm_expired(arm, lifetime, now_ticks)
+        || (SDIO_DEADLINE_HINT_LAST_PHYSICAL_EPOCH.load(Ordering::Acquire)
+            == arm.physical_lifetime_epoch
+            && SDIO_DEADLINE_HINT_LAST_REQUEST_SEQUENCE.load(Ordering::Acquire)
+                == arm.request_sequence
+            && SDIO_DEADLINE_HINT_LAST_EXPIRY_TICKS.load(Ordering::Acquire) == arm.expiry_ticks())
+        || driver_task_sdio_deadline_arm_snapshot() != Some(arm)
+        || driver_task_sdio_physical_lifetime_snapshot() != Some(lifetime)
+    {
+        return false;
+    }
+    let Some(slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let notification = slot.root_notification.load(Ordering::Acquire);
+    if notification == 0 {
+        return false;
+    }
+
+    // Commit the one-shot identity before signalling. If the binary
+    // notification coalesces, the durable arm remains visible; if the owner
+    // changes it, the new expiry identity may independently schedule once.
+    SDIO_DEADLINE_HINT_LAST_PHYSICAL_EPOCH.store(arm.physical_lifetime_epoch, Ordering::Release);
+    SDIO_DEADLINE_HINT_LAST_REQUEST_SEQUENCE.store(arm.request_sequence, Ordering::Release);
+    SDIO_DEADLINE_HINT_LAST_EXPIRY_TICKS.store(arm.expiry_ticks(), Ordering::Release);
+    SDIO_DEADLINE_HINT_COUNT.fetch_add(1, Ordering::AcqRel);
+    driver_task_counter_add(&slot.counters.send_attempts, 1);
+    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
+    true
+}
+
+/// Number of fault-only SDIO deadline hints emitted in this root lifetime.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn driver_task_sdio_deadline_hint_count() -> u32 {
+    SDIO_DEADLINE_HINT_COUNT.load(Ordering::Acquire)
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -16273,8 +16559,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     {
         match cyw43_persistent_transaction_parent_condition(request as u32) {
             Cyw43PersistentTransactionParentCondition::Waiting => {
-                // EventPump already revisits this durable condition. The poll
-                // neither ages a scheduler counter nor creates new authority.
+                // Root's scheduling boundary normally parks this exact durable
+                // condition before entering HAL. A race that reaches this
+                // final check still performs no operation, ages no scheduler
+                // counter, and creates no authority.
                 persistent_transaction_waiting = true;
             }
             Cyw43PersistentTransactionParentCondition::TerminalVisible => {
@@ -20520,6 +20808,26 @@ mod tests {
         }
         assert_eq!(ring.read_sdio_clock_snapshot(), Some(clock_snapshot));
 
+        let deadline_arm = DriverRuntimeSdioDeadlineArm::staged(4, 0x8000_0042, 55_000)
+            .commit()
+            .expect("deadline arm body is valid");
+        let deadline_base = usize::from(DRIVER_RUNTIME_SDIO_DEADLINE_ARM_OFFSET);
+        for (index, word) in [
+            deadline_arm.physical_lifetime_epoch,
+            deadline_arm.request_sequence,
+            deadline_arm.expiry_ticks_lo,
+            deadline_arm.expiry_ticks_hi,
+            deadline_arm.committed_request_sequence,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            ring.window
+                .write_u32(deadline_base + index * core::mem::size_of::<u32>(), word)
+                .expect("SDIO deadline arm word fits");
+        }
+        assert_eq!(ring.read_sdio_deadline_arm(), Some(deadline_arm));
+
         let dpc = DriverRuntimeDpcEventRing::empty(9);
         let dpc_base = usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         for (offset, value) in [
@@ -20577,6 +20885,48 @@ mod tests {
         for offset in (0..DRIVER_TASK_RING_PAGE_BYTES).step_by(4) {
             assert_eq!(ring.read_u32(offset), Some(0));
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_deadline_fault_hint_requires_exact_current_expiry() {
+        let arm = DriverRuntimeSdioDeadlineArm::staged(8, 0x8000_0043, 90_000)
+            .commit()
+            .expect("deadline arm body is valid");
+        let lifetime = DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 8,
+            completed_epoch: 8,
+            failed_epoch: 7,
+            ..DriverRuntimeSdioPhysicalLifetimeRecord::empty()
+        };
+        assert!(driver_task_sdio_deadline_arm_expired(
+            arm,
+            lifetime,
+            arm.expiry_ticks(),
+        ));
+        assert!(!driver_task_sdio_deadline_arm_expired(
+            arm,
+            lifetime,
+            arm.expiry_ticks().wrapping_sub(1),
+        ));
+
+        let stale_lifetime = DriverRuntimeSdioPhysicalLifetimeRecord {
+            begun_epoch: 9,
+            completed_epoch: 9,
+            ..lifetime
+        };
+        assert!(!driver_task_sdio_deadline_arm_expired(
+            arm,
+            stale_lifetime,
+            arm.expiry_ticks(),
+        ));
+        let mut torn = arm;
+        torn.committed_request_sequence = 0;
+        assert!(!driver_task_sdio_deadline_arm_expired(
+            torn,
+            lifetime,
+            arm.expiry_ticks(),
+        ));
     }
 
     #[cfg(feature = "kernel")]
@@ -25262,12 +25612,15 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_durable_queue_and_batch_copy_survive_later_enqueue() {
+    fn cyw43_durable_queue_batch_copy_and_ack_survive_later_enqueue() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("persistent op11 batch ACK test lock");
         let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
-        clear_driver_task_transport(contract);
         let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
         let ring_root_ptr = ring.0.as_mut_ptr() as usize;
-        publish_driver_task_ring(contract, ring_root_ptr);
+        let command = seed_persistent_op11_deadline_parent(ring_root_ptr, 17);
+        assert_eq!(command.sequence, 17);
 
         let mut shared_pages = (0..DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES)
             .map(|_| Box::new(AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4])))
@@ -25381,6 +25734,27 @@ mod tests {
             Some(entries[2])
         );
         assert_eq!(copied, payload);
+        assert!(!driver_task_cyw43_rx_batch_acknowledged(batch));
+        let sends_before = DRIVER_TASK_SLOT_CYW43455
+            .counters
+            .send_attempts
+            .load(Ordering::Acquire);
+        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(batch));
+        assert!(driver_task_cyw43_rx_batch_acknowledged(batch));
+        let sends_after = DRIVER_TASK_SLOT_CYW43455
+            .counters
+            .send_attempts
+            .load(Ordering::Acquire);
+        assert_eq!(sends_after, sends_before.saturating_add(1));
+        assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(batch));
+        assert_eq!(
+            DRIVER_TASK_SLOT_CYW43455
+                .counters
+                .send_attempts
+                .load(Ordering::Acquire),
+            sends_after,
+            "a durable duplicate ACK cannot create another notification edge",
+        );
 
         let mut later_queue_state = queue_state;
         later_queue_state.queue_depth = later_queue_state.queue_depth.saturating_add(1);
@@ -25415,6 +25789,7 @@ mod tests {
         );
         assert!(driver_task_cyw43_rx_batch_snapshot(17, queue_state).is_none());
         clear_driver_task_transport(contract);
+        reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]
