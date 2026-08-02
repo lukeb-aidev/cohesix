@@ -629,25 +629,43 @@ enum DeferredCyw43SupervisorTurn {
 const fn deferred_cyw43_supervisor_phase_step(
     phase: DeferredCyw43SupervisorPhase,
     may_begin: bool,
+    driver_turn_due: bool,
 ) -> (DeferredCyw43SupervisorTurn, DeferredCyw43SupervisorPhase) {
-    match (phase, may_begin) {
-        (DeferredCyw43SupervisorPhase::Operator, true) => (
+    match (phase, may_begin, driver_turn_due) {
+        (DeferredCyw43SupervisorPhase::Operator, true, true) => (
             DeferredCyw43SupervisorTurn::Operator,
             DeferredCyw43SupervisorPhase::Driver,
         ),
-        (DeferredCyw43SupervisorPhase::Operator, false) => (
+        (DeferredCyw43SupervisorPhase::Operator, _, false)
+        | (DeferredCyw43SupervisorPhase::Operator, false, true) => (
             DeferredCyw43SupervisorTurn::Operator,
             DeferredCyw43SupervisorPhase::Operator,
         ),
-        (DeferredCyw43SupervisorPhase::Driver, true) => (
+        (DeferredCyw43SupervisorPhase::Driver, true, true) => (
             DeferredCyw43SupervisorTurn::Driver,
             DeferredCyw43SupervisorPhase::Operator,
         ),
-        (DeferredCyw43SupervisorPhase::Driver, false) => (
+        (DeferredCyw43SupervisorPhase::Driver, _, false)
+        | (DeferredCyw43SupervisorPhase::Driver, false, true) => (
             DeferredCyw43SupervisorTurn::Blocked,
             DeferredCyw43SupervisorPhase::Operator,
         ),
     }
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn service_deferred_cyw43_bootstrap_sideband_condition<F>(stable_copy_and_ack: F) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    // This return value is diagnostic only. The sequence-last batch/ACK
+    // records remain the complete authority; a consumed notification or a
+    // failed stable read neither authorizes Driver nor creates retry history.
+    stable_copy_and_ack()
 }
 
 #[cfg(all(
@@ -2238,7 +2256,17 @@ where
             // with a Wi-Fi child operation in one scheduler iteration.
             pump.poll_cyw43_bootstrap_supervisor_event_turn();
             let may_begin = pump.cyw43_bootstrap_may_begin();
-            let (_, next_phase) = deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin);
+            if may_begin {
+                let _ = service_deferred_cyw43_bootstrap_sideband_condition(|| {
+                    crate::drivers::driver_task_net::consume_cyw43_persistent_sideband_rx_batch()
+                });
+            }
+            // The operator turn is the condition-before-sleep boundary. The
+            // persistent parent has no root continuation edge, so durable
+            // terminal/fault state alone can reopen Driver after it waits.
+            let driver_turn_due = bootstrap.driver_turn_due();
+            let (_, next_phase) =
+                deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin, driver_turn_due);
             supervisor_phase = next_phase;
             if !may_begin {
                 sel4::yield_now();
@@ -2268,13 +2296,15 @@ where
         }
 
         let may_begin = pump.cyw43_bootstrap_may_begin();
+        let driver_turn_due = bootstrap.driver_turn_due();
         let (driver_turn, next_phase) =
-            deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin);
+            deferred_cyw43_supervisor_phase_step(supervisor_phase, may_begin, driver_turn_due);
         supervisor_phase = next_phase;
         if driver_turn != DeferredCyw43SupervisorTurn::Driver {
-            // Recheck the admission guard in Driver phase. A reboot or linked
-            // serial cut that became visible after the preceding operator
-            // turn must return to Operator without issuing a child operation.
+            // Recheck both admission and the durable parent condition in
+            // Driver phase. A reboot, linked-serial cut, or persistent wait
+            // that became visible after the preceding operator turn returns
+            // to Operator without issuing a child operation.
             sel4::yield_now();
             continue;
         }
@@ -4097,24 +4127,94 @@ mod tests {
         let (operator, after_operator) = super::deferred_cyw43_supervisor_phase_step(
             super::DeferredCyw43SupervisorPhase::Operator,
             true,
+            true,
         );
         assert_eq!(operator, super::DeferredCyw43SupervisorTurn::Operator);
         assert_eq!(after_operator, super::DeferredCyw43SupervisorPhase::Driver);
 
         let (driver, after_driver) =
-            super::deferred_cyw43_supervisor_phase_step(after_operator, true);
+            super::deferred_cyw43_supervisor_phase_step(after_operator, true, true);
         assert_eq!(driver, super::DeferredCyw43SupervisorTurn::Driver);
         assert_eq!(after_driver, super::DeferredCyw43SupervisorPhase::Operator);
 
         let (blocked, after_blocked) = super::deferred_cyw43_supervisor_phase_step(
             super::DeferredCyw43SupervisorPhase::Driver,
             false,
+            true,
         );
         assert_eq!(blocked, super::DeferredCyw43SupervisorTurn::Blocked);
         assert_eq!(
             after_blocked,
             super::DeferredCyw43SupervisorPhase::Operator,
             "a reboot or lost serial proof must return Driver to Operator without child work",
+        );
+
+        let (waiting, after_waiting) = super::deferred_cyw43_supervisor_phase_step(
+            super::DeferredCyw43SupervisorPhase::Operator,
+            true,
+            false,
+        );
+        assert_eq!(waiting, super::DeferredCyw43SupervisorTurn::Operator);
+        assert_eq!(
+            after_waiting,
+            super::DeferredCyw43SupervisorPhase::Operator,
+            "a durable persistent wait must not schedule repeated Driver turns",
+        );
+
+        let (resumed, after_resumed) =
+            super::deferred_cyw43_supervisor_phase_step(after_waiting, true, true);
+        assert_eq!(resumed, super::DeferredCyw43SupervisorTurn::Operator);
+        assert_eq!(
+            after_resumed,
+            super::DeferredCyw43SupervisorPhase::Driver,
+            "a terminal or fault condition must restore the consume turn",
+        );
+    }
+
+    #[cfg(all(
+        feature = "serial-console",
+        feature = "kernel",
+        feature = "net-console"
+    ))]
+    #[test]
+    fn bootstrap_operator_rechecks_durable_sideband_without_granting_driver() {
+        use core::cell::Cell;
+
+        let stable_reads = Cell::new(0u8);
+        assert!(super::service_deferred_cyw43_bootstrap_sideband_condition(
+            || {
+                stable_reads.set(stable_reads.get().saturating_add(1));
+                true
+            },
+        ));
+        assert_eq!(
+            stable_reads.get(),
+            1,
+            "one operator turn takes one stable read"
+        );
+
+        let (turn, next) = super::deferred_cyw43_supervisor_phase_step(
+            super::DeferredCyw43SupervisorPhase::Operator,
+            true,
+            false,
+        );
+        assert_eq!(turn, super::DeferredCyw43SupervisorTurn::Operator);
+        assert_eq!(
+            next,
+            super::DeferredCyw43SupervisorPhase::Operator,
+            "a sideband ACK is a child hint, not parent Driver authority",
+        );
+
+        assert!(!super::service_deferred_cyw43_bootstrap_sideband_condition(
+            || {
+                stable_reads.set(stable_reads.get().saturating_add(1));
+                false
+            },
+        ));
+        assert_eq!(
+            stable_reads.get(),
+            2,
+            "absence is rechecked without a latch"
         );
     }
 

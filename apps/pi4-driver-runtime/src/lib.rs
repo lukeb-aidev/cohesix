@@ -6781,11 +6781,19 @@ struct RuntimeSteadyCyw43ForegroundSnapshot {
 struct RuntimePersistentCyw43ForegroundSnapshot {
     parent_sequence: u32,
     generation: u32,
+    active: bool,
+    executing: bool,
+    pending: bool,
+    replay_index: u16,
+    replayed_count: u16,
     completed_count: u16,
+    action_consumed: bool,
     deadline_count: u8,
     completed_deadline_mask: u64,
     issued_unknown: bool,
     poisoned: bool,
+    prepared_sequence: u32,
+    prepared_descriptor_valid: bool,
     frontier_sequence: u32,
     frontier_ordinal: u16,
     frontier_valid: bool,
@@ -6823,6 +6831,7 @@ struct RuntimePersistentCyw43ForegroundSnapshot {
     sdpcm_seq_max: u8,
     flowcontrol: u8,
     flowcontrol_all: bool,
+    local_continuation_due: bool,
 }
 
 /// Compact semantic frontier for one active CYW43 DPC event lifetime.
@@ -7219,7 +7228,20 @@ impl RuntimePersistentTransactionService {
     where
         P: FnOnce(DriverTaskCommandRecord, u32, u32) -> bool,
     {
-        let disposition = runtime_steady_semantic_disposition(&mut self.semantic_snapshot, current);
+        let local_continuation_due = matches!(
+            current,
+            RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(snapshot)
+                if snapshot.local_continuation_due
+        );
+        let mut disposition =
+            runtime_steady_semantic_disposition(&mut self.semantic_snapshot, current);
+        if disposition == RuntimeSteadyPendingDisposition::WaitForWake && local_continuation_due {
+            // Snapshot equality proves only that no external condition changed.
+            // A retained private cursor may still have one deterministic phase
+            // before its first child or next true external wait. That durable
+            // local condition is authority to continue; a notification is not.
+            disposition = RuntimeSteadyPendingDisposition::SemanticProgress;
+        }
         if disposition == RuntimeSteadyPendingDisposition::WaitForWake {
             return Some(disposition);
         }
@@ -19443,6 +19465,16 @@ fn cyw43_control_exchange_generation_ready(
         && cursor.generation == state.dpc_shared_epoch
 }
 
+fn cyw43_control_exchange_start_ready(state: &Cyw43RuntimeState) -> bool {
+    state.initialized
+        && state.transport_ready
+        && state.firmware_released
+        && state.bus_link_ready
+        && state.dpc_link_ready
+        && !state.recovery_required
+        && state.dpc_shared_epoch != 0
+}
+
 fn cyw43_control_exchange_deadline_expired(
     deadline: &mut RuntimeDeadline,
     phase_turns: &mut u32,
@@ -19900,28 +19932,25 @@ fn cyw43_control_exchange_command_turn(
                 cyw43_descriptor_invalid_result(desc) | CYW43_DESCRIPTOR_INVALID_PAYLOAD,
             ));
         }
-        if !state.initialized
-            || !state.transport_ready
-            || !state.firmware_released
-            || !state.bus_link_ready
-            || !state.dpc_link_ready
-            || state.recovery_required
-            || state.dpc_shared_epoch == 0
-        {
+        if !cyw43_control_exchange_start_ready(state) {
             return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
                 sequence,
                 FAULT_CYW43_CONTROL_EXCHANGE,
                 CYW43_CONTROL_EXCHANGE_TIMEOUT_RESULT_NOT_READY,
             ));
         }
-        if cyw43_control_exchange_begin(state, desc, owner_generation) {
-            return RuntimeCommandTurn::Pending;
+        if !cyw43_control_exchange_begin(state, desc, owner_generation) {
+            return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_CYW43_DESCRIPTOR_INVALID,
+                CYW43_DESCRIPTOR_INVALID_PAYLOAD,
+            ));
         }
-        return RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
-            sequence,
-            FAULT_CYW43_DESCRIPTOR_INVALID,
-            CYW43_DESCRIPTOR_INVALID_PAYLOAD,
-        ));
+        // Admission and the first actionable private phase are one local
+        // transition. Returning after `begin` would make a scheduler edge a
+        // prerequisite for publishing the first SDIO child even though no
+        // external condition exists that can generate such a wake.
+        cursor = state.control_exchange;
     }
 
     if cursor.sideband_queue_commit != 0 {
@@ -23602,6 +23631,36 @@ fn cyw43_foreground_restore_baseline() -> bool {
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_initialize_control_cursor_before_baseline(
+    command: DriverTaskCommandRecord,
+) -> bool {
+    let descriptor = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        (transaction.parent == command
+            && transaction.parent_input_sealed
+            && transaction.parent_descriptor_valid
+            && transaction.parent_descriptor.op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE)
+            .then_some(transaction.parent_descriptor)
+    });
+    let Some(descriptor) = descriptor else {
+        return true;
+    };
+    CYW43_RUNTIME_STATE.with_mut(|state| {
+        if state.control_exchange.active()
+            || !cyw43_control_exchange_descriptor_strict(descriptor)
+            || !cyw43_control_exchange_start_ready(state)
+        {
+            // An existing cursor and every typed rejection remain owned by
+            // the ordinary command-turn validator below.
+            return true;
+        }
+        // The control cursor is durable parent state, not a physical action.
+        // Commit it before the foreground rollback baseline is captured so
+        // publishing the first SDIO child cannot restore the cursor to Idle.
+        cyw43_control_exchange_begin(state, descriptor, command.aux1)
+    })
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
     let (active, same_parent, poisoned) = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
         (
@@ -23642,6 +23701,10 @@ fn cyw43_foreground_begin_turn(command: DriverTaskCommandRecord) -> bool {
         // here also protects helpers that consume a physical frame directly and
         // prevents a mixed old-descriptor/new-payload view at initial dispatch.
         CYW43_FOREGROUND_TRANSACTION.with_ref(Cyw43ForegroundTransaction::restore_parent_input);
+        if !cyw43_foreground_initialize_control_cursor_before_baseline(command) {
+            CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.poisoned = true);
+            return false;
+        }
         let generation = cyw43_foreground_snapshot_runtime_state();
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.baseline_state_valid = true;
@@ -25954,6 +26017,74 @@ fn runtime_steady_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySemanticS
 }
 
 #[cfg(any(target_os = "none", test))]
+fn runtime_persistent_cyw43_local_continuation_due(
+    transaction: &Cyw43ForegroundTransaction,
+    state: &Cyw43RuntimeState,
+    sideband_acknowledged: bool,
+    child_active: bool,
+) -> bool {
+    let cursor = state.control_exchange;
+    if !transaction.parent_input_sealed
+        || !transaction.persistent_transaction_parent_authorized()
+        || transaction.issued_unknown
+        || transaction.poisoned
+        || state.recovery_required
+        || state.dpc_terminal_cause.active()
+        || !cursor.active()
+    {
+        return false;
+    }
+
+    // A submitted child is an actual external wait. Its sequence-last
+    // terminal and post-commit notification will prompt the exact replay; an
+    // unchanged controller snapshot must not turn that wait into polling.
+    if transaction.frontier_submitted || child_active {
+        return false;
+    }
+
+    // Root owns the stable-copy acknowledgement for an ordinary sideband
+    // batch. Once the ACK is durable, clearing it and resuming the control
+    // cursor are again local work.
+    if cursor.sideband_queue_commit != 0 {
+        return sideband_acknowledged;
+    }
+
+    // These private foreground states have an exact deterministic successor
+    // and cannot legitimately depend on a fresh scheduler notification.
+    if transaction.prepared_descriptor_valid
+        || (transaction.frontier_valid && !transaction.frontier_submitted)
+        || transaction.turn.replay_index < transaction.turn.completed_count
+    {
+        return true;
+    }
+
+    match cursor.phase {
+        Cyw43ControlExchangePhase::Idle => false,
+        Cyw43ControlExchangePhase::PreTxDpcProbe | Cyw43ControlExchangePhase::PreTxDrain => true,
+        Cyw43ControlExchangePhase::WaitCredit => {
+            (cursor.descriptor_flags & DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN != 0
+                && state.rx_queue_state_commit != cursor.pre_tx_queue_commit)
+                || has_sdpcm_credit_for_frame(state.sdpcm_seq, state.sdpcm_seq_max, false)
+        }
+        Cyw43ControlExchangePhase::WaitReplyDeadline => state.rx_queue_count != 0,
+        Cyw43ControlExchangePhase::WaitUnboundReplyGrace => {
+            if state.rx_queue_state_commit != cursor.unbound_reply_queue_commit
+                || cursor.unbound_reply_grace_remaining != 0
+            {
+                return true;
+            }
+            let final_probe_consumed = cursor.unbound_reply_probe_event_sequence == 0
+                || state
+                    .dpc_last_consumed_sequence
+                    .wrapping_sub(cursor.unbound_reply_probe_event_sequence)
+                    < (1u32 << 31);
+            final_probe_consumed
+                && state.dpc_active_sequence != cursor.unbound_reply_probe_event_sequence
+        }
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
 fn runtime_persistent_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySemanticSnapshot {
     let dpc_ring = dpc_event_ring_read_at(
         DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
@@ -25969,6 +26100,13 @@ fn runtime_persistent_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySeman
                     .then_some(ack.committed_queue_commit_sequence)
                     .unwrap_or(0)
             });
+            let child_active = CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire);
+            let local_continuation_due = runtime_persistent_cyw43_local_continuation_due(
+                transaction,
+                state,
+                sideband_ack_queue_commit != 0,
+                child_active,
+            );
             let mut completed_deadline_mask = 0u64;
             let mut index = 0usize;
             while index < usize::from(transaction.deadline_count) {
@@ -25981,11 +26119,19 @@ fn runtime_persistent_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySeman
                 RuntimePersistentCyw43ForegroundSnapshot {
                     parent_sequence: transaction.parent.sequence,
                     generation: transaction.generation,
+                    active: transaction.active,
+                    executing: transaction.executing,
+                    pending: transaction.turn.pending,
+                    replay_index: transaction.turn.replay_index,
+                    replayed_count: transaction.turn.replayed_count,
                     completed_count: transaction.turn.completed_count,
+                    action_consumed: transaction.turn.action_consumed,
                     deadline_count: transaction.deadline_count,
                     completed_deadline_mask,
                     issued_unknown: transaction.issued_unknown,
                     poisoned: transaction.poisoned,
+                    prepared_sequence: transaction.prepared_sequence,
+                    prepared_descriptor_valid: transaction.prepared_descriptor_valid,
                     frontier_sequence: transaction.frontier.command.sequence,
                     frontier_ordinal: transaction.frontier.ticket.ordinal,
                     frontier_valid: transaction.frontier_valid,
@@ -25993,7 +26139,7 @@ fn runtime_persistent_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySeman
                     frontier_continuation_grant_required: transaction
                         .frontier_continuation_grant_required,
                     frontier_service_progress_slice: transaction.frontier_service_progress_slice,
-                    child_active: CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire),
+                    child_active,
                     child_expected_sequence: CYW43_SDIO_CHILD_EXPECTED_SEQUENCE
                         .load(Ordering::Acquire),
                     child_issued_unknown: CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire),
@@ -26026,6 +26172,7 @@ fn runtime_persistent_cyw43_foreground_semantic_snapshot() -> RuntimeSteadySeman
                     sdpcm_seq_max: state.sdpcm_seq_max,
                     flowcontrol: state.flowcontrol,
                     flowcontrol_all: state.flowcontrol_all,
+                    local_continuation_due,
                 },
             )
         })
@@ -55146,6 +55293,7 @@ mod tests {
             transaction.executing = false;
             transaction.turn.pending = true;
         });
+        CYW43_RUNTIME_STATE.with_mut(|state| state.sdpcm_seq_max = state.sdpcm_seq);
         let expected = runtime_persistent_cyw43_foreground_semantic_snapshot();
         assert!(!runtime_durable_condition_changed(expected, Some(expected),));
         assert!(runtime_durable_condition_changed(expected, None));
@@ -55218,9 +55366,60 @@ mod tests {
     }
 
     #[test]
-    fn persistent_control_semantic_progress_runs_to_first_external_wait() {
+    fn persistent_transaction_equal_snapshot_continues_only_when_local_work_is_due() {
         let _guard = test_guard();
         let physical_generation = 0x4359_5233;
+        let (parent, descriptor) =
+            install_persistent_control_parent_fixture(0x4359_5234, 0, physical_generation);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(cyw43_control_exchange_begin(state, descriptor, parent.aux1));
+            assert!(has_sdpcm_credit_for_frame(
+                state.sdpcm_seq,
+                state.sdpcm_seq_max,
+                false,
+            ));
+        });
+        let locally_runnable = runtime_persistent_cyw43_foreground_semantic_snapshot();
+        assert!(matches!(
+            locally_runnable,
+            RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(snapshot)
+                if snapshot.local_continuation_due
+        ));
+
+        let mut tracker = RuntimePersistentTransactionService::empty();
+        assert!(tracker.admit(parent));
+        assert_eq!(
+            tracker.record_semantic_progress_with(parent, locally_runnable, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+        );
+        assert_eq!(
+            tracker.record_semantic_progress_with(parent, locally_runnable, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+            "an equal snapshot cannot park a deterministic private transition",
+        );
+
+        CYW43_RUNTIME_STATE.with_mut(|state| state.sdpcm_seq_max = state.sdpcm_seq);
+        let external_wait = runtime_persistent_cyw43_foreground_semantic_snapshot();
+        assert!(matches!(
+            external_wait,
+            RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(snapshot)
+                if !snapshot.local_continuation_due
+        ));
+        assert_eq!(
+            tracker.record_semantic_progress_with(parent, external_wait, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+        );
+        assert_eq!(
+            tracker.record_semantic_progress_with(parent, external_wait, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::WaitForWake),
+            "credit exhaustion is a real external condition and must not poll",
+        );
+    }
+
+    #[test]
+    fn persistent_control_semantic_progress_runs_to_first_external_wait() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_5235;
         initialize_production_foreground_pair(physical_generation);
         let _descriptor = stage_cyw43_control_exchange_request(
             0x107,
@@ -55238,7 +55437,7 @@ mod tests {
             state.recovery_required = false;
             state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
             state.sdpcm_tx_write_ambiguous = false;
-            state.control_startup_status_drained = true;
+            state.control_startup_status_drained = false;
             state.sdpcm_seq = 17;
             state.sdpcm_seq_max = 19;
         });
@@ -55250,7 +55449,7 @@ mod tests {
         });
         sdio_record_dpc_health(false);
 
-        let mut parent = cyw43_descriptor_command(0x4359_5234);
+        let mut parent = cyw43_descriptor_command(0x4359_5236);
         parent.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
             | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
         parent.aux1 = 0;
@@ -55265,28 +55464,7 @@ mod tests {
         assert!(service.admit(parent));
 
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
-        let begin_snapshot = runtime_persistent_cyw43_foreground_semantic_snapshot();
-        let begin_disposition = service
-            .record_semantic_progress_with(parent, begin_snapshot, |_, _, _| true)
-            .expect("the exact persistent service remains admitted");
-        assert_eq!(
-            begin_disposition,
-            RuntimeSteadyPendingDisposition::SemanticProgress
-        );
-        assert_eq!(
-            runtime_durable_pending_route(begin_disposition),
-            RuntimeDurablePendingRoute::ContinueToQuiescence,
-            "the private PreTxDpcProbe transition cannot require a scheduler edge",
-        );
-        assert_eq!(
-            CYW43_RUNTIME_STATE.with_ref(|state| state.control_exchange.phase),
-            Cyw43ControlExchangePhase::PreTxDpcProbe,
-        );
-        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
-
-        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let child_snapshot = runtime_persistent_cyw43_foreground_semantic_snapshot();
-        assert_ne!(child_snapshot, begin_snapshot);
         let child_disposition = service
             .record_semantic_progress_with(parent, child_snapshot, |_, _, _| true)
             .expect("the exact persistent service remains admitted");
@@ -55297,7 +55475,11 @@ mod tests {
         assert_eq!(
             runtime_durable_pending_route(child_disposition),
             RuntimeDurablePendingRoute::ContinueToQuiescence,
-            "publishing the first exact child remains in the same owner lifetime",
+            "publishing the first exact child remains in the admitted lifetime",
+        );
+        assert_eq!(
+            CYW43_RUNTIME_STATE.with_ref(|state| state.control_exchange.phase),
+            Cyw43ControlExchangePhase::PreTxDpcProbe,
         );
         CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
             assert!(transaction.active);
@@ -55309,11 +55491,30 @@ mod tests {
             ));
         });
         assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(matches!(
+            child_snapshot,
+            RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(snapshot)
+                if !snapshot.local_continuation_due
+        ));
+
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        let replay_snapshot = runtime_persistent_cyw43_foreground_semantic_snapshot();
+        assert_ne!(
+            replay_snapshot, child_snapshot,
+            "the first exact-child recheck retires its prepared private cursor",
+        );
+        let replay_disposition = service
+            .record_semantic_progress_with(parent, replay_snapshot, |_, _, _| true)
+            .expect("the exact persistent service remains admitted");
+        assert_eq!(
+            replay_disposition,
+            RuntimeSteadyPendingDisposition::SemanticProgress,
+        );
 
         assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
         let waiting_snapshot = runtime_persistent_cyw43_foreground_semantic_snapshot();
         assert_eq!(
-            waiting_snapshot, child_snapshot,
+            waiting_snapshot, replay_snapshot,
             "an uncompleted physical child is the first stable external wait",
         );
         let waiting_disposition = service
@@ -85813,9 +86014,10 @@ mod tests {
         assert_eq!(
             service_command_turn(0, parent),
             RuntimeCommandTurn::Pending,
-            "the first no-child turn commits the control cursor and its TX deadline",
+            "control admission commits its cursor and publishes the first exact child",
         );
-        assert!(!cyw43_foreground_transaction_active());
+        assert!(cyw43_foreground_transaction_active());
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
         let (tx_deadline_start, tx_deadline_cycles) =
             CYW43_RUNTIME_STATE.with_ref(|state| match state.control_exchange.tx_deadline {
                 RuntimeDeadline::Counter { start, cycles } => (start, cycles),

@@ -1112,6 +1112,7 @@ struct Cyw43PendingAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43RetainedActionOutcome {
     Pending,
+    Waiting,
     Complete(DriverTaskCompletionRecord),
     Poisoned(&'static str),
     Failed(DriverTaskNetError),
@@ -1543,6 +1544,27 @@ impl Cyw43BootstrapSupervisor {
     #[must_use]
     pub const fn is_ready(&self) -> bool {
         matches!(self.phase, Cyw43BootstrapPhase::Complete)
+    }
+
+    /// Return whether the supervisor may enter its next driver turn.
+    ///
+    /// Once an exact persistent op11 parent is issued, its linked runtimes own
+    /// every remaining transaction phase. Root keeps servicing operator turns
+    /// and rechecks this durable condition before each possible driver turn;
+    /// only a terminal or fault makes the retained parent runnable again.
+    #[must_use]
+    pub fn driver_turn_due(&self) -> bool {
+        let Some(pending) = self.pending.as_ref() else {
+            return true;
+        };
+        if pending.ticket.descriptor.op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+            return true;
+        }
+        let Cyw43ActionIssuance::AwaitingCompletion { request } = pending.issuance else {
+            return true;
+        };
+        cyw43_active_persistent_parent_condition()
+            != Some((request, Cyw43PersistentTransactionParentCondition::Waiting))
     }
 
     /// Accept one immutable, exact-epoch Gate 8 proof.
@@ -2391,7 +2413,7 @@ impl Cyw43BootstrapSupervisor {
                 // lifetime bound. A scheduling recheck cannot age the legacy
                 // root poll counter or turn durable identity into work.
                 pending.deadline = deadline_before_turn;
-                return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Pending);
+                return self.keep_pending_action(pending, Cyw43RetainedActionOutcome::Waiting);
             }
             Err(DriverTaskNetError::RuntimeInit("cyw43-persistent-transaction-deadline")) => {
                 return self
@@ -2849,6 +2871,7 @@ impl Cyw43BootstrapSupervisor {
         let ticket = self.pending.as_ref().map(|pending| pending.ticket);
         match self.service_pending_action() {
             Cyw43RetainedActionOutcome::Pending => self.pending_outcome(stage, true),
+            Cyw43RetainedActionOutcome::Waiting => self.pending_outcome(stage, false),
             Cyw43RetainedActionOutcome::Poisoned(reason) => {
                 self.route_generation_recovery(reason);
                 self.pending_outcome(reason, true)
@@ -3545,6 +3568,7 @@ impl Cyw43BootstrapSupervisor {
             .unwrap_or("cyw43-control-plane");
         match self.service_pending_action() {
             Cyw43RetainedActionOutcome::Pending => self.pending_outcome(stage, true),
+            Cyw43RetainedActionOutcome::Waiting => self.pending_outcome(stage, false),
             Cyw43RetainedActionOutcome::Poisoned(reason) => {
                 self.route_generation_recovery(reason);
                 self.pending_outcome(reason, true)
@@ -43996,6 +44020,70 @@ mod tests {
             "a waiting parent cannot perform another retained PollRing turn",
         );
         assert!(cyw43_logical_control_owner_active());
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_supervisor_parks_only_on_the_exact_persistent_wait() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let request = 0x4359_8102;
+        *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() =
+            Some((request, Cyw43PersistentTransactionParentCondition::Waiting));
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor
+            .install_iovar_set(
+                "bus:txglomalign",
+                &CYW43_TXGLOMALIGN_AARCH64_ALIGN.to_le_bytes(),
+                "cyw43-persistent-supervisor-wait-test",
+                Cyw43ControlHeaderMode::Plain,
+                true,
+            )
+            .expect("exact control action installs");
+
+        begin_cyw43_outer_event_turn();
+        assert!(matches!(
+            supervisor.service_control_turn(),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-persistent-supervisor-wait-test",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+        assert_eq!(
+            CYW43_TEST_PROGRESS_OPERATION_COUNT.load(Ordering::Acquire),
+            0,
+            "the supervisor must preserve the no-operation wait classification",
+        );
+
+        supervisor
+            .pending
+            .as_mut()
+            .expect("persistent action remains retained")
+            .issuance = Cyw43ActionIssuance::AwaitingCompletion { request };
+        assert!(
+            !supervisor.driver_turn_due(),
+            "the exact durable Waiting condition parks Driver",
+        );
+        *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() = Some((
+            request,
+            Cyw43PersistentTransactionParentCondition::TerminalVisible,
+        ));
+        assert!(
+            supervisor.driver_turn_due(),
+            "a sequence-last terminal restores the root consume turn",
+        );
+        *CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE.lock() = Some((
+            request.wrapping_add(1),
+            Cyw43PersistentTransactionParentCondition::Waiting,
+        ));
+        assert!(
+            supervisor.driver_turn_due(),
+            "another request's wait cannot suppress this supervisor ticket",
+        );
 
         reset_cyw43_status_flags();
     }

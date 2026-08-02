@@ -1408,17 +1408,22 @@ generation and XID.
   sequence last. CYW43 advances or reuses the batch storage only after two
   stable ACK samples match that exact identity. This sideband handoff is
   memory-only and leaves the immutable op11 descriptor, payload, BCDC id,
-  deadline, child frontier, and final terminal ownership unchanged.
+  deadline, child frontier, and final terminal ownership unchanged. The
+  pre-Gate-8 bootstrap operator turn performs the same stable-copy/ACK check
+  before deciding whether Driver is due, so a sideband batch cannot depend on
+  a TCP-era network phase to release its persistent parent.
 
   While that exact issued persistent op11 has no stable terminal, HAL reports
   `Cyw43PersistentTransactionParentCondition::Waiting`. Root uses this durable
   condition to suppress only the same parent's runtime-descriptor,
   logical-owner, and HAL-lease self-demand from
   `Cyw43ServiceWorkSnapshot`; repeated EventPump turns therefore cannot become
-  a poll clock. A committed DPC event, committed RX queue/batch state, an exact
-  sideband-batch consumer/ACK obligation, a fault-only deadline-arm obligation,
-  or the exact parent's newly visible terminal remains independent schedulable
-  work. `TerminalVisible`, identity loss, or typed
+  a poll clock. The supervisor reports that recheck as no operation and keeps
+  deferred bootstrap in its operator phase until terminal, fault, or identity
+  change makes Driver due. A committed DPC event, committed RX queue/batch
+  state, an exact sideband-batch consumer/ACK obligation, a fault-only
+  deadline-arm obligation, or the exact parent's newly visible terminal
+  remains independent schedulable work. `TerminalVisible`, identity loss, or typed
   deadline containment ends the suppression through the existing exact path.
   Notification arrival or absence never controls this mask.
 
@@ -1858,11 +1863,14 @@ generation and XID.
   runtime seals an op11 descriptor and its payload immediately after the
   sequence-last command record and derived persistent marker agree, before
   draining any watermarked CARD_INT/DPC work. Purely private op11 phase
-  transitions retain that seal until terminal completion, and the first
-  private service turn restores the descriptor and payload together before any
-  helper consumes them. DPC may continue using its disjoint frame and RX
-  slices before op11's first SDIO child without misrouting or corrupting the
-  root control exchange. This is the isolated runtime equivalent of Linux
+  transitions retain that seal until terminal completion. Control admission
+  initializes the durable BCDC cursor before capturing the foreground rollback
+  baseline, then the same bounded service call advances through the first
+  actionable private phase. It may not return `Pending` at an artificial
+  no-child boundary. The first private service turn restores the descriptor and
+  payload together before any helper consumes them. DPC may continue using its
+  disjoint frame and RX slices before op11's first SDIO child without
+  misrouting or corrupting the root control exchange. This is the isolated runtime equivalent of Linux
   attaching BCDC state to the already admitted request before scheduling its
   SDIO DPC.
   Function 1 firmware streaming retains one immutable 32-KiB backplane
@@ -2210,7 +2218,13 @@ generation and XID.
   An exact op11 parent and each marker-paired SDIO child instead retain durable
   identity and semantic progress without recurrent grants; each scheduler turn
   still admits at most one bounded physical owner quantum. Remaining work stays
-  visible in committed state and does not require another notification.
+  visible in committed state and does not require another notification. The
+  persistent condition includes the private replay/prepared frontier as well as
+  queue, credit, DPC, and exact-child state. A deterministic local transition
+  continues even when the external snapshot is otherwise unchanged. Blocking
+  is legal only for a submitted exact child, unavailable SDPCM credit with no
+  newer queue state, an unacknowledged sideband batch, or an empty reply/source
+  condition with a real producer and wake route.
   Reciprocal CYW43-to-SDIO work separates child-ring submission, stable
   completion checks, and physical owner service into retained quanta. Neither
   path contains a private yield/resignal loop. Badge-2 and badge-256
