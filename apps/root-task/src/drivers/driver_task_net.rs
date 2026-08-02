@@ -28156,6 +28156,7 @@ mod tests {
     }
 
     fn reset_cyw43_status_flags() {
+        crate::hal::driver_task::enable_driver_task_test_counter_for_current_thread();
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::hal::driver_task::test_reset_cyw43_root_wake();
         #[cfg(feature = "kernel")]
@@ -28670,7 +28671,6 @@ mod tests {
             .expect("cyw43 status test lock");
         reset_cyw43_status_flags();
         let generation = 75;
-        mark_cyw43_gate8_ready_for_test(generation);
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
@@ -28687,9 +28687,10 @@ mod tests {
                 cyw43_supervisor_ring_test_service,
             )
         );
+        mark_cyw43_gate8_ready_for_test(generation);
         let op8 = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
 
@@ -29839,7 +29840,8 @@ mod tests {
             .receive(Instant::from_millis(0))
             .expect("the copied RX retains its mandatory final paired permit");
         rx.consume(|bytes| assert_eq!(bytes, &copied));
-        paired_tx.consume(64, |bytes| bytes.fill(0xa5));
+        let response = test_cyw43_tcp_reply_frame(&copied);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert_eq!(
             cyw43_data_tx_queue_diagnostic().depth,
             CYW43_DATA_TX_QUEUE_CAP as u32,
@@ -29886,7 +29888,8 @@ mod tests {
             .receive(Instant::from_millis(0))
             .expect("the final paired FIFO permit must be usable");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
-        paired_tx.consume(64, |bytes| bytes.fill(0xa5));
+        let response = test_cyw43_tcp_reply_frame(&frame);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert_eq!(
             cyw43_data_tx_queue_diagnostic().depth,
             CYW43_DATA_TX_QUEUE_CAP as u32
@@ -29970,7 +29973,8 @@ mod tests {
             .receive(Instant::from_millis(0))
             .expect("the last paired permit is admitted before FIFO saturation");
         rx.consume(|bytes| assert_eq!(bytes, &copied));
-        paired_tx.consume(64, |bytes| bytes.fill(0xa5));
+        let response = test_cyw43_tcp_reply_frame(&copied);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 16);
 
         let credit_flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
@@ -30541,22 +30545,39 @@ mod tests {
                     break;
                 }
             }
+            let expected_reason = if op == DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE {
+                "cyw43-retained-service-failed"
+            } else {
+                "cyw43-ambiguous-generation-fault"
+            };
+            let expected_ring_turns = u32::from(op != DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE);
             assert_eq!(
                 outcome,
-                Cyw43RetainedActionOutcome::Poisoned("cyw43-ambiguous-generation-fault"),
+                Cyw43RetainedActionOutcome::Poisoned(expected_reason),
                 "composite op {op} must recover the pair rather than replay"
             );
-            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+            assert_eq!(
+                CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
+                expected_ring_turns,
+            );
             assert_eq!(
                 CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
-                u32::from(op)
+                if expected_ring_turns == 0 {
+                    0
+                } else {
+                    u32::from(op)
+                }
             );
             let submitted_after = crate::hal::driver_task::driver_task_counter_snapshot(
                 CYW43_WIFI_DRIVER_TASK_CONTRACT,
             )
             .expect("real reciprocal controller counters remain available")
             .submitted_turns;
-            assert_eq!(submitted_after.saturating_sub(submitted_before), 1);
+            assert_eq!(
+                submitted_after.saturating_sub(submitted_before),
+                u64::from(expected_ring_turns),
+                "persistent op11 must fail closed before parent publication",
+            );
 
             begin_cyw43_outer_event_turn();
             assert!(matches!(
@@ -30564,7 +30585,10 @@ mod tests {
                 Cyw43RetainedActionOutcome::Failed(_)
             ));
             assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
-            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+            assert_eq!(
+                CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
+                expected_ring_turns,
+            );
             assert_eq!(
                 crate::hal::driver_task::driver_task_counter_snapshot(
                     CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -30699,13 +30723,10 @@ mod tests {
         supervisor
             .install_empty_action(
                 DriverRuntimeCyw43CommandDescriptor {
-                    op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-                    flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
-                    arg0: CYW43_WLC_SET_VAR,
-                    arg1: 1,
+                    op: DRIVER_RUNTIME_CYW43_OP_FIRMWARE_PREP,
                     ..DriverRuntimeCyw43CommandDescriptor::empty()
                 },
-                "cyw43-control-txglomalign-alias-test",
+                "cyw43-firmware-prep-alias-test",
             )
             .expect("retained Gate 8 action installs");
         let ticket = supervisor.pending.as_ref().expect("ticket retained").ticket;
@@ -33186,7 +33207,7 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
 
@@ -34085,8 +34106,8 @@ mod tests {
             counters_after
                 .send_attempts
                 .saturating_sub(counters_before.0),
-            0,
-            "the autonomous child must execute at CommitRing before NotifyRing"
+            1,
+            "the persistent op11 parent is committed before one signal-last scheduling hint"
         );
         assert_eq!(
             counters_after
@@ -34123,6 +34144,14 @@ mod tests {
             CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire),
             1,
             "the possibly-issued op11 cursor must never be replayed"
+        );
+        let counters_final =
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+                .expect("the exact op11 counters remain available after recovery");
+        assert_eq!(counters_final.send_attempts, counters_after.send_attempts);
+        assert_eq!(
+            counters_final.submitted_turns,
+            counters_after.submitted_turns
         );
         assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
 
@@ -34347,6 +34376,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     fn mark_cyw43_gate8_ready_for_test(generation: u32) {
+        let generation = generation.max(1);
         prepare_cyw43_gate8_publication_for_test(
             generation,
             crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
@@ -34361,6 +34391,7 @@ mod tests {
         let receipt =
             cyw43_gate8_publication_receipt(generation).expect("test Gate 8 publication receipt");
         assert!(publish_cyw43_gate8_data_consumer(generation, receipt));
+        crate::hal::driver_task::test_open_cyw43_sdio_network_priority_lease_for_current_pair();
     }
 
     #[cfg(feature = "kernel")]
@@ -34587,10 +34618,28 @@ mod tests {
             &((IPV4_HEADER_LEN + TCP_HEADER_LEN + TCP_PAYLOAD_LEN) as u16).to_be_bytes(),
         );
         frame[ip + 9] = CYW43_IP_PROTO_TCP;
+        frame[ip + 12..ip + 16].copy_from_slice(&[192, 168, 86, 102]);
+        frame[ip + 16..ip + 20].copy_from_slice(&[192, 168, 86, 154]);
         let tcp = ip + IPV4_HEADER_LEN;
-        frame[tcp..tcp + 2].copy_from_slice(&31337u16.to_be_bytes());
-        frame[tcp + 2..tcp + 4].copy_from_slice(&49152u16.to_be_bytes());
+        frame[tcp..tcp + 2].copy_from_slice(&49152u16.to_be_bytes());
+        frame[tcp + 2..tcp + 4].copy_from_slice(&31337u16.to_be_bytes());
+        frame[tcp + 12] = 5 << 4;
+        frame[tcp + 13] = 0x10;
         frame
+    }
+
+    fn test_cyw43_tcp_reply_frame(received: &[u8; 94]) -> [u8; 94] {
+        const IPV4_HEADER_LEN: usize = 20;
+        let mut response = *received;
+        response[..6].copy_from_slice(&received[6..12]);
+        response[6..12].copy_from_slice(&received[..6]);
+        let ip = ETH_HEADER_LEN;
+        response[ip + 12..ip + 16].copy_from_slice(&received[ip + 16..ip + 20]);
+        response[ip + 16..ip + 20].copy_from_slice(&received[ip + 12..ip + 16]);
+        let tcp = ip + IPV4_HEADER_LEN;
+        response[tcp..tcp + 2].copy_from_slice(&received[tcp + 2..tcp + 4]);
+        response[tcp + 2..tcp + 4].copy_from_slice(&received[tcp..tcp + 2]);
+        response
     }
 
     fn test_cyw43_tcp_segment_token(
@@ -40617,6 +40666,13 @@ mod tests {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         mark_cyw43_gate8_ready_for_test(0);
+        let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
+            generation,
+            CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+            CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire),
+            0,
+        )));
 
         let flags = DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
         let frame = test_cyw43_dhcp_frame(2, CYW43_DHCP_SERVER_PORT, CYW43_DHCP_CLIENT_PORT);
@@ -40716,7 +40772,7 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
 
@@ -40758,7 +40814,7 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let descriptor = DriverRuntimeCyw43CommandDescriptor {
             op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-            flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+            flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
             ..DriverRuntimeCyw43CommandDescriptor::empty()
         };
 
@@ -40953,7 +41009,7 @@ mod tests {
                 Cyw43PromptPollOwner::NetData,
                 DriverRuntimeCyw43CommandDescriptor {
                     op: DRIVER_RUNTIME_CYW43_OP_RX_POLL,
-                    flags: CYW43_DATA_RX_STEADY_POLL_FLAGS,
+                    flags: DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN,
                     ..DriverRuntimeCyw43CommandDescriptor::empty()
                 },
             ),
@@ -51431,15 +51487,17 @@ mod tests {
             dev.transmit(Instant::from_millis(0)).is_some(),
             "credit wait must not prevent a bounded WiFi TX reservation"
         );
+        let frame = test_cyw43_tcp_frame();
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            test_rx_token(&test_cyw43_tcp_frame()),
+            test_rx_token(&frame),
         ));
         let (rx, paired_tx) = dev
             .receive(Instant::from_millis(0))
             .expect("copied RX must be delivered with a reserved bounded response token");
-        rx.consume(|bytes| assert_eq!(bytes, test_cyw43_tcp_frame()));
-        paired_tx.consume(64, |bytes| bytes.fill(0x24));
+        rx.consume(|bytes| assert_eq!(bytes, frame));
+        let response = test_cyw43_tcp_reply_frame(&frame);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert_eq!(
             cyw43_pending_rx_queue_len(),
             0,
@@ -51549,7 +51607,8 @@ mod tests {
             .receive(Instant::from_millis(0))
             .expect("the first copied RX receives an admissible paired TX token");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
-        paired_tx.consume(64, |bytes| bytes.fill(0x42));
+        let response = test_cyw43_tcp_reply_frame(&frame);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
         assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 1);
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), 0);
@@ -51643,7 +51702,8 @@ mod tests {
             .receive(Instant::from_millis(0))
             .expect("bounded queue capacity makes the paired TX token infallible");
         rx.consume(|bytes| assert_eq!(bytes, &frame));
-        paired_tx.consume(64, |bytes| bytes.fill(0x24));
+        let response = test_cyw43_tcp_reply_frame(&frame);
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert_eq!(cyw43_pending_rx_queue_len(), 0);
         assert_eq!(
             CYW43_TX_UNPROVEN_ACTIVE.load(Ordering::Acquire),
@@ -51676,7 +51736,7 @@ mod tests {
             CYW43_TX_UNPROVEN_NONE
         );
         CYW43_DATA_TX_TEST_SUCCESS_WITHOUT_CREDIT.store(0, Ordering::Release);
-        paired_tx.consume(64, |bytes| bytes.fill(0x25));
+        paired_tx.consume(response.len(), |bytes| bytes.copy_from_slice(&response));
         assert!(CYW43_PENDING_DATA_TX.lock().is_none());
         assert_eq!(cyw43_data_tx_queue_diagnostic().depth, 2);
         assert_eq!(CYW43_TX_DROPPED.load(Ordering::Acquire), drops_before);
@@ -52216,7 +52276,8 @@ mod tests {
         let accepted_digest = retained.payload_digest;
         let attempts = CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire);
 
-        CYW43_CONNECTION_EPOCH.store(1, Ordering::Release);
+        let owner_generation = CYW43_CONNECTION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        let recovery_generation = owner_generation.wrapping_add(1);
         begin_cyw43_outer_event_turn();
         assert_eq!(
             advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
@@ -52235,8 +52296,8 @@ mod tests {
         let recovery = CYW43_DEFERRED_RECOVERY
             .lock()
             .expect("the accepted ETH_TX child poisons the replacement pair");
-        assert_eq!(recovery.generation, 1);
-        assert_eq!(recovery.owner_generation, 0);
+        assert_eq!(recovery.generation, recovery_generation);
+        assert_eq!(recovery.owner_generation, owner_generation);
         assert_eq!(recovery.cause, Cyw43RecoveryCause::DataTx);
         assert_eq!(recovery.payload_digest, accepted_digest);
         assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
@@ -52275,6 +52336,7 @@ mod tests {
                 cyw43_supervisor_ring_test_service,
             )
         );
+        crate::hal::driver_task::test_open_cyw43_sdio_network_priority_lease_for_current_pair();
         mark_cyw43_data_plane_ready_for_test();
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let submitted_before =
@@ -52331,7 +52393,8 @@ mod tests {
                 .submitted_turns;
         assert_eq!(submitted.saturating_sub(submitted_before), 1);
 
-        CYW43_CONNECTION_EPOCH.store(1, Ordering::Release);
+        let owner_generation = CYW43_CONNECTION_EPOCH.fetch_add(1, Ordering::AcqRel);
+        let recovery_generation = owner_generation.wrapping_add(1);
         begin_cyw43_outer_event_turn();
         assert_eq!(
             advance_cyw43_pending_data_tx(CYW43_WIFI_DRIVER_TASK_CONTRACT),
@@ -52348,8 +52411,8 @@ mod tests {
         let recovery = CYW43_DEFERRED_RECOVERY
             .lock()
             .expect("released ETH_TX parent fences the replacement generation");
-        assert_eq!(recovery.generation, 1);
-        assert_eq!(recovery.owner_generation, 0);
+        assert_eq!(recovery.generation, recovery_generation);
+        assert_eq!(recovery.owner_generation, owner_generation);
         assert_eq!(recovery.cause, Cyw43RecoveryCause::DataTx);
         assert_eq!(recovery.ticket_id, retained.ticket_id);
         assert_eq!(recovery.payload_digest, retained.payload_digest);
@@ -52714,6 +52777,12 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let generation = 10;
         mark_cyw43_gate8_ready_for_test(generation);
+        set_cyw43_service_work_snapshot_test_override(Some(Cyw43ServiceWorkSnapshot::for_test(
+            generation,
+            CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire),
+            CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire),
+            CYW43_SERVICE_WORK_DATA_TX,
+        )));
 
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,

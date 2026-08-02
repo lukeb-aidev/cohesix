@@ -21763,6 +21763,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     fn clear_wifi_driver_task_test_state() {
+        crate::hal::driver_task::enable_driver_task_test_counter_for_current_thread();
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);

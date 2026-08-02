@@ -38,9 +38,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET,
     DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-    DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
-    DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
-    DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
+    DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
     DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH, DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET,
     DRIVER_RUNTIME_ENGINE_INIT_AUX, DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
@@ -5000,6 +4998,38 @@ static DRIVER_TASK_OBSERVED_US_PCIE_ROOT: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(feature = "kernel", not(target_arch = "aarch64")))]
 static DRIVER_TASK_TEST_COUNTER_TICKS: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(test)]
+std::thread_local! {
+    static DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS: core::cell::Cell<Option<u64>> =
+        const { core::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+struct DriverTaskTestCounterOverride;
+
+#[cfg(test)]
+impl DriverTaskTestCounterOverride {
+    fn new() -> Self {
+        DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.set(Some(0)));
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for DriverTaskTestCounterOverride {
+    fn drop(&mut self) {
+        DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.set(None));
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn enable_driver_task_test_counter_for_current_thread() {
+    // Rust's test harness gives each test a fresh worker thread. Keep the
+    // synthetic counter confined to that thread so no production or sibling
+    // test can acquire timing authority from this fixture.
+    DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.set(Some(0)));
+}
+
 /// Return the stable driver-task key for a contract.
 #[must_use]
 pub fn driver_task_contract_key(contract: DriverTaskContract) -> Option<usize> {
@@ -5943,6 +5973,10 @@ fn driver_task_counter_frequency() -> Option<u64> {
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
     {
+        #[cfg(test)]
+        if DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| ticks.get().is_some()) {
+            return Some(1_000_000);
+        }
         None
     }
     #[cfg(not(target_arch = "aarch64"))]
@@ -5960,6 +5994,14 @@ fn driver_task_counter_ticks() -> Option<u64> {
     }
     #[cfg(all(target_arch = "aarch64", not(feature = "timers-arch-counter")))]
     {
+        #[cfg(test)]
+        if let Some(tick) = DRIVER_TASK_TEST_COUNTER_OVERRIDE_TICKS.with(|ticks| {
+            let tick = ticks.get()?;
+            ticks.set(Some(tick.wrapping_add(1)));
+            Some(tick)
+        }) {
+            return Some(tick);
+        }
         None
     }
     #[cfg(not(target_arch = "aarch64"))]
@@ -15372,21 +15414,23 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     }
     let typed_steady_tx_entry = steady_data_plane_operation.is_some();
     let terminal_drain_candidate = !typed_steady_tx_entry
-        && steady_tx_descriptor_marked
         && mode == DriverTaskRingCommandMode::RetainedTurn
-        && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
         && slot.active.load(Ordering::Acquire) != 0
         && CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) != 0
         && slot.request_seq.load(Ordering::Acquire)
             == CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) as usize
         && CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Acquire) == command.aux1;
-    if typed_steady_tx_entry || terminal_drain_candidate {
+    let steady_tx_terminal_drain_candidate = terminal_drain_candidate
+        && steady_tx_descriptor_marked
+        && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0;
+    if typed_steady_tx_entry || steady_tx_terminal_drain_candidate {
         command.flags |= DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
     }
     let command_marks_steady_service_lease =
         command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0;
     if steady_tx_descriptor_marked != command_marks_steady_service_lease
-        || steady_tx_descriptor_marked != (typed_steady_tx_entry || terminal_drain_candidate)
+        || steady_tx_descriptor_marked
+            != (typed_steady_tx_entry || steady_tx_terminal_drain_candidate)
     {
         // The immutable descriptor marker and the typed root entry are one
         // authority statement. Neither a generic caller with a marked op7, a
@@ -15454,7 +15498,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     }
     let same_request_resume = active_before_submit
         && driver_task_ring_mode_uses_bounded_send(mode)
-        && driver_task_ring_timeout_keeps_active(contract, command, mode)
+        && (exact_terminal_drain || driver_task_ring_timeout_keeps_active(contract, command, mode))
         && slot.active_command_fingerprint.load(Ordering::Acquire) == command_fingerprint;
     let closing_cyw43_parent_resume = mode == DriverTaskRingCommandMode::RetainedTurn
         && contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
@@ -19138,9 +19182,9 @@ pub const CYW43_WIFI_DRIVER_TASK_CONTRACT: DriverTaskContract = DriverTaskContra
     authority: DriverTaskAuthority::NetworkFrameTransport,
     isolation: DriverTaskIsolation::DedicatedSeL4Task,
     budget: DriverTaskBudget::preemptible(
-        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
-        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
-        DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
+        pi4_driver_abi::DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
+        pi4_driver_abi::DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
+        pi4_driver_abi::DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
     ),
     queue_depth: 128,
 };
@@ -22000,6 +22044,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_steady_tx_parent_inactivity_rebases_only_on_new_exact_progress() {
+        let _counter = DriverTaskTestCounterOverride::new();
         let mut ring_page = Box::new(AlignedDriverTaskRing(
             [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
         ));
@@ -22180,6 +22225,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_steady_tx_fresh_turn_signals_once_and_deadline_faults_without_resignal() {
+        let _counter = DriverTaskTestCounterOverride::new();
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().expect("steady TX lease test lock");
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
@@ -24027,6 +24073,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn persistent_op11_deadline_completion_wins_without_resignal_or_grant() {
+        let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
             .lock()
             .expect("persistent op11 deadline test lock");
@@ -24064,6 +24111,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn persistent_op11_deadline_stable_miss_faults_pair_without_resignal_or_grant() {
+        let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
             .lock()
             .expect("persistent op11 deadline test lock");
@@ -24090,6 +24138,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn persistent_op11_deadline_preserves_ordinary_non_op11_grant_lane() {
+        let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
             .lock()
             .expect("persistent op11 deadline test lock");
