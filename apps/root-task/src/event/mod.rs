@@ -2785,8 +2785,6 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_rx_admission_pending: bool,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    linked_runtime_cyw43_rx_observed_hit_epoch: usize,
-    #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_durable_resume: Option<LinkedRuntimeCyw43DurableResume>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_operator_rotation_pending: Option<LinkedRuntimeCyw43DurableResume>,
@@ -3150,8 +3148,6 @@ where
             linked_runtime_network_operator_checkpoint_started_ticks: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_cyw43_rx_admission_pending: false,
-            #[cfg(all(feature = "kernel", feature = "net-console"))]
-            linked_runtime_cyw43_rx_observed_hit_epoch: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_cyw43_durable_resume: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -3991,15 +3987,21 @@ where
                             elapsed_us,
                         )
                     {
-                        // A CYW43 op8 completion exposes exactly one copied
-                        // frame. Keep the NIC phase only while an exact
-                        // continuation, queue, or TCP response is pending.
-                        // One root turn still owns at most one linked-runtime
-                        // operation. Bounded physical-console checkpoints
-                        // preserve the open immutable parent. The
-                        // virtual-counter cap fences only fresh-parent
-                        // admission; the compiler-declared turn cap remains
-                        // the hard retained-parent bound.
+                        // One Network turn imports a bounded batch of
+                        // queue-only CYW43 op8 completions. No batch member
+                        // inspects or advances the physical source: the exact
+                        // DPC/SDIO lifetime remains the sole F2 owner. Each
+                        // additional child-ring permit is opened only after a
+                        // committed queue terminal; the coalesced root wake is
+                        // only an urgency hint. An exact empty terminal stops
+                        // the batch and clears/rechecks that hint. Keep the NIC
+                        // phase only while an exact continuation, queue, or TCP
+                        // response is pending.
+                        // Bounded physical-console checkpoints preserve the
+                        // open immutable parent. The virtual-counter cap
+                        // fences only fresh-parent admission; the
+                        // compiler-declared turn cap remains the hard
+                        // retained-parent bound.
                         if !self.route_linked_runtime_cyw43_operator_probe() {
                             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
                         }
@@ -4274,8 +4276,6 @@ where
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn clear_linked_runtime_cyw43_rx_admission(&mut self) {
         self.linked_runtime_cyw43_rx_admission_pending = false;
-        self.linked_runtime_cyw43_rx_observed_hit_epoch =
-            crate::hal::driver_task::cyw43_root_wake_hit_epoch();
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -4403,13 +4403,13 @@ where
         true
     }
 
-    /// Convert one newly consumed child RX wake into one EventPump admission.
+    /// Consume one child notification only as an urgency hint.
     ///
-    /// The kernel notification remains a coalesced level until exact empty op8
-    /// proof. Only a change in the hit epoch may arm this one-shot scheduler
-    /// cursor, so the retained level cannot repeatedly bypass physical
-    /// operators. A fresh edge latches Network admission but never rewrites an
-    /// already-scheduled Serial, LocalSeat, Dispatch, or Display phase.
+    /// The durable service snapshot is re-read after polling. A hint with no
+    /// committed work cannot admit Network, while committed work remains live
+    /// through the durable-resume token even when the hint was lost or
+    /// coalesced. No notification counter carries history or operation
+    /// authority.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn poll_linked_runtime_cyw43_rx_admission(&mut self) {
         if self.network_service_quarantined
@@ -4420,26 +4420,15 @@ where
             return;
         }
 
+        let hinted = crate::hal::driver_task::poll_cyw43_root_wake_notification();
         self.refresh_linked_runtime_cyw43_durable_resume();
-        if !crate::drivers::driver_task_net::cyw43_service_work_snapshot()
-            .ordinary_network_admissible()
-        {
+        let snapshot = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+        if !snapshot.ordinary_network_admissible() {
             self.clear_linked_runtime_cyw43_scheduler_state();
             return;
         }
-        let _ = crate::hal::driver_task::poll_cyw43_root_wake_notification();
-        let hit_epoch = crate::hal::driver_task::cyw43_root_wake_hit_epoch();
-        if !crate::hal::driver_task::cyw43_root_wake_pending() {
-            self.linked_runtime_cyw43_rx_admission_pending = false;
-            self.linked_runtime_cyw43_rx_observed_hit_epoch = hit_epoch;
-            return;
-        }
-        if hit_epoch == self.linked_runtime_cyw43_rx_observed_hit_epoch {
-            return;
-        }
-
-        self.linked_runtime_cyw43_rx_observed_hit_epoch = hit_epoch;
-        self.linked_runtime_cyw43_rx_admission_pending = true;
+        self.linked_runtime_cyw43_rx_admission_pending =
+            hinted && snapshot.schedulable_network_work();
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -4447,7 +4436,7 @@ where
         &self,
         serial_rx_activity: bool,
     ) -> bool {
-        crate::drivers::driver_task_net::cyw43_service_work_snapshot().ordinary_network_admissible()
+        crate::drivers::driver_task_net::cyw43_service_work_snapshot().schedulable_network_work()
             && (self.linked_runtime_cyw43_rx_admission_pending
                 || self.linked_runtime_cyw43_durable_resume.is_some()
                 || (self.linked_runtime_network_consecutive_turns != 0
@@ -13955,18 +13944,13 @@ where
         HeaplessString<DEFAULT_LINE_CAPACITY>,
     ) {
         let state = format_message(format_args!(
-            "wifi: root rx_wake bound={} badge={} pending={} signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck",
+            "wifi: root rx_hint bound={} badge={} authority=none condition=committed-runtime-queue",
             Self::yes_no(wake.bound),
             wake.badge,
-            Self::yes_no(wake.pending),
         ));
         let counters = format_message(format_args!(
-            "wifi: root rx_wake_counters polls={} hits={} clears={} rechecks={} stale_clear_skips={}",
-            wake.polls,
-            wake.hits,
-            wake.clears,
-            wake.rechecks,
-            wake.stale_clear_skips,
+            "wifi: root rx_hint_counters polls={} hits={}",
+            wake.polls, wake.hits,
         ));
         (state, counters)
     }
@@ -25422,18 +25406,17 @@ mod tests {
             crate::hal::driver_task::Cyw43RootWakeSnapshot {
                 bound: true,
                 badge: 1,
-                pending: true,
                 polls: usize::MAX,
                 hits: usize::MAX,
-                clears: usize::MAX,
-                rechecks: usize::MAX,
-                stale_clear_skips: usize::MAX,
             },
         );
         assert!(!wake.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{wake}");
-        assert!(wake.contains("bound=yes badge=1 pending=yes"), "{wake}");
         assert!(
-            wake.ends_with("signal=runtime-queue-0-to-1 clear=exact-empty-op8-recheck"),
+            wake.contains("rx_hint bound=yes badge=1 authority=none"),
+            "{wake}"
+        );
+        assert!(
+            wake.ends_with("condition=committed-runtime-queue"),
             "{wake}"
         );
         assert!(
@@ -25442,12 +25425,8 @@ mod tests {
         );
         assert!(
             wake_counters.starts_with(
-                "wifi: root rx_wake_counters polls=18446744073709551615 hits=18446744073709551615"
+                "wifi: root rx_hint_counters polls=18446744073709551615 hits=18446744073709551615"
             ),
-            "{wake_counters}"
-        );
-        assert!(
-            wake_counters.ends_with("stale_clear_skips=18446744073709551615"),
             "{wake_counters}"
         );
     }
@@ -33621,7 +33600,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_new_rx_edge_preserves_scheduled_display_phase_before_network() {
+    fn linked_cyw43_new_rx_hint_preserves_scheduled_display_phase_before_network() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -33635,9 +33614,10 @@ mod tests {
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(40, 6, 2, 1),
         ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
@@ -33670,7 +33650,7 @@ mod tests {
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
-                "a fresh edge must not rewrite the already-scheduled Display turn"
+                "a fresh hint must not rewrite the already-scheduled Display turn"
             );
             assert!(pump.linked_runtime_cyw43_rx_admission_pending);
             assert_eq!(
@@ -33686,14 +33666,21 @@ mod tests {
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Network,
-                "Serial then admits the latched Network edge"
+                "Serial then admits committed work after the hint is consumed"
             );
-            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "the notification carries urgency for one polling turn only"
+            );
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_some(),
+                "committed runtime work, not the consumed hint, retains Network service"
+            );
 
             pump.poll();
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_pending,
-                "the edge cursor must be consumed by the first admitted Network turn"
+                "the consumed hint must not become scheduler history"
             );
         }
         assert_eq!(wifi.polls, 1);
@@ -33701,7 +33688,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_durable_level_survives_consumed_edge_until_exact_idle() {
+    fn linked_cyw43_durable_level_survives_consumed_hint_until_exact_idle() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
@@ -33718,9 +33705,7 @@ mod tests {
         crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
             crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(41, 7, 3, 1),
         ));
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
-        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
@@ -33758,7 +33743,7 @@ mod tests {
             pump.poll();
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_pending,
-                "the first Network turn must consume only the edge cursor"
+                "the notification hint must be consumed without clearing durable work"
             );
             assert_eq!(
                 pump.linked_runtime_service_phase,
@@ -33930,9 +33915,7 @@ mod tests {
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
-        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
             crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(56, 16, 0, 1),
@@ -33965,22 +33948,18 @@ mod tests {
             );
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_can_follow_serial(false),
-                "a stale edge cursor must not bypass the physical-lifetime fence"
+                "a stale hint must not bypass the physical-lifetime fence"
             );
 
             pump.poll_linked_runtime_cyw43_rx_admission();
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_pending,
-                "epoch-zero state must not consume and convert a wake edge"
+                "epoch-zero state must not convert a consumed hint into authority"
             );
             let wake = crate::hal::driver_task::cyw43_root_wake_snapshot()
                 .expect("configured CYW43 wake route remains inspectable");
-            assert_eq!(wake.polls, 0);
-            assert_eq!(wake.hits, 0);
-            assert!(
-                !wake.pending,
-                "EventPump must leave the kernel-latched edge unconsumed"
-            );
+            assert_eq!(wake.polls, 1);
+            assert_eq!(wake.hits, 1);
             assert!(
                 !pump.linked_runtime_cyw43_network_burst_due()
                     && !pump.linked_runtime_cyw43_priority_work_due(),
@@ -34002,14 +33981,13 @@ mod tests {
             "no NIC, CYW43, or SDIO child turn may run for epoch-zero work"
         );
         assert!(
-            crate::hal::driver_task::poll_cyw43_root_wake_notification(),
-            "the untouched wake edge remains available to the later valid owner"
+            !crate::hal::driver_task::poll_cyw43_root_wake_notification(),
+            "a consumed notification cannot retain history for a later owner"
         );
         let wake = crate::hal::driver_task::cyw43_root_wake_snapshot()
             .expect("configured CYW43 wake route remains inspectable");
-        assert_eq!(wake.polls, 1);
+        assert_eq!(wake.polls, 2);
         assert_eq!(wake.hits, 1);
-        assert!(wake.pending);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -34103,16 +34081,22 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_new_rx_edge_preserves_each_scheduled_operator_phase() {
+    fn linked_cyw43_new_rx_hint_preserves_each_scheduled_operator_phase() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
                 crate::hal::driver_task::test_reset_cyw43_root_wake();
             }
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(59, 19, 11, 1),
+        ));
         let _reset = LinkedRuntimeTestReset;
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
             32768,
@@ -34131,26 +34115,21 @@ mod tests {
             LinkedRuntimeServicePhase::Dispatch,
             LinkedRuntimeServicePhase::Display,
         ] {
-            assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-                false, 0,
-            ));
+            assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
             crate::hal::driver_task::test_inject_cyw43_root_wake();
             pump.linked_runtime_service_phase = phase;
             pump.linked_runtime_cyw43_rx_admission_pending = false;
-            pump.linked_runtime_cyw43_rx_observed_hit_epoch = 0;
 
             pump.poll_linked_runtime_cyw43_rx_admission();
 
             assert_eq!(
                 pump.linked_runtime_service_phase, phase,
-                "new CYW43 RX edge must not rewrite scheduled {phase:?} work"
+                "new CYW43 RX hint must not rewrite scheduled {phase:?} work"
             );
             assert!(pump.linked_runtime_cyw43_rx_admission_pending);
         }
 
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
-        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         pump.pending_cyw43_bootstrap_hdmi_terminal_milestone =
             Some(PendingCyw43BootstrapHdmiMilestone {
@@ -34159,14 +34138,13 @@ mod tests {
             });
         pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Display;
         pump.linked_runtime_cyw43_rx_admission_pending = false;
-        pump.linked_runtime_cyw43_rx_observed_hit_epoch = 0;
 
         pump.poll_linked_runtime_cyw43_rx_admission();
 
         assert_eq!(
             pump.linked_runtime_service_phase,
             LinkedRuntimeServicePhase::Display,
-            "a new edge must not preempt a high-impact HDMI status turn"
+            "a new hint must not preempt a high-impact HDMI status turn"
         );
         assert!(pump.linked_runtime_cyw43_rx_admission_pending);
         assert!(
@@ -34178,20 +34156,33 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn linked_cyw43_observed_wake_level_does_not_rearm_or_bypass_local_seat() {
+    fn linked_cyw43_consumed_hint_does_not_rearm_or_bypass_local_seat() {
         struct LinkedRuntimeTestReset;
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
                 crate::hal::driver_task::test_reset_cyw43_root_wake();
                 crate::serial::test_end_linked_runtime_only_transport();
             }
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            true, 7,
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(60, 20, 12, 0),
         ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(7));
+        crate::hal::driver_task::test_inject_cyw43_root_wake();
+        assert!(
+            crate::hal::driver_task::poll_cyw43_root_wake_notification(),
+            "the first poll consumes the urgency hint"
+        );
+        let consumed = crate::hal::driver_task::cyw43_root_wake_snapshot()
+            .expect("configured CYW43 wake route remains inspectable");
+        assert_eq!(consumed.polls, 1);
+        assert_eq!(consumed.hits, 8);
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
 
@@ -34216,21 +34207,19 @@ mod tests {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
                 .with_network(&mut wifi)
                 .with_local_seat(&mut local_seat);
-            pump.linked_runtime_cyw43_rx_observed_hit_epoch = 7;
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::LocalSeat;
 
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Dispatch,
-                "the retained wake level must not behave like another edge"
+                "a consumed hint must not bypass the scheduled local-seat turn"
             );
             assert!(!pump.linked_runtime_cyw43_rx_admission_pending);
-            assert_eq!(
-                crate::hal::driver_task::cyw43_root_wake_hit_epoch(),
-                7,
-                "a level-only poll must not manufacture a hit"
-            );
+            let after = crate::hal::driver_task::cyw43_root_wake_snapshot()
+                .expect("configured CYW43 wake route remains inspectable");
+            assert_eq!(after.polls, 2);
+            assert_eq!(after.hits, 8, "a poll without a new hint must not rearm");
         }
         assert_eq!(wifi.polls, 0);
     }
@@ -34242,15 +34231,19 @@ mod tests {
 
         impl Drop for LinkedRuntimeTestReset {
             fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
                 crate::hal::driver_task::test_reset_cyw43_root_wake();
                 crate::serial::test_end_linked_runtime_only_transport();
             }
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(62, 22, 14, 1),
         ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         crate::serial::test_begin_linked_runtime_only_transport();
         let _reset = LinkedRuntimeTestReset;
@@ -34283,7 +34276,7 @@ mod tests {
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Serial,
-                "the scheduled Display phase must finish before the fresh edge reaches Serial"
+                "the scheduled Display phase must finish before the fresh hint reaches Serial"
             );
             assert!(pump.linked_runtime_cyw43_rx_admission_pending);
 
@@ -34293,7 +34286,14 @@ mod tests {
                 LinkedRuntimeServicePhase::LocalSeat,
                 "real local-seat input must retain precedence after the Serial turn"
             );
-            assert!(pump.linked_runtime_cyw43_rx_admission_pending);
+            assert!(
+                !pump.linked_runtime_cyw43_rx_admission_pending,
+                "the hint remains consumable even while local input wins scheduling"
+            );
+            assert!(
+                pump.linked_runtime_cyw43_durable_resume.is_some(),
+                "committed work must remain authoritative after consuming the hint"
+            );
             assert!(
                 pump.linked_runtime_cyw43_operator_rotation_pending
                     .is_some(),
@@ -34399,9 +34399,7 @@ mod tests {
         }
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
-        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
             crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(61, 13, 9, 1),
@@ -34458,7 +34456,7 @@ mod tests {
             assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
             assert!(
                 !pump.linked_runtime_cyw43_rx_admission_pending,
-                "GENET must never arm the CYW43-only edge admission cursor"
+                "GENET must never acquire CYW43-only hint admission"
             );
             assert!(
                 pump.linked_runtime_cyw43_durable_resume.is_none()
@@ -34568,9 +34566,7 @@ mod tests {
         let _progress_guard = wifi_driver_task_progress_test_guard();
         crate::serial::test_begin_linked_runtime_only_transport();
         crate::hal::driver_task::test_reset_cyw43_root_wake();
-        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(
-            false, 0,
-        ));
+        assert!(crate::hal::driver_task::test_configure_cyw43_root_wake(0));
         crate::hal::driver_task::test_inject_cyw43_root_wake();
         let wake_before = crate::hal::driver_task::cyw43_root_wake_snapshot()
             .expect("configured CYW43 wake remains inspectable");
@@ -34631,7 +34627,7 @@ mod tests {
             .expect("configured CYW43 wake remains inspectable");
         assert_eq!(
             wake_after, wake_before,
-            "quarantine must not consume or latch a poisoned-generation wake"
+            "quarantine must not consume the poisoned-generation hint"
         );
     }
 

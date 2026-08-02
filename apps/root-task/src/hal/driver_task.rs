@@ -434,6 +434,16 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
     DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT, DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
+#[cfg(feature = "kernel")]
+use pi4_driver_abi::{
+    DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
+    DriverRuntimeCyw43RxQueueState, DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE, DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES, DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES,
+    DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET,
+};
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
     DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_SDIO_SERVICE_MAX_BYTES,
@@ -1632,6 +1642,47 @@ pub const DRIVER_TASK_RING_PAGE_BYTES: usize = 4096;
 /// Shared owner pages exposed through a linked bus-owner transport.
 pub const DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
+/// Root-side shared-page records retained for one driver runtime.
+///
+/// Only the first eight pages belong to the CYW43-to-SDIO owner aperture. The
+/// remaining compiler-declared pages stay private to the CYW43/root handoff;
+/// tracking them here must never widen the bus-owner capability export.
+pub const DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY: usize =
+    pi4_driver_abi::DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES;
+const _: () = {
+    assert!(DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY == 8);
+    assert!(DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY >= 16);
+    assert!(
+        DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY < DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY
+    );
+};
+#[cfg(feature = "kernel")]
+const _: () = {
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE
+            == DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+            <= DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE
+            + DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES
+            == DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET as usize
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize
+                + DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE * DRIVER_TASK_RING_PAGE_BYTES
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as usize
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize
+                + DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES * DRIVER_TASK_RING_PAGE_BYTES
+    );
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES as usize <= DRIVER_TASK_RING_PAGE_BYTES);
+};
 /// Bytes in the CYW43-to-SDIO owner shared data window.
 pub const DRIVER_TASK_SDIO_BUS_SHARED_DATA_BYTES: usize =
     DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY * DRIVER_TASK_RING_PAGE_BYTES;
@@ -2717,23 +2768,11 @@ fn record_driver_task_steady_service_progress_time(slot: &DriverTaskCommandSlot)
     }
 }
 
-/// Start the one physical child-lifetime containment interval after a probe.
-///
-/// This deliberately leaves `retained_steady_tx_deadline_probe_sent` latched.
-/// A later exact heartbeat may rebase the same inactivity clock, but it cannot
-/// authorize another deadline notification for the immutable parent.
-#[cfg(feature = "kernel")]
-fn record_driver_task_steady_service_probe_containment_start(slot: &DriverTaskCommandSlot) {
-    record_driver_task_steady_service_progress_time(slot);
-}
-
 /// Return whether the exact steady parent has exceeded one complete child lifetime.
 ///
-/// This is the lost-wake containment clock, not normal service cadence. Healthy
-/// SDHCI requests wake through IRQ 158 and publish semantic progress before this
-/// bound. If that edge is lost, root uses the generated virtual-counter truth to
-/// schedule one final identity-preserving probe instead of counting EventPump
-/// polls as elapsed time.
+/// This is a fault-containment clock, not normal service cadence. Healthy SDHCI
+/// requests complete through IRQ 158 and durable ring state before this bound.
+/// Expiry never publishes or replays scheduling authority.
 #[cfg(feature = "kernel")]
 fn driver_task_steady_service_inactivity_expired(slot: &DriverTaskCommandSlot) -> Option<bool> {
     let start = slot
@@ -2791,7 +2830,6 @@ fn driver_task_steady_service_parent_identity_matches(
         && command.sequence == request
         && ring_root_ptr != 0
         && command_fingerprint != 0
-        && slot.root_notification.load(Ordering::Acquire) != 0
         && slot.active.load(Ordering::Acquire) != 0
         && slot.ring_root_ptr.load(Ordering::Acquire) == ring_root_ptr
         && slot.request_seq.load(Ordering::Acquire) == request as usize
@@ -2811,72 +2849,88 @@ fn driver_task_steady_service_parent_identity_matches(
         && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
 }
 
-/// Return whether the exact active steady parent is due for a containment poll.
+/// Root-side condition for one immutable issued CYW43 steady-service parent.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SteadyServiceParentCondition {
+    /// No current issued parent matches the caller's exact request identity.
+    NotExact,
+    /// The exact parent remains live and has no committed terminal yet.
+    Waiting,
+    /// A stable sequence-last terminal is visible and must be consumed.
+    TerminalVisible,
+    /// The exact parent missed its containment deadline and pair recovery was latched.
+    DeadlineFault,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_exact_completion_is_stable(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+    request: u32,
+) -> bool {
+    let Some(ring) = DriverTaskRingView::new(ring_root_ptr) else {
+        return false;
+    };
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    let first = ring.read_completion();
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    let second = ring.read_completion();
+    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+    driver_task_counter_add(
+        &slot.counters.cache_invalidate_bytes,
+        2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
+    );
+    matches!((first, second), (Some(first), Some(second)) if first == second && second.sequence == request)
+}
+
+/// Recheck durable terminal state immediately before suppressing one issued op7.
 ///
-/// This is a passive scheduler predicate: it neither advances the ring nor
-/// signals either linked runtime. Counterless profiles remain on the existing
-/// finite poll fallback instead of being stranded by a timer they cannot read.
+/// Notifications are urgency hints only. Exact immutable request identity and
+/// sequence-last ring state decide whether root waits or consumes. The deadline
+/// is sampled only after a stable terminal miss; expiry poisons the scheduling
+/// lease and enters the sole coordinated CYW43/SDIO recovery lane without
+/// signalling either runtime or making ordinary Network service runnable.
 #[cfg(feature = "kernel")]
 #[must_use]
-pub(crate) fn cyw43_steady_service_parent_deadline_due() -> bool {
+pub(crate) fn cyw43_steady_service_parent_condition(
+    expected_request: u32,
+) -> Cyw43SteadyServiceParentCondition {
     let slot = &DRIVER_TASK_SLOT_CYW43455;
     let Some(DriverTaskRetainedRequestState::Issued { request, command }) =
         active_driver_task_retained_request_for_slot(slot)
     else {
-        return false;
+        return Cyw43SteadyServiceParentCondition::NotExact;
     };
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
-    if !driver_task_steady_service_parent_identity_matches(
-        slot,
-        CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        command,
-        ring_root_ptr,
-        request,
-        command_fingerprint,
-    ) {
-        return false;
-    }
-    driver_task_steady_service_inactivity_expired(slot).unwrap_or(true)
-}
-
-/// Signal one deadline probe for the still-exact steady parent.
-#[cfg(feature = "kernel")]
-fn signal_driver_task_steady_service_deadline_probe(
-    slot: &DriverTaskCommandSlot,
-    contract: DriverTaskContract,
-    command: DriverTaskCommandRecord,
-    ring_root_ptr: usize,
-    request: u32,
-    command_fingerprint: u32,
-) -> bool {
-    if !driver_task_steady_service_parent_identity_matches(
-        slot,
-        contract,
-        command,
-        ring_root_ptr,
-        request,
-        command_fingerprint,
-    ) {
-        return false;
-    }
-    let notification = slot.root_notification.load(Ordering::Acquire);
-    if notification == 0
-        || slot
-            .retained_steady_tx_deadline_probe_sent
-            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
-            .is_err()
+    if request != expected_request
+        || !driver_task_steady_service_parent_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            command_fingerprint,
+        )
     {
-        return false;
+        return Cyw43SteadyServiceParentCondition::NotExact;
     }
-    record_driver_task_steady_service_probe_containment_start(slot);
-    core::sync::atomic::compiler_fence(Ordering::Release);
-    driver_task_counter_add(&slot.counters.send_attempts, 1);
-    #[cfg(test)]
-    TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
-    #[cfg(not(test))]
-    crate::sel4::signal_unchecked(notification as sel4_sys::seL4_CPtr);
-    true
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43SteadyServiceParentCondition::TerminalVisible;
+    }
+    if !driver_task_steady_service_inactivity_expired(slot).unwrap_or(false) {
+        return Cyw43SteadyServiceParentCondition::Waiting;
+    }
+    // Close the expiry race with the same exact stable fence. A terminal that
+    // committed while the counter was sampled always wins over recovery.
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43SteadyServiceParentCondition::TerminalVisible;
+    }
+    driver_task_counter_add(&slot.counters.aborts, 1);
+    fail_driver_task_retained_priority_lease(slot, CYW43_WIFI_DRIVER_TASK_CONTRACT);
+    Cyw43SteadyServiceParentCondition::DeadlineFault
 }
 
 #[cfg(feature = "kernel")]
@@ -3103,6 +3157,32 @@ impl DriverTaskRingView {
             detail,
             result,
             frame,
+        })
+    }
+
+    fn read_cyw43_rx_queue_state(&self) -> Option<DriverRuntimeCyw43RxQueueState> {
+        let base = usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET);
+        Some(DriverRuntimeCyw43RxQueueState {
+            magic: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, magic))?,
+            version: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, version))?,
+            len: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, len))?,
+            generation: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, generation),
+            )?,
+            queue_depth: self.read_u16(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, queue_depth),
+            )?,
+            queue_capacity: self.read_u16(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, queue_capacity),
+            )?,
+            flags: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, flags))?,
+            commit_sequence: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, commit_sequence),
+            )?,
         })
     }
 
@@ -3340,22 +3420,17 @@ struct DriverTaskCommandSlot {
     retained_steady_tx_fast_lane: AtomicUsize,
     retained_steady_tx_last_progress_slice: AtomicU32,
     retained_steady_tx_last_progress_ticks: AtomicU64,
-    retained_steady_tx_deadline_probe_sent: AtomicUsize,
     endpoint: AtomicUsize,
     root_notification: AtomicUsize,
     root_wake_notification: AtomicUsize,
     root_wake_badge: AtomicU32,
-    root_wake_latched: AtomicUsize,
     root_wake_polls: AtomicUsize,
     root_wake_hits: AtomicUsize,
-    root_wake_clears: AtomicUsize,
-    root_wake_rechecks: AtomicUsize,
-    root_wake_stale_clear_skips: AtomicUsize,
     ring_root_ptr: AtomicUsize,
     ring_frame_cap: AtomicUsize,
     shared_frame_count: AtomicUsize,
-    shared_frame_caps: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
-    shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+    shared_frame_caps: [AtomicUsize; DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
+    shared_frame_root_ptrs: [AtomicUsize; DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
     request_seq: AtomicUsize,
     active: AtomicUsize,
     ring_producer: AtomicUsize,
@@ -3835,24 +3910,19 @@ impl DriverTaskCommandSlot {
             retained_steady_tx_fast_lane: AtomicUsize::new(0),
             retained_steady_tx_last_progress_slice: AtomicU32::new(0),
             retained_steady_tx_last_progress_ticks: AtomicU64::new(0),
-            retained_steady_tx_deadline_probe_sent: AtomicUsize::new(0),
             endpoint: AtomicUsize::new(0),
             root_notification: AtomicUsize::new(0),
             root_wake_notification: AtomicUsize::new(0),
             root_wake_badge: AtomicU32::new(0),
-            root_wake_latched: AtomicUsize::new(0),
             root_wake_polls: AtomicUsize::new(0),
             root_wake_hits: AtomicUsize::new(0),
-            root_wake_clears: AtomicUsize::new(0),
-            root_wake_rechecks: AtomicUsize::new(0),
-            root_wake_stale_clear_skips: AtomicUsize::new(0),
             ring_root_ptr: AtomicUsize::new(0),
             ring_frame_cap: AtomicUsize::new(0),
             shared_frame_count: AtomicUsize::new(0),
             shared_frame_caps: [const { AtomicUsize::new(0) };
-                DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+                DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
             shared_frame_root_ptrs: [const { AtomicUsize::new(0) };
-                DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY],
+                DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY],
             request_seq: AtomicUsize::new(0),
             active: AtomicUsize::new(0),
             ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
@@ -4026,12 +4096,8 @@ pub(crate) struct DriverTaskRetainedGrantSnapshot {
 pub(crate) struct Cyw43RootWakeSnapshot {
     pub(crate) bound: bool,
     pub(crate) badge: u32,
-    pub(crate) pending: bool,
     pub(crate) polls: usize,
     pub(crate) hits: usize,
-    pub(crate) clears: usize,
-    pub(crate) rechecks: usize,
-    pub(crate) stale_clear_skips: usize,
 }
 
 #[cfg(feature = "kernel")]
@@ -6158,7 +6224,6 @@ pub fn publish_driver_task_root_wake_notification(
     slot.root_wake_notification
         .store(notification, Ordering::Release);
     slot.root_wake_badge.store(badge, Ordering::Release);
-    slot.root_wake_latched.store(0, Ordering::Release);
     true
 }
 
@@ -6181,27 +6246,27 @@ fn poll_cyw43_root_wake_badge(notification: usize) -> sel4_sys::seL4_Word {
 }
 
 #[cfg(feature = "kernel")]
-fn poll_cyw43_root_wake_slot(slot: &DriverTaskCommandSlot, recheck: bool) -> bool {
+fn poll_cyw43_root_wake_slot(slot: &DriverTaskCommandSlot) -> bool {
     let notification = slot.root_wake_notification.load(Ordering::Acquire);
     let expected_badge = slot.root_wake_badge.load(Ordering::Acquire);
     if notification == 0
         || expected_badge != pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE
     {
-        return slot.root_wake_latched.load(Ordering::Acquire) != 0;
+        return false;
     }
     slot.root_wake_polls.fetch_add(1, Ordering::AcqRel);
-    if recheck {
-        slot.root_wake_rechecks.fetch_add(1, Ordering::AcqRel);
-    }
     if poll_cyw43_root_wake_badge(notification) == sel4_sys::seL4_Word::from(expected_badge) {
-        slot.root_wake_latched.store(1, Ordering::Release);
         slot.root_wake_hits.fetch_add(1, Ordering::AcqRel);
+        return true;
     }
-    slot.root_wake_latched.load(Ordering::Acquire) != 0
+    false
 }
 
-/// Poll the unbound CYW43 child-to-root RX wake once and retain a scheduling
-/// hint until an exact op8 completion proves the runtime queue empty.
+/// Poll the unbound CYW43 child-to-root RX wake once.
+///
+/// The result is an urgency hint for this scheduling turn only. Queue state in
+/// the sequence-last CYW43 record remains the sole authority and history;
+/// consuming this binary notification never creates a software latch.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub fn poll_cyw43_root_wake_notification() -> bool {
@@ -6211,55 +6276,10 @@ pub fn poll_cyw43_root_wake_notification() -> bool {
     let Some(slot) = slot_for_task_key(task_key) else {
         return false;
     };
-    poll_cyw43_root_wake_slot(slot, false)
+    poll_cyw43_root_wake_slot(slot)
 }
 
-/// Return whether a CYW43 RX wake remains actionable for root scheduling.
-#[cfg(feature = "kernel")]
-#[must_use]
-pub fn cyw43_root_wake_pending() -> bool {
-    driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-        .and_then(slot_for_task_key)
-        .is_some_and(|slot| slot.root_wake_latched.load(Ordering::Acquire) != 0)
-}
-
-/// Return the wake-hit epoch captured by an exact CYW43 op8 owner.
-#[cfg(feature = "kernel")]
-#[must_use]
-pub fn cyw43_root_wake_hit_epoch() -> usize {
-    driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-        .and_then(slot_for_task_key)
-        .map_or(0, |slot| slot.root_wake_hits.load(Ordering::Acquire))
-}
-
-/// Clear and immediately recheck the CYW43 RX scheduling hint after an exact
-/// op8 terminal reports an empty child queue.
-///
-/// A hit consumed after this op8 owner captured `expected_hit_epoch` prevents
-/// the older terminal from clearing newer work. Otherwise root clears the
-/// latch and immediately polls once: a pre-clear child edge is re-latched,
-/// while an edge after that poll remains kernel-pending for the next turn.
-#[cfg(feature = "kernel")]
-#[must_use]
-pub fn clear_and_recheck_cyw43_root_wake_after_empty_rx(expected_hit_epoch: usize) -> bool {
-    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
-        return false;
-    };
-    let Some(slot) = slot_for_task_key(task_key) else {
-        return false;
-    };
-    if slot.root_wake_hits.load(Ordering::Acquire) != expected_hit_epoch {
-        slot.root_wake_stale_clear_skips
-            .fetch_add(1, Ordering::AcqRel);
-        return slot.root_wake_latched.load(Ordering::Acquire) != 0;
-    }
-    if slot.root_wake_latched.swap(0, Ordering::AcqRel) != 0 {
-        slot.root_wake_clears.fetch_add(1, Ordering::AcqRel);
-    }
-    poll_cyw43_root_wake_slot(slot, true)
-}
-
-/// Snapshot CYW43 root-wake telemetry without consuming notification state.
+/// Snapshot CYW43 root-wake telemetry without assigning it queue authority.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_root_wake_snapshot() -> Option<Cyw43RootWakeSnapshot> {
@@ -6268,12 +6288,8 @@ pub(crate) fn cyw43_root_wake_snapshot() -> Option<Cyw43RootWakeSnapshot> {
     Some(Cyw43RootWakeSnapshot {
         bound: slot.root_wake_notification.load(Ordering::Acquire) != 0,
         badge: slot.root_wake_badge.load(Ordering::Acquire),
-        pending: slot.root_wake_latched.load(Ordering::Acquire) != 0,
         polls: slot.root_wake_polls.load(Ordering::Acquire),
         hits: slot.root_wake_hits.load(Ordering::Acquire),
-        clears: slot.root_wake_clears.load(Ordering::Acquire),
-        rechecks: slot.root_wake_rechecks.load(Ordering::Acquire),
-        stale_clear_skips: slot.root_wake_stale_clear_skips.load(Ordering::Acquire),
     })
 }
 
@@ -6319,7 +6335,7 @@ pub fn publish_driver_task_shared_frame(
     shared_frame_cap: usize,
     shared_frame_root_ptr: usize,
 ) {
-    if page_index >= DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+    if page_index >= DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
         return;
     }
     let Some(task_key) = driver_task_contract_key(contract) else {
@@ -6389,6 +6405,237 @@ pub fn driver_task_bus_owner_transport_caps_with_shared(
         index = index.saturating_add(1);
     }
     Some((endpoint, ring_frame_cap, shared_frame_caps))
+}
+
+/// Return one stable, passive sample of the CYW43 private-RX queue level.
+///
+/// The runtime's sequence-last record is authoritative. Root invalidates and
+/// samples it twice; the child-to-root notification is deliberately absent
+/// from this decision path.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_rx_queue_state_snapshot() -> Option<DriverRuntimeCyw43RxQueueState>
+{
+    const SNAPSHOT_ATTEMPTS: usize = 3;
+
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    if slot.root_ring_writers.load(Ordering::Acquire) != 0 {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let record_ptr =
+        ring_root_ptr.checked_add(usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET))?;
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES);
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+
+    let mut attempt = 0usize;
+    while attempt < SNAPSHOT_ATTEMPTS {
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let first = ring.read_cyw43_rx_queue_state()?;
+        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let second = ring.read_cyw43_rx_queue_state()?;
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(
+            &slot.counters.cache_invalidate_bytes,
+            record_bytes.saturating_mul(2),
+        );
+        if let Some(snapshot) = DriverRuntimeCyw43RxQueueState::stable_snapshot(first, second) {
+            return Some(snapshot);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_pages_ready(slot: &DriverTaskCommandSlot) -> bool {
+    if slot.shared_frame_count.load(Ordering::Acquire)
+        < DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+    {
+        return false;
+    }
+    let mut page = DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE;
+    while page < DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES {
+        if slot.shared_frame_caps[page].load(Ordering::Acquire) == 0
+            || slot.shared_frame_root_ptrs[page].load(Ordering::Acquire) == 0
+        {
+            return false;
+        }
+        page = page.saturating_add(1);
+    }
+    true
+}
+
+/// Resolve one contiguous absolute shared-buffer span to its root mapping.
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_contiguous_root_span(
+    slot: &DriverTaskCommandSlot,
+    absolute_offset: usize,
+    len: usize,
+) -> Option<usize> {
+    if len == 0 || !driver_task_cyw43_rx_batch_pages_ready(slot) {
+        return None;
+    }
+    let relative =
+        absolute_offset.checked_sub(usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE))?;
+    let page = relative / DRIVER_TASK_RING_PAGE_BYTES;
+    let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+    if page < DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE
+        || page >= DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+        || len > DRIVER_TASK_RING_PAGE_BYTES.saturating_sub(page_offset)
+    {
+        return None;
+    }
+    slot.shared_frame_root_ptrs[page]
+        .load(Ordering::Acquire)
+        .checked_add(page_offset)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES);
+    let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET),
+        record_bytes,
+    )?;
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>()) {
+        return None;
+    }
+
+    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    // SAFETY: The compiler-declared page geometry above proves that this
+    // aligned pointer names the complete fixed-layout batch header in the
+    // HAL-published root mapping. The runtime publishes only primitive fields.
+    let first =
+        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchRecord) };
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+    // SAFETY: This is the second volatile sample of the same validated header;
+    // sequence-last validation below rejects a concurrent producer update.
+    let second =
+        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchRecord) };
+    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+    driver_task_counter_add(
+        &slot.counters.cache_invalidate_bytes,
+        record_bytes.saturating_mul(2),
+    );
+    DriverRuntimeCyw43RxBatchRecord::stable_snapshot(first, second)
+}
+
+/// Stable-read one exact CYW43 RX batch for an immutable op8 parent.
+///
+/// The batch must match both the parent sequence and the current durable queue
+/// generation/commit. Old shared-page contents therefore cannot masquerade as
+/// a completion for a newer transaction.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_rx_batch_snapshot(
+    expected_parent_sequence: u32,
+    queue_state: DriverRuntimeCyw43RxQueueState,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    if expected_parent_sequence == 0 || !queue_state.committed() {
+        return None;
+    }
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    let batch = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
+    if !batch.valid_for_parent_and_queue_state(expected_parent_sequence, queue_state) {
+        return None;
+    }
+    let current_queue_state = driver_task_cyw43_rx_queue_state_snapshot()?;
+    batch
+        .valid_for_parent_and_queue_state(expected_parent_sequence, current_queue_state)
+        .then_some(batch)
+}
+
+#[cfg(feature = "kernel")]
+fn copy_driver_task_cyw43_rx_batch_payload(
+    slot: &DriverTaskCommandSlot,
+    absolute_offset: usize,
+    dest: &mut [u8],
+) -> Option<()> {
+    if dest.is_empty() || !driver_task_cyw43_rx_batch_pages_ready(slot) {
+        return None;
+    }
+    let batch_start = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET);
+    let batch_end = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET);
+    let copy_end = absolute_offset.checked_add(dest.len())?;
+    if absolute_offset < batch_start || copy_end > batch_end {
+        return None;
+    }
+
+    let mut copied = 0usize;
+    while copied < dest.len() {
+        let current_offset = absolute_offset.checked_add(copied)?;
+        let relative =
+            current_offset.checked_sub(usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE))?;
+        let page = relative / DRIVER_TASK_RING_PAGE_BYTES;
+        let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+        if page < DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE
+            || page >= DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+        {
+            return None;
+        }
+        let root_ptr = slot.shared_frame_root_ptrs[page].load(Ordering::Acquire);
+        if root_ptr == 0 {
+            return None;
+        }
+        let chunk = (DRIVER_TASK_RING_PAGE_BYTES - page_offset).min(dest.len() - copied);
+        let source = root_ptr.checked_add(page_offset)?;
+        driver_task_ring_invalidate_root_range(source, chunk);
+        // SAFETY: `source` is bounded to one HAL-published private batch page
+        // and `dest` is a live mutable caller slice. `copy` also preserves the
+        // contract if a diagnostic caller deliberately supplies an overlapping
+        // view of root-shared memory.
+        unsafe {
+            core::ptr::copy(source as *const u8, dest.as_mut_ptr().add(copied), chunk);
+        }
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 1);
+        driver_task_counter_add(&slot.counters.cache_invalidate_bytes, chunk);
+        copied = copied.saturating_add(chunk);
+    }
+    driver_task_shared_load_barrier();
+    Some(())
+}
+
+/// Copy one exact frame from a previously validated CYW43 RX batch.
+///
+/// Stable header samples before and after the copy close the producer-rewrite
+/// race. A caller receives bytes only while the immutable batch commit remains
+/// unchanged across the complete payload read.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn copy_driver_task_cyw43_rx_batch_frame(
+    batch: DriverRuntimeCyw43RxBatchRecord,
+    entry_index: usize,
+    dest: &mut [u8],
+) -> Option<DriverRuntimeCyw43RxBatchEntry> {
+    if !batch.valid() || entry_index >= usize::from(batch.count) {
+        return None;
+    }
+    let entry = batch.entries[entry_index];
+    let frame_len = usize::from(entry.len);
+    if !entry.valid_for_index(entry_index) || dest.len() < frame_len {
+        return None;
+    }
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    let before = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
+    if before != batch {
+        return None;
+    }
+    copy_driver_task_cyw43_rx_batch_payload(
+        slot,
+        usize::try_from(entry.offset).ok()?,
+        &mut dest[..frame_len],
+    )?;
+    let after = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
+    (after == batch).then_some(entry)
 }
 
 /// Return whether CYW43 has irreversible producer authority over the SDIO ring.
@@ -6673,12 +6920,8 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.root_notification.store(0, Ordering::Release);
     slot.root_wake_notification.store(0, Ordering::Release);
     slot.root_wake_badge.store(0, Ordering::Release);
-    slot.root_wake_latched.store(0, Ordering::Release);
     slot.root_wake_polls.store(0, Ordering::Release);
     slot.root_wake_hits.store(0, Ordering::Release);
-    slot.root_wake_clears.store(0, Ordering::Release);
-    slot.root_wake_rechecks.store(0, Ordering::Release);
-    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
     #[cfg(test)]
     TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
@@ -6691,7 +6934,7 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     );
     slot.shared_frame_count.store(0, Ordering::Release);
     let mut index = 0usize;
-    while index < DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY {
+    while index < DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
         slot.shared_frame_caps[index].store(0, Ordering::Release);
         slot.shared_frame_root_ptrs[index].store(0, Ordering::Release);
         index = index.saturating_add(1);
@@ -7016,8 +7259,6 @@ fn reset_driver_task_retained_priority_lease_slot(slot: &DriverTaskCommandSlot) 
     slot.retained_steady_tx_last_progress_slice
         .store(0, Ordering::Release);
     slot.retained_steady_tx_last_progress_ticks
-        .store(0, Ordering::Release);
-    slot.retained_steady_tx_deadline_probe_sent
         .store(0, Ordering::Release);
 }
 
@@ -10242,9 +10483,6 @@ fn reset_cyw43_root_wake_for_pair_restart(slot: &DriverTaskCommandSlot) {
         // scrubbed, so one non-blocking poll deterministically drains the
         // binary notification state for the discarded runtime queue.
         let _ = poll_cyw43_root_wake_badge(notification);
-    }
-    if slot.root_wake_latched.swap(0, Ordering::AcqRel) != 0 {
-        slot.root_wake_clears.fetch_add(1, Ordering::AcqRel);
     }
 }
 
@@ -13871,7 +14109,7 @@ fn driver_task_ring_timeout_keep_active_limit(
         {
             // Completion-poll count is only the timerless host fallback. Pi
             // hardware uses the exact semantic-progress timestamp and one
-            // CNTVCT-scaled child lifetime before a final deadline wake.
+            // CNTVCT-scaled child lifetime before terminal fault containment.
             DRIVER_TASK_CYW43_TRANSPORT_TIMEOUT_KEEP_ACTIVE_LIMIT
         } else {
             usize::MAX
@@ -13981,33 +14219,13 @@ fn driver_task_ring_timeout_keep_decision(
                 .timeout_resumes
                 .fetch_add(1, Ordering::AcqRel)
                 .saturating_add(1);
-            // Physical time admits exactly one scheduling-only probe. Once it
-            // has been sent, the next physical expiry proceeds directly to the
-            // stable-completion fence and issued-unknown recovery; scheduler
-            // poll counts never grant a grace interval.
-            return (
-                slot.retained_steady_tx_deadline_probe_sent
-                    .load(Ordering::Acquire)
-                    == 0,
-                timeout_count,
-            );
-        }
-        if slot
-            .retained_steady_tx_deadline_probe_sent
-            .load(Ordering::Acquire)
-            != 0
-        {
-            // A counterless test/profile cannot measure a second physical
-            // interval. It still must not mint scheduler-poll grace after the
-            // sole probe, so fail through the terminal fence on the next turn.
-            let timeout_count = slot
-                .timeout_resumes
-                .fetch_add(1, Ordering::AcqRel)
-                .saturating_add(1);
+            // Expiry is a terminal fault-containment trigger. The caller closes
+            // the race with one stable completion fence, then enters pair
+            // recovery; it never creates another scheduling edge.
             return (false, timeout_count);
         }
-        // Host tests or unsupported profiles without a counter retain the old
-        // finite fallback below. Pi acceptance requires the generated counter.
+        // Counterless host profiles retain a finite diagnostic fallback below.
+        // Its terminal action is the same fault fence, never a wake or retry.
     }
     if progress_advanced {
         slot.timeout_resumes.store(0, Ordering::Release);
@@ -14965,8 +15183,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 .store(0, Ordering::Release);
             slot.retained_steady_tx_last_progress_ticks
                 .store(0, Ordering::Release);
-            slot.retained_steady_tx_deadline_probe_sent
-                .store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -14992,8 +15208,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 .store(0, Ordering::Release);
             slot.retained_steady_tx_last_progress_ticks
                 .store(0, Ordering::Release);
-            slot.retained_steady_tx_deadline_probe_sent
-                .store(0, Ordering::Release);
             emit_driver_task_ring_resource_submit_status(
                 contract,
                 command,
@@ -15015,8 +15229,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_steady_tx_last_progress_slice
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
-            .store(0, Ordering::Release);
-        slot.retained_steady_tx_deadline_probe_sent
             .store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
@@ -15074,8 +15286,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_steady_tx_last_progress_slice
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
-            .store(0, Ordering::Release);
-        slot.retained_steady_tx_deadline_probe_sent
             .store(0, Ordering::Release);
         return None;
     }
@@ -15587,8 +15797,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // re-signal, or acknowledge continuation authority. Exact newer
         // runtime semantic-progress records can rebase the inactivity fence;
         // repeated or wrong-identity records cannot. The hardware path uses
-        // CNTVCT age and one final scheduling-only deadline wake, never the
-        // number of root completion polls as elapsed-time authority.
+        // CNTVCT age only to trigger the stable terminal fence and recovery,
+        // never to create a wake or treat completion polls as elapsed time.
         if keep_active_on_timeout {
             driver_task_counter_add(&slot.counters.keep_active_timeouts, 1);
         }
@@ -15609,9 +15819,9 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         }
         cache_counter_batch.flush(slot);
 
-        let mut final_probe_cache_counter_batch = DriverTaskCacheCounterBatch::new();
+        let mut final_terminal_cache_counter_batch = DriverTaskCacheCounterBatch::new();
         let first = read_driver_task_ring_completion(
-            &mut final_probe_cache_counter_batch,
+            &mut final_terminal_cache_counter_batch,
             ring_root_ptr,
             completion_ptr,
             request,
@@ -15620,39 +15830,20 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             first
         } else {
             read_driver_task_ring_completion(
-                &mut final_probe_cache_counter_batch,
+                &mut final_terminal_cache_counter_batch,
                 ring_root_ptr,
                 completion_ptr,
                 request,
             )
         };
-        final_probe_cache_counter_batch.flush(slot);
+        final_terminal_cache_counter_batch.flush(slot);
         if late.sequence != request as u32 {
-            let deadline_probe_due = keep_active_on_timeout
-                && timeout_count != 0
-                && slot
-                    .retained_steady_tx_deadline_probe_sent
-                    .load(Ordering::Acquire)
-                    == 0;
-            if deadline_probe_due
-                && signal_driver_task_steady_service_deadline_probe(
-                    slot,
-                    contract,
-                    command,
-                    ring_root_ptr,
-                    request as u32,
-                    command_fingerprint,
-                )
-            {
+            if keep_active_on_timeout {
                 return None;
             }
-            if keep_active_on_timeout && !deadline_probe_due {
-                return None;
-            }
-            // Identity validation or the one-shot signal failed after the
-            // stable terminal fence, or the post-probe physical interval
-            // expired. Treat this issued request as unknown; never mint a
-            // second wake for the unchanged parent.
+            // The fault-containment deadline expired after a stable terminal
+            // miss. Treat this issued request as unknown and enter coordinated
+            // pair recovery without creating another scheduling edge.
             driver_task_counter_add(&slot.counters.aborts, 1);
             emit_driver_task_ring_call_abort(
                 contract,
@@ -15775,8 +15966,6 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_steady_tx_last_progress_slice
             .store(0, Ordering::Release);
         slot.retained_steady_tx_last_progress_ticks
-            .store(0, Ordering::Release);
-        slot.retained_steady_tx_deadline_probe_sent
             .store(0, Ordering::Release);
         if completion.sequence != request as u32 && timeout_count != 0 {
             driver_task_counter_add(&slot.counters.aborts, 1);
@@ -16763,23 +16952,9 @@ pub(crate) fn test_publish_driver_task_root_notification(contract: DriverTaskCon
     true
 }
 
-/// Set the retained CYW43 root-wake hint without invoking a host seL4 syscall.
-#[cfg(all(test, feature = "kernel"))]
-pub(crate) fn test_set_cyw43_root_wake_pending(pending: bool) -> bool {
-    let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
-        return false;
-    };
-    let Some(slot) = slot_for_task_key(task_key) else {
-        return false;
-    };
-    slot.root_wake_latched
-        .store(usize::from(pending), Ordering::Release);
-    true
-}
-
 /// Configure an isolated host-test wake route and reset its telemetry.
 #[cfg(all(test, feature = "kernel"))]
-pub(crate) fn test_configure_cyw43_root_wake(pending: bool, hits: usize) -> bool {
+pub(crate) fn test_configure_cyw43_root_wake(hits: usize) -> bool {
     let Some(task_key) = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
         return false;
     };
@@ -16791,13 +16966,8 @@ pub(crate) fn test_configure_cyw43_root_wake(pending: bool, hits: usize) -> bool
         pi4_driver_abi::DRIVER_RUNTIME_CYW43_ROOT_WAKE_NOTIFICATION_BADGE,
         Ordering::Release,
     );
-    slot.root_wake_latched
-        .store(usize::from(pending), Ordering::Release);
     slot.root_wake_polls.store(0, Ordering::Release);
     slot.root_wake_hits.store(hits, Ordering::Release);
-    slot.root_wake_clears.store(0, Ordering::Release);
-    slot.root_wake_rechecks.store(0, Ordering::Release);
-    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
     TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
     true
 }
@@ -16822,12 +16992,8 @@ pub(crate) fn test_reset_cyw43_root_wake() {
     };
     slot.root_wake_notification.store(0, Ordering::Release);
     slot.root_wake_badge.store(0, Ordering::Release);
-    slot.root_wake_latched.store(0, Ordering::Release);
     slot.root_wake_polls.store(0, Ordering::Release);
     slot.root_wake_hits.store(0, Ordering::Release);
-    slot.root_wake_clears.store(0, Ordering::Release);
-    slot.root_wake_rechecks.store(0, Ordering::Release);
-    slot.root_wake_stale_clear_skips.store(0, Ordering::Release);
     TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
 }
 
@@ -21329,7 +21495,6 @@ mod tests {
         slot.retained_steady_tx_last_progress_ticks
             .store(now.wrapping_sub(deadline_cycles as u64), Ordering::Release);
         slot.timeout_resumes.store(0, Ordering::Release);
-        slot.root_notification.store(0x1234, Ordering::Release);
         slot.active.store(1, Ordering::Release);
         slot.retained_steady_tx_fast_lane
             .store(1, Ordering::Release);
@@ -21343,40 +21508,8 @@ mod tests {
                 command.sequence,
                 false,
             ),
-            (true, 1),
-            "the first physical expiry admits the sole scheduling probe",
-        );
-        slot.retained_steady_tx_deadline_probe_sent
-            .store(1, Ordering::Release);
-        record_driver_task_steady_service_probe_containment_start(&slot);
-        for _ in 0..8 {
-            assert_eq!(
-                driver_task_ring_timeout_keep_decision(
-                    &slot,
-                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                    command,
-                    DriverTaskRingCommandMode::RetainedTurn,
-                    command.sequence,
-                    false,
-                ),
-                (true, 0),
-                "scheduler polls cannot age the post-probe containment interval",
-            );
-        }
-        let now = driver_task_counter_ticks().expect("test counter sample");
-        slot.retained_steady_tx_last_progress_ticks
-            .store(now.wrapping_sub(deadline_cycles as u64), Ordering::Release);
-        assert_eq!(
-            driver_task_ring_timeout_keep_decision(
-                &slot,
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                command,
-                DriverTaskRingCommandMode::RetainedTurn,
-                command.sequence,
-                false,
-            ),
-            (false, 2),
-            "the second physical expiry goes directly to terminal recovery",
+            (false, 1),
+            "the first physical expiry is a terminal fault, never a scheduling probe",
         );
         assert_eq!(
             driver_task_ring_timeout_keep_decision(
@@ -21390,17 +21523,11 @@ mod tests {
             (true, 0),
         );
         assert_eq!(slot.timeout_resumes.load(Ordering::Acquire), 0);
-        assert_eq!(
-            slot.retained_steady_tx_deadline_probe_sent
-                .load(Ordering::Acquire),
-            1,
-            "exact progress rebases inactivity but cannot mint another probe",
-        );
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_steady_tx_fresh_turn_signals_once_without_grant_then_only_polls() {
+    fn cyw43_steady_tx_fresh_turn_signals_once_and_deadline_faults_without_resignal() {
         static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = LOCK.lock().expect("steady TX lease test lock");
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
@@ -21542,9 +21669,19 @@ mod tests {
             Some(DriverTaskRetainedLeasePhase::Issued),
         );
 
-        let command_fingerprint = DRIVER_TASK_SLOT_CYW43455
-            .active_command_fingerprint
-            .load(Ordering::Acquire);
+        let root_signals = TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire);
+        DRIVER_TASK_SLOT_CYW43455
+            .root_notification
+            .store(0, Ordering::Release);
+        assert_eq!(
+            cyw43_steady_service_parent_condition(issued.sequence.wrapping_add(1)),
+            Cyw43SteadyServiceParentCondition::NotExact,
+        );
+        assert_eq!(
+            cyw43_steady_service_parent_condition(issued.sequence),
+            Cyw43SteadyServiceParentCondition::Waiting,
+            "notification state cannot replace the durable parent condition",
+        );
         let frequency = driver_task_counter_frequency().expect("test counter frequency");
         let deadline_cycles = (u128::from(DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US)
             * u128::from(frequency)
@@ -21554,72 +21691,38 @@ mod tests {
         DRIVER_TASK_SLOT_CYW43455
             .retained_steady_tx_last_progress_ticks
             .store(now.wrapping_sub(deadline_cycles as u64), Ordering::Release);
-        assert!(cyw43_steady_service_parent_deadline_due());
-        let root_signals = TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire);
-        assert!(!signal_driver_task_steady_service_deadline_probe(
-            &DRIVER_TASK_SLOT_CYW43455,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            issued,
-            ring_root_ptr,
-            issued.sequence.wrapping_add(1),
-            command_fingerprint,
-        ));
-        let mut wrong_generation = issued;
-        wrong_generation.aux1 = wrong_generation.aux1.wrapping_add(1);
-        assert!(!signal_driver_task_steady_service_deadline_probe(
-            &DRIVER_TASK_SLOT_CYW43455,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            wrong_generation,
-            ring_root_ptr,
-            issued.sequence,
-            command_fingerprint,
-        ));
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut terminal = DriverTaskCompletionRecord::progress(issued.sequence, 1);
+        terminal.sequence = 0;
+        // SAFETY: This is the completion record inside the test-owned ring.
+        // Publish the body first and the sequence word last, matching runtime.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, issued.sequence);
+        }
         assert_eq!(
-            DRIVER_TASK_SLOT_CYW43455
-                .retained_steady_tx_deadline_probe_sent
-                .load(Ordering::Acquire),
-            0,
-            "identity mismatches cannot consume the sole probe",
+            cyw43_steady_service_parent_condition(issued.sequence),
+            Cyw43SteadyServiceParentCondition::TerminalVisible,
+            "a committed terminal wins even when the containment clock expired",
         );
+        // SAFETY: Reset the same test-owned completion to an uncommitted value.
+        unsafe {
+            core::ptr::write_volatile(
+                completion_ptr,
+                DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+            );
+        }
+        assert_eq!(
+            cyw43_steady_service_parent_condition(issued.sequence),
+            Cyw43SteadyServiceParentCondition::DeadlineFault,
+            "expiry after the final stable miss must enter pair recovery",
+        );
+        assert!(cyw43_sdio_pair_restart_required());
         assert_eq!(
             TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire),
             root_signals,
-        );
-        assert!(signal_driver_task_steady_service_deadline_probe(
-            &DRIVER_TASK_SLOT_CYW43455,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            issued,
-            ring_root_ptr,
-            issued.sequence,
-            command_fingerprint,
-        ));
-        assert_eq!(
-            TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire),
-            root_signals.saturating_add(1),
-        );
-        assert!(
-            !cyw43_steady_service_parent_deadline_due(),
-            "the successful probe starts one physical containment interval",
-        );
-        assert!(!signal_driver_task_steady_service_deadline_probe(
-            &DRIVER_TASK_SLOT_CYW43455,
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-            issued,
-            ring_root_ptr,
-            issued.sequence,
-            command_fingerprint,
-        ));
-        assert_eq!(
-            TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire),
-            root_signals.saturating_add(1),
-            "the immutable parent receives exactly one deadline probe",
-        );
-        assert_eq!(
-            DRIVER_TASK_SLOT_CYW43455
-                .retained_grant_id
-                .load(Ordering::Acquire),
-            0,
-            "the scheduling probe cannot mint continuation authority",
+            "deadline containment cannot signal either runtime",
         );
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
@@ -23825,52 +23928,42 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_root_wake_clear_recheck_preserves_new_edges() {
-        assert!(test_configure_cyw43_root_wake(true, 5));
+    fn cyw43_root_wake_is_a_consumable_hint_without_software_history() {
+        assert!(test_configure_cyw43_root_wake(5));
         test_inject_cyw43_root_wake();
-        assert!(clear_and_recheck_cyw43_root_wake_after_empty_rx(5));
-        let rechecked = cyw43_root_wake_snapshot().expect("wake snapshot");
-        assert!(rechecked.pending);
-        assert_eq!(rechecked.hits, 6);
-        assert_eq!(rechecked.clears, 1);
-        assert_eq!(rechecked.rechecks, 1);
-
-        let polls_before_stale_clear = rechecked.polls;
-        assert!(clear_and_recheck_cyw43_root_wake_after_empty_rx(5));
-        let stale = cyw43_root_wake_snapshot().expect("wake snapshot");
-        assert!(stale.pending);
-        assert_eq!(stale.polls, polls_before_stale_clear);
-        assert_eq!(stale.stale_clear_skips, 1);
+        assert!(poll_cyw43_root_wake_notification());
+        assert!(
+            !poll_cyw43_root_wake_notification(),
+            "a consumed hint must not become durable scheduling history"
+        );
+        let snapshot = cyw43_root_wake_snapshot().expect("wake snapshot");
+        assert_eq!(snapshot.polls, 2);
+        assert_eq!(snapshot.hits, 6);
         test_reset_cyw43_root_wake();
     }
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_root_wake_pair_restart_and_transport_clear_drop_stale_state() {
-        assert!(test_configure_cyw43_root_wake(true, 3));
+    fn cyw43_root_wake_pair_restart_and_transport_clear_drop_stale_hint() {
+        assert!(test_configure_cyw43_root_wake(3));
         test_inject_cyw43_root_wake();
         let task_key =
             driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT).expect("CYW43 task key");
         let slot = slot_for_task_key(task_key).expect("CYW43 slot");
         reset_cyw43_root_wake_for_pair_restart(slot);
-        assert!(!cyw43_root_wake_pending());
         assert!(
             !poll_cyw43_root_wake_notification(),
             "pair restart must drain the discarded kernel wake"
         );
         assert_eq!(cyw43_root_wake_snapshot().expect("wake snapshot").hits, 3);
 
-        assert!(test_configure_cyw43_root_wake(true, 7));
+        assert!(test_configure_cyw43_root_wake(7));
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         let cleared = cyw43_root_wake_snapshot().expect("wake snapshot");
         assert!(!cleared.bound);
-        assert!(!cleared.pending);
         assert_eq!(cleared.badge, 0);
         assert_eq!(cleared.polls, 0);
         assert_eq!(cleared.hits, 0);
-        assert_eq!(cleared.clears, 0);
-        assert_eq!(cleared.rechecks, 0);
-        assert_eq!(cleared.stale_clear_skips, 0);
     }
 
     #[cfg(feature = "kernel")]
@@ -24113,6 +24206,221 @@ mod tests {
             DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY
         )
         .is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn private_shared_page_tracking_does_not_widen_bus_owner_export() {
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        publish_driver_task_command_endpoint(contract, 0x1234);
+        publish_driver_task_ring_frame_cap(contract, 0x2000);
+
+        let mut expected_export =
+            [0 as sel4_sys::seL4_CPtr; DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY];
+        for index in 0..DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY {
+            let cap = 0x3000usize + index * DRIVER_TASK_RING_PAGE_BYTES;
+            publish_driver_task_shared_frame(
+                contract,
+                index,
+                cap,
+                0x5000_0000 + index * DRIVER_TASK_RING_PAGE_BYTES,
+            );
+            if index < expected_export.len() {
+                expected_export[index] = cap as sel4_sys::seL4_CPtr;
+            }
+        }
+
+        let task_key = driver_task_contract_key(contract).expect("CYW43 task key");
+        let slot = slot_for_task_key(task_key).expect("CYW43 slot");
+        assert_eq!(
+            slot.shared_frame_count.load(Ordering::Acquire),
+            DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY
+        );
+        let (_, _, exported) = driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY,
+        )
+        .expect("fixed bus-owner export");
+        assert_eq!(exported, expected_export);
+        assert!(driver_task_bus_owner_transport_caps_with_shared(
+            contract,
+            DRIVER_TASK_BUS_LINK_SHARED_FRAME_CAPACITY + 1,
+        )
+        .is_none());
+
+        publish_driver_task_shared_frame(
+            contract,
+            DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY,
+            0xdead,
+            0xbeef,
+        );
+        assert_eq!(
+            slot.shared_frame_count.load(Ordering::Acquire),
+            DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY,
+            "tracking remains compiler-bounded"
+        );
+        clear_driver_task_transport(contract);
+        let last = DRIVER_TASK_SHARED_FRAME_TRACKING_CAPACITY - 1;
+        assert_eq!(slot.shared_frame_caps[last].load(Ordering::Acquire), 0);
+        assert_eq!(slot.shared_frame_root_ptrs[last].load(Ordering::Acquire), 0);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_durable_queue_and_batch_copy_survive_later_enqueue() {
+        let contract = CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        clear_driver_task_transport(contract);
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        publish_driver_task_ring(contract, ring_root_ptr);
+
+        let mut shared_pages = (0..DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES)
+            .map(|_| Box::new(AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4])))
+            .collect::<Vec<_>>();
+        for (page_index, page) in shared_pages.iter_mut().enumerate() {
+            publish_driver_task_shared_frame(
+                contract,
+                page_index,
+                0x3000 + page_index * DRIVER_TASK_RING_PAGE_BYTES,
+                page.0.as_mut_ptr() as usize,
+            );
+        }
+
+        let mut queue_state = DriverRuntimeCyw43RxQueueState::empty();
+        queue_state.generation = 7;
+        queue_state.queue_depth = 2;
+        queue_state.commit_sequence = 5;
+        let queue_ptr = ring_root_ptr + usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET);
+        // SAFETY: `queue_ptr` is aligned and wholly inside this test-owned ring
+        // page at the compiler-declared queue-state offset.
+        unsafe {
+            core::ptr::write_volatile(
+                queue_ptr as *mut DriverRuntimeCyw43RxQueueState,
+                queue_state,
+            );
+        }
+        driver_task_ring_clean_root_range(
+            queue_ptr,
+            usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
+        );
+        assert_eq!(
+            driver_task_cyw43_rx_queue_state_snapshot(),
+            Some(queue_state)
+        );
+
+        let mut entries = [DriverRuntimeCyw43RxBatchEntry::empty();
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+        for (index, entry) in entries.iter_mut().take(3).enumerate() {
+            *entry = DriverRuntimeCyw43RxBatchEntry {
+                offset: pi4_driver_abi::driver_runtime_cyw43_rx_batch_payload_offset(index)
+                    .expect("exact batch slot"),
+                len: if index == 2 {
+                    pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES
+                } else {
+                    4
+                },
+                flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+            };
+        }
+        let batch = DriverRuntimeCyw43RxBatchRecord::staged(
+            17,
+            queue_state.generation,
+            queue_state.commit_sequence,
+            3,
+            queue_state.queue_depth,
+            entries,
+        )
+        .commit();
+        assert!(batch.valid_for_parent_and_queue_state(17, queue_state));
+
+        let batch_page = DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE;
+        let batch_ptr = shared_pages[batch_page].0.as_mut_ptr() as usize;
+        // SAFETY: Page eight is test-owned, suitably aligned, and the fixed
+        // 128-byte header fits wholly within it at offset zero.
+        unsafe {
+            core::ptr::write_volatile(batch_ptr as *mut DriverRuntimeCyw43RxBatchRecord, batch);
+        }
+
+        let payload = (0..usize::from(entries[2].len))
+            .map(|index| ((index * 29 + 0xa7) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        let mut written = 0usize;
+        let payload_relative = usize::try_from(entries[2].offset)
+            .expect("u32 batch offset fits usize")
+            - usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE);
+        while written < payload.len() {
+            let relative = payload_relative + written;
+            let page_index = relative / DRIVER_TASK_RING_PAGE_BYTES;
+            let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+            let chunk = (DRIVER_TASK_RING_PAGE_BYTES - page_offset).min(payload.len() - written);
+            // SAFETY: Exact ABI slot validation bounds every chunk to one of
+            // the test-owned batch pages and the source to `payload`.
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    payload.as_ptr().add(written),
+                    (shared_pages[page_index].0.as_mut_ptr() as *mut u8).add(page_offset),
+                    chunk,
+                );
+            }
+            written += chunk;
+        }
+        for page in shared_pages
+            .iter_mut()
+            .skip(DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE)
+            .take(DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES)
+        {
+            driver_task_ring_clean_root_range(
+                page.0.as_mut_ptr() as usize,
+                DRIVER_TASK_RING_PAGE_BYTES,
+            );
+        }
+
+        assert_eq!(
+            driver_task_cyw43_rx_batch_snapshot(17, queue_state),
+            Some(batch)
+        );
+        assert!(driver_task_cyw43_rx_batch_snapshot(18, queue_state).is_none());
+        let mut copied = vec![0u8; usize::from(entries[2].len)];
+        assert_eq!(
+            copy_driver_task_cyw43_rx_batch_frame(batch, 2, &mut copied),
+            Some(entries[2])
+        );
+        assert_eq!(copied, payload);
+
+        let mut later_queue_state = queue_state;
+        later_queue_state.queue_depth = later_queue_state.queue_depth.saturating_add(1);
+        later_queue_state.commit_sequence = later_queue_state.commit_sequence.saturating_add(1);
+        // SAFETY: Same test-owned queue-state record; this models a later DPC
+        // enqueue published after the immutable batch terminal.
+        unsafe {
+            core::ptr::write_volatile(
+                queue_ptr as *mut DriverRuntimeCyw43RxQueueState,
+                later_queue_state,
+            );
+        }
+        driver_task_ring_clean_root_range(
+            queue_ptr,
+            usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
+        );
+        assert_eq!(
+            driver_task_cyw43_rx_batch_snapshot(17, queue_state),
+            Some(batch),
+            "later same-generation queue progress must not invalidate the immutable batch"
+        );
+
+        let mut poisoned = later_queue_state;
+        poisoned.flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED;
+        // SAFETY: Same bounded test-owned queue-state record.
+        unsafe {
+            core::ptr::write_volatile(queue_ptr as *mut DriverRuntimeCyw43RxQueueState, poisoned);
+        }
+        driver_task_ring_clean_root_range(
+            queue_ptr,
+            usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
+        );
+        assert!(driver_task_cyw43_rx_batch_snapshot(17, queue_state).is_none());
+        clear_driver_task_transport(contract);
     }
 
     #[cfg(feature = "kernel")]

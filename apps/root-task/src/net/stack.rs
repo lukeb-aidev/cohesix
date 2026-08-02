@@ -9034,6 +9034,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
 #[cfg(feature = "kernel")]
 const NET_RING_FLAG_BUDGETED: u16 = 1;
 const GENET_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 8;
+// A steady CYW43 op8 returns one committed batch containing up to eight
+// wire-order frames. Root therefore issues at most one parent here; durable
+// queue state, rather than a synthetic loop of per-frame parents, schedules a
+// later batch only when the runtime reports remaining work.
 const CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DEFAULT_DRIVER_TASK_PRE_POLL_BURST_LIMIT: usize = 1;
 const DRIVER_TASK_PRE_POLL_TURN_BYTES: u32 = 2048;
@@ -10894,7 +10898,7 @@ mod tests {
         );
         assert_eq!(
             CYW43_DRIVER_TASK_PRE_POLL_BURST_LIMIT, 1,
-            "CYW43 pre-poll urgency must be retained for the next EventPump turn"
+            "one CYW43 op8 parent must carry the complete bounded RX batch"
         );
         assert!(
             base_ops

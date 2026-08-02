@@ -307,6 +307,8 @@ pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x580
 /// frame and resubmit the identical BCDC command identity; the runtime must not
 /// transmit the request a second time.
 pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_INTERLEAVED_FRAME: u16 = 0x5802;
+/// CYW43 positive detail: one strict op8 completion carries a committed RX batch.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL: u16 = 0x5803;
 /// CYW43 RX idle detail: no detailed RX result was reported.
 pub const DRIVER_RUNTIME_CYW43_RX_IDLE_DETAIL_NONE: u16 = 0;
 /// CYW43 RX idle detail: firmware/channel state is not ready for RX.
@@ -374,6 +376,18 @@ pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP: usize = 50;
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT: u16 = 8;
 /// CYW43 frame flag mask carrying the firmware SDPCM credit byte.
 pub const DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK: u16 = 0xff00;
+
+/// Whether CYW43 RX metadata carries only one supported channel and its credit.
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_frame_flags_valid(flags: u16) -> bool {
+    let channel = flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK;
+    let known =
+        DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK | DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_MASK;
+    (channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL
+        || channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT
+        || channel == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA)
+        && flags & !known == 0
+}
 /// PCIe runtime command operation: read one 32-bit xHCI/VL805 register.
 pub const DRIVER_RUNTIME_PCIE_OP_PORT_READ: u16 = 1;
 /// PCIe runtime command operation: write one 32-bit xHCI/VL805 register.
@@ -549,6 +563,21 @@ pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC: u32 = 0x5344_434b;
 pub const DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION: u16 = 1;
 /// Fixed offset of the runtime progress marker in one ring page.
 pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
+/// Fixed offset of the CYW43 private-RX queue's durable root-visible level.
+///
+/// This record lives in the CYW43 runtime's local command page. The SDIO
+/// owner's distinct command page uses the same numeric range for its DPC event
+/// ring, so the compiler-declared runtime role and physical ring identity are
+/// part of the address. No shared physical page aliases the two records.
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET: u16 = 192;
+/// Bytes in one sequence-last CYW43 private-RX queue-state record.
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES: u16 = 24;
+/// Magic value for a committed CYW43 private-RX queue-state record.
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC: u32 = 0x4359_5153;
+/// Layout version for [`DriverRuntimeCyw43RxQueueState`].
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION: u16 = 1;
+/// Queue-state flag: this CYW43 generation is poisoned and cannot serve RX.
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED: u32 = 1 << 0;
 /// Fixed offset of the SDIO owner's physical WiFi lifetime record.
 ///
 /// The record occupies the reserved gap immediately after the generic runtime
@@ -1557,6 +1586,51 @@ pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET: u16 =
 /// Bytes reserved for CYW43-private post-release Function 2 RX.
 pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES: u16 =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_BYTES - DRIVER_RUNTIME_CYW43_COMMAND_TX_SHARED_PAYLOAD_BYTES;
+/// Magic value for one committed CYW43 root-visible RX batch.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC: u32 = 0x4359_5242;
+/// Layout version for [`DriverRuntimeCyw43RxBatchRecord`].
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 1;
+/// Maximum frames committed in one CYW43-to-root RX batch.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP: usize = 8;
+/// Bytes reserved for each exact RX frame slot in a batch.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES: u16 = 1_536;
+/// First shared-buffer page reserved exclusively for CYW43 RX batching.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE: usize =
+    DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
+/// Shared-buffer pages reserved exclusively for CYW43 RX batching.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES: usize = 4;
+/// Total shared-buffer pages needed for the SDIO aperture and RX batch region.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES: usize =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE + DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES;
+/// Fixed offset of the sequence-last CYW43 RX batch header.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET: u16 = DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET;
+/// Exact bytes in one CYW43 RX batch header.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES: u16 = 128;
+/// Fixed offset of the first exact CYW43 RX batch payload slot.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET: u16 =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET + DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES;
+/// Distance in bytes between exact CYW43 RX batch payload slots.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE: u16 =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES;
+/// Bytes reserved for the complete CYW43 RX batch header and payload region.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_REGION_BYTES: u16 =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES as u16 * DRIVER_RUNTIME_RING_PAGE_BYTES;
+/// Exclusive offset at the end of the CYW43 RX batch region.
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET: u16 =
+    DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET + DRIVER_RUNTIME_CYW43_RX_BATCH_REGION_BYTES;
+
+/// Exact shared-buffer offset for one CYW43 RX batch payload slot.
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_batch_payload_offset(index: usize) -> Option<u32> {
+    if index < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
+        Some(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET as u32
+                + index as u32 * DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE as u32,
+        )
+    } else {
+        None
+    }
+}
 
 const _: () = {
     assert!(DRIVER_RUNTIME_CYW43_BACKPLANE_APERTURE_BYTES == 0x8000);
@@ -1587,6 +1661,28 @@ const _: () = {
         DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_OFFSET as u32
             + DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES as u32
             == DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as u32
+    );
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE == 8);
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES == 4);
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES == 12);
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES
+    );
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET == DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET);
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES == 128);
+    assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET.is_multiple_of(64));
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u32
+                * DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE as u32
+            <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as usize
+            == DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE as usize
+                + DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+                    * DRIVER_RUNTIME_RING_PAGE_BYTES as usize
     );
 };
 /// First child CSpace slot reserved for driver-owned IRQ handler caps.
@@ -1649,6 +1745,404 @@ const _: () = {
         DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_BADGE == 0
     );
     assert!(DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE & DRIVER_RUNTIME_RESERVED_ROOT_BADGE == 0);
+};
+
+/// Durable level of the CYW43 runtime's private decoded-RX queue.
+///
+/// `commit_sequence` is the sequence-last publication word. Before changing
+/// any body field, the sole CYW43 producer clears that word and makes the clear
+/// visible. It then writes the body, cleans and barriers the record, and writes
+/// a new nonzero sequence last. Readers accept only two identical, valid
+/// samples. A root-wake notification merely prompts a new sample; this record
+/// is the durable condition that determines whether work remains visible.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43RxQueueState {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero CYW43 runtime generation, or zero before runtime admission.
+    pub generation: u32,
+    /// Frames durably retained in the private decoded-RX queue.
+    pub queue_depth: u16,
+    /// Exact [`DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP`] ABI capacity.
+    pub queue_capacity: u16,
+    /// Queue condition flags, including poison containment.
+    pub flags: u32,
+    /// Nonzero monotonically increasing commit sequence, written last.
+    pub commit_sequence: u32,
+}
+
+impl DriverRuntimeCyw43RxQueueState {
+    /// Canonical initialized state before the first CYW43 runtime generation.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION,
+            len: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES,
+            generation: 0,
+            queue_depth: 0,
+            queue_capacity: DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16,
+            flags: 0,
+            commit_sequence: 0,
+        }
+    }
+
+    /// Byte-zero form produced by initial command-ring construction.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self {
+            magic: 0,
+            version: 0,
+            len: 0,
+            generation: 0,
+            queue_depth: 0,
+            queue_capacity: 0,
+            flags: 0,
+            commit_sequence: 0,
+        }
+    }
+
+    /// Whether this is the byte-zero initial ring form.
+    #[must_use]
+    pub const fn is_zeroed(self) -> bool {
+        self.magic == 0
+            && self.version == 0
+            && self.len == 0
+            && self.generation == 0
+            && self.queue_depth == 0
+            && self.queue_capacity == 0
+            && self.flags == 0
+            && self.commit_sequence == 0
+    }
+
+    /// Whether every body field is internally consistent before final commit.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC
+            && self.version == DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION
+            && self.len == DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
+            && self.queue_capacity == DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16
+            && self.queue_depth <= self.queue_capacity
+            && self.flags & !DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED == 0
+            && (self.generation != 0
+                || (self.queue_depth == 0 && self.flags == 0 && self.commit_sequence == 0))
+    }
+
+    /// Whether this is either the canonical empty state or one committed level.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid()
+            && ((self.generation == 0 && self.commit_sequence == 0)
+                || (self.generation != 0 && self.commit_sequence != 0))
+    }
+
+    /// Whether a runtime generation has committed this durable queue level.
+    #[must_use]
+    pub const fn committed(self) -> bool {
+        self.valid() && self.generation != 0
+    }
+
+    /// Whether this committed generation is fenced from further RX service.
+    #[must_use]
+    pub const fn poisoned(self) -> bool {
+        self.committed() && self.flags & DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED != 0
+    }
+
+    /// Whether root must service the durable RX condition without another wake.
+    #[must_use]
+    pub const fn work_visible(self) -> bool {
+        self.committed() && self.queue_depth != 0 && !self.poisoned()
+    }
+
+    /// Strictly monotonic next commit sequence, or `None` at exhaustion.
+    #[must_use]
+    pub const fn next_commit_sequence(self) -> Option<u32> {
+        if !self.valid() || self.commit_sequence == u32::MAX {
+            None
+        } else {
+            Some(self.commit_sequence + 1)
+        }
+    }
+
+    /// Accept two identical, valid volatile samples as one stable queue level.
+    ///
+    /// A byte-zero initial command ring is normalized to [`Self::empty`].
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub const fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        let first = if first.is_zeroed() {
+            Self::empty()
+        } else {
+            first
+        };
+        let second = if second.is_zeroed() {
+            Self::empty()
+        } else {
+            second
+        };
+        if first.magic == second.magic
+            && first.version == second.version
+            && first.len == second.len
+            && first.generation == second.generation
+            && first.queue_depth == second.queue_depth
+            && first.queue_capacity == second.queue_capacity
+            && first.flags == second.flags
+            && first.commit_sequence == second.commit_sequence
+            && first.valid()
+        {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
+/// Exact metadata for one fixed CYW43 RX batch payload slot.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43RxBatchEntry {
+    /// Exact shared-buffer offset for this entry index.
+    pub offset: u32,
+    /// Decoded payload bytes in this fixed slot.
+    pub len: u16,
+    /// Supported SDPCM channel plus the observed firmware credit.
+    pub flags: u16,
+}
+
+impl DriverRuntimeCyw43RxBatchEntry {
+    /// Empty metadata for an unused batch slot.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            offset: 0,
+            len: 0,
+            flags: 0,
+        }
+    }
+
+    /// Whether every field is zero for an unused batch slot.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.offset == 0 && self.len == 0 && self.flags == 0
+    }
+
+    /// Whether this entry names the exact payload slot assigned to `index`.
+    #[must_use]
+    pub const fn valid_for_index(self, index: usize) -> bool {
+        match driver_runtime_cyw43_rx_batch_payload_offset(index) {
+            Some(expected_offset) => {
+                self.offset == expected_offset
+                    && self.len != 0
+                    && self.len <= DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES
+                    && driver_runtime_cyw43_rx_frame_flags_valid(self.flags)
+            }
+            None => false,
+        }
+    }
+}
+
+/// Root-visible batch of frames drained under one persistent CYW43 transaction.
+///
+/// The sole CYW43 producer clears `committed_parent_sequence` before changing
+/// the body, writes every payload and header body field, cleans and barriers the
+/// full region, then repeats `parent_sequence` in the final field. Root accepts
+/// only two identical records whose final commit matches the immutable parent.
+/// A completion reports the entry count in `result`, points `frame` at this
+/// header, and uses [`DRIVER_RUNTIME_CYW43_RX_BATCH_DETAIL`].
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43RxBatchRecord {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Immutable nonzero op8 parent-command sequence.
+    pub parent_sequence: u32,
+    /// Nonzero CYW43 runtime generation owning this batch.
+    pub generation: u32,
+    /// Exact committed private-queue state observed after the batch drain.
+    pub queue_commit_sequence: u32,
+    /// Number of populated entries in `entries`.
+    pub count: u16,
+    /// Frames still durable in the CYW43 private queue after this batch.
+    pub remaining: u16,
+    /// Fixed metadata for each exact payload slot.
+    pub entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 36],
+    /// Sequence-last commit; exactly repeats `parent_sequence` when complete.
+    pub committed_parent_sequence: u32,
+}
+
+impl DriverRuntimeCyw43RxBatchRecord {
+    /// Canonical uncommitted empty header.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION,
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
+            parent_sequence: 0,
+            generation: 0,
+            queue_commit_sequence: 0,
+            count: 0,
+            remaining: 0,
+            entries: [DriverRuntimeCyw43RxBatchEntry::empty();
+                DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+            reserved: [0; 36],
+            committed_parent_sequence: 0,
+        }
+    }
+
+    /// Construct an uncommitted body; publish it only after calling [`Self::commit`].
+    #[must_use]
+    pub const fn staged(
+        parent_sequence: u32,
+        generation: u32,
+        queue_commit_sequence: u32,
+        count: u16,
+        remaining: u16,
+        entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION,
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
+            parent_sequence,
+            generation,
+            queue_commit_sequence,
+            count,
+            remaining,
+            entries,
+            reserved: [0; 36],
+            committed_parent_sequence: 0,
+        }
+    }
+
+    /// Whether every header body field and exact payload slot is consistent.
+    ///
+    /// This deliberately ignores the sequence-last field so a writer can
+    /// validate a staged body before committing it.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC
+            || self.version != DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION
+            || self.len != DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES
+            || self.parent_sequence == 0
+            || self.generation == 0
+            || self.queue_commit_sequence == 0
+            || self.count == 0
+            || self.count as usize > DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP
+            || self.remaining as usize > DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP
+            || self.count as usize + self.remaining as usize > DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP
+        {
+            return false;
+        }
+
+        let mut index = 0;
+        while index < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
+            if (index < self.count as usize && !self.entries[index].valid_for_index(index))
+                || (index >= self.count as usize && !self.entries[index].is_empty())
+            {
+                return false;
+            }
+            index += 1;
+        }
+
+        let mut reserved_index = 0;
+        while reserved_index < self.reserved.len() {
+            if self.reserved[reserved_index] != 0 {
+                return false;
+            }
+            reserved_index += 1;
+        }
+        true
+    }
+
+    /// Whether the final sequence-last field commits this complete header.
+    #[must_use]
+    pub const fn committed(self) -> bool {
+        self.parent_sequence != 0 && self.committed_parent_sequence == self.parent_sequence
+    }
+
+    /// Whether this is one complete, sequence-last committed RX batch.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed()
+    }
+
+    /// Return this valid staged body with its parent sequence committed last.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_parent_sequence = self.parent_sequence;
+        }
+        self
+    }
+
+    /// Whether this batch is no newer than the current durable queue condition.
+    ///
+    /// `remaining` is the historical post-drain level committed with this
+    /// immutable batch. A later same-generation enqueue may advance both the
+    /// queue commit and current depth before root copies the batch, so current
+    /// depth is deliberately not required to equal `remaining`. Commit
+    /// exhaustion is fault-contained instead of wrapping.
+    #[must_use]
+    pub const fn valid_for_queue_state(self, queue_state: DriverRuntimeCyw43RxQueueState) -> bool {
+        self.valid()
+            && queue_state.committed()
+            && !queue_state.poisoned()
+            && self.generation == queue_state.generation
+            && queue_state.commit_sequence >= self.queue_commit_sequence
+    }
+
+    /// Whether this batch matches one immutable parent and durable queue level.
+    #[must_use]
+    pub const fn valid_for_parent_and_queue_state(
+        self,
+        expected_parent_sequence: u32,
+        queue_state: DriverRuntimeCyw43RxQueueState,
+    ) -> bool {
+        expected_parent_sequence != 0
+            && self.parent_sequence == expected_parent_sequence
+            && self.valid_for_queue_state(queue_state)
+    }
+
+    /// Accept two identical, valid volatile samples as one stable RX batch.
+    ///
+    /// Callers must place their platform load/cache barriers between samples
+    /// and copy payloads only after this header has stabilized.
+    #[must_use]
+    pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first == second && first.valid() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
+const _: () = {
+    assert!(
+        DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET + DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
+            <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+    );
+    assert!(core::mem::size_of::<DriverRuntimeCyw43RxQueueState>() == 24);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43RxQueueState>() == 4);
+    assert!(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>() == 8);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchEntry>() == 4);
+    assert!(core::mem::size_of::<DriverRuntimeCyw43RxBatchRecord>() == 128);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>() == 4);
+    assert!(
+        core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence) == 124
+    );
 };
 
 /// SDIO-owner identity for complete physical WiFi power lifetimes.
@@ -4017,6 +4511,245 @@ mod tests {
             DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET as u32
         );
         assert!(DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES);
+    }
+
+    #[test]
+    fn cyw43_rx_batch_geometry_is_exact_and_disjoint_from_sdio_scratch() {
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE, 8);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES, 4);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES, 12);
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET,
+            DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_END_OFFSET
+        );
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET, 36_864);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES, 128);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET, 36_992);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE, 1_536);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET, 53_248);
+        assert!(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
+                <= DRIVER_RUNTIME_INIT_MAX_SHARED_PAGES
+        );
+
+        let mut index = 0;
+        while index < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
+            assert_eq!(
+                driver_runtime_cyw43_rx_batch_payload_offset(index),
+                Some(
+                    DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_OFFSET as u32
+                        + index as u32 * DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES as u32
+                )
+            );
+            index += 1;
+        }
+        assert_eq!(
+            driver_runtime_cyw43_rx_batch_payload_offset(DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP),
+            None
+        );
+        assert!(
+            driver_runtime_cyw43_rx_batch_payload_offset(
+                DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP - 1
+            )
+            .unwrap()
+                + DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES as u32
+                <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
+        );
+    }
+
+    #[test]
+    fn cyw43_rx_queue_state_is_sequence_last_and_level_triggered() {
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeCyw43RxQueueState>(),
+            DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES as usize
+        );
+        assert_eq!(core::mem::align_of::<DriverRuntimeCyw43RxQueueState>(), 4);
+        assert!(
+            DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET + DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
+                <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+        );
+
+        let empty = DriverRuntimeCyw43RxQueueState::empty();
+        assert!(empty.valid());
+        assert!(!empty.committed());
+        assert!(!empty.work_visible());
+        assert_eq!(empty.next_commit_sequence(), Some(1));
+        assert_eq!(
+            DriverRuntimeCyw43RxQueueState::stable_snapshot(
+                DriverRuntimeCyw43RxQueueState::zeroed(),
+                DriverRuntimeCyw43RxQueueState::zeroed(),
+            ),
+            Some(empty)
+        );
+
+        let staged = DriverRuntimeCyw43RxQueueState {
+            generation: 7,
+            queue_depth: 3,
+            ..empty
+        };
+        assert!(staged.body_valid());
+        assert!(!staged.valid());
+        assert_eq!(staged.next_commit_sequence(), None);
+
+        let committed = DriverRuntimeCyw43RxQueueState {
+            commit_sequence: 9,
+            ..staged
+        };
+        assert!(committed.valid());
+        assert!(committed.committed());
+        assert!(committed.work_visible());
+        assert_eq!(committed.next_commit_sequence(), Some(10));
+        assert_eq!(
+            DriverRuntimeCyw43RxQueueState::stable_snapshot(committed, committed),
+            Some(committed)
+        );
+
+        let changed = DriverRuntimeCyw43RxQueueState {
+            queue_depth: 2,
+            commit_sequence: 10,
+            ..committed
+        };
+        assert_eq!(
+            DriverRuntimeCyw43RxQueueState::stable_snapshot(committed, changed),
+            None,
+            "a queue update cannot be assembled from two generations"
+        );
+
+        let poisoned = DriverRuntimeCyw43RxQueueState {
+            flags: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            commit_sequence: 10,
+            ..committed
+        };
+        assert!(poisoned.valid());
+        assert!(poisoned.poisoned());
+        assert!(!poisoned.work_visible());
+
+        let overflow = DriverRuntimeCyw43RxQueueState {
+            queue_depth: DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16 + 1,
+            ..committed
+        };
+        assert!(!overflow.body_valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxQueueState::stable_snapshot(overflow, overflow),
+            None
+        );
+    }
+
+    #[test]
+    fn cyw43_rx_batch_requires_exact_slots_and_final_parent_commit() {
+        assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>(), 8);
+        assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchRecord>(), 128);
+        assert_eq!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>(), 4);
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence),
+            124
+        );
+
+        let mut entries =
+            [DriverRuntimeCyw43RxBatchEntry::empty(); DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+        entries[0] = DriverRuntimeCyw43RxBatchEntry {
+            offset: driver_runtime_cyw43_rx_batch_payload_offset(0).unwrap(),
+            len: 64,
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT | (3 << 8),
+        };
+        entries[1] = DriverRuntimeCyw43RxBatchEntry {
+            offset: driver_runtime_cyw43_rx_batch_payload_offset(1).unwrap(),
+            len: DRIVER_RUNTIME_CYW43_RX_BATCH_FRAME_BYTES,
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA | (12 << 8),
+        };
+
+        let staged = DriverRuntimeCyw43RxBatchRecord::staged(41, 7, 9, 2, 3, entries);
+        assert!(staged.body_valid());
+        assert!(!staged.committed());
+        assert!(!staged.valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(staged, staged),
+            None
+        );
+
+        let committed = staged.commit();
+        assert!(committed.body_valid());
+        assert!(committed.committed());
+        assert!(committed.valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(committed, committed),
+            Some(committed)
+        );
+
+        let queue_state = DriverRuntimeCyw43RxQueueState {
+            generation: 7,
+            queue_depth: 3,
+            commit_sequence: 9,
+            ..DriverRuntimeCyw43RxQueueState::empty()
+        };
+        assert!(committed.valid_for_queue_state(queue_state));
+        assert!(committed.valid_for_parent_and_queue_state(41, queue_state));
+        assert!(!committed.valid_for_parent_and_queue_state(42, queue_state));
+        let later_enqueue = DriverRuntimeCyw43RxQueueState {
+            queue_depth: 4,
+            commit_sequence: 10,
+            ..queue_state
+        };
+        assert!(
+            committed.valid_for_queue_state(later_enqueue),
+            "a later same-generation enqueue cannot invalidate an immutable batch"
+        );
+        assert!(
+            !committed.valid_for_queue_state(DriverRuntimeCyw43RxQueueState {
+                commit_sequence: 8,
+                ..queue_state
+            })
+        );
+        assert!(
+            !committed.valid_for_queue_state(DriverRuntimeCyw43RxQueueState {
+                generation: 8,
+                commit_sequence: 10,
+                ..queue_state
+            })
+        );
+        assert!(
+            !committed.valid_for_queue_state(DriverRuntimeCyw43RxQueueState {
+                flags: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+                commit_sequence: 10,
+                ..queue_state
+            })
+        );
+
+        let torn_commit = DriverRuntimeCyw43RxBatchRecord {
+            committed_parent_sequence: committed.parent_sequence + 1,
+            ..committed
+        };
+        assert!(torn_commit.body_valid());
+        assert!(!torn_commit.valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(torn_commit, torn_commit),
+            None
+        );
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(staged, committed),
+            None,
+            "a reader cannot combine staged and committed samples"
+        );
+
+        let mut wrong_slot = committed;
+        wrong_slot.entries[1].offset += 1;
+        assert!(!wrong_slot.body_valid());
+
+        let mut invalid_channel = committed;
+        invalid_channel.entries[0].flags = 3;
+        assert!(!invalid_channel.body_valid());
+
+        let mut stale_tail = committed;
+        stale_tail.entries[2] = DriverRuntimeCyw43RxBatchEntry {
+            offset: driver_runtime_cyw43_rx_batch_payload_offset(2).unwrap(),
+            len: 1,
+            flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_CONTROL,
+        };
+        assert!(!stale_tail.body_valid());
+
+        let mut nonzero_reserved = committed;
+        nonzero_reserved.reserved[0] = 1;
+        assert!(!nonzero_reserved.body_valid());
     }
 
     #[test]
