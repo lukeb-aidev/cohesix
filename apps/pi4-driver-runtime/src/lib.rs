@@ -2976,6 +2976,7 @@ struct SdioRuntimeState {
     dma_irq_handler_slot: u32,
     dma_irq_ack_pending: bool,
     dma_irq_ready: bool,
+    dma_condition_acked_sequence: u32,
     peer_notification_slot: u32,
     card_irq_masked: bool,
     dpc_activation_allowed: bool,
@@ -3007,6 +3008,7 @@ impl SdioRuntimeState {
             dma_irq_handler_slot: 0,
             dma_irq_ack_pending: false,
             dma_irq_ready: false,
+            dma_condition_acked_sequence: 0,
             peer_notification_slot: 0,
             card_irq_masked: false,
             dpc_activation_allowed: false,
@@ -13810,17 +13812,25 @@ fn sdio_final_dpc_rearm_turn_due(route: RuntimeNotificationRoute, command_pendin
 
 #[cfg(any(target_os = "none", test))]
 fn sdio_runtime_service_dma_notification(badge: u32) -> bool {
-    let (shared_epoch, expected_badge, handler_slot, irq_ready, irq_ack_pending, cursor) =
-        SDIO_RUNTIME_STATE.with_ref(|state| {
-            (
-                state.shared_epoch,
-                state.dma_irq_badge,
-                state.dma_irq_handler_slot,
-                state.dma_irq_ready,
-                state.dma_irq_ack_pending,
-                state.external_dma_request,
-            )
-        });
+    let (
+        shared_epoch,
+        expected_badge,
+        handler_slot,
+        irq_ready,
+        irq_ack_pending,
+        condition_acked_sequence,
+        cursor,
+    ) = SDIO_RUNTIME_STATE.with_ref(|state| {
+        (
+            state.shared_epoch,
+            state.dma_irq_badge,
+            state.dma_irq_handler_slot,
+            state.dma_irq_ready,
+            state.dma_irq_ack_pending,
+            state.dma_condition_acked_sequence,
+            state.external_dma_request,
+        )
+    });
     if badge != expected_badge
         || expected_badge != DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE
         || handler_slot != DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
@@ -13831,6 +13841,24 @@ fn sdio_runtime_service_dma_notification(badge: u32) -> bool {
     }
 
     let mut io = SdioMmioTransferIo;
+    if condition_acked_sequence != 0 {
+        let Some(authority) =
+            RUNTIME_DESCRIPTOR.with_ref(sdio_external_dma_authority_from_descriptor)
+        else {
+            return false;
+        };
+        if sdio_external_dma_condition_badge_consumed_with(authority, &mut io) {
+            // The exact cursor cleared and acknowledged this handler before it
+            // published terminal state. Consume only the later coalesced badge
+            // history; a newer asserted source takes the ordinary path below.
+            SDIO_RUNTIME_STATE.with_mut(|state| {
+                if state.dma_condition_acked_sequence == condition_acked_sequence {
+                    state.dma_condition_acked_sequence = 0;
+                }
+            });
+            return true;
+        }
+    }
     let result = if sdio_external_dma_irq_cursor_admitted(cursor, shared_epoch) {
         sdio_external_dma_irq_service_with(
             cursor,
@@ -13869,6 +13897,9 @@ fn sdio_runtime_service_dma_notification(badge: u32) -> bool {
         }
         result
     };
+    if matches!(result, SdioExternalDmaIrqServiceResult::Acked) {
+        SDIO_RUNTIME_STATE.with_mut(|state| state.dma_condition_acked_sequence = 0);
+    }
     matches!(result, SdioExternalDmaIrqServiceResult::Acked)
 }
 
@@ -16264,13 +16295,55 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     let uses_pio = sdio_request_uses_pio(identity);
     let uses_external_dma = sdio_request_uses_external_dma(identity);
     if uses_external_dma
+        && !cursor.dma_terminal_interrupt_seen
+        && snapshot.dma_cs & BCM2835_DMA_CS_INT != 0
+    {
+        let (shared_epoch, handler_slot, irq_ready, irq_ack_pending) =
+            SDIO_RUNTIME_STATE.with_ref(|state| {
+                (
+                    state.shared_epoch,
+                    state.dma_irq_handler_slot,
+                    state.dma_irq_ready,
+                    state.dma_irq_ack_pending,
+                )
+            });
+        if handler_slot == DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT
+            && irq_ready
+            && !irq_ack_pending
+        {
+            // `CS.INT` is the durable request condition; badge 512 is its
+            // normal low-latency scheduler hint, not completion history. A
+            // peer/root/host wake or the final condition-before-sleep sample
+            // may therefore reach the same exact consumer first. Commit before
+            // ACK just as the badge path does, and remember that one ACK so a
+            // subsequently coalesced badge becomes an idempotent history drain.
+            let committed_cursor = core::cell::Cell::new(cursor);
+            let terminal = sdio_external_dma_irq_service_with(
+                cursor,
+                shared_epoch,
+                io,
+                |committed| {
+                    committed_cursor.set(committed);
+                    SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request = committed);
+                },
+                || runtime_irq_handler_ack(handler_slot),
+            );
+            cursor = committed_cursor.get();
+            if matches!(terminal, SdioExternalDmaIrqServiceResult::Acked) {
+                SDIO_RUNTIME_STATE.with_mut(|state| {
+                    state.dma_condition_acked_sequence = identity.sequence;
+                });
+            }
+        }
+    }
+    if uses_external_dma
         && (cursor.dma_irq_ack_failed
             || cursor.dma_irq_terminal_invalid
             || cursor.dma_irq_cs_snapshot & BCM2835_DMA_CS_ERR != 0)
     {
-        // The dedicated callback committed its exact channel snapshot before
-        // releasing (or failing to release) the seL4 IRQ mask. Preserve that
-        // evidence across this join even if the live CS register has changed.
+        // The shared cursor-owned terminal consumer committed its exact channel
+        // snapshot before releasing (or failing to release) the seL4 IRQ mask.
+        // Preserve that evidence even if the live CS register has changed.
         snapshot.dma_cs = cursor.dma_irq_cs_snapshot;
         snapshot.dma_conblk = cursor.dma_irq_conblk_snapshot;
         cursor.failure_snapshot = snapshot;
@@ -16323,10 +16396,10 @@ fn sdio_external_dma_poll_issued_with<I: SdioTransferIo>(
     cursor.failure_snapshot = snapshot;
     cursor.failure_snapshot_valid = true;
     // Channel 4 is interrupt-bound for the complete SDIO runtime lifetime and
-    // every admitted external-DMA terminal CB carries INT_EN. PollIssued may
-    // inspect CS/CONBLK for error and quiescence evidence, but the IRQ116
-    // callback is the sole owner allowed to W1C CS.INT, commit terminal state,
-    // and ACK handler slot 5.
+    // every admitted external-DMA terminal CB carries INT_EN. Badge 512 is the
+    // fast wake, while the exact retained cursor is the sole owner allowed to
+    // W1C CS.INT, commit terminal state, and ACK handler slot 5 from either the
+    // badge path or one bounded condition-before-sleep sample.
     if snapshot.status & SDHCI_INT_ALL_ERROR_MASK != 0 {
         let stage = if cursor.response_seen {
             SDIO_TRANSFER_FAILURE_STAGE_DATA_END
@@ -47049,11 +47122,12 @@ enum SdioRequestIrqPartition {
     RequestAndCard,
 }
 
-/// Outcome of the dedicated BCM2835 DMA channel-4 interrupt callback.
+/// Outcome of the exact BCM2835 DMA channel-4 terminal consumer.
 ///
-/// The kernel keeps a delivered level IRQ masked until its handler cap is
-/// acknowledged. Only the immutable issued ExternalDma cursor may clear the
-/// channel's terminal `CS.INT` source and release that mask.
+/// IRQ116 is the normal scheduler wake, but the immutable issued ExternalDma
+/// cursor may reach the same durable condition from another admitted owner
+/// wake or condition-before-sleep sample. Only that cursor clears `CS.INT` and
+/// releases the handler mask.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SdioExternalDmaIrqServiceResult {
@@ -47099,13 +47173,14 @@ const fn sdio_external_dma_late_clear_cursor_admitted(
         && !cursor.dma_irq_terminal_invalid
 }
 
-/// Consume one exact external-DMA terminal IRQ without polling or reissuing.
+/// Consume one exact external-DMA terminal condition without polling or reissue.
 ///
-/// The callback follows Linux's `bcm2835_dma_callback` source order: snapshot
-/// this request's private channel, W1C `CS.INT` with the callback-shaped
-/// `INT | ACTIVE` write, prove the source clear, commit the terminal evidence,
-/// and only then acknowledge the exact seL4 handler cap once. `PollIssued`
-/// remains the sole join for SDHCI response/DATA_END and request completion.
+/// Both the badge fast path and the final cursor condition sample follow
+/// Linux's `bcm2835_dma_callback` source order: snapshot this request's private
+/// channel, W1C `CS.INT` with `INT | ACTIVE`, prove the source clear, commit the
+/// terminal evidence, and only then acknowledge the exact seL4 handler cap
+/// once. `PollIssued` remains the sole join for SDHCI response/DATA_END and
+/// request completion.
 #[cfg(any(target_os = "none", test))]
 fn sdio_external_dma_irq_service_with<I, Commit, Ack>(
     mut cursor: SdioExternalDmaRequestCursor,
@@ -47210,6 +47285,28 @@ where
     } else {
         SdioExternalDmaIrqServiceResult::AckFailed
     }
+}
+
+/// Prove that a condition-first terminal consumer already removed the exact
+/// channel source represented by a subsequently observed coalesced badge.
+///
+/// This path deliberately performs neither W1C nor `IRQHandler_Ack`: the same
+/// cursor committed both before recording its sequence in runtime state. A
+/// non-quiescent channel cannot spend that record and remains fail closed for
+/// the ordinary exact-source consumer or physical-lifetime recovery.
+#[cfg(any(target_os = "none", test))]
+fn sdio_external_dma_condition_badge_consumed_with<I: SdioTransferIo>(
+    authority: SdioExternalDmaAuthority,
+    io: &mut I,
+) -> bool {
+    if authority.channel_vaddr == 0 {
+        return false;
+    }
+    io.external_dma_load_barrier();
+    let dma_cs = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CS);
+    let dma_conblk = io.external_dma_read32(authority.channel_vaddr + BCM2835_DMA_CONBLK_AD);
+    dma_cs & (BCM2835_DMA_CS_INT | BCM2835_DMA_CS_ERR | BCM2835_DMA_CS_ACTIVE) == 0
+        && dma_conblk == 0
 }
 
 const SDIO_CARD_INTERRUPT_REARM_INT_VERIFY_MASK: u32 =
@@ -48353,6 +48450,7 @@ fn sdio_linux_wifi_power_cycle_turn() -> SdioPwrseqTurn {
             SDIO_RUNTIME_STATE.with_mut(|state| {
                 state.dma_irq_ack_pending = true;
                 state.dma_irq_ready = false;
+                state.dma_condition_acked_sequence = 0;
             });
             cursor.phase = SdioPwrseqPhase::EngineInitDmaInspect;
         }
@@ -75284,60 +75382,68 @@ mod tests {
     }
 
     #[test]
-    fn sdio_dma_terminal_cannot_retire_before_exact_ack_or_alias_next_request() {
+    fn sdio_dma_terminal_condition_completes_without_badge_and_late_badge_is_idempotent() {
         let _guard = test_guard();
         let generation = 0xd114_4001;
 
-        reset_runtime_for_test();
+        reset_sdio_descriptor_seam_for_test();
         let mut io = TestSdioHostIo::new();
         io.dma_cs = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
         io.dma_conblk = 0;
         io.set_register(SDHCI_INT_STATUS, SDHCI_INT_DATA_END);
         let mut cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
         cursor.response_seen = true;
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.shared_epoch = generation;
+            state.dma_irq_badge = DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE;
+            state.dma_irq_handler_slot = DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT;
+            state.dma_irq_ack_pending = false;
+            state.dma_irq_ready = true;
+            state.external_dma_request = cursor;
+        });
         assert_eq!(
             sdio_external_dma_poll_issued_with(cursor, &mut io),
-            RuntimeCommandTurn::Pending,
-            "PollIssued cannot consume or retire the IRQ-owned terminal",
-        );
-        let retained = SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request);
-        assert!(!retained.dma_terminal_interrupt_seen);
-        assert!(!retained.dma_complete);
-        assert!(!retained.dma_irq_acknowledged);
-        assert_ne!(io.dma_cs & BCM2835_DMA_CS_INT, 0);
-        assert_eq!(io.dma_terminal_interrupt_acks, 0);
-
-        let committed = core::cell::Cell::new(retained);
-        let ack_count = core::cell::Cell::new(0u32);
-        assert_eq!(
-            sdio_external_dma_irq_service_with(
-                retained,
-                generation,
-                &mut io,
-                |snapshot| {
-                    committed.set(snapshot);
-                    SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request = snapshot);
-                },
-                || {
-                    ack_count.set(ack_count.get().saturating_add(1));
-                    true
-                },
-            ),
-            SdioExternalDmaIrqServiceResult::Acked,
-        );
-        let committed = committed.get();
-        assert!(committed.dma_complete);
-        assert!(committed.dma_irq_acknowledged);
-        assert_eq!(ack_count.get(), 1);
-        assert_eq!(
-            sdio_external_dma_poll_issued_with(committed, &mut io),
             RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::progress(
-                committed.identity.sequence,
-                u32::from(committed.identity.frame.len),
+                cursor.identity.sequence,
+                u32::from(cursor.identity.frame.len),
             )),
-            "retirement follows the committed terminal and exact ACK",
+            "the exact cursor must consume a durable terminal condition even when badge 512 was coalesced",
+        );
+        assert_eq!(io.dma_cs & BCM2835_DMA_CS_INT, 0);
+        assert_eq!(io.dma_terminal_interrupt_acks, 1);
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        assert_eq!(
+            TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            1
         );
         assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.external_dma_request.active()));
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.dma_condition_acked_sequence),
+            cursor.identity.sequence,
+        );
+
+        // Model delivery of the already-ACKed handler badge after the cursor
+        // has published completion. It drains only history: no second W1C,
+        // handler ACK, command issue, or completion can occur.
+        TEST_SDIO_DMA_CS_RESPONSE.store(0, Ordering::Release);
+        TEST_SDIO_DMA_CONBLK_RESPONSE.store(0, Ordering::Release);
+        let w1c_before = TEST_SDIO_DMA_INIT_W1C_WRITES.load(Ordering::Acquire);
+        assert!(sdio_runtime_service_dma_notification(
+            DRIVER_RUNTIME_SDIO_DMA_IRQ_BADGE,
+        ));
+        assert_eq!(
+            TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            1
+        );
+        assert_eq!(
+            TEST_SDIO_DMA_INIT_W1C_WRITES.load(Ordering::Acquire),
+            w1c_before,
+        );
+        assert_eq!(
+            SDIO_RUNTIME_STATE.with_ref(|state| state.dma_condition_acked_sequence),
+            0,
+        );
 
         reset_runtime_for_test();
         let mut failed_ack_io = TestSdioHostIo::new();

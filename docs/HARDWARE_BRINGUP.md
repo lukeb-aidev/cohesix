@@ -1402,8 +1402,13 @@ authority or exact immutable finite lease admission, not a
 service source or foreground authority. The reserved high notification bit is
 excluded from service work. If badge 159 or badge 512 coalesces with badge 256,
 SDIO partitions the exact source and services the IRQ wake without spending
-foreground authority. A DMA badge authorizes only the exact active external-DMA
-cursor to sample channel 4 and W1C `CS.INT` before handler-slot-5 ACK. Once DPC activation is
+foreground authority. A DMA badge is the normal low-latency wake, while only
+the exact active external-DMA cursor may sample channel 4 and W1C `CS.INT`
+before handler-slot-5 ACK. Because `CS.INT` is a durable level condition rather
+than notification history, that same cursor resamples it on every admitted
+SDIO-owner wake and at condition-before-sleep. The badge and condition paths use
+one idempotent terminal consumer, so neither a crossing edge nor a later
+coalesced badge can duplicate W1C, ACK, command issue, or publication. Once DPC activation is
 open, prompt service may mask, durably publish, ACK the exact IRQ epoch, and
 signal CYW43 while preserving an active controller/DMA cursor; it issues no
 SDIO card command. The exact AckStatus W1C child later rearms CARD_INT before
@@ -1881,9 +1886,12 @@ request's `CS.INT`, and no DMA error; `CS.INT` is acknowledged with Linux's
 RESET, control-block address, and ACTIVE publication is followed by a full
 store-completion fence and same-channel readback. SDHCI `DATA_END` and DMA
 channel-4 terminal may arrive in either order: badge 159 records the host half;
-badge 512 permits only the exact retained external-DMA cursor to latch channel-4
-terminal/error state, W1C `CS.INT`, and then ACK handler slot 5. The first half
-returns to `WaitForWake` and cannot poll for the second or publish completion.
+badge 512 normally wakes the exact retained external-DMA cursor to latch
+channel-4 terminal/error state, W1C `CS.INT`, and then ACK handler slot 5. The
+same cursor consumes an already-asserted terminal level on another admitted
+owner wake before it blocks, making notification coalescing non-fatal without a
+timer or private poll loop. The first half returns to `WaitForWake` and cannot
+complete alone.
 
 Every active request derives one exact request mask. Command-only uses
 `RESPONSE` plus named command errors, external DMA uses the named bcm2835 mask
@@ -1965,9 +1973,12 @@ edge. Badge 256 is disjoint from SDHCI badge 159 and DMA badge 512. When any of
 them coalesce, one `CheckWake` turn partitions each physical source, services
 only its bounded IRQ quantum, and the preserved ordinary grant may
 release only one later owner quantum after `CheckGrant` and `Execute`. A leased
-request that has issued instead blocks until its exact required host or DMA IRQ;
-external DMA joins both terminal halves in either arrival order. It does not
-self-yield or require root completion polling. Any ordinary required
+request that has issued instead performs one final exact-source condition check
+and blocks until an admitted host, DMA, peer, or root wake; IRQ158/IRQ116 remain
+the normal latency path. External DMA joins both terminal halves in either
+arrival order, and a non-IRQ wake may consume an already-asserted current-
+request DMA level exactly once. It does not self-yield or require root
+completion polling. Any ordinary required
 `PublishGrant` and signal-last `NotifyRing` actions still occur on later turns.
 A matching completion
 wins before either authority action. Delegated ordinary foreground producers

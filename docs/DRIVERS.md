@@ -1955,11 +1955,17 @@ generation and XID.
   fence plus same-channel status readback after ACTIVE prevents an immediate
   join poll from observing a posted start as false completion. SDHCI `DATA_END`
   and DMA channel-4 terminal may arrive in either order. IRQ 158 records the
-  host half; IRQ 116 permits only the exact active external-DMA cursor to sample
-  channel 4, latch `CONBLK_AD`/`CS` terminal or error state, perform the cursor-
-  owned `CS.INT` W1C, and then ACK handler slot 5. Whichever arrives first is
-  retained and returns to `WaitForWake`; it never polls for the other or
-  completes the request alone. The external
+  host half; IRQ 116 is the normal low-latency wake for the exact active
+  external-DMA cursor to sample channel 4, latch `CONBLK_AD`/`CS` terminal or
+  error state, perform the cursor-owned `CS.INT` W1C, and then ACK handler slot
+  5. `CS.INT` is durable source truth rather than notification-history truth:
+  the same exact-generation cursor also resamples it on any already-admitted
+  SDIO-owner wake and in the final condition-before-sleep check. Both entry
+  points use one terminal consumer, so a condition-first crossing or later
+  coalesced DMA badge performs no second W1C, handler ACK, command issue, or
+  completion publication. Whichever durable terminal half is observed first is
+  retained and returns to `WaitForWake`; it never runs a private poll loop for
+  the other or completes the request alone. The external
   engine does not set `SDHCI_TRNS_DMA`; that bit belongs to SDHCI's internal
   DMA mode, not Linux's dmaengine path. SDHCI `readl`/`writel` and raw FIFO
   access retain the required AArch64 device-ordering barriers. Every active
@@ -2005,7 +2011,10 @@ generation and XID.
   DMA request cannot be admitted if either route, its exact handler cap, or its
   disjoint badge is absent. IRQ delivery is scheduling evidence only; the exact
   retained request cursor remains the sole authority for host W1C, DMA `CS.INT`
-  W1C, terminal joining, and completion publication.
+  W1C, terminal joining, and completion publication. A DMA badge drives the
+  fast path, but it is not a consumable history counter: every admitted owner
+  wake rechecks the exact cursor's level condition before blocking, and only an
+  asserted current-request `CS.INT` may advance that cursor.
 - Cohesix intentionally has one production SDIO request lane with the
   Linux/Raspberry Pi `mmc-bcm2835` engine threshold embedded in its immutable
   request identity. A normalized host block count of at most two selects
@@ -2128,16 +2137,19 @@ generation and XID.
   segment. Writes copy the reciprocal-ring payload into the bounce arena before
   the DMA store barrier; reads apply the DMA load barrier before copying back.
   For an external-DMA request, the SDIO owner retains the exact cursor after
-  command and channel activation. Each host- or DMA-IRQ continuation samples
-  only its exact immutable source, latches response, `DATA_END`, or DMA terminal
-  evidence independently, and returns without a private wait loop. Lone
+  command and channel activation. Each admitted host, DMA, peer, or root wake
+  runs one bounded condition-before-sleep sample of only that exact immutable
+  source, latches response, `DATA_END`, or DMA terminal evidence independently,
+  and returns without a private wait loop. Lone
   `SPACE_AVAIL`/`DATA_AVAIL` observations remain outside this engine's W1C
   ownership, and block-gap control is required to remain zero.
   Completion requires `CONBLK_AD == 0`, this request's terminal DMA `CS.INT`,
   no DMA `CS.ERROR`, and SDHCI `DATA_END`, with the DMA and SDHCI terminal
   edges accepted in either arrival order. Only the exact cursor acknowledges
   the DMA W1C edge once with `INT | ACTIVE`, before handler-slot-5 ACK; the first
-  terminal half remains waiting for the second IRQ. `DMA_END` is enabled and acknowledged
+  terminal half remains waiting for the second durable condition. A condition-
+  first completion consumes a later coalesced badge as scheduling history only,
+  without a second W1C or ACK. `DMA_END` is enabled and acknowledged
   as Linux-shaped progress only; it cannot satisfy either terminal join
   condition. The physical deadline is lost-wake fault containment only;
   ordinary and pressure completion must join both IRQs with zero physical-

@@ -837,6 +837,16 @@ The selected Pi 4 DTS maps `dma4` to GIC SPI `0x54`; adding the GIC SPI base
 `32` yields seL4 IRQ `116`. IRQ `114` names `dma2` in that DTS and must be
 rejected for the channel-4 owner.
 
+DMA terminal-condition tests must treat IRQ116 as the normal scheduling wake,
+not as consumable completion history. With an exact issued external-DMA cursor,
+`CS.INT | END` and `CONBLK_AD == 0` must complete through the same terminal
+consumer when reached from the DMA badge, a coalesced host/DMA/peer badge, an
+already-admitted peer/root wake, or the final condition-before-sleep check. A
+condition-first crossing followed by a late DMA badge must perform exactly one
+`INT | ACTIVE` W1C and one handler-slot-5 ACK total. Wrong generation, inactive
+cursor, missing `CS.INT`, live `CONBLK_AD`, DMA error, source-clear failure, and
+handler-ACK failure must remain fail closed and issue no command.
+
 External-DMA lifecycle coverage must prove the exact Linux order within one
 bounded preissue/issue owner quantum with `PREISSUE_STEP_BOUND=16`: SDHCI
 block-gap inspect/repair/verify, DMA-authority/idle snapshot, full immutable
@@ -2221,11 +2231,16 @@ local-notification topology has SDHCI IRQ 158/badge 159/handler slot 4 and DMA
 IRQ 116/badge 512/handler slot 5. Every issued steady request
 must enable its exact response/data/error and direction-correct PIO-ready
 sources in both host interrupt registers, block when unchanged, and resume from
-the exact required physical IRQ rather than a runnable status poll. Request and
+the exact required physical IRQ on the normal path rather than a runnable
+status poll. Before blocking, and on any already-admitted owner wake, its exact
+cursor must resample the durable DMA terminal condition once so a coalesced or
+crossing notification cannot strand completed hardware. Request and
 CARD_INT causes must be partitioned from one host snapshot under one handler-
 slot-4 acknowledgement. External DMA must join the independently delivered host
 and DMA terminal halves in either order; its cursor owns DMA `CS.INT` W1C before
-handler-slot-5 acknowledgement. The AckStatus W1C child must
+handler-slot-5 acknowledgement. DMA-badge-first and condition-first cases must
+share one terminal consumer and prove one total W1C/ACK even if a late badge is
+then delivered. The AckStatus W1C child must
 rearm CARD_INT before terminal publication, and a new IRQ may append only after
 unmask proof. No test may pass by adding a normal-path timer poller or private
 physical drain loop. The 32-ms quiescence and 1,024-ms reissue deadlines on the
@@ -2348,9 +2363,12 @@ resume with zero root physical-deadline wakes, zero second expired misses, zero
 pair recovery, and zero unchanged-wait heartbeats. A sample completed by the
 20.56-second containment wake is a failure, never a latency outlier that can be
 discarded. Ordinary and pressure runs must prove external-DMA completion is
-entirely IRQ-driven: force both SDHCI-`DATA_END`-first and DMA-channel-4-
-terminal-first requests, retain the first half without polling, and complete
-only after the second exact IRQ. Any missing DMA route, deadline wake, runnable
+normally IRQ-woken and always condition-driven: force both SDHCI-`DATA_END`-
+first and DMA-channel-4-terminal-first requests, retain the first half without
+polling, and complete only after the second exact durable condition. Include a
+condition-first crossing reached on another admitted owner wake and prove it
+does not wait for a timeout or duplicate W1C/ACK when its badge is later
+consumed. Any missing DMA route, deadline wake, runnable
 completion poll, or one-sided terminal completion fails the candidate. The pcap must additionally show no warmed-traffic loss, sequence gap,
 out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
 reconnect, and the pressure run must have zero timeout masking. GENET must pass
@@ -2365,7 +2383,8 @@ DPC and eligible urgent op7 separately, with zero excluded-child admission,
 overrun, auto-renew, or poison. It must also show exact request IRQ enable,
 delivery, mask-before-ACK, cursor W1C/rearm, block, and terminal counters for
 SDHCI IRQ 158 plus DMA IRQ 116. DMA telemetry must prove cursor-owned `CS.INT`
-W1C before handler-slot-5 ACK, both terminal arrival orders, and zero physical-
+W1C before handler-slot-5 ACK, both terminal arrival orders, condition-first
+and badge-first consumption counts, no duplicate W1C/ACK, and zero physical-
 deadline wakes under ordinary and pressure load, with
 zero request-only DPC/no-source classifications and zero empty/spurious
 heartbeat publications. Correlate root accepted-to-issued,
@@ -2973,7 +2992,9 @@ rearm, request-only exclusion from DPC/no-source, and mixed-cause preservation.
 DMA-IRQ coverage must prove exact active-cursor and channel-4 identity, terminal
 and error latching, cursor-owned `CS.INT` W1C before handler-slot-5 ACK, both
 host-first and DMA-first terminal joins, and correct host/DMA/peer badge
-coalescing. Pair-restart coverage must suspend both runtimes, mask CARD_INT,
+coalescing. It must also prove a terminal condition reached from a peer/root
+wake and condition-before-sleep, plus an idempotent late DMA badge, without a
+second W1C, ACK, issue, or completion. Pair-restart coverage must suspend both runtimes, mask CARD_INT,
 drain local notification slot `3`, and prove root ACKs only SDHCI IRQ 158
 handler slot 4. DMA IRQ 116 handler slot 5 must remain unacknowledged across the
 generation cut. Replacement `EngineInit` must abort or reset channel 4 as
