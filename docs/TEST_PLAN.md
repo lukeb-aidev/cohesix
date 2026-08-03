@@ -2073,6 +2073,17 @@ carry no authority, work count, or history. At quiescence the final stable
 condition recheck must observe no work and block without requiring a later
 edge.
 
+The persistent-control composition must include the exact generation-1 Join
+boundary observed on hardware: the marker-paired first `DPC_ACTIVATE` arrives
+with activation false and state/ring `CARD_INT` mask state skewed. That child
+must remain generation/link/ring/poison checked, reconcile activation and mask
+health, publish its terminal without one SDHCI command or continuation grant,
+and let the same parent reach its fenced Function-2 TX. Under the identical
+precondition, ordinary persistent CMD52/CMD53 children must remain rejected;
+wrong epoch, poison, overrun, and marker mutation must also fail closed. A
+failed dedicated final rearm must preserve the typed first owner fault rather
+than surface only as a later persistent-marker rejection.
+
 Common NetStack coverage must use one fixed-capacity raw IPv4/ICMP socket as
 the sole Echo Reply owner. From its two-frame RX side, the service admits only
 checksum-valid Echo Requests from a unicast source addressed to the exact

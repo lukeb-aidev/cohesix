@@ -14602,11 +14602,7 @@ fn sdio_persistent_transaction_admitted_with_ring(
         return false;
     }
     let state = SDIO_RUNTIME_STATE.with_ref(|state| *state);
-    if state.shared_epoch != generation
-        || !state.dpc_link_ready
-        || !state.dpc_activation_allowed
-        || state.dpc_poisoned
-    {
+    if state.shared_epoch != generation || !state.dpc_link_ready || state.dpc_poisoned {
         return false;
     }
     if !ring.valid()
@@ -14616,6 +14612,17 @@ fn sdio_persistent_transaction_admitted_with_ring(
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
             != 0
     {
+        return false;
+    }
+    if descriptor.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE {
+        // DPC_ACTIVATE is the canonical operation that establishes activation,
+        // masks CARD_INT, and republishes ring health. Requiring its output
+        // state before admitting the same exact generation-bound transaction
+        // is circular. Its retained owner state machine repeats link, epoch,
+        // poison, and notification-binding admission before any MMIO.
+        return descriptor.addr == generation;
+    }
+    if !state.dpc_activation_allowed {
         return false;
     }
     let ring_card_irq_masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
@@ -14884,6 +14891,17 @@ const fn sdio_final_dpc_rearm_admitted(
 }
 
 #[cfg(any(target_os = "none", test))]
+fn sdio_record_final_dpc_rearm_service(serviced: bool) {
+    if !serviced {
+        // Preserve the real owner-health failure before a later immutable
+        // child reaches admission. Without this record the next typed request
+        // can surface only a generic marker fault, hiding the first broken
+        // rearm edge from pair recovery diagnostics.
+        sdio_record_transfer_failure_result(DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED);
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
 fn sdio_final_dpc_rearm_turn_due(route: RuntimeNotificationRoute) -> bool {
     if route != RuntimeNotificationRoute::SdioOwner {
         return false;
@@ -14900,7 +14918,7 @@ fn sdio_final_dpc_rearm_turn_due(route: RuntimeNotificationRoute) -> bool {
     // the empty-ring rearm with HoldPending, but either outcome consumes this
     // turn; the retained command and any frozen grant remain untouched for the
     // next arbitration pass.
-    let _ = sdio_runtime_service_notification(0);
+    sdio_record_final_dpc_rearm_service(sdio_runtime_service_notification(0));
     true
 }
 
@@ -56245,7 +56263,9 @@ mod tests {
         let _descriptor = stage_cyw43_control_exchange_request(
             0x107,
             1,
-            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
+            DRIVER_RUNTIME_CYW43_FLAG_CONTROL_EXT_HEADER
+                | DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN
+                | DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE,
             &[0x5a, 0xa5],
         );
         CYW43_RUNTIME_STATE.with_mut(|state| {
@@ -56279,13 +56299,17 @@ mod tests {
         let mut parent = cyw43_descriptor_command(0x4359_5238);
         parent.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
             | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
-        parent.aux1 = 0;
+        parent.aux1 = physical_generation;
         parent.budget = DriverTaskBudgetGrant {
             max_ops: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
             max_frames: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
             max_bytes: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
         };
         assert!(cyw43_foreground_pre_admit(parent));
+        assert!(cyw43_persistent_parent_transaction_admitted(
+            parent,
+            physical_generation,
+        ));
         let original_watermark = cyw43_capture_foreground_dpc_watermark(parent.sequence);
         let _production_mode = ProductionForegroundModeGuard::enter();
 
@@ -56307,6 +56331,25 @@ mod tests {
             CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.frontier),
         ));
         assert_eq!(TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire), 1);
+
+        // Model the exact pre-Join boundary that hardware exposed: the prior
+        // DPC lifetime has advanced its durable ring while the private mask /
+        // activation mirror still reflects the preceding rearm transition.
+        // The exact DPC_ACTIVATE child owns reconciliation; this mutable state
+        // cannot invalidate its already-sealed transaction identity.
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_activation_allowed = false;
+            state.card_irq_masked = true;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert!(dpc_event_ring_set_owner_health_at(
+            dpc_base, false, false, false, false,
+        ));
+        assert!(cyw43_persistent_parent_transaction_admitted(
+            parent,
+            physical_generation,
+        ));
         // Host tests model the linked runtimes with disjoint virtual backing
         // arrays. Mirror the already committed owner descriptor into SDIO's
         // local mapping before exercising its production intake seam.
@@ -56327,6 +56370,69 @@ mod tests {
             child_descriptor,
             physical_generation,
         ));
+        let ordinary_descriptor = sdio_bus_link_cmd52_descriptor(
+            false,
+            1,
+            SDIO_CCCR_IORX,
+            BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        )
+        .map(|descriptor| DriverRuntimeSdioCommandDescriptor {
+            flags: descriptor.flags
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PERSISTENT_TRANSACTION,
+            ..descriptor
+        })
+        .expect("the comparison Function-1 read has one persistent identity");
+        let mut ordinary_child = child;
+        ordinary_child.sequence = ordinary_child.sequence.wrapping_add(1);
+        ordinary_child.budget = sdio_bus_link_command_budget(1);
+        assert!(ordinary_descriptor.valid());
+        assert!(sdio_bus_link_command_budget_valid(
+            ordinary_child,
+            ordinary_descriptor,
+        ));
+        assert!(
+            !sdio_persistent_transaction_admitted(
+                ordinary_child,
+                ordinary_descriptor,
+                physical_generation,
+            ),
+            "the same inactive/mask-skewed condition cannot admit ordinary card I/O",
+        );
+        let admitted_ring = dpc_event_ring_read_at(dpc_base);
+        let wrong_generation_descriptor = DriverRuntimeSdioCommandDescriptor {
+            addr: physical_generation.wrapping_add(1),
+            ..child_descriptor
+        };
+        assert!(!sdio_persistent_transaction_admitted_with_ring(
+            child,
+            wrong_generation_descriptor,
+            physical_generation,
+            admitted_ring,
+        ));
+        let mut stale_ring = admitted_ring;
+        stale_ring.epoch = stale_ring.epoch.wrapping_add(1);
+        assert!(!sdio_persistent_transaction_admitted_with_ring(
+            child,
+            child_descriptor,
+            physical_generation,
+            stale_ring,
+        ));
+        let mut overrun_ring = admitted_ring;
+        overrun_ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN;
+        overrun_ring.overruns = overrun_ring.overruns.saturating_add(1);
+        assert!(!sdio_persistent_transaction_admitted_with_ring(
+            child,
+            child_descriptor,
+            physical_generation,
+            overrun_ring,
+        ));
+        SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = true);
+        assert!(!sdio_persistent_transaction_admitted(
+            child,
+            child_descriptor,
+            physical_generation,
+        ));
+        SDIO_RUNTIME_STATE.with_mut(|state| state.dpc_poisoned = false);
         assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
 
         let mut io = TestSdioHostIo::new();
@@ -56350,8 +56456,16 @@ mod tests {
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert!(!state.external_dma_input.valid);
             assert!(!state.external_dma_request.active());
+            assert!(state.dpc_activation_allowed);
+            assert!(state.card_irq_masked);
             assert!(!state.dpc_poisoned);
         });
+        let reconciled_ring = dpc_event_ring_read_at(dpc_base);
+        assert_ne!(
+            reconciled_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0,
+            "the exact activation republishes its reconciled owner condition",
+        );
 
         let mut owner_ring =
             RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
@@ -56496,8 +56610,8 @@ mod tests {
             previous_owner_sequence = next_child.sequence;
         }
 
-        let (control_tx_child, control_tx_descriptor) =
-            control_tx_child.expect("the marked gen0 parent reaches one persistent Function-2 TX");
+        let (control_tx_child, control_tx_descriptor) = control_tx_child
+            .expect("the marked generation-1 Join reaches one persistent Function-2 TX");
         assert_eq!(
             CYW43_RUNTIME_STATE.with_ref(|state| state.control_exchange.phase),
             Cyw43ControlExchangePhase::WaitCredit,
@@ -92694,6 +92808,23 @@ mod tests {
             !sdio_final_dpc_rearm_turn_due(RuntimeNotificationRoute::Cyw43Client),
             "the CYW43 client cannot execute the SDIO owner's rearm",
         );
+    }
+
+    #[test]
+    fn sdio_final_dpc_rearm_failure_preserves_the_first_owner_fault() {
+        let _guard = test_guard();
+        reset_sdio_descriptor_seam_for_test();
+        sdio_clear_last_transfer_failure();
+
+        sdio_record_final_dpc_rearm_service(false);
+        assert_eq!(
+            sdio_last_transfer_failure(),
+            DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+        );
+
+        sdio_clear_last_transfer_failure();
+        sdio_record_final_dpc_rearm_service(true);
+        assert_eq!(sdio_last_transfer_failure(), 0);
     }
 
     #[test]

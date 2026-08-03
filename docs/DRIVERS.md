@@ -1528,6 +1528,18 @@ generation and XID.
   unrelated primitive, changed body, stale generation, replay, or mixture with
   the finite steady-service lease fails closed before I/O.
 
+  Persistent `DPC_ACTIVATE` is the one operation-specific exception to
+  pre-existing activation and `CARD_INT` mask-parity admission. It still
+  requires the exact nonzero generation, ready reciprocal link, non-poisoned
+  owner, and a valid same-generation ring with no poison or overrun. Its sole
+  retained SDIO-owner cursor then rechecks the link, generation, notification
+  binding, and poison before MMIO; establishes activation and masked policy;
+  inspects or coalesces the durable source; republishes ring health; and reaches
+  one terminal without issuing an SDHCI command. Requiring activation or mask
+  parity before this operation would require its own postcondition as an input.
+  Ordinary persistent CMD52/CMD53 children and the separate urgent-op7 lease
+  retain their stronger live activation, ring, and mask-coherence gates.
+
   Every persistent Function-2 CMD53 write additionally inherits
   `FLAG_PRE_TX_DPC_FENCE`; callers and operation-specific control flags cannot
   opt out. Before installing that immutable request, SDIO requires the exact
@@ -3116,7 +3128,11 @@ blocks immediately, equal deterministic private work continues, and
 takes its required live hardware sample after a changed cursor. A marked
 persistent op11 drives its first `DPC_ACTIVATE` child through production SDIO
 intake and owner terminal, then replays from the sequence-last completion with
-the notification absent. The same marked logical-generation-zero lifecycle
+the notification absent. The generation-1 Join composition begins from the
+observed inactive/mask-skewed pre-Join boundary and proves that activation
+reconciles the owner with zero SDHCI command issue, while the same boundary
+rejects an ordinary persistent Function-1 read and stale epoch, poison, or
+overrun still fail closed. The same marked logical-generation-zero lifecycle
 then consumes the owner-published source event through canonical DPC, reaches
 one persistent Function-2 TX child with no continuation grant, commits and
 replays that child exactly once, then takes a modeled physical IRQ158/CARD_INT
