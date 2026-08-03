@@ -17328,20 +17328,39 @@ fn sdio_retained_request_preissue_turn_with<I: SdioTransferIo>(
                     & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE
                     != 0
                 {
-                    let status = io.read32(SDHCI_INT_STATUS);
-                    if status & SDHCI_INT_CARD_INT != 0 {
-                        // This read is the Join source-ordering linearization
-                        // point. The immutable child is proven not issued: leave
-                        // CARD_INT level-retained for the canonical DPC_ACTIVATE
-                        // lane, restore the base host policy, and return a typed
-                        // terminal without containment or pair recovery.
-                        cursor.failure_result = sdio_transfer_failure_result(
-                            SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE,
-                            status,
-                        );
-                        cursor.phase = SdioExternalDmaRequestPhase::PreIssueDpcFenceRestorePolicy;
-                        sdio_external_dma_store_cursor(cursor);
-                        return RuntimeCommandTurn::Pending;
+                    match sdio_linearize_preissue_dpc_fence_with(io, identity.generation, cursor) {
+                        SdioPreissueDpcFenceResult::Ready => {}
+                        SdioPreissueDpcFenceResult::Deferred(status) => {
+                            // The immutable child is proven not issued. The
+                            // source is already durable (or was published above),
+                            // so restore the base policy and return the typed DPC
+                            // defer terminal without containment or pair recovery.
+                            cursor.failure_result = sdio_transfer_failure_result(
+                                SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE,
+                                status,
+                            );
+                            cursor.phase =
+                                SdioExternalDmaRequestPhase::PreIssueDpcFenceRestorePolicy;
+                            sdio_external_dma_store_cursor(cursor);
+                            return RuntimeCommandTurn::Pending;
+                        }
+                        SdioPreissueDpcFenceResult::Fault => {
+                            // A generation, health, or physical-enable mismatch
+                            // is not ordinary DPC backpressure. Fail closed before
+                            // COMMAND/DMA and require canonical pair recovery.
+                            sdio_poison_owner_path_with(io);
+                            sdio_record_transfer_failure_result(
+                                DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+                            );
+                            SDIO_RUNTIME_STATE.with_mut(|state| state.external_dma_request.reset());
+                            return RuntimeCommandTurn::Complete(
+                                DriverTaskCompletionRecord::fault_with_result(
+                                    identity.sequence,
+                                    FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                                    DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+                                ),
+                            );
+                        }
                     }
                 }
                 io.write16(
@@ -17768,6 +17787,38 @@ fn service_sdio_external_dma_command_turn_with_io<I: SdioTransferIo>(
             ));
         }
         sdio_clear_last_transfer_failure();
+        if descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE != 0 {
+            match sdio_establish_preissue_dpc_fence_with(io, identity.generation) {
+                SdioPreissueDpcFenceResult::Ready => {}
+                SdioPreissueDpcFenceResult::Deferred(status) => {
+                    let result = sdio_transfer_failure_result(
+                        SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE,
+                        status,
+                    );
+                    sdio_record_transfer_failure_result(result);
+                    return RuntimeCommandTurn::Complete(
+                        DriverTaskCompletionRecord::fault_with_result(
+                            command.sequence,
+                            FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                            result,
+                        ),
+                    );
+                }
+                SdioPreissueDpcFenceResult::Fault => {
+                    sdio_poison_owner_path_with(io);
+                    sdio_record_transfer_failure_result(
+                        DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+                    );
+                    return RuntimeCommandTurn::Complete(
+                        DriverTaskCompletionRecord::fault_with_result(
+                            command.sequence,
+                            FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                            DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+                        ),
+                    );
+                }
+            }
+        }
         cursor = SdioExternalDmaRequestCursor {
             phase: if descriptor.op == DRIVER_RUNTIME_SDIO_OP_HOST_CONFIG {
                 SdioExternalDmaRequestPhase::HostConfigStart
@@ -21425,8 +21476,11 @@ const fn sdio_transfer_failure_stage(result: u32) -> u32 {
 }
 
 const fn sdio_transfer_preissue_dpc_fence_deferred(result: u32) -> bool {
+    // Stage 7 is itself the typed, proven-not-issued outcome. Its low bits are
+    // only evidence: a durable DPC event may carry SOURCE_PENDING with a clear
+    // host latch, while a physical crossing carries CARD_INT. Do not invent a
+    // hardware status bit merely to classify the same authoritative condition.
     sdio_transfer_failure_stage(result) == SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE
-        && result & SDHCI_INT_CARD_INT != 0
 }
 
 fn sdio_clear_last_transfer_failure() {
@@ -24006,6 +24060,13 @@ fn cyw43_foreground_scope_prepared_descriptor(
         // this child marker. `valid` below constrains the result to one exact
         // Function-1/2 primitive or DPC activation owned by that transaction.
         desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_PERSISTENT_TRANSACTION;
+        if desc.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE && desc.function == 2 {
+            // Every control TX can make a reply source visible. Bind physical
+            // CARD_INT arm proof to the immutable child rather than relying on
+            // a preceding DPC-rearm scheduling edge or an operation-specific
+            // CYW43 flag. Steady op7 traffic remains on its existing exact lane.
+            desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE;
+        }
     } else if transaction.steady_tx_service_lease_parent_authorized()
         && desc.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
         && desc.function == 2
@@ -49580,6 +49641,21 @@ enum SdioCardInterruptRearmResult {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPreissueDpcFenceCondition {
+    EmptyMasked,
+    EmptyArmed,
+    Event(u32),
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SdioPreissueDpcFenceResult {
+    Ready,
+    Deferred(u32),
+    Fault,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum SdioRequestIrqPartition {
     NotRequest,
     RequestOnlyAcked(bool),
@@ -50076,6 +50152,172 @@ fn sdio_rearm_card_interrupt_with<I: SdioTransferIo>(io: &mut I) -> SdioCardInte
     });
     sdio_record_dpc_health(false);
     SdioCardInterruptRearmResult::Rearmed
+}
+
+fn sdio_preissue_dpc_fence_condition(generation: u32) -> SdioPreissueDpcFenceCondition {
+    let state = SDIO_RUNTIME_STATE.with_ref(|state| *state);
+    if generation == 0
+        || !state.initialized
+        || state.shared_epoch != generation
+        || !state.dpc_link_ready
+        || state.irq_handler_slot != DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT
+        || state.peer_notification_slot != DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT
+        || !state.dpc_activation_allowed
+        || state.irq_ack_pending
+        || state.dpc_poisoned
+    {
+        return SdioPreissueDpcFenceCondition::Fault;
+    }
+    let ring = sdio_runtime_dpc_ring_snapshot(generation);
+    let ring_card_irq_masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
+    if !ring.valid()
+        || ring.epoch != generation
+        || ring_card_irq_masked != state.card_irq_masked
+        || ring.flags
+            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
+            != 0
+    {
+        return SdioPreissueDpcFenceCondition::Fault;
+    }
+    match dpc_event_ring_peek(&ring, generation) {
+        DpcRingConsumeResult::Event(_) if !state.card_irq_masked => {
+            // Canonical source publication masks the retained CARD_INT level
+            // before committing the event. Event-plus-unmasked is therefore a
+            // broken owner invariant, not ordinary DPC backpressure.
+            SdioPreissueDpcFenceCondition::Fault
+        }
+        DpcRingConsumeResult::Event(event) if cyw43_dpc_event_has_source(event.flags) => {
+            SdioPreissueDpcFenceCondition::Event(event.host_int_status)
+        }
+        DpcRingConsumeResult::Event(_)
+        | DpcRingConsumeResult::BadEpoch
+        | DpcRingConsumeResult::BadSequence => SdioPreissueDpcFenceCondition::Fault,
+        DpcRingConsumeResult::Empty if state.card_irq_masked => {
+            SdioPreissueDpcFenceCondition::EmptyMasked
+        }
+        DpcRingConsumeResult::Empty => SdioPreissueDpcFenceCondition::EmptyArmed,
+    }
+}
+
+fn sdio_preissue_publish_card_interrupt_with<I: SdioTransferIo>(
+    io: &mut I,
+    host_int_status: u32,
+) -> bool {
+    let (masked_int, masked_signal) = sdio_interrupt_policy_registers(true, true);
+    if !sdio_write_card_interrupt_masked_policy_with(io, masked_int, masked_signal) {
+        let _ = sdio_fail_card_interrupt_rearm_with(io, masked_int, masked_signal);
+        return false;
+    }
+    sdio_publish_card_interrupt_event_after_rearm(host_int_status)
+}
+
+fn sdio_establish_preissue_dpc_fence_with<I: SdioTransferIo>(
+    io: &mut I,
+    generation: u32,
+) -> SdioPreissueDpcFenceResult {
+    match sdio_preissue_dpc_fence_condition(generation) {
+        SdioPreissueDpcFenceCondition::Event(status) => {
+            return SdioPreissueDpcFenceResult::Deferred(status);
+        }
+        SdioPreissueDpcFenceCondition::EmptyArmed => {
+            // Do not trust an arm inherited from an earlier control lifetime.
+            // Commit a masked durable baseline, then run the same crossing-safe
+            // physical transition used after DPC consumption. This repairs
+            // stale enable-register drift without adding a scheduler edge.
+            SDIO_RUNTIME_STATE.with_mut(|state| state.card_irq_masked = true);
+            sdio_record_dpc_health(false);
+            if sdio_preissue_dpc_fence_condition(generation)
+                != SdioPreissueDpcFenceCondition::EmptyMasked
+            {
+                return SdioPreissueDpcFenceResult::Fault;
+            }
+        }
+        SdioPreissueDpcFenceCondition::EmptyMasked => {}
+        SdioPreissueDpcFenceCondition::Fault => {
+            return SdioPreissueDpcFenceResult::Fault;
+        }
+    }
+    match sdio_rearm_card_interrupt_with(io) {
+        SdioCardInterruptRearmResult::Rearmed => {}
+        SdioCardInterruptRearmResult::SourcePending(status) => {
+            return if sdio_publish_card_interrupt_event_after_rearm(status) {
+                SdioPreissueDpcFenceResult::Deferred(status)
+            } else {
+                SdioPreissueDpcFenceResult::Fault
+            };
+        }
+        SdioCardInterruptRearmResult::Fault => {
+            return SdioPreissueDpcFenceResult::Fault;
+        }
+    }
+
+    // The health publication in the rearm helper is not itself authoritative.
+    // Re-read the committed ring and the physical enables before admitting any
+    // request programming, so a failed health store or state transition cannot
+    // be inferred from the earlier MMIO writes.
+    match sdio_preissue_dpc_fence_condition(generation) {
+        SdioPreissueDpcFenceCondition::Event(status) => {
+            return SdioPreissueDpcFenceResult::Deferred(status);
+        }
+        SdioPreissueDpcFenceCondition::EmptyArmed => {}
+        SdioPreissueDpcFenceCondition::EmptyMasked | SdioPreissueDpcFenceCondition::Fault => {
+            return SdioPreissueDpcFenceResult::Fault;
+        }
+    }
+    let (expected_int, expected_signal) = sdio_interrupt_policy_registers(true, false);
+    if !sdio_card_interrupt_policy_readback_matches(
+        io.read32(SDHCI_INT_ENABLE),
+        io.read32(SDHCI_SIGNAL_ENABLE),
+        expected_int,
+        expected_signal,
+    ) {
+        return SdioPreissueDpcFenceResult::Fault;
+    }
+    let status = io.read32(SDHCI_INT_STATUS);
+    if status & SDHCI_INT_CARD_INT == 0 {
+        SdioPreissueDpcFenceResult::Ready
+    } else if sdio_preissue_publish_card_interrupt_with(io, status) {
+        SdioPreissueDpcFenceResult::Deferred(status)
+    } else {
+        SdioPreissueDpcFenceResult::Fault
+    }
+}
+
+fn sdio_linearize_preissue_dpc_fence_with<I: SdioTransferIo>(
+    io: &mut I,
+    generation: u32,
+    cursor: SdioExternalDmaRequestCursor,
+) -> SdioPreissueDpcFenceResult {
+    match sdio_preissue_dpc_fence_condition(generation) {
+        SdioPreissueDpcFenceCondition::Event(status) => {
+            return SdioPreissueDpcFenceResult::Deferred(status);
+        }
+        SdioPreissueDpcFenceCondition::EmptyArmed => {}
+        SdioPreissueDpcFenceCondition::EmptyMasked | SdioPreissueDpcFenceCondition::Fault => {
+            return SdioPreissueDpcFenceResult::Fault;
+        }
+    }
+    let (base_int, base_signal) = sdio_interrupt_policy_registers(true, false);
+    let (expected_int, expected_signal) =
+        sdio_request_interrupt_policy_registers(base_int, base_signal, cursor);
+    if !sdio_card_interrupt_policy_readback_matches(
+        io.read32(SDHCI_INT_ENABLE),
+        io.read32(SDHCI_SIGNAL_ENABLE),
+        expected_int,
+        expected_signal,
+    ) {
+        return SdioPreissueDpcFenceResult::Fault;
+    }
+    let status = io.read32(SDHCI_INT_STATUS);
+    if status & SDHCI_INT_CARD_INT == 0 {
+        SdioPreissueDpcFenceResult::Ready
+    } else if sdio_preissue_publish_card_interrupt_with(io, status) {
+        SdioPreissueDpcFenceResult::Deferred(status)
+    } else {
+        SdioPreissueDpcFenceResult::Fault
+    }
 }
 
 #[cfg(target_os = "none")]
@@ -55046,6 +55288,8 @@ mod tests {
         });
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
             state.dpc_activation_allowed = true;
             state.dpc_poisoned = false;
             state.card_irq_masked = false;
@@ -55239,6 +55483,13 @@ mod tests {
                         | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE),
                 0,
             );
+            let function2_control_tx =
+                scoped.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE && scoped.function == 2;
+            assert_eq!(
+                scoped.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE != 0,
+                function2_control_tx,
+                "only the persistent Function-2 TX child mints the physical arm prerequisite",
+            );
             let child = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
                 transaction.prepared_descriptor = scoped;
                 transaction.prepared_descriptor_valid = true;
@@ -55405,6 +55656,11 @@ mod tests {
             transaction.executing = false;
             (child, descriptor)
         });
+        assert_ne!(
+            descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            0,
+            "every persistent Function-2 control child inherits the physical arm fence",
+        );
         assert!(cyw43_foreground_begin_turn(parent));
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             assert_eq!(cyw43_foreground_poll_frontier(transaction), None);
@@ -55430,6 +55686,9 @@ mod tests {
 
         let mut io = production_owner_io();
         configure_production_owner_child(&mut io, descriptor);
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, false);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
         assert_eq!(
             sdio_external_dma_request_identity_with(child, descriptor, &mut io)
                 .expect("persistent child has one exact physical identity")
@@ -55495,6 +55754,13 @@ mod tests {
             io.dma_terminal_interrupt_acks,
             usize::from(expected_engine == SdioRequestEngine::ExternalDma),
         );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.card_irq_masked);
+            assert_eq!(
+                state.card_irq_rearms, 1,
+                "each persistent PIO/DMA control child establishes one fresh physical arm",
+            );
+        });
 
         let mut owner_ring =
             RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
@@ -55813,6 +56079,7 @@ mod tests {
             state.initialized = true;
             state.dpc_link_ready = true;
             state.shared_epoch = physical_generation;
+            state.irq_badge = DRIVER_RUNTIME_SDIO_IRQ_BADGE;
             state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
             state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
             state.dpc_activation_allowed = true;
@@ -56006,6 +56273,12 @@ mod tests {
             if next_descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
                 && next_descriptor.function == 2
             {
+                assert_ne!(
+                    next_descriptor.flags
+                        & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+                    0,
+                    "the parent scopes every Function-2 control TX with the physical arm fence",
+                );
                 control_tx_child = Some((next_child, next_descriptor));
                 break;
             }
@@ -56054,6 +56327,20 @@ mod tests {
                 u32::from(control_tx_descriptor.len),
             ),
         );
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.card_irq_masked);
+            assert!(!state.dpc_poisoned);
+        });
+        let post_tx_ring = dpc_event_ring_read_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        );
+        assert_eq!(post_tx_ring.producer, post_tx_ring.consumer);
+        assert_eq!(
+            post_tx_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0,
+        );
+        assert_ne!(tx_io.register(SDHCI_INT_ENABLE) & SDHCI_INT_CARD_INT, 0,);
+        assert_ne!(tx_io.register(SDHCI_SIGNAL_ENABLE) & SDHCI_INT_CARD_INT, 0,);
         assert!(runtime_ring_write_completion_staged(
             &mut owner_ring,
             runtime_staged_completion(tx_completion),
@@ -56089,8 +56376,61 @@ mod tests {
         assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
 
         let response = *b"ok";
-        CYW43_RUNTIME_STATE.with_mut(|state| {
-            queue_cyw43_control_reply(state, 0x107, 1, CYW43_CDC_STATUS_SUCCESS, &response);
+        let reply_frame_len = CYW43_SDPCM_HEADER_BYTES + CYW43_CDC_HEADER_BYTES + response.len();
+        stage_sdpcm_rx_header(
+            CYW43_RUNTIME_RX_BUFFER_OFFSET,
+            reply_frame_len,
+            CYW43_SDPCM_HEADER_BYTES,
+            CYW43_SDPCM_CHANNEL_CONTROL,
+            23,
+            false,
+        );
+        let cdc_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + CYW43_SDPCM_HEADER_BYTES;
+        stage_u32(cdc_offset, 0x107);
+        stage_u32(cdc_offset + 4, response.len() as u32);
+        stage_u16(cdc_offset + 8, 0);
+        stage_u16(cdc_offset + 10, 1);
+        stage_u32(cdc_offset + 12, CYW43_CDC_STATUS_SUCCESS);
+        stage_bytes(cdc_offset + CYW43_CDC_HEADER_BYTES, &response);
+        let reply_wire = snapshot_runtime_wire::<128>(CYW43_RUNTIME_RX_BUFFER_OFFSET);
+
+        let irq_acks_before = TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(SDHCI_INT_CARD_INT, Ordering::Release);
+        assert!(sdio_runtime_service_notification(
+            DRIVER_RUNTIME_SDIO_IRQ_BADGE,
+        ));
+        TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(0, Ordering::Release);
+        assert_eq!(
+            TEST_RUNTIME_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            irq_acks_before + 1,
+            "the modeled IRQ158 edge is acknowledged exactly once after durable publication",
+        );
+        let reply_event = match cyw43_runtime_dpc_event_peek() {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("post-TX CARD_INT must commit one durable reply event: {other:?}"),
+        };
+        assert_eq!(reply_event.host_int_status, SDHCI_INT_CARD_INT);
+        assert_eq!(reply_event.reason, DPC_REASON_SDIO_CARD_INTERRUPT);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert!(!state.irq_ack_pending);
+            assert_eq!(state.card_irq_captures, 1);
+        });
+
+        let reply_dpc = drive_production_dpc_event_to_fifo(
+            physical_generation,
+            &reply_wire,
+            1,
+            I_HMB_FRAME_IND,
+        );
+        assert_eq!(
+            reply_dpc.function2_reads, 2,
+            "the reply must traverse authoritative Function-2 RX plus empty confirmation",
+        );
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.rx_queue_count, 1);
+            assert_eq!(state.dpc_last_consumed_sequence, reply_event.sequence);
+            assert!(!state.recovery_required);
         });
         assert_eq!(
             service_command_turn(0, parent),
@@ -56099,7 +56439,7 @@ mod tests {
                 DriverFrameDescriptor {
                     offset: (DRIVER_TASK_RING_FRAME_OFFSET + CYW43_CDC_HEADER_BYTES) as u32,
                     len: response.len() as u16,
-                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 1),
+                    flags: cyw43_frame_flags(CYW43_SDPCM_CHANNEL_CONTROL, 23),
                 },
             )),
         );
@@ -82808,8 +83148,17 @@ mod tests {
     #[test]
     fn sdio_retained_join_fence_defers_asserted_card_int_before_issue() {
         let _guard = test_guard();
-        reset_sdio_descriptor_seam_for_test();
-        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_6801);
+        let generation = 0x4359_6801;
+        initialize_production_foreground_pair(generation);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.dpc_activation_allowed = true;
+            state.card_irq_masked = false;
+        });
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        sdio_record_dpc_health(false);
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
         for index in 0..64 {
             write_runtime_payload_byte(data_offset + index, 0x5a ^ index as u8);
@@ -82831,6 +83180,9 @@ mod tests {
         let command = stage_sdio_descriptor_service_command(sequence, descriptor);
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, false);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
         io.set_register(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
 
         let completion = drive_sdio_retained_descriptor_for_test(command, descriptor, &mut io);
@@ -82871,10 +83223,215 @@ mod tests {
     }
 
     #[test]
-    fn sdio_retained_join_fence_issues_once_when_card_int_is_clear() {
+    fn sdio_retained_control_fence_defers_durable_source_event_without_fake_card_int() {
         let _guard = test_guard();
-        reset_sdio_descriptor_seam_for_test();
-        SDIO_RUNTIME_STATE.with_mut(|state| state.shared_epoch = 0x4359_6802);
+        let generation = 0x4359_6804;
+        initialize_production_foreground_pair(generation);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.dpc_activation_allowed = true;
+            state.card_irq_masked = true;
+        });
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        sdio_record_dpc_health(false);
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                0,
+                0,
+                DPC_REASON_SDIO_SOURCE_PENDING,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+
+        let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
+        for index in 0..64 {
+            write_runtime_payload_byte(data_offset + index, 0x96 ^ index as u8);
+        }
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: BACKPLANE_32BIT_FLAG,
+            data_offset: data_offset as u16,
+            len: 64,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let sequence = 0x8000_6804;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, true);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
+
+        let completion = drive_sdio_retained_descriptor_for_test(command, descriptor, &mut io);
+        let expected =
+            sdio_transfer_failure_result(SDIO_TRANSFER_FAILURE_STAGE_PREISSUE_DPC_FENCE, 0);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                expected,
+            ),
+        );
+        assert!(sdio_transfer_preissue_dpc_fence_deferred(completion.result));
+        assert_eq!(completion.result & SDHCI_INT_CARD_INT, 0);
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        assert!(!SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned));
+        assert!(matches!(
+            dpc_event_ring_peek_at(dpc_base, generation),
+            DpcRingConsumeResult::Event(event)
+                if event.flags & DRIVER_RUNTIME_DPC_EVENT_FLAG_SOURCE_PENDING != 0
+        ));
+    }
+
+    #[test]
+    fn sdio_retained_control_fence_fails_closed_on_irq_ack_debt() {
+        let _guard = test_guard();
+        let generation = 0x4359_6805;
+        initialize_production_foreground_pair(generation);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.dpc_activation_allowed = true;
+            state.card_irq_masked = true;
+            state.irq_ack_pending = true;
+        });
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        sdio_record_dpc_health(false);
+
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: BACKPLANE_32BIT_FLAG,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let sequence = 0x8000_6805;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, true);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
+
+        let completion = drive_sdio_retained_descriptor_for_test(command, descriptor, &mut io);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+            ),
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert!(state.dpc_poisoned);
+            assert!(!state.dpc_activation_allowed);
+        });
+    }
+
+    #[test]
+    fn sdio_retained_control_fence_fails_closed_on_unmasked_durable_event() {
+        let _guard = test_guard();
+        let generation = 0x4359_6806;
+        initialize_production_foreground_pair(generation);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.dpc_activation_allowed = true;
+            state.card_irq_masked = false;
+        });
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        sdio_record_dpc_health(false);
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                SDHCI_INT_CARD_INT,
+                0,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+
+        let descriptor = DriverRuntimeSdioCommandDescriptor {
+            op: DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE,
+            function: 2,
+            response_kind: DRIVER_RUNTIME_SDIO_RESP_SHORT,
+            addr: BACKPLANE_32BIT_FLAG,
+            data_offset: CYW43_SDIO_BUS_LINK_DATA_OFFSET as u16,
+            len: 64,
+            flags: DriverRuntimeSdioCommandDescriptor::FLAG_INCREMENT
+                | DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            timeout_us: BCM2835_SDIO_REQUEST_TIMEOUT_US,
+            ..DriverRuntimeSdioCommandDescriptor::empty()
+        };
+        let sequence = 0x8000_6806;
+        let command = stage_sdio_descriptor_service_command(sequence, descriptor);
+        let mut io = TestSdioHostIo::new();
+        io.use_runtime_payload = true;
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, false);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
+
+        let completion = drive_sdio_retained_descriptor_for_test(command, descriptor, &mut io);
+        assert_eq!(
+            completion,
+            DriverTaskCompletionRecord::fault_with_result(
+                sequence,
+                FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
+                DRIVER_RUNTIME_REJECT_SDIO_DPC_SOURCE_REARM_FAILED,
+            ),
+        );
+        assert_eq!(io.command_issue_count(), 0);
+        assert_eq!(io.dma_started, 0);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.card_irq_masked);
+            assert!(state.dpc_poisoned);
+            assert!(!state.dpc_activation_allowed);
+        });
+    }
+
+    #[test]
+    fn sdio_retained_join_fence_rearms_masked_empty_generation_and_issues_once() {
+        let _guard = test_guard();
+        let generation = 0x4359_6802;
+        initialize_production_foreground_pair(generation);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.dpc_activation_allowed = true;
+            state.card_irq_masked = true;
+            state.card_irq_rearms = 0;
+        });
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        sdio_record_dpc_health(false);
         let data_offset = CYW43_SDIO_BUS_LINK_DATA_OFFSET;
         for index in 0..64 {
             write_runtime_payload_byte(data_offset + index, 0xa5 ^ index as u8);
@@ -82895,6 +83452,9 @@ mod tests {
         let command = stage_sdio_descriptor_service_command(sequence, descriptor);
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
+        let (int_enable, signal_enable) = sdio_interrupt_policy_registers(true, true);
+        io.set_register(SDHCI_INT_ENABLE, int_enable);
+        io.set_register(SDHCI_SIGNAL_ENABLE, signal_enable);
         io.command_status = SDHCI_INT_RESPONSE | SDHCI_INT_SPACE_AVAIL;
         io.command_present_set = SDHCI_SPACE_AVAILABLE | SDHCI_DATA_INHIBIT | SDHCI_DAT_ACTIVE;
         io.data_end_after_words = 16;
@@ -82910,6 +83470,20 @@ mod tests {
         assert_eq!(io.sdhci_buffer_accesses, 16);
         assert_eq!(io.fifo_len, 64);
         assert_eq!(sdio_last_transfer_failure(), 0);
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.card_irq_masked);
+            assert_eq!(state.card_irq_rearms, 1);
+            assert!(!state.dpc_poisoned);
+        });
+        let ring = dpc_event_ring_read_at(
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
+        );
+        assert_eq!(ring.producer, ring.consumer);
+        assert_eq!(
+            ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            0,
+            "the durable owner-health commit precedes the sole Function-2 issue",
+        );
     }
 
     #[test]

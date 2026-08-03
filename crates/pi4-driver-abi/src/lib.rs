@@ -3515,8 +3515,10 @@ impl DriverRuntimeSdioCommandDescriptor {
     /// DPC activation must publish one generation-bound source-probe event
     /// even when the host `CARD_INT` latch is not currently asserted.
     pub const FLAG_DPC_FORCE_SOURCE_PROBE: u16 = 1 << 3;
-    /// A Function-2 CMD53 write must sample the host `CARD_INT` source at the
-    /// final pre-issue boundary and defer without issuing when it is asserted.
+    /// A Function-2 CMD53 write must establish a healthy, same-generation DPC
+    /// ring with host `CARD_INT` physically armed, then recheck that durable
+    /// condition at the final pre-issue boundary. Visible DPC work defers the
+    /// child without issuing.
     pub const FLAG_PRE_TX_DPC_FENCE: u16 = 1 << 4;
     /// HOST_CONFIG carries a read-back CCCR `SPEED` byte in `reserved[7:0]`.
     pub const FLAG_HOST_CCCR_SPEED_VALID: u16 = 1 << 5;

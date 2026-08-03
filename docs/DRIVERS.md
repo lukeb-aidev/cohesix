@@ -1519,6 +1519,23 @@ generation and XID.
   unrelated primitive, changed body, stale generation, replay, or mixture with
   the finite steady-service lease fails closed before I/O.
 
+  Every persistent Function-2 CMD53 write additionally inherits
+  `FLAG_PRE_TX_DPC_FENCE`; callers and operation-specific control flags cannot
+  opt out. Before installing that immutable request, SDIO requires the exact
+  generation, a valid non-poisoned DPC ring, no IRQ-ACK debt, and state/ring
+  mask agreement. A visible event returns a typed proven-not-issued defer only
+  while the canonical masked-source state is committed; event-plus-unmasked is
+  an invariant fault. For every healthy empty ring, SDIO commits a fresh masked baseline and rearms
+  through the existing readback and source-crossing sequence instead of trusting
+  an enable state inherited from an earlier control lifetime. The committed
+  ring health and both host enable registers are then re-read. Immediately
+  before `SDHCI_COMMAND`, SDIO repeats the
+  durable ring, enable-register, and `CARD_INT` checks. A source crossing is
+  durably published and defers the unissued child; an epoch, health, ACK, or
+  enable mismatch fails closed. This issue prerequisite applies to PIO and
+  external-DMA control children without adding a poller, deadline wake, second
+  issuer, or steady op7 hot-path work.
+
   CYW43 writes and cleans the complete persistent child command, executes the
   barrier, commits its sequence last, and may issue one badge-256 scheduling
   prompt. The sole SDIO owner binds that exact child once and advances it without
@@ -3072,9 +3089,15 @@ intake and owner terminal, then replays from the sequence-last completion with
 the notification absent. The same marked logical-generation-zero lifecycle
 then consumes the owner-published source event through canonical DPC, reaches
 one persistent Function-2 TX child with no continuation grant, commits and
-replays that child exactly once, and terminates only on its exact CONTROL
-reply. Separate production-reachable tests prove op11
-`WaitReply` and urgent-op7 `WAIT_CREDIT` admit a later committed front DPC event
+replays that child exactly once, then takes a modeled physical IRQ158/CARD_INT
+through durable DPC publication, Function-2 RX, and the control queue before
+terminating on its exact CONTROL reply. That child is automatically fenced even when the parent control flags
+are zero: masked-empty owner state must commit an unmasked healthy ring before
+its sole command write, an already-durable source event defers without a fake
+`CARD_INT` bit, and ACK debt or health mismatch performs zero command/DMA I/O
+and fails closed. PIO and external-DMA variants both traverse the same issue
+gate. Separate production-reachable tests prove op11 `WaitReply` and urgent-op7
+`WAIT_CREDIT` admit a later committed front DPC event
 outside the original fairness watermark; the same sealed op7 then reaches its
 exact Function-2 child without a root or delegated continuation grant.
 Every failure cut resumes or fails
