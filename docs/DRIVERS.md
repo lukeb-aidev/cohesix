@@ -463,11 +463,17 @@ or contain a fault; it cannot publish grant 19, re-signal, or manufacture a
 rescue edge. CYW43 derives a paired marker for each exact CMD52, CMD53, or
 `DPC_ACTIVATE` child. The sole SDIO owner retains that immutable child across
 bounded physical quanta with zero delegated grants, and commits the terminal
-before signalling. From the first post-release DPC event, before or after Gate
-8, the active event sequence and current physical generation instead bind the
-separate finite DPC steady-service lease. Mutable data-plane readiness cannot
-select an ordinary recurrent-grant DPC path. Persistent op11, urgent op7, and
-the DPC event lease continue only when their current durable local condition is
+before signalling. The post-release `DPC_ACTIVATE` establishes one
+generation-long bus lifetime. An ordinary control exchange reuses that current
+healthy, unmasked, quiescent generation instead of interposing another
+activation child. If a committed event is already visible, the exchange binds
+that exact sequence and canonical DPC consumes it before control continues;
+only absent or unhealthy activation state uses the retained activation state
+machine. From the first post-release DPC event, before or after Gate 8, the
+active event sequence and current physical generation bind the separate finite
+DPC steady-service lease. Mutable data-plane readiness cannot select an
+ordinary recurrent-grant DPC path. Persistent op11, urgent op7, and the DPC
+event lease continue only when their current durable local condition is
 runnable. Snapshot change is diagnostic history, not service authority: a
 newly committed external wait blocks immediately, while equal deterministic
 private state and returned RX-queue capacity continue without another hint.
@@ -865,9 +871,11 @@ samples the level-retained host `CARD_INT`. If it is asserted, the child
 returns a typed not-issued terminal without starting DMA, touching the FIFO,
 advancing the SDPCM sequence, entering containment, or requesting pair
 recovery. The same immutable operation-11 parent, payload, generation, and
-absolute deadline return to canonical `DPC_ACTIVATE` service for that observed
-CARD_INT condition, consume the event through the same exact post-release
-event-sequence DPC lease, and re-enter the ordinary drain/credit/setup path.
+absolute deadline bind the exact committed source to canonical DPC service for
+that observed CARD_INT condition, consume it through the same post-release
+event-sequence lease, and re-enter the ordinary drain/credit/setup path. The
+healthy generation-long activation is reused; this late crossing does not
+create a second activation lifetime.
 Only a later source-clear child may issue the Join
 CMD53, exactly once. This closes the owner-side late-source interval without a
 second Join, recovery, or fallback lane; repeated fresh-Pi proof remains
@@ -1528,27 +1536,37 @@ generation and XID.
   unrelated primitive, changed body, stale generation, replay, or mixture with
   the finite steady-service lease fails closed before I/O.
 
-  Persistent `DPC_ACTIVATE` is the one operation-specific exception to
-  pre-existing activation and `CARD_INT` mask-parity admission. It still
+  Post-release `DPC_ACTIVATE` owns the generation-level activation lifetime; it
+  is not a prerequisite transaction repeated before each control transfer. A
+  healthy current-generation, unmasked, empty ring authorizes the control
+  parent to continue locally to its Function-2 issue fence. A visible ring
+  entry instead binds exactly that event sequence to the parent until the
+  canonical DPC consumer commits it consumed; a later reassertion cannot widen
+  that one-event dependency or starve TX. If the bound event disappears or is
+  replaced without durable consumed proof, the generation is quarantined
+  rather than reconstructed by a new activation. Only genuinely absent,
+  masked, ACK-pending, invalid, poisoned, overrun, or wrong-generation owner
+  state enters the retained `DPC_ACTIVATE` state machine.
+
+  That fault/initialization state machine is the operation-specific exception
+  to pre-existing activation and `CARD_INT` mask-parity admission. It still
   requires the exact nonzero generation, ready reciprocal link, non-poisoned
   owner, and a valid same-generation ring with no poison or overrun. Its sole
-  retained SDIO-owner cursor then rechecks the link, generation, notification
+  retained SDIO-owner cursor rechecks the link, generation, notification
   binding, and poison before MMIO; establishes activation and masked policy;
   inspects or coalesces the durable source; republishes ring health; and reaches
-  one terminal without issuing an SDHCI command. Requiring activation or mask
-  parity before this operation would require its own postcondition as an input.
-  The same condition-first rule applies when IRQ158 arrives after that exact
-  immutable frontier is submitted: its current `ACK_PENDING` bit remains
-  admissible only while the active parent, child ticket, generation, descriptor,
-  source-probe flag, and global child sequence all identify that one
-  `DPC_ACTIVATE`. That owner cursor alone commits/coalesces the source, ACKs the
-  frozen IRQ epoch, republishes cleared health, and then terminalizes. ACK debt
-  with no such frontier, a different child, or a mutated identity remains a
-  terminal parent-admission failure. Notification intake latches that exact
-  epoch before sampling host status. While activation is closed and either the
-  immutable owner command or its private cursor exists, even a clear status
-  sample remains attached to that frontier; only an unclaimed zero-status badge
-  may be acknowledged immediately.
+  one terminal without issuing an SDHCI command. The same condition-first rule
+  applies when IRQ158 arrives after that exact immutable frontier is submitted:
+  its current `ACK_PENDING` bit remains admissible only while the active parent,
+  child ticket, generation, descriptor, source-probe flag, and global child
+  sequence all identify that one `DPC_ACTIVATE`. That owner cursor alone
+  commits/coalesces the source, ACKs the frozen IRQ epoch, republishes cleared
+  health, and then terminalizes. ACK debt with no such frontier, a different
+  child, or a mutated identity remains a terminal parent-admission failure.
+  Notification intake latches that exact epoch before sampling host status.
+  While activation is closed and either the immutable owner command or its
+  private cursor exists, even a clear status sample remains attached to that
+  frontier; only an unclaimed zero-status badge may be acknowledged immediately.
   Ordinary persistent CMD52/CMD53 children and the separate urgent-op7 lease
   retain their stronger live activation, ring, and mask-coherence gates.
 
@@ -1558,11 +1576,11 @@ generation and XID.
   generation, a valid non-poisoned DPC ring, no IRQ-ACK debt, and state/ring
   mask agreement. A visible event returns a typed proven-not-issued defer only
   while the canonical masked-source state is committed; event-plus-unmasked is
-  an invariant fault. For every healthy empty ring, SDIO commits a fresh masked baseline and rearms
-  through the existing readback and source-crossing sequence instead of trusting
-  an enable state inherited from an earlier control lifetime. The committed
-  ring health and both host enable registers are then re-read. Immediately
-  before `SDHCI_COMMAND`, SDIO repeats the
+  an invariant fault. Healthy generation activation remains live across
+  requests. The issue fence transiently masks, verifies, and crossing-safely
+  rearms the current request's source condition; it does not close and reopen
+  the generation's activation lifetime. The committed ring health and both host
+  enable registers are then re-read. Immediately before `SDHCI_COMMAND`, SDIO repeats the
   durable ring, enable-register, and `CARD_INT` checks. A source crossing is
   durably published and defers the unissued child; an epoch, health, ACK, or
   enable mismatch fails closed. This issue prerequisite applies to PIO and
@@ -1647,7 +1665,10 @@ generation and XID.
   IRQ and completion/DPC notifications are coalescing prompts and can never
   advance a retained foreground cursor. The distinct badge-256 client-to-owner
   notification prompts inspection of an already-published command, ordinary
-  grant, or persistent child condition.
+  grant, or persistent child condition. Immediately before its idle receive,
+  the SDIO runtime stable-reads the one-way command ring again. A fresh
+  sequence-last child re-enters owner arbitration without requiring another
+  notification; only an unchanged ring may block.
   SDHCI IRQ158 (currently badge 159) and DMA channel-4 IRQ116 are distinct
   physical sources bound to the same SDIO owner. PIO uses no DMA authority;
   for external DMA, the owner joins both IRQs with the
@@ -1668,7 +1689,8 @@ generation and XID.
   Notification coalescing cannot replay work because the sequence-last ring
   command plus either its paired persistent marker or exact unused ordinary
   grant are the only intake and continuation authorities. An idle runtime
-  blocks only after the final committed-state and hardware-condition recheck.
+  blocks only after the final command-ring, committed-state, and
+  hardware-condition recheck.
   In particular, an empty valid DPC ring whose durable owner state still says
   `CARD_INT` is masked makes the SDIO owner's final rearm quantum due even when
   its command queue is empty. The owner performs the same crossing-safe rearm
@@ -2151,6 +2173,11 @@ generation and XID.
   Delayed success at the 51/200/3,000/1,000 bounds cannot consume the
   1,024-action foreground trace or 64-slot deadline table.
 
+  Its final `DPC_ACTIVATE` completion is the sole transition that establishes a
+  healthy post-release activation lifetime for that physical generation.
+  Ordinary control transfers reuse that state; they do not insert a second
+  activation transaction between CYW43 and the card.
+
   `firmware_execution_started` is published only after the exact ARMCR4
   RESETCTRL-clear completion; `firmware_released` is published only after the
   exact generation-bound DPC activation completion. Any stale owner,
@@ -2210,7 +2237,9 @@ generation and XID.
   `INT_ENABLE`, `SIGNAL_ENABLE`, host-status/ring inspection, disposition,
   durable publish/coalesce, exact IRQ acknowledgement, signal, and rearm
   policy. The source remains masked until that ordered quantum reaches its
-  disposition.
+  disposition. Production uses that transaction at release and for typed
+  unhealthy-state repair only; a healthy generation's ordinary pre-TX path
+  reuses the established lifetime.
   Only a failed acknowledgement of the exact frozen IRQ epoch may return
   `Pending` and cross an outer-turn boundary; that later owner turn retries only
   the acknowledgement, without rereading status, republishing an event, or
@@ -2348,8 +2377,16 @@ generation and XID.
   aperture and before the Function 2 TX region, so terminal DPC capture cannot
   overwrite an accepted control or data payload.
   A control exchange carrying `CONTROL_PRE_TX_DRAIN` retains one immutable,
-  generation-bound parent and services only already-visible physical CARD_INT
-  or committed DPC/queue state before Function 2 TX. If a frame arrives while
+  generation-bound parent. At `PreTxDpcProbe`, a healthy current-generation
+  empty/unmasked ring reuses the existing activation. A committed front event
+  instead binds one attempt-scoped sequence token—sequence zero is valid—and
+  canonical DPC must commit that exact event consumed before the parent
+  advances. A later event remains queued and cannot extend the token; a missing
+  or replaced token without consumed proof quarantines the generation. Only
+  unhealthy owner state enters the activation-repair transaction. The later
+  Function-2 issue fence, not another activation child, owns a source crossing
+  after this decision. The exchange otherwise services only already-visible
+  physical CARD_INT or committed DPC/queue state before Function 2 TX. If a frame arrives while
   the cursor waits for SDPCM credit, the durable condition returns that same
   parent to its bounded FIFO drain; exhausting the finite pre-TX frame bound
   terminates as not-issued rather than transmitting ahead of an older frame.
@@ -2435,7 +2472,10 @@ generation and XID.
   currently waiting on the credit or reply that the front event can carry. A
   persistent op11 in credit/reply wait and a finite urgent op7 in `WAIT_CREDIT`
   therefore admit that later durable front condition directly; private pre-TX
-  phases and ordinary commands retain the watermark and RXBOUND fairness. This
+  phases and ordinary commands retain the watermark and RXBOUND fairness. The
+  sole pre-TX exception is the one exact event token bound at `PreTxDpcProbe`;
+  once it is consumed, later events again remain behind the foreground quantum.
+  This
   preserves DPC service without allowing a continuously asserted `CARD_INT`
   source to starve unrelated control or bootstrap progress.
 - Control replies, asynchronous events, EAPOL, and data frames may interleave;
@@ -3150,21 +3190,26 @@ current durable condition rather than snapshot novelty: a newly submitted child
 blocks immediately, equal deterministic private work continues, and
 `RxQueueWait` resumes as soon as committed queue capacity returns. SDIO alone
 takes its required live hardware sample after a changed cursor. A marked
-persistent op11 drives its first `DPC_ACTIVATE` child through production SDIO
-intake and owner terminal, then replays from the sequence-last completion with
-the notification absent. The generation-1 Join composition begins from the
-observed inactive/mask-skewed pre-Join boundary plus one exact IRQ158 ACK debt
-and proves that the already-submitted activation frontier remains admitted,
-ACKs that exact epoch, republishes cleared health, and reconciles the owner with
-zero SDHCI command issue. Removing the submitted frontier or changing its
-operation rejects the parent; the same boundary also rejects an ordinary
-persistent Function-1 read, while stale epoch, poison, or overrun still fail
-closed. The same marked logical-generation-zero lifecycle
-then consumes the owner-published source event through canonical DPC, reaches
-one persistent Function-2 TX child with no continuation grant, commits and
-replays that child exactly once, then takes a modeled physical IRQ158/CARD_INT
-through durable DPC publication, Function-2 RX, and the control queue before
-terminating on its exact CONTROL reply. That child is automatically fenced even when the parent control flags
+persistent op11 reuses a healthy current-generation empty/unmasked ring with no
+`DPC_ACTIVATE` child. A committed event binds one exact sequence, including
+wrapped sequence zero, and advances after durable consumption even if a later
+event is queued; disappearance or replacement without consumed proof
+quarantines the generation. Separate masked/ACK-pending coverage drives the
+retained `DPC_ACTIVATE` child through production SDIO intake and owner terminal,
+then replays its sequence-last completion with the notification absent. The
+generation-1 Join fallback composition begins from the observed
+inactive/mask-skewed boundary plus one exact IRQ158 ACK debt and proves that the
+already-submitted activation frontier remains admitted, ACKs that exact epoch,
+republishes cleared health, and reconciles the owner with zero SDHCI command
+issue. Removing the submitted frontier or changing its operation rejects the
+parent; the same boundary also rejects an ordinary persistent Function-1 read,
+while stale epoch, poison, or overrun still fail closed. The same marked
+logical-generation-zero lifecycle then consumes an owner-published source event
+through canonical DPC, reaches one persistent Function-2 TX child with no
+continuation grant, commits and replays that child exactly once, then takes a
+modeled physical IRQ158/CARD_INT through durable DPC publication, Function-2
+RX, and the control queue before terminating on its exact CONTROL reply. That
+child is automatically fenced even when the parent control flags
 are zero: masked-empty owner state must commit an unmasked healthy ring before
 its sole command write, an already-durable source event defers without a fake
 `CARD_INT` bit, and ACK debt or health mismatch performs zero command/DMA I/O
@@ -3217,6 +3262,9 @@ remain separated explicitly for non-CYW43 root commands.
 Root-to-CYW43 tests reject endpoint wakes, preserve ordinary grants across
 coalesced peer service, and prove an exact op11 plus its marker-paired children
 reach the same terminal with a missing, coalesced, or repeated scheduling hint.
+The SDIO runtime-loop test additionally publishes a fresh ring-only child after
+the earlier idle sample and proves the final pre-wait command-ring read re-enters
+owner arbitration; endpoint and unrelated notification routes still block.
 SDIO deadline tests must prove every timed autonomous owner wait selects and
 commits the exact phase expiry in `DriverRuntimeSdioDeadlineArm` body before
 request sequence, including pre-issue inhibit and status-clear, and prove
@@ -3249,8 +3297,9 @@ Production-chain coverage additionally drives normal control and EAPOL TX
 through exactly one cached-window F2 CMD53 child. A separate cold-cache proof
 drives exactly three LOW/MID/HIGH CMD52 writes followed by F2, with no
 per-packet IORx child. Function 2 readiness remains an initialization/recovery
-proof, matching Linux brcmfmac's enable-once/data-lane split. The suite drives
-the 20-child post-F2 release through real DPC activation and lets a real DPC
+  proof, matching Linux brcmfmac's enable-once/data-lane split. The suite drives
+  the 20-command post-F2 release culminating in the generation's one real DPC
+  activation and lets a real DPC
 event consume owner-backed status/F2/empty confirmation work before publishing
 the durable queue and batch state. The real DPC chain routes one exact admitted
 `DPC_ACTIVATE` through the production pending-command gate as a bounded

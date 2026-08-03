@@ -543,8 +543,9 @@ most one monotonic CYW43 parent-operation permit; a rejected second parent
 attempt must leave the retained ticket, deadline, payload fingerprint,
 generation, and cursor unchanged. Once admitted, persistent op11, the separate
 finite urgent-op7 lease, and a post-release DPC event lease advance inside the
-linked runtimes from changed durable state to the first unchanged external
-wait. Every helper remains bounded and each immutable hardware request may
+linked runtimes whenever the current durable condition is locally runnable,
+including equal deterministic private state, and block at the first exact
+external wait. Every helper remains bounded and each immutable hardware request may
 issue at most once, but no scheduler turn, yield, or notification is a required
 edge between semantic phases.
 
@@ -835,8 +836,11 @@ The status-clear step must include the same request-owned readback fence.
 If owned W1C bits survive that readback, the cursor must retain
 `ProgramVerifyStatusClear`, issue no COMMAND, and yield for one
 deadline-bounded retry. No other deterministic setup register may force a
-phase-per-outer-turn schedule; an optional pre-TX DPC fence may finish unissued
-but cannot retry or issue the request.
+phase-per-outer-turn schedule; an optional pre-TX DPC fence may finish the old
+child proven-not-issued, and that child can never retry, issue, or replay. After
+canonical DPC consumes the exact committed source, the same immutable op11
+parent may publish one fresh F2 child under its unchanged absolute deadline;
+the logical request still has exactly one physical issue.
 That quantum must remain within the shared 256-operation contract and perform
 no post-issue completion snapshot. Stale pre-command
 `SPACE_AVAILABLE` cannot satisfy the fresh response or switch an immutable
@@ -993,8 +997,10 @@ retain separate immutable request, command fingerprint, issue, grant,
 notification, and completion identities. Every outer EventPump turn still
 admits at most one root CYW43 parent operation. The linked runtimes may then
 advance an already-admitted persistent or finite event lifetime through
-consecutive bounded helpers while durable semantic state changes; each
-immutable physical request remains single-issue.
+consecutive bounded helpers whenever the current durable condition is locally
+runnable. Equal deterministic private state continues; the first exact external
+child, credit, queue, or peer wait blocks immediately, even when newly observed.
+Each immutable physical request remains single-issue.
 
 Closing the quantum must fence fresh pair work. An exact already-`Prepared` or
 already-`Issued` parent may drain alone. Tests must prove that an ABI-invisible
@@ -1023,8 +1029,8 @@ commands outside finite op7, including non-op11 bootstrap and recovery
 commands, keep their exact endpoint/grant authority and ABI-invisible `Stage`,
 `CommitRing`, `PublishGrant`, `NotifyRing`, and `PollRing` cadence. The finite
 urgent op7 steady-service lease retains its distinct identity, admission, and
-budget, while changed durable semantic state now continues locally to its first
-unchanged external wait. Tests must retain current grant acknowledgement,
+budget, while its current durable runnable condition continues locally to its
+first exact external wait. Tests must retain current grant acknowledgement,
 replacement, re-signal, identity, exhaustion, and endpoint-fallback rejection
 coverage for the ordinary foreground path.
 
@@ -1041,8 +1047,8 @@ The sequence-zero `Stage` remains invisible; the next producer turn writes and
 cleans the full command body/payload, executes the barrier, commits the nonzero
 sequence last, records `Issued`, and emits exactly one reserved-root-badge
 notification. One HAL admission with zero root continuation-grant publications
-must advance a real Join from
-`PreTxDrain` to `WaitCredit` and onward without grant 19, replacement grant,
+must advance a real Join from `PreTxDpcProbe` through `PreTxDrain` to
+`WaitCredit` and onward without grant 19, replacement grant,
 second notification, or endpoint send. Every completion miss retains `Issued`;
 only the exact terminal or typed fault containment closes the parent. Missing,
 coalesced, and repeated notification hints must produce identical terminal
@@ -1052,6 +1058,16 @@ non-renewable 30-second CNTVCT containment deadline starts at sequence-last
 issue: a stable terminal at expiry must win, while a double stable miss must
 request the existing pair recovery with zero added grant, signal, replay, or
 runtime wake.
+
+`PreTxDpcProbe` must classify the durable generation condition without exposing
+housekeeping as a bus transaction. A valid current-generation empty/unmasked
+ring continues locally with no `DPC_ACTIVATE` child. A committed front event
+binds one attempt-scoped exact sequence token, including sequence zero, widens
+the fairness watermark once, and waits for canonical DPC consumption. Masked,
+ACK-pending, invalid, poisoned, overrun, absent, or wrong-generation state alone
+uses the retained activation-repair transaction. A later event cannot widen the
+bound token or starve TX, and a vanished/replaced token without durable consumed
+proof quarantines the generation.
 
 Interleaved EVENT/DATA before the exact BCDC reply must not produce an op11
 terminal or a replacement parent sequence. CYW43 must publish one through eight
@@ -1086,11 +1102,12 @@ replay, mixed finite steady-service marker, or wrong parent binding before I/O.
 The real shared ring and owner cursor must commit the complete child command
 sequence last, optionally signal badge 256 once, and retain the exact child to
 terminal with zero delegated grants. Every service helper remains bounded and
-each immutable hardware request may issue at most once; changed semantic state
-may continue locally without a scheduler handoff. The owner re-reads the matching completion,
-joined IRQ state, CARD_INT/DPC work, and child frontier immediately before
-`Wait`; visible work continues without a new notification, while unchanged
-state blocks. Tests must prove the PIO CMD53 path reaches one terminal with
+each immutable hardware request may issue at most once; a current durable local
+condition may continue without a scheduler handoff. The owner re-reads the
+matching completion, joined IRQ state, CARD_INT/DPC work, child frontier, and
+sequence-last one-way command ring immediately before `Wait`; a fresh child
+re-enters intake without a new notification, while an unchanged ring and
+unchanged external work condition may block. Tests must prove the PIO CMD53 path reaches one terminal with
 IRQ158/host state and zero DMA use, and prove the external-DMA CMD53 path joins
 IRQ158/IRQ116 in both arrival orders into exactly one terminal. The completion
 body/cache clean/barrier must precede sequence-last commit and any signal.
@@ -1126,8 +1143,9 @@ replacement only after consumption, and zero I/O on mismatch. From the first
 post-release event, production DPC instead binds the exact event sequence and
 physical generation to the finite steady-service child marker before or after
 Gate 8. Mutable `steady_data_plane_live` state must never select the ordinary
-continuation-grant mode; the DPC semantic snapshot must remain authoritative
-between exact children until the event terminal. Immutable
+continuation-grant mode; the immutable DPC cursor and committed ring remain
+authoritative between exact children until the event terminal, while the
+semantic snapshot is diagnostic only. Immutable
 root/delegated commands must reject endpoint fallback even when mutable gate
 state is absent. All physical deadlines remain fault-containment limits for the
 exact active autonomous phase or ambiguous request, not traffic-progress
@@ -1136,18 +1154,23 @@ an op11 post-TX `WaitReply` with unchanged durable CARD_INT/DPC/RX/credit and
 child-terminal state must block without a forced source probe, ordinary-traffic
 deadline hint, synthetic DPC, or manufactured completion.
 Focused runtime coverage must include
-`persistent_control_semantic_progress_runs_to_first_external_wait` and
-`post_release_dpc_child_uses_exact_event_lease_before_gate8`: the first must
-exercise two successive semantic changes followed by the first stable external
-wait, and the second must prove a pre-Gate-8 event uses the exact DPC lease with
-zero ordinary continuation grants.
-An event's source/frame-length hint must be copied into the DPC cursor only on
+`persistent_control_reuses_healthy_dpc_lifetime_without_a_child`,
+`control_pre_tx_binds_one_event_then_advances_past_reassertion`,
+`control_pre_tx_missing_bound_event_faults_without_reactivation`, and
+`post_release_dpc_child_uses_exact_event_lease_before_gate8`. They prove the
+healthy zero-activation-child path, exact one-event binding including sequence
+zero, later-event fairness, fail-closed lost-token handling, and a pre-Gate-8
+event using the exact DPC lease with zero ordinary continuation grants.
+An event's source/frame-length hint must be copied into the canonical DPC cursor only on
 the first admission of that exact sequence. Later completion-poll,
 legacy ordinary-mode test, or durable-condition recheck turns must not
 reapply it: doing so can resurrect `I_HMB_FRAME_IND` after a completed F2 read
-and create an endless same-frame drain. A different sequence while one is
-active must poison the generation rather than merge event identities.
-Production-chain coverage must drive the real reciprocal `DPC_ACTIVATE` owner
+and create an endless same-frame drain. A different sequence while that
+canonical cursor is active must poison the generation rather than merge event
+identities. A later sequence queued behind the exact pre-TX token remains
+pending and does not widen that parent's watermark. Production-chain coverage
+must drive the real reciprocal `DPC_ACTIVATE` owner only for release
+establishment or unhealthy-state repair, then drive the healthy DPC event
 ring into a committed queue level and then one immutable op8 batch parent; it
 must not fabricate queue-empty op8/op10 probes or a synthetic terminal stream.
 The producer clears `commit_sequence`, writes and cleans the complete 24-byte
@@ -1323,7 +1346,8 @@ respectively.
 Production-chain coverage must additionally drive normal control and EAPOL TX
 through one cached-window F2 CMD53 child, drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
-drive all 20 post-F2 release children into real retained DPC activation, and
+drive the 20-command post-F2 release sequence to the generation's one retained
+DPC activation and prove later controls reuse it, then
 drive one pre-Gate-8 DPC event under its exact event-sequence steady lease
 through owner-backed status, F2 read, empty-confirmation, and post-status work
 before committed queue/batch publication. That event must use zero recurrent
@@ -1352,9 +1376,11 @@ zero Function 2 writes and zero op11 terminals before the single Join write is
 admitted. At the later final SDIO pre-issue boundary, assert host
 `CARD_INT` for a Join-marked Function 2 child and prove a typed not-issued
 terminal, zero controller/DMA/FIFO work, unchanged operation-11 parent and
-absolute counter deadline, no SDPCM advance or pair recovery, one forced
-`DPC_ACTIVATE` consumed through DPC, and exactly one later Function 2 issue
-after source clear. The same asserted source on an unmarked Function 2
+absolute counter deadline, no SDPCM advance or pair recovery, exact event
+publication and attempt-scoped token binding, canonical DPC consumption with no
+activation child, and exactly one fresh later Function 2 child with one total
+physical issue after source clear. A fresh defer must reset the prior token; a
+vanished or replaced token faults without reactivation. The same asserted source on an unmarked Function 2
 descriptor must preserve its bounded foreground-fairness lane.
 
 Card-init tests must prove CMD7 uses the R1b short-busy response and distinguish
@@ -1439,8 +1465,10 @@ data TX, ARP/GARP output, and the ordered pre-Join drain snapshot. The finite
 pre-Join polling cap remains separate from steady RX batching. Tests must prove
 the Join-only final pre-issue source fence closes the interval after that
 snapshot without extending the policy to generic control/data descriptors.
-The typed not-issued edge must preserve the same logical parent and route the
-level source through the sole DPC lane before one later source-clear issue.
+The old typed not-issued child must never issue, retry, or replay. It preserves
+the same logical parent, binds the exact event through the sole canonical DPC
+lane without another activation, and permits that parent to publish one distinct
+fresh child for one later source-clear issue under the unchanged deadline.
 Failure-cut tests must reject stale completions, forbid same-generation replay after
 issued-unknown ownership, and resume or fail deterministically at every
 retained action. EventPump/NetStack tests must prove Wi-Fi urgency is retained
@@ -1483,7 +1511,9 @@ Parent-replay coverage must table every CYW43 operation against transfer
 stages 1 through 7. Only stage-1 `0x5103` on the seven single-action parents may
 retry in-generation. Stage 7 is admitted only for the Join-marked Function 2
 child and is a proven not-issued DPC deferral, not recovery or replay of an
-issued action. `TRANSPORT_INIT`, `FIRMWARE_PREP`, `RELEASE`, and every other
+issued action. That old child never issues again; after exact canonical DPC
+consumption, the unchanged parent may publish one new F2 child with one total
+physical issue. `TRANSPORT_INIT`, `FIRMWARE_PREP`, `RELEASE`, and every other
 `CONTROL_EXCHANGE` failure must publish exactly one reciprocal parent request
 and then fence pair recovery. Real-ring adversarial cases must cover maintenance op11,
 all four prompt-poll owners, association and WSEC payload drift, and an ETH_TX
@@ -1770,8 +1800,9 @@ op11. The later exact CONTROL reply alone terminalizes that parent.
 From the first post-release event, the exact event-sequence DPC lease must
 complete joined interrupt work, drain bounded RX, update SDPCM credits, admit
 an already-ready urgent TX, and recheck completion/queue/event state immediately
-before blocking. Changed semantic state must continue locally across exact
-children; only the first unchanged external condition may block. A nonempty
+before blocking. The current durable runnable condition must continue locally
+across exact children, including equal deterministic private state; the first
+exact external condition may block immediately even when newly observed. A nonempty
 committed queue retains the next batch parent; exact committed empty state ends RX service.
 Bootstrap, split-control/host-EAPOL, control pre-TX, and Join-only fences remain
 separately bounded and must not become periodic steady NetData polling.
@@ -2072,16 +2103,22 @@ queue level, and one committed root batch. Its scheduler form remains one
 bounded EventPump root-parent admission with physical-console checkpoints,
 ordinary foreground grants, persistent op11 and urgent-op7 parents, an exact
 event-sequence DPC lease, one HAL owner, and one linked SDIO runtime issuer.
-Changed durable state continues inside the admitted runtime lifetime to the
-first unchanged external wait; no test may pass by
+The current durable runnable condition continues inside the admitted runtime
+lifetime, including equal deterministic private state, to the first exact
+external wait; no test may pass by
 adding a timer poller, rescue inspection, private physical drain loop, or a
 second transaction lane. Notifications may prompt a durable-state check but
 carry no authority, work count, or history. At quiescence the final stable
 condition recheck must observe no work and block without requiring a later
 edge.
 
-The persistent-control composition must include the exact generation-1 Join
-boundary observed on hardware: the marker-paired first `DPC_ACTIVATE` arrives
+The persistent-control composition must first prove the normal path: one
+post-release activation remains live for the physical generation, a healthy
+empty/unmasked ring admits ordinary control with zero `DPC_ACTIVATE` children,
+and one exact committed pre-TX event is consumed without admitting an unbounded
+later-event stream. A separate activation-repair fixture must include the exact
+inactive/mask-skewed generation-1 Join boundary observed on hardware: its
+marker-paired `DPC_ACTIVATE` arrives
 with activation false, state/ring `CARD_INT` mask state skewed, and an exact
 IRQ158 epoch pending after the child frontier was submitted. That child must
 remain generation/link/ring/poison checked, retain parent admission solely from
@@ -2332,6 +2369,10 @@ completion. Timeout or selected-engine failure must perform bounded containment
 without engine switching, notification rescue, or post-issue replay; malformed
 external-DMA resources must fail before command issue without falling back to
 PIO or root-owned service.
+The idle-owner adversary must publish a fresh sequence-last one-way command
+after the earlier empty intake sample and before receive. SDIO's final stable
+command-ring re-read must re-enter arbitration with zero physical I/O and no
+second notification; unchanged or call-shaped intake may still block.
 Firmware tests must prove one retained 32-KiB aperture drains as Linux
 MMC-shaped `511 * 64` external-DMA plus `1 * 64` retained-PIO CMD53 children,
 while the true final aperture uses the maximum full-block request plus one
@@ -2348,6 +2389,10 @@ exchange coverage must retain Linux's separate absolute 2.5-second TX and
 reply windows. It must hold an exact Function 2 child through terminal
 completion without abandoning or reissuing it, apply that completion before
 the timeout decision, and prove the original deadline is unchanged. A child
+that returns the typed pre-TX DPC defer is proven not issued and can never be
+retried or replayed; canonical DPC consumes its exact event, then the unchanged
+parent may publish one distinct fresh Function 2 child with one total physical
+issue. A child
 that finishes after the TX deadline must produce a post-TX fault and ordered
 pair fence, never replayable `NOT_READY`; the later reply window starts only
 after an on-time exact TX completion and is not inflated by any child wait.
@@ -2673,7 +2718,8 @@ phase or re-signal may appear. Every post-release DPC event carries the finite
 steady-service marker bound to its exact event sequence and physical
 generation, including before Gate 8, with zero recurrent grants. The owner uses
 bounded helpers, issues each immutable hardware request at most once, and
-continues on changed semantic state while preserving the same request until one terminal.
+continues whenever the current durable condition is locally runnable while
+preserving the same request until one terminal.
 Its physical deadline contains only the exact active autonomous phase or
 ambiguous fault and cannot manufacture traffic work. Pre-issue
 inhibit/status-clear coverage must not create a traffic cadence. HAL must mint the CYW43 send cap from the SDIO
@@ -2704,8 +2750,10 @@ For non-op11 delegated work, the existing exact-grant ACK-before-I/O contract
 remains covered. PIO must reach one terminal with IRQ158/host state and zero DMA
 use. For external DMA, IRQ158 and IRQ116 may arrive in either order or together,
 and the same owner joins them into exactly one terminal.
-For `DPC_ACTIVATE`, the bounded ordered transaction masks, inspects, commits or
-coalesces durable work, acknowledges the exact IRQ, and rearms. When it is a
+For the generation's release-time or typed unhealthy-state `DPC_ACTIVATE`, the
+bounded ordered transaction masks, inspects, commits or coalesces durable work,
+acknowledges the exact IRQ, and rearms. Healthy ordinary controls must reuse the
+existing activation with no such child. When activation repair is a
 one-way linked child, those steps emit no inner hint; only the generic
 sequence-last child-terminal commit may signal. A failed exact IRQ
 acknowledgement may retain only that immutable
@@ -2714,9 +2762,11 @@ successful retry: `ack_failures` must remain one as per-pair telemetry while
 current ACK-pending/fault flags clear, and op11, steady TX, DPC urgency, and RX
 batching must all remain admissible. Pending, poisoned, and overrun state must
 still fail closed. Pair replacement must zero the DPC ring counters and retain
-the old cause only in root's first-cause recovery record. Before `Wait`, the owner must re-read both
-the matching persistent-child, DPC event-lease, or ordinary-grant identity, completion sequence,
-and committed work condition. Visible work continues without another
+the old cause only in root's first-cause recovery record. Before `Wait`, the owner must re-read
+the matching persistent-child, DPC event-lease, or ordinary-grant identity,
+completion sequence, committed work condition, and sequence-last one-way
+command ring relative to the last consumed sequence. Visible work or a fresh
+ring child continues without another
 notification. A pending CARD_INT is serviced first; afterward the owner
 rechecks durable state and may continue the exact persistent child or DPC event
 lease, or preserve an unconsumed ordinary grant, without waiting for a new edge.
@@ -2761,8 +2811,9 @@ exact-root-grant cadence and reject endpoint continuation. An exact op11 instead
 commits once, signals once, remains `Issued`, and advances from its durable
 parent/child state with no recurrent root or delegated grant. Delegated initial
 intake uses the coalescing badge-256 notification and sequence-last ring
-command. After `Pending`, a persistent op11 parent or child continues only when
-its semantic condition changes; an unchanged post-TX `WaitReply` blocks on
+command. After `Pending`, a persistent op11 parent or child continues whenever
+its current durable condition is locally runnable, including equal
+deterministic private state; an exact post-TX `WaitReply` blocks on
 CARD_INT/DPC/RX/credit/child-terminal state with no forced source probe or
 ordinary-traffic deadline hint. Interleaved EVENT/DATA uses the durable
 sideband batch and exact ACK without terminating op11. While HAL reports exact
@@ -2775,14 +2826,16 @@ existing `Poll -> Grant -> Poll` coverage. Production DPC instead uses the
 event-sequence steady lease from its first post-release event with no mutable
 Gate-8 mode switch or recurrent grant. Non-CYW43 and GENET retain their existing
 phases; finite op7 keeps its separate identity and bounds while continuing
-changed durable state locally.
+its current durable runnable state locally.
 Pending-command DPC arbitration, reciprocal SDIO child-ring submission,
 completion checks, and owner admission remain bounded retained work. The SDIO
 owner must stable-read the durable condition and selected persistent-marker,
 DPC event-lease, or ordinary-grant identity and recheck completion/work state
-immediately before blocking. No immutable hardware request may issue twice, and
+plus the sequence-last one-way command ring immediately before blocking. A
+fresh ring child re-enters intake without another hint. No immutable hardware request may issue twice, and
 no private fallback or recurrent yield/resignal/poll lane may form; consecutive
-bounded helpers on changed semantic state remain the same transaction.
+bounded helpers selected by the current durable runnable condition remain the
+same transaction.
 Issued-unknown completion reaping must run
 before a pair-restart hold: a late exact child reply may prove terminal
 ownership and release the claim, but its result/payload is quarantined and only
@@ -3340,14 +3393,20 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     the boot-paired serial/pcap lifetime. Before Gate 8 and during steady
     traffic, every production DPC event must retain one exact event-sequence
     lease with no ordinary continuation grant; persistent op11 and urgent op7
-    must likewise reach the first unchanged external wait from durable state,
+    must likewise run from current durable local conditions to the first exact
+    external wait,
     not recurrent scheduler edges. An exact op11 `Waiting` parent must create no
     root self-poll amplification while independent DPC/RX/sideband/deadline/
     terminal work remains live. Interleaved EVENT/DATA must cross one durable
     sideband batch and disjoint root ACK without an op11 terminal. Ordinary
     traffic must record `sdio_deadline_hints=0`, zero timer-created source
     probes, sequence defects, fallback-lane issues, or notification-count
-    dependence. Every accepted physical pair must report zero overruns and ACK
+    dependence. Each physical generation must show one release activation,
+    absent an explicitly typed unhealthy-state repair, and no per-control
+    activation cadence. Pre-TX source work must bind one exact event and report
+    zero lost-token/reactivation faults. Source/runtime proof must also cover the
+    final SDIO command-ring sleep race: a fresh sequence-last one-way child
+    re-enters intake without a second signal. Every accepted physical pair must report zero overruns and ACK
     failures; counters reset rather than accumulating across replacement pairs.
     Hardware counters and the paired pcap must agree with the accepted frame
     order and one terminal per immutable physical request.
