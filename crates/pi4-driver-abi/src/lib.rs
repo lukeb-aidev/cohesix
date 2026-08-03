@@ -311,11 +311,13 @@ pub const DRIVER_RUNTIME_CYW43_FLAG_RX_STEADY_TAIL_DRAIN: u16 = 1 << 4;
 /// CYW43 command flag: fence an association Join Function-2 transmit against
 /// a newly asserted DPC source at the final SDIO pre-issue boundary.
 pub const DRIVER_RUNTIME_CYW43_FLAG_JOIN_PRE_TX_DPC_FENCE: u16 = 1 << 5;
-/// CYW43 command flag: retain the exact urgent post-Gate-8 Ethernet TX child
-/// under one finite, generation-bound SDIO service lease.
+/// CYW43 command flag: retain one exact Ethernet TX child under a finite,
+/// generation-bound SDIO service lease.
 ///
-/// Root may set this only for a latency-sensitive steady-data-plane request;
-/// the CYW43 runtime propagates it solely to that parent's Function-2 write.
+/// Root may set this only through a typed HAL entry for either one urgent
+/// post-Gate-8 data response or one intake-sealed host-EAPOL key response. The
+/// CYW43 runtime independently validates the immutable parent and propagates
+/// the authority solely to that parent's Function-2 write.
 pub const DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE: u16 = 1 << 6;
 /// CYW43 positive detail: a control Function 2 TX retry recovered a transfer fault.
 pub const DRIVER_RUNTIME_CYW43_CONTROL_DETAIL_TX_F2_RETRY_RECOVERED: u16 = 0x5801;
@@ -3550,13 +3552,15 @@ impl DriverRuntimeSdioCommandDescriptor {
     /// The marker is valid only on the event-bound, four-byte Function-1
     /// backplane write that carries [`Self::FLAG_STEADY_SERVICE_LEASE`].
     pub const FLAG_DPC_SOURCE_W1C_REARM: u16 = 1 << 8;
-    /// This exact Function-2 write is the child of an explicitly marked,
-    /// urgent post-Gate-8 Ethernet TX parent and may use the same finite SDIO
-    /// service lease as an event-bound DPC child.
+    /// This exact Function-2 write is the child of a HAL-marked finite
+    /// Ethernet TX parent and may use the same finite SDIO service lease as an
+    /// event-bound DPC child.
     ///
     /// The child remains identity-bound to its immutable parent sequence and
-    /// shared generation; control/EAPOL, boot, and bulk paths cannot infer the
-    /// authority from Function 2 or operation number alone.
+    /// shared generation. Ordinary data parents require the post-Gate-8
+    /// priority lease; host-EAPOL parents require an intake-sealed M2, M4, or
+    /// group-key response. Control, boot, bulk, and untyped op7 paths cannot
+    /// infer the authority from Function 2 or operation number alone.
     pub const FLAG_STEADY_TX_SERVICE_LEASE: u16 = 1 << 9;
     /// This exact CYW43-linked primitive belongs to one immutable persistent
     /// parent transaction.

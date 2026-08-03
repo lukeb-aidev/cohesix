@@ -1261,7 +1261,16 @@ non-op11 bootstrap and recovery parents, keep separate sequence-zero prepare, se
 commit, exact-grant publication, signal-last notification, and later
 completion-poll turns. The finite urgent op7 steady lease keeps its exact
 identity, admission, and budget; changed durable progress within that admitted
-lifetime now continues locally to its first stable external wait. Every exact
+lifetime now continues locally to its first stable external wait. EAPOL-Start
+and ordinary control remain on the ordinary retained cadence. Only a completely
+intake-sealed EAPOL-Key M2, M4, or group-key response may select the existing
+paired finite-op7 marker, and it carries one current-generation frame with a
+four-operation/1,536-byte budget. HAL binds CYW43 and SDIO priority to that
+exact request; root commits it, sends one notification, and publishes no grant
+after issue. CYW43 crosses its Function-2 pre-TX DPC fence and root resumes only
+after the durable terminal condition is visible. Its deadline is recovery-only
+fault containment. Ordinary post-Gate-8 TCP keeps the O(1) finite-op7 lane;
+neither case creates a poller or fallback path. Every exact
 op11 instead uses one
 HAL-derived persistent marker: after invisible `Stage`, HAL cleans/barriers the
 full descriptor and payload, commits the command sequence last, records
@@ -2320,7 +2329,8 @@ already-ready urgent TX, and rechecks the durable condition before sleep and
 rearm. Normal steady state has no hintless source probe or watchdog rescue.
 Bootstrap, split-control/host-EAPOL, control pre-TX, and the Join-only fence
 retain only their explicit protocol bounds and cannot become periodic receive
-polling.
+polling. The request-bound sealed M2/M4/group-key finite parent is an explicit
+host-EAPOL bound; EAPOL-Start and other control remain ordinary.
 
 An active DPC cursor or SDIO child does not block memory-only publication of
 already-completed private RX frames. CYW43 may commit one current-generation
@@ -2338,7 +2348,7 @@ The existing accounting line retains its historical `captures` key for old
 capture tooling. The immediately following scope line is normative:
 
 ```text
-CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported
+CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events poisoned=aggregate-client-or-ring source=card-int-or-source-probe physical_card_irq=not-exported
 ```
 
 `captures` is `ring.producer + ring.overruns`; it includes both hardware
@@ -2463,12 +2473,13 @@ accounts for the silence, the runtime fails the attach closed as
 the one armed successor after first-report readiness remains untimed during
 ordinary idle. This is bounded failure containment, not live typing proof.
 
-A retained host-EAPOL TX/key/drain action, including a request-less
-post-secure M4 op7, blocks every fresh generic NetData pre-poll at both the
-outer stack wrapper and inner budgeted service. This is owner precedence, not a
-second data-path block: an exact already-assigned NetData continuation remains
-non-revocable, then the EAPOL owner receives the next unowned turn. A repeated
-op8 while that M4 stays at sequence zero is failed service evidence.
+A retained host-EAPOL TX/key/drain action, including an intake-sealed M2, M4,
+or group-key response awaiting its request-bound finite op7, blocks every fresh
+generic NetData pre-poll at both the outer stack wrapper and inner budgeted
+service. This is owner precedence, not a second data-path block: an exact
+already-assigned NetData continuation remains non-revocable, then the EAPOL
+owner receives the next unowned turn. A repeated op8 after that key response
+has acquired its exact request is failed service evidence.
 
 The central EventPump `network_contract_service_admissible` fence covers both
 ordinary `poll_runtime` and pre-root `poll_pre_root_network`. It rechecks the

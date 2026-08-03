@@ -29,8 +29,9 @@ use crate::drivers::cyw43_host_eapol::{
 #[cfg(feature = "kernel")]
 use crate::hal::driver_task::{
     Cyw43PersistentTransactionParentCondition, Cyw43SdioNetworkPriorityLeasePhase,
-    DriverServiceBudget, DriverServiceBudgetError, DriverTaskRetainedServiceTurn,
-    DriverTaskRingProgressSnapshot, CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
+    Cyw43SteadyDataPlaneOp, DriverServiceBudget, DriverServiceBudgetError,
+    DriverTaskRetainedServiceTurn, DriverTaskRingProgressSnapshot,
+    CYW43_STEADY_TX_SERVICE_LEASE_BUDGET,
 };
 use crate::hal::driver_task::{
     DriverFrameDescriptor, DriverTaskBudgetGrant, DriverTaskCommandRecord,
@@ -5860,6 +5861,51 @@ fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
     .then_some(request?)
 }
 
+/// Return the exact retained Host-EAPOL key response that is waiting on its
+/// physical Function-2 terminal.
+///
+/// EAPOL-Start remains on the ordinary grant cadence and is never classified
+/// here. For a finite key response, HAL's stable sequence-last observation is
+/// authoritative: the root cursor and notification history cannot make a
+/// waiting parent runnable. Deadline expiry enters the one coordinated pair
+/// recovery path without manufacturing another service wake.
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_tx_condition_blocked_request() -> Option<u32> {
+    let pending = CYW43_HOST_EAPOL_SESSION
+        .lock()
+        .as_ref()
+        .and_then(|session| session.pending_tx_submit)
+        .filter(|pending| pending.continuation.finite_tx_operation().is_some());
+    let request = pending.and_then(|pending| pending.request);
+    let active = crate::hal::driver_task::active_driver_task_retained_request(
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    );
+    let active_request = active.map(|active| active.request());
+    let active_issued = active.is_some_and(|active| active.issued());
+    let condition = request.map_or(
+        crate::hal::driver_task::Cyw43SteadyServiceParentCondition::NotExact,
+        crate::hal::driver_task::cyw43_steady_service_parent_condition,
+    );
+    if condition == crate::hal::driver_task::Cyw43SteadyServiceParentCondition::DeadlineFault {
+        if let (Some(pending), Some(request)) = (pending, request) {
+            latch_cyw43_host_eapol_tx_recovery(
+                &pending,
+                Cyw43RecoveryCause::IssuedOwnerUnknown,
+                None,
+            );
+            return Some(request);
+        }
+    }
+    cyw43_steady_tx_waits_for_runtime_condition(
+        pending.is_some(),
+        request,
+        active_request,
+        active_issued,
+        condition,
+    )
+    .then_some(request?)
+}
+
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_bound_physical_lifetime_current() -> bool {
@@ -5926,26 +5972,31 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
             condition == Cyw43PersistentTransactionParentCondition::Waiting
         });
     let blocked_steady_tx_request = cyw43_steady_tx_condition_blocked_request();
-    let data_tx = blocked_steady_tx_request.is_none()
+    let blocked_host_eapol_tx_request = cyw43_host_eapol_tx_condition_blocked_request();
+    let blocked_finite_tx_request = blocked_steady_tx_request.or(blocked_host_eapol_tx_request);
+    let data_tx = blocked_finite_tx_request.is_none()
         && (CYW43_PENDING_DATA_TX
             .lock()
             .is_some_and(|pending| pending.generation == generation)
             || cyw43_data_tx_queue_has_current_generation());
-    let arp_tx = blocked_steady_tx_request.is_none() && !CYW43_PENDING_ARP_TX.lock().is_empty();
+    let arp_tx = blocked_finite_tx_request.is_none() && !CYW43_PENDING_ARP_TX.lock().is_empty();
     let root_rx = CYW43_PENDING_RX_QUEUE
         .lock()
         .iter()
         .any(|pending| pending.sampled_generation == generation);
     let control_reply = !CYW43_PENDING_CONTROL_REPLY_QUEUE.lock().is_empty();
-    let logical_owner = CYW43_LOGICAL_CONTROL_OWNER
-        .lock()
-        .is_some_and(|owner| owner.generation == generation);
+    let logical_owner = blocked_finite_tx_request.is_none()
+        && CYW43_LOGICAL_CONTROL_OWNER
+            .lock()
+            .is_some_and(|owner| owner.generation == generation);
     let terminal_drain = CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
-        cursor.generation() == generation && Some(cursor.request) != blocked_steady_tx_request
+        cursor.generation() == generation && Some(cursor.request) != blocked_finite_tx_request
     });
-    let host_eapol = cyw43_host_eapol_runtime_work_pending()
-        || CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0;
-    let hal_lease = blocked_steady_tx_request.is_none()
+    let host_eapol =
+        cyw43_host_eapol_runtime_work_pending_excluding_tx_request(blocked_host_eapol_tx_request)
+            || (blocked_host_eapol_tx_request.is_none()
+                && CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0);
+    let hal_lease = blocked_finite_tx_request.is_none()
         && crate::hal::driver_task::active_driver_task_retained_request(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
         )
@@ -5959,8 +6010,8 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         pre_poll: cyw43_net_data_pre_poll_continuation_pending(CYW43_WIFI_DRIVER_TASK_CONTRACT),
         data_tx,
         arp_tx,
-        runtime_descriptor: cyw43_active_runtime_descriptor(CYW43_WIFI_DRIVER_TASK_CONTRACT)
-            .is_some(),
+        runtime_descriptor: blocked_finite_tx_request.is_none()
+            && cyw43_active_runtime_descriptor(CYW43_WIFI_DRIVER_TASK_CONTRACT).is_some(),
         root_rx,
         control_reply,
         logical_owner,
@@ -7185,7 +7236,7 @@ fn retain_active_cyw43_recovery_owner_diagnostic(current_generation: u32) {
                     pending.stage,
                     pending.connection_epoch,
                     cyw43_active_parent_recovery_cause(pending.request, pending.issued),
-                    cyw43_data_tx_descriptor(usize::from(pending.len)),
+                    cyw43_pending_host_eapol_tx_descriptor(pending),
                     pending.ticket_id,
                     0,
                     0,
@@ -7989,6 +8040,25 @@ enum Cyw43HostEapolTxDrainContinuation {
 }
 
 #[cfg(feature = "kernel")]
+impl Cyw43HostEapolTxDrainContinuation {
+    /// Return the sole finite op7 lane used by sealed EAPOL-Key responses.
+    ///
+    /// EAPOL-Start is a discovery prompt rather than a response to an accepted
+    /// authenticator key frame, so it deliberately retains the ordinary
+    /// request/grant cadence. M2, M4, and group-key replies are immutable
+    /// one-frame transactions and retain the typed bus episode to terminal.
+    const fn finite_tx_operation(self) -> Option<Cyw43SteadyDataPlaneOp> {
+        match self {
+            Self::Start => None,
+            Self::M2 { .. }
+            | Self::M4Retransmit { .. }
+            | Self::M4InstallKeys { .. }
+            | Self::GroupM2 { .. } => Some(Cyw43SteadyDataPlaneOp::HostEapolTx),
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct Cyw43PendingHostEapolTxDrain {
     ticket_id: u64,
@@ -8349,7 +8419,7 @@ impl Cyw43TerminalDrainCursor {
             Cyw43TerminalDrainOwner::Association(pending) => pending.tx_descriptor,
             Cyw43TerminalDrainOwner::Wsec(pending) => pending.tx_descriptor,
             Cyw43TerminalDrainOwner::HostEapolTx(pending) => {
-                cyw43_data_tx_descriptor(pending.len as usize)
+                cyw43_pending_host_eapol_tx_descriptor(&pending)
             }
             Cyw43TerminalDrainOwner::DataTx(pending) => cyw43_pending_data_tx_descriptor(&pending),
             Cyw43TerminalDrainOwner::Maintenance(pending) => pending.descriptor,
@@ -8877,6 +8947,7 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub retained_request: u32,
     pub retained_issued: bool,
     pub retained_accepted: bool,
+    pub retained_finite_tx: bool,
     pub retained_tx_committed: bool,
 }
 
@@ -9241,7 +9312,9 @@ fn cyw43_post_assoc_bssid_obligation_pending(session: &Cyw43HostEapolSession) ->
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_runtime_work_pending() -> bool {
+fn cyw43_host_eapol_runtime_work_pending_excluding_tx_request(
+    excluded_tx_request: Option<u32>,
+) -> bool {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     if CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.load(Ordering::Acquire) != 0
         || cyw43_prompt_poll_owned_by_host_eapol()
@@ -9264,11 +9337,17 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
         .lock()
         .as_ref()
         .is_some_and(|session| {
-            session.pending_tx_submit.is_some()
-                || session.pending_key_install.is_some()
+            session.pending_tx_submit.is_some_and(|pending| {
+                excluded_tx_request.is_none() || pending.request != excluded_tx_request
+            }) || session.pending_key_install.is_some()
                 || session.pending_tx_drain.is_some()
                 || cyw43_post_assoc_bssid_obligation_pending(session)
         })
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_runtime_work_pending() -> bool {
+    cyw43_host_eapol_runtime_work_pending_excluding_tx_request(None)
 }
 
 #[cfg(feature = "kernel")]
@@ -9439,9 +9518,14 @@ pub(crate) fn cyw43_gate8_publication_quiescent(expected_generation: u32) -> boo
 pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
     let prompt = *CYW43_PENDING_PROMPT_POLL.lock();
     let join = *CYW43_ASSOCIATION_JOIN_DIAGNOSTIC.lock();
-    let (progress, session_retained) = {
+    let (progress, session_retained, session_retained_finite_tx) = {
         let guard = CYW43_HOST_EAPOL_SESSION.lock();
         let progress = guard.as_ref().map(|session| session.progress);
+        let finite_tx = guard.as_ref().is_some_and(|session| {
+            session
+                .pending_tx_submit
+                .is_some_and(|pending| pending.continuation.finite_tx_operation().is_some())
+        });
         let retained = guard.as_ref().and_then(|session| {
             if let Some(pending) = session.pending_key_install.as_ref() {
                 Some((
@@ -9466,7 +9550,7 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
                     .map(|pending| (pending.stage, pending.connection_epoch, 0, false, false))
             }
         });
-        (progress, retained)
+        (progress, retained, finite_tx)
     };
     let prompt_retained = prompt.map(|pending| {
         (
@@ -9542,6 +9626,10 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
         retained_request: retained.map_or(0, |retained| retained.2),
         retained_issued: retained.is_some_and(|retained| retained.3),
         retained_accepted: retained.is_some_and(|retained| retained.4),
+        retained_finite_tx: join.is_none()
+            && prompt_retained.is_none()
+            && session_retained.is_some()
+            && session_retained_finite_tx,
         retained_tx_committed: join.is_some_and(|join| join.tx_committed),
     }
 }
@@ -10327,7 +10415,7 @@ fn fence_cyw43_host_eapol_retained_action_before_teardown() -> bool {
                 } else {
                     match classify_and_fence_cyw43_prepared_transport_lease(
                         pending.connection_epoch,
-                        cyw43_data_tx_descriptor(usize::from(pending.len)),
+                        cyw43_pending_host_eapol_tx_descriptor(pending),
                         &pending.frame[..usize::from(pending.len)],
                         pending.request,
                         pending.issued,
@@ -10688,6 +10776,19 @@ fn run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> DriverTaskRetainedServiceTurn {
     crate::hal::driver_task::run_driver_task_ring_service_retained_urgent_cyw43_tx_turn_staged(
+        contract,
+        command,
+        staging_segments,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_net_service_retained_host_eapol_tx_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> DriverTaskRetainedServiceTurn {
+    crate::hal::driver_task::run_driver_task_ring_service_retained_host_eapol_tx_turn_staged(
         contract,
         command,
         staging_segments,
@@ -14491,6 +14592,13 @@ fn service_cyw43_host_eapol_slice_with_outcome(
             activity: true,
             progress: None,
         };
+    }
+    if cyw43_host_eapol_tx_condition_blocked_request().is_some() {
+        // A retained key response is already across the issue boundary. Its
+        // immutable terminal condition, not this policy cursor or a fresh
+        // notification, decides when Host-EAPOL may resume. CARD_INT/DPC and
+        // root RX remain independently runnable outside this policy slice.
+        return Cyw43HostEapolSliceOutcome::default();
     }
     if service_cyw43_maintenance_turn() {
         return Cyw43HostEapolSliceOutcome {
@@ -18409,7 +18517,7 @@ fn latch_cyw43_host_eapol_tx_recovery(
         pending.connection_epoch,
         cause,
         pending.stage,
-        cyw43_data_tx_descriptor(usize::from(pending.len)),
+        cyw43_pending_host_eapol_tx_descriptor(pending),
         pending.payload_digest,
         pending.ticket_id,
         completion.map_or(0, |record| record.detail),
@@ -18452,7 +18560,7 @@ fn advance_cyw43_host_eapol_tx_submit(
     }
 
     let frame_len = usize::from(pending.len);
-    let descriptor = cyw43_data_tx_descriptor(frame_len);
+    let descriptor = cyw43_pending_host_eapol_tx_descriptor(&pending);
     if pending.ticket_id == 0
         || cyw43_payload_digest(&pending.frame[..frame_len]) != pending.payload_digest
     {
@@ -18504,15 +18612,30 @@ fn advance_cyw43_host_eapol_tx_submit(
         session.pending_tx_submit = Some(pending);
         return Ok(Cyw43IncrementalKeyStep::Pending { activity: true });
     }
-    let turn = match run_cyw43_runtime_descriptor_turn_raw(
-        contract,
-        pending.connection_epoch,
-        pending.stage,
-        descriptor,
-        &pending.frame[..frame_len],
-    ) {
+    let turn_result = if pending.continuation.finite_tx_operation().is_some() {
+        run_cyw43_runtime_descriptor_turn_raw_host_eapol_tx(
+            contract,
+            pending.connection_epoch,
+            pending.stage,
+            descriptor,
+            &pending.frame[..frame_len],
+        )
+    } else {
+        run_cyw43_runtime_descriptor_turn_raw(
+            contract,
+            pending.connection_epoch,
+            pending.stage,
+            descriptor,
+            &pending.frame[..frame_len],
+        )
+    };
+    let turn = match turn_result {
         Ok(turn) => turn,
-        Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
+        Err(DriverTaskNetError::RuntimePending(
+            "cyw43-outer-event-turn-claimed"
+            | "cyw43-logical-control-owner-busy"
+            | "cyw43-persistent-transaction-waiting",
+        )) => {
             pending.deadline = deadline_before_turn;
             session.pending_tx_submit = Some(pending);
             return Ok(Cyw43IncrementalKeyStep::Pending { activity: false });
@@ -21135,7 +21258,7 @@ fn service_cyw43_pair_terminal_owner_turn(
         descriptor,
         payload,
         Cyw43LogicalControlAdmissionMode::ExactIssuedTerminalDrain,
-        false,
+        None,
     ) {
         Ok(turn) => turn,
         Err(DriverTaskNetError::RuntimePending("cyw43-outer-event-turn-claimed")) => {
@@ -24007,6 +24130,16 @@ fn cyw43_data_tx_descriptor_for_cadence(
 }
 
 #[cfg(feature = "kernel")]
+fn cyw43_pending_host_eapol_tx_descriptor(
+    pending: &Cyw43PendingHostEapolTxSubmit,
+) -> DriverRuntimeCyw43CommandDescriptor {
+    cyw43_data_tx_descriptor_for_cadence(
+        usize::from(pending.len),
+        pending.continuation.finite_tx_operation().is_some(),
+    )
+}
+
+#[cfg(feature = "kernel")]
 fn cyw43_pending_data_tx_descriptor(
     pending: &Cyw43PendingDataTx,
 ) -> DriverRuntimeCyw43CommandDescriptor {
@@ -25814,7 +25947,7 @@ fn run_cyw43_runtime_descriptor_turn_raw(
         descriptor,
         payload,
         Cyw43LogicalControlAdmissionMode::Normal,
-        false,
+        None,
     )
 }
 
@@ -25836,7 +25969,27 @@ fn run_cyw43_runtime_descriptor_turn_raw_steady_tx(
         descriptor,
         payload,
         Cyw43LogicalControlAdmissionMode::Normal,
-        true,
+        Some(Cyw43SteadyDataPlaneOp::EthTx),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_cyw43_runtime_descriptor_turn_raw_host_eapol_tx(
+    contract: DriverTaskContract,
+    owner_generation: u32,
+    stage: &'static str,
+    mut descriptor: DriverRuntimeCyw43CommandDescriptor,
+    payload: &[u8],
+) -> Result<Cyw43RawDescriptorTurn, DriverTaskNetError> {
+    descriptor.flags |= DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE;
+    run_cyw43_runtime_descriptor_turn_raw_with_admission(
+        contract,
+        owner_generation,
+        stage,
+        descriptor,
+        payload,
+        Cyw43LogicalControlAdmissionMode::Normal,
+        Some(Cyw43SteadyDataPlaneOp::HostEapolTx),
     )
 }
 
@@ -25848,17 +26001,18 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
     descriptor: DriverRuntimeCyw43CommandDescriptor,
     payload: &[u8],
     admission_mode: Cyw43LogicalControlAdmissionMode,
-    steady_cadence: bool,
+    finite_tx_operation: Option<Cyw43SteadyDataPlaneOp>,
 ) -> Result<Cyw43RawDescriptorTurn, DriverTaskNetError> {
     let descriptor_marks_steady_cadence =
         descriptor.flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0;
+    let finite_tx_cadence = finite_tx_operation.is_some();
     let cadence_valid = match admission_mode {
         Cyw43LogicalControlAdmissionMode::Normal => {
-            descriptor_marks_steady_cadence == steady_cadence
-                && (!steady_cadence || descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
+            descriptor_marks_steady_cadence == finite_tx_cadence
+                && (!finite_tx_cadence || descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
         }
         Cyw43LogicalControlAdmissionMode::ExactIssuedTerminalDrain => {
-            !steady_cadence
+            !finite_tx_cadence
                 && (!descriptor_marks_steady_cadence
                     || descriptor.op == DRIVER_RUNTIME_CYW43_OP_ETH_TX)
         }
@@ -25874,7 +26028,7 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
         owner_generation,
         descriptor,
         payload,
-        steady_cadence,
+        descriptor_marks_steady_cadence,
     )?;
     let logical_control_admission = match admission_mode {
         Cyw43LogicalControlAdmissionMode::Normal => {
@@ -25981,18 +26135,26 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
                     0,
                 ),
             ];
-            if steady_cadence {
-                run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+            match finite_tx_operation {
+                Some(Cyw43SteadyDataPlaneOp::EthTx) => {
+                    run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
+                Some(Cyw43SteadyDataPlaneOp::HostEapolTx) => {
+                    run_driver_task_net_service_retained_host_eapol_tx_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
+                None => run_driver_task_net_service_retained_turn_staged(
                     contract,
                     command,
                     &staging_segments,
-                )
-            } else {
-                run_driver_task_net_service_retained_turn_staged(
-                    contract,
-                    command,
-                    &staging_segments,
-                )
+                ),
             }
         } else {
             let staging_segments = [DriverTaskStagingSegment::ring_payload_at(
@@ -26000,18 +26162,26 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
                 &scratch,
                 0,
             )];
-            if steady_cadence {
-                run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+            match finite_tx_operation {
+                Some(Cyw43SteadyDataPlaneOp::EthTx) => {
+                    run_driver_task_net_service_retained_urgent_cyw43_tx_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
+                Some(Cyw43SteadyDataPlaneOp::HostEapolTx) => {
+                    run_driver_task_net_service_retained_host_eapol_tx_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
+                None => run_driver_task_net_service_retained_turn_staged(
                     contract,
                     command,
                     &staging_segments,
-                )
-            } else {
-                run_driver_task_net_service_retained_turn_staged(
-                    contract,
-                    command,
-                    &staging_segments,
-                )
+                ),
             }
         }
     };
@@ -36725,6 +36895,16 @@ mod tests {
                     Cyw43HostEapolTxDrainContinuation::Start,
                 )
                 .expect("local TX preparation succeeds without a child submission");
+                let pending = session
+                    .pending_tx_submit
+                    .as_ref()
+                    .expect("EAPOL-Start remains locally retained");
+                assert_eq!(pending.continuation.finite_tx_operation(), None);
+                assert_eq!(
+                    cyw43_pending_host_eapol_tx_descriptor(pending).flags
+                        & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+                    0,
+                );
             }
             *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
             let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 0);
@@ -36802,6 +36982,7 @@ mod tests {
         assert_eq!(snapshot.retained_request, 0xa1);
         assert!(snapshot.retained_issued);
         assert!(snapshot.retained_accepted);
+        assert!(!snapshot.retained_finite_tx);
 
         CYW43_PENDING_PROMPT_POLL
             .lock()
@@ -36814,6 +36995,7 @@ mod tests {
         assert_eq!(net_data.retained_request, 0xa1);
         assert!(net_data.retained_issued);
         assert!(net_data.retained_accepted);
+        assert!(!net_data.retained_finite_tx);
 
         *CYW43_PENDING_PROMPT_POLL.lock() = None;
         {
@@ -36840,6 +37022,15 @@ mod tests {
         assert_eq!(stale.retained_request, 0);
         assert!(!stale.retained_issued);
         assert!(!stale.retained_accepted);
+        assert!(!stale.retained_finite_tx);
+
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_mut()
+            .and_then(|session| session.pending_tx_submit.as_mut())
+            .expect("diagnostic TX cursor remains present")
+            .continuation = Cyw43HostEapolTxDrainContinuation::M2 { post_secure: false };
+        assert!(cyw43_association_diagnostic().retained_finite_tx);
 
         reset_cyw43_status_flags();
     }
@@ -39513,6 +39704,15 @@ mod tests {
         assert_eq!(retained.drain_stage, "m2-before-m3");
         assert_eq!(retained.poll, 42);
         assert_eq!(retained.connection_epoch, 0);
+        assert_eq!(
+            retained.continuation.finite_tx_operation(),
+            Some(Cyw43SteadyDataPlaneOp::HostEapolTx)
+        );
+        assert_ne!(
+            cyw43_pending_host_eapol_tx_descriptor(&retained).flags
+                & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+            0,
+        );
         assert_eq!(CYW43_DATA_TX_TEST_ATTEMPTS.load(Ordering::Acquire), 0);
         assert_eq!(CYW43_HOST_EAPOL_M2.load(Ordering::Acquire), 0);
         assert!(session.pending_tx_drain.is_none());

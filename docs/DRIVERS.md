@@ -450,7 +450,17 @@ under Reopened Milestone 26b task
 history with durable conditions. Non-op11 retained foreground commands outside
 the finite urgent op7 path, including non-op11 bootstrap and recovery commands,
 keep their existing exact endpoint/grant cadence. The urgent op7 parent retains
-its separate finite steady-service identity and budget. Its current durable
+its separate finite steady-service identity and budget. EAPOL-Start and
+ordinary control remain on that ordinary retained cadence. Only an
+intake-sealed EAPOL-Key M2, M4, or group-key response may reuse the existing
+paired finite-op7 marker: one current-generation frame, four owner operations,
+and 1,536 bytes under request-bound CYW43-plus-SDIO priority. That exact parent
+commits and sends one notification, publishes no grant after issue, crosses the
+Function-2 pre-TX DPC fence, and remains authoritative until its durable
+terminal is visible to root. Its deadline can enter recovery only; it never
+creates progress, a poller, or a fallback lane. Ordinary post-Gate-8 TCP retains
+the O(1) finite op7 admission path and is not parsed or scheduled as EAPOL. The
+finite parent's current durable
 condition decides each handoff: deterministic private work continues even when
 the diagnostic snapshot is unchanged, while a committed child, unavailable
 credit, or other external wait blocks on its first observation. For every
@@ -1957,7 +1967,17 @@ generation and XID.
   transitions, separate sequence-last commit, exact-grant publication,
   signal-last notify, and completion-poll turns. The finite urgent op7 steady
   lease remains a separate typed identity with its existing admission and
-  budget. Its sealed parent remains local across a real credit wait; current
+  budget. EAPOL-Start and ordinary control remain on the preceding retained
+  cadence. Intake may select the existing paired finite marker only for a
+  completely sealed current-generation EAPOL-Key M2, M4, or group-key response,
+  with exactly one frame and the four-operation/1,536-byte budget. HAL binds
+  both CYW43 and SDIO priority to that exact request; root commits it, signals
+  once, and publishes no grant after issue. The runtime applies the Function-2
+  pre-TX DPC fence and advances only from durable conditions until the committed
+  terminal lets root resume. Expiry is recovery authority only. Untagged input
+  cannot promote itself into this contract, and post-Gate-8 TCP keeps its O(1)
+  finite-op7 path with no EAPOL parse, fallback, or polling lane. Its sealed
+  parent remains local across a real credit wait; current
   credit and DPC-ring conditions resume it, while an exact external wait blocks
   immediately.
   The typed initial-physical-lifetime provenance remains lifecycle evidence but
@@ -2316,7 +2336,8 @@ generation and XID.
   unless accepted hardware evidence reports `owner_active=yes`. The following
   scope line defines the historical `captures` key with
   `CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events
-  source=card-int-or-source-probe physical_card_irq=not-exported`. Thus
+  poisoned=aggregate-client-or-ring source=card-int-or-source-probe
+  physical_card_irq=not-exported`. Thus
   `captures` is exactly `ring.producer + ring.overruns`, not the SDIO owner's
   physical CARD_INT counter. Rejected historical images may include authorized
   hintless source probes in that legacy count; current steady state does not.
@@ -2458,7 +2479,9 @@ generation and XID.
   terminal; it cannot be rewritten or renewed per frame. Ordinary steady state
   has no hintless source probe or lost-edge watchdog. Bootstrap,
   control-reply, host-EAPOL, and Join retain only their explicitly bounded
-  protocol fences and may not generalize them into steady polling. Stale,
+  protocol fences and may not generalize them into steady polling. For
+  host-EAPOL, the sealed M2/M4/group-key finite parent described above is one
+  such explicit fence; EAPOL-Start and other control remain ordinary. Stale,
   malformed, torn, or issued-unknown completion state fails closed without
   mutating a replacement generation. Neither op8 nor op10 may fall back to an
   independent foreground physical read.

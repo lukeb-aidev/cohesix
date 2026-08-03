@@ -13357,12 +13357,13 @@ where
         association: crate::drivers::driver_task_net::Cyw43AssociationDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: association retained owner={} generation={} request={} issued={} accepted={} tx_committed={}",
+            "wifi: association retained owner={} generation={} request={} issued={} accepted={} finite_tx={} join_tx_committed={}",
             association.retained_owner,
             association.retained_generation,
             association.retained_request,
             Self::yes_no(association.retained_issued),
             Self::yes_no(association.retained_accepted),
+            Self::yes_no(association.retained_finite_tx),
             Self::yes_no(association.retained_tx_committed),
         ))
     }
@@ -14561,7 +14562,7 @@ where
         // unambiguously beside it. The SDIO owner's true physical CARD_INT
         // counter is not carried by the current fixed event-ring ABI.
         format_message(format_args!(
-            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported"
+            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events poisoned=aggregate-client-or-ring source=card-int-or-source-probe physical_card_irq=not-exported"
         ))
     }
 
@@ -25028,6 +25029,7 @@ mod tests {
             retained_request: u32::MAX,
             retained_issued: true,
             retained_accepted: true,
+            retained_finite_tx: true,
             retained_tx_committed: true,
         };
         let host_eapol_work = crate::drivers::driver_task_net::Cyw43HostEapolWorkDiagnostic {
@@ -25222,7 +25224,9 @@ mod tests {
             "event_armed=yes event_generation=4294967295 terminal_failure=yes deferred_reauth=yes deferred_generation=4294967295"
         ));
         assert!(lines[4].contains("generation=4294967295 current=no"));
-        assert!(lines[5].contains("request=4294967295 issued=yes accepted=yes tx_committed=yes"));
+        assert!(lines[5].contains(
+            "request=4294967295 issued=yes accepted=yes finite_tx=yes join_tx_committed=yes"
+        ));
         assert!(lines[16].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
@@ -25704,7 +25708,7 @@ mod tests {
         assert!(accounting.ends_with("poisoned=yes masked=yes"));
         assert_eq!(
             scope.as_str(),
-            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported"
+            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events poisoned=aggregate-client-or-ring source=card-int-or-source-probe physical_card_irq=not-exported"
         );
         assert!(truth.contains("ring_poisoned=no client_sample_stale=yes"));
         assert!(truth.contains("ring_consumer=4294967295 sample_consumer=4294967295"));
@@ -37994,7 +37998,7 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
         let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 owner_active=yes poisoned=no masked=no";
-        let dpc_scope = "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported";
+        let dpc_scope = "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events poisoned=aggregate-client-or-ring source=card-int-or-source-probe physical_card_irq=not-exported";
         let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         let dpc_rearm = "CYW43_SDIO_DPC_REARM generation=9 counter=client-signal-attempts count=12 owner_irq=unmasked action=none";
         assert!(rendered.contains(dpc_line), "{rendered}");

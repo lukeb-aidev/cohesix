@@ -2863,7 +2863,7 @@ fn driver_task_steady_service_parent_identity_matches(
     command_fingerprint: u32,
 ) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        && cyw43_sdio_network_priority_lease_covers_exact_command(command, true)
+        && cyw43_finite_tx_scheduler_coverage(slot, contract, command, true)
         && !driver_task_retained_uses_root_grant(contract, command)
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
         && driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
@@ -3818,23 +3818,42 @@ pub(crate) enum Cyw43SdioNetworkPriorityLeaseBegin {
     RecoveryRequired,
 }
 
-/// Steady CYW43 data-plane operation allowed to use the open Network lease.
+/// Exact one-frame CYW43 operation allowed to use the finite op7 lifetime.
 ///
 /// This is intentionally narrower than the runtime descriptor opcode space.
-/// Association, keying, control, bootstrap, recovery, and bulk TX retain the
-/// fully phase-separated retained-turn protocol.
+/// Ordinary data requires the open Network lease. Host EAPOL is admitted only
+/// through its retained key-response cursor and receives a request-bound
+/// scheduler lease when the Network lease is not already open. Control,
+/// bootstrap, recovery, and bulk TX retain their existing protocols.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Cyw43SteadyDataPlaneOp {
     /// One urgent Ethernet response already admitted by the bounded TX queue.
     EthTx,
+    /// One intake-sealed supplicant EAPOL-Key response retained by root.
+    HostEapolTx,
 }
 
 #[cfg(feature = "kernel")]
 impl Cyw43SteadyDataPlaneOp {
     const fn wire_op(self) -> u16 {
         match self {
-            Self::EthTx => DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            Self::EthTx | Self::HostEapolTx => DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+        }
+    }
+
+    const fn slot_value(self) -> usize {
+        match self {
+            Self::EthTx => 1,
+            Self::HostEapolTx => 2,
+        }
+    }
+
+    const fn from_slot_value(value: usize) -> Option<Self> {
+        match value {
+            1 => Some(Self::EthTx),
+            2 => Some(Self::HostEapolTx),
+            _ => None,
         }
     }
 }
@@ -7676,6 +7695,55 @@ fn driver_task_retained_cadence_matches(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_request_bound_priority_coverage(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+) -> bool {
+    let mask = slot.retained_priority_lease_mask.load(Ordering::Acquire);
+    let valid_mask = DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS;
+    if mask & !valid_mask != 0 {
+        return false;
+    }
+    let Some(task_key) = driver_task_contract_key(contract) else {
+        return false;
+    };
+    let owner_token = task_key.saturating_add(1);
+    (mask & DRIVER_TASK_RETAINED_LEASE_PRIMARY == 0
+        || slot.retained_priority_boost_active.load(Ordering::Acquire) == owner_token)
+        && (mask & DRIVER_TASK_RETAINED_LEASE_BUS == 0
+            || retained_priority_lease_target(contract, command, true).is_some_and(
+                |(_, bus_slot)| {
+                    bus_slot
+                        .retained_priority_boost_active
+                        .load(Ordering::Acquire)
+                        == owner_token
+                },
+            ))
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_finite_tx_scheduler_coverage(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    closing_parent_resume: bool,
+) -> bool {
+    match Cyw43SteadyDataPlaneOp::from_slot_value(
+        slot.retained_steady_tx_fast_lane.load(Ordering::Acquire),
+    ) {
+        Some(Cyw43SteadyDataPlaneOp::EthTx) => {
+            cyw43_sdio_network_priority_lease_covers_exact_command(command, closing_parent_resume)
+        }
+        Some(Cyw43SteadyDataPlaneOp::HostEapolTx) => {
+            cyw43_sdio_network_priority_lease_covers_exact_command(command, closing_parent_resume)
+                || driver_task_request_bound_priority_coverage(slot, contract, command)
+        }
+        None => false,
+    }
+}
+
+#[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43SdioNetworkPriorityRequestCoverage {
     NotApplicable,
@@ -9215,6 +9283,7 @@ struct Cyw43SteadyTxServiceLeaseSignal<'a> {
     slot: &'a DriverTaskCommandSlot,
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
+    operation: Cyw43SteadyDataPlaneOp,
     request: usize,
     fingerprint: u32,
     ring_root_ptr: usize,
@@ -9234,11 +9303,13 @@ where
         slot,
         contract,
         command,
+        operation,
         request,
         fingerprint,
         ring_root_ptr,
     } = context;
-    if !cyw43_sdio_network_priority_lease_covers_exact_command(command, true)
+    if slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != operation.slot_value()
+        || !cyw43_finite_tx_scheduler_coverage(slot, contract, command, true)
         || driver_task_retained_uses_root_grant(contract, command)
         || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
         || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
@@ -15335,16 +15406,45 @@ fn driver_task_cyw43_steady_data_plane_command_matches(
     staging_segments: &[DriverTaskStagingSegment<'_>],
     expected: Cyw43SteadyDataPlaneOp,
 ) -> bool {
-    contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
-        && command.budget == CYW43_STEADY_TX_SERVICE_LEASE_BUDGET
-        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
-        && driver_task_staged_cyw43_descriptor_header(command, staging_segments).is_some_and(
-            |(op, flags)| {
-                op == expected.wire_op()
-                    && flags & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE != 0
-            },
-        )
+    if contract != CYW43_WIFI_DRIVER_TASK_CONTRACT
+        || command.aux0 != DRIVER_RUNTIME_CYW43_COMMAND_AUX
+        || command.aux1 == 0
+        || command.budget != CYW43_STEADY_TX_SERVICE_LEASE_BUDGET
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+        || !driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+        || staging_segments.len() != 2
+    {
+        return false;
+    }
+    let Some(descriptor) = driver_task_staged_cyw43_descriptor(command, staging_segments) else {
+        return false;
+    };
+    if descriptor.op != expected.wire_op()
+        || descriptor.flags != DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE
+        || descriptor.target_addr != 0
+        || descriptor.payload_offset != DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE
+        || descriptor.payload_len < 14
+        || descriptor.total_len != u32::from(descriptor.payload_len)
+        || descriptor.arg0 != 0
+        || descriptor.arg1 != 0
+        || descriptor.reserved != 0
+    {
+        return false;
+    }
+    let payload_is_eapol = staging_segments.iter().find_map(|segment| match segment {
+        DriverTaskStagingSegment::Shared { payload, flags }
+            if *flags == 0 && payload.len() == usize::from(descriptor.payload_len) =>
+        {
+            Some(u16::from_be_bytes([payload[12], payload[13]]) == 0x888e)
+        }
+        DriverTaskStagingSegment::Ring { .. } | DriverTaskStagingSegment::Shared { .. } => None,
+    });
+    match (expected, payload_is_eapol) {
+        (Cyw43SteadyDataPlaneOp::EthTx, Some(false))
+        | (Cyw43SteadyDataPlaneOp::HostEapolTx, Some(true)) => true,
+        _ => false,
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -15355,12 +15455,20 @@ fn driver_task_cyw43_steady_data_plane_fast_lane_admitted(
     expected: Cyw43SteadyDataPlaneOp,
     closing_parent_resume: bool,
 ) -> bool {
-    driver_task_cyw43_steady_data_plane_command_matches(
+    if !driver_task_cyw43_steady_data_plane_command_matches(
         contract,
         command,
         staging_segments,
         expected,
-    ) && cyw43_sdio_network_priority_lease_covers_exact_command(command, closing_parent_resume)
+    ) {
+        return false;
+    }
+    match expected {
+        Cyw43SteadyDataPlaneOp::EthTx => {
+            cyw43_sdio_network_priority_lease_covers_exact_command(command, closing_parent_resume)
+        }
+        Cyw43SteadyDataPlaneOp::HostEapolTx => true,
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -15971,7 +16079,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         slot.retained_doorbell_issued.store(0, Ordering::Release);
         slot.retained_grant_id.store(0, Ordering::Release);
         slot.retained_steady_tx_fast_lane.store(
-            usize::from(steady_tx_fast_lane_requested),
+            steady_data_plane_operation.map_or(0, Cyw43SteadyDataPlaneOp::slot_value),
             Ordering::Release,
         );
         slot.retained_steady_tx_last_progress_slice
@@ -16050,12 +16158,10 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
     let persistent_transaction = persistent_transaction_requested
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
     if retained_request_prepared && !steady_tx_fast_lane {
-        // Generic, cold, control, EAPOL, bulk, and recovery commands keep Stage
-        // as their own retained outer turn. The exact tagged urgent op7 path is
-        // the sole exception: the already-open Network lease has completed all
-        // scheduler transitions, so it can continue below through the issued
-        // latch, sequence-last commit, and one final signal in this producer turn.
-        // No continuation grant is created for this finite parent authority.
+        // Generic, cold, control, untyped op7, bulk, and recovery commands keep
+        // Stage as their own retained outer turn. A typed finite op7 may
+        // continue only when its scheduler coverage has already reached the
+        // issue boundary; no continuation grant is created after publication.
         cache_counter_batch.flush(slot);
         return None;
     }
@@ -16163,10 +16269,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             return None;
         }
         if steady_tx_fast_lane {
-            // The already-open bounded Network lease needs no scheduler
-            // transition or continuation grant. Commit -> Issued and signal
-            // exactly once in this sole producer transaction; all later root
-            // turns are completion polls.
+            let Some(operation) = steady_data_plane_operation else {
+                fail_driver_task_retained_priority_lease(slot, contract);
+                return None;
+            };
+            // The open Network lease or the request-bound pre-secure lease has
+            // completed every scheduler transition. Commit -> Issued and
+            // signal exactly once; all later root turns are terminal polls.
             // MR0 carries only the immutable request identity; the child
             // notification itself carries no message registers.
             crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
@@ -16176,6 +16285,7 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                     slot,
                     contract,
                     command,
+                    operation,
                     request,
                     fingerprint: command_fingerprint,
                     ring_root_ptr,
@@ -17140,6 +17250,41 @@ pub(crate) fn run_driver_task_ring_service_retained_urgent_cyw43_tx_turn_staged(
     command: DriverTaskCommandRecord,
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> DriverTaskRetainedServiceTurn {
+    run_driver_task_ring_service_retained_finite_cyw43_tx_turn_staged(
+        contract,
+        command,
+        staging_segments,
+        Cyw43SteadyDataPlaneOp::EthTx,
+    )
+}
+
+/// Execute one retained host-EAPOL response as a finite CYW43 op7 lifetime.
+///
+/// The typed root cursor supplies the immutable frame. HAL validates that the
+/// staged payload is EAPOL before minting the paired finite-service markers;
+/// the runtime then validates the exact key-response shape and owns it through
+/// its Function-2 terminal without another root continuation grant.
+#[cfg(feature = "kernel")]
+pub(crate) fn run_driver_task_ring_service_retained_host_eapol_tx_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> DriverTaskRetainedServiceTurn {
+    run_driver_task_ring_service_retained_finite_cyw43_tx_turn_staged(
+        contract,
+        command,
+        staging_segments,
+        Cyw43SteadyDataPlaneOp::HostEapolTx,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_ring_service_retained_finite_cyw43_tx_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+    operation: Cyw43SteadyDataPlaneOp,
+) -> DriverTaskRetainedServiceTurn {
     let mut fingerprint_command = command;
     fingerprint_command.flags = driver_task_ring_flags_for_mode(
         DriverTaskRingCommandMode::RetainedTurn,
@@ -17158,7 +17303,7 @@ pub(crate) fn run_driver_task_ring_service_retained_urgent_cyw43_tx_turn_staged(
         command,
         DriverTaskRingCommandMode::RetainedTurn,
         staging_segments,
-        Some(Cyw43SteadyDataPlaneOp::EthTx),
+        Some(operation),
     );
     let active = if completion.is_some() {
         active_before
@@ -22178,6 +22323,7 @@ mod tests {
     fn steady_tx_test_descriptor_bytes(
         marked: bool,
     ) -> [u8; core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()] {
+        const PAYLOAD_LEN: u16 = 64;
         let mut bytes = [0u8; core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>()];
         bytes[..2].copy_from_slice(&DRIVER_RUNTIME_CYW43_OP_ETH_TX.to_le_bytes());
         let flags = if marked {
@@ -22186,7 +22332,19 @@ mod tests {
             0
         };
         bytes[2..4].copy_from_slice(&flags.to_le_bytes());
+        bytes[8..10].copy_from_slice(&DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE.to_le_bytes());
+        bytes[10..12].copy_from_slice(&PAYLOAD_LEN.to_le_bytes());
+        bytes[12..16].copy_from_slice(&u32::from(PAYLOAD_LEN).to_le_bytes());
         bytes
+    }
+
+    #[cfg(feature = "kernel")]
+    fn steady_tx_test_payload(eapol: bool) -> [u8; 64] {
+        let mut payload = [0u8; 64];
+        payload[0..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 1]);
+        payload[6..12].copy_from_slice(&[0x02, 0, 0, 0, 0, 2]);
+        payload[12..14].copy_from_slice(if eapol { &[0x88, 0x8e] } else { &[0x08, 0x00] });
+        payload
     }
 
     #[cfg(feature = "kernel")]
@@ -22337,23 +22495,58 @@ mod tests {
     fn cyw43_steady_tx_lease_requires_exact_paired_tags_budget_and_cadence() {
         let marked = steady_tx_test_descriptor_bytes(true);
         let unmarked = steady_tx_test_descriptor_bytes(false);
-        let marked_segments = [DriverTaskStagingSegment::ring_payload_at(
-            usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
-            &marked,
-            0,
-        )];
-        let unmarked_segments = [DriverTaskStagingSegment::ring_payload_at(
-            usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
-            &unmarked,
-            0,
-        )];
+        let ordinary_payload = steady_tx_test_payload(false);
+        let eapol_payload = steady_tx_test_payload(true);
+        let marked_segments = [
+            DriverTaskStagingSegment::shared(&ordinary_payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &marked,
+                0,
+            ),
+        ];
+        let marked_eapol_segments = [
+            DriverTaskStagingSegment::shared(&eapol_payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &marked,
+                0,
+            ),
+        ];
+        let unmarked_segments = [
+            DriverTaskStagingSegment::shared(&ordinary_payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &unmarked,
+                0,
+            ),
+        ];
         let mut tagged = steady_tx_test_command(31);
-        tagged.flags |= DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
+        tagged.flags |=
+            DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE | DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
         assert!(driver_task_cyw43_steady_data_plane_command_matches(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             tagged,
             &marked_segments,
             Cyw43SteadyDataPlaneOp::EthTx,
+        ));
+        assert!(!driver_task_cyw43_steady_data_plane_command_matches(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tagged,
+            &marked_eapol_segments,
+            Cyw43SteadyDataPlaneOp::EthTx,
+        ));
+        assert!(driver_task_cyw43_steady_data_plane_command_matches(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tagged,
+            &marked_eapol_segments,
+            Cyw43SteadyDataPlaneOp::HostEapolTx,
+        ));
+        assert!(!driver_task_cyw43_steady_data_plane_command_matches(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            tagged,
+            &marked_segments,
+            Cyw43SteadyDataPlaneOp::HostEapolTx,
         ));
 
         let mut broad = tagged;
@@ -22389,6 +22582,292 @@ mod tests {
         assert_eq!(CYW43_STEADY_TX_SERVICE_LEASE_BUDGET.max_ops, 4);
         assert_eq!(CYW43_STEADY_TX_SERVICE_LEASE_BUDGET.max_frames, 1);
         assert_eq!(CYW43_STEADY_TX_SERVICE_LEASE_BUDGET.max_bytes, 1_536);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_host_eapol_finite_lifetime_is_request_bound_and_restores_boosts() {
+        use core::cell::Cell;
+
+        let _counter = DriverTaskTestCounterOverride::new();
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = LOCK.lock().expect("host EAPOL finite-lifetime test lock");
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+        test_reset_root_grant_action_counts();
+
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let mut shared_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        publish_driver_task_ring(CYW43_WIFI_DRIVER_TASK_CONTRACT, ring_root_ptr);
+        publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            0x3000,
+            shared_page.0.as_mut_ptr() as usize,
+        );
+        publish_driver_task_root_notification(CYW43_WIFI_DRIVER_TASK_CONTRACT, 0x77);
+
+        let descriptor = steady_tx_test_descriptor_bytes(true);
+        let payload = steady_tx_test_payload(true);
+        let staging = [
+            DriverTaskStagingSegment::shared(&payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &descriptor,
+                0,
+            ),
+        ];
+        let request = 43usize;
+        let mut command = steady_tx_test_command(101);
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags)
+                | DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
+        command.sequence = request as u32;
+        assert!(driver_task_cyw43_steady_data_plane_fast_lane_admitted(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            &staging,
+            Cyw43SteadyDataPlaneOp::HostEapolTx,
+            false,
+        ));
+        assert!(!driver_task_cyw43_steady_data_plane_fast_lane_admitted(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            &staging,
+            Cyw43SteadyDataPlaneOp::EthTx,
+            false,
+        ));
+        assert_eq!(
+            Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+                CYW43_SDIO_NETWORK_PRIORITY_LEASE
+                    .phase
+                    .load(Ordering::Acquire),
+            ),
+            Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive),
+            "host EAPOL must not depend on an already-open Network lease",
+        );
+
+        let slot = &DRIVER_TASK_SLOT_CYW43455;
+        let bus_slot = &DRIVER_TASK_SLOT_SDIO_HOST;
+        slot.tcb.store(0x44, Ordering::Release);
+        slot.steady_priority.store(160, Ordering::Release);
+        slot.steady_priority_state.store(
+            DriverTaskSteadyPriorityState::Active.as_usize(),
+            Ordering::Release,
+        );
+        bus_slot.tcb.store(0x45, Ordering::Release);
+        bus_slot.steady_priority.store(200, Ordering::Release);
+        bus_slot.steady_priority_state.store(
+            DriverTaskSteadyPriorityState::Active.as_usize(),
+            Ordering::Release,
+        );
+        let owner_token = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+            .expect("CYW43 task key")
+            .saturating_add(1);
+        let mask = DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS;
+        slot.retained_priority_boost_active
+            .store(owner_token, Ordering::Release);
+        bus_slot
+            .retained_priority_boost_active
+            .store(owner_token, Ordering::Release);
+        assert!(set_driver_task_retained_priority(
+            SDIO_HOST_DRIVER_TASK_CONTRACT,
+            bus_slot,
+            owner_token,
+            true,
+        ));
+        assert!(set_driver_task_retained_priority(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            slot,
+            owner_token,
+            true,
+        ));
+
+        let fingerprint = driver_task_ring_command_fingerprint(
+            command,
+            driver_task_staging_segments_fingerprint(&staging),
+        );
+        slot.active.store(1, Ordering::Release);
+        slot.request_seq.store(request, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(request, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_mask
+            .store(mask, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::ReadyToIssue.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_steady_tx_fast_lane.store(
+            Cyw43SteadyDataPlaneOp::HostEapolTx.slot_value(),
+            Ordering::Release,
+        );
+        assert_eq!(
+            Cyw43SteadyDataPlaneOp::from_slot_value(
+                slot.retained_steady_tx_fast_lane.load(Ordering::Acquire),
+            ),
+            Some(Cyw43SteadyDataPlaneOp::HostEapolTx),
+            "the retained slot must preserve the typed host-EAPOL identity",
+        );
+        assert!(driver_task_request_bound_priority_coverage(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+        ));
+        assert!(cyw43_finite_tx_scheduler_coverage(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            false,
+        ));
+
+        assert!(driver_task_ring_prepare_retained_issue(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            &staging,
+        ));
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        driver_task_ring_commit_command_sequence(slot, ring_root_ptr, command_ptr, request as u32);
+        assert!(mark_driver_task_retained_priority_lease_committed(
+            slot, false,
+        ));
+        assert_eq!(slot.retained_grant_id.load(Ordering::Acquire), 0);
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+
+        let signals = Cell::new(0usize);
+        let signal_context = || Cyw43SteadyTxServiceLeaseSignal {
+            slot,
+            contract: CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            operation: Cyw43SteadyDataPlaneOp::HostEapolTx,
+            request,
+            fingerprint,
+            ring_root_ptr,
+        };
+        assert!(signal_cyw43_steady_tx_service_lease_with(
+            signal_context(),
+            || {},
+            |_| signals.set(signals.get().saturating_add(1)),
+        ));
+        assert!(!signal_cyw43_steady_tx_service_lease_with(
+            signal_context(),
+            || {},
+            |_| signals.set(signals.get().saturating_add(1)),
+        ));
+        assert_eq!(signals.get(), 1, "finite authority may signal only once");
+        assert_eq!(test_root_grant_action_counts(), (0, 1));
+        assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
+
+        slot.root_notification.store(0, Ordering::Release);
+        assert_eq!(
+            cyw43_steady_service_parent_condition(request as u32),
+            Cyw43SteadyServiceParentCondition::Waiting,
+            "a consumed notification cannot erase the durable issued condition",
+        );
+        assert_eq!(test_root_grant_action_counts(), (0, 1));
+
+        let mut terminal = DriverTaskCompletionRecord::progress(request as u32, 1);
+        terminal.sequence = 0;
+        // SAFETY: The completion pointer lies in the test-owned aligned ring.
+        // Publish the terminal body before its sequence-last commit word.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, request as u32);
+        }
+        assert_eq!(
+            cyw43_steady_service_parent_condition(request as u32),
+            Cyw43SteadyServiceParentCondition::TerminalVisible,
+        );
+        assert_eq!(
+            latch_driver_task_retained_priority_lease_completion(slot),
+            DriverTaskRetainedLeaseTurn::Pending,
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::RestorePrimary),
+        );
+        assert_eq!(
+            step_driver_task_retained_priority_lease(
+                slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                request,
+                fingerprint,
+                false,
+            ),
+            DriverTaskRetainedLeaseTurn::Pending,
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::RestoreBus),
+        );
+        assert_eq!(
+            step_driver_task_retained_priority_lease(
+                slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                request,
+                fingerprint,
+                false,
+            ),
+            DriverTaskRetainedLeaseTurn::Pending,
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::ReadyToComplete),
+        );
+        assert!(finish_driver_task_retained_priority_lease(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            request,
+            fingerprint,
+        ));
+        assert_eq!(
+            slot.retained_priority_boost_active.load(Ordering::Acquire),
+            0
+        );
+        assert_eq!(
+            bus_slot
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            0,
+        );
+        assert_eq!(
+            DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            ),
+            Some(DriverTaskRetainedLeasePhase::Inactive),
+        );
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]
@@ -22585,8 +23064,17 @@ mod tests {
         let mut ring_page = Box::new(AlignedDriverTaskRing(
             [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
         ));
+        let mut shared_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
         let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
         publish_driver_task_ring(CYW43_WIFI_DRIVER_TASK_CONTRACT, ring_root_ptr);
+        publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            0x3000,
+            shared_page.0.as_mut_ptr() as usize,
+        );
         publish_driver_task_command_endpoint(CYW43_WIFI_DRIVER_TASK_CONTRACT, 1);
         publish_driver_task_root_notification(CYW43_WIFI_DRIVER_TASK_CONTRACT, 1);
 
@@ -22610,11 +23098,15 @@ mod tests {
         );
 
         let descriptor = steady_tx_test_descriptor_bytes(true);
-        let staging = [DriverTaskStagingSegment::ring_payload_at(
-            usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
-            &descriptor,
-            0,
-        )];
+        let payload = steady_tx_test_payload(false);
+        let staging = [
+            DriverTaskStagingSegment::shared(&payload, 0),
+            DriverTaskStagingSegment::ring_payload_at(
+                usize::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+                &descriptor,
+                0,
+            ),
+        ];
         let command = steady_tx_test_command(37);
         test_reset_root_grant_action_counts();
 

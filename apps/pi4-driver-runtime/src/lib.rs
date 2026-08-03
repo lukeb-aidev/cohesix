@@ -1555,10 +1555,25 @@ const CYW43_RX_PRIORITY_PROTECTED_GROUP_KEY: u8 = 9;
 const CYW43_RX_PRIORITY_PROTECTED_M3: u8 = 10;
 const CYW43_RX_PRIORITY_EVENT: u8 = 11;
 const CYW43_RX_PRIORITY_CONTROL: u8 = 12;
+const CYW43_EAPOL_PACKET_TYPE_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 1;
+const CYW43_EAPOL_BODY_LEN_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 2;
+const CYW43_EAPOL_KEY_DESCRIPTOR_TYPE_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 4;
 const CYW43_EAPOL_KEY_INFO_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 5;
+const CYW43_EAPOL_KEY_DATA_LEN_OFFSET: usize = CYW43_ETH_HEADER_BYTES + 97;
+const CYW43_EAPOL_KEY_BODY_FIXED_BYTES: usize = 95;
+const CYW43_EAPOL_PACKET_TYPE_KEY: u8 = 3;
+const CYW43_EAPOL_KEY_DESCRIPTOR_RSN: u8 = 2;
+const CYW43_EAPOL_KEY_DESCRIPTOR_WPA: u8 = 254;
+const CYW43_EAPOL_KEY_INFO_VERSION_MASK: u16 = 0b111;
 const CYW43_EAPOL_KEY_INFO_PAIRWISE: u16 = 1 << 3;
+const CYW43_EAPOL_KEY_INFO_INSTALL: u16 = 1 << 6;
 const CYW43_EAPOL_KEY_INFO_ACK: u16 = 1 << 7;
 const CYW43_EAPOL_KEY_INFO_MIC: u16 = 1 << 8;
+const CYW43_EAPOL_KEY_INFO_SECURE: u16 = 1 << 9;
+const CYW43_EAPOL_KEY_INFO_ERROR: u16 = 1 << 10;
+const CYW43_EAPOL_KEY_INFO_REQUEST: u16 = 1 << 11;
+const CYW43_EAPOL_KEY_INFO_ENCRYPTED_DATA: u16 = 1 << 12;
+const CYW43_EAPOL_KEY_INFO_SMK: u16 = 1 << 13;
 const CYW43_HOST_EAPOL_BDC_PRIORITY: u8 = 6;
 const CYW43_RX_GLOM_SUBFRAME_CAP: usize = 8;
 const CYW43_RX_QUEUE_CAP: usize = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP;
@@ -7090,7 +7105,8 @@ const fn runtime_semantic_local_continuation_due(current: RuntimeSteadySemanticS
 /// advance the already intake-sealed controller cursor once per scheduler
 /// slice without a reciprocal grant round trip for every internal phase. The
 /// marker is admitted either from an exact DPC event or from an explicitly
-/// marked urgent post-Gate-8 Ethernet TX parent; no operation is inferred.
+/// marked one-frame Ethernet TX parent. EAPOL parents additionally prove an
+/// intake-sealed M2, M4, or group-key response; no operation is inferred.
 /// Its total lifetime follows the existing CNTVCT-scaled controller/child
 /// deadline. `max_ops` remains a HAL-operation budget and is deliberately not
 /// reused as a scheduler-poll count. Current durable conditions continue only
@@ -23451,6 +23467,7 @@ struct Cyw43ForegroundTransaction {
     parent_descriptor_valid: bool,
     parent_payload_offset: u16,
     parent_payload_len: u16,
+    parent_payload_digest: u32,
     parent_payload: [u8; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
     parent_overlay: [u8; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
     parent_overlay_valid: [u8; CYW43_FOREGROUND_PARENT_OVERLAY_BYTES],
@@ -23505,6 +23522,7 @@ impl Cyw43ForegroundTransaction {
             parent_descriptor_valid: false,
             parent_payload_offset: 0,
             parent_payload_len: 0,
+            parent_payload_digest: 0,
             parent_payload: [0; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
             parent_overlay: [0; CYW43_FOREGROUND_PARENT_PAYLOAD_BYTES],
             parent_overlay_valid: [0; CYW43_FOREGROUND_PARENT_OVERLAY_BYTES],
@@ -23564,6 +23582,7 @@ impl Cyw43ForegroundTransaction {
         self.parent_descriptor_valid = false;
         self.parent_payload_offset = 0;
         self.parent_payload_len = 0;
+        self.parent_payload_digest = 0;
         self.parent_overlay_valid.fill(0);
         self.baseline_state_valid = false;
         self.generation = 0;
@@ -23730,6 +23749,7 @@ impl Cyw43ForegroundTransaction {
         self.parent_descriptor = descriptor.unwrap_or(DriverRuntimeCyw43CommandDescriptor::empty());
         self.parent_payload_offset = 0;
         self.parent_payload_len = 0;
+        self.parent_payload_digest = 0;
         if let Some(descriptor) = descriptor.filter(|descriptor| descriptor.valid()) {
             match cyw43_foreground_parent_payload_snapshot(descriptor, shared_payload_bytes) {
                 Cyw43ForegroundParentPayloadSnapshot::Empty => {}
@@ -23741,6 +23761,7 @@ impl Cyw43ForegroundTransaction {
                         self.parent_payload[index] =
                             read_runtime_payload_byte_physical(base + index);
                     }
+                    self.parent_payload_digest = self.sealed_parent_payload_digest();
                 }
                 Cyw43ForegroundParentPayloadSnapshot::Reject => self.poisoned = true,
             }
@@ -23760,6 +23781,35 @@ impl Cyw43ForegroundTransaction {
     fn parent_payload_index(&self, offset: usize) -> Option<usize> {
         let index = offset.checked_sub(usize::from(self.parent_payload_offset))?;
         (index < usize::from(self.parent_payload_len)).then_some(index)
+    }
+
+    fn sealed_parent_payload_digest(&self) -> u32 {
+        if self.parent_payload_len == 0 {
+            return 0;
+        }
+        let mut digest = 0x811c_9dc5u32;
+        for byte in &self.parent_payload[..usize::from(self.parent_payload_len)] {
+            digest ^= u32::from(*byte);
+            digest = digest.wrapping_mul(0x0100_0193);
+        }
+        digest
+    }
+
+    fn parent_payload_seal_valid(&self) -> bool {
+        self.parent_payload_len != 0
+            && self.parent_payload_digest == self.sealed_parent_payload_digest()
+    }
+
+    fn read_sealed_parent_payload(&self, offset: usize) -> Option<u8> {
+        let index = self.parent_payload_index(offset)?;
+        Some(self.parent_payload[index])
+    }
+
+    fn read_sealed_parent_u16(&self, offset: usize) -> Option<u16> {
+        Some(u16::from_be_bytes([
+            self.read_sealed_parent_payload(offset)?,
+            self.read_sealed_parent_payload(offset.checked_add(1)?)?,
+        ]))
     }
 
     fn read_parent_payload(&self, offset: usize) -> Option<u8> {
@@ -23827,6 +23877,68 @@ impl Cyw43ForegroundTransaction {
             && self.parent_payload_len == self.parent_descriptor.payload_len
     }
 
+    /// Admit only supplicant EAPOL-Key replies whose complete Ethernet frame
+    /// was sealed at intake. M2, M4, and group-key message 2 are finite urgent
+    /// responses; authenticator M1/M3, EAPOL control traffic, and malformed or
+    /// trailing data never acquire autonomous service authority.
+    fn critical_eapol_response_parent_authorized(&self) -> bool {
+        if !self.parent_payload_seal_valid()
+            || usize::from(self.parent_payload_len)
+                < CYW43_ETH_HEADER_BYTES + 4 + CYW43_EAPOL_KEY_BODY_FIXED_BYTES
+            || self.parent_descriptor.target_addr != 0
+            || self.parent_descriptor.arg0 != 0
+            || self.parent_descriptor.arg1 != 0
+            || self.parent_descriptor.reserved != 0
+        {
+            return false;
+        }
+        let base = usize::from(self.parent_payload_offset);
+        if self.read_sealed_parent_u16(base + 12) != Some(CYW43_ETH_P_EAPOL)
+            || self.read_sealed_parent_payload(base + CYW43_EAPOL_PACKET_TYPE_OFFSET)
+                != Some(CYW43_EAPOL_PACKET_TYPE_KEY)
+        {
+            return false;
+        }
+        let Some(body_len) = self.read_sealed_parent_u16(base + CYW43_EAPOL_BODY_LEN_OFFSET) else {
+            return false;
+        };
+        let Some(key_data_len) =
+            self.read_sealed_parent_u16(base + CYW43_EAPOL_KEY_DATA_LEN_OFFSET)
+        else {
+            return false;
+        };
+        if usize::from(body_len) != CYW43_EAPOL_KEY_BODY_FIXED_BYTES + usize::from(key_data_len)
+            || usize::from(self.parent_payload_len)
+                != CYW43_ETH_HEADER_BYTES + 4 + usize::from(body_len)
+            || !matches!(
+                self.read_sealed_parent_payload(base + CYW43_EAPOL_KEY_DESCRIPTOR_TYPE_OFFSET),
+                Some(CYW43_EAPOL_KEY_DESCRIPTOR_RSN) | Some(CYW43_EAPOL_KEY_DESCRIPTOR_WPA)
+            )
+        {
+            return false;
+        }
+        let Some(key_info) = self.read_sealed_parent_u16(base + CYW43_EAPOL_KEY_INFO_OFFSET) else {
+            return false;
+        };
+        let forbidden = CYW43_EAPOL_KEY_INFO_INSTALL
+            | CYW43_EAPOL_KEY_INFO_ACK
+            | CYW43_EAPOL_KEY_INFO_ERROR
+            | CYW43_EAPOL_KEY_INFO_REQUEST
+            | CYW43_EAPOL_KEY_INFO_ENCRYPTED_DATA
+            | CYW43_EAPOL_KEY_INFO_SMK;
+        let descriptor_version = key_info & CYW43_EAPOL_KEY_INFO_VERSION_MASK;
+        if descriptor_version == 0
+            || descriptor_version > 3
+            || key_info & CYW43_EAPOL_KEY_INFO_MIC == 0
+            || key_info & forbidden != 0
+        {
+            return false;
+        }
+        let pairwise = key_info & CYW43_EAPOL_KEY_INFO_PAIRWISE != 0;
+        let secure = key_info & CYW43_EAPOL_KEY_INFO_SECURE != 0;
+        (pairwise && !secure && key_data_len != 0) || (secure && key_data_len == 0)
+    }
+
     fn steady_tx_service_lease_parent_authorized(&self) -> bool {
         if self.parent.sequence == 0
             || self.parent.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
@@ -23840,13 +23952,11 @@ impl Cyw43ForegroundTransaction {
             return false;
         }
         let ethertype_offset = usize::from(self.parent_descriptor.payload_offset) + 12;
-        let Some(high) = self.read_parent_payload(ethertype_offset) else {
-            return false;
-        };
-        let Some(low) = self.read_parent_payload(ethertype_offset + 1) else {
-            return false;
-        };
-        u16::from_be_bytes([high, low]) != CYW43_ETH_P_EAPOL
+        match self.read_sealed_parent_u16(ethertype_offset) {
+            Some(CYW43_ETH_P_EAPOL) => self.critical_eapol_response_parent_authorized(),
+            Some(_) => true,
+            None => false,
+        }
     }
 
     fn new_frontier_allowed(&self) -> bool {
@@ -24681,6 +24791,13 @@ fn cyw43_foreground_scope_prepared_descriptor(
     {
         desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE
             | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE;
+        if transaction.critical_eapol_response_parent_authorized() {
+            // Host EAPOL replies are pre-secure progress, so their one exact
+            // Function-2 issue also owns the standard pre-TX CARD_INT fence.
+            // SDIO remains the sole physical owner of both the fence and the
+            // write terminal; this marker cannot be inherited by Function 1.
+            desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE;
+        }
     }
     desc.valid().then_some(desc)
 }
@@ -56279,6 +56396,92 @@ mod tests {
             transaction.parent_payload_offset = descriptor.payload_offset;
             transaction.parent_payload_len = descriptor.payload_len;
             transaction.parent_payload[12..14].copy_from_slice(&ethertype.to_be_bytes());
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
+            transaction.generation = generation;
+        });
+        command
+    }
+
+    fn install_critical_eapol_parent_fixture(
+        sequence: u32,
+        generation: u32,
+        key_info: u16,
+        key_data_len: u16,
+        tagged: bool,
+    ) -> DriverTaskCommandRecord {
+        let payload_len = CYW43_ETH_HEADER_BYTES
+            + 4
+            + CYW43_EAPOL_KEY_BODY_FIXED_BYTES
+            + usize::from(key_data_len);
+        let descriptor = DriverRuntimeCyw43CommandDescriptor {
+            op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+            flags: if tagged {
+                DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE
+            } else {
+                0
+            },
+            payload_offset: DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE,
+            payload_len: payload_len as u16,
+            total_len: payload_len as u32,
+            ..DriverRuntimeCyw43CommandDescriptor::empty()
+        };
+        assert!(descriptor.valid());
+        let command = DriverTaskCommandRecord {
+            sequence,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
+                | if tagged {
+                    DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                } else {
+                    0
+                },
+            arg0: HOT_PATH_CYW43_WIFI,
+            arg1: ROLE_NET,
+            aux0: DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            aux1: generation,
+            budget: if tagged {
+                DriverTaskBudgetGrant {
+                    max_ops: DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_OPS,
+                    max_frames: DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_FRAMES,
+                    max_bytes: DRIVER_RUNTIME_CYW43_STEADY_TX_LEASE_BYTES,
+                }
+            } else {
+                DriverTaskBudgetGrant {
+                    max_ops: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
+                    max_frames: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
+                    max_bytes: DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
+                }
+            },
+            frame: DriverFrameDescriptor {
+                offset: DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>() as u16,
+                flags: 0,
+            },
+        };
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.clear();
+            transaction.parent = command;
+            transaction.parent_input_sealed = true;
+            transaction.parent_descriptor = descriptor;
+            transaction.parent_descriptor_valid = true;
+            transaction.parent_payload_offset = descriptor.payload_offset;
+            transaction.parent_payload_len = descriptor.payload_len;
+            let payload = &mut transaction.parent_payload[..payload_len];
+            payload.fill(0);
+            payload[12..14].copy_from_slice(&CYW43_ETH_P_EAPOL.to_be_bytes());
+            payload[CYW43_EAPOL_PACKET_TYPE_OFFSET] = CYW43_EAPOL_PACKET_TYPE_KEY;
+            let body_len = CYW43_EAPOL_KEY_BODY_FIXED_BYTES as u16 + key_data_len;
+            payload[CYW43_EAPOL_BODY_LEN_OFFSET..CYW43_EAPOL_BODY_LEN_OFFSET + 2]
+                .copy_from_slice(&body_len.to_be_bytes());
+            payload[CYW43_EAPOL_KEY_DESCRIPTOR_TYPE_OFFSET] = CYW43_EAPOL_KEY_DESCRIPTOR_RSN;
+            payload[CYW43_EAPOL_KEY_INFO_OFFSET..CYW43_EAPOL_KEY_INFO_OFFSET + 2]
+                .copy_from_slice(&key_info.to_be_bytes());
+            payload[CYW43_EAPOL_KEY_DATA_LEN_OFFSET..CYW43_EAPOL_KEY_DATA_LEN_OFFSET + 2]
+                .copy_from_slice(&key_data_len.to_be_bytes());
+            if key_data_len != 0 {
+                payload[CYW43_EAPOL_KEY_DATA_LEN_OFFSET + 2..].fill(0x5a);
+            }
+            transaction.parent_payload_digest = transaction.sealed_parent_payload_digest();
             transaction.generation = generation;
         });
         command
@@ -58289,6 +58492,11 @@ mod tests {
             descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE,
             0,
         );
+        assert_eq!(
+            descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            0,
+            "ordinary post-secure TX does not acquire the EAPOL pre-TX fence",
+        );
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.prepared_descriptor = descriptor;
             transaction.prepared_descriptor_valid = true;
@@ -58381,6 +58589,209 @@ mod tests {
             install_steady_tx_parent_fixture(0x4359_5145, logical_generation, CYW43_ETH_P_EAPOL);
         assert!(!CYW43_FOREGROUND_TRANSACTION
             .with_ref(Cyw43ForegroundTransaction::steady_tx_service_lease_parent_authorized));
+    }
+
+    #[test]
+    fn critical_eapol_lease_accepts_only_sealed_supplicant_key_responses() {
+        let _guard = test_guard();
+        let generation = 0x4359_5146;
+        let m2_key_info = 2 | CYW43_EAPOL_KEY_INFO_PAIRWISE | CYW43_EAPOL_KEY_INFO_MIC;
+        let m4_key_info = m2_key_info | CYW43_EAPOL_KEY_INFO_SECURE;
+        let group_m2_key_info = 2 | CYW43_EAPOL_KEY_INFO_MIC | CYW43_EAPOL_KEY_INFO_SECURE;
+
+        let _m2 =
+            install_critical_eapol_parent_fixture(0x4359_5147, generation, m2_key_info, 20, true);
+        assert!(CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.critical_eapol_response_parent_authorized()
+                && transaction.steady_tx_service_lease_parent_authorized()
+        }));
+
+        let _m4 =
+            install_critical_eapol_parent_fixture(0x4359_5148, generation, m4_key_info, 0, true);
+        assert!(CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.critical_eapol_response_parent_authorized()
+                && transaction.steady_tx_service_lease_parent_authorized()
+        }));
+
+        let _group_m2 = install_critical_eapol_parent_fixture(
+            0x4359_5149,
+            generation,
+            group_m2_key_info,
+            0,
+            true,
+        );
+        assert!(CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.critical_eapol_response_parent_authorized()
+                && transaction.steady_tx_service_lease_parent_authorized()
+        }));
+
+        for (sequence, key_info, key_data_len) in [
+            (
+                0x4359_514a,
+                2 | CYW43_EAPOL_KEY_INFO_PAIRWISE | CYW43_EAPOL_KEY_INFO_ACK,
+                0,
+            ),
+            (
+                0x4359_514b,
+                m4_key_info | CYW43_EAPOL_KEY_INFO_ACK | CYW43_EAPOL_KEY_INFO_INSTALL,
+                0,
+            ),
+            (0x4359_514c, m2_key_info, 0),
+            (0x4359_514d, group_m2_key_info, 8),
+            (
+                0x4359_514e,
+                4 | CYW43_EAPOL_KEY_INFO_PAIRWISE | CYW43_EAPOL_KEY_INFO_MIC,
+                20,
+            ),
+        ] {
+            let _ = install_critical_eapol_parent_fixture(
+                sequence,
+                generation,
+                key_info,
+                key_data_len,
+                true,
+            );
+            assert!(!CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+                transaction.critical_eapol_response_parent_authorized()
+                    || transaction.steady_tx_service_lease_parent_authorized()
+            }));
+        }
+
+        let _untagged =
+            install_critical_eapol_parent_fixture(0x4359_5153, generation, m2_key_info, 20, false);
+        assert!(CYW43_FOREGROUND_TRANSACTION
+            .with_ref(Cyw43ForegroundTransaction::critical_eapol_response_parent_authorized,));
+        assert!(!CYW43_FOREGROUND_TRANSACTION
+            .with_ref(Cyw43ForegroundTransaction::steady_tx_service_lease_parent_authorized,));
+
+        let _mutated =
+            install_critical_eapol_parent_fixture(0x4359_5154, generation, m2_key_info, 20, true);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.parent_payload[CYW43_EAPOL_KEY_DATA_LEN_OFFSET + 2] ^= 0xff;
+        });
+        assert!(!CYW43_FOREGROUND_TRANSACTION
+            .with_ref(Cyw43ForegroundTransaction::steady_tx_service_lease_parent_authorized,));
+    }
+
+    #[test]
+    fn critical_eapol_lease_binds_one_frame_to_current_physical_generation() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_5150;
+        let logical_generation = 7;
+        initialize_production_foreground_pair(physical_generation);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_released = true;
+            state.bus_link_ready = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = physical_generation;
+            state.recovery_required = false;
+            state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
+            state.sdpcm_tx_write_ambiguous = false;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+            state.card_irq_masked = false;
+        });
+        sdio_record_dpc_health(false);
+        let parent = install_critical_eapol_parent_fixture(
+            0x4359_5151,
+            logical_generation,
+            2 | CYW43_EAPOL_KEY_INFO_PAIRWISE | CYW43_EAPOL_KEY_INFO_MIC,
+            20,
+            true,
+        );
+        CYW43_FOREGROUND_TRANSACTION
+            .with_mut(|transaction| transaction.generation = physical_generation);
+        assert!(cyw43_steady_parent_service_lease_admitted(
+            parent,
+            logical_generation,
+        ));
+        assert!(!cyw43_steady_parent_service_lease_admitted(
+            parent,
+            physical_generation,
+        ));
+
+        let intake = RuntimeCommandIntake {
+            command: parent,
+            reply_cap_available: false,
+        };
+        let mut gate = RuntimePendingCommandGate::new();
+        retain_runtime_command_after_arbitration_turn(
+            &mut gate,
+            intake,
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+        assert!(!gate.continuation_required());
+        assert_eq!(gate.grant_generation(), None);
+
+        let descriptor = CYW43_FOREGROUND_TRANSACTION
+            .with_ref(|transaction| {
+                cyw43_foreground_scope_prepared_descriptor(
+                    transaction,
+                    steady_tx_function2_descriptor(),
+                )
+            })
+            .expect("the exact EAPOL reply scopes its one Function-2 child");
+        assert_ne!(
+            descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE,
+            0,
+        );
+        assert_ne!(
+            descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+            0,
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+        });
+        let child = DriverTaskCommandRecord {
+            sequence: 0x8000_5152,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
+                | DRIVER_RUNTIME_SDIO_FLAG_DATA
+                | DRIVER_RUNTIME_SDIO_FLAG_WRITE
+                | DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: 0,
+            aux1: 0,
+            budget: sdio_bus_link_command_budget(u32::from(descriptor.len)),
+            frame: DriverFrameDescriptor {
+                offset: CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET as u32,
+                len: core::mem::size_of::<DriverRuntimeSdioCommandDescriptor>() as u16,
+                flags: 0,
+            },
+        };
+        let child = CYW43_FOREGROUND_TRANSACTION
+            .with_ref(|transaction| cyw43_foreground_bind_prepared_command(transaction, child))
+            .expect("the child inherits request and current physical epoch");
+        assert_eq!(child.aux0, parent.sequence);
+        assert_eq!(child.aux1, physical_generation);
+        assert_ne!(
+            child.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
+            0,
+        );
+
+        let mut two_frames = parent;
+        two_frames.budget.max_frames = 2;
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.parent = two_frames);
+        assert!(!cyw43_steady_parent_service_lease_admitted(
+            two_frames,
+            logical_generation,
+        ));
+
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| transaction.parent = parent);
+        CYW43_RUNTIME_STATE
+            .with_mut(|state| state.dpc_shared_epoch = physical_generation.wrapping_add(1));
+        assert!(!cyw43_steady_parent_service_lease_admitted(
+            parent,
+            logical_generation,
+        ));
     }
 
     #[test]

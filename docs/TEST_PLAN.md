@@ -1354,8 +1354,12 @@ an issued-unknown action, or repeating a terminal failure must perform no
 child I/O. `firmware_execution_started` and `firmware_released` must remain
 false until the exact RESETCTRL-clear and DPC-activation completions,
 respectively.
-Production-chain coverage must additionally drive normal control and EAPOL TX
-through one cached-window F2 CMD53 child, drive a genuine cache miss through
+Production-chain coverage must additionally drive normal control and
+EAPOL-Start TX through the ordinary retained cadence and one cached-window F2
+CMD53 child. It must separately intake-seal valid EAPOL-Key M2, M4, and
+group-key responses and drive each through the existing paired finite-op7
+marker with one current-generation frame, four owner operations, and 1,536
+bytes. Drive a genuine cache miss through
 exact LOW/MID/HIGH CMD52 writes followed by F2 with no per-packet IORx child,
 drive the 20-command post-F2 release sequence to the generation's one retained
 DPC activation and prove later controls reuse it, then
@@ -1816,7 +1820,9 @@ across exact children, including equal deterministic private state; the first
 exact external condition may block immediately even when newly observed. A nonempty
 committed queue retains the next batch parent; exact committed empty state ends RX service.
 Bootstrap, split-control/host-EAPOL, control pre-TX, and Join-only fences remain
-separately bounded and must not become periodic steady NetData polling.
+separately bounded and must not become periodic steady NetData polling. The
+sealed M2/M4/group-key finite parent is an explicit host-EAPOL bound;
+EAPOL-Start and other control remain ordinary.
 
 Every non-RX durable-work reason—data TX, ARP TX, runtime descriptor, root RX,
 control reply, logical owner, terminal drain, host EAPOL, HAL lease, prompt,
@@ -2733,6 +2739,19 @@ or replay the command.
 Every root-to-CYW43 generation, including zero, retains one selected authority
 contract. Non-op11 retained commands outside finite op7, including non-op11
 bootstrap and recovery commands, keep their stable acknowledged exact shared-grant cadence.
+EAPOL-Start and ordinary control must remain on that cadence. A separate
+admission table must accept only completely intake-sealed current-generation
+EAPOL-Key M2, M4, and group-key responses for the existing paired finite-op7
+contract; malformed, truncated, ordinary Ethernet, EAPOL-Start, wrong-message,
+untagged, stale-generation, and mismatched descriptor/payload cases must fail
+before issue. Each accepted parent must bind both CYW43 and SDIO request
+priority, enforce exactly one frame and the four-operation/1,536-byte budget,
+cross the Function-2 pre-TX DPC fence, commit and notify once, publish no grant
+or later notification after issue, and keep root blocked until the durable
+matching terminal is visible. Expiry may select exact recovery only and must
+not create a source probe, poll, replay, or fallback. Ordinary post-Gate-8 TCP
+must retain its O(1) finite-op7 classification and service path without running
+the EAPOL-Key parser.
 Every exact op11 instead uses one HAL-derived persistent marker regardless of
 logical generation or lifecycle: tests must cross ABI-invisible `Stage`,
 full-body clean/barrier, sequence-last `CommitRing`, `Issued`, exactly one
@@ -2927,7 +2946,8 @@ slice and `WIFI_DPC_PROOF=yes` from
 `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that
 bounded accounting grammar and immediately follows it with
 `CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events
-source=card-int-or-source-probe physical_card_irq=not-exported`. The scope line
+poisoned=aggregate-client-or-ring source=card-int-or-source-probe
+physical_card_irq=not-exported`. The scope line
 is mandatory because the compatibility key `captures` means
 `ring.producer + ring.overruns`, includes hardware CARD_INT and authorized
 SOURCE_PENDING attempts, and is not a physical IRQ counter. The fixed v3 ring
