@@ -92,6 +92,7 @@ CYW43_SDIO_DPC_RE = re.compile(
     r"epoch_errors=(?P<epoch_errors>[0-9]+) "
     r"sequence_errors=(?P<sequence_errors>[0-9]+) "
     r"ack_failures=(?P<ack_failures>[0-9]+) "
+    r"(?:owner_active=(?P<owner_active>yes|no) )?"
     r"poisoned=(?P<poisoned>yes|no)"
     r"(?: masked=(?P<masked>yes|no))?$"
 )
@@ -634,6 +635,7 @@ class WifiDpcProof:
     epoch_errors: int = 0
     sequence_errors: int = 0
     ack_failures: int = 0
+    owner_active: str = "unknown"
     poisoned: str = "unknown"
     masked: str = "unknown"
     line: int = 0
@@ -766,6 +768,7 @@ class GateSummary:
     wifi_dpc_epoch_errors: int = 0
     wifi_dpc_sequence_errors: int = 0
     wifi_dpc_ack_failures: int = 0
+    wifi_dpc_owner_active: str = "unknown"
     wifi_dpc_poisoned: str = "unknown"
     wifi_dpc_masked: str = "unknown"
     wifi_dpc_line: int = 0
@@ -1029,6 +1032,7 @@ class GateSummary:
             "WIFI_DPC_EPOCH_ERRORS": self.wifi_dpc_epoch_errors,
             "WIFI_DPC_SEQUENCE_ERRORS": self.wifi_dpc_sequence_errors,
             "WIFI_DPC_ACK_FAILURES": self.wifi_dpc_ack_failures,
+            "WIFI_DPC_OWNER_ACTIVE": self.wifi_dpc_owner_active,
             "WIFI_DPC_POISONED": self.wifi_dpc_poisoned,
             "WIFI_DPC_MASKED": self.wifi_dpc_masked,
             "WIFI_DPC_LINE": self.wifi_dpc_line,
@@ -13289,6 +13293,10 @@ def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
         return "sequence-error"
     if proof.ack_failures != 0:
         return "ack-failure"
+    if proof.owner_active == "no":
+        return "owner-inactive"
+    if proof.owner_active != "yes":
+        return "owner-active-unproven"
     if proof.captures == 0 or proof.published == 0:
         return "no-activity"
     if proof.captures != proof.published:
@@ -13358,6 +13366,7 @@ def summarize_wifi_dpc_proof(
             epoch_errors=values["epoch_errors"],
             sequence_errors=values["sequence_errors"],
             ack_failures=values["ack_failures"],
+            owner_active=match.group("owner_active") or "unknown",
             poisoned=match.group("poisoned"),
             masked=match.group("masked") or "unknown",
             line=event.line,
@@ -14664,6 +14673,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_dpc_epoch_errors=wifi_dpc.epoch_errors,
         wifi_dpc_sequence_errors=wifi_dpc.sequence_errors,
         wifi_dpc_ack_failures=wifi_dpc.ack_failures,
+        wifi_dpc_owner_active=wifi_dpc.owner_active,
         wifi_dpc_poisoned=wifi_dpc.poisoned,
         wifi_dpc_masked=wifi_dpc.masked,
         wifi_dpc_line=wifi_dpc.line,

@@ -113,9 +113,9 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_HOST_READY, DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY,
     DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN,
-    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED, DRIVER_RUNTIME_NET_INIT_AUX,
-    DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH, DRIVER_RUNTIME_REJECT_OUTER_GENERATION,
-    DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION,
+    DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
+    DRIVER_RUNTIME_NET_INIT_AUX, DRIVER_RUNTIME_REJECT_CYW43_CONTROL_OWNER_MISMATCH,
+    DRIVER_RUNTIME_REJECT_OUTER_GENERATION, DRIVER_RUNTIME_REJECT_SDIO_DPC_ACTIVATION_ADMISSION,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_COMMIT_ADMISSION,
     DRIVER_RUNTIME_REJECT_SDIO_GENERATION_RESET_ROUTE_MISSING,
     DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_BUSY, DRIVER_RUNTIME_REJECT_SDIO_INTAKE_SEAL_MISSING,
@@ -5073,6 +5073,8 @@ pub(crate) struct Cyw43SdioDpcDiagnostic {
     pub epoch_errors: u32,
     pub sequence_errors: u32,
     pub ack_failures: u32,
+    /// Durable proof that the sole SDIO owner admitted this physical epoch.
+    pub owner_active: bool,
     pub ring_poisoned: bool,
     pub client_sample_stale: bool,
     /// Compatibility aggregate for existing fail-closed acceptance callers.
@@ -5345,6 +5347,7 @@ fn cyw43_sdio_dpc_diagnostic_from(
     let client_consumer_mismatch = client.consumed != ring.consumer;
     let ring_poisoned = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED != 0;
     let masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
+    let owner_active = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE != 0;
     Cyw43SdioDpcDiagnostic {
         generation: ring.epoch,
         event_attempts: ring.producer.saturating_add(ring.overruns),
@@ -5361,6 +5364,7 @@ fn cyw43_sdio_dpc_diagnostic_from(
         epoch_errors: client.epoch_errors,
         sequence_errors: client.sequence_errors,
         ack_failures: ring.ack_failures,
+        owner_active,
         ring_poisoned,
         client_sample_stale: client_consumer_mismatch,
         poisoned: client_consumer_mismatch || client.epoch_errors != 0 || ring_poisoned,
@@ -5410,6 +5414,7 @@ fn cyw43_sdio_dpc_ring_work_pending(
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
             == 0
+        && ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE != 0
         && (ring.producer != ring.consumer
             || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0)
 }
@@ -5988,6 +5993,7 @@ fn cyw43_sdio_dpc_diagnostic_work_pending(
         && snapshot.overruns == 0
         && snapshot.epoch_errors == 0
         && snapshot.sequence_errors == 0
+        && snapshot.owner_active
         && !snapshot.ring_poisoned
         && !snapshot.client_sample_stale
         && !snapshot.poisoned
@@ -9401,7 +9407,10 @@ pub(crate) fn cyw43_gate8_publication_receipt(
     }
     let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
     let dpc = cyw43_gate8_sdio_dpc_ring_snapshot()?;
-    if dpc.epoch == 0 || dpc.producer != dpc.consumer || dpc.flags != 0 {
+    if dpc.epoch == 0
+        || dpc.producer != dpc.consumer
+        || dpc.flags != DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE
+    {
         return None;
     }
     core::sync::atomic::fence(Ordering::Acquire);
@@ -34635,7 +34644,7 @@ mod tests {
                 epoch: generation.wrapping_add(1).max(1),
                 producer: 0,
                 consumer: 0,
-                flags: 0,
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
                 overruns: 0,
                 ack_failures: 0,
             },
@@ -34662,7 +34671,7 @@ mod tests {
             epoch: 7,
             producer: 11,
             consumer: 11,
-            flags: 0,
+            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
             overruns: 4,
             ack_failures: 2,
         };
@@ -34685,7 +34694,8 @@ mod tests {
                 ..stable_history
             },
             crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
-                flags: 1,
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE
+                    | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
                 ..stable_history
             },
         ] {
@@ -44239,7 +44249,8 @@ mod tests {
             epoch: expected_generation,
             producer: 12,
             consumer: 11,
-            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED
+                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
             overruns: 0,
             ack_failures: 0,
         };
@@ -44262,7 +44273,9 @@ mod tests {
         ack_pending_ring.flags |= DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING;
         let mut idle_ring = healthy_ring;
         idle_ring.producer = idle_ring.consumer;
-        idle_ring.flags = 0;
+        idle_ring.flags = DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE;
+        let mut inactive_ring = healthy_ring;
+        inactive_ring.flags &= !DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE;
 
         assert!(
             cyw43_sdio_dpc_ring_work_pending(ack_failed_ring, Some(expected_generation)),
@@ -44280,6 +44293,7 @@ mod tests {
                 Some(expected_generation),
             ),
             ("ack-pending", ack_pending_ring, Some(expected_generation)),
+            ("owner-inactive", inactive_ring, Some(expected_generation)),
             ("idle", idle_ring, Some(expected_generation)),
         ] {
             assert!(
@@ -44299,6 +44313,7 @@ mod tests {
             epoch_errors: 0,
             sequence_errors: 0,
             ack_failures: 0,
+            owner_active: true,
             ring_poisoned: false,
             client_sample_stale: false,
             poisoned: false,
@@ -44363,6 +44378,13 @@ mod tests {
                 "aggregate-poisoned",
                 Cyw43SdioDpcDiagnostic {
                     poisoned: true,
+                    ..healthy_diagnostic
+                },
+            ),
+            (
+                "owner-inactive",
+                Cyw43SdioDpcDiagnostic {
+                    owner_active: false,
                     ..healthy_diagnostic
                 },
             ),
@@ -51204,7 +51226,7 @@ mod tests {
                 epoch: generation + 1,
                 producer: 0,
                 consumer: 0,
-                flags: 0,
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
                 overruns: 0,
                 ack_failures: 0,
             },

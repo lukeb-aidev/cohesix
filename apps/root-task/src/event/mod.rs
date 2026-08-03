@@ -14535,8 +14535,9 @@ where
     fn wifi_sdio_dpc_accounting_line(
         snapshot: crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
-        format_message(format_args!(
-            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} poisoned={} masked={}",
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(&mut line, format_args!(
+            "CYW43_SDIO_DPC generation={} captures={} published={} consumed={} rearms={} overruns={} epoch_errors={} sequence_errors={} ack_failures={} owner_active={} poisoned={} masked={}",
             snapshot.generation,
             snapshot.event_attempts,
             snapshot.published,
@@ -14546,15 +14547,17 @@ where
             snapshot.epoch_errors,
             snapshot.sequence_errors,
             snapshot.ack_failures,
+            if snapshot.owner_active { "yes" } else { "no" },
             if snapshot.poisoned { "yes" } else { "no" },
             if snapshot.masked { "yes" } else { "no" },
         ))
+        .expect("fixed DPC accounting grammar fits DEFAULT_LINE_CAPACITY");
+        line
     }
 
     #[cfg(feature = "kernel")]
     fn wifi_sdio_dpc_scope_line() -> HeaplessString<DEFAULT_LINE_CAPACITY> {
-        // Keep the established accounting line byte-compatible for existing
-        // capture tooling, then define its historical `captures` key
+        // Define the accounting line's historical `captures` key
         // unambiguously beside it. The SDIO owner's true physical CARD_INT
         // counter is not carried by the current fixed event-ring ABI.
         format_message(format_args!(
@@ -14570,14 +14573,17 @@ where
             ("ring-poisoned", "live-ring", "restart-pair")
         } else if snapshot.client_sample_stale {
             ("ring-consumer-mismatch", "live-ring", "rerun-proof")
+        } else if !snapshot.owner_active {
+            ("owner-inactive", "live-ring", "activate-owner")
         } else if snapshot.masked {
             ("owner-rearm-pending", "live-ring", "service-sdio-owner")
         } else {
             ("current", "live-ring", "none")
         };
         format_message(format_args!(
-            "CYW43_SDIO_DPC_TRUTH generation={} ring_poisoned={} client_sample_stale={} ring_consumer={} sample_consumer={} sample_reason={} authority={} action={}",
+            "CYW43_SDIO_DPC_TRUTH generation={} owner_active={} ring_poisoned={} client_sample_stale={} ring_consumer={} sample_consumer={} sample_reason={} authority={} action={}",
             snapshot.generation,
+            if snapshot.owner_active { "yes" } else { "no" },
             if snapshot.ring_poisoned { "yes" } else { "no" },
             if snapshot.client_sample_stale {
                 "yes"
@@ -17917,6 +17923,7 @@ where
             && snapshot.epoch_errors == 0
             && snapshot.sequence_errors == 0
             && snapshot.ack_failures == 0
+            && snapshot.owner_active
             && !snapshot.ring_poisoned
             && !snapshot.client_sample_stale
             && !snapshot.poisoned
@@ -25653,6 +25660,7 @@ mod tests {
             epoch_errors: u32::MAX,
             sequence_errors: u32::MAX,
             ack_failures: u32::MAX,
+            owner_active: true,
             ring_poisoned: false,
             client_sample_stale: true,
             poisoned: true,
@@ -25681,7 +25689,12 @@ mod tests {
         let rearm = KernelConsoleTestPump::wifi_sdio_dpc_rearm_line(diagnostic);
         let cause = KernelConsoleTestPump::wifi_sdio_dpc_cause_line(cause_diagnostic);
 
-        for line in [&accounting, &scope, &truth, &rearm, &cause] {
+        assert!(
+            !accounting.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "DPC telemetry must remain parseable: {accounting}"
+        );
+        assert!(accounting.len() < DEFAULT_LINE_CAPACITY, "{accounting}");
+        for line in [&scope, &truth, &rearm, &cause] {
             assert!(
                 !line.contains(DIAGNOSTIC_TRUNCATION_MARKER),
                 "DPC telemetry must remain parseable: {line}"
@@ -33356,6 +33369,7 @@ mod tests {
                 epoch_errors: 0,
                 sequence_errors: 0,
                 ack_failures: 0,
+                owner_active: true,
                 ring_poisoned: false,
                 client_sample_stale: false,
                 poisoned: false,
@@ -37945,6 +37959,7 @@ mod tests {
                 epoch_errors: 0,
                 sequence_errors: 0,
                 ack_failures: 0,
+                owner_active: true,
                 ring_poisoned: false,
                 client_sample_stale: false,
                 sample_consumer: 12,
@@ -37978,9 +37993,9 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(wifi.breadcrumb_suppression_observed);
-        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 poisoned=no masked=no";
+        let dpc_line = "CYW43_SDIO_DPC generation=9 captures=12 published=12 consumed=12 rearms=12 overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 owner_active=yes poisoned=no masked=no";
         let dpc_scope = "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-int-or-source-probe physical_card_irq=not-exported";
-        let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
+        let dpc_truth = "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes ring_poisoned=no client_sample_stale=no ring_consumer=12 sample_consumer=12";
         let dpc_rearm = "CYW43_SDIO_DPC_REARM generation=9 counter=client-signal-attempts count=12 owner_irq=unmasked action=none";
         assert!(rendered.contains(dpc_line), "{rendered}");
         assert!(rendered.contains(dpc_scope), "{rendered}");
@@ -40648,6 +40663,7 @@ mod tests {
             epoch_errors: 0,
             sequence_errors: 0,
             ack_failures: 0,
+            owner_active: true,
             ring_poisoned: false,
             client_sample_stale: false,
             sample_consumer: 4,
@@ -40656,6 +40672,12 @@ mod tests {
         };
         assert!(KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
             healthy
+        ));
+
+        let mut inactive = healthy;
+        inactive.owner_active = false;
+        assert!(!KernelConsoleTestPump::wifi_diag_dpc_acceptance_pass_from(
+            inactive,
         ));
 
         let mut poisoned = healthy;

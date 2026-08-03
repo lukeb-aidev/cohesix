@@ -176,7 +176,7 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
         "CYW43_SDIO_DPC generation=7 captures=4 published=4 consumed=4 "
         "rearms=4 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no",
+        "ack_failures=0 owner_active=yes poisoned=no",
         "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
         "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi "
         "active_net=cyw43 required_roles=0x3f required_hot_paths=0x7f "
@@ -421,7 +421,7 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "[cohsh-net][auth] auth OK, session established (generation=9 conn_id=1)",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no masked=no",
+        "ack_failures=0 owner_active=yes poisoned=no masked=no",
     ]
 
 
@@ -1487,7 +1487,7 @@ def test_gate_proof_rejects_wifi_ready_with_zero_dpc_activity(
     lines.append(
         "CYW43_SDIO_DPC generation=9 captures=0 published=0 consumed=0 "
         "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no masked=no"
+        "ack_failures=0 owner_active=yes poisoned=no masked=no"
     )
     log_path = tmp_path / "pi4-serial.log"
     log_path.write_text("\n".join(lines), encoding="utf-8")

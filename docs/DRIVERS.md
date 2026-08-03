@@ -989,8 +989,9 @@ pre-secure EAPOL RX frame, no host-EAPOL prompt, session work, deferred
 reauthentication, or post-association BSSID work, no maintenance or other
 logical control owner, no prompt poll or terminal-drain cursor, and no retained
 HAL driver-task request. The linked SDIO DPC ring must also be empty and
-healthy: producer equals consumer, current-pair flags are zero, and the
-current-pair overrun count is zero. `ack_failures` is retained attempt history
+healthy: producer equals consumer, current-pair flags are exactly
+`OWNER_ACTIVE`, and the current-pair overrun count is zero. `ack_failures` is
+retained attempt history
 for that physical pair, not current fault authority: after an exact ACK retry
 succeeds and pending/fault flags clear, a stable nonzero count does not by
 itself revoke healthy work. Its exact value, the nonzero DPC epoch, and the
@@ -1404,9 +1405,14 @@ generation and XID.
   staged op11 descriptor, payload, full contract budget, request, and logical
   generation form one valid immutable statement. The shared budget is exactly
   192 operations, 64 frames, and 65,536 bytes; any changed field rejects the
-  marker before child issue. Logical generation zero is the only sentinel that
-  may bind to the current private physical epoch; a stale nonzero generation
-  never rebinds. `Stage` remains invisible to
+  marker before child issue. The root-owned logical connection generation and
+  the generated SDIO bus-link epoch are independent identities. CYW43 seals the
+  exact logical generation in the parent, then binds that parent once to the
+  current private physical epoch; the parent `aux1` remains logical while the
+  retained transaction and every SDIO child carry the physical epoch. Neither
+  generation zero nor a nonzero logical generation is ever compared with, or
+  rewritten into, the physical epoch. A changed parent identity or a stale
+  physical ring epoch rejects before child issue. `Stage` remains invisible to
   the child. The following producer turn refreshes and cleans the complete
   body/payload, executes the barrier, commits the nonzero command sequence last,
   moves the retained request to `Issued`, and signals the reserved-root-badge
@@ -1541,7 +1547,8 @@ generation and XID.
 
   Post-release `DPC_ACTIVATE` owns the generation-level activation lifetime; it
   is not a prerequisite transaction repeated before each control transfer. A
-  healthy current-generation, unmasked, empty ring authorizes the control
+  healthy current-physical-generation, owner-active, unmasked, empty ring
+  authorizes the control
   parent to continue locally to its Function-2 issue fence. A visible ring
   entry instead binds exactly that event sequence to the parent until the
   canonical DPC consumer commits it consumed; a later reassertion cannot widen
@@ -1555,8 +1562,9 @@ generation and XID.
 
   That fault/initialization state machine is the operation-specific exception
   to pre-existing activation and `CARD_INT` mask-parity admission. It still
-  requires the exact nonzero generation, ready reciprocal link, non-poisoned
-  owner, and a valid same-generation ring with no poison or overrun. Its sole
+  requires the exact nonzero physical bus-link epoch, ready reciprocal link,
+  non-poisoned owner, and a valid ring for that same physical epoch with no
+  poison or overrun. Its sole
   retained SDIO-owner cursor rechecks the link, generation, notification
   binding, and poison before MMIO; establishes activation and masked policy;
   inspects or coalesces the durable source; republishes ring health; and reaches
@@ -2178,8 +2186,11 @@ generation and XID.
   Delayed success at the 51/200/3,000/1,000 bounds cannot consume the
   1,024-action foreground trace or 64-slot deadline table.
 
-  Its final `DPC_ACTIVATE` completion is the sole transition that establishes a
-  healthy post-release activation lifetime for that physical generation.
+  The `DPC_ACTIVATE` state machine is the sole path that establishes a healthy
+  post-release activation lifetime for that physical generation. Its health
+  phase publishes `OWNER_ACTIVE` after physical activation is admitted and
+  before the exact child terminal; the terminal remains separate proof that the
+  activation transaction completed.
   Ordinary control transfers reuse that state; they do not insert a second
   activation transaction between CYW43 and the card.
 
@@ -2276,9 +2287,10 @@ generation and XID.
   sideband state while it continues to own the exact control exchange; root's
   exact disjoint ACK, not a per-frame completion, releases that batch storage.
 
-  The batch path requires the exact current nonzero generation, healthy owner
-  frontier, immutable parent identity, and compatible prompt identity when one
-  exists. Ordinary op8 requires no control exchange; the separate sideband
+  The batch path requires the exact current nonzero logical parent generation,
+  the active current physical bus-link epoch, a healthy owner frontier,
+  immutable parent identity, and compatible prompt identity when one exists.
+  Ordinary op8 requires no control exchange; the separate sideband
   branch requires the exact active persistent op11 identity and preserves it
   until the matching BCDC terminal. Both require no recovery, issued-unknown
   state, restart, or quarantine. Empty, stale, torn, mismatched, unsealed,
@@ -2292,15 +2304,23 @@ generation and XID.
   cache lines, so neither side writes a line owned by the other.
   The additive 252-byte v11 RX-idle trace retains the complete 196-byte v10
   prefix and appends saturating DPC source, service-turn, owner-turn, and
-  frame-bound counters. `wifi diag` leaves the existing accounting line
-  byte-stable for capture-tool compatibility and immediately defines its
-  historical `captures` key with
+  frame-bound counters. The fixed v3 DPC event-ring ABI adds the durable
+  `OWNER_ACTIVE` state bit. SDIO sets it during the exact `DPC_ACTIVATE` health
+  phase after generation-long physical activation is admitted, clears it on
+  reset or poison, and publishes it with the rest of owner health before
+  signaling CYW43. It records the durable active owner state, not the child
+  terminal by itself. A valid,
+  empty and unmasked ring without `OWNER_ACTIVE` is not reusable activation.
+  `wifi diag` exposes this as `owner_active=yes|no` immediately before
+  `poisoned`; current capture tooling accepts the revised line and fails closed
+  unless accepted hardware evidence reports `owner_active=yes`. The following
+  scope line defines the historical `captures` key with
   `CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events
-  source=card-int physical_card_irq=not-exported`. Thus
+  source=card-int-or-source-probe physical_card_irq=not-exported`. Thus
   `captures` is exactly `ring.producer + ring.overruns`, not the SDIO owner's
   physical CARD_INT counter. Rejected historical images may include authorized
   hintless source probes in that legacy count; current steady state does not.
-  The fixed v2 event-ring ABI has no cumulative
+  The fixed v3 event-ring ABI has no cumulative
   physical-interrupt field. `wifi diag` renders the appended v11 counters after
   the accounting, scope, truth, and rearm lines as
   `CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n>
@@ -2384,8 +2404,9 @@ generation and XID.
   aperture and before the Function 2 TX region, so terminal DPC capture cannot
   overwrite an accepted control or data payload.
   A control exchange carrying `CONTROL_PRE_TX_DRAIN` retains one immutable,
-  generation-bound parent. At `PreTxDpcProbe`, a healthy current-generation
-  empty/unmasked ring reuses the existing activation. A committed front event
+  logical-generation-bound parent. At `PreTxDpcProbe`, a healthy owner-active
+  ring for the current physical bus-link epoch, empty and unmasked, reuses the
+  existing activation. A committed front event
   instead binds one attempt-scoped sequence token—sequence zero is valid—and
   canonical DPC must commit that exact event consumed before the parent
   advances. A later event remains queued and cannot extend the token; a missing
@@ -3200,7 +3221,8 @@ current durable condition rather than snapshot novelty: a newly submitted child
 blocks immediately, equal deterministic private work continues, and
 `RxQueueWait` resumes as soon as committed queue capacity returns. SDIO alone
 takes its required live hardware sample after a changed cursor. A marked
-persistent op11 reuses a healthy current-generation empty/unmasked ring with no
+persistent op11 reuses a healthy current-physical-generation, owner-active,
+empty/unmasked ring with no
 `DPC_ACTIVATE` child. A committed event binds one exact sequence, including
 wrapped sequence zero, and advances after durable consumption even if a later
 event is queued; disappearance or replacement without consumed proof

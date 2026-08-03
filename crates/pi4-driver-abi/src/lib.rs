@@ -3020,7 +3020,7 @@ pub const DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO: u32 = 2;
 /// Magic value for the CYW43/SDIO bounded DPC event ring.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_MAGIC: u32 = 0x4450_4352;
 /// CYW43/SDIO bounded DPC event-ring layout version.
-pub const DRIVER_RUNTIME_DPC_EVENT_RING_VERSION: u16 = 2;
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_VERSION: u16 = 3;
 /// Fixed metadata offset for the DPC event ring in the owner command page.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET: u16 = 160;
 /// Fixed bytes reserved for the DPC event ring before the payload window.
@@ -3065,12 +3065,20 @@ pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING: u32 = 1 << 1;
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED: u32 = 1 << 2;
 /// DPC event-ring flag: SDHCI `CARD_INT` signalling is currently masked.
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED: u32 = 1 << 3;
+/// DPC event-ring flag: the SDIO owner has admitted the current physical epoch.
+///
+/// This is durable owner state, not a consumable scheduling edge. The sole SDIO
+/// owner sets it during exact `DPC_ACTIVATE` after admitting the generation-long
+/// physical service state and clears it whenever that lifetime is poisoned or
+/// reset; the child terminal remains separate completion proof.
+pub const DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE: u32 = 1 << 4;
 /// Complete set of flags admitted by [`DriverRuntimeDpcEventRing::valid`].
 pub const DRIVER_RUNTIME_DPC_EVENT_RING_KNOWN_FLAGS: u32 =
     DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
         | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
         | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED
-        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED;
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED
+        | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE;
 /// DPC event flag: the SDHCI host reported a card interrupt.
 pub const DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT: u16 = 1 << 0;
 /// DPC event flag: the producer retained a level source for another service turn.
@@ -5430,7 +5438,7 @@ mod tests {
     fn dpc_event_ring_is_fixed_bounded_and_sequence_checked() {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
-        assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 2);
+        assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
         assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 6);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
@@ -5617,6 +5625,7 @@ mod tests {
             DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
             DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED,
             DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+            DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
         ] {
             ring.flags = flag;
             assert!(ring.valid(), "known DPC ring flag 0x{flag:08x}");

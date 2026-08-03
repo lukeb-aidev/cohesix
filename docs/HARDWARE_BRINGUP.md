@@ -904,8 +904,9 @@ current-generation host-EAPOL event or queued pre-secure EAPOL RX frame; no
 host-EAPOL prompt, session work, deferred reauthentication, or post-association
 BSSID work; no maintenance, logical-control, prompt-poll, terminal-drain, or
 retained HAL driver-task owner; no recovery or rejoin; and an empty, healthy
-linked SDIO DPC ring. The ring must have producer equal to consumer, zero
-current-pair flags, zero current-pair overruns, and the same nonzero DPC epoch,
+linked SDIO DPC ring. The ring must have producer equal to consumer,
+current-pair flags exactly `OWNER_ACTIVE`, zero current-pair overruns, and the
+same nonzero DPC epoch,
 producer watermark, and per-pair IRQ-ACK-failure count on both observations.
 `ack_failures` is historical attempt telemetry inside that pair, not current
 fault authority: a stable nonzero value after an exact successful retry does
@@ -1266,8 +1267,11 @@ HAL-derived persistent marker: after invisible `Stage`, HAL cleans/barriers the
 full descriptor and payload, commits the command sequence last, records
 `Issued`, and signals exactly once. Its later completion polls publish no grant
 or notification. The marker also binds the exact shared 192-operation,
-64-frame, 65,536-byte budget. Generation zero alone binds to the current
-private physical epoch; a stale nonzero generation fails before child issue.
+64-frame, 65,536-byte budget. The logical connection generation, including
+zero, remains sealed in the parent while CYW43 binds it once to the independent
+current physical bus-link epoch; retained transactions and SDIO children carry
+that physical epoch. A changed logical parent or stale physical epoch fails
+before child issue, and the two domains are never compared directly.
 One non-renewable 30-second root CNTVCT deadline starts immediately before the
 sequence-last commit. It is fault containment only: a double stable terminal
 miss enters coordinated pair recovery without another signal, grant, replay,
@@ -1320,6 +1324,13 @@ rendezvous. No completion is
 exposed until all leased priorities have returned to their manifest values. An
 unresolved lease is cleared only inside fenced pair restart after both runtimes
 are suspended.
+
+The root-owned connection generation and generated SDIO bus-link epoch are
+independent identities. CYW43 seals logical `aux1` in the parent and binds that
+parent once to the current private physical epoch; every retained transaction
+and SDIO child then carries the physical epoch. Logical zero and nonzero parents
+follow the same rule. Never compare the two domains or rewrite either one into
+the other.
 
 HAL creates the reserved-root-badge send cap only for CYW43 and only at the
 final successful runtime-construction boundary. Each retained root cursor
@@ -2332,8 +2343,14 @@ CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events source=card-i
 
 `captures` is `ring.producer + ring.overruns`; it includes both hardware
 CARD_INT events and software-authorized SOURCE_PENDING probes and must not be
-reported as a physical interrupt count. The fixed v2 ring exports no cumulative
-physical CARD_INT counter.
+reported as a physical interrupt count. The fixed v3 ring exports no cumulative
+physical CARD_INT counter. It adds `OWNER_ACTIVE`, set only by the SDIO owner
+during the exact activation health phase after generation-long physical
+activation is admitted and cleared on reset or poison. The bit records durable
+active-owner state; it is not the child terminal by itself.
+The accounting line reports `owner_active=yes|no` immediately before
+`poisoned`, and the truth line repeats it. A valid, empty and unmasked ring is
+not healthy activation unless this durable state is `yes`.
 
 The same lifetime's diagnostic must include:
 

@@ -570,7 +570,8 @@ prove all of the following:
   work, no maintenance or logical control owner, no prompt-poll or
   terminal-drain cursor, no retained HAL driver-task request, and no
   recovery/rejoin. The linked SDIO DPC ring must have producer equal to
-  consumer, zero current-pair flags, zero current-pair overruns, and the same
+  consumer, current-pair flags exactly `OWNER_ACTIVE`, zero current-pair
+  overruns, and the same
   nonzero epoch, producer watermark, and per-pair IRQ-ACK-failure count on both
   observations. `ack_failures` is attempt history, not current fault authority:
   after an exact ACK retry succeeds and pending/fault flags clear, a stable
@@ -1040,9 +1041,13 @@ rejects a caller-supplied marker and derives
 `DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION` only from the fully valid
 staged op11 descriptor, complete payload, full budget, request, and generation.
 The exact shared budget is 192 operations, 64 frames, and 65,536 bytes; mutate
-each field independently and require rejection before child issue. Generation
-zero may bind only once to the current private physical epoch, while a stale
-nonzero generation must reject without publishing a child.
+each field independently and require rejection before child issue. Test the
+logical connection generation and physical bus-link epoch as distinct domains:
+both logical zero and nonzero parents bind once to the current private physical
+epoch, parent `aux1` remains logical, and every retained transaction and SDIO
+child carries the physical epoch. A changed logical parent or stale physical
+epoch must reject without publishing a child; comparing either domain directly
+with the other is a regression.
 The sequence-zero `Stage` remains invisible; the next producer turn writes and
 cleans the full command body/payload, executes the barrier, commits the nonzero
 sequence last, records `Issued`, and emits exactly one reserved-root-badge
@@ -1060,8 +1065,9 @@ request the existing pair recovery with zero added grant, signal, replay, or
 runtime wake.
 
 `PreTxDpcProbe` must classify the durable generation condition without exposing
-housekeeping as a bus transaction. A valid current-generation empty/unmasked
-ring continues locally with no `DPC_ACTIVATE` child. A committed front event
+housekeeping as a bus transaction. A valid current-physical-generation,
+owner-active, empty/unmasked ring continues locally with no `DPC_ACTIVATE`
+child. A committed front event
 binds one attempt-scoped exact sequence token, including sequence zero, widens
 the fairness watermark once, and waits for canonical DPC consumption. Only
 activation-absent or mask-skewed state, plus exact ACK debt bound to an
@@ -2915,7 +2921,8 @@ Strict Pi SDIO command/data calls, fixed-layout SDIO CMD52/CMD53 descriptors, CY
 Current Wi-Fi acceptance also requires one exact
 `CYW43_SDIO_DPC generation=<n> captures=<n> published=<n> consumed=<n>
 rearms=<n> overruns=<n> epoch_errors=<n> sequence_errors=<n>
-ack_failures=<n> poisoned=yes|no masked=yes|no` diagnostic in the current boot
+ack_failures=<n> owner_active=yes|no poisoned=yes|no masked=yes|no` diagnostic
+in the current boot
 slice and `WIFI_DPC_PROOF=yes` from
 `scripts/pi4_trace_normalize.py --gate-summary`. `wifi diag` preserves that
 bounded accounting grammar and immediately follows it with
@@ -2923,18 +2930,22 @@ bounded accounting grammar and immediately follows it with
 source=card-int-or-source-probe physical_card_irq=not-exported`. The scope line
 is mandatory because the compatibility key `captures` means
 `ring.producer + ring.overruns`, includes hardware CARD_INT and authorized
-SOURCE_PENDING attempts, and is not a physical IRQ counter. The fixed v2 ring
+SOURCE_PENDING attempts, and is not a physical IRQ counter. The fixed v3 ring
 exports no cumulative physical CARD_INT count. Its overrun and ACK-failure
 fields are scoped to the current physical pair and reset at replacement;
 cross-pair first-cause history belongs to root recovery diagnostics. Current
 flags/pending state remain authority, but accepted hardware evidence requires
-`overruns=0 ack_failures=0`. The scope line is followed by
-`CYW43_SDIO_DPC_TRUTH generation=<n> ring_poisoned=yes|no
+`overruns=0 ack_failures=0 owner_active=yes`. `owner_active=yes` is the v3
+ring's durable proof that SDIO admitted the generation-long physical activation
+state; the exact child terminal separately proves transaction completion.
+Valid/empty/unmasked without owner-active state must fail closed. The scope line is followed by
+`CYW43_SDIO_DPC_TRUTH generation=<n> owner_active=yes|no ring_poisoned=yes|no
 client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>
 sample_reason=<reason> authority=live-ring action=<action>` plus
 `CYW43_SDIO_DPC_REARM generation=<n> counter=client-signal-attempts count=<n>
 owner_irq=masked|unmasked action=<action>`. The additive v11 client trace keeps
-those three lines byte-stable and appends
+the scope and rearm lines byte-stable, revises the accounting/truth lines with
+the explicit activation state, and appends
 `CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n>
 other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n>
 fown=<n>`. All five lines must remain complete at maximum counter widths. The
@@ -2966,8 +2977,9 @@ the next actual op7 issue, not TxToken admission, an earlier local promotion,
 or general smoltcp delay.
 
 `wifi diag` emits the proof only after a stable valid read of the admitted SDIO
-owner ring and a same-generation current v11 CYW43 client-counter sample. The
-v11 layout preserves the complete v10 prefix for old-capture parsing.
+owner ring and a current v11 CYW43 client-counter sample for that same physical
+bus-link epoch. The v11 layout preserves the complete v10 prefix for
+old-capture parsing.
 `rearms` counts generation-scoped owner-rearm signal attempts, not separately
 delivered wakes or hardware re-enables; the older
 source-asserted-empty episode counter cannot satisfy Gate 10. Acceptance also

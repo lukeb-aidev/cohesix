@@ -318,7 +318,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no masked=no",
+        "ack_failures=0 owner_active=yes poisoned=no masked=no",
     ])
 
 
@@ -480,7 +480,7 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no masked=no",
+        "ack_failures=0 owner_active=yes poisoned=no masked=no",
     ])
 
 
@@ -607,7 +607,7 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
         "CYW43_SDIO_DPC generation=9 captures=16 published=16 consumed=16 "
         "rearms=16 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 poisoned=no masked=no",
+        "ack_failures=0 owner_active=yes poisoned=no masked=no",
     ]
 
 
@@ -1332,6 +1332,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DPC_EPOCH_ERRORS": 0,
         "WIFI_DPC_SEQUENCE_ERRORS": 0,
         "WIFI_DPC_ACK_FAILURES": 0,
+        "WIFI_DPC_OWNER_ACTIVE": "unknown",
         "WIFI_DPC_POISONED": "unknown",
         "WIFI_DPC_MASKED": "unknown",
         "WIFI_DPC_LINE": 0,
@@ -8356,7 +8357,7 @@ def test_gate_summary_accepts_exact_healthy_wifi_dpc_proof() -> None:
         [
             "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
             "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no",
+            "ack_failures=0 owner_active=yes poisoned=no",
         ]
     )
 
@@ -8369,8 +8370,27 @@ def test_gate_summary_accepts_exact_healthy_wifi_dpc_proof() -> None:
     assert record["WIFI_DPC_PUBLISHED"] == 6
     assert record["WIFI_DPC_CONSUMED"] == 6
     assert record["WIFI_DPC_REARMS"] == 6
+    assert record["WIFI_DPC_OWNER_ACTIVE"] == "yes"
     assert record["WIFI_DPC_POISONED"] == "no"
     assert record["WIFI_DPC_MASKED"] == "unknown"
+
+
+def test_gate_summary_rejects_legacy_dpc_line_without_owner_active_proof() -> None:
+    """Historical grammar remains readable but cannot prove live activation."""
+
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 poisoned=no masked=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "owner-active-unproven"
+    assert record["WIFI_DPC_OWNER_ACTIVE"] == "unknown"
 
 
 def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
@@ -8378,7 +8398,7 @@ def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
         [
             "CYW43_SDIO_DPC generation=10 captures=0 published=0 consumed=0 "
             "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no masked=no",
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
         ]
     )
 
@@ -8400,6 +8420,7 @@ def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
         ({"epoch_errors": 1}, "epoch-error"),
         ({"sequence_errors": 1}, "sequence-error"),
         ({"ack_failures": 1}, "ack-failure"),
+        ({"owner_active": "no"}, "owner-inactive"),
         (
             {
                 "captures": 0,
@@ -8429,6 +8450,7 @@ def test_gate_summary_rejects_invalid_wifi_dpc_proof(
         "epoch_errors": 0,
         "sequence_errors": 0,
         "ack_failures": 0,
+        "owner_active": "yes",
         "poisoned": "no",
     }
     values.update(fields)
@@ -8442,6 +8464,7 @@ def test_gate_summary_rejects_invalid_wifi_dpc_proof(
             f"epoch_errors={values['epoch_errors']} "
             f"sequence_errors={values['sequence_errors']} "
             f"ack_failures={values['ack_failures']} "
+            f"owner_active={values['owner_active']} "
             f"poisoned={values['poisoned']}{masked}",
         ]
     )
@@ -8477,7 +8500,7 @@ def test_wifi_dpc_proof_does_not_promote_rejected_supervisor_retry() -> None:
             bootstrap_supervisor_line(1, "begin", 0, 100, 1),
             "CYW43_SDIO_DPC generation=1 captures=6 published=5 consumed=5 "
             "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no masked=no",
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
             bootstrap_supervisor_line(1, "backoff", 1_000, 1_150, 2),
             bootstrap_supervisor_line(2, "begin", 0, 1_150, 3),
             *bootstrap_gate8_ready_tail(
@@ -8490,7 +8513,7 @@ def test_wifi_dpc_proof_does_not_promote_rejected_supervisor_retry() -> None:
             ),
             "CYW43_SDIO_DPC generation=2 captures=8 published=8 consumed=8 "
             "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no masked=no",
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
         ]
     )
 
@@ -8514,10 +8537,10 @@ def test_wifi_dpc_proof_retains_failure_within_latest_generation() -> None:
         [
             "CYW43_SDIO_DPC generation=9 captures=6 published=5 consumed=5 "
             "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no masked=no",
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
             "CYW43_SDIO_DPC generation=9 captures=8 published=8 consumed=8 "
             "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 poisoned=no masked=no",
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
         ]
     )
 
@@ -14041,7 +14064,7 @@ def wifi_generation_gate10_lines(
             f"generation={resolved_dpc_generation} "
             "captures=6 published=6 consumed=6 rearms=6 overruns=0 "
             "epoch_errors=0 sequence_errors=0 ack_failures=0 "
-            "poisoned=no masked=no",
+            "owner_active=yes poisoned=no masked=no",
         ]
     )
     return lines

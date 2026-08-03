@@ -577,6 +577,7 @@ run_normalizer() {
         args+=("--expect-min" "TCP_RX_BYTES=1")
         args+=("--expect" "WIFI_DPC_PROOF=yes")
         args+=("--expect" "WIFI_DPC_REASON=none")
+        args+=("--expect" "WIFI_DPC_OWNER_ACTIVE=yes")
         args+=("--expect" "WIFI_GATE7_COMPLETE=yes")
         args+=("--expect" "WIFI_GATE7_SEEN=7a>7b>7c>7d>7e")
         args+=("--expect" "WIFI_GATE7_LAST=7e")
