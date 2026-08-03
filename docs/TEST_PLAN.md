@@ -1839,8 +1839,9 @@ payload, digest, ticket, and generation must remain immutable, and acceptance
 must not promote it outside the EventPump coordinator. A real retained NetData
 op8 plus a queued DHCP-sized op7 must preserve the op8 request and identity,
 spend no TX budget, create no op7 request or recovery, complete op8 first, and
-only then admit op7. A sustained copied-RX queue must not starve a credit-ready
-FIFO head from promotion or an active op7 past its retained deadline. An unproved
+only then admit op7. A committed copied/DPC/runtime RX level must run before a
+fresh or requestless op7, while an already-started op7 remains exact through
+its terminal and cannot be displaced by later RX. An unproved
 predecessor credit window must leave it queued with no active op7, HAL request,
 child deadline, or TX budget charge. Focused coverage must advance virtual time
 beyond the complete child lease with zero drop or recovery and unchanged TX
@@ -1957,6 +1958,14 @@ The focused acceptance tests
 `cyw43_persistent_transaction_is_derived_only_from_exact_staged_op11`,
 `persistent_op11_commits_then_signals_once_and_poll_miss_creates_no_edge`,
 `sdio_persistent_transaction_marker_is_scoped_to_one_linked_primitive`,
+`cyw43_parent_admission_requires_exact_source_for_steady_ack_pending`,
+`critical_eapol_f2_terminal_survives_concurrent_dpc_ack_pending`,
+`steady_parent_ack_before_event_retains_op7_to_terminal_without_root_grant`,
+`malformed_tagged_steady_parent_and_child_never_enter_root_grant_lane`,
+`dpc_routes_durable_work_without_starving_commands`,
+`dpc_durable_event_and_cursor_ignore_deferred_hint_history`,
+`dpc_idle_prewait_reenters_for_source_committed_before_cursor_creation`,
+`dpc_exact_child_waits_for_terminal_without_poll_or_grant_hint`,
 `control_pre_tx_reuses_only_a_quiescent_generation_long_dpc_lifetime`,
 `control_pre_tx_binds_one_event_then_advances_past_reassertion`,
 `control_pre_tx_missing_bound_event_faults_without_reactivation`,
@@ -1979,10 +1988,16 @@ The focused acceptance tests
 `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
 `cyw43_receive_delivers_copied_rx_without_advancing_queued_paired_tx`,
 `cyw43_copied_rx_is_delivered_before_pending_data_tx_progress`,
-`cyw43_event_tx_hook_prevents_copied_rx_from_starving_active_tx`,
+`cyw43_event_tx_hook_drains_copied_rx_before_fresh_tx`,
+`cyw43_event_tx_hook_drains_durable_runtime_rx_before_fresh_tx`,
+`cyw43_event_tx_hook_finishes_exact_tx_before_later_runtime_rx`,
 `cyw43_event_tx_hook_defers_queued_tx_behind_exact_netdata_owner`,
 `cyw43_event_tx_hook_does_not_stage_arp_into_the_paired_rx_slot`,
+`cyw43_event_tx_hook_preserves_paired_rx_slot_ahead_of_arp`,
 `cyw43_event_tx_hook_frees_full_fifo_for_pending_rx`,
+`cyw43_full_fifo_credit_wait_uses_queued_credit_to_release_paired_rx`,
+`steady_network_dpc_condition_preserves_ack_before_sequence_publication_order`,
+`sdio_dpc_snapshot_exposes_front_only_after_sequence_last_producer_commit`,
 `cyw43_rx_queue_signal_is_only_a_non_authoritative_hint`,
 `cyw43_open_network_parent_requires_complete_current_identity`,
 `linked_cyw43_operator_checkpoint_preserves_quantum_composition_state`,
@@ -2085,8 +2100,8 @@ parent identity. The historical phase count is non-authoritative; current tests
 target the persistent durable-condition transaction. TX coverage must prove
 the aggregate-capacity-16 urgent/bulk priority classes, EventPump-only
 coordination, queue-only TxToken consumption, exact foreign-owner preservation,
-active-op7 or credit-ready-head priority over sustained copied RX, copied RX
-before ARP only when no op7 is legally runnable, no same-turn successor
+active-op7 terminal priority, committed RX before fresh/requestless TX, copied
+RX before ARP when paired-response capacity exists, no same-turn successor
 promotion, and credit-timeout exact-pair recovery.
 
 The exact `25f406d9cc26` image (image id
@@ -2233,9 +2248,10 @@ urgent-before-bulk selection and FIFO-within-class order, reserve paired
 response capacity before dequeueing RX, and produce zero fabricated TX drops.
 TxToken consumption must remain queue-only. An exact retained op8 must defer
 op7 promotion without losing either identity or charging TX budget; once the
-lane is free, the coordinator must advance an active op7 or promote and advance
-a credit-ready FIFO head before copied RX, while copied RX
-must return before pending ARP only when no op7 is legally runnable.
+lane is free, the coordinator must advance an active op7 to terminal, then
+drain one committed copied/DPC/runtime RX level before promoting a fresh or
+requestless op7. Copied RX must return before pending ARP while paired-response
+capacity remains available.
 Full-capacity backpressure may promote and advance only the credit-ready head
 and must never issue a second operation or promote a successor in the same outer
 turn. An unproved predecessor credit window
@@ -2439,6 +2455,13 @@ The focused adversarial cases include
 `control_pre_tx_missing_bound_event_faults_without_reactivation`,
 `persistent_control_reuses_healthy_dpc_lifetime_without_a_child`,
 `persistent_control_marked_lifecycle_reaches_reply_without_grant_or_hint_history`,
+`cyw43_parent_admission_requires_exact_source_for_steady_ack_pending`,
+`critical_eapol_f2_terminal_survives_concurrent_dpc_ack_pending`,
+`steady_parent_ack_before_event_retains_op7_to_terminal_without_root_grant`,
+`malformed_tagged_steady_parent_and_child_never_enter_root_grant_lane`,
+`dpc_durable_event_and_cursor_ignore_deferred_hint_history`,
+`dpc_idle_prewait_reenters_for_source_committed_before_cursor_creation`,
+`dpc_exact_child_waits_for_terminal_without_poll_or_grant_hint`,
 `idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child`,
 `production_masked_control_uses_exact_owner_activation_before_tx`,
 `production_join_final_fence_runs_canonical_dpc_then_issues_exactly_once`,
@@ -2746,10 +2769,16 @@ contract; malformed, truncated, ordinary Ethernet, EAPOL-Start, wrong-message,
 untagged, stale-generation, and mismatched descriptor/payload cases must fail
 before issue. Each accepted parent must bind both CYW43 and SDIO request
 priority, enforce exactly one frame and the four-operation/1,536-byte budget,
-cross the Function-2 pre-TX DPC fence, commit and notify once, publish no grant
-or later notification after issue, and keep root blocked until the durable
-matching terminal is visible. Expiry may select exact recovery only and must
-not create a source probe, poll, replay, or fallback. Ordinary post-Gate-8 TCP
+commit and notify once, publish no grant or later notification after issue, and
+keep root blocked until the durable matching Function-2 terminal is visible.
+The data/EAPOL child must not inherit persistent control's pre-TX fence. A
+concurrent source-bearing event remains independently durable; an
+`ACK_PENDING`-before-front publication window must retain the same parent
+without admitting DPC issue or any ordinary root grant, and the later
+sequence-last front event must become serviceable without another authority
+edge.
+Expiry may select exact recovery only and must not create a source probe, poll,
+replay, or fallback. Ordinary post-Gate-8 TCP
 must retain its O(1) finite-op7 classification and service path without running
 the EAPOL-Key parser.
 Every exact op11 instead uses one HAL-derived persistent marker regardless of

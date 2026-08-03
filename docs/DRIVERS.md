@@ -455,15 +455,23 @@ ordinary control remain on that ordinary retained cadence. Only an
 intake-sealed EAPOL-Key M2, M4, or group-key response may reuse the existing
 paired finite-op7 marker: one current-generation frame, four owner operations,
 and 1,536 bytes under request-bound CYW43-plus-SDIO priority. That exact parent
-commits and sends one notification, publishes no grant after issue, crosses the
-Function-2 pre-TX DPC fence, and remains authoritative until its durable
-terminal is visible to root. Its deadline can enter recovery only; it never
-creates progress, a poller, or a fallback lane. Ordinary post-Gate-8 TCP retains
-the O(1) finite op7 admission path and is not parsed or scheduled as EAPOL. The
-finite parent's current durable
+commits and sends one notification, publishes no grant after issue, and remains
+authoritative until its durable Function-2 terminal is visible to root. Unlike
+persistent control/Join, that data/EAPOL child does not infer a pre-TX DPC
+fence: a concurrent source-bearing CARD_INT remains independent durable DPC
+work and cannot reject the already-sealed write before issue. Its deadline can
+enter recovery only; it never creates progress, a poller, or a fallback lane.
+Ordinary post-Gate-8 TCP retains the O(1) finite op7 admission path and is not
+parsed or scheduled as EAPOL. The finite parent's current durable
 condition decides each handoff: deterministic private work continues even when
 the diagnostic snapshot is unchanged, while a committed child, unavailable
-credit, or other external wait blocks on its first observation. For every
+credit, or other external wait blocks on its first observation. Parent identity
+depends on its immutable seal, generations, and healthy owner state, not on the
+instantaneous DPC publication phase. `ACK_PENDING` before the sequence-last
+front event is a bounded producer window: it retains the exact parent but is
+not yet DPC service authority. Once the source-bearing event commits, canonical
+DPC owns the next bounded quantum. Neither state may downgrade the parent to an
+ordinary root grant. For every
 exact op11, HAL derives
 a persistent-transaction marker only from the fully validated immutable
 descriptor and payload, performs ABI-invisible `Stage`, cleans/barriers the
@@ -515,6 +523,19 @@ instead exposes it as sideband and waits for root's disjoint commit-last ACK.
 These authorities never substitute for one another.
 Notifications are optional coalescing prompts; they carry neither authority nor
 history.
+
+Exact `5fa7c3871d96` hardware separated the two consequences of violating this
+contract. Cold, R02, and R03 stranded the sealed host M4 parent before its exact
+terminal. R01 reached Gate 8, transmitted 14 DHCP requests, and received valid
+broadcast replies from the AP within about 1-2 ms in the paired capture, yet
+delivered no root RX terminal. Its DPC ring remained balanced and unpoisoned;
+the first missing progress was the durable CARD_INT/DPC/runtime-RX-to-op8
+handoff. This excludes radio TX, DHCP parsing, smoltcp, and GENET as the common
+cause. The historical 5/5 oracle revisited both unfinished levels through
+recurrent grants, which explains its boot success and second-scale TCP latency.
+The repaired path instead derives DPC work from the committed front event or
+the exact active cursor and orders a committed RX batch ahead of any fresh or
+requestless TX after an already-active op7 reaches terminal.
 
 The as-built lane has no post-TX receive watch, periodic source probe, or
 alternate receive path. A physical interrupt drives the event-bound DPC
@@ -1172,15 +1193,13 @@ op8 remains non-revocable: the op7 head stays queued and requestless, and the TX
 hook spends no budget, starts no deadline, and requests no recovery until that
 op8 reaches its typed terminal.
 
-With the lane free, the hook either advances one active op7 or promotes and
-advances one credit-ready FIFO head for at most one physical turn before
-copied-RX service. This bounded
-priority prevents a continually replenished root RX queue from starving the
-first DHCP or later control TX. Copied RX precedes the coordinator's physical
-op only while no op7 is legally runnable, including predecessor-credit
-discovery or a retained foreign owner. Otherwise it remains preserved and may
-drain memory-only in the following smoltcp poll. `Device::receive` and a failed
-reservation never service TX. The hook may
+With the lane free, the hook first distinguishes immutable continuation from
+fresh admission. An already-started op7 advances to its exact terminal and
+cannot be preempted by a later RX level. Before promoting a fresh or requestless
+op7, however, one committed copied/DPC/runtime RX level receives the next
+bounded memory drain or queue-only op8 turn. This prevents the AP reply or TCP
+request that arrived during the preceding TX from sitting behind a later retry.
+`Device::receive` and a failed reservation never service TX. The hook may
 move one eligible ARP/GARP record into the same urgent aggregate before that
 single op7 advance. If all 16 aggregate slots are occupied, promotion removes
 one credit-ready head and restores a paired slot before its one advance. A
@@ -3130,13 +3149,10 @@ generation and XID.
   EventPump is the sole production TX coordinator. An exact foreign HAL owner,
   including a retained NetData op8, remains non-revocable and leaves the op7
   head queued without spending TX budget or deadline. Once the lane is free,
-  the coordinator either advances one active op7 or promotes and advances one
-  credit-ready FIFO head before copied RX, so a replenished memory-only queue
-  cannot starve TX. Copied RX precedes that physical quantum only when no op7 is legally
-  runnable, including while RX/op8 must establish predecessor credit; otherwise
-  it remains preserved and may drain memory-only in the following smoltcp poll.
-  At full capacity, promotion
-  removes one credit-ready head and restores a paired slot before its one
+  the coordinator advances an already-active op7 to its exact terminal. Before
+  promoting a fresh or requestless op7, one committed copied/DPC/runtime RX
+  level receives the next bounded drain or op8 turn. At full capacity,
+  promotion removes one credit-ready head and restores a paired slot before its one
   physical advance. A terminal does not promote a successor in the same turn.
   A queued,
   unissued frame has no child deadline and cannot poison the pair;

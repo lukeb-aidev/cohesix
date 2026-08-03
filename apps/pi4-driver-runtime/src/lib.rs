@@ -7689,14 +7689,16 @@ fn retain_runtime_command_after_arbitration_turn(
     if route == RuntimeNotificationRoute::Cyw43Client
         && matches!(
             runtime_root_generation_admission(intake.command, route),
-            RuntimeDelegatedGenerationAdmission::Admitted(generation)
-                if cyw43_steady_parent_service_lease_admitted(intake.command, generation)
-                    || cyw43_persistent_parent_transaction_admitted(intake.command, generation)
+            RuntimeDelegatedGenerationAdmission::Admitted(_)
         )
+        && (cyw43_steady_parent_marker_present(intake.command)
+            || cyw43_persistent_parent_marker_present(intake.command))
     {
         // The specialized sequence-last command already carries complete
-        // parent authority. A DPC arbitration slice may delay it, but cannot
-        // force root to publish a grant or renew immutable identity.
+        // parent syntax. A DPC arbitration slice may delay it, but cannot
+        // force root to publish a grant or renew immutable identity. The main
+        // classifier either resumes the same valid parent or publishes its
+        // typed autonomous-lane rejection.
         gate.complete();
         return;
     }
@@ -8896,12 +8898,112 @@ const fn cyw43_dpc_rx_queue_backpressured(state: &Cyw43RuntimeState) -> bool {
     state.rx_queue_count as usize + cyw43_dpc_rx_queue_reserve(state) > CYW43_RX_QUEUE_CAP
 }
 
-const fn cyw43_should_run_deferred_dpc(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcDurableWorkRoute {
+    None,
+    ExternalWait,
+    Service,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43DpcIdlePrewaitRoute {
+    Block,
+    ExternalWait,
+    ReenterService,
+}
+
+const fn cyw43_dpc_idle_prewait_route(
+    durable_work: Cyw43DpcDurableWorkRoute,
+) -> Cyw43DpcIdlePrewaitRoute {
+    match durable_work {
+        Cyw43DpcDurableWorkRoute::None => Cyw43DpcIdlePrewaitRoute::Block,
+        Cyw43DpcDurableWorkRoute::ExternalWait => Cyw43DpcIdlePrewaitRoute::ExternalWait,
+        Cyw43DpcDurableWorkRoute::Service => Cyw43DpcIdlePrewaitRoute::ReenterService,
+    }
+}
+
+const fn cyw43_should_run_durable_dpc(
     command_ready: bool,
-    deferred: bool,
+    durable_work: Cyw43DpcDurableWorkRoute,
     child_active: bool,
 ) -> bool {
-    deferred && !command_ready && !child_active
+    matches!(durable_work, Cyw43DpcDurableWorkRoute::Service) && !command_ready && !child_active
+}
+
+/// Classify the current DPC lifetime from durable state only.
+///
+/// A current-generation source-bearing front event admits the lifetime. Once
+/// admitted, the exact active cursor retains that authority through every
+/// private phase. The deferred atomic and notification history are deliberately
+/// absent: they can prompt this recheck, but cannot create or renew work.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_durable_work_route() -> Cyw43DpcDurableWorkRoute {
+    CYW43_RUNTIME_STATE.with_ref(|state| {
+        if !state.dpc_link_ready
+            || state.dpc_shared_epoch == 0
+            || state.recovery_required
+            || state.dpc_terminal_cause.active()
+            || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
+        {
+            return Cyw43DpcDurableWorkRoute::None;
+        }
+
+        let base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        let front_event = match dpc_event_ring_peek_at(base, state.dpc_shared_epoch) {
+            DpcRingConsumeResult::Event(event) if cyw43_dpc_event_has_source(event.flags) => {
+                Some(event)
+            }
+            DpcRingConsumeResult::Event(_)
+            | DpcRingConsumeResult::Empty
+            | DpcRingConsumeResult::BadEpoch
+            | DpcRingConsumeResult::BadSequence => None,
+        };
+        let cursor = state.dpc_cursor;
+        if cursor.event_sequence == 0 {
+            return if front_event.is_some() {
+                Cyw43DpcDurableWorkRoute::Service
+            } else {
+                Cyw43DpcDurableWorkRoute::None
+            };
+        }
+
+        let cursor_exact = state.dpc_active_sequence == cursor.event_sequence
+            && front_event.is_some_and(|event| event.sequence == cursor.event_sequence);
+        if !cursor_exact {
+            // A cursor without its immutable source event cannot authorize bus
+            // access. The normal generation fault path remains responsible for
+            // containment; never turn a stale scheduling hint into work.
+            return Cyw43DpcDurableWorkRoute::ExternalWait;
+        }
+        if cursor.child.issued_unknown || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire) {
+            return Cyw43DpcDurableWorkRoute::None;
+        }
+        if cursor.child.active {
+            if !cyw43_dpc_child_steady_service_lease_exact(&cursor)
+                || !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+                || CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire)
+                    != cursor.child.expected_sequence
+            {
+                // Re-enter once so the exact DPC child poll records the typed
+                // identity failure and quarantines this generation.
+                return Cyw43DpcDurableWorkRoute::Service;
+            }
+            return match cyw43_sdio_child_poll_exact(Cyw43SdioChildState::new(
+                cursor.child.expected_sequence,
+            )) {
+                Cyw43SdioChildCompletion::Exact(_) => Cyw43DpcDurableWorkRoute::Service,
+                Cyw43SdioChildCompletion::Waiting => Cyw43DpcDurableWorkRoute::ExternalWait,
+            };
+        }
+        if CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) {
+            return Cyw43DpcDurableWorkRoute::ExternalWait;
+        }
+        if cursor.action == Cyw43DpcAction::RxQueueWait && cyw43_dpc_rx_queue_backpressured(state) {
+            return Cyw43DpcDurableWorkRoute::ExternalWait;
+        }
+        Cyw43DpcDurableWorkRoute::Service
+    })
 }
 
 const fn cyw43_dpc_child_blocks_cursor(global_child_active: bool, dpc_child_active: bool) -> bool {
@@ -8982,7 +9084,9 @@ fn cyw43_dpc_tx_interleave_permit(
             parent_sequence: command.sequence,
         })
     })?;
-    if !cyw43_steady_parent_service_lease_admitted(command, permit.owner_generation) {
+    if cyw43_steady_parent_service_lease_admission(command, permit.owner_generation)
+        != Cyw43SteadyParentAdmission::Admitted
+    {
         return None;
     }
     let ring = dpc_event_ring_read_at(
@@ -10065,7 +10169,7 @@ fn dpc_event_ring_advance_at(base: usize, epoch: u32, sequence: u32) -> bool {
     true
 }
 
-#[cfg(any(target_os = "none", test))]
+#[cfg(test)]
 fn dpc_event_ring_set_owner_health_at(
     base: usize,
     card_irq_masked: bool,
@@ -13508,7 +13612,7 @@ const fn runtime_steady_cyw43_prewait_route(
 fn runtime_autonomous_cyw43_foreground_wait_child(
     parent: DriverTaskCommandRecord,
 ) -> Option<Cyw43SdioChildState> {
-    if !cyw43_steady_parent_service_lease_admitted(parent, parent.aux1)
+    if !cyw43_steady_parent_service_lease_admission(parent, parent.aux1).retains_parent()
         && !cyw43_persistent_parent_transaction_admitted(parent, parent.aux1)
     {
         return None;
@@ -14804,18 +14908,88 @@ const fn cyw43_steady_parent_command_shape(command: DriverTaskCommandRecord) -> 
         && cyw43_command_uses_foreground_transaction(command)
 }
 
+/// Admission of one immutable op7 steady parent at the CYW43 owner boundary.
+///
+/// Parent identity and generation health are authority. The DPC ACK/event
+/// frontier is only a durable runnable condition: the SDIO producer may set
+/// ACK_PENDING before publishing the source event sequence-last, and that
+/// transient must retain the exact parent without either executing it or
+/// downgrading it into the ordinary root-grant lane.
 #[cfg(any(target_os = "none", test))]
-fn cyw43_steady_parent_service_lease_admitted(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SteadyParentAdmission {
+    Invalid,
+    BlockedByDurableDpc,
+    Admitted,
+}
+
+#[cfg(any(target_os = "none", test))]
+impl Cyw43SteadyParentAdmission {
+    const fn retains_parent(self) -> bool {
+        !matches!(self, Self::Invalid)
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_steady_parent_pending_disposition(
+    admitted_before_snapshot: Cyw43SteadyParentAdmission,
+    admitted_after_snapshot: Cyw43SteadyParentAdmission,
+    semantic_disposition: RuntimeSteadyPendingDisposition,
+) -> Option<RuntimeSteadyPendingDisposition> {
+    match admitted_after_snapshot {
+        Cyw43SteadyParentAdmission::Invalid => None,
+        Cyw43SteadyParentAdmission::BlockedByDurableDpc => {
+            Some(RuntimeSteadyPendingDisposition::WaitForWake)
+        }
+        Cyw43SteadyParentAdmission::Admitted
+            if admitted_before_snapshot == Cyw43SteadyParentAdmission::BlockedByDurableDpc =>
+        {
+            // The source event committed before or during expected-snapshot
+            // capture. Re-enter arbitration immediately: sleeping on that
+            // already-observed condition would require a second notification.
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress)
+        }
+        Cyw43SteadyParentAdmission::Admitted => Some(semantic_disposition),
+    }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_steady_parent_marker_present(command: DriverTaskCommandRecord) -> bool {
+    command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+        || CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.parent_input_sealed
+                && transaction.parent.sequence == command.sequence
+                && (transaction.parent.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE
+                    != 0
+                    || transaction.parent_descriptor.flags
+                        & DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE
+                        != 0)
+        })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_persistent_parent_marker_present(command: DriverTaskCommandRecord) -> bool {
+    command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+        || CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            transaction.parent_input_sealed
+                && transaction.parent.sequence == command.sequence
+                && transaction.parent.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+                    != 0
+        })
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_steady_parent_service_lease_admission(
     command: DriverTaskCommandRecord,
     logical_generation: u32,
-) -> bool {
+) -> Cyw43SteadyParentAdmission {
     if logical_generation == 0
         || command.aux1 != logical_generation
         || !cyw43_steady_parent_command_shape(command)
         || CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire)
         || CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire)
     {
-        return false;
+        return Cyw43SteadyParentAdmission::Invalid;
     }
     let (transaction_admitted, retained_generation) =
         CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
@@ -14834,7 +15008,7 @@ fn cyw43_steady_parent_service_lease_admitted(
             )
         });
     if !transaction_admitted {
-        return false;
+        return Cyw43SteadyParentAdmission::Invalid;
     }
     let (state_admitted, physical_generation) = CYW43_RUNTIME_STATE.with_ref(|state| {
         let physical_generation = if retained_generation == 0 {
@@ -14856,20 +15030,46 @@ fn cyw43_steady_parent_service_lease_admitted(
         )
     });
     if !state_admitted {
-        return false;
+        return Cyw43SteadyParentAdmission::Invalid;
     }
     let ring = dpc_event_ring_read_at(
         DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
     );
-    ring.valid()
-        && ring.epoch == physical_generation
-        && ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE != 0
-        && ring.overruns == 0
-        && ring.flags
-            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
-                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+    if !ring.valid()
+        || ring.epoch != physical_generation
+        || ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE == 0
+        || ring.overruns != 0
+        || ring.flags
+            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
-            == 0
+            != 0
+    {
+        return Cyw43SteadyParentAdmission::Invalid;
+    }
+    if ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING == 0 {
+        return Cyw43SteadyParentAdmission::Admitted;
+    }
+    // ACK_PENDING means the owner has masked CARD_INT while publishing or
+    // retaining source work. A sequence-committed current-generation event is
+    // runnable DPC authority. ACK without that front event is only the bounded
+    // producer window: it retains this exact sealed parent but cannot run it.
+    if matches!(
+        dpc_event_ring_peek(&ring, physical_generation),
+        DpcRingConsumeResult::Event(event) if cyw43_dpc_event_has_source(event.flags)
+    ) {
+        Cyw43SteadyParentAdmission::Admitted
+    } else {
+        Cyw43SteadyParentAdmission::BlockedByDurableDpc
+    }
+}
+
+#[cfg(test)]
+fn cyw43_steady_parent_service_lease_admitted(
+    command: DriverTaskCommandRecord,
+    logical_generation: u32,
+) -> bool {
+    cyw43_steady_parent_service_lease_admission(command, logical_generation)
+        == Cyw43SteadyParentAdmission::Admitted
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -15012,6 +15212,28 @@ fn steady_service_lease_exhaustion_completion(
         command.sequence,
         FAULT_SDIO_DESCRIPTOR_TRANSFER_FAILED,
         DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_EXHAUSTED,
+    )
+}
+
+#[cfg(any(target_os = "none", test))]
+fn steady_service_lease_identity_completion(
+    command: DriverTaskCommandRecord,
+) -> DriverTaskCompletionRecord {
+    if command.arg0 == HOT_PATH_CYW43_WIFI && command.arg1 == ROLE_NET {
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.poisoned = true;
+            transaction.turn.pending = false;
+        });
+        CYW43_RUNTIME_STATE.with_mut(cyw43_poison_retained_generation);
+        CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    } else {
+        sdio_poison_owner_path();
+    }
+    DriverTaskCompletionRecord::fault_with_result(
+        command.sequence,
+        FAULT_REJECTED_COMMAND,
+        DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_INVALID,
     )
 }
 
@@ -24791,13 +25013,11 @@ fn cyw43_foreground_scope_prepared_descriptor(
     {
         desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE
             | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE;
-        if transaction.critical_eapol_response_parent_authorized() {
-            // Host EAPOL replies are pre-secure progress, so their one exact
-            // Function-2 issue also owns the standard pre-TX CARD_INT fence.
-            // SDIO remains the sole physical owner of both the fence and the
-            // write terminal; this marker cannot be inherited by Function 1.
-            desc.flags |= DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE;
-        }
+        // A sealed M2/M4/group response is one finite Function-2 write, just
+        // like other exact steady TX. A concurrent committed CARD_INT remains
+        // DPC work beside that immutable child; it cannot retroactively turn
+        // the already-published write into a pre-issue fence failure. Persistent
+        // control/Join transactions retain their explicit fence above.
     }
     desc.valid().then_some(desc)
 }
@@ -26281,6 +26501,17 @@ const fn cyw43_foreground_steady_service_lease_child(entry: Cyw43ForegroundTrace
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn cyw43_foreground_steady_service_lease_marker_present(
+    entry: Cyw43ForegroundTraceEntry,
+) -> bool {
+    entry.command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+        || entry.descriptor.flags
+            & (DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_SERVICE_LEASE
+                | DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE)
+            != 0
+}
+
+#[cfg(any(target_os = "none", test))]
 const fn cyw43_foreground_persistent_transaction_child(entry: Cyw43ForegroundTraceEntry) -> bool {
     entry.ticket.parent_sequence != 0
         && entry.ticket.generation != 0
@@ -26422,8 +26653,10 @@ fn cyw43_foreground_submit_frontier(transaction: &mut Cyw43ForegroundTransaction
 #[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_grant_frontier(transaction: &mut Cyw43ForegroundTransaction) -> bool {
     let entry = transaction.frontier;
-    if cyw43_foreground_persistent_transaction_marker_present(entry) {
-        // A persistent child has no grant phase. Reaching this function means
+    if cyw43_foreground_steady_service_lease_marker_present(entry)
+        || cyw43_foreground_persistent_transaction_marker_present(entry)
+    {
+        // An autonomous child has no grant phase. Reaching this function means
         // its immutable marker or retained route was mutated; never downgrade
         // it into the ordinary Poll -> Grant lane.
         cyw43_foreground_poison_active_frontier(transaction);
@@ -26564,13 +26797,18 @@ where
     if let Cyw43SdioChildCompletion::Exact(completion) = cyw43_sdio_child_poll_exact(child) {
         return cyw43_foreground_accept_exact_completion(transaction, entry, completion);
     }
+    let steady_marker_present = cyw43_foreground_steady_service_lease_marker_present(entry);
+    let steady_service_lease = cyw43_foreground_steady_service_lease_child(entry);
+    if steady_marker_present && !steady_service_lease {
+        cyw43_foreground_poison_active_frontier(transaction);
+        return None;
+    }
     let persistent_marker_present = cyw43_foreground_persistent_transaction_marker_present(entry);
     let persistent_transaction = cyw43_foreground_persistent_transaction_child(entry);
     if persistent_marker_present && !persistent_transaction {
         cyw43_foreground_poison_active_frontier(transaction);
         return None;
     }
-    let steady_service_lease = cyw43_foreground_steady_service_lease_child(entry);
     let autonomous_transaction = steady_service_lease || persistent_transaction;
     let plan = if autonomous_transaction {
         None
@@ -53403,7 +53641,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             }
             continue;
         }
-        let deferred_dpc = if pending_intake.is_none()
+        let deferred_dpc_hint = if pending_intake.is_none()
             && notification_route == RuntimeNotificationRoute::Cyw43Client
         {
             CYW43_DPC_DEFERRED.swap(false, Ordering::AcqRel)
@@ -53608,20 +53846,27 @@ pub fn runtime_main(task_key: usize) -> ! {
                 continue;
             }
         }
-        if deferred_dpc && blocking_child_active {
+        if deferred_dpc_hint && blocking_child_active {
             // A foreground or issued-unknown non-DPC child owns the SDIO ring;
-            // retain coalesced DPC work without attempting a cursor child turn.
+            // retain the coalesced scheduling hint without attempting a cursor
+            // child turn. The event/cursor below remains the work authority.
             // A cursor-owned child is different: the next DPC turn must poll
             // that exact child or its completion notification would be lost.
             CYW43_DPC_DEFERRED.store(true, Ordering::Release);
         }
-        if cyw43_should_run_deferred_dpc(
+        let durable_dpc_work = if notification_route == RuntimeNotificationRoute::Cyw43Client {
+            cyw43_dpc_durable_work_route()
+        } else {
+            Cyw43DpcDurableWorkRoute::None
+        };
+        if cyw43_should_run_durable_dpc(
             pending_intake.is_some(),
-            deferred_dpc,
+            durable_dpc_work,
             blocking_child_active,
         ) {
-            // Linux services latched DPC work as scheduled quanta. A queued
-            // command remains retained until the cursor reaches terminal.
+            // Linux services one admitted bus episode to its next external
+            // wait or bounded quiescent boundary. The committed source event
+            // or exact cursor, never the consumed hint, owns this quantum.
             let _ = cyw43_runtime_service_dpc_event();
             if let Some((disposition, snapshot)) =
                 runtime_steady_cyw43_dpc_pending_disposition(&mut steady_dpc_semantic_snapshot)
@@ -53652,25 +53897,37 @@ pub fn runtime_main(task_key: usize) -> ! {
                 // Poll the persistent ring/source once before sleeping so a
                 // coalesced or already-consumed doorbell cannot strand work.
                 let _ = service_runtime_persistent_source_once(notification_route, 0);
-                if notification_route == RuntimeNotificationRoute::Cyw43Client
-                    && CYW43_DPC_DEFERRED.load(Ordering::Acquire)
-                    && !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
-                {
-                    if let Some((disposition, snapshot)) =
-                        runtime_steady_cyw43_dpc_pending_disposition(
-                            &mut steady_dpc_semantic_snapshot,
-                        )
-                    {
-                        runtime_handoff_steady_pending(
-                            disposition,
-                            notification_route,
-                            None,
-                            snapshot,
-                        );
-                        continue;
-                    } else if runtime_cyw43_dpc_recovery_settle_pending() {
-                        runtime_yield_current_tcb();
-                        continue;
+                if notification_route == RuntimeNotificationRoute::Cyw43Client {
+                    match cyw43_dpc_idle_prewait_route(cyw43_dpc_durable_work_route()) {
+                        Cyw43DpcIdlePrewaitRoute::ReenterService => {
+                            // A source event may commit after the earlier DPC
+                            // turn and before a cursor exists. With no semantic
+                            // cursor snapshot to hand off, the durable event is
+                            // itself the condition that forbids sleep.
+                            continue;
+                        }
+                        Cyw43DpcIdlePrewaitRoute::ExternalWait
+                            if !CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire) =>
+                        {
+                            if let Some((disposition, snapshot)) =
+                                runtime_steady_cyw43_dpc_pending_disposition(
+                                    &mut steady_dpc_semantic_snapshot,
+                                )
+                            {
+                                runtime_handoff_steady_pending(
+                                    disposition,
+                                    notification_route,
+                                    None,
+                                    snapshot,
+                                );
+                                continue;
+                            } else if runtime_cyw43_dpc_recovery_settle_pending() {
+                                runtime_yield_current_tcb();
+                                continue;
+                            }
+                        }
+                        Cyw43DpcIdlePrewaitRoute::Block
+                        | Cyw43DpcIdlePrewaitRoute::ExternalWait => {}
                     }
                 }
             }
@@ -53783,6 +54040,16 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             }
         }
+        let cyw43_steady_parent_marker = notification_route
+            == RuntimeNotificationRoute::Cyw43Client
+            && cyw43_steady_parent_marker_present(command);
+        let cyw43_steady_parent_admission = match (notification_route, root_generation) {
+            (
+                RuntimeNotificationRoute::Cyw43Client,
+                RuntimeDelegatedGenerationAdmission::Admitted(generation),
+            ) => cyw43_steady_parent_service_lease_admission(command, generation),
+            _ => Cyw43SteadyParentAdmission::Invalid,
+        };
         let mut turn = if let Some(event_sequence) = foreground_watermark_refresh_fault {
             RuntimeCommandTurn::Complete(cyw43_terminal_foreground_dpc_refresh_fault(
                 command.sequence,
@@ -53802,6 +54069,26 @@ pub fn runtime_main(task_key: usize) -> ! {
                     state.dpc_cursor.event_sequence,
                 )
             }))
+        } else if cyw43_steady_parent_marker {
+            match cyw43_steady_parent_admission {
+                Cyw43SteadyParentAdmission::Invalid => {
+                    RuntimeCommandTurn::Complete(steady_service_lease_identity_completion(command))
+                }
+                Cyw43SteadyParentAdmission::BlockedByDurableDpc => {
+                    if steady_service_lease.admit_next_slice(command) {
+                        RuntimeCommandTurn::Pending
+                    } else {
+                        RuntimeCommandTurn::Complete(steady_service_lease_exhaustion_completion(
+                            command,
+                        ))
+                    }
+                }
+                Cyw43SteadyParentAdmission::Admitted => {
+                    steady_service_lease_preflight_turn(&mut steady_service_lease, command, || {
+                        service_command_turn(task_key, command)
+                    })
+                }
+            }
         } else {
             steady_service_lease_preflight_turn(&mut steady_service_lease, command, || {
                 service_command_turn(task_key, command)
@@ -53809,7 +54096,7 @@ pub fn runtime_main(task_key: usize) -> ! {
         };
         let mut autonomous_transaction_pending = None;
         if matches!(turn, RuntimeCommandTurn::Pending) {
-            let steady_lease_admitted =
+            let steady_lease_retained =
                 match (notification_route, delegated_generation, root_generation) {
                     (
                         RuntimeNotificationRoute::SdioOwner,
@@ -53821,10 +54108,20 @@ pub fn runtime_main(task_key: usize) -> ! {
                     (
                         RuntimeNotificationRoute::Cyw43Client,
                         _,
-                        RuntimeDelegatedGenerationAdmission::Admitted(generation),
-                    ) => cyw43_steady_parent_service_lease_admitted(command, generation),
+                        RuntimeDelegatedGenerationAdmission::Admitted(_),
+                    ) => cyw43_steady_parent_admission.retains_parent(),
                     _ => false,
                 };
+            let steady_marker = match notification_route {
+                RuntimeNotificationRoute::SdioOwner => {
+                    command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
+                        || sdio_external_dma_command_candidate(command).is_some_and(|descriptor| {
+                            sdio_steady_service_lease_marker_present(command, descriptor)
+                        })
+                }
+                RuntimeNotificationRoute::Cyw43Client => cyw43_steady_parent_marker,
+                RuntimeNotificationRoute::Serial | RuntimeNotificationRoute::Unavailable => false,
+            };
             let persistent_marker =
                 command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
             let persistent_transaction_admitted =
@@ -53851,7 +54148,14 @@ pub fn runtime_main(task_key: usize) -> ! {
                     command,
                 ));
             }
-            if steady_lease_admitted {
+            if steady_marker && !steady_lease_retained {
+                // A partial or mutated steady marker still selects the
+                // autonomous lane. Fail its sealed identity here; no tagged
+                // parent or child can re-enter ordinary root-grant service.
+                turn =
+                    RuntimeCommandTurn::Complete(steady_service_lease_identity_completion(command));
+            }
+            if steady_lease_retained {
                 let lease_identity_admitted =
                     steady_service_lease.active_for(command) || steady_service_lease.admit(command);
                 if !lease_identity_admitted {
@@ -53861,7 +54165,14 @@ pub fn runtime_main(task_key: usize) -> ! {
                 } else {
                     let snapshot = runtime_steady_command_semantic_snapshot(notification_route);
                     if let Some(snapshot) = snapshot {
-                        autonomous_transaction_pending = steady_service_lease
+                        let admission_after_snapshot = match (notification_route, root_generation) {
+                            (
+                                RuntimeNotificationRoute::Cyw43Client,
+                                RuntimeDelegatedGenerationAdmission::Admitted(generation),
+                            ) => cyw43_steady_parent_service_lease_admission(command, generation),
+                            _ => Cyw43SteadyParentAdmission::Admitted,
+                        };
+                        if let Some(semantic_disposition) = steady_service_lease
                             .record_semantic_progress_with(
                                 command,
                                 snapshot,
@@ -53873,9 +54184,31 @@ pub fn runtime_main(task_key: usize) -> ! {
                                         service_slice,
                                     )
                                 },
-                            );
+                            )
+                        {
+                            if notification_route == RuntimeNotificationRoute::Cyw43Client {
+                                autonomous_transaction_pending =
+                                    cyw43_steady_parent_pending_disposition(
+                                        cyw43_steady_parent_admission,
+                                        admission_after_snapshot,
+                                        semantic_disposition,
+                                    );
+                                if autonomous_transaction_pending.is_none()
+                                    && admission_after_snapshot
+                                        == Cyw43SteadyParentAdmission::Invalid
+                                {
+                                    turn = RuntimeCommandTurn::Complete(
+                                        steady_service_lease_identity_completion(command),
+                                    );
+                                }
+                            } else {
+                                autonomous_transaction_pending = Some(semantic_disposition);
+                            }
+                        }
                     }
-                    if autonomous_transaction_pending.is_none() {
+                    if matches!(turn, RuntimeCommandTurn::Pending)
+                        && autonomous_transaction_pending.is_none()
+                    {
                         // Losing the exact semantic cursor or overflowing its
                         // monotonic revision is an identity failure. Fence the
                         // generation through the existing typed lease terminal;
@@ -56635,7 +56968,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_parent_admission_ignores_recovered_ack_history_but_not_ack_pending() {
+    fn cyw43_parent_admission_requires_exact_source_for_steady_ack_pending() {
         let _guard = test_guard();
         let generation = 0x4359_51f1;
         let (persistent, _) = install_persistent_control_parent_fixture(0x4359_51f2, 0, generation);
@@ -56677,9 +57010,30 @@ mod tests {
         assert!(dpc_event_ring_set_owner_health_at(
             dpc_base, false, true, false, false,
         ));
+        assert_eq!(
+            cyw43_steady_parent_service_lease_admission(steady, generation),
+            Cyw43SteadyParentAdmission::BlockedByDurableDpc,
+            "ACK_PENDING before sequence-last event publication retains identity but blocks service",
+        );
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                generation,
+                SDHCI_INT_CARD_INT,
+                0,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
         assert!(
-            !cyw43_steady_parent_service_lease_admitted(steady, generation),
-            "the urgent parent also fails closed while ACK_PENDING is live",
+            !cyw43_persistent_parent_transaction_admitted(persistent, 0),
+            "persistent control/Join keeps its explicit ACK fence",
+        );
+        assert_eq!(
+            cyw43_steady_parent_service_lease_admission(steady, generation),
+            Cyw43SteadyParentAdmission::Admitted,
+            "the exact source event makes the already-retained steady parent runnable",
         );
         assert!(dpc_event_ring_set_owner_health_at(
             dpc_base, false, false, false, false,
@@ -58741,9 +59095,10 @@ mod tests {
             descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE,
             0,
         );
-        assert_ne!(
+        assert_eq!(
             descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
             0,
+            "critical EAPOL uses the same exact F2 terminal as other steady TX",
         );
         CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
             transaction.prepared_descriptor = descriptor;
@@ -58792,6 +59147,406 @@ mod tests {
             parent,
             logical_generation,
         ));
+    }
+
+    #[test]
+    fn critical_eapol_f2_terminal_survives_concurrent_dpc_ack_pending() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_5155;
+        let logical_generation = 8;
+        initialize_production_foreground_pair(physical_generation);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_execution_started = true;
+            state.firmware_released = true;
+            state.bus_link_ready = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = physical_generation;
+            state.recovery_required = false;
+            state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
+            state.sdpcm_tx_write_ambiguous = false;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+            state.card_irq_masked = false;
+        });
+        sdio_record_dpc_health(false);
+        let parent = install_critical_eapol_parent_fixture(
+            0x4359_5156,
+            logical_generation,
+            2 | CYW43_EAPOL_KEY_INFO_PAIRWISE
+                | CYW43_EAPOL_KEY_INFO_MIC
+                | CYW43_EAPOL_KEY_INFO_SECURE,
+            0,
+            true,
+        );
+        CYW43_FOREGROUND_TRANSACTION
+            .with_mut(|transaction| transaction.generation = physical_generation);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(parent.sequence, Ordering::Release);
+
+        let (child, descriptor) = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 1));
+            let descriptor = cyw43_foreground_scope_prepared_descriptor(
+                transaction,
+                steady_tx_function2_descriptor(),
+            )
+            .expect("the sealed M4 parent scopes one exact Function-2 child");
+            assert_eq!(
+                descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
+                0,
+                "Host EAPOL cannot convert a concurrent CARD_INT into pre-issue rejection",
+            );
+            transaction.prepared_sequence = 0x8000_5157;
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+            transaction.prepared_write_len = descriptor.len;
+            transaction.prepared_write[..usize::from(descriptor.len)].fill(0x5a);
+            let mut child =
+                stage_sdio_descriptor_service_command(transaction.prepared_sequence, descriptor);
+            child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+            let child = cyw43_foreground_bind_prepared_command(transaction, child)
+                .expect("M4 child inherits the sealed parent and physical generation");
+            assert!(cyw43_foreground_reserve_frontier(transaction, child));
+            assert!(cyw43_foreground_submit_frontier(transaction));
+            assert!(cyw43_foreground_published_frontier_is_immutable(
+                transaction,
+            ));
+            transaction.executing = false;
+            (child, descriptor)
+        });
+
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                physical_generation,
+                SDHCI_INT_CARD_INT,
+                0,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+        assert!(dpc_event_ring_set_owner_health_at(
+            dpc_base, false, true, false, false,
+        ));
+        assert!(cyw43_steady_parent_service_lease_admitted(
+            parent,
+            logical_generation,
+        ));
+
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 2));
+            assert_eq!(cyw43_foreground_poll_frontier(transaction), None);
+            assert!(transaction.frontier_valid);
+            assert!(transaction.frontier_submitted);
+            assert!(!transaction.frontier_continuation_grant_required);
+            assert!(!transaction.poisoned);
+            transaction.executing = false;
+        });
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
+
+        let completion =
+            DriverTaskCompletionRecord::progress(child.sequence, u32::from(descriptor.len));
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 3));
+            assert_eq!(
+                cyw43_foreground_poll_frontier(transaction),
+                Some(completion),
+            );
+            assert_eq!(transaction.turn.completed_count, 1);
+            assert_eq!(transaction.entries[0].completion, completion);
+            assert!(!transaction.frontier_valid);
+            assert!(!transaction.poisoned);
+            assert_eq!(transaction.parent, parent);
+            assert!(transaction.parent_input_sealed);
+        });
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        let retained_event = match cyw43_runtime_dpc_event_peek() {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("the concurrent CARD_INT must remain for DPC: {other:?}"),
+        };
+        assert_eq!(retained_event.sequence, 1);
+        assert!(cyw43_dpc_event_has_source(retained_event.flags));
+        assert_ne!(
+            dpc_event_ring_read_at(dpc_base).flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+            0,
+            "the F2 terminal cannot consume the independently durable DPC debt",
+        );
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
+    }
+
+    #[test]
+    fn steady_parent_ack_before_event_retains_op7_to_terminal_without_root_grant() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_51d0;
+        let logical_generation = 9;
+        initialize_production_foreground_pair(physical_generation);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_execution_started = true;
+            state.firmware_released = true;
+            state.bus_link_ready = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = physical_generation;
+            state.recovery_required = false;
+            state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
+            state.sdpcm_tx_write_ambiguous = false;
+            state.sdpcm_seq = 17;
+            state.sdpcm_seq_max = 19;
+            state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+            state.backplane_window_valid = true;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+            state.card_irq_masked = false;
+        });
+        sdio_record_dpc_health(false);
+        let parent =
+            install_steady_tx_parent_fixture(0x4359_51d1, logical_generation, CYW43_ETH_P_IPV4);
+        CYW43_FOREGROUND_TRANSACTION
+            .with_mut(|transaction| transaction.generation = physical_generation);
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+
+        assert!(dpc_event_ring_set_owner_health_at(
+            dpc_base, false, true, false, false,
+        ));
+        assert_eq!(
+            cyw43_runtime_dpc_event_peek(),
+            DpcRingConsumeResult::Empty,
+            "the producer has not yet committed the sequence-last source event",
+        );
+        assert_eq!(
+            cyw43_steady_parent_service_lease_admission(parent, logical_generation),
+            Cyw43SteadyParentAdmission::BlockedByDurableDpc,
+        );
+        let before_event = runtime_steady_cyw43_foreground_semantic_snapshot();
+        let mut gate = RuntimePendingCommandGate::new();
+        retain_runtime_command_after_arbitration_turn(
+            &mut gate,
+            RuntimeCommandIntake {
+                command: parent,
+                reply_cap_available: false,
+            },
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+        assert!(!gate.continuation_required());
+        assert_eq!(gate.grant_generation(), None);
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR).is_none());
+
+        assert_eq!(
+            dpc_event_ring_publish_at(
+                dpc_base,
+                physical_generation,
+                SDHCI_INT_CARD_INT,
+                0,
+                DPC_REASON_SDIO_CARD_INTERRUPT,
+                DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+            ),
+            DpcRingPublishResult::Published(1),
+        );
+        let after_event = runtime_steady_cyw43_foreground_semantic_snapshot();
+        assert!(runtime_durable_condition_changed(
+            before_event,
+            Some(after_event),
+        ));
+        let admission_after_event =
+            cyw43_steady_parent_service_lease_admission(parent, logical_generation);
+        assert_eq!(admission_after_event, Cyw43SteadyParentAdmission::Admitted);
+        let mut expected_snapshot = None;
+        let semantic_disposition =
+            runtime_steady_semantic_disposition(&mut expected_snapshot, after_event);
+        assert_eq!(
+            cyw43_steady_parent_pending_disposition(
+                Cyw43SteadyParentAdmission::BlockedByDurableDpc,
+                admission_after_event,
+                semantic_disposition,
+            ),
+            Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+            "an event committed before expected-snapshot capture must re-enter without another notification",
+        );
+
+        let child = (0..8)
+            .find_map(|_| {
+                assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+                RuntimeRingWindow::sdio_owner()
+                    .and_then(|ring| runtime_ring_read_command_stable(&ring))
+                    .filter(|command| command.sequence != 0)
+            })
+            .expect("the same retained op7 publishes its exact Function-2 child");
+        let descriptor = sdio_bus_link_read_descriptor(CYW43_SDIO_BUS_LINK_DESCRIPTOR_OFFSET)
+            .expect("the op7 child descriptor is sequence-last visible");
+        // The production SDIO runtime maps the reciprocal ring at its local
+        // DRIVER_TASK_RING_VADDR before this seal. Host tests keep the CYW43
+        // and SDIO windows disjoint, so install the byte-identical intake seal
+        // explicitly rather than parsing the unrelated local test aperture.
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.external_dma_input = SdioExternalDmaInputSeal {
+                command: child,
+                descriptor,
+                valid: true,
+            };
+        });
+        assert!(sdio_steady_service_lease_admitted(
+            child,
+            descriptor,
+            physical_generation,
+        ));
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
+
+        let mut io = production_owner_io();
+        configure_production_owner_child(&mut io, descriptor);
+        let child_terminal = (0..512)
+            .find_map(|_| {
+                let turn = service_sdio_external_dma_admitted_turn_with_io(child, &mut io)
+                    .expect("the exact steady child stays on the sole SDIO owner lane");
+                match turn {
+                    RuntimeCommandTurn::Pending => {
+                        let _ = service_production_dma_terminal_if_pending(&mut io);
+                        None
+                    }
+                    RuntimeCommandTurn::Complete(completion) => Some(completion),
+                }
+            })
+            .expect("the steady Function-2 child reaches one exact terminal");
+        assert_eq!(child_terminal.sequence, child.sequence);
+        assert_eq!(
+            child_terminal.code, COMPLETION_PROGRESS,
+            "unexpected steady child terminal: {child_terminal:?}",
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(child_terminal),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            child_terminal.sequence,
+        ));
+
+        assert_eq!(service_command_turn(0, parent), RuntimeCommandTurn::Pending);
+        let parent_terminal = (0..4)
+            .find_map(|_| match service_command_turn(0, parent) {
+                RuntimeCommandTurn::Pending => None,
+                RuntimeCommandTurn::Complete(completion) => Some(completion),
+            })
+            .expect("the exact child terminal completes the same op7 parent");
+        assert_eq!(parent_terminal.sequence, parent.sequence);
+        assert_eq!(parent_terminal.code, COMPLETION_PROGRESS);
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
+
+        let retained_event = match cyw43_runtime_dpc_event_peek() {
+            DpcRingConsumeResult::Event(event) => event,
+            other => panic!("op7 must leave the independently durable DPC event: {other:?}"),
+        };
+        assert_eq!(retained_event.sequence, 1);
+        assert!(cyw43_runtime_service_dpc_event());
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_active_sequence, retained_event.sequence);
+            assert_eq!(state.dpc_cursor.event_sequence, retained_event.sequence);
+        });
+    }
+
+    #[test]
+    fn malformed_tagged_steady_parent_and_child_never_enter_root_grant_lane() {
+        let _guard = test_guard();
+        let generation = 0x4359_51e0;
+        initialize_production_foreground_pair(generation);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.transport_ready = true;
+            state.firmware_released = true;
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = generation;
+            state.recovery_required = false;
+            state.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
+            state.sdpcm_tx_write_ambiguous = false;
+        });
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.dpc_activation_allowed = true;
+            state.dpc_poisoned = false;
+            state.card_irq_masked = false;
+        });
+        sdio_record_dpc_health(false);
+        let parent = install_steady_tx_parent_fixture(0x4359_51e1, generation, CYW43_ETH_P_IPV4);
+        assert_eq!(
+            cyw43_steady_parent_service_lease_admission(parent, generation),
+            Cyw43SteadyParentAdmission::Admitted,
+            "the unmodified steady parent is normally runnable",
+        );
+
+        let mut malformed = parent;
+        malformed.budget.max_frames = malformed.budget.max_frames.saturating_add(1);
+        assert!(cyw43_steady_parent_marker_present(malformed));
+        assert_eq!(
+            cyw43_steady_parent_service_lease_admission(malformed, generation),
+            Cyw43SteadyParentAdmission::Invalid,
+        );
+        let mut gate = RuntimePendingCommandGate::new();
+        retain_runtime_command_after_arbitration_turn(
+            &mut gate,
+            RuntimeCommandIntake {
+                command: malformed,
+                reply_cap_available: false,
+            },
+            RuntimeNotificationRoute::Cyw43Client,
+        );
+        assert!(!gate.continuation_required());
+        assert_eq!(gate.grant_generation(), None);
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR).is_none());
+        assert_eq!(
+            steady_service_lease_identity_completion(malformed),
+            DriverTaskCompletionRecord::fault_with_result(
+                malformed.sequence,
+                FAULT_REJECTED_COMMAND,
+                DRIVER_RUNTIME_REJECT_SDIO_STEADY_SERVICE_LEASE_INVALID,
+            ),
+        );
+
+        initialize_production_foreground_pair(generation.wrapping_add(1));
+        let (_parent, _child) = install_steady_tx_pending_child_fixture(
+            0x4359_51e2,
+            0x8000_51e3,
+            generation.wrapping_add(1),
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier.descriptor.flags &=
+                !DriverRuntimeSdioCommandDescriptor::FLAG_STEADY_TX_SERVICE_LEASE;
+            assert!(cyw43_foreground_steady_service_lease_marker_present(
+                transaction.frontier,
+            ));
+            assert!(!cyw43_foreground_steady_service_lease_child(
+                transaction.frontier,
+            ));
+            assert!(!cyw43_foreground_grant_frontier(transaction));
+            assert!(transaction.poisoned);
+        });
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
+        assert!(CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
     }
 
     #[test]
@@ -60872,17 +61627,157 @@ mod tests {
     }
 
     #[test]
-    fn dpc_defers_device_or_latch_work_without_starving_commands() {
-        assert!(!cyw43_should_run_deferred_dpc(true, true, false));
-        assert!(cyw43_should_run_deferred_dpc(false, true, false));
-        assert!(!cyw43_should_run_deferred_dpc(false, false, false));
-        assert!(!cyw43_should_run_deferred_dpc(false, true, true));
+    fn dpc_routes_durable_work_without_starving_commands() {
+        assert!(!cyw43_should_run_durable_dpc(
+            true,
+            Cyw43DpcDurableWorkRoute::Service,
+            false,
+        ));
+        assert!(cyw43_should_run_durable_dpc(
+            false,
+            Cyw43DpcDurableWorkRoute::Service,
+            false,
+        ));
+        assert!(!cyw43_should_run_durable_dpc(
+            false,
+            Cyw43DpcDurableWorkRoute::None,
+            false,
+        ));
+        assert!(!cyw43_should_run_durable_dpc(
+            false,
+            Cyw43DpcDurableWorkRoute::ExternalWait,
+            false,
+        ));
+        assert!(!cyw43_should_run_durable_dpc(
+            false,
+            Cyw43DpcDurableWorkRoute::Service,
+            true,
+        ));
         assert!(!cyw43_dpc_child_blocks_cursor(false, false));
         assert!(cyw43_dpc_child_blocks_cursor(true, false));
         assert!(!cyw43_dpc_child_blocks_cursor(true, true));
         assert!(!cyw43_dpc_wait_services_cursor(false, false));
         assert!(cyw43_dpc_wait_services_cursor(true, false));
         assert!(!cyw43_dpc_wait_services_cursor(true, true));
+    }
+
+    #[test]
+    fn dpc_durable_event_and_cursor_ignore_deferred_hint_history() {
+        let _guard = test_guard();
+        let generation = 0x4359_5351;
+        let event_sequence = initialize_production_dpc_source_event(generation, 0);
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::Service,
+            "the committed source event admits DPC without a remembered hint",
+        );
+        CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::Service,
+            "notification history cannot alter the durable route",
+        );
+
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_active_sequence = event_sequence;
+            state.rx_service_active = true;
+            state.rx_service_quiescent = false;
+            state.dpc_cursor = Cyw43DpcCursor {
+                event_sequence,
+                action: Cyw43DpcAction::PostStatus,
+                io_kind: Cyw43DpcIoKind::BackplaneRead32,
+                io_phase: Cyw43DpcIoPhase::Idle,
+                ..Cyw43DpcCursor::empty()
+            };
+        });
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::Service,
+            "an exact childless cursor continues locally without another edge",
+        );
+
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_cursor.action = Cyw43DpcAction::RxQueueWait;
+            state.rx_queue_count = CYW43_RX_QUEUE_CAP as u8;
+        });
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::ExternalWait,
+            "queue capacity is the external condition, not the DPC hint",
+        );
+        CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 0);
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::Service,
+            "durable queue capacity resumes the same cursor",
+        );
+    }
+
+    #[test]
+    fn dpc_idle_prewait_reenters_for_source_committed_before_cursor_creation() {
+        let _guard = test_guard();
+        let generation = 0x4359_5353;
+        let event_sequence = initialize_production_dpc_source_event(generation, 0);
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_cursor.event_sequence, 0);
+            assert_eq!(state.dpc_active_sequence, 0);
+        });
+        let mut semantic_snapshot = None;
+        assert_eq!(
+            runtime_steady_cyw43_dpc_pending_disposition(&mut semantic_snapshot),
+            None,
+            "a source committed before cursor creation has no handoff snapshot yet",
+        );
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::Service,
+        );
+        assert_eq!(
+            cyw43_dpc_idle_prewait_route(cyw43_dpc_durable_work_route()),
+            Cyw43DpcIdlePrewaitRoute::ReenterService,
+            "the final condition read must re-enter locally without a peer notification",
+        );
+
+        assert!(cyw43_runtime_service_dpc_event());
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_active_sequence, event_sequence);
+            assert_eq!(state.dpc_cursor.event_sequence, event_sequence);
+        });
+        let sequence = CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire);
+        if sequence != 0 {
+            assert!(cyw43_sdio_child_release_exact_or_restart(sequence));
+        }
+    }
+
+    #[test]
+    fn dpc_exact_child_waits_for_terminal_without_poll_or_grant_hint() {
+        let _guard = test_guard();
+        let generation = 0x4359_5352;
+        let _event_sequence = initialize_production_dpc_source_event(generation, 0);
+        CYW43_DPC_DEFERRED.store(false, Ordering::Release);
+        assert!(cyw43_runtime_service_dpc_event());
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert_eq!(
+            cyw43_dpc_durable_work_route(),
+            Cyw43DpcDurableWorkRoute::ExternalWait,
+            "the exact physical child is the first true external wait",
+        );
+        assert!(!cyw43_should_run_durable_dpc(
+            false,
+            cyw43_dpc_durable_work_route(),
+            false,
+        ));
+        assert!(read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none());
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.dpc_cursor.child.mode, Cyw43DpcChildMode::SteadyLease);
+            assert!(!state.dpc_cursor.child.continuation_grant_required);
+        });
+        let sequence = CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire);
+        assert!(cyw43_sdio_child_release_exact_or_restart(sequence));
     }
 
     #[test]

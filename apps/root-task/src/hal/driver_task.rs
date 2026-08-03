@@ -7078,6 +7078,10 @@ pub(crate) struct DriverTaskSdioDpcRingSnapshot {
     pub producer: u32,
     /// Sequence after the newest event consumed by CYW43.
     pub consumer: u32,
+    /// Sequence of the stable current front event, or zero when none is exact.
+    pub front_event_sequence: u32,
+    /// Source-bearing flags of the stable current front event.
+    pub front_event_flags: u16,
     /// Current ABI ring flags.
     pub flags: u32,
     /// Saturating owner overrun counter.
@@ -7094,10 +7098,19 @@ fn stable_sdio_dpc_ring_snapshot(
     if first != second || !second.valid() {
         return None;
     }
+    let front_event = if second.producer == second.consumer {
+        None
+    } else {
+        let expected = second.consumer.wrapping_add(1);
+        let event = second.entries[second.consumer as usize % DRIVER_RUNTIME_DPC_EVENT_RING_DEPTH];
+        (event.sequence == expected && event.valid()).then_some(event)
+    };
     Some(DriverTaskSdioDpcRingSnapshot {
         epoch: second.epoch,
         producer: second.producer,
         consumer: second.consumer,
+        front_event_sequence: front_event.map_or(0, |event| event.sequence),
+        front_event_flags: front_event.map_or(0, |event| event.flags),
         flags: second.flags,
         overruns: second.overruns,
         ack_failures: second.ack_failures,
@@ -7105,7 +7118,7 @@ fn stable_sdio_dpc_ring_snapshot(
 }
 
 /// Snapshot the isolated SDIO owner's DPC ring without acquiring write
-/// authority. The root mapping is retained only for fail-closed diagnostics;
+/// authority. Root may derive passive scheduling conditions and diagnostics;
 /// producer and consumer ownership remain exclusively with the child runtimes.
 #[cfg(feature = "kernel")]
 #[must_use]
@@ -22198,6 +22211,8 @@ mod tests {
         let snapshot = stable_sdio_dpc_ring_snapshot(ring, ring)
             .expect("stable ABI ring should be observable");
         assert_eq!(snapshot.epoch, 41);
+        assert_eq!(snapshot.front_event_sequence, 0);
+        assert_eq!(snapshot.front_event_flags, 0);
 
         let mut changed = ring;
         changed.producer = 1;
@@ -22206,6 +22221,42 @@ mod tests {
         let mut invalid = ring;
         invalid.magic = 0;
         assert_eq!(stable_sdio_dpc_ring_snapshot(invalid, invalid), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn sdio_dpc_snapshot_exposes_front_only_after_sequence_last_producer_commit() {
+        let ring = DriverRuntimeDpcEventRing::empty(42);
+        let mut body_visible = ring;
+        body_visible.flags |= pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING;
+        body_visible.entries[0] = pi4_driver_abi::DriverRuntimeDpcEventEntry {
+            sequence: 0,
+            host_int_status: 1 << 8,
+            signal_status: 0,
+            reason: 1,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+        };
+        let body_snapshot = stable_sdio_dpc_ring_snapshot(body_visible, body_visible)
+            .expect("the pre-commit body is a stable observable publication step");
+        assert_eq!(body_snapshot.front_event_sequence, 0);
+        assert_eq!(body_snapshot.front_event_flags, 0);
+
+        let mut sequence_visible = body_visible;
+        sequence_visible.entries[0].sequence = 1;
+        let sequence_snapshot = stable_sdio_dpc_ring_snapshot(sequence_visible, sequence_visible)
+            .expect("sequence-last remains private until producer commits it");
+        assert_eq!(sequence_snapshot.front_event_sequence, 0);
+        assert_eq!(sequence_snapshot.front_event_flags, 0);
+
+        let mut committed = sequence_visible;
+        committed.producer = 1;
+        let committed_snapshot = stable_sdio_dpc_ring_snapshot(committed, committed)
+            .expect("producer-last publishes the exact source event");
+        assert_eq!(committed_snapshot.front_event_sequence, 1);
+        assert_eq!(
+            committed_snapshot.front_event_flags,
+            pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT,
+        );
     }
 
     #[cfg(feature = "kernel")]

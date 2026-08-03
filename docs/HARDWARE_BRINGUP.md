@@ -1031,14 +1031,12 @@ no foreign exact HAL descriptor owns the lane. A retained NetData op8 remains
 non-revocable: op7 stays queued and requestless with no TX budget, deadline, or
 recovery until that op8 reaches its typed terminal.
 
-With the lane free, the hook either advances one active op7 or promotes and
-advances one credit-ready FIFO head for at most one physical turn before
-copied-RX service. This prevents
-a replenished copied-RX queue from starving DHCP or later control TX. Copied RX
-precedes the coordinator's physical op only while no op7 is legally runnable,
-including predecessor-credit discovery or a retained foreign owner. Otherwise
-it remains preserved and may drain memory-only in the following smoltcp poll.
-`Device::receive` and reservation failure never service TX. The hook may move
+With the lane free, the hook distinguishes immutable continuation from fresh
+admission. An already-started op7 advances to its exact terminal. Before
+promoting a fresh or requestless op7, one committed copied/DPC/runtime RX level
+instead receives the next bounded memory drain or queue-only op8 turn. This
+prevents a prompt DHCP reply or TCP request from remaining behind a later
+retry. `Device::receive` and reservation failure never service TX. The hook may move
 one eligible ARP/GARP
 record into the same urgent aggregate before its single op7 advance. With all 16
 slots in use, promotion removes one credit-ready head and restores a paired slot
@@ -1267,9 +1265,15 @@ intake-sealed EAPOL-Key M2, M4, or group-key response may select the existing
 paired finite-op7 marker, and it carries one current-generation frame with a
 four-operation/1,536-byte budget. HAL binds CYW43 and SDIO priority to that
 exact request; root commits it, sends one notification, and publishes no grant
-after issue. CYW43 crosses its Function-2 pre-TX DPC fence and root resumes only
-after the durable terminal condition is visible. Its deadline is recovery-only
-fault containment. Ordinary post-Gate-8 TCP keeps the O(1) finite-op7 lane;
+after issue. Its Function-2 data child does not inherit persistent control's
+pre-TX fence: a concurrent source-bearing CARD_INT remains durable DPC work and
+cannot reject the sealed write. Root resumes only after the durable terminal
+condition is visible. The sealed parent remains exact while SDIO publishes a
+source: `ACK_PENDING` without a committed front event is a bounded producer
+window, not a missing identity or DPC issue authority; the sequence-last front
+event then admits canonical DPC. Neither state can enter the ordinary grant
+lane. Its deadline is recovery-only fault containment. Ordinary post-Gate-8
+TCP keeps the O(1) finite-op7 lane;
 neither case creates a poller or fallback path. Every exact
 op11 instead uses one
 HAL-derived persistent marker: after invisible `Stage`, HAL cleans/barriers the
@@ -2547,12 +2551,11 @@ deadline creates RX work. Treat an op8 that repeatedly runs ahead of an
 already-active op7, or op7 identity that changes across those turns, as failed
 single-lifetime evidence rather than a recoverable RX/TX race. An exact op8
 assigned before op7 promotion is instead non-revocable: the queued op7 must
-remain requestless until that owner reaches its typed terminal. With a paired
-aggregate permit, copied RX precedes the coordinator's physical op only while
-no active op7 or credit-ready FIFO head can run, including while RX may
-establish predecessor credit. Otherwise the copied frame remains preserved and
-may drain memory-only in the following smoltcp poll; its response remains queued
-and cannot become op7 until that credit window closes. Only when the bounded
+remain requestless until that owner reaches its typed terminal. Once neither
+owner is active, a paired aggregate permit and committed copied/DPC/runtime RX
+level admit that RX before any fresh or requestless op7. Its response remains
+urgent in the same bounded aggregate and cannot become the sole op7 until the
+predecessor credit window closes. Only when the bounded
 linked TX queue is full does complete output remain retained. Three backlog
 records are
 reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`
