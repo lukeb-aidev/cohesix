@@ -1063,11 +1063,13 @@ runtime wake.
 housekeeping as a bus transaction. A valid current-generation empty/unmasked
 ring continues locally with no `DPC_ACTIVATE` child. A committed front event
 binds one attempt-scoped exact sequence token, including sequence zero, widens
-the fairness watermark once, and waits for canonical DPC consumption. Masked,
-ACK-pending, invalid, poisoned, overrun, absent, or wrong-generation state alone
-uses the retained activation-repair transaction. A later event cannot widen the
-bound token or starve TX, and a vanished/replaced token without durable consumed
-proof quarantines the generation.
+the fairness watermark once, and waits for canonical DPC consumption. Only
+activation-absent or mask-skewed state, plus exact ACK debt bound to an
+already-submitted immutable activation frontier, uses the retained
+activation-repair transaction. Invalid, wrong-generation, poisoned, overrun,
+or lost-authority state fails closed and quarantines the generation. A later
+event cannot widen the bound token or starve TX, and a vanished/replaced token
+without durable consumed proof quarantines the generation.
 
 Interleaved EVENT/DATA before the exact BCDC reply must not produce an op11
 terminal or a replacement parent sequence. CYW43 must publish one through eight
@@ -1170,9 +1172,12 @@ canonical cursor is active must poison the generation rather than merge event
 identities. A later sequence queued behind the exact pre-TX token remains
 pending and does not widen that parent's watermark. Production-chain coverage
 must drive the real reciprocal `DPC_ACTIVATE` owner only for release
-establishment or unhealthy-state repair, then drive the healthy DPC event
-ring into a committed queue level and then one immutable op8 batch parent; it
+establishment, activation-absent or mask-skewed state, or exact ACK debt bound
+to an already-submitted immutable activation frontier, then drive the healthy
+DPC event ring into a committed queue level and then one immutable op8 batch parent; it
 must not fabricate queue-empty op8/op10 probes or a synthetic terminal stream.
+Invalid, wrong-generation, poisoned, overrun, or lost-authority state must fail
+closed and quarantine the generation without `DPC_ACTIVATE` repair.
 The producer clears `commit_sequence`, writes and cleans the complete 24-byte
 queue body, executes the barrier, and commits a new nonzero sequence last at
 local-ring offset 192. It then builds the real 128-byte batch record at shared
@@ -1940,6 +1945,14 @@ The focused acceptance tests
 `cyw43_persistent_transaction_is_derived_only_from_exact_staged_op11`,
 `persistent_op11_commits_then_signals_once_and_poll_miss_creates_no_edge`,
 `sdio_persistent_transaction_marker_is_scoped_to_one_linked_primitive`,
+`control_pre_tx_reuses_only_a_quiescent_generation_long_dpc_lifetime`,
+`control_pre_tx_binds_one_event_then_advances_past_reassertion`,
+`control_pre_tx_missing_bound_event_faults_without_reactivation`,
+`persistent_control_reuses_healthy_dpc_lifetime_without_a_child`,
+`persistent_control_marked_lifecycle_reaches_reply_without_grant_or_hint_history`,
+`idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child`,
+`production_masked_control_uses_exact_owner_activation_before_tx`,
+`production_join_final_fence_runs_canonical_dpc_then_issues_exactly_once`,
 `dpc_cursor_routes_exactly_one_child_action_per_turn`,
 `sdio_external_dma_joins_irq158_and_irq116_once`,
 `cyw43_rx_queue_state_commit_is_sequence_last_and_stable`,
@@ -1967,6 +1980,11 @@ The focused acceptance tests
 `linked_cyw43_closing_lease_drains_exact_parent_contiguously`,
 `linked_cyw43_unleased_boundary_adopts_only_one_exact_parent`, and
 `post_secure_host_eapol_tx_blocks_fresh_net_data_pre_poll` must pass.
+The eight generation-bus cases collectively prove healthy zero-child activation
+reuse, exact sequence-zero-capable one-event binding, lost-token quarantine
+without reactivation, hintless retained-parent progress, the final one-way
+command-ring pre-wait recheck, typed mask-skew repair, and one physical
+Function-2 issue after canonical DPC.
 Together they must prove the exact policy line
 `m26d_net_first=no physical_input_yield=enabled` and exactly four scheduler
 writes for a clean quantum
@@ -2404,6 +2422,14 @@ The focused adversarial cases include
 `sdio_retired_generation_operations_typed_reject_before_mmio`,
 `sdio_poison_rejects_ordinary_descriptors_until_canonical_pair_scrub`,
 `canonical_pair_entry_scrub_clears_owner_poison_without_starting_another_lifetime`,
+`control_pre_tx_reuses_only_a_quiescent_generation_long_dpc_lifetime`,
+`control_pre_tx_binds_one_event_then_advances_past_reassertion`,
+`control_pre_tx_missing_bound_event_faults_without_reactivation`,
+`persistent_control_reuses_healthy_dpc_lifetime_without_a_child`,
+`persistent_control_marked_lifecycle_reaches_reply_without_grant_or_hint_history`,
+`idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child`,
+`production_masked_control_uses_exact_owner_activation_before_tx`,
+`production_join_final_fence_runs_canonical_dpc_then_issues_exactly_once`,
 `sdio_physical_lifetime_completes_once_for_one_low_high_cycle`,
 `sdio_pair_restart_immediately_fails_the_active_power_lifetime`,
 `sdio_pair_restart_uses_the_durable_active_epoch_when_the_cursor_is_lost`,
@@ -2483,6 +2509,11 @@ The focused adversarial cases include
 `dpc_pair_restart_arbitration_publishes_only_released_child_terminal_cause`,
 `corrupted_continuation_fingerprint_fences_real_owner_without_second_quantum`,
 and `cyw43_foreground_baseline_requires_release_published_snapshot`.
+The eight generation-bus cases collectively prove healthy zero-child activation
+reuse, exact sequence-zero-capable one-event binding, lost-token quarantine
+without reactivation, hintless retained-parent progress, the final one-way
+command-ring pre-wait recheck, typed mask-skew repair, and one physical
+Function-2 issue after canonical DPC.
 
 QEMU packaging must pass `scripts/cohesix-build-run.sh --no-run --cargo-target aarch64-unknown-none` and the 4 MiB rootfs guard with no `cohesix/bin/root-task` entry. The build embeds a boot-minimized rootserver in the staged elfloader and retains the unchanged target ELF as `out/cohesix/staging/rootserver` for diagnostics and external QEMU loading; these boot artifacts are outside the payload CPIO. The CPIO inventory manifest must match its component paths, and all seven `cohesix/bin/pi4-driver-*` payloads must be byte-identical to their target artifacts. Removing or stripping a runtime image, forging the manifest, or bypassing `scripts/ci/size_guard.sh` fails this gate.
 The AArch64 runtime ELF audit must additionally show the full fixed CYW43
@@ -2750,9 +2781,10 @@ For non-op11 delegated work, the existing exact-grant ACK-before-I/O contract
 remains covered. PIO must reach one terminal with IRQ158/host state and zero DMA
 use. For external DMA, IRQ158 and IRQ116 may arrive in either order or together,
 and the same owner joins them into exactly one terminal.
-For the generation's release-time or typed unhealthy-state `DPC_ACTIVATE`, the
-bounded ordered transaction masks, inspects, commits or coalesces durable work,
-acknowledges the exact IRQ, and rearms. Healthy ordinary controls must reuse the
+For the generation's release-time, activation-absent or mask-skewed state, or
+exact ACK debt bound to an already-submitted immutable activation frontier,
+the `DPC_ACTIVATE` bounded ordered transaction masks, inspects, commits or
+coalesces durable work, acknowledges the exact IRQ, and rearms. Healthy ordinary controls must reuse the
 existing activation with no such child. When activation repair is a
 one-way linked child, those steps emit no inner hint; only the generic
 sequence-last child-terminal commit may signal. A failed exact IRQ
@@ -3401,9 +3433,12 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     sideband batch and disjoint root ACK without an op11 terminal. Ordinary
     traffic must record `sdio_deadline_hints=0`, zero timer-created source
     probes, sequence defects, fallback-lane issues, or notification-count
-    dependence. Each physical generation must show one release activation,
-    absent an explicitly typed unhealthy-state repair, and no per-control
-    activation cadence. Pre-TX source work must bind one exact event and report
+    dependence. Each physical generation must show one release activation and
+    no per-control activation cadence. Additional activation may occur only for
+    activation-absent or mask-skewed repair or exact ACK debt bound to an
+    already-submitted immutable activation frontier. Invalid, wrong-generation,
+    poisoned, overrun, or lost-authority state must fail closed without repair.
+    Pre-TX source work must bind one exact event and report
     zero lost-token/reactivation faults. Source/runtime proof must also cover the
     final SDIO command-ring sleep race: a fresh sequence-last one-way child
     re-enters intake without a second signal. Every accepted physical pair must report zero overruns and ACK

@@ -468,8 +468,11 @@ generation-long bus lifetime. An ordinary control exchange reuses that current
 healthy, unmasked, quiescent generation instead of interposing another
 activation child. If a committed event is already visible, the exchange binds
 that exact sequence and canonical DPC consumes it before control continues;
-only absent or unhealthy activation state uses the retained activation state
-machine. From the first post-release DPC event, before or after Gate 8, the
+only activation-absent or mask-skewed state, plus exact ACK debt bound to an
+already-submitted immutable activation frontier, uses the retained activation
+state machine. Invalid, wrong-generation, poisoned, overrun, or lost-authority
+state fails closed and quarantines the generation. From the first post-release
+DPC event, before or after Gate 8, the
 active event sequence and current physical generation bind the separate finite
 DPC steady-service lease. Mutable data-plane readiness cannot select an
 ordinary recurrent-grant DPC path. Persistent op11, urgent op7, and the DPC
@@ -1544,9 +1547,11 @@ generation and XID.
   canonical DPC consumer commits it consumed; a later reassertion cannot widen
   that one-event dependency or starve TX. If the bound event disappears or is
   replaced without durable consumed proof, the generation is quarantined
-  rather than reconstructed by a new activation. Only genuinely absent,
-  masked, ACK-pending, invalid, poisoned, overrun, or wrong-generation owner
-  state enters the retained `DPC_ACTIVATE` state machine.
+  rather than reconstructed by a new activation. Only activation-absent or
+  mask-skewed state, plus exact ACK debt bound to an already-submitted immutable
+  activation frontier, enters the retained `DPC_ACTIVATE` state machine.
+  Invalid, wrong-generation, poisoned, overrun, or lost-authority state fails
+  closed and quarantines the generation.
 
   That fault/initialization state machine is the operation-specific exception
   to pre-existing activation and `CARD_INT` mask-parity admission. It still
@@ -2237,9 +2242,11 @@ generation and XID.
   `INT_ENABLE`, `SIGNAL_ENABLE`, host-status/ring inspection, disposition,
   durable publish/coalesce, exact IRQ acknowledgement, signal, and rearm
   policy. The source remains masked until that ordered quantum reaches its
-  disposition. Production uses that transaction at release and for typed
-  unhealthy-state repair only; a healthy generation's ordinary pre-TX path
-  reuses the established lifetime.
+  disposition. Production uses that transaction at release, for
+  activation-absent or mask-skewed state, and for exact ACK debt bound to an
+  already-submitted immutable activation frontier only. Invalid,
+  wrong-generation, poisoned, overrun, or lost-authority state fails closed;
+  a healthy generation's ordinary pre-TX path reuses the established lifetime.
   Only a failed acknowledgement of the exact frozen IRQ epoch may return
   `Pending` and cross an outer-turn boundary; that later owner turn retries only
   the acknowledgement, without rereading status, republishing an event, or
@@ -2383,9 +2390,12 @@ generation and XID.
   canonical DPC must commit that exact event consumed before the parent
   advances. A later event remains queued and cannot extend the token; a missing
   or replaced token without consumed proof quarantines the generation. Only
-  unhealthy owner state enters the activation-repair transaction. The later
-  Function-2 issue fence, not another activation child, owns a source crossing
-  after this decision. The exchange otherwise services only already-visible
+  activation-absent or mask-skewed state, plus exact ACK debt bound to an
+  already-submitted immutable activation frontier, enters the activation-repair
+  transaction. Invalid, wrong-generation, poisoned, overrun, or lost-authority
+  state fails closed. The later Function-2 issue fence, not another activation
+  child, owns a source crossing after this decision. The exchange otherwise
+  services only already-visible
   physical CARD_INT or committed DPC/queue state before Function 2 TX. If a frame arrives while
   the cursor waits for SDPCM credit, the durable condition returns that same
   parent to its bounded FIFO drain; exhausting the finite pre-TX frame bound
@@ -3206,8 +3216,10 @@ parent; the same boundary also rejects an ordinary persistent Function-1 read,
 while stale epoch, poison, or overrun still fail closed. The same marked
 logical-generation-zero lifecycle then consumes an owner-published source event
 through canonical DPC, reaches one persistent Function-2 TX child with no
-continuation grant, commits and replays that child exactly once, then takes a
-modeled physical IRQ158/CARD_INT through durable DPC publication, Function-2
+continuation grant, physically issues that child exactly once, commits its
+sequence-last terminal once, and consumes/replays that terminal exactly once,
+then takes a modeled physical IRQ158/CARD_INT through durable DPC publication,
+Function-2
 RX, and the control queue before terminating on its exact CONTROL reply. That
 child is automatically fenced even when the parent control flags
 are zero: masked-empty owner state must commit an unmasked healthy ring before
