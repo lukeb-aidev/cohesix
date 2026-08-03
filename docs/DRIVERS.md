@@ -419,6 +419,15 @@ software scheduling turns still surrounded sub-millisecond 41.666-MHz bus
 work. This stop-and-wait description is non-authoritative history; the current
 contract is the persistent durable-condition transaction described below.
 
+The historical `78d5195582c7` 5/5 boot oracle masked two owner-lifetime gaps
+because its recurrent Poll/Grant/reply-probe cadence repeatedly returned to
+both the request-terminal IRQ episode and final DPC rearm. That made boot look
+reliable while making ordinary ingress depend on consumable scheduler edges;
+the resulting TCP cadence was far outside Wi-Fi latency and throughput norms.
+The current repair preserves the oracle's physical ordering as durable owner
+state. It restores neither its poller nor any fallback, source probe, smoltcp
+tuning, or GENET change.
+
 The exact `25f406d9cc26` image (image id
 `92d8326196f954c5f56b45b092cc2b17ae7cf5ffe9bfff7bbc6df806c1030884`,
 SHA-256
@@ -1536,6 +1545,22 @@ generation and XID.
   external-DMA control children without adding a poller, deadline wake, second
   issuer, or steady op7 hot-path work.
 
+  Request terminalization closes the same physical episode before publishing
+  the child terminal. The sole SDIO owner masks request and `CARD_INT`
+  signalling in both host enable registers and verifies the readback, W1Cs
+  only the immutable request's residual status bits, and verifies that exact
+  clear. If `CARD_INT` is visible, it commits the DPC event body and sequence
+  before acknowledging the exact IRQ158 handler cap and signalling CYW43; that
+  event retains the masked level for its DPC consumer. Otherwise the owner
+  acknowledges the exact IRQ158 episode and completes the normal
+  crossing-safe `CARD_INT` rearm before the child terminal becomes visible. A
+  source crossing that rearm is committed, acknowledged, and signalled by the
+  same ordering. An external-DMA child additionally joins the already-cleared
+  channel condition with the exact DMA4 IRQ116 handler acknowledgement before
+  the single child terminal. Polling the durable controller terminal before
+  dequeuing either IRQ badge therefore cannot strand a masked handler or split
+  one immutable request into two completions.
+
   CYW43 writes and cleans the complete persistent child command, executes the
   barrier, commits its sequence last, and may issue one badge-256 scheduling
   prompt. The sole SDIO owner binds that exact child once and advances it without
@@ -1608,6 +1633,11 @@ generation and XID.
   command plus either its paired persistent marker or exact unused ordinary
   grant are the only intake and continuation authorities. An idle runtime
   blocks only after the final committed-state and hardware-condition recheck.
+  In particular, an empty valid DPC ring whose durable owner state still says
+  `CARD_INT` is masked makes the SDIO owner's final rearm quantum due even when
+  its command queue is empty. The owner performs the same crossing-safe rearm
+  from that durable condition before command arbitration; a peer notification
+  may prompt the check but supplies neither the condition nor a command.
   The legacy `dpc_owner_rearms` trace field counts
   generation-scoped signal attempts, not delivered work or authority; actual
   SDIO owner progress and rearm are established by durable ring and owner
