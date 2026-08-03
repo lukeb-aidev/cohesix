@@ -2781,6 +2781,7 @@ struct SdioExternalDmaRequestIdentity {
     sequence: u32,
     action_fingerprint: u32,
     generation: u32,
+    peer_wake_deferred_to_terminal: bool,
     descriptor: DriverRuntimeSdioCommandDescriptor,
     frame: DriverFrameDescriptor,
     cmd: u16,
@@ -2808,6 +2809,7 @@ impl SdioExternalDmaRequestIdentity {
             sequence: 0,
             action_fingerprint: 0,
             generation: 0,
+            peer_wake_deferred_to_terminal: false,
             descriptor: DriverRuntimeSdioCommandDescriptor::empty(),
             frame: DriverFrameDescriptor::empty(),
             cmd: 0,
@@ -14116,7 +14118,17 @@ fn runtime_signal_notification(slot: u32) {
     }
 }
 
-#[cfg(not(target_os = "none"))]
+#[cfg(all(not(target_os = "none"), test))]
+static TEST_CYW43_PEER_WAKE_SIGNALS: AtomicUsize = AtomicUsize::new(0);
+
+#[cfg(all(not(target_os = "none"), test))]
+fn runtime_signal_notification(slot: u32) {
+    if slot == DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT {
+        TEST_CYW43_PEER_WAKE_SIGNALS.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+#[cfg(all(not(target_os = "none"), not(test)))]
 fn runtime_signal_notification(_slot: u32) {}
 
 #[cfg(test)]
@@ -14318,14 +14330,41 @@ fn sdio_publish_card_interrupt_event(
     badge: u32,
     irq_ack_epoch: Option<u32>,
 ) -> bool {
-    sdio_publish_card_interrupt_event_with_policy(host_int_status, badge, irq_ack_epoch, false)
+    let peer_wake_deferred_to_terminal = SDIO_RUNTIME_STATE.with_ref(|state| {
+        state.external_dma_request.active()
+            && state
+                .external_dma_request
+                .identity
+                .peer_wake_deferred_to_terminal
+            || (state.external_dma_input.valid
+                && sdio_owner_completion_requires_postcommit_signal(
+                    state.external_dma_input.command,
+                    RuntimeNotificationRoute::SdioOwner,
+                ))
+    });
+    sdio_publish_card_interrupt_event_with_policy(
+        host_int_status,
+        badge,
+        irq_ack_epoch,
+        false,
+        peer_wake_deferred_to_terminal,
+    )
 }
 
-fn sdio_publish_card_interrupt_event_after_rearm(host_int_status: u32) -> bool {
+fn sdio_publish_card_interrupt_event_after_rearm(
+    host_int_status: u32,
+    peer_wake_deferred_to_terminal: bool,
+) -> bool {
     // `sdio_rearm_card_interrupt_with` already proved and restored the masked
     // policy before returning SourcePending. Publish the new physical episode
     // without replacing the active controller cursor or replaying an IRQ ACK.
-    sdio_publish_card_interrupt_event_with_policy(host_int_status, 0, None, true)
+    sdio_publish_card_interrupt_event_with_policy(
+        host_int_status,
+        0,
+        None,
+        true,
+        peer_wake_deferred_to_terminal,
+    )
 }
 
 fn sdio_publish_card_interrupt_event_with_policy(
@@ -14333,6 +14372,7 @@ fn sdio_publish_card_interrupt_event_with_policy(
     badge: u32,
     irq_ack_epoch: Option<u32>,
     policy_already_masked: bool,
+    peer_wake_deferred_to_terminal: bool,
 ) -> bool {
     #[cfg(all(not(target_os = "none"), not(test)))]
     let _ = (host_int_status, badge);
@@ -14402,7 +14442,12 @@ fn sdio_publish_card_interrupt_event_with_policy(
             sdio_record_irq_ack_result_for_epoch(epoch, acked);
             acked
         });
-    if durable {
+    if durable && !peer_wake_deferred_to_terminal {
+        // A standalone IRQ episode has no later terminal publication, so its
+        // durable event needs one immediate scheduling hint. If an immutable
+        // one-way SDIO child is active, the event and IRQ joins are part of
+        // that same transaction: its generic sequence-last completion emits
+        // the sole peer hint after both records are authoritative.
         runtime_signal_notification(peer_slot);
     }
     acked
@@ -14760,14 +14805,25 @@ fn cyw43_persistent_parent_transaction_admitted(
     let ring = dpc_event_ring_read_at(
         DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET),
     );
+    let exact_dpc_activation_owns_ack_debt = CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        transaction.exact_persistent_dpc_activation_frontier_active(physical_generation)
+    });
+    let ack_pending = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING != 0;
     ring.valid()
         && ring.epoch == physical_generation
         && ring.overruns == 0
         && ring.flags
-            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING
-                | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
+            & (DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OVERRUN
                 | DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED)
             == 0
+        // IRQ158 is the physical mask while its exact ACK is outstanding.
+        // The immutable persistent DPC_ACTIVATE frontier is the sole owner
+        // operation that inspects the source, commits/coalesces its durable
+        // ring event, ACKs that epoch, and signals CYW43. Requiring the ACK to
+        // be complete before admitting that same frontier is circular. No
+        // other parent phase, child operation, or unclaimed notification may
+        // borrow this condition-scoped exception.
+        && (!ack_pending || exact_dpc_activation_owns_ack_debt)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -15055,18 +15111,6 @@ fn sdio_runtime_service_sdhci_notification(badge: u32) -> bool {
             SdioRequestIrqPartition::RequestAndCard | SdioRequestIrqPartition::NotRequest => {}
         }
     }
-    if real_irq && sampled_host_int_status == Some(0) {
-        // A badge queued before a condition-first terminal ACK carries no
-        // episode history. Release it idempotently without perturbing the
-        // current request/CARD_INT policy; a source crossing this clear sample
-        // remains level-latched and produces its own later delivery.
-        let Some(epoch) = irq_ack_epoch else {
-            return false;
-        };
-        let acked = runtime_irq_handler_ack(handler_slot);
-        sdio_record_irq_ack_result_for_epoch(epoch, acked);
-        return acked;
-    }
     if irq_ack_epoch.is_some()
         && !dpc_activation_allowed
         && (owner_request_active || sdio_durable_owner_command_pending())
@@ -15080,6 +15124,20 @@ fn sdio_runtime_service_sdhci_notification(badge: u32) -> bool {
         // preserving the request cursor and direction-ready interrupt source.
         // No SDIO card command is issued from this notification path.
         return true;
+    }
+    if real_irq && sampled_host_int_status == Some(0) {
+        // A badge queued before a condition-first terminal ACK carries no
+        // episode history only when no pre-activation owner frontier already
+        // owns it. Release that otherwise-unclaimed epoch idempotently without
+        // perturbing the current request/CARD_INT policy; a source crossing
+        // this clear sample remains level-latched and produces its own later
+        // delivery.
+        let Some(epoch) = irq_ack_epoch else {
+            return false;
+        };
+        let acked = runtime_irq_handler_ack(handler_slot);
+        sdio_record_irq_ack_result_for_epoch(epoch, acked);
+        return acked;
     }
     let poisoned = SDIO_RUNTIME_STATE.with_ref(|state| state.dpc_poisoned);
     if poisoned {
@@ -15890,6 +15948,10 @@ fn sdio_external_dma_request_identity_with<I: SdioTransferIo>(
         sequence: command.sequence,
         action_fingerprint: runtime_continuation_action_fingerprint(command),
         generation,
+        peer_wake_deferred_to_terminal: sdio_owner_completion_requires_postcommit_signal(
+            command,
+            RuntimeNotificationRoute::SdioOwner,
+        ),
         descriptor,
         frame,
         cmd,
@@ -16108,6 +16170,7 @@ fn sdio_join_request_terminal_irq_with<I: SdioTransferIo>(
             0,
             Some(ack_epoch),
             true,
+            cursor.identity.peer_wake_deferred_to_terminal,
         ) {
             let _ = sdio_fail_card_interrupt_rearm_with(io, masked_int, masked_signal);
             return SdioRequestTerminalIrqJoinResult::Fault;
@@ -16148,7 +16211,13 @@ fn sdio_join_request_terminal_irq_with<I: SdioTransferIo>(
             // dequeued. The common publisher closes that newly latched epoch
             // only after the event is durable, then emits the scheduling hint.
             let ack_epoch = sdio_latch_irq_ack();
-            if sdio_publish_card_interrupt_event_with_policy(status, 0, Some(ack_epoch), true) {
+            if sdio_publish_card_interrupt_event_with_policy(
+                status,
+                0,
+                Some(ack_epoch),
+                true,
+                cursor.identity.peer_wake_deferred_to_terminal,
+            ) {
                 SdioRequestTerminalIrqJoinResult::Joined
             } else {
                 let _ = sdio_fail_card_interrupt_rearm_with(io, masked_int, masked_signal);
@@ -17265,11 +17334,20 @@ fn sdio_retained_dpc_activate_turn_with<I: SdioTransferIo>(
                 };
             }
             SdioExternalDmaRequestPhase::DpcActivateSignal => {
-                if !matches!(cursor.dpc_publish_result, DpcRingPublishResult::BadEpoch) {
+                if !matches!(cursor.dpc_publish_result, DpcRingPublishResult::BadEpoch)
+                    && !cursor.identity.peer_wake_deferred_to_terminal
+                {
                     let peer_slot =
                         SDIO_RUNTIME_STATE.with_ref(|state| state.peer_notification_slot);
                     runtime_signal_notification(peer_slot);
                 }
+                // For an immutable one-way linked child, the durable DPC event
+                // and exact IRQ ACK are only part of the terminal body. The
+                // generic runtime commits the child completion sequence last
+                // and emits the sole CYW43 hint afterward; an in-transaction
+                // signal here could be consumed while the completion is still
+                // staged. Direct non-one-way service has no such later wake
+                // and retains the standalone event signal above.
                 cursor.phase = if cursor.config_control == 0 {
                     SdioExternalDmaRequestPhase::DpcActivateComplete
                 } else {
@@ -17994,7 +18072,11 @@ fn service_sdio_external_dma_command_turn_with_io<I: SdioTransferIo>(
         }
         sdio_clear_last_transfer_failure();
         if descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE != 0 {
-            match sdio_establish_preissue_dpc_fence_with(io, identity.generation) {
+            match sdio_establish_preissue_dpc_fence_with(
+                io,
+                identity.generation,
+                identity.peer_wake_deferred_to_terminal,
+            ) {
                 SdioPreissueDpcFenceResult::Ready => {}
                 SdioPreissueDpcFenceResult::Deferred(status) => {
                     let result = sdio_transfer_failure_result(
@@ -23414,6 +23496,23 @@ impl Cyw43ForegroundTransaction {
             && u32::from(self.parent_descriptor.payload_len) <= self.parent.budget.max_bytes
             && self.parent_payload_offset == self.parent_descriptor.payload_offset
             && self.parent_payload_len == self.parent_descriptor.payload_len
+    }
+
+    fn exact_persistent_dpc_activation_frontier_active(&self, generation: u32) -> bool {
+        let entry = self.frontier;
+        generation != 0
+            && self.active
+            && self.generation == generation
+            && self.frontier_submitted
+            && self.frontier_ticket_valid()
+            && cyw43_foreground_persistent_transaction_child(entry)
+            && entry.descriptor.op == DRIVER_RUNTIME_SDIO_OP_DPC_ACTIVATE
+            && entry.descriptor.addr == generation
+            && entry.descriptor.flags
+                & DriverRuntimeSdioCommandDescriptor::FLAG_DPC_FORCE_SOURCE_PROBE
+                != 0
+            && CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire)
+            && CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire) == entry.command.sequence
     }
 
     fn steady_tx_service_lease_parent_budget_valid(&self) -> bool {
@@ -50410,18 +50509,20 @@ fn sdio_preissue_dpc_fence_condition(generation: u32) -> SdioPreissueDpcFenceCon
 fn sdio_preissue_publish_card_interrupt_with<I: SdioTransferIo>(
     io: &mut I,
     host_int_status: u32,
+    peer_wake_deferred_to_terminal: bool,
 ) -> bool {
     let (masked_int, masked_signal) = sdio_interrupt_policy_registers(true, true);
     if !sdio_write_card_interrupt_masked_policy_with(io, masked_int, masked_signal) {
         let _ = sdio_fail_card_interrupt_rearm_with(io, masked_int, masked_signal);
         return false;
     }
-    sdio_publish_card_interrupt_event_after_rearm(host_int_status)
+    sdio_publish_card_interrupt_event_after_rearm(host_int_status, peer_wake_deferred_to_terminal)
 }
 
 fn sdio_establish_preissue_dpc_fence_with<I: SdioTransferIo>(
     io: &mut I,
     generation: u32,
+    peer_wake_deferred_to_terminal: bool,
 ) -> SdioPreissueDpcFenceResult {
     match sdio_preissue_dpc_fence_condition(generation) {
         SdioPreissueDpcFenceCondition::Event(status) => {
@@ -50448,7 +50549,10 @@ fn sdio_establish_preissue_dpc_fence_with<I: SdioTransferIo>(
     match sdio_rearm_card_interrupt_with(io) {
         SdioCardInterruptRearmResult::Rearmed => {}
         SdioCardInterruptRearmResult::SourcePending(status) => {
-            return if sdio_publish_card_interrupt_event_after_rearm(status) {
+            return if sdio_publish_card_interrupt_event_after_rearm(
+                status,
+                peer_wake_deferred_to_terminal,
+            ) {
                 SdioPreissueDpcFenceResult::Deferred(status)
             } else {
                 SdioPreissueDpcFenceResult::Fault
@@ -50484,7 +50588,8 @@ fn sdio_establish_preissue_dpc_fence_with<I: SdioTransferIo>(
     let status = io.read32(SDHCI_INT_STATUS);
     if status & SDHCI_INT_CARD_INT == 0 {
         SdioPreissueDpcFenceResult::Ready
-    } else if sdio_preissue_publish_card_interrupt_with(io, status) {
+    } else if sdio_preissue_publish_card_interrupt_with(io, status, peer_wake_deferred_to_terminal)
+    {
         SdioPreissueDpcFenceResult::Deferred(status)
     } else {
         SdioPreissueDpcFenceResult::Fault
@@ -50519,7 +50624,11 @@ fn sdio_linearize_preissue_dpc_fence_with<I: SdioTransferIo>(
     let status = io.read32(SDHCI_INT_STATUS);
     if status & SDHCI_INT_CARD_INT == 0 {
         SdioPreissueDpcFenceResult::Ready
-    } else if sdio_preissue_publish_card_interrupt_with(io, status) {
+    } else if sdio_preissue_publish_card_interrupt_with(
+        io,
+        status,
+        cursor.identity.peer_wake_deferred_to_terminal,
+    ) {
         SdioPreissueDpcFenceResult::Deferred(status)
     } else {
         SdioPreissueDpcFenceResult::Fault
@@ -52343,6 +52452,28 @@ const fn runtime_completion_postcommit_wake_target(
     }
 }
 
+fn runtime_emit_completion_postcommit_wake(
+    order: RuntimeCompletionWakeOrder,
+    completion_committed: bool,
+) -> RuntimeCompletionWakeTarget {
+    let target = runtime_completion_postcommit_wake_target(order, completion_committed);
+    match target {
+        RuntimeCompletionWakeTarget::Cyw43Peer => {
+            // The exact SDIO child terminal is durable before the scheduling
+            // hint. Any DPC event published while that child was active is
+            // part of the same body and deliberately emitted no earlier hint.
+            runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT);
+        }
+        RuntimeCompletionWakeTarget::RootNetwork => {
+            // Root suppresses an unchanged active steady-TX level while it is
+            // asleep. Prompt it only after the exact parent terminal commit.
+            cyw43_signal_root_network_wake();
+        }
+        RuntimeCompletionWakeTarget::None => {}
+    }
+    target
+}
+
 /// Run the isolated driver runtime receive/service loop.
 #[cfg(target_os = "none")]
 pub fn runtime_main(task_key: usize) -> ! {
@@ -53456,23 +53587,8 @@ pub fn runtime_main(task_key: usize) -> ! {
             runtime_notification_route(&RUNTIME_DESCRIPTOR.load()),
         );
         let completion_committed = publish_runtime_completion_sequence_last(completion);
-        match runtime_completion_postcommit_wake_target(completion_wake_order, completion_committed)
-        {
-            RuntimeCompletionWakeTarget::Cyw43Peer => {
-                // The exact SDIO child terminal is durable before the scheduling
-                // edge. CYW43 therefore cannot consume the edge, observe only a
-                // staged record, and park the retained child without another wake.
-                runtime_signal_notification(DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT);
-            }
-            RuntimeCompletionWakeTarget::RootNetwork => {
-                // Root suppresses an unchanged active steady-TX level while it is
-                // asleep. Publish one Network scheduling edge only after the exact
-                // parent terminal is sequence-last committed, so the awakened
-                // EventPump can consume terminal truth immediately.
-                cyw43_signal_root_network_wake();
-            }
-            RuntimeCompletionWakeTarget::None => {}
-        }
+        let _ =
+            runtime_emit_completion_postcommit_wake(completion_wake_order, completion_committed);
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -54821,6 +54937,7 @@ mod tests {
         TEST_CYW43_FOREGROUND_STATE_SNAPSHOTS.store(0, Ordering::Release);
         TEST_CYW43_CONTROL_TX_DONE_PUBLISHES.store(0, Ordering::Release);
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
+        TEST_CYW43_PEER_WAKE_SIGNALS.store(0, Ordering::Release);
         CYW43_FOREGROUND_TRANSACTION.with_mut(Cyw43ForegroundTransaction::clear);
         CYW43_FOREGROUND_BASELINE_VALID.store(false, Ordering::Release);
         CYW43_FOREGROUND_TURN_ID.store(0, Ordering::Release);
@@ -56332,20 +56449,48 @@ mod tests {
         ));
         assert_eq!(TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire), 1);
 
-        // Model the exact pre-Join boundary that hardware exposed: the prior
-        // DPC lifetime has advanced its durable ring while the private mask /
-        // activation mirror still reflects the preceding rearm transition.
-        // The exact DPC_ACTIVATE child owns reconciliation; this mutable state
-        // cannot invalidate its already-sealed transaction identity.
+        // Model the exact pre-Join boundary that hardware exposed: IRQ158 was
+        // delivered after the immutable DPC_ACTIVATE child was submitted but
+        // before activation opened. The handler cap is the physical mask and
+        // its epoch remains owed to this exact child. Requiring an already
+        // clear ACK flag here would prevent the sole owner from clearing it.
         SDIO_RUNTIME_STATE.with_mut(|state| {
             state.dpc_activation_allowed = false;
             state.card_irq_masked = true;
+            state.irq_ack_pending = true;
+            state.irq_ack_epoch = 7;
         });
         let dpc_base =
             DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
         assert!(dpc_event_ring_set_owner_health_at(
-            dpc_base, false, false, false, false,
+            dpc_base, true, true, false, false,
         ));
+        assert!(cyw43_persistent_parent_transaction_admitted(
+            parent,
+            physical_generation,
+        ));
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier_submitted = false;
+        });
+        assert!(
+            !cyw43_persistent_parent_transaction_admitted(parent, physical_generation),
+            "ACK debt without the exact submitted DPC_ACTIVATE frontier remains terminal",
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier_submitted = true;
+        });
+        let exact_frontier =
+            CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.frontier);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier.descriptor.op = DRIVER_RUNTIME_SDIO_OP_CMD52_READ;
+        });
+        assert!(
+            !cyw43_persistent_parent_transaction_admitted(parent, physical_generation),
+            "ordinary persistent card I/O cannot inherit DPC_ACTIVATE's ACK authority",
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.frontier = exact_frontier;
+        });
         assert!(cyw43_persistent_parent_transaction_admitted(
             parent,
             physical_generation,
@@ -56437,6 +56582,8 @@ mod tests {
 
         let mut io = TestSdioHostIo::new();
         io.use_runtime_payload = true;
+        let irq_acks_before = TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let peer_wakes_before = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
         let RuntimeCommandTurn::Complete(completion) =
             service_sdio_external_dma_admitted_turn_with_io(child, &mut io)
                 .expect("the marked DPC child stays on the sealed SDIO owner lane")
@@ -56459,12 +56606,28 @@ mod tests {
             assert!(state.dpc_activation_allowed);
             assert!(state.card_irq_masked);
             assert!(!state.dpc_poisoned);
+            assert!(!state.irq_ack_pending);
         });
+        assert_eq!(
+            TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire),
+            irq_acks_before + 1,
+            "the exact DPC activation discharges the one retained IRQ158 epoch",
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before,
+            "event publication inside the child cannot wake CYW43 before its terminal commit",
+        );
         let reconciled_ring = dpc_event_ring_read_at(dpc_base);
         assert_ne!(
             reconciled_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
             0,
             "the exact activation republishes its reconciled owner condition",
+        );
+        assert_eq!(
+            reconciled_ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_ACK_PENDING,
+            0,
+            "terminal owner health commits after the IRQ158 debt is cleared",
         );
 
         let mut owner_ring =
@@ -56477,6 +56640,18 @@ mod tests {
             &mut owner_ring,
             completion.sequence,
         ));
+        assert_eq!(
+            runtime_emit_completion_postcommit_wake(
+                runtime_completion_wake_order(child, RuntimeNotificationRoute::SdioOwner),
+                true,
+            ),
+            RuntimeCompletionWakeTarget::Cyw43Peer,
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before + 1,
+            "the event plus sequence-last child terminal produces one peer hint",
+        );
         let source_event = match cyw43_runtime_dpc_event_peek() {
             DpcRingConsumeResult::Event(event) => event,
             other => panic!("the source-probe terminal must leave one durable event: {other:?}"),
@@ -81222,6 +81397,7 @@ mod tests {
         identity.cmd = SDIO_CMD52;
         identity.flags = DRIVER_RUNTIME_SDIO_FLAG_RESP_SHORT;
         identity.engine = SdioRequestEngine::CommandOnly;
+        identity.peer_wake_deferred_to_terminal = true;
         let mut cursor = SdioExternalDmaRequestCursor {
             phase: SdioExternalDmaRequestPhase::PollIssued,
             identity,
@@ -81245,6 +81421,7 @@ mod tests {
         let mut io = TestSdioHostIo::new();
         io.set_register(SDHCI_INT_STATUS, SDHCI_INT_RESPONSE | SDHCI_INT_CARD_INT);
         let acks_before = TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let peer_wakes_before = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
         let _production_mode = ProductionForegroundModeGuard::enter();
 
         assert_eq!(
@@ -81266,11 +81443,40 @@ mod tests {
             TEST_RUNTIME_SDIO_IRQ_ACK_CALLS.load(Ordering::Acquire),
             acks_before + 1,
         );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before,
+            "the command terminal owns CARD_INT and emits no signal before sequence-last commit",
+        );
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert!(state.card_irq_masked);
             assert!(!state.irq_ack_pending);
             assert_eq!(state.dpc_events_published, 1);
         });
+
+        let completion = DriverTaskCompletionRecord::progress(identity.sequence, 1);
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert_eq!(
+            runtime_emit_completion_postcommit_wake(
+                RuntimeCompletionWakeOrder::AfterCommitCyw43Peer,
+                true,
+            ),
+            RuntimeCompletionWakeTarget::Cyw43Peer,
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before + 1,
+            "the command terminal publishes exactly one peer hint after its durable commit",
+        );
     }
 
     #[test]
@@ -81348,6 +81554,7 @@ mod tests {
         let generation = 0xd114_0008;
         let io = TestSdioHostIo::new();
         let mut cursor = sdio_external_dma_irq_cursor_for_test(generation, &io);
+        cursor.identity.peer_wake_deferred_to_terminal = true;
         cursor.dma_terminal_interrupt_seen = true;
         cursor.dma_complete = true;
         cursor.dma_irq_cs_snapshot = BCM2835_DMA_CS_END | BCM2835_DMA_CS_INT;
@@ -81360,6 +81567,7 @@ mod tests {
             state.external_dma_request = cursor;
         });
         let acks_before = TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire);
+        let peer_wakes_before = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
 
         assert!(sdio_join_external_dma_terminal_irq(&mut cursor));
         assert!(cursor.dma_irq_acknowledged);
@@ -81367,6 +81575,11 @@ mod tests {
         assert_eq!(
             TEST_RUNTIME_SDIO_DMA_IRQ_ACK_CALLS.load(Ordering::Acquire),
             acks_before + 1,
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before,
+            "IRQ116 contributes terminal body state but never signals the CYW43 peer",
         );
         SDIO_RUNTIME_STATE.with_ref(|state| {
             assert!(!state.dma_irq_ack_pending);
@@ -92634,6 +92847,89 @@ mod tests {
     }
 
     #[test]
+    fn sdio_precursor_seal_coalesces_dpc_wake_into_child_terminal() {
+        let _guard = test_guard();
+        let epoch = 0x4359_5305;
+        initialize_production_foreground_pair(epoch);
+        SDIO_RUNTIME_STATE.with_mut(|state| {
+            state.dpc_link_ready = true;
+            state.irq_handler_slot = DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT;
+            state.peer_notification_slot = DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT;
+            state.card_irq_masked = true;
+            state.dpc_activation_allowed = true;
+            state.irq_ack_pending = false;
+            state.dpc_poisoned = false;
+        });
+        let dpc_base =
+            DRIVER_TASK_SDIO_BUS_RING_VADDR + usize::from(DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+        assert!(dpc_event_ring_set_owner_health_at(
+            dpc_base, true, false, false, false,
+        ));
+
+        let descriptor = sdio_bus_link_cmd52_descriptor(
+            false,
+            1,
+            SDIO_CCCR_IORX,
+            BCM2835_SDIO_REQUEST_TIMEOUT_US,
+        )
+        .expect("the linked child has one valid Function-1 read");
+        let mut child = stage_sdio_descriptor_service_command(0x8000_5305, descriptor);
+        child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        child.aux1 = epoch;
+        assert!(sdio_external_dma_pre_admit(child));
+        SDIO_RUNTIME_STATE.with_ref(|state| {
+            assert!(state.external_dma_input.matches(child));
+            assert!(!state.external_dma_request.active());
+        });
+
+        TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.store(1, Ordering::Release);
+        TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(SDHCI_INT_CARD_INT, Ordering::Release);
+        let peer_wakes_before = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
+        let _production_mode = ProductionForegroundModeGuard::enter();
+        assert!(sdio_final_dpc_rearm_turn_due(
+            RuntimeNotificationRoute::SdioOwner,
+        ));
+        assert!(matches!(
+            dpc_event_ring_peek_at(dpc_base, epoch),
+            DpcRingConsumeResult::Event(event)
+                if event.flags & DRIVER_RUNTIME_DPC_EVENT_FLAG_CARD_INTERRUPT != 0
+        ));
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before,
+            "the intake-sealed child owns the first peer wake before its cursor exists",
+        );
+
+        let completion = DriverTaskCompletionRecord::frame_ready_at(
+            child.sequence,
+            u32::from(descriptor.data_offset),
+            1,
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert_eq!(
+            runtime_emit_completion_postcommit_wake(
+                runtime_completion_wake_order(child, RuntimeNotificationRoute::SdioOwner),
+                true,
+            ),
+            RuntimeCompletionWakeTarget::Cyw43Peer,
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before + 1,
+            "the durable event and sequence-last child terminal share one scheduling hint",
+        );
+    }
+
+    #[test]
     fn sdio_final_dpc_rearm_services_idle_owner_hint_once() {
         let _guard = test_guard();
         let epoch = 0x4359_5304;
@@ -92699,6 +92995,7 @@ mod tests {
 
         TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.store(1, Ordering::Release);
         TEST_SDIO_HOST_INT_STATUS_RESPONSE.store(SDHCI_INT_CARD_INT, Ordering::Release);
+        let peer_wakes_before = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
         let _production_mode = ProductionForegroundModeGuard::enter();
         assert!(sdio_final_dpc_rearm_turn_due(
             RuntimeNotificationRoute::SdioOwner,
@@ -92724,6 +93021,11 @@ mod tests {
             other => panic!("crossing CARD_INT must remain durable: {other:?}"),
         };
         assert_eq!(event.signal_status, 0, "rearm discovery is not badge 159");
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_wakes_before + 1,
+            "standalone idle CARD_INT remains an immediate liveness hint",
+        );
         assert_eq!(
             TEST_SDIO_HOST_INT_STATUS_ZERO_READS_REMAINING.load(Ordering::Acquire),
             0,

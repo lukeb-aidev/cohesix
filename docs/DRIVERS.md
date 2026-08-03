@@ -1537,6 +1537,18 @@ generation and XID.
   inspects or coalesces the durable source; republishes ring health; and reaches
   one terminal without issuing an SDHCI command. Requiring activation or mask
   parity before this operation would require its own postcondition as an input.
+  The same condition-first rule applies when IRQ158 arrives after that exact
+  immutable frontier is submitted: its current `ACK_PENDING` bit remains
+  admissible only while the active parent, child ticket, generation, descriptor,
+  source-probe flag, and global child sequence all identify that one
+  `DPC_ACTIVATE`. That owner cursor alone commits/coalesces the source, ACKs the
+  frozen IRQ epoch, republishes cleared health, and then terminalizes. ACK debt
+  with no such frontier, a different child, or a mutated identity remains a
+  terminal parent-admission failure. Notification intake latches that exact
+  epoch before sampling host status. While activation is closed and either the
+  immutable owner command or its private cursor exists, even a clear status
+  sample remains attached to that frontier; only an unclaimed zero-status badge
+  may be acknowledged immediately.
   Ordinary persistent CMD52/CMD53 children and the separate urgent-op7 lease
   retain their stronger live activation, ring, and mask-coherence gates.
 
@@ -1562,16 +1574,28 @@ generation and XID.
   signalling in both host enable registers and verifies the readback, W1Cs
   only the immutable request's residual status bits, and verifies that exact
   clear. If `CARD_INT` is visible, it commits the DPC event body and sequence
-  before acknowledging the exact IRQ158 handler cap and signalling CYW43; that
-  event retains the masked level for its DPC consumer. Otherwise the owner
+  before acknowledging the exact IRQ158 handler cap; that event retains the
+  masked level for its DPC consumer. Otherwise the owner
   acknowledges the exact IRQ158 episode and completes the normal
   crossing-safe `CARD_INT` rearm before the child terminal becomes visible. A
-  source crossing that rearm is committed, acknowledged, and signalled by the
-  same ordering. An external-DMA child additionally joins the already-cleared
+  source crossing that rearm is committed and acknowledged by the same
+  ordering. An external-DMA child additionally joins the already-cleared
   channel condition with the exact DMA4 IRQ116 handler acknowledgement before
   the single child terminal. Polling the durable controller terminal before
   dequeuing either IRQ badge therefore cannot strand a masked handler or split
   one immutable request into two completions.
+
+  While an immutable one-way child is intake-sealed or cursor-active, the DPC
+  event, ring health, IRQ158 acknowledgement, and optional IRQ116 join are body
+  state for that same child terminal. None emits an intermediate peer hint.
+  The generic owner path cleans and barriers the complete terminal body,
+  commits the child completion sequence last, and only then emits exactly one
+  CYW43 hint. A failed completion commit emits none. Standalone idle `CARD_INT`
+  capture/rearm discovery and non-one-way service have no later linked terminal
+  to carry the handoff, so they retain one immediate hint after their durable
+  event commit. This intake-seal rule covers the interval before the retained
+  cursor exists and prevents a consumable scheduling edge from preceding its
+  authoritative completion.
 
   CYW43 writes and cleans the complete persistent child command, executes the
   barrier, commits its sequence last, and may issue one badge-256 scheduling
@@ -3129,10 +3153,13 @@ takes its required live hardware sample after a changed cursor. A marked
 persistent op11 drives its first `DPC_ACTIVATE` child through production SDIO
 intake and owner terminal, then replays from the sequence-last completion with
 the notification absent. The generation-1 Join composition begins from the
-observed inactive/mask-skewed pre-Join boundary and proves that activation
-reconciles the owner with zero SDHCI command issue, while the same boundary
-rejects an ordinary persistent Function-1 read and stale epoch, poison, or
-overrun still fail closed. The same marked logical-generation-zero lifecycle
+observed inactive/mask-skewed pre-Join boundary plus one exact IRQ158 ACK debt
+and proves that the already-submitted activation frontier remains admitted,
+ACKs that exact epoch, republishes cleared health, and reconciles the owner with
+zero SDHCI command issue. Removing the submitted frontier or changing its
+operation rejects the parent; the same boundary also rejects an ordinary
+persistent Function-1 read, while stale epoch, poison, or overrun still fail
+closed. The same marked logical-generation-zero lifecycle
 then consumes the owner-published source event through canonical DPC, reaches
 one persistent Function-2 TX child with no continuation grant, commits and
 replays that child exactly once, then takes a modeled physical IRQ158/CARD_INT

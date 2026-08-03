@@ -1094,6 +1094,13 @@ state blocks. Tests must prove the PIO CMD53 path reaches one terminal with
 IRQ158/host state and zero DMA use, and prove the external-DMA CMD53 path joins
 IRQ158/IRQ116 in both arrival orders into exactly one terminal. The completion
 body/cache clean/barrier must precede sequence-last commit and any signal.
+Signal-count coverage must prove that an intake-sealed pre-cursor crossing,
+active `DPC_ACTIVATE`, and PIO/CMD terminal `CARD_INT` join each emit zero peer
+hints before child-terminal commit and exactly one afterward. DMA4 IRQ116 must
+join that body without signalling CYW43 directly. A failed completion commit
+must emit zero hints. The complementary idle-owner rearm crossing, where no
+one-way child owns a later terminal, must still publish its durable event and
+emit exactly one immediate liveness hint.
 
 Every active autonomous SDIO phase that can remain blocked must publish
 `DriverRuntimeSdioDeadlineArm` body before its final request-sequence commit at
@@ -2075,12 +2082,19 @@ edge.
 
 The persistent-control composition must include the exact generation-1 Join
 boundary observed on hardware: the marker-paired first `DPC_ACTIVATE` arrives
-with activation false and state/ring `CARD_INT` mask state skewed. That child
-must remain generation/link/ring/poison checked, reconcile activation and mask
+with activation false, state/ring `CARD_INT` mask state skewed, and an exact
+IRQ158 epoch pending after the child frontier was submitted. That child must
+remain generation/link/ring/poison checked, retain parent admission solely from
+its immutable active frontier, ACK exactly that epoch, commit cleared owner
 health, publish its terminal without one SDHCI command or continuation grant,
-and let the same parent reach its fenced Function-2 TX. Under the identical
+and let the same parent reach its fenced Function-2 TX. Removing the submitted
+frontier or changing its operation must reject the parent. Under the identical
 precondition, ordinary persistent CMD52/CMD53 children must remain rejected;
 wrong epoch, poison, overrun, and marker mutation must also fail closed. A
+real IRQ arriving immediately before or after durable owner-command publication
+must retain its exact ACK epoch through private cursor admission, including a
+zero host-status sample; only the same owner quantum may consume it. An idle
+unclaimed zero-status badge must still be acknowledged without creating work. A
 failed dedicated final rearm must preserve the typed first owner fault rather
 than surface only as a later persistent-marker rejection.
 
@@ -2691,8 +2705,10 @@ remains covered. PIO must reach one terminal with IRQ158/host state and zero DMA
 use. For external DMA, IRQ158 and IRQ116 may arrive in either order or together,
 and the same owner joins them into exactly one terminal.
 For `DPC_ACTIVATE`, the bounded ordered transaction masks, inspects, commits or
-coalesces durable work, acknowledges the exact IRQ, signals only after commit,
-and rearms. A failed exact IRQ acknowledgement may retain only that immutable
+coalesces durable work, acknowledges the exact IRQ, and rearms. When it is a
+one-way linked child, those steps emit no inner hint; only the generic
+sequence-last child-terminal commit may signal. A failed exact IRQ
+acknowledgement may retain only that immutable
 ACK transaction for a later retry. Inject one failure followed by an exact
 successful retry: `ack_failures` must remain one as per-pair telemetry while
 current ACK-pending/fault flags clear, and op11, steady TX, DPC urgency, and RX
