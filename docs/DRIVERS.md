@@ -467,7 +467,16 @@ condition decides each handoff: deterministic private work continues even when
 the diagnostic snapshot is unchanged, while a committed child, unavailable
 credit, or other external wait blocks on its first observation. Parent identity
 depends on its immutable seal, generations, and healthy owner state, not on the
-instantaneous DPC publication phase. `ACK_PENDING` before the sequence-last
+instantaneous DPC publication phase. Root validates that immutable identity and
+stable-reads the exact completion before consulting lease phase or priority
+coverage, because those transient scheduler facts govern only whether an
+incomplete parent may sleep. A committed terminal therefore always restores
+one explicit consume turn. While the exact terminal is absent, the same waiting
+parent suppresses all Host-EAPOL policy self-demand, including active-session
+and post-association BSSID levels; CARD_INT/DPC and root RX remain independently
+schedulable. The bounded `wifi: finite_parent` diagnostic reports the raw stable
+root completion plus immutable and wait identity, but carries no authority.
+`ACK_PENDING` before the sequence-last
 front event is a bounded producer window: it retains the exact parent but is
 not yet DPC service authority. Once the source-bearing event commits, canonical
 DPC owns the next bounded quantum. Neither state may downgrade the parent to an

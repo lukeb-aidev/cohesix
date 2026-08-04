@@ -5520,6 +5520,8 @@ const CYW43_SERVICE_WORK_MAINTENANCE: u64 = 1 << 14;
 #[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_RECOVERY: u64 = 1 << 15;
 #[cfg(feature = "kernel")]
+const CYW43_SERVICE_WORK_FINITE_PARENT_TERMINAL: u64 = 1 << 16;
+#[cfg(feature = "kernel")]
 const CYW43_SERVICE_WORK_PERSISTENT_PARENT_LIVENESS: u64 = CYW43_SERVICE_WORK_RUNTIME_DESCRIPTOR
     | CYW43_SERVICE_WORK_LOGICAL_OWNER
     | CYW43_SERVICE_WORK_HAL_LEASE;
@@ -5547,6 +5549,7 @@ struct Cyw43ServiceWorkInputs {
     prompt: bool,
     maintenance: bool,
     recovery: bool,
+    finite_parent_terminal: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -5598,6 +5601,9 @@ impl Cyw43ServiceWorkInputs {
         }
         if self.recovery {
             reason_mask |= CYW43_SERVICE_WORK_RECOVERY;
+        }
+        if self.finite_parent_terminal {
+            reason_mask |= CYW43_SERVICE_WORK_FINITE_PARENT_TERMINAL;
         }
         reason_mask
     }
@@ -5863,27 +5869,67 @@ const fn cyw43_persistent_parent_turn_route(
     }
 }
 
-/// Decide whether one exact tagged TX parent must remain asleep.
-///
-/// Notifications are scheduler hints, not operation authority or history. The
-/// exact parent waits only while its durable HAL condition is still waiting;
-/// a committed terminal always makes it runnable for consumption.
+/// One authoritative service route for an issued finite op7 parent.
 #[cfg(feature = "kernel")]
-fn cyw43_steady_tx_waits_for_runtime_condition(
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Cyw43SteadyTxParentRoute {
+    Inactive,
+    Waiting(u32),
+    ConsumeTerminal(u32),
+    Fault(u32),
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43SteadyTxParentRoute {
+    #[must_use]
+    const fn blocked_request(self) -> Option<u32> {
+        match self {
+            Self::Waiting(request) | Self::Fault(request) => Some(request),
+            Self::Inactive | Self::ConsumeTerminal(_) => None,
+        }
+    }
+
+    #[must_use]
+    const fn terminal_request(self) -> Option<u32> {
+        match self {
+            Self::ConsumeTerminal(request) => Some(request),
+            Self::Inactive | Self::Waiting(_) | Self::Fault(_) => None,
+        }
+    }
+}
+
+/// Classify one exact finite parent from immutable identity and durable state.
+///
+/// Notifications are scheduler hints, not operation authority or history. A
+/// committed terminal always routes one consume turn. An incomplete exact
+/// parent sleeps, and an issued identity fault is fenced rather than allowing
+/// unrelated policy work to hot-run over an unfinished physical lifetime.
+#[cfg(feature = "kernel")]
+fn cyw43_steady_tx_parent_route(
     tagged_parent: bool,
     request: Option<u32>,
     active_request: Option<u32>,
     active_issued: bool,
     condition: crate::hal::driver_task::Cyw43SteadyServiceParentCondition,
-) -> bool {
-    tagged_parent
-        && request.is_some()
-        && request == active_request
-        && active_issued
-        && matches!(
-            condition,
-            crate::hal::driver_task::Cyw43SteadyServiceParentCondition::Waiting
-        )
+) -> Cyw43SteadyTxParentRoute {
+    let Some(request) = request else {
+        return Cyw43SteadyTxParentRoute::Inactive;
+    };
+    if !tagged_parent || Some(request) != active_request || !active_issued {
+        return Cyw43SteadyTxParentRoute::Inactive;
+    }
+    match condition {
+        crate::hal::driver_task::Cyw43SteadyServiceParentCondition::Waiting => {
+            Cyw43SteadyTxParentRoute::Waiting(request)
+        }
+        crate::hal::driver_task::Cyw43SteadyServiceParentCondition::TerminalVisible => {
+            Cyw43SteadyTxParentRoute::ConsumeTerminal(request)
+        }
+        crate::hal::driver_task::Cyw43SteadyServiceParentCondition::DeadlineFault
+        | crate::hal::driver_task::Cyw43SteadyServiceParentCondition::NotExact => {
+            Cyw43SteadyTxParentRoute::Fault(request)
+        }
+    }
 }
 
 /// Return the request identity of a tagged TX parent whose durable condition
@@ -5893,7 +5939,7 @@ fn cyw43_steady_tx_waits_for_runtime_condition(
 /// On physical-lifetime expiry it closes that race once more, latches the sole
 /// coordinated recovery path, and emits no scheduling signal or rescue turn.
 #[cfg(feature = "kernel")]
-fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
+fn cyw43_steady_tx_parent_condition_route() -> Cyw43SteadyTxParentRoute {
     let pending = *CYW43_PENDING_DATA_TX.lock();
     let request = pending.and_then(|pending| pending.request);
     let active = crate::hal::driver_task::active_driver_task_retained_request(
@@ -5905,16 +5951,30 @@ fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
         crate::hal::driver_task::Cyw43SteadyServiceParentCondition::NotExact,
         crate::hal::driver_task::cyw43_steady_service_parent_condition,
     );
-    if condition == crate::hal::driver_task::Cyw43SteadyServiceParentCondition::DeadlineFault {
+    let route = cyw43_steady_tx_parent_route(
+        pending.is_some(),
+        request,
+        active_request,
+        active_issued,
+        condition,
+    );
+    if matches!(route, Cyw43SteadyTxParentRoute::Fault(_)) {
         if let (Some(pending), Some(request)) = (pending, request) {
             // HAL has already fenced the issued parent and latched coordinated
-            // pair recovery. Preserve the immutable root/child identity in the
-            // same observation turn; recovery, never a deadline wake, consumes it.
+            // pair recovery on deadline, or exposed an immutable identity fault.
+            // Preserve that root/child identity in the same observation turn;
+            // recovery, never a manufactured service wake, consumes it.
             let _ = latch_cyw43_deferred_recovery_for_owner_subphase(
                 CYW43_CONNECTION_EPOCH.load(Ordering::Acquire),
                 pending.generation,
                 Cyw43RecoveryCause::IssuedOwnerUnknown,
-                "cyw43-net-data-tx-deadline",
+                if condition
+                    == crate::hal::driver_task::Cyw43SteadyServiceParentCondition::DeadlineFault
+                {
+                    "cyw43-net-data-tx-deadline"
+                } else {
+                    "cyw43-net-data-tx-identity"
+                },
                 cyw43_pending_data_tx_descriptor(&pending),
                 pending.payload_digest,
                 pending.ticket_id,
@@ -5923,17 +5983,15 @@ fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
                 request,
                 false,
             );
-            return Some(request);
+            return Cyw43SteadyTxParentRoute::Fault(request);
         }
     }
-    cyw43_steady_tx_waits_for_runtime_condition(
-        pending.is_some(),
-        request,
-        active_request,
-        active_issued,
-        condition,
-    )
-    .then_some(request?)
+    route
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
+    cyw43_steady_tx_parent_condition_route().blocked_request()
 }
 
 /// Return the exact retained Host-EAPOL key response that is waiting on its
@@ -5945,7 +6003,7 @@ fn cyw43_steady_tx_condition_blocked_request() -> Option<u32> {
 /// waiting parent runnable. Deadline expiry enters the one coordinated pair
 /// recovery path without manufacturing another service wake.
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_tx_condition_blocked_request() -> Option<u32> {
+fn cyw43_host_eapol_tx_parent_condition_route() -> Cyw43SteadyTxParentRoute {
     let pending = CYW43_HOST_EAPOL_SESSION
         .lock()
         .as_ref()
@@ -5961,24 +6019,43 @@ fn cyw43_host_eapol_tx_condition_blocked_request() -> Option<u32> {
         crate::hal::driver_task::Cyw43SteadyServiceParentCondition::NotExact,
         crate::hal::driver_task::cyw43_steady_service_parent_condition,
     );
-    if condition == crate::hal::driver_task::Cyw43SteadyServiceParentCondition::DeadlineFault {
+    let route = cyw43_steady_tx_parent_route(
+        pending.is_some(),
+        request,
+        active_request,
+        active_issued,
+        condition,
+    );
+    if matches!(route, Cyw43SteadyTxParentRoute::Fault(_)) {
         if let (Some(pending), Some(request)) = (pending, request) {
             latch_cyw43_host_eapol_tx_recovery(
                 &pending,
                 Cyw43RecoveryCause::IssuedOwnerUnknown,
                 None,
             );
-            return Some(request);
+            return Cyw43SteadyTxParentRoute::Fault(request);
         }
     }
-    cyw43_steady_tx_waits_for_runtime_condition(
-        pending.is_some(),
-        request,
-        active_request,
-        active_issued,
-        condition,
-    )
-    .then_some(request?)
+    route
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_host_eapol_tx_condition_blocked_request() -> Option<u32> {
+    cyw43_host_eapol_tx_parent_condition_route().blocked_request()
+}
+
+/// Admit Host-EAPOL policy only outside an unfinished finite parent lifetime.
+///
+/// A BSSID refresh, active-session marker, or queued policy event remains
+/// durable while the exact op7 sleeps; none is authority to re-enter the
+/// policy slice before that parent's committed terminal becomes consumable.
+#[cfg(feature = "kernel")]
+const fn cyw43_host_eapol_policy_schedulable(
+    blocked_request: Option<u32>,
+    runtime_work_pending: bool,
+    active: bool,
+) -> bool {
+    blocked_request.is_none() && (runtime_work_pending || active)
 }
 
 #[cfg(feature = "kernel")]
@@ -6058,9 +6135,15 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         cyw43_active_persistent_parent_condition().is_some_and(|(_, condition)| {
             condition == Cyw43PersistentTransactionParentCondition::Waiting
         });
-    let blocked_steady_tx_request = cyw43_steady_tx_condition_blocked_request();
-    let blocked_host_eapol_tx_request = cyw43_host_eapol_tx_condition_blocked_request();
+    let steady_tx_parent_route = cyw43_steady_tx_parent_condition_route();
+    let host_eapol_tx_parent_route = cyw43_host_eapol_tx_parent_condition_route();
+    let blocked_steady_tx_request = steady_tx_parent_route.blocked_request();
+    let blocked_host_eapol_tx_request = host_eapol_tx_parent_route.blocked_request();
     let blocked_finite_tx_request = blocked_steady_tx_request.or(blocked_host_eapol_tx_request);
+    let finite_parent_terminal = steady_tx_parent_route
+        .terminal_request()
+        .or(host_eapol_tx_parent_route.terminal_request())
+        .is_some();
     let pending_data_tx = *CYW43_PENDING_DATA_TX.lock();
     let exact_data_tx = pending_data_tx.is_some_and(|pending| {
         pending.generation == generation
@@ -6085,10 +6168,11 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
     let terminal_drain = CYW43_TERMINAL_DRAIN_CURSOR.lock().is_some_and(|cursor| {
         cursor.generation() == generation && Some(cursor.request) != blocked_finite_tx_request
     });
-    let host_eapol =
-        cyw43_host_eapol_runtime_work_pending_excluding_tx_request(blocked_host_eapol_tx_request)
-            || (blocked_host_eapol_tx_request.is_none()
-                && CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0);
+    let host_eapol = cyw43_host_eapol_policy_schedulable(
+        blocked_host_eapol_tx_request,
+        blocked_host_eapol_tx_request.is_none() && cyw43_host_eapol_runtime_work_pending(),
+        CYW43_HOST_EAPOL_ACTIVE.load(Ordering::Acquire) != 0,
+    );
     let hal_lease = blocked_finite_tx_request.is_none()
         && crate::hal::driver_task::active_driver_task_retained_request(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -6117,6 +6201,7 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
             || runtime_rx_queue_poisoned
             || crate::hal::driver_task::cyw43_sdio_pair_restart_required()
             || crate::hal::driver_task::cyw43_sdio_pair_context_replay_required(),
+        finite_parent_terminal,
     };
 
     Cyw43ServiceWorkSnapshot {
@@ -9417,9 +9502,7 @@ fn cyw43_post_assoc_bssid_obligation_pending(session: &Cyw43HostEapolSession) ->
 }
 
 #[cfg(feature = "kernel")]
-fn cyw43_host_eapol_runtime_work_pending_excluding_tx_request(
-    excluded_tx_request: Option<u32>,
-) -> bool {
+fn cyw43_host_eapol_runtime_work_pending() -> bool {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
     if CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.load(Ordering::Acquire) != 0
         || cyw43_prompt_poll_owned_by_host_eapol()
@@ -9442,17 +9525,11 @@ fn cyw43_host_eapol_runtime_work_pending_excluding_tx_request(
         .lock()
         .as_ref()
         .is_some_and(|session| {
-            session.pending_tx_submit.is_some_and(|pending| {
-                excluded_tx_request.is_none() || pending.request != excluded_tx_request
-            }) || session.pending_key_install.is_some()
+            session.pending_tx_submit.is_some()
+                || session.pending_key_install.is_some()
                 || session.pending_tx_drain.is_some()
                 || cyw43_post_assoc_bssid_obligation_pending(session)
         })
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_host_eapol_runtime_work_pending() -> bool {
-    cyw43_host_eapol_runtime_work_pending_excluding_tx_request(None)
 }
 
 #[cfg(feature = "kernel")]
@@ -44434,59 +44511,92 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_steady_tx_parent_waits_only_on_the_durable_parent_condition() {
+    fn cyw43_steady_tx_parent_routes_only_from_the_durable_parent_condition() {
         use crate::hal::driver_task::Cyw43SteadyServiceParentCondition;
 
         let request = Some(41);
-        assert!(cyw43_steady_tx_waits_for_runtime_condition(
-            true,
-            request,
-            request,
-            true,
-            Cyw43SteadyServiceParentCondition::Waiting,
-        ));
-        for not_blocked in [
-            cyw43_steady_tx_waits_for_runtime_condition(
-                false,
+        assert_eq!(
+            cyw43_steady_tx_parent_route(
+                true,
                 request,
                 request,
                 true,
                 Cyw43SteadyServiceParentCondition::Waiting,
             ),
-            cyw43_steady_tx_waits_for_runtime_condition(
-                true,
-                request,
-                Some(42),
-                true,
-                Cyw43SteadyServiceParentCondition::Waiting,
-            ),
-            cyw43_steady_tx_waits_for_runtime_condition(
-                true,
-                request,
-                request,
-                false,
-                Cyw43SteadyServiceParentCondition::Waiting,
-            ),
-            cyw43_steady_tx_waits_for_runtime_condition(
+            Cyw43SteadyTxParentRoute::Waiting(41),
+        );
+        assert_eq!(
+            cyw43_steady_tx_parent_route(
                 true,
                 request,
                 request,
                 true,
                 Cyw43SteadyServiceParentCondition::TerminalVisible,
             ),
-            cyw43_steady_tx_waits_for_runtime_condition(
-                true,
-                request,
-                request,
-                true,
-                Cyw43SteadyServiceParentCondition::DeadlineFault,
-            ),
+            Cyw43SteadyTxParentRoute::ConsumeTerminal(41),
+        );
+        for fault in [
+            Cyw43SteadyServiceParentCondition::NotExact,
+            Cyw43SteadyServiceParentCondition::DeadlineFault,
         ] {
-            assert!(
-                !not_blocked,
-                "only the exact issued parent with a durable waiting condition sleeps",
+            assert_eq!(
+                cyw43_steady_tx_parent_route(true, request, request, true, fault),
+                Cyw43SteadyTxParentRoute::Fault(41),
+                "an exact issued identity fault must be fenced, not hot-run",
             );
         }
+        for inactive in [
+            cyw43_steady_tx_parent_route(
+                false,
+                request,
+                request,
+                true,
+                Cyw43SteadyServiceParentCondition::Waiting,
+            ),
+            cyw43_steady_tx_parent_route(
+                true,
+                request,
+                Some(42),
+                true,
+                Cyw43SteadyServiceParentCondition::Waiting,
+            ),
+            cyw43_steady_tx_parent_route(
+                true,
+                request,
+                request,
+                false,
+                Cyw43SteadyServiceParentCondition::Waiting,
+            ),
+        ] {
+            assert_eq!(
+                inactive,
+                Cyw43SteadyTxParentRoute::Inactive,
+                "only an exact issued finite parent owns a terminal route",
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_waiting_finite_parent_suppresses_all_host_eapol_policy_work() {
+        assert!(
+            !cyw43_host_eapol_policy_schedulable(Some(41), true, true),
+            "BSSID and active-session levels cannot hot-run over an unfinished parent",
+        );
+        assert!(cyw43_host_eapol_policy_schedulable(None, true, false));
+        assert!(cyw43_host_eapol_policy_schedulable(None, false, true));
+        assert!(!cyw43_host_eapol_policy_schedulable(None, false, false));
+        let independent_work = Cyw43ServiceWorkInputs {
+            dpc: true,
+            root_rx: true,
+            host_eapol: cyw43_host_eapol_policy_schedulable(Some(41), true, true),
+            ..Cyw43ServiceWorkInputs::default()
+        };
+        assert_eq!(
+            independent_work.reason_mask(),
+            CYW43_SERVICE_WORK_DPC | CYW43_SERVICE_WORK_ROOT_RX,
+            "waiting suppresses policy self-demand without suppressing DPC or root RX",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -44524,6 +44634,10 @@ mod tests {
         assert_reason!(prompt, CYW43_SERVICE_WORK_PROMPT);
         assert_reason!(maintenance, CYW43_SERVICE_WORK_MAINTENANCE);
         assert_reason!(recovery, CYW43_SERVICE_WORK_RECOVERY);
+        assert_reason!(
+            finite_parent_terminal,
+            CYW43_SERVICE_WORK_FINITE_PARENT_TERMINAL
+        );
 
         let all = Cyw43ServiceWorkInputs {
             dpc: true,
@@ -44541,10 +44655,11 @@ mod tests {
             prompt: true,
             maintenance: true,
             recovery: true,
+            finite_parent_terminal: true,
         };
         assert_eq!(
             all.reason_mask(),
-            ((1u64 << 16) - 1) & !(1u64 << 5),
+            ((1u64 << 17) - 1) & !(1u64 << 5),
             "the complete source set is non-overlapping and leaves retired bit 5 clear",
         );
     }
@@ -54071,7 +54186,8 @@ mod tests {
             | CYW43_SERVICE_WORK_HOST_EAPOL
             | CYW43_SERVICE_WORK_HAL_LEASE
             | CYW43_SERVICE_WORK_PROMPT
-            | CYW43_SERVICE_WORK_MAINTENANCE;
+            | CYW43_SERVICE_WORK_MAINTENANCE
+            | CYW43_SERVICE_WORK_FINITE_PARENT_TERMINAL;
         let non_source_cases = [
             ("pre-poll", CYW43_SERVICE_WORK_PRE_POLL),
             ("data-tx", CYW43_SERVICE_WORK_DATA_TX),
@@ -54085,6 +54201,10 @@ mod tests {
             ("hal-lease", CYW43_SERVICE_WORK_HAL_LEASE),
             ("prompt", CYW43_SERVICE_WORK_PROMPT),
             ("maintenance", CYW43_SERVICE_WORK_MAINTENANCE),
+            (
+                "finite-parent-terminal",
+                CYW43_SERVICE_WORK_FINITE_PARENT_TERMINAL,
+            ),
             ("recovery", CYW43_SERVICE_WORK_RECOVERY),
             ("combined-ordinary", combined_ordinary_non_source),
         ];

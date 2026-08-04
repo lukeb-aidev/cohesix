@@ -2855,7 +2855,7 @@ fn driver_task_ring_exact_command_is_stable(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_steady_service_parent_identity_matches(
+fn driver_task_steady_service_parent_completion_identity_matches(
     slot: &DriverTaskCommandSlot,
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
@@ -2864,7 +2864,6 @@ fn driver_task_steady_service_parent_identity_matches(
     command_fingerprint: u32,
 ) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
-        && cyw43_finite_tx_scheduler_coverage(slot, contract, command, true)
         && !driver_task_retained_uses_root_grant(contract, command)
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
         && driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
@@ -2882,13 +2881,32 @@ fn driver_task_steady_service_parent_identity_matches(
             request as usize,
             command_fingerprint,
         )
-        && DriverTaskRetainedLeasePhase::from_usize(
-            slot.retained_priority_lease_phase.load(Ordering::Acquire),
-        ) == Some(DriverTaskRetainedLeasePhase::Issued)
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0
         && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
         && slot.retained_grant_id.load(Ordering::Acquire) == 0
         && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_steady_service_parent_wait_identity_matches(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    ring_root_ptr: usize,
+    request: u32,
+    command_fingerprint: u32,
+) -> bool {
+    driver_task_steady_service_parent_completion_identity_matches(
+        slot,
+        contract,
+        command,
+        ring_root_ptr,
+        request,
+        command_fingerprint,
+    ) && DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    ) == Some(DriverTaskRetainedLeasePhase::Issued)
+        && cyw43_finite_tx_scheduler_coverage(slot, contract, command, true)
 }
 
 #[cfg(feature = "kernel")]
@@ -2962,6 +2980,22 @@ pub(crate) enum Cyw43PersistentTransactionParentCondition {
     DeadlineFault,
 }
 
+/// Passive root-side proof of one finite CYW43 parent pre-wait boundary.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43SteadyServiceParentDiagnostic {
+    pub(crate) request: u32,
+    pub(crate) issued: bool,
+    pub(crate) completion_stable: bool,
+    pub(crate) completion_sequence: u32,
+    pub(crate) completion_code: u16,
+    pub(crate) completion_detail: u16,
+    pub(crate) completion_result: u32,
+    pub(crate) immutable_identity: bool,
+    pub(crate) wait_identity: bool,
+    pub(crate) condition: &'static str,
+}
+
 #[cfg(feature = "kernel")]
 fn driver_task_ring_exact_completion_is_stable(
     slot: &DriverTaskCommandSlot,
@@ -2982,6 +3016,25 @@ fn driver_task_ring_exact_completion_is_stable(
         2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
     );
     matches!((first, second), (Some(first), Some(second)) if first == second && second.sequence == request)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_stable_completion_snapshot(
+    slot: &DriverTaskCommandSlot,
+    ring_root_ptr: usize,
+) -> Option<DriverTaskCompletionRecord> {
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    let first = ring.read_completion_snapshot()?;
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_completion_record(ring_root_ptr);
+    let second = ring.read_completion_snapshot()?;
+    driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+    driver_task_counter_add(
+        &slot.counters.cache_invalidate_bytes,
+        2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
+    );
+    (first == second).then_some(second)
 }
 
 /// Recheck durable terminal state immediately before suppressing one issued op7.
@@ -3005,7 +3058,7 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
     if request != expected_request
-        || !driver_task_steady_service_parent_identity_matches(
+        || !driver_task_steady_service_parent_completion_identity_matches(
             slot,
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             command,
@@ -3019,6 +3072,21 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
         return Cyw43SteadyServiceParentCondition::TerminalVisible;
     }
+    // Scheduler coverage and the current lease phase govern only whether an
+    // incomplete parent may sleep. They are not completion identity: priority
+    // restoration can begin after the child commits, and a coalesced wake must
+    // never make that durable terminal invisible. Terminal state therefore
+    // wins above before transient wait eligibility is inspected.
+    if !driver_task_steady_service_parent_wait_identity_matches(
+        slot,
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        command,
+        ring_root_ptr,
+        request,
+        command_fingerprint,
+    ) {
+        return Cyw43SteadyServiceParentCondition::NotExact;
+    }
     if !driver_task_steady_service_inactivity_expired(slot).unwrap_or(false) {
         return Cyw43SteadyServiceParentCondition::Waiting;
     }
@@ -3030,6 +3098,70 @@ pub(crate) fn cyw43_steady_service_parent_condition(
     driver_task_counter_add(&slot.counters.aborts, 1);
     fail_driver_task_retained_priority_lease(slot, CYW43_WIFI_DRIVER_TASK_CONTRACT);
     Cyw43SteadyServiceParentCondition::DeadlineFault
+}
+
+/// Snapshot the exact finite-parent completion boundary without advancing it.
+///
+/// This is diagnostic evidence only. It does not consume a completion, sample
+/// a deadline, signal either runtime, or create Network scheduling authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_steady_service_parent_diagnostic() -> Option<Cyw43SteadyServiceParentDiagnostic>
+{
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let state = active_driver_task_retained_request_for_slot(slot)?;
+    let request = state.request();
+    let issued = state.issued();
+    let command = state.command();
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    let immutable_identity = issued
+        && command.is_some_and(|command| {
+            driver_task_steady_service_parent_completion_identity_matches(
+                slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                ring_root_ptr,
+                request,
+                command_fingerprint,
+            )
+        });
+    let wait_identity = issued
+        && command.is_some_and(|command| {
+            driver_task_steady_service_parent_wait_identity_matches(
+                slot,
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                command,
+                ring_root_ptr,
+                request,
+                command_fingerprint,
+            )
+        });
+    let completion = driver_task_ring_stable_completion_snapshot(slot, ring_root_ptr);
+    let exact_terminal = completion.is_some_and(|completion| completion.sequence == request);
+    let condition = if !issued {
+        "not-issued"
+    } else if !immutable_identity {
+        "identity-fault"
+    } else if exact_terminal {
+        "terminal"
+    } else if wait_identity {
+        "waiting"
+    } else {
+        "wait-state-fault"
+    };
+    Some(Cyw43SteadyServiceParentDiagnostic {
+        request,
+        issued,
+        completion_stable: completion.is_some(),
+        completion_sequence: completion.map_or(0, |completion| completion.sequence),
+        completion_code: completion.map_or(0, |completion| completion.code),
+        completion_detail: completion.map_or(0, |completion| completion.detail),
+        completion_result: completion.map_or(0, |completion| completion.result),
+        immutable_identity,
+        wait_identity,
+        condition,
+    })
 }
 
 /// Recheck durable terminal state before retaining one issued persistent op11.
@@ -23166,9 +23298,27 @@ mod tests {
             core::ptr::write_volatile(completion_ptr, terminal);
             core::ptr::write_volatile(completion_ptr as *mut u32, request as u32);
         }
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::RestorePrimary.as_usize(),
+            Ordering::Release,
+        );
         assert_eq!(
             cyw43_steady_service_parent_condition(request as u32),
             Cyw43SteadyServiceParentCondition::TerminalVisible,
+            "a committed exact terminal must outrank transient lease restoration state",
+        );
+        let diagnostic = cyw43_steady_service_parent_diagnostic()
+            .expect("the exact finite parent diagnostic must remain available");
+        assert_eq!(diagnostic.request, request as u32);
+        assert!(diagnostic.issued);
+        assert!(diagnostic.completion_stable);
+        assert_eq!(diagnostic.completion_sequence, request as u32);
+        assert!(diagnostic.immutable_identity);
+        assert!(!diagnostic.wait_identity);
+        assert_eq!(diagnostic.condition, "terminal");
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
         );
         assert_eq!(
             latch_driver_task_retained_priority_lease_completion(slot),

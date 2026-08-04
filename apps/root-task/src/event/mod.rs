@@ -13942,6 +13942,25 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_finite_parent_line(
+        parent: crate::hal::driver_task::Cyw43SteadyServiceParentDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: finite_parent request={} issued={} completion={}/{}/{}/{}/{} immutable={} wait={} condition={}",
+            parent.request,
+            Self::yes_no(parent.issued),
+            Self::yes_no(parent.completion_stable),
+            parent.completion_sequence,
+            parent.completion_code,
+            parent.completion_detail,
+            parent.completion_result,
+            Self::yes_no(parent.immutable_identity),
+            Self::yes_no(parent.wait_identity),
+            parent.condition,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_root_wake_lines(
         wake: crate::hal::driver_task::Cyw43RootWakeSnapshot,
     ) -> (
@@ -14239,6 +14258,10 @@ where
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ) {
             let detail = Self::wifi_diag_root_grant_line(grant);
+            self.emit_console_line(detail.as_str());
+        }
+        if let Some(parent) = crate::hal::driver_task::cyw43_steady_service_parent_diagnostic() {
+            let detail = Self::wifi_diag_finite_parent_line(parent);
             self.emit_console_line(detail.as_str());
         }
         if let Some(wake) = crate::hal::driver_task::cyw43_root_wake_snapshot() {
@@ -25463,6 +25486,32 @@ mod tests {
             "{prepared}"
         );
         assert!(prepared.ends_with("exact=not-published"), "{prepared}");
+        let finite_parent = KernelConsoleTestPump::wifi_diag_finite_parent_line(
+            crate::hal::driver_task::Cyw43SteadyServiceParentDiagnostic {
+                request: 1923,
+                issued: true,
+                completion_stable: true,
+                completion_sequence: 1923,
+                completion_code: 1,
+                completion_detail: 0,
+                completion_result: 143,
+                immutable_identity: true,
+                wait_identity: false,
+                condition: "terminal",
+            },
+        );
+        assert!(
+            finite_parent.contains("completion=yes/1923/1/0/143"),
+            "{finite_parent}",
+        );
+        assert!(
+            finite_parent.ends_with("immutable=yes wait=no condition=terminal"),
+            "{finite_parent}",
+        );
+        assert!(
+            !finite_parent.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{finite_parent}",
+        );
         let (wake, wake_counters) = KernelConsoleTestPump::wifi_diag_root_wake_lines(
             crate::hal::driver_task::Cyw43RootWakeSnapshot {
                 bound: true,
