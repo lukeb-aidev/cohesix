@@ -3680,7 +3680,21 @@ where
                     && self.linked_runtime_cyw43_operator_display_pending();
                 #[cfg(not(feature = "net-console"))]
                 let display_due = false;
-                self.linked_runtime_service_phase = if display_due {
+                #[cfg(feature = "net-console")]
+                let durable_network_due =
+                    rotation_finished && self.linked_runtime_cyw43_priority_work_due();
+                #[cfg(not(feature = "net-console"))]
+                let durable_network_due = false;
+                self.linked_runtime_service_phase = if durable_network_due {
+                    // Serial, LocalSeat, and Dispatch have completed their
+                    // bounded operator cut. A durable CYW43 continuation must
+                    // now reach Network before queued display housekeeping;
+                    // otherwise persistent USB service debt can turn
+                    // Display -> Serial into a closed cycle that strands an
+                    // already-visible bus transaction. Display still receives
+                    // the bounded post-quantum turn below.
+                    LinkedRuntimeServicePhase::Network
+                } else if display_due {
                     LinkedRuntimeServicePhase::Display
                 } else if !rotation_finished {
                     LinkedRuntimeServicePhase::Serial
@@ -4184,8 +4198,10 @@ where
     /// current CYW43 priority lease or discarding its immutable retained
     /// parent.
     ///
-    /// The checkpoint is `Serial -> LocalSeat -> Dispatch -> pending Display`.
-    /// It performs no NIC operation and then resumes the same Network quantum.
+    /// The checkpoint is `Serial -> LocalSeat -> Dispatch`. It performs no NIC
+    /// operation; once the operator fence is complete, the same durable
+    /// Network quantum resumes before queued display housekeeping. Display then
+    /// receives the normal bounded post-quantum turn.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn route_linked_runtime_cyw43_operator_probe(&mut self) -> bool {
         if self.linked_runtime_network_consecutive_turns == 0
@@ -33332,6 +33348,8 @@ mod tests {
             line_bytes: 192,
             buffer_lines: 64,
         });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
 
         {
             let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
@@ -33360,11 +33378,15 @@ mod tests {
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Dispatch
             );
+            assert!(
+                pump.linked_runtime_cyw43_operator_display_pending(),
+                "the regression must retain display housekeeping at the Dispatch boundary"
+            );
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Network,
-                "service debt cannot retain the WiFi fence after Dispatch"
+                "USB service debt and queued display housekeeping cannot retain the WiFi fence after Dispatch"
             );
             assert_eq!(
                 pump.linked_runtime_cyw43_durable_resume,
@@ -33375,10 +33397,26 @@ mod tests {
                 .linked_runtime_cyw43_operator_rotation_pending
                 .is_none());
 
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(61, 13, 9, 0),
+            ));
             pump.poll();
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 1,
                 "Network must receive the next outer turn despite persistent USB service debt"
+            );
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "exact idle after the admitted Network turn must release queued display work"
+            );
+            assert!(pump.linked_runtime_cyw43_operator_display_pending());
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the bounded Display turn must return to the physical-operator rotation"
             );
         }
 
