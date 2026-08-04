@@ -14640,23 +14640,67 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_cyw43_bus_episode_line(
+        snapshot: pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, core::fmt::Error> {
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "CYW43_BUS_EPISODE p={:08x} e={:08x} lg={:08x} pe={:08x} pa={:08x}/{:04x} c={} f={:016x} l={:016x} ch={:08x}/{:04x}/{:04x}/{:08x} hw={:04x}/{:04x} d={:08x} o8={:08x} r={:08x} t={:08x} q={:08x} er={}/{:04x}/{:08x} fl={:08x}",
+                snapshot.publication_sequence,
+                snapshot.episode_sequence,
+                snapshot.logical_generation,
+                snapshot.physical_epoch,
+                snapshot.parent_sequence,
+                snapshot.parent_op,
+                snapshot.cause,
+                snapshot.first_cntvct,
+                snapshot.last_cntvct,
+                snapshot.child_sequence,
+                snapshot.child_code,
+                snapshot.child_detail,
+                snapshot.child_result,
+                snapshot.child_engine,
+                snapshot.child_irq_contract,
+                snapshot.dpc_sequence,
+                snapshot.op8_progress,
+                snapshot.rx_progress,
+                snapshot.tx_progress,
+                snapshot.final_pending_mask,
+                snapshot.exit_reason,
+                snapshot.exit_detail,
+                snapshot.exit_result,
+                snapshot.flags,
+            ),
+        )?;
+        Ok(line)
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
-        let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() else {
-            return;
-        };
-        let cause =
-            crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(snapshot.generation);
-        let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
-        let scope = Self::wifi_sdio_dpc_scope_line();
-        let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
-        let rearm = Self::wifi_sdio_dpc_rearm_line(snapshot);
-        self.emit_console_line(accounting.as_str());
-        self.emit_console_line(scope.as_str());
-        self.emit_console_line(truth.as_str());
-        self.emit_console_line(rearm.as_str());
-        if let Some(cause) = cause {
-            let cause = Self::wifi_sdio_dpc_cause_line(cause);
-            self.emit_console_line(cause.as_str());
+        if let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() {
+            let cause = crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(
+                snapshot.generation,
+            );
+            let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
+            let scope = Self::wifi_sdio_dpc_scope_line();
+            let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
+            let rearm = Self::wifi_sdio_dpc_rearm_line(snapshot);
+            self.emit_console_line(accounting.as_str());
+            self.emit_console_line(scope.as_str());
+            self.emit_console_line(truth.as_str());
+            self.emit_console_line(rearm.as_str());
+            if let Some(cause) = cause {
+                let cause = Self::wifi_sdio_dpc_cause_line(cause);
+                self.emit_console_line(cause.as_str());
+            }
+        }
+        if let Some(episode) = crate::drivers::driver_task_net::cyw43_bus_episode_diagnostic() {
+            match Self::wifi_cyw43_bus_episode_line(episode) {
+                Ok(line) => self.emit_console_line(line.as_str()),
+                Err(_) => self.emit_console_line("CYW43_BUS_EPISODE format=overflow"),
+            }
         }
     }
 
@@ -21779,6 +21823,7 @@ mod tests {
         crate::hal::driver_task::enable_driver_task_test_counter_for_current_thread();
         crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
         crate::drivers::driver_task_net::test_clear_cyw43_runtime_replay_status();
+        crate::drivers::driver_task_net::set_cyw43_bus_episode_diagnostic_test_override(None);
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
         crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(None);
         crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
@@ -25725,6 +25770,125 @@ mod tests {
         assert!(cause.ends_with(
             "dpc=4294967295 child=4294967295 owner=4294967295 fdpc=4294967295 fown=4294967295"
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn committed_cyw43_bus_episode_diagnostic_for_test(
+    ) -> pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord {
+        let mut record = pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord::staged(
+            pi4_driver_abi::DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: u32::MAX,
+                episode_sequence: u32::MAX,
+                logical_generation: u32::MAX,
+                physical_epoch: u32::MAX,
+                parent_sequence: u32::MAX,
+                parent_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+                cause: pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND_AND_DPC,
+                first_cntvct: u64::MAX - 1,
+            },
+        );
+        record.last_cntvct = u64::MAX;
+        record.child_sequence = u32::MAX;
+        record.child_code = u16::MAX;
+        record.child_detail = u16::MAX;
+        record.child_result = u32::MAX;
+        record.child_engine = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_DMA;
+        record.child_irq_contract = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ116;
+        record.dpc_sequence = u32::MAX;
+        record.op8_progress = u32::MAX;
+        record.rx_progress = u32::MAX;
+        record.tx_progress = u32::MAX;
+        record.final_pending_mask =
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_FOREGROUND
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_DPC
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_EXTERNAL_WAIT
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RX
+                | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_TX;
+        record.exit_reason = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT;
+        record.exit_detail = u16::MAX;
+        record.exit_result = u32::MAX;
+        record.flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_OP8_PROGRESS
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_RX_PROGRESS
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_TX_PROGRESS
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT;
+        record.commit()
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_cyw43_bus_episode_line_is_complete_and_bounded() {
+        let record = committed_cyw43_bus_episode_diagnostic_for_test();
+        assert!(record.valid());
+        let line = KernelConsoleTestPump::wifi_cyw43_bus_episode_line(record)
+            .expect("maximum bounded episode line must fit");
+
+        assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+        assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        assert!(line.starts_with("CYW43_BUS_EPISODE p=ffffffff e=ffffffff lg=ffffffff pe=ffffffff"));
+        assert!(line.contains("pa=ffffffff/0007 c=3"));
+        assert!(
+            line.contains("f=fffffffffffffffe l=ffffffffffffffff ch=ffffffff/ffff/ffff/ffffffff")
+        );
+        assert!(
+            line.contains("hw=0003/0003 d=ffffffff o8=ffffffff r=ffffffff t=ffffffff q=0000001f")
+        );
+        assert!(line.ends_with("er=4/ffff/ffffffff fl=0000003f"), "{line}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn maximum_cyw43_bus_episode_is_emitted_by_linked_runtime_serial() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let record = committed_cyw43_bus_episode_diagnostic_for_test();
+        let line = KernelConsoleTestPump::wifi_cyw43_bus_episode_line(record)
+            .expect("maximum bounded episode line must fit");
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        pump.serial_mut().driver_mut().reset_io_call_counts();
+
+        pump.emit_console_line(line.as_str());
+        let mut transcript = Vec::new();
+        for _ in 0..16 {
+            pump.poll_with_linked_serial_runtime();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript
+                .windows(line.len())
+                .any(|window| window == line.as_bytes())
+            {
+                break;
+            }
+        }
+
+        let rendered = core::str::from_utf8(transcript.as_slice())
+            .expect("linked serial diagnostic must be utf8");
+        assert!(rendered.contains(line.as_str()), "{rendered}");
+        assert!(
+            !rendered.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{rendered}"
+        );
+        assert_eq!(
+            pump.serial_mut().driver_mut().io_call_counts(),
+            (0, 0),
+            "linked diagnostic must never re-enter the generic serial backend",
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -37952,6 +38116,12 @@ mod tests {
     #[test]
     fn serial_wifi_diag_command_reads_one_cached_snapshot_without_mutation() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
+        let episode = committed_cyw43_bus_episode_diagnostic_for_test();
+        let episode_line = KernelConsoleTestPump::wifi_cyw43_bus_episode_line(episode)
+            .expect("maximum bounded episode line must fit");
+        crate::drivers::driver_task_net::set_cyw43_bus_episode_diagnostic_test_override(Some(
+            episode,
+        ));
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(Some(
             crate::drivers::driver_task_net::Cyw43SdioDpcDiagnostic {
                 generation: 9,
@@ -38005,6 +38175,12 @@ mod tests {
         assert!(rendered.contains(dpc_scope), "{rendered}");
         assert!(rendered.contains(dpc_truth), "{rendered}");
         assert!(rendered.contains(dpc_rearm), "{rendered}");
+        assert!(rendered.contains(episode_line.as_str()), "{rendered}");
+        assert_eq!(
+            rendered.matches("CYW43_BUS_EPISODE ").count(),
+            1,
+            "{rendered}"
+        );
         assert_eq!(rendered.matches("CYW43_SDIO_DPC ").count(), 1, "{rendered}");
         assert_eq!(
             rendered.matches("CYW43_SDIO_DPC_SCOPE ").count(),

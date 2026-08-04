@@ -8,7 +8,7 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 6;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 7;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -1628,6 +1628,94 @@ pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_MAGIC: u32 = 0x4359_414b;
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_VERSION: u16 = 1;
 /// Exact bytes in one cache-line-isolated CYW43 RX batch acknowledgement.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES: u16 = 64;
+/// Fixed offset of the cache-isolated CYW43 bus-episode diagnostic.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET: u16 = 49_344;
+/// Exact bytes in one cache-isolated CYW43 bus-episode diagnostic.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES: u16 = 128;
+/// Exact 32-bit words in one CYW43 bus-episode diagnostic.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS: usize =
+    DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as usize / core::mem::size_of::<u32>();
+/// Magic value for one CYW43 bus-episode diagnostic.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC: u32 = 0x4359_4245;
+/// Layout version for [`DriverRuntimeCyw43BusEpisodeRecord`].
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION: u16 = 1;
+/// A root foreground command opened the bus-service episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND: u16 = 1;
+/// Durable CYW43 DPC work opened the bus-service episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_DPC: u16 = 2;
+/// Foreground and durable DPC work were both visible at episode admission.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND_AND_DPC: u16 = 3;
+/// The episode is still active and has no terminal exit classification.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_ACTIVE: u16 = 0;
+/// The admitted parent reached its exact terminal.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_TERMINAL: u16 = 1;
+/// The owner classified an external wait and is about to perform its final
+/// durable-condition and exact-terminal rechecks before sleeping.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_PREWAIT_CHECKPOINT: u16 = 2;
+/// The bounded episode yielded at its deterministic fairness boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAIRNESS: u16 = 3;
+/// The episode ended at a typed fault.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT: u16 = 4;
+/// A child operation reached a typed terminal during the episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL: u32 = 1 << 0;
+/// At least one durable DPC sequence was observed during the episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED: u32 = 1 << 1;
+/// At least one Function-2 RX poll progressed during the episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_OP8_PROGRESS: u32 = 1 << 2;
+/// At least one root-visible RX frame progressed during the episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_RX_PROGRESS: u32 = 1 << 3;
+/// At least one foreground TX frame progressed during the episode.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_TX_PROGRESS: u32 = 1 << 4;
+/// The episode recorded a typed fault exit.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT: u32 = 1 << 5;
+/// No physical child engine has reached a terminal in this publication.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_NONE: u16 = 0;
+/// The exact descriptor selects the SDHCI command-only engine.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND: u16 = 1;
+/// The exact descriptor selects the SDHCI programmed-I/O engine.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_PIO: u16 = 2;
+/// The exact descriptor selects the joined SDHCI plus BCM2835 DMA engine.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_DMA: u16 = 3;
+/// The selected child contract requires SDHCI/CARD_INT IRQ158.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158: u16 = 1 << 0;
+/// The selected child contract also requires BCM2835 DMA4 IRQ116.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ116: u16 = 1 << 1;
+/// A foreground parent remains durably pending at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_FOREGROUND: u32 = 1 << 0;
+/// CYW43 DPC work remains durably pending at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_DPC: u32 = 1 << 1;
+/// A physical SDIO or DMA terminal remains pending at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_EXTERNAL_WAIT: u32 = 1 << 2;
+/// CYW43-to-root RX work remains durably pending at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RX: u32 = 1 << 3;
+/// Root-to-CYW43 TX work remains durably pending at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_TX: u32 = 1 << 4;
+/// One exact SDIO child remains active at the episode boundary.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CHILD_ACTIVE: u32 = 1 << 5;
+/// The active child was issued but has no observed physical terminal yet.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CHILD_ISSUED_UNKNOWN: u32 = 1 << 6;
+/// A committed DPC event remains in the ACK-pending state.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_ACK_PENDING: u32 = 1 << 7;
+/// CARD_INT remains masked pending exact DPC acknowledgement and rearm.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CARD_INT_MASKED: u32 = 1 << 8;
+/// A linked command, completion, DPC, or RX ring is durably poisoned.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RING_POISON: u32 = 1 << 9;
+/// CYW43's private RX queue remains nonempty.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_PRIVATE_RX_QUEUE: u32 = 1 << 10;
+/// A committed root-visible RX batch remains unacknowledged.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_UNACKED_RX_BATCH: u32 = 1 << 11;
+/// A Function-2 RX-poll parent remains active.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_OP8_ACTIVE: u32 = 1 << 12;
+/// A persistent control-exchange parent remains active.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_OP11_ACTIVE: u32 = 1 << 13;
+/// Foreground Function-2 TX is durably waiting for SDPCM credit.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_TX_CREDIT_WAIT: u32 = 1 << 14;
+/// A bounded CYW43-local continuation remains durably admitted.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_LOCAL_CONTINUATION: u32 = 1 << 15;
+/// Typed fault-containment recovery remains active.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RECOVERY: u32 = 1 << 16;
+/// A typed CYW43/SDIO pair restart remains active.
+pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_PAIR_RESTART: u32 = 1 << 17;
 /// First shared-buffer page reserved exclusively for CYW43 RX batching.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE: usize =
     DRIVER_RUNTIME_SDIO_SHARED_PAYLOAD_PAGES;
@@ -1714,8 +1802,14 @@ const _: () = {
     assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES == 64);
     assert!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET.is_multiple_of(64));
     assert!(
-        DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
-            + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES as u32
+        DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET
+            == DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES
+    );
+    assert!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES == 128);
+    assert!(
+        DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as u32
             <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
     );
     assert!(
@@ -2308,6 +2402,414 @@ impl DriverRuntimeCyw43RxBatchAck {
     }
 }
 
+/// Immutable identity which opens one bounded CYW43 bus-service episode.
+///
+/// This is a construction helper rather than a shared-memory record. The
+/// diagnostic producer passes it to
+/// [`DriverRuntimeCyw43BusEpisodeRecord::staged`] before adding progress and
+/// the typed episode exit.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43BusEpisodeStart {
+    /// Nonzero publication sequence committed by this record version.
+    pub publication_sequence: u32,
+    /// Monotonic nonzero bus-service episode identity.
+    pub episode_sequence: u32,
+    /// CYW43 logical-runtime generation; zero is valid for persistent work.
+    pub logical_generation: u32,
+    /// Nonzero SDIO physical-owner lifetime epoch.
+    pub physical_epoch: u32,
+    /// Immutable parent sequence, or zero for a DPC-only episode.
+    pub parent_sequence: u32,
+    /// Immutable CYW43 parent op, or zero for a DPC-only episode.
+    pub parent_op: u16,
+    /// One typed `DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_*` value.
+    pub cause: u16,
+    /// Virtual-counter sample at initial admission.
+    pub first_cntvct: u64,
+}
+
+/// Passive, bounded summary of one CYW43 bus-service episode.
+///
+/// The CYW43 runtime clears `committed_publication_sequence`, writes this
+/// complete body, cleans both dedicated cache lines, executes the required
+/// publication barrier, then repeats `publication_sequence` in the final word.
+/// Readers accept only two identical, valid samples. The record reports
+/// durable state but never authorizes work, signals another runtime, retries a
+/// transfer, or creates a second physical lane.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43BusEpisodeRecord {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero publication identity committed in the final word.
+    pub publication_sequence: u32,
+    /// Nonzero monotonic bus-service episode identity.
+    pub episode_sequence: u32,
+    /// CYW43 logical-runtime generation; zero is valid for persistent work.
+    pub logical_generation: u32,
+    /// Nonzero SDIO physical-owner lifetime epoch.
+    pub physical_epoch: u32,
+    /// Immutable parent sequence, or zero for a DPC-only episode.
+    pub parent_sequence: u32,
+    /// Immutable CYW43 parent op, or zero for a DPC-only episode.
+    pub parent_op: u16,
+    /// One typed `DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_*` value.
+    pub cause: u16,
+    /// Virtual-counter sample at initial admission.
+    pub first_cntvct: u64,
+    /// Most recent virtual-counter sample represented by this publication.
+    pub last_cntvct: u64,
+    /// Exact active or terminal SDIO child sequence, when present.
+    pub child_sequence: u32,
+    /// Typed child terminal completion code, when terminal.
+    pub child_code: u16,
+    /// Typed child terminal detail, when terminal.
+    pub child_detail: u16,
+    /// Child terminal result word, when terminal.
+    pub child_result: u32,
+    /// Engine selected by the exact active or terminal child descriptor.
+    pub child_engine: u16,
+    /// IRQ contract required by the selected child engine.
+    pub child_irq_contract: u16,
+    /// Most recent durable DPC sequence observed by the episode.
+    pub dpc_sequence: u32,
+    /// Count of Function-2 RX-poll progress transitions.
+    pub op8_progress: u32,
+    /// Count of root-visible RX progress transitions.
+    pub rx_progress: u32,
+    /// Count of foreground TX progress transitions.
+    pub tx_progress: u32,
+    /// Durable `DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_*` levels at exit.
+    pub final_pending_mask: u32,
+    /// One typed `DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_*` value.
+    pub exit_reason: u16,
+    /// Exit-specific typed detail.
+    pub exit_detail: u16,
+    /// Exit-specific result word.
+    pub exit_result: u32,
+    /// Bounded `DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_*` evidence bits.
+    pub flags: u32,
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 28],
+    /// Sequence-last commit; exactly repeats `publication_sequence`.
+    pub committed_publication_sequence: u32,
+}
+
+impl DriverRuntimeCyw43BusEpisodeRecord {
+    const FLAG_MASK: u32 = DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_OP8_PROGRESS
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_RX_PROGRESS
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_TX_PROGRESS
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT;
+    const PENDING_MASK: u32 = DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_FOREGROUND
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_DPC
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_EXTERNAL_WAIT
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RX
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_TX
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CHILD_ACTIVE
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CHILD_ISSUED_UNKNOWN
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_ACK_PENDING
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CARD_INT_MASKED
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RING_POISON
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_PRIVATE_RX_QUEUE
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_UNACKED_RX_BATCH
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_OP8_ACTIVE
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_OP11_ACTIVE
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_TX_CREDIT_WAIT
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_LOCAL_CONTINUATION
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RECOVERY
+        | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_PAIR_RESTART;
+
+    /// Canonical uncommitted empty episode diagnostic.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION,
+            len: DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES,
+            publication_sequence: 0,
+            episode_sequence: 0,
+            logical_generation: 0,
+            physical_epoch: 0,
+            parent_sequence: 0,
+            parent_op: 0,
+            cause: 0,
+            first_cntvct: 0,
+            last_cntvct: 0,
+            child_sequence: 0,
+            child_code: 0,
+            child_detail: 0,
+            child_result: 0,
+            child_engine: DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_NONE,
+            child_irq_contract: 0,
+            dpc_sequence: 0,
+            op8_progress: 0,
+            rx_progress: 0,
+            tx_progress: 0,
+            final_pending_mask: 0,
+            exit_reason: DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_ACTIVE,
+            exit_detail: 0,
+            exit_result: 0,
+            flags: 0,
+            reserved: [0; 28],
+            committed_publication_sequence: 0,
+        }
+    }
+
+    /// Construct the uncommitted first publication for one immutable episode.
+    #[must_use]
+    pub const fn staged(start: DriverRuntimeCyw43BusEpisodeStart) -> Self {
+        Self {
+            publication_sequence: start.publication_sequence,
+            episode_sequence: start.episode_sequence,
+            logical_generation: start.logical_generation,
+            physical_epoch: start.physical_epoch,
+            parent_sequence: start.parent_sequence,
+            parent_op: start.parent_op,
+            cause: start.cause,
+            first_cntvct: start.first_cntvct,
+            last_cntvct: start.first_cntvct,
+            ..Self::empty()
+        }
+    }
+
+    /// Encode the fixed shared-memory representation as little-endian words.
+    ///
+    /// This keeps passive readers and host tests on bounded primitive accesses
+    /// rather than introducing another typed raw-pointer boundary.
+    #[must_use]
+    pub const fn to_le_words(self) -> [u32; DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS] {
+        let mut words = [0; DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS];
+        words[0] = self.magic;
+        words[1] = self.version as u32 | ((self.len as u32) << 16);
+        words[2] = self.publication_sequence;
+        words[3] = self.episode_sequence;
+        words[4] = self.logical_generation;
+        words[5] = self.physical_epoch;
+        words[6] = self.parent_sequence;
+        words[7] = self.parent_op as u32 | ((self.cause as u32) << 16);
+        words[8] = self.first_cntvct as u32;
+        words[9] = (self.first_cntvct >> 32) as u32;
+        words[10] = self.last_cntvct as u32;
+        words[11] = (self.last_cntvct >> 32) as u32;
+        words[12] = self.child_sequence;
+        words[13] = self.child_code as u32 | ((self.child_detail as u32) << 16);
+        words[14] = self.child_result;
+        words[15] = self.child_engine as u32 | ((self.child_irq_contract as u32) << 16);
+        words[16] = self.dpc_sequence;
+        words[17] = self.op8_progress;
+        words[18] = self.rx_progress;
+        words[19] = self.tx_progress;
+        words[20] = self.final_pending_mask;
+        words[21] = self.exit_reason as u32 | ((self.exit_detail as u32) << 16);
+        words[22] = self.exit_result;
+        words[23] = self.flags;
+        let mut index = 0usize;
+        while index < self.reserved.len() / core::mem::size_of::<u32>() {
+            let byte = index * core::mem::size_of::<u32>();
+            words[24 + index] = u32::from_le_bytes([
+                self.reserved[byte],
+                self.reserved[byte + 1],
+                self.reserved[byte + 2],
+                self.reserved[byte + 3],
+            ]);
+            index += 1;
+        }
+        words[31] = self.committed_publication_sequence;
+        words
+    }
+
+    /// Decode the fixed little-endian shared-memory word representation.
+    #[must_use]
+    pub const fn from_le_words(words: [u32; DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS]) -> Self {
+        let mut reserved = [0; 28];
+        let mut index = 0usize;
+        while index < reserved.len() / core::mem::size_of::<u32>() {
+            let bytes = words[24 + index].to_le_bytes();
+            let byte = index * core::mem::size_of::<u32>();
+            reserved[byte] = bytes[0];
+            reserved[byte + 1] = bytes[1];
+            reserved[byte + 2] = bytes[2];
+            reserved[byte + 3] = bytes[3];
+            index += 1;
+        }
+        Self {
+            magic: words[0],
+            version: words[1] as u16,
+            len: (words[1] >> 16) as u16,
+            publication_sequence: words[2],
+            episode_sequence: words[3],
+            logical_generation: words[4],
+            physical_epoch: words[5],
+            parent_sequence: words[6],
+            parent_op: words[7] as u16,
+            cause: (words[7] >> 16) as u16,
+            first_cntvct: words[8] as u64 | ((words[9] as u64) << 32),
+            last_cntvct: words[10] as u64 | ((words[11] as u64) << 32),
+            child_sequence: words[12],
+            child_code: words[13] as u16,
+            child_detail: (words[13] >> 16) as u16,
+            child_result: words[14],
+            child_engine: words[15] as u16,
+            child_irq_contract: (words[15] >> 16) as u16,
+            dpc_sequence: words[16],
+            op8_progress: words[17],
+            rx_progress: words[18],
+            tx_progress: words[19],
+            final_pending_mask: words[20],
+            exit_reason: words[21] as u16,
+            exit_detail: (words[21] >> 16) as u16,
+            exit_result: words[22],
+            flags: words[23],
+            reserved,
+            committed_publication_sequence: words[31],
+        }
+    }
+
+    /// Whether every diagnostic body field is internally consistent.
+    ///
+    /// This deliberately ignores the sequence-last commit field so a producer
+    /// can validate a staged body before publishing it.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC
+            || self.version != DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION
+            || self.len != DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES
+            || self.publication_sequence == 0
+            || self.episode_sequence == 0
+            || self.physical_epoch == 0
+            || self.last_cntvct < self.first_cntvct
+            || !Self::cause_valid(self.cause)
+            || !Self::parent_identity_valid(self)
+            || !Self::exit_valid(self.exit_reason)
+            || (self.flags & !Self::FLAG_MASK) != 0
+            || (self.final_pending_mask & !Self::PENDING_MASK) != 0
+            || !Self::progress_flags_valid(self)
+            || !Self::child_identity_valid(self)
+            || !Self::exit_fields_valid(self)
+        {
+            return false;
+        }
+
+        let mut index = 0;
+        while index < self.reserved.len() {
+            if self.reserved[index] != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    const fn cause_valid(cause: u16) -> bool {
+        cause == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND
+            || cause == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_DPC
+            || cause == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND_AND_DPC
+    }
+
+    const fn parent_identity_valid(self) -> bool {
+        if self.cause == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_DPC {
+            self.parent_sequence == 0 && self.parent_op == 0
+        } else {
+            self.parent_sequence != 0 && self.parent_op != 0
+        }
+    }
+
+    const fn exit_valid(exit_reason: u16) -> bool {
+        exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_ACTIVE
+            || exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_TERMINAL
+            || exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_PREWAIT_CHECKPOINT
+            || exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAIRNESS
+            || exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT
+    }
+
+    const fn progress_flags_valid(self) -> bool {
+        ((self.dpc_sequence != 0)
+            == ((self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED) != 0))
+            && ((self.op8_progress != 0)
+                == ((self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_OP8_PROGRESS) != 0))
+            && ((self.rx_progress != 0)
+                == ((self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_RX_PROGRESS) != 0))
+            && ((self.tx_progress != 0)
+                == ((self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_TX_PROGRESS) != 0))
+    }
+
+    const fn child_identity_valid(self) -> bool {
+        if self.child_sequence == 0 {
+            self.child_code == 0
+                && self.child_detail == 0
+                && self.child_result == 0
+                && self.child_engine == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_NONE
+                && self.child_irq_contract == 0
+                && (self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL) == 0
+        } else if (self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL) == 0 {
+            self.child_code == 0
+                && self.child_detail == 0
+                && self.child_result == 0
+                && Self::child_transport_valid(self)
+        } else {
+            self.child_code != 0 && Self::child_transport_valid(self)
+        }
+    }
+
+    const fn child_transport_valid(self) -> bool {
+        if self.child_engine == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_DMA {
+            self.child_irq_contract
+                == (DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158
+                    | DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ116)
+        } else if self.child_engine == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_PIO
+            || self.child_engine == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND
+        {
+            self.child_irq_contract == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158
+        } else {
+            false
+        }
+    }
+
+    const fn exit_fields_valid(self) -> bool {
+        let fault_flag = (self.flags & DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_FAULT) != 0;
+        if self.exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_ACTIVE {
+            self.exit_detail == 0 && self.exit_result == 0 && !fault_flag
+        } else if self.exit_reason == DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAULT {
+            fault_flag
+        } else {
+            !fault_flag
+        }
+    }
+
+    /// Return this valid staged body with its publication sequence committed.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_publication_sequence = self.publication_sequence;
+        }
+        self
+    }
+
+    /// Whether this is one complete, sequence-last committed publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed_publication_sequence == self.publication_sequence
+    }
+
+    /// Accept two identical, valid samples as one stable episode diagnostic.
+    ///
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first == second && first.valid() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
 const _: () = {
     assert!(
         DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET + DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
@@ -2329,6 +2831,14 @@ const _: () = {
             DriverRuntimeCyw43RxBatchAck,
             committed_queue_commit_sequence
         ) == 60
+    );
+    assert!(core::mem::size_of::<DriverRuntimeCyw43BusEpisodeRecord>() == 128);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43BusEpisodeRecord>() == 64);
+    assert!(
+        core::mem::offset_of!(
+            DriverRuntimeCyw43BusEpisodeRecord,
+            committed_publication_sequence
+        ) == 124
     );
 };
 
@@ -4881,6 +5391,8 @@ mod tests {
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_PAYLOAD_STRIDE, 1_536);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET, 49_280);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES, 64);
+        assert_eq!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET, 49_344);
+        assert_eq!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES, 128);
         assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET, 53_248);
         assert!(
             DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES
@@ -4911,8 +5423,8 @@ mod tests {
                 == DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
         );
         assert!(
-            DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET as u32
-                + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES as u32
+            DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET as u32
+                + DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as u32
                 <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
         );
     }
@@ -5224,6 +5736,180 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_bus_episode_layout_is_cache_isolated_and_sequence_last() {
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET,
+            DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET + DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES
+        );
+        assert!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET.is_multiple_of(64));
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeCyw43BusEpisodeRecord>(),
+            DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as usize
+        );
+        assert_eq!(
+            core::mem::align_of::<DriverRuntimeCyw43BusEpisodeRecord>(),
+            64
+        );
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeCyw43BusEpisodeRecord,
+                committed_publication_sequence
+            ),
+            124
+        );
+
+        let empty = DriverRuntimeCyw43BusEpisodeRecord::empty();
+        assert!(!empty.body_valid());
+        assert!(!empty.valid());
+
+        let mut staged =
+            DriverRuntimeCyw43BusEpisodeRecord::staged(DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: 11,
+                episode_sequence: 7,
+                logical_generation: 3,
+                physical_epoch: 5,
+                parent_sequence: 41,
+                parent_op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+                cause: DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND,
+                first_cntvct: 100,
+            });
+        staged.last_cntvct = 160;
+        staged.child_sequence = 17;
+        staged.child_code = 1;
+        staged.child_engine = DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_PIO;
+        staged.child_irq_contract = DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_IRQ158;
+        staged.dpc_sequence = 9;
+        staged.op8_progress = 2;
+        staged.rx_progress = 3;
+        staged.tx_progress = 1;
+        staged.final_pending_mask = DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RX;
+        staged.exit_reason = DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_TERMINAL;
+        staged.flags = DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_OP8_PROGRESS
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_RX_PROGRESS
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_TX_PROGRESS;
+        assert!(staged.body_valid());
+        assert!(!staged.valid());
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(staged, staged),
+            None
+        );
+
+        let committed = staged.commit();
+        assert!(committed.valid());
+        assert_eq!(committed.committed_publication_sequence, 11);
+        let words = committed.to_le_words();
+        assert_eq!(words.len(), DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS);
+        assert_eq!(words[0], DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC);
+        assert_eq!(words[31], committed.publication_sequence);
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::from_le_words(words),
+            committed,
+        );
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(committed, committed),
+            Some(committed)
+        );
+
+        let mut active_child = staged;
+        active_child.child_code = 0;
+        active_child.child_detail = 0;
+        active_child.child_result = 0;
+        active_child.flags &= !DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_CHILD_TERMINAL;
+        active_child.exit_reason = DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_PREWAIT_CHECKPOINT;
+        assert!(active_child.body_valid());
+        assert!(active_child.commit().valid());
+        active_child.child_engine = DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_NONE;
+        active_child.child_irq_contract = 0;
+        assert!(!active_child.body_valid());
+
+        let persistent_op11 =
+            DriverRuntimeCyw43BusEpisodeRecord::staged(DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: 12,
+                episode_sequence: 8,
+                logical_generation: 0,
+                physical_epoch: 5,
+                parent_sequence: 42,
+                parent_op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+                cause: DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND,
+                first_cntvct: 170,
+            });
+        assert!(persistent_op11.body_valid());
+        assert!(persistent_op11.commit().valid());
+    }
+
+    #[test]
+    fn cyw43_bus_episode_rejects_torn_and_wrong_version_publications() {
+        let mut staged =
+            DriverRuntimeCyw43BusEpisodeRecord::staged(DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: 19,
+                episode_sequence: 8,
+                logical_generation: 0,
+                physical_epoch: 6,
+                parent_sequence: 0,
+                parent_op: 0,
+                cause: DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_DPC,
+                first_cntvct: 200,
+            });
+        staged.last_cntvct = 230;
+        staged.dpc_sequence = 13;
+        staged.final_pending_mask = DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_DPC
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_RX
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_ACK_PENDING
+            | DRIVER_RUNTIME_CYW43_BUS_EPISODE_PENDING_CARD_INT_MASKED;
+        staged.exit_reason = DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_FAIRNESS;
+        staged.flags = DRIVER_RUNTIME_CYW43_BUS_EPISODE_FLAG_DPC_OBSERVED;
+        let committed = staged.commit();
+        assert!(committed.valid());
+
+        let torn = DriverRuntimeCyw43BusEpisodeRecord {
+            committed_publication_sequence: committed.publication_sequence + 1,
+            ..committed
+        };
+        assert!(torn.body_valid());
+        assert!(!torn.valid());
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(torn, torn),
+            None
+        );
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(staged, committed),
+            None,
+            "a reader cannot combine staged and committed publications"
+        );
+
+        let wrong_version = DriverRuntimeCyw43BusEpisodeRecord {
+            version: DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION + 1,
+            ..committed
+        };
+        assert!(!wrong_version.body_valid());
+        assert!(!wrong_version.valid());
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(wrong_version, wrong_version),
+            None
+        );
+
+        let missing_dpc_flag = DriverRuntimeCyw43BusEpisodeRecord {
+            flags: 0,
+            committed_publication_sequence: 0,
+            ..committed
+        };
+        assert!(!missing_dpc_flag.body_valid());
+
+        let bad_reserved = DriverRuntimeCyw43BusEpisodeRecord {
+            reserved: {
+                let mut reserved = [0; 28];
+                reserved[27] = 1;
+                reserved
+            },
+            committed_publication_sequence: 0,
+            ..committed
+        };
+        assert!(!bad_reserved.body_valid());
+    }
+
+    #[test]
     fn bcm2835_dma_tag_identifies_linked_sdio_mmio_authority() {
         assert_eq!(DRIVER_RUNTIME_RESOURCE_TAG_BCM2835_DMA, 13);
         assert_ne!(
@@ -5443,7 +6129,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 6);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 7);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET

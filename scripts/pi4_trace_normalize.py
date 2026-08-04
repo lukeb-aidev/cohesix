@@ -96,6 +96,33 @@ CYW43_SDIO_DPC_RE = re.compile(
     r"poisoned=(?P<poisoned>yes|no)"
     r"(?: masked=(?P<masked>yes|no))?$"
 )
+CYW43_BUS_EPISODE_RE = re.compile(
+    r"^CYW43_BUS_EPISODE "
+    r"p=(?P<publication_sequence>[0-9a-f]{8}) "
+    r"e=(?P<episode_sequence>[0-9a-f]{8}) "
+    r"lg=(?P<logical_generation>[0-9a-f]{8}) "
+    r"pe=(?P<physical_epoch>[0-9a-f]{8}) "
+    r"pa=(?P<parent_sequence>[0-9a-f]{8})/"
+    r"(?P<parent_op>[0-9a-f]{4}) "
+    r"c=(?P<cause_code>[1-3]) "
+    r"f=(?P<first_cntvct>[0-9a-f]{16}) "
+    r"l=(?P<last_cntvct>[0-9a-f]{16}) "
+    r"ch=(?P<child_sequence>[0-9a-f]{8})/"
+    r"(?P<child_code>[0-9a-f]{4})/"
+    r"(?P<child_detail>[0-9a-f]{4})/"
+    r"(?P<child_result>[0-9a-f]{8}) "
+    r"hw=(?P<child_engine>[0-9a-f]{4})/"
+    r"(?P<child_irq_contract>[0-9a-f]{4}) "
+    r"d=(?P<dpc_sequence>[0-9a-f]{8}) "
+    r"o8=(?P<op8_progress>[0-9a-f]{8}) "
+    r"r=(?P<rx_progress>[0-9a-f]{8}) "
+    r"t=(?P<tx_progress>[0-9a-f]{8}) "
+    r"q=(?P<pending_mask>[0-9a-f]{8}) "
+    r"er=(?P<exit_reason>[0-4])/"
+    r"(?P<exit_detail>[0-9a-f]{4})/"
+    r"(?P<exit_result>[0-9a-f]{8}) "
+    r"fl=(?P<flags>[0-9a-f]{8})$"
+)
 CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
     r"^CYW43_BOOTSTRAP_SUPERVISOR "
     r"attempt=(?P<attempt>[0-9]+) "
@@ -1381,6 +1408,19 @@ def parse_fields(text: str) -> dict[str, str]:
     return fields
 
 
+def parse_cyw43_bus_episode(raw: str) -> dict[str, str] | None:
+    """Parse one compact, diagnostic-only CYW43 bus-episode record."""
+
+    match = CYW43_BUS_EPISODE_RE.fullmatch(raw)
+    if match is None:
+        return None
+    return {
+        "diagnostic": "cyw43-bus-episode",
+        "diagnostic_schema": "compact-v1",
+        **match.groupdict(),
+    }
+
+
 def startup_diag_gate(raw: str, domain: str) -> int | None:
     """Return the gate number from a startup black-box diagnostic line."""
 
@@ -1765,9 +1805,15 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         return None
     source = classify_source(line, domain)
     fields = parse_fields(line)
+    bus_episode = parse_cyw43_bus_episode(line)
+    if bus_episode is not None:
+        fields = {**fields, **bus_episode}
     stage = choose_stage(fields)
     message = extract_message(line, domain, source)
-    if line == "halting...":
+    if bus_episode is not None:
+        stage = "cyw43-bus-episode"
+        message = "bus-episode diagnostic=passive"
+    elif line == "halting...":
         fields = {**fields, "halt": "yes", "reason": "kernel-halt"}
         stage = "halt"
         message = "halt reason=kernel-halt"
@@ -10815,7 +10861,7 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     return explicit.lower() == "driver-owned"
 
 
-RUNTIME_DESCRIPTOR_SEAL_VERSION = 5
+RUNTIME_DESCRIPTOR_SEAL_VERSION = 7
 SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
     {"usb-keyboard", "cyw43-wifi", "sdio-host"}
 )
@@ -13704,7 +13750,11 @@ def summarize_cyw43_bootstrap_supervisor(
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
-    event_list = list(events)
+    event_list = [
+        event
+        for event in events
+        if not event.raw.startswith("CYW43_BUS_EPISODE ")
+    ]
     wifi_gate8 = summarize_wifi_gate8_proof(event_list)
     cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(event_list)
     gate8_protocol_seen = any(

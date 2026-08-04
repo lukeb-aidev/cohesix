@@ -524,6 +524,40 @@ These authorities never substitute for one another.
 Notifications are optional coalescing prompts; they carry neither authority nor
 history.
 
+Driver-runtime ABI v7 adds one bounded diagnostic ledger for this same
+lifetime; it does not add a service mechanism. The CYW43/root-private shared
+tail reserves one cache-isolated 128-byte
+`DriverRuntimeCyw43BusEpisodeRecord` at absolute offset 49,344, after the
+disjoint RX-batch ACK and outside the SDIO owner's eight-page aperture. CYW43
+maintains separate foreground and DPC diagnostic accumulators because a sealed
+foreground parent and committed DPC event may coexist. A material terminal,
+typed fault, prewait checkpoint, or bounded fairness checkpoint writes the
+record body, cleans and barriers it, then commits the publication sequence in
+the final word. The prewait exit is only a pre-sleep checkpoint: CYW43 repeats
+the complete durable-condition and exact-child terminal tests after publishing
+it, with no diagnostic work between the final recheck and the block. A parent
+terminal commits and signals its authoritative completion before ledger
+housekeeping. Pair-ring scrub, foreground-transaction clear, and
+`Cyw43RuntimeState` restoration do not erase the last publication. Root only
+double-samples and formats the record as one bounded `CYW43_BUS_EPISODE` line
+in `wifi diag`; it never writes the record or feeds it back into admission.
+The compact serial grammar stays within the 256-byte console-line contract:
+`p`/`e` are publication and episode sequences, `lg`/`pe` are logical and
+physical identities, `pa`/`c` are parent identity and cause, `f`/`l` are the
+first and last CNTVCT, `ch` is the active-or-terminal child tuple, and `hw` is
+the engine selected by its immutable descriptor plus the required IRQ contract.
+`hw` is expected contract while the child is active; the child-terminal flag
+means the sole owner completed that contract. `d`, `o8`, `r`, and `t` are
+DPC/op8/root-visible-batch/TX progress, `q` is
+the final pending mask, `er` is the typed exit tuple, and `fl` is the flag mask.
+The ledger carries immutable parent/child and logical/physical identities,
+first/last CNTVCT, DPC sequence, op8/RX/TX progress, final durable pending
+mask, and a typed exit. A first typed fault dominates any later peer terminal or
+fault so a joined episode cannot erase its exact first break. Publishing sends no notification and cannot issue,
+retry, complete, recover, rearm, or schedule work. It exists solely so a
+scrubbed live failure identifies the exact last retained condition rather than
+forcing inference from generation-wide counters.
+
 Exact `5fa7c3871d96` hardware separated the two consequences of violating this
 contract. Cold, R02, and R03 stranded the sealed host M4 parent before its exact
 terminal. R01 reached Gate 8, transmitted 14 DHCP requests, and received valid

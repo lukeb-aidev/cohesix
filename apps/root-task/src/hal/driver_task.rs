@@ -23,8 +23,8 @@ use heapless::Deque;
 use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
-    DriverRuntimeCyw43CommandDescriptor, DriverRuntimeDpcEventRing,
-    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
+    DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimeSdioClockSnapshot, DriverRuntimeSdioDeadlineArm,
     DriverRuntimeSdioPhysicalLifetimeRecord, DriverRuntimeSteadyServiceProgress,
     DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
@@ -35,7 +35,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
-    DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+    DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES,
+    DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET,
     DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
     DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
@@ -442,8 +443,8 @@ use pi4_driver_abi::{
     DriverRuntimeCyw43RxBatchAck, DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
     DriverRuntimeCyw43RxQueueState, DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_OFFSET, DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET,
-    DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE, DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET,
-    DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP, DRIVER_RUNTIME_CYW43_RX_BATCH_FIRST_SHARED_PAGE,
+    DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET, DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES, DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES,
     DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET,
@@ -6774,6 +6775,240 @@ fn driver_task_cyw43_rx_batch_contiguous_root_span(
 }
 
 #[cfg(feature = "kernel")]
+struct DriverTaskSharedRecordView {
+    window: super::MappedRegisterWindow,
+    base_offset: usize,
+    len: usize,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskSharedRecordView {
+    fn new(record_ptr: usize, len: usize) -> Option<Self> {
+        if len == 0 {
+            return None;
+        }
+        let base_offset = record_ptr % DRIVER_TASK_RING_PAGE_BYTES;
+        let page_base = record_ptr.checked_sub(base_offset)?;
+        if len > DRIVER_TASK_RING_PAGE_BYTES.checked_sub(base_offset)? {
+            return None;
+        }
+        #[cfg(not(test))]
+        let window =
+            super::MappedRegisterWindow::new(page_base, DRIVER_TASK_RING_PAGE_BYTES).ok()?;
+        #[cfg(test)]
+        let window =
+            super::MappedRegisterWindow::new_test(page_base, DRIVER_TASK_RING_PAGE_BYTES).ok()?;
+        Some(Self {
+            window,
+            base_offset,
+            len,
+        })
+    }
+
+    fn read_u32(&self, offset: usize) -> Option<u32> {
+        if offset.checked_add(core::mem::size_of::<u32>())? > self.len {
+            return None;
+        }
+        self.window
+            .read_u32(self.base_offset.checked_add(offset)?)
+            .ok()
+    }
+
+    fn read_u16(&self, offset: usize) -> Option<u16> {
+        if offset.checked_add(core::mem::size_of::<u16>())? > self.len {
+            return None;
+        }
+        let aligned = offset & !3;
+        let shift = ((offset & 2) * 8) as u32;
+        self.read_u32(aligned)
+            .map(|word| ((word >> shift) & u32::from(u16::MAX)) as u16)
+    }
+
+    fn read_u8(&self, offset: usize) -> Option<u8> {
+        if offset >= self.len {
+            return None;
+        }
+        let aligned = offset & !3;
+        let shift = ((offset & 3) * 8) as u32;
+        self.read_u32(aligned)
+            .map(|word| ((word >> shift) & u32::from(u8::MAX)) as u8)
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_read_cyw43_bus_episode_record(
+    record_ptr: usize,
+) -> Option<DriverRuntimeCyw43BusEpisodeRecord> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES);
+    let view = DriverTaskSharedRecordView::new(record_ptr, record_bytes)?;
+    let mut words = [0; pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS];
+    let mut index = 0usize;
+    while index < words.len() {
+        words[index] = view.read_u32(index * core::mem::size_of::<u32>())?;
+        index = index.saturating_add(1);
+    }
+    Some(DriverRuntimeCyw43BusEpisodeRecord::from_le_words(words))
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_read_cyw43_rx_batch_record(
+    record_ptr: usize,
+) -> Option<DriverRuntimeCyw43RxBatchRecord> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES);
+    let view = DriverTaskSharedRecordView::new(record_ptr, record_bytes)?;
+    let mut entries =
+        [DriverRuntimeCyw43RxBatchEntry::empty(); DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+    let entries_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, entries);
+    let mut index = 0usize;
+    while index < entries.len() {
+        let entry_offset = entries_offset.checked_add(
+            index.checked_mul(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>())?,
+        )?;
+        entries[index] = DriverRuntimeCyw43RxBatchEntry {
+            offset: view.read_u32(
+                entry_offset + core::mem::offset_of!(DriverRuntimeCyw43RxBatchEntry, offset),
+            )?,
+            len: view.read_u16(
+                entry_offset + core::mem::offset_of!(DriverRuntimeCyw43RxBatchEntry, len),
+            )?,
+            flags: view.read_u16(
+                entry_offset + core::mem::offset_of!(DriverRuntimeCyw43RxBatchEntry, flags),
+            )?,
+        };
+        index = index.saturating_add(1);
+    }
+    let mut reserved = [0; 36];
+    let reserved_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved);
+    let mut reserved_index = 0usize;
+    while reserved_index < reserved.len() {
+        reserved[reserved_index] = view.read_u8(reserved_offset + reserved_index)?;
+        reserved_index = reserved_index.saturating_add(1);
+    }
+    Some(DriverRuntimeCyw43RxBatchRecord {
+        magic: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            magic
+        ))?,
+        version: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            version
+        ))?,
+        len: view.read_u16(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, len))?,
+        parent_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            parent_sequence
+        ))?,
+        generation: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            generation
+        ))?,
+        queue_commit_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            queue_commit_sequence
+        ))?,
+        count: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            count
+        ))?,
+        remaining: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            remaining
+        ))?,
+        entries,
+        reserved,
+        committed_parent_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchRecord,
+            committed_parent_sequence
+        ))?,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_read_cyw43_rx_batch_ack(record_ptr: usize) -> Option<DriverRuntimeCyw43RxBatchAck> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_ACK_BYTES);
+    let view = DriverTaskSharedRecordView::new(record_ptr, record_bytes)?;
+    let mut reserved = [0; 38];
+    let reserved_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchAck, reserved);
+    let mut index = 0usize;
+    while index < reserved.len() {
+        reserved[index] = view.read_u8(reserved_offset + index)?;
+        index = index.saturating_add(1);
+    }
+    Some(DriverRuntimeCyw43RxBatchAck {
+        magic: view.read_u32(core::mem::offset_of!(DriverRuntimeCyw43RxBatchAck, magic))?,
+        version: view.read_u16(core::mem::offset_of!(DriverRuntimeCyw43RxBatchAck, version))?,
+        len: view.read_u16(core::mem::offset_of!(DriverRuntimeCyw43RxBatchAck, len))?,
+        generation: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            generation
+        ))?,
+        parent_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            parent_sequence
+        ))?,
+        queue_commit_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            queue_commit_sequence
+        ))?,
+        count: view.read_u16(core::mem::offset_of!(DriverRuntimeCyw43RxBatchAck, count))?,
+        reserved,
+        committed_queue_commit_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43RxBatchAck,
+            committed_queue_commit_sequence
+        ))?,
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_bus_episode_snapshot_for_slot(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverRuntimeCyw43BusEpisodeRecord> {
+    const SNAPSHOT_ATTEMPTS: usize = 3;
+
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES);
+    let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET),
+        record_bytes,
+    )?;
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43BusEpisodeRecord>()) {
+        return None;
+    }
+
+    let mut attempt = 0usize;
+    while attempt < SNAPSHOT_ATTEMPTS {
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let first = driver_task_read_cyw43_bus_episode_record(record_ptr)?;
+        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let second = driver_task_read_cyw43_bus_episode_record(record_ptr)?;
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(
+            &slot.counters.cache_invalidate_bytes,
+            record_bytes.saturating_mul(2),
+        );
+        if let Some(snapshot) = DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(first, second) {
+            return Some(snapshot);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+/// Return one stable, passive CYW43 bus-service episode diagnostic.
+///
+/// The sequence-last runtime record is the only source. Root neither writes
+/// the record nor turns its contents into scheduling, signal, retry, or
+/// physical-owner authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_bus_episode_snapshot() -> Option<DriverRuntimeCyw43BusEpisodeRecord>
+{
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    driver_task_cyw43_bus_episode_snapshot_for_slot(slot)
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
     slot: &DriverTaskCommandSlot,
 ) -> Option<DriverRuntimeCyw43RxBatchRecord> {
@@ -6788,17 +7023,10 @@ fn driver_task_cyw43_rx_batch_record_snapshot_for_slot(
     }
 
     driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
-    // SAFETY: The compiler-declared page geometry above proves that this
-    // aligned pointer names the complete fixed-layout batch header in the
-    // HAL-published root mapping. The runtime publishes only primitive fields.
-    let first =
-        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchRecord) };
+    let first = driver_task_read_cyw43_rx_batch_record(record_ptr)?;
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
-    // SAFETY: This is the second volatile sample of the same validated header;
-    // sequence-last validation below rejects a concurrent producer update.
-    let second =
-        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchRecord) };
+    let second = driver_task_read_cyw43_rx_batch_record(record_ptr)?;
     driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
     driver_task_counter_add(
         &slot.counters.cache_invalidate_bytes,
@@ -6846,16 +7074,10 @@ fn driver_task_cyw43_rx_batch_ack_snapshot_for_slot(
         return None;
     }
     driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
-    // SAFETY: The ACK occupies one dedicated, aligned root-owned cache line in
-    // the HAL-published CYW43 shared mapping. It contains only primitive fields.
-    let first =
-        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchAck) };
+    let first = driver_task_read_cyw43_rx_batch_ack(record_ptr)?;
     driver_task_shared_load_barrier();
     driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
-    // SAFETY: This second sample uses the same validated fixed-layout mapping;
-    // sequence-last validation rejects a torn root publication.
-    let second =
-        unsafe { core::ptr::read_volatile(record_ptr as *const DriverRuntimeCyw43RxBatchAck) };
+    let second = driver_task_read_cyw43_rx_batch_ack(record_ptr)?;
     driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
     driver_task_counter_add(
         &slot.counters.cache_invalidate_bytes,
@@ -22265,6 +22487,106 @@ mod tests {
         let mut ring = DriverRuntimeDpcEventRing::empty(40);
         ring.epoch = 0;
         assert_eq!(stable_sdio_dpc_ring_snapshot(ring, ring), None);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn committed_cyw43_bus_episode_for_test() -> DriverRuntimeCyw43BusEpisodeRecord {
+        let mut record = DriverRuntimeCyw43BusEpisodeRecord::staged(
+            pi4_driver_abi::DriverRuntimeCyw43BusEpisodeStart {
+                publication_sequence: 17,
+                episode_sequence: 9,
+                logical_generation: 7,
+                physical_epoch: 5,
+                parent_sequence: 0x8000_0042,
+                parent_op: DRIVER_RUNTIME_CYW43_OP_ETH_TX,
+                cause: pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND,
+                first_cntvct: 11_000,
+            },
+        );
+        record.last_cntvct = 11_250;
+        record.exit_reason = pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_EXIT_TERMINAL;
+        record.commit()
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bus_episode_stable_snapshot_rejects_staged_torn_and_wrong_identity() {
+        let record = committed_cyw43_bus_episode_for_test();
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(record, record),
+            Some(record),
+        );
+
+        let mut staged = record;
+        staged.committed_publication_sequence = 0;
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(staged, staged),
+            None,
+        );
+
+        let mut changed = record;
+        changed.publication_sequence = changed.publication_sequence.wrapping_add(1);
+        changed.committed_publication_sequence = changed.publication_sequence;
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(record, changed),
+            None,
+        );
+
+        let mut wrong_version = record;
+        wrong_version.version = wrong_version.version.wrapping_add(1);
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(wrong_version, wrong_version),
+            None,
+        );
+
+        let mut wrong_commit = record;
+        wrong_commit.committed_publication_sequence =
+            wrong_commit.committed_publication_sequence.wrapping_add(1);
+        assert_eq!(
+            DriverRuntimeCyw43BusEpisodeRecord::stable_snapshot(wrong_commit, wrong_commit),
+            None,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_bus_episode_reader_uses_existing_shared_pages_without_write_authority() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut pages: [Box<AlignedDriverTaskRing>;
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES] = std::array::from_fn(|_| {
+            Box::new(AlignedDriverTaskRing(
+                [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+            ))
+        });
+        for (index, page) in pages.iter_mut().enumerate() {
+            slot.shared_frame_caps[index].store(index.saturating_add(1), Ordering::Release);
+            slot.shared_frame_root_ptrs[index]
+                .store(page.0.as_mut_ptr() as usize, Ordering::Release);
+        }
+        slot.shared_frame_count.store(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
+            Ordering::Release,
+        );
+
+        let relative = usize::from(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET)
+            .checked_sub(usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE))
+            .expect("episode record lies in the shared arena");
+        let page_index = relative / DRIVER_TASK_RING_PAGE_BYTES;
+        let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+        let record = committed_cyw43_bus_episode_for_test();
+        let first_word = page_offset / core::mem::size_of::<u32>();
+        let words = record.to_le_words();
+        pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
+        assert_eq!(
+            driver_task_cyw43_bus_episode_snapshot_for_slot(&slot),
+            Some(record),
+        );
+
+        let mut staged = record;
+        staged.committed_publication_sequence = 0;
+        let words = staged.to_le_words();
+        pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
+        assert_eq!(driver_task_cyw43_bus_episode_snapshot_for_slot(&slot), None,);
     }
 
     #[test]

@@ -5084,6 +5084,26 @@ pub(crate) struct Cyw43SdioDpcDiagnostic {
     pub masked: bool,
 }
 
+/// Return the latest stable, read-only CYW43 bus-service episode summary.
+///
+/// This diagnostic preserves the runtime's sequence-last publication exactly.
+/// It cannot admit work, signal either child, or create scheduling authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_bus_episode_diagnostic(
+) -> Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE.lock() {
+        return Some(snapshot);
+    }
+    crate::hal::driver_task::driver_task_cyw43_bus_episode_snapshot()
+}
+
+#[cfg(all(feature = "kernel", test))]
+static CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE: Mutex<
+    Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
+> = Mutex::new(None);
+
 #[cfg(all(feature = "kernel", test))]
 static CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE: Mutex<Option<Cyw43SdioDpcDiagnostic>> = Mutex::new(None);
 
@@ -6138,6 +6158,13 @@ fn cyw43_sdio_dpc_diagnostic_work_pending(
 pub(crate) fn cyw43_steady_network_work_pending(contract: DriverTaskContract) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
         && cyw43_service_work_snapshot().schedulable_network_work()
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn set_cyw43_bus_episode_diagnostic_test_override(
+    snapshot: Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
+) {
+    *CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
 }
 
 #[cfg(all(feature = "kernel", test))]

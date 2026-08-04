@@ -50,7 +50,7 @@ def descriptor_seal_suffix(hot_path: str) -> str:
         "valid" if hot_path in {"usb-keyboard", "cyw43-wifi", "sdio-host"} else "none"
     )
     return (
-        "descriptor_version=5 descriptor_seal=valid "
+        "descriptor_version=7 descriptor_seal=valid "
         f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
     )
 
@@ -85,7 +85,7 @@ def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=5",
+            " descriptor_version=7",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",
@@ -703,6 +703,75 @@ def test_parse_events_filters_unrelated_lines() -> None:
     assert [event.domain for event in events] == ["console", "wifi", "usb", "wifi"]
     assert events[2].stage == "0x0230"
     assert events[2].fields["tag"] == "reset-write"
+
+
+def test_compact_cyw43_bus_episode_is_anchored_and_passive() -> None:
+    line = (
+        "CYW43_BUS_EPISODE p=ffffffff e=ffffffff lg=ffffffff pe=ffffffff "
+        "pa=ffffffff/0007 c=3 f=fffffffffffffffe l=ffffffffffffffff "
+        "ch=ffffffff/ffff/ffff/ffffffff hw=0003/0003 d=ffffffff "
+        "o8=ffffffff r=ffffffff t=ffffffff q=0000001f "
+        "er=4/ffff/ffffffff fl=0000003f"
+    )
+
+    parsed = normalizer.parse_cyw43_bus_episode(line)
+    assert parsed is not None
+    assert parsed["diagnostic"] == "cyw43-bus-episode"
+    assert parsed["diagnostic_schema"] == "compact-v1"
+    assert parsed["publication_sequence"] == "ffffffff"
+    assert parsed["episode_sequence"] == "ffffffff"
+    assert parsed["logical_generation"] == "ffffffff"
+    assert parsed["physical_epoch"] == "ffffffff"
+    assert parsed["parent_sequence"] == "ffffffff"
+    assert parsed["parent_op"] == "0007"
+    assert parsed["cause_code"] == "3"
+    assert parsed["first_cntvct"] == "fffffffffffffffe"
+    assert parsed["last_cntvct"] == "ffffffffffffffff"
+    assert parsed["child_sequence"] == "ffffffff"
+    assert parsed["child_code"] == "ffff"
+    assert parsed["child_detail"] == "ffff"
+    assert parsed["child_result"] == "ffffffff"
+    assert parsed["child_engine"] == "0003"
+    assert parsed["child_irq_contract"] == "0003"
+    assert parsed["dpc_sequence"] == "ffffffff"
+    assert parsed["op8_progress"] == "ffffffff"
+    assert parsed["rx_progress"] == "ffffffff"
+    assert parsed["tx_progress"] == "ffffffff"
+    assert parsed["pending_mask"] == "0000001f"
+    assert parsed["exit_reason"] == "4"
+    assert parsed["exit_detail"] == "ffff"
+    assert parsed["exit_result"] == "ffffffff"
+    assert parsed["flags"] == "0000003f"
+    malformed_line = f"{line} trailing=yes"
+    assert normalizer.parse_cyw43_bus_episode(malformed_line) is None
+
+    event = normalizer.parse_events([line])[0]
+    assert event.domain == "wifi"
+    assert event.stage == "cyw43-bus-episode"
+    assert event.message == "bus-episode diagnostic=passive"
+    assert event.fields["diagnostic"] == "cyw43-bus-episode"
+
+    record = normalizer.summarize_gates([event]).to_record()
+    empty = normalizer.summarize_gates([]).to_record()
+    for key in (
+        "WIFI_GATE",
+        "WIFI_BLOCKER",
+        "WIFI_DPC_PROOF",
+        "WIFI_DPC_REASON",
+        "WIFI_GATE8_COMPLETE",
+    ):
+        assert record[key] == empty[key]
+
+    malformed_event = normalizer.parse_events([malformed_line])[0]
+    malformed_record = normalizer.summarize_gates([malformed_event]).to_record()
+    for key in (
+        "WIFI_GATE",
+        "WIFI_BLOCKER",
+        "WIFI_DPC_PROOF",
+        "WIFI_DPC_REASON",
+        "WIFI_GATE8_COMPLETE",
+    ):
+        assert malformed_record[key] == empty[key]
 
 
 def test_host_annotation_tail_cannot_replay_target_gate_or_boot_evidence() -> None:
