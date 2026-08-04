@@ -749,6 +749,57 @@ const fn gate8_terminal_pending_cancels_for_recovery(
     feature = "kernel",
     feature = "net-console"
 ))]
+const fn gate8_terminal_pending_yields_to_finite_owner(
+    terminal_decision_committed: bool,
+    finite_terminal_pending: bool,
+) -> bool {
+    !terminal_decision_committed && finite_terminal_pending
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+const fn gate8_terminal_decision_cut_open(
+    recovery_required: bool,
+    finite_terminal_pending: bool,
+) -> bool {
+    !recovery_required && !finite_terminal_pending
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
+fn commit_gate8_terminal_decision<Retract>(
+    terminal_decision_committed: &mut bool,
+    generation: u32,
+    recovery_required: bool,
+    finite_terminal_pending: bool,
+    retract: Retract,
+) -> bool
+where
+    Retract: FnOnce(u32) -> bool,
+{
+    if *terminal_decision_committed {
+        return true;
+    }
+    if !gate8_terminal_decision_cut_open(recovery_required, finite_terminal_pending)
+        || !retract(generation)
+    {
+        return false;
+    }
+    *terminal_decision_committed = true;
+    true
+}
+
+#[cfg(all(
+    feature = "serial-console",
+    feature = "kernel",
+    feature = "net-console"
+))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DeferredNetSupervisorSequence {
     status_sequence: u64,
@@ -1840,6 +1891,19 @@ where
             // terminal decision cut commits immediately before atomic batch
             // retention. No later child operation may run while the batch or
             // its adjacent Permanent status waits for output service.
+            if gate8_terminal_pending_yields_to_finite_owner(
+                pending.terminal_decision_committed,
+                crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(),
+            ) {
+                // A sequence-last finite terminal committed before the cut is
+                // part of the already-admitted bus transaction. Give the
+                // ordinary EventPump Network phase another bounded turn to
+                // retire that exact owner; do not reset the Gate 8 deadline or
+                // admit any fresh operation.
+                gate8_terminal_pending = None;
+                sel4::yield_now();
+                continue;
+            }
             if gate8_terminal_pending_cancels_for_recovery(
                 pending.terminal_decision_committed,
                 crate::drivers::driver_task_net::cyw43_recovery_required(),
@@ -1863,14 +1927,13 @@ where
                     pending.diagnostic,
                     line.as_str(),
                     || {
-                        if pending.terminal_decision_committed {
-                            return true;
-                        }
-                        if crate::drivers::driver_task_net::cyw43_recovery_required() {
-                            return false;
-                        }
-                        pending.terminal_decision_committed = true;
-                        true
+                        commit_gate8_terminal_decision(
+                            &mut pending.terminal_decision_committed,
+                            pending.generation,
+                            crate::drivers::driver_task_net::cyw43_recovery_required(),
+                            crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(),
+                            crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer,
+                        )
                     },
                 );
                 match outcome {
@@ -2171,8 +2234,11 @@ where
                         } else if let Some(deadline_ms) = gate8_lifecycle
                             .service_readiness_deadline_expired(generation, stability_now_ms)
                         {
-                            terminal_failure =
-                                Some((generation, "service-readiness-deadline", deadline_ms));
+                            if !crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(
+                            ) {
+                                terminal_failure =
+                                    Some((generation, "service-readiness-deadline", deadline_ms));
+                            }
                         }
                     }
                     DeferredGate8Observation::Committed
@@ -2210,14 +2276,19 @@ where
                         deadline_ms,
                         blocker,
                     } => {
-                        if !recovery_required {
+                        if !recovery_required
+                            && !crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking(
+                            )
+                        {
                             terminal_failure = Some((generation, blocker, deadline_ms));
                         }
                     }
                 }
 
                 if let Some((generation, blocker, deadline_ms)) = terminal_failure {
-                    if crate::drivers::driver_task_net::cyw43_recovery_required() {
+                    if crate::drivers::driver_task_net::cyw43_recovery_required()
+                        || crate::drivers::driver_task_net::cyw43_finite_lifecycle_cut_blocking()
+                    {
                         // A typed transport edge discovered after the first
                         // passive snapshot retains recovery authority. The next
                         // supervisor section will service it without publishing a
@@ -2225,9 +2296,6 @@ where
                         sel4::yield_now();
                         continue 'supervisor;
                     }
-                    let _ = crate::drivers::driver_task_net::retract_cyw43_gate8_data_consumer(
-                        generation,
-                    );
                     gate8_terminal_pending = Some(DeferredGate8TerminalPending {
                         attempt,
                         generation,
@@ -3990,6 +4058,8 @@ mod tests {
     ))]
     #[test]
     fn gate8_terminal_pending_linearizes_at_explicit_decision_cut() {
+        use core::cell::Cell;
+
         assert!(super::gate8_terminal_pending_cancels_for_recovery(
             false, true
         ));
@@ -4003,6 +4073,90 @@ mod tests {
         assert!(!super::gate8_terminal_pending_cancels_for_recovery(
             true, false
         ));
+        assert!(super::gate8_terminal_pending_yields_to_finite_owner(
+            false, true
+        ));
+        assert!(!super::gate8_terminal_pending_yields_to_finite_owner(
+            true, true
+        ));
+        assert!(!super::gate8_terminal_pending_yields_to_finite_owner(
+            false, false
+        ));
+        assert!(super::gate8_terminal_decision_cut_open(false, false));
+        assert!(!super::gate8_terminal_decision_cut_open(true, false));
+        assert!(!super::gate8_terminal_decision_cut_open(false, true));
+        assert!(!super::gate8_terminal_decision_cut_open(true, true));
+
+        let retractions = Cell::new(0u32);
+        let mut committed = false;
+        assert!(!super::commit_gate8_terminal_decision(
+            &mut committed,
+            12,
+            true,
+            false,
+            |_| {
+                retractions.set(retractions.get().saturating_add(1));
+                true
+            },
+        ));
+        assert!(!committed);
+        assert_eq!(retractions.get(), 0, "recovery retains the data consumer");
+        assert!(!super::commit_gate8_terminal_decision(
+            &mut committed,
+            12,
+            false,
+            true,
+            |_| {
+                retractions.set(retractions.get().saturating_add(1));
+                true
+            },
+        ));
+        assert!(!committed);
+        assert_eq!(
+            retractions.get(),
+            0,
+            "an unfinished finite owner retains the data consumer"
+        );
+        assert!(super::commit_gate8_terminal_decision(
+            &mut committed,
+            12,
+            false,
+            false,
+            |_| {
+                retractions.set(retractions.get().saturating_add(1));
+                true
+            },
+        ));
+        assert!(committed);
+        assert_eq!(retractions.get(), 1);
+        assert!(super::commit_gate8_terminal_decision(
+            &mut committed,
+            12,
+            true,
+            true,
+            |_| {
+                retractions.set(retractions.get().saturating_add(1));
+                true
+            },
+        ));
+        assert_eq!(
+            retractions.get(),
+            1,
+            "a retained decision cannot retract the exact consumer twice"
+        );
+
+        let mut stale_generation_committed = false;
+        assert!(!super::commit_gate8_terminal_decision(
+            &mut stale_generation_committed,
+            12,
+            false,
+            false,
+            |_| false,
+        ));
+        assert!(
+            !stale_generation_committed,
+            "a newer publication owner must defeat the stale terminal cut"
+        );
     }
 
     #[cfg(all(

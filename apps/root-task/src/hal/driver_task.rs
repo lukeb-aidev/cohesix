@@ -2980,6 +2980,27 @@ pub(crate) enum Cyw43PersistentTransactionParentCondition {
     DeadlineFault,
 }
 
+/// Root-side durable condition for an immutable issued CYW43 parent whose
+/// operation class has no specialized inactivity contract.
+///
+/// This is the common sequence-last observation used by retained op8 prompt
+/// polls and recovery arbitration. This read creates no scheduling authority
+/// and owns no deadline: the logical owner keeps its existing protocol bound, but
+/// must re-read this condition after expiry so a concurrent terminal wins.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43RetainedParentCondition {
+    /// No current issued parent matches the exact retained request identity.
+    NotExact,
+    /// The exact parent remains live and has no committed terminal yet.
+    Waiting,
+    /// Exact root-owned housekeeping is runnable: publish or notify one grant,
+    /// or replace one current grant after its durable acknowledgement.
+    ContinuationReady,
+    /// A stable sequence-last terminal is visible and must be consumed.
+    TerminalVisible,
+}
+
 /// Passive root-side proof of one finite CYW43 parent pre-wait boundary.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3035,6 +3056,135 @@ fn driver_task_ring_stable_completion_snapshot(
         2usize.saturating_mul(core::mem::size_of::<DriverTaskCompletionRecord>()),
     );
     (first == second).then_some(second)
+}
+
+/// Recheck durable completion state for one exact issued CYW43 parent.
+///
+/// Specialized op7/op11 callers use their stronger condition APIs. This
+/// common form exists for retained operation classes such as op8 which still
+/// require immutable command identity and a stable sequence-last terminal but
+/// intentionally retain their owner-local fault-containment deadline.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_retained_parent_condition(
+    expected_request: u32,
+) -> Cyw43RetainedParentCondition {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let Some(DriverTaskRetainedRequestState::Issued { request, command }) =
+        active_driver_task_retained_request_for_slot(slot)
+    else {
+        return Cyw43RetainedParentCondition::NotExact;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
+    let phase = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    );
+    if expected_request == 0
+        || request != expected_request
+        || command.sequence != request
+        || ring_root_ptr == 0
+        || command_fingerprint == 0
+        || slot.active.load(Ordering::Acquire) == 0
+        || slot.request_seq.load(Ordering::Acquire) != request as usize
+        || !driver_task_retained_lease_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            request as usize,
+            command_fingerprint,
+        )
+        || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
+        || !driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+        || !driver_task_retained_uses_root_grant(CYW43_WIFI_DRIVER_TASK_CONTRACT, command)
+    {
+        return Cyw43RetainedParentCondition::NotExact;
+    }
+    if !matches!(
+        phase,
+        Some(
+            DriverTaskRetainedLeasePhase::GrantRequired
+                | DriverTaskRetainedLeasePhase::Granted
+                | DriverTaskRetainedLeasePhase::Issued
+                | DriverTaskRetainedLeasePhase::RestorePrimary
+                | DriverTaskRetainedLeasePhase::RestoreBus
+                | DriverTaskRetainedLeasePhase::ReadyToComplete
+        )
+    ) {
+        return Cyw43RetainedParentCondition::NotExact;
+    }
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43RetainedParentCondition::TerminalVisible;
+    }
+    match phase {
+        Some(DriverTaskRetainedLeasePhase::GrantRequired) => {
+            let current = slot.retained_grant_id.load(Ordering::Acquire);
+            if current == 0 {
+                if driver_task_ring_read_continuation_grant(ring_root_ptr).is_none() {
+                    Cyw43RetainedParentCondition::ContinuationReady
+                } else {
+                    Cyw43RetainedParentCondition::NotExact
+                }
+            } else {
+                let Some(grant) =
+                    read_driver_task_retained_root_grant_stable_with(command, current, || {
+                        driver_task_ring_read_continuation_grant(ring_root_ptr)
+                    })
+                else {
+                    return Cyw43RetainedParentCondition::NotExact;
+                };
+                if grant.consumed_grant_id == current {
+                    Cyw43RetainedParentCondition::ContinuationReady
+                } else {
+                    Cyw43RetainedParentCondition::NotExact
+                }
+            }
+        }
+        Some(DriverTaskRetainedLeasePhase::Granted) => {
+            let current = slot.retained_grant_id.load(Ordering::Acquire);
+            if current == 0
+                || read_driver_task_retained_root_grant_stable_with(command, current, || {
+                    driver_task_ring_read_continuation_grant(ring_root_ptr)
+                })
+                .is_none()
+            {
+                Cyw43RetainedParentCondition::NotExact
+            } else {
+                Cyw43RetainedParentCondition::ContinuationReady
+            }
+        }
+        Some(DriverTaskRetainedLeasePhase::Issued) => {
+            let current = slot.retained_grant_id.load(Ordering::Acquire);
+            if current == 0 {
+                return Cyw43RetainedParentCondition::NotExact;
+            }
+            let Some(grant) =
+                read_driver_task_retained_root_grant_stable_with(command, current, || {
+                    driver_task_ring_read_continuation_grant(ring_root_ptr)
+                })
+            else {
+                return Cyw43RetainedParentCondition::NotExact;
+            };
+            if grant.consumed_grant_id == current {
+                Cyw43RetainedParentCondition::ContinuationReady
+            } else {
+                Cyw43RetainedParentCondition::Waiting
+            }
+        }
+        Some(
+            DriverTaskRetainedLeasePhase::Committed
+            | DriverTaskRetainedLeasePhase::RestorePrimary
+            | DriverTaskRetainedLeasePhase::RestoreBus
+            | DriverTaskRetainedLeasePhase::ReadyToComplete,
+        )
+        | Some(
+            DriverTaskRetainedLeasePhase::Inactive
+            | DriverTaskRetainedLeasePhase::BoostBus
+            | DriverTaskRetainedLeasePhase::BoostPrimary
+            | DriverTaskRetainedLeasePhase::ReadyToIssue
+            | DriverTaskRetainedLeasePhase::Poisoned,
+        )
+        | None => Cyw43RetainedParentCondition::NotExact,
+    }
 }
 
 /// Recheck durable terminal state immediately before suppressing one issued op7.
@@ -23845,6 +23995,172 @@ mod tests {
             core::ptr::write_volatile(consumed_ptr, consumed_grant_id);
         }
         (command, fingerprint)
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_retained_parent_condition_models_root_grant_housekeeping_as_one_episode() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("CYW43 retained-condition test lock");
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+        test_reset_root_grant_action_counts();
+
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut command = network_priority_test_cyw43_command(19);
+        command.sequence = 0x4359_8008;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags);
+        assert!(driver_task_retained_uses_root_grant(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+        ));
+        let fingerprint = driver_task_ring_command_fingerprint(
+            command,
+            driver_task_staging_segments_fingerprint(&[]),
+        );
+        let slot = &DRIVER_TASK_SLOT_CYW43455;
+        driver_task_ring_publish_command_record(
+            slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+        slot.active.store(1, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.root_notification.store(0x77, Ordering::Release);
+        slot.request_seq
+            .store(command.sequence as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(command.sequence as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_steady_tx_fast_lane
+            .store(0, Ordering::Release);
+        slot.retained_grant_id.store(0, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
+            Ordering::Release,
+        );
+
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::ContinuationReady,
+            "the initial grant publication is exact root housekeeping",
+        );
+        assert!(driver_task_ring_publish_continuation_grant(
+            slot,
+            ring_root_ptr,
+            command,
+            1,
+        ));
+        slot.retained_grant_id.store(1, Ordering::Release);
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Granted.as_usize(),
+            Ordering::Release,
+        );
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::ContinuationReady,
+            "a published exact grant needs one notify-or-ack turn",
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::Waiting,
+            "an unconsumed issued grant supplies no operation authority",
+        );
+
+        let consumed_ptr = (ring_root_ptr
+            + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+            + core::mem::offset_of!(DriverRuntimeContinuationGrant, consumed_grant_id))
+            as *mut u32;
+        // SAFETY: `consumed_ptr` addresses the fixed grant ACK word in this
+        // test-owned aligned ring page.
+        unsafe {
+            core::ptr::write_volatile(consumed_ptr, 1);
+        }
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::ContinuationReady,
+            "a durable ACK admits exactly one replacement-grant turn",
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
+            Ordering::Release,
+        );
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::ContinuationReady,
+            "recurrent grant publication remains the same parent episode",
+        );
+
+        let mut terminal = DriverTaskCompletionRecord::progress(command.sequence, 1);
+        terminal.sequence = 0;
+        // SAFETY: `completion_ptr` addresses the fixed completion record in
+        // this test-owned aligned ring. The sequence is committed last.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, command.sequence);
+        }
+        for phase in [
+            DriverTaskRetainedLeasePhase::GrantRequired,
+            DriverTaskRetainedLeasePhase::Granted,
+            DriverTaskRetainedLeasePhase::Issued,
+            DriverTaskRetainedLeasePhase::RestorePrimary,
+            DriverTaskRetainedLeasePhase::RestoreBus,
+            DriverTaskRetainedLeasePhase::ReadyToComplete,
+        ] {
+            slot.retained_priority_lease_phase
+                .store(phase.as_usize(), Ordering::Release);
+            assert_eq!(
+                cyw43_retained_parent_condition(command.sequence),
+                Cyw43RetainedParentCondition::TerminalVisible,
+                "a committed terminal must outrank legal phase {phase:?}",
+            );
+        }
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Committed.as_usize(),
+            Ordering::Release,
+        );
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence),
+            Cyw43RetainedParentCondition::NotExact,
+            "Committed is impossible for a root-granted parent",
+        );
+        assert_eq!(
+            cyw43_retained_parent_condition(command.sequence.wrapping_add(1)),
+            Cyw43RetainedParentCondition::NotExact,
+        );
+        assert_eq!(
+            test_root_grant_action_counts(),
+            (0, 0),
+            "condition reads cannot publish or signal authority",
+        );
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]
