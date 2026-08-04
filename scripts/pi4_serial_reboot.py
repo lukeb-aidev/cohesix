@@ -59,16 +59,10 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "netstats": (b"OK NETSTATS", b"ERR NETSTATS"),
     "nettest": (b"OK NETTEST", b"ERR NETTEST"),
     "wifi diag": (b"OK WIFI", b"ERR WIFI"),
-    "wifi probe-ht": (b"OK WIFI", b"ERR WIFI"),
     "usb diag": (b"OK USB", b"ERR USB"),
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
     "smp activity": (b"OK SMP", b"ERR SMP"),
 }
-WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL = (
-    b"ERR WIFI reason=policy detail=subcommand=probe-ht "
-    b"error=pi4-wifi-driver-task-runtime-required "
-    b"source=linked-runtime-replay-failure"
-)
 DIAGNOSTIC_READY_MARKERS = (
     b"usb keyboard command-ready",
 )
@@ -104,7 +98,7 @@ WIFI_SUPERVISOR_RECORD_RE = re.compile(
     rb"backoff_ms=(?P<backoff_ms>0|[1-9][0-9]*) "
     rb"next_attempt_ms=(?P<next_attempt_ms>0|[1-9][0-9]*) "
     rb"serial=(?P<serial>ready|blocked) "
-    rb"local_seat=(?P<local_seat>enabled|disabled|ready) "
+    rb"local_seat=(?P<local_seat>enabled|disabled) "
     rb"recovery=full "
     rb"console_seq=(?P<console_seq>0|[1-9][0-9]*) "
     rb"telemetry_sinks=serial\+qlog\+hdmi "
@@ -114,6 +108,9 @@ WIFI_SUPERVISOR_LIFECYCLE_STATUSES = frozenset(
     {"begin", "recovery", "stabilizing", "ready", "failed", "permanent"}
 )
 WIFI_SUPERVISOR_FINAL_STATUSES = frozenset({"failed", "permanent"})
+WIFI_SUPERVISOR_PROOF_FAILURE_STATUSES = frozenset(
+    {*WIFI_SUPERVISOR_FINAL_STATUSES, "recovery"}
+)
 NETSTATS_NETWORK_RE = re.compile(
     rb"netstats: generation=(?P<generation>0|[1-9][0-9]*) "
     rb"mode=(?P<mode>[^ \r\n]+) "
@@ -164,10 +161,6 @@ ASYNC_RESULT_FRAGMENT_RE = re.compile(
     rb"|SDIO_DRIVER_TASK_[A-Z_]*"
     rb")[^\r\n]*"
 )
-ASYNC_RESULT_LINE_RE = re.compile(
-    ASYNC_RESULT_FRAGMENT_RE.pattern + rb"(?:\r?\n|$)"
-)
-
 MENU_ROOT = "root"
 MENU_DHCP = "dhcp"
 MENU_INTERFACE = "interface"
@@ -503,15 +496,16 @@ def inspect_wifi_supervisor_evidence(
 ) -> tuple[tuple[int, str] | None, str | None]:
     """Validate one Wi-Fi lifetime and return its current admission candidate.
 
-    ``ready`` is retractable until it remains quiet for the separate stability
-    window. A same-attempt ``recovery`` or ``stabilizing`` record therefore
-    clears an earlier candidate; only ``failed`` and ``permanent`` are
-    irrevocable lifecycle terminals.
+    ``ready`` is a unique bootstrap service terminal and remains a retractable
+    acceptance candidate during the separate stability window. A later runtime
+    ``recovery`` is a failed repeatability proof; production restores service
+    with ``CYW43_RUNTIME_RECOVERY``, never a second bootstrap ``ready``.
     """
 
     current: tuple[int, str] | None = None
     previous_status: str | None = None
     recoveries = 0
+    ready_seen = False
     for raw_line in snapshot.splitlines(keepends=True):
         line_complete = raw_line.endswith((b"\r", b"\n"))
         line = (
@@ -578,6 +572,11 @@ def inspect_wifi_supervisor_evidence(
             return None, "terminal-numeric-field-invalid"
         if int(match.group("backoff_ms")) != 0:
             return None, "terminal-backoff-invalid"
+        next_attempt_ms = int(match.group("next_attempt_ms"))
+        if status == "failed" and next_attempt_ms != U64_MAX:
+            return None, "failed-next-attempt-invalid"
+        if status != "failed" and next_attempt_ms == U64_MAX:
+            return None, "lifecycle-next-attempt-invalid"
         if previous_status in WIFI_SUPERVISOR_FINAL_STATUSES:
             if status == previous_status:
                 return None, "terminal-duplicate"
@@ -587,15 +586,21 @@ def inspect_wifi_supervisor_evidence(
                 return None, "lifecycle-begin-duplicate"
             current = None
         elif status == "recovery":
+            if not ready_seen:
+                return None, "pre-ready-recovery-forbidden"
             recoveries += 1
             if recoveries > 1:
                 return None, "recovery-limit-exceeded"
-            current = None
+            current = (attempt, status)
         elif status == "stabilizing":
-            current = None
+            if recoveries == 0:
+                current = None
         elif status == "ready":
-            if previous_status == "ready":
+            if ready_seen:
+                if recoveries != 0:
+                    return None, "bootstrap-ready-republication-forbidden"
                 return None, "terminal-duplicate"
+            ready_seen = True
             current = (attempt, status)
         else:
             if previous_status == "ready":
@@ -1095,7 +1100,7 @@ def wait_for_wifi_supervisor_terminal(
             continue
 
         attempt, status = terminal
-        if status in WIFI_SUPERVISOR_FINAL_STATUSES:
+        if status in WIFI_SUPERVISOR_PROOF_FAILURE_STATUSES:
             controller.note(
                 "wifi supervisor terminal "
                 f"attempt={attempt} status={status} source={source} "
@@ -1154,7 +1159,7 @@ def wait_for_wifi_supervisor_terminal(
             return "ready", observed
         if (
             settled is not None
-            and settled[1] in WIFI_SUPERVISOR_FINAL_STATUSES
+            and settled[1] in WIFI_SUPERVISOR_PROOF_FAILURE_STATUSES
         ):
             controller.note(
                 "wifi supervisor terminal "
@@ -1198,44 +1203,6 @@ def issue_diagnostic_command(
         result_timeout_s,
         label=f"result for {label}",
     )
-
-
-def parse_wifi_probe_ht_terminal(snapshot: bytes) -> str | None:
-    """Classify one complete probe terminal, including linked-runtime refusal."""
-
-    cleaned = ASYNC_RESULT_LINE_RE.sub(b"", snapshot)
-    for raw_line in cleaned.splitlines(keepends=True):
-        if not raw_line.endswith((b"\r", b"\n")):
-            continue
-        line = raw_line.rstrip(b"\r\n")
-        if line == WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL:
-            return "linked-runtime-unavailable"
-        if line.startswith(b"OK WIFI"):
-            return "ok"
-        if line.startswith(b"ERR WIFI"):
-            return "err"
-    return None
-
-
-def complete_wifi_probe_ht_terminal(
-    controller: RedactingSerialController,
-    snapshot: bytes,
-) -> tuple[bytes, str]:
-    """Read through the terminal newline so a typed refusal is never truncated."""
-
-    deadline = time.monotonic() + 10.0
-    terminal = parse_wifi_probe_ht_terminal(snapshot)
-    while terminal is None:
-        snapshot += controller.read_until(
-            (b"\r", b"\n"),
-            remaining_before_deadline(
-                deadline,
-                label="complete wifi probe-ht terminal",
-            ),
-            label="complete wifi probe-ht terminal",
-        )
-        terminal = parse_wifi_probe_ht_terminal(snapshot)
-    return snapshot, terminal
 
 
 def wait_for_wifi_dhcp_bound(
@@ -1432,12 +1399,7 @@ def run_diagnostics(
             ("netstats", "netstats-final"),
         ]
     if lane == "wifi":
-        commands.extend(
-            [
-                ("wifi diag", "wifi diag"),
-                ("wifi probe-ht", "wifi probe-ht"),
-            ]
-        )
+        commands.append(("wifi diag", "wifi diag"))
     commands.extend(
         [
             ("usb diag", "usb diag"),
@@ -1462,29 +1424,13 @@ def run_diagnostics(
                 label,
                 result_markers,
             )
-            probe_ht_terminal = None
-            if command == "wifi probe-ht":
-                command_snapshot, probe_ht_terminal = (
-                    complete_wifi_probe_ht_terminal(
-                        controller,
-                        command_snapshot,
-                    )
-                )
             error_marker = DIAGNOSTIC_RESULT_MARKERS[command][1]
             if serial_marker_seen(command_snapshot, error_marker):
-                if probe_ht_terminal == "linked-runtime-unavailable":
-                    controller.note(
-                        "diagnostic terminal command='wifi probe-ht' "
-                        "label='wifi probe-ht' result=expected-refusal "
-                        "reason=pi4-wifi-driver-task-runtime-required "
-                        "action=record-informational"
-                    )
-                else:
-                    failures.append(f"{label}:err")
-                    controller.note(
-                        f"diagnostic terminal command={command!r} "
-                        f"label={label!r} result=err action=continue"
-                    )
+                failures.append(f"{label}:err")
+                controller.note(
+                    f"diagnostic terminal command={command!r} "
+                    f"label={label!r} result=err action=continue"
+                )
             elif command == "nettest" and serial_marker_seen(
                 command_snapshot,
                 NETTEST_STARTED_MARKER,

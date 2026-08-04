@@ -1097,7 +1097,7 @@ A current-generation EAPOL frame copied into root before secure publication
 remains an obligation of the same host-EAPOL policy owner. Post-association
 BSSID and filter maintenance retains priority; after that maintenance reaches
 its exact terminal, each ordinary EventPump turn consumes at most one queued
-EAPOL frame and retains any resulting TX/key/drain continuation for later
+EAPOL frame and retains any resulting TX/key continuation for later
 turns. That aggregate owner also fences a fresh generic NetData pre-poll at
 both stack entry and its inner budgeted service: a request-less post-secure
 op7 must acquire and advance its own HAL request instead of repeatedly finding
@@ -1107,6 +1107,12 @@ therefore cannot exit while the aggregate Gate 8g work
 fence is held solely by its own queued frame. Frames handled after secure key
 completion retain post-secure rekey/fail-closed semantics; this is not a
 second RX poll, retry, or NetData lane.
+
+A joined Function-2 terminal proves that the sole bus transaction completed;
+it does not prove over-air AP receipt. After a post-secure M4 terminal, the
+host-EAPOL owner therefore rearms only the exact retained AP/ANonce/replay M3
+tuple for a later AP-driven retransmission. A submit fault does not rearm it,
+and the driver never proactively replays M4 or creates a polling lane.
 
 The first deferred-recovery and terminal-drain diagnostics remain retained
 through every revocable snapshot/publication attempt and are cleared only
@@ -1217,8 +1223,9 @@ ordinary traffic remain bulk. A frame produced through the copied-RX paired
 token is urgent independently, preserving response liveness. Urgent frames are
 selected before bulk while FIFO order is preserved within each class. This is
 scheduling priority, not a second physical lane: both classes feed exactly one
-`CYW43_PENDING_DATA_TX`, which exists only after the FIFO head has proof that
-the predecessor SDPCM-credit window is closed and remains the sole op7 owner.
+`CYW43_PENDING_DATA_TX`, which retains the selected FIFO head as the sole op7
+owner. Root does not mirror SDPCM flow-control state or wait for a later RX
+header to acknowledge an already-terminal Function-2 write.
 The two fixed backing deques occupy about 50 KiB of BSS, roughly 25 KiB more
 than one deque, while the aggregate admission bound remains 16. This deliberate
 static trade avoids O(n) movement of approximately 1.5-KiB frame records on the
@@ -1245,49 +1252,61 @@ request that arrived during the preceding TX from sitting behind a later retry.
 `Device::receive` and a failed reservation never service TX. The hook may
 move one eligible ARP/GARP record into the same urgent aggregate before that
 single op7 advance. If all 16 aggregate slots are occupied, promotion removes
-one credit-ready head and restores a paired slot before its one advance. A
+one eligible head and restores a paired slot before its one advance. A
 terminal never promotes a successor; that frame remains queued until a later
 EventPump coordinator turn.
-Before charging the TX service budget or promoting a FIFO head, the hook proves
-that the predecessor SDPCM-credit window is closed. Without that proof, the
-immutable frame remains queued with no active op7, HAL request, or child
-deadline; the hook spends no TX budget and yields to already-authorized NetData
-RX/op8 continuation or source work. A queued frame cannot expire or poison the
-pair. Credit-bearing RX/op8 work may close the predecessor window; promotion
-then starts the op7 lifetime. Generation replacement or reset purges
-never-issued queued frames locally, while an active issued or otherwise
-ambiguous frame follows the existing poison-and-recovery path. GENET has no
-queue reservation, priority class, promotion, hook, or telemetry path.
+Promotion starts the exact op7 lifetime. The CYW43 runtime is the sole owner of
+`sdpcm_seq` and the dongle-advertised `tx_max` window: it issues only while the
+current window admits that sequence and otherwise retains the same op7 in
+`WAIT_CREDIT` until DPC commits a newer window. A joined Function-2/SDHCI
+terminal releases the root frame and orders the next protocol cursor; `tx_max`
+is admission authority, not a transmit-completion acknowledgement. Generation
+replacement or reset purges never-issued queued frames locally, while an active
+issued or otherwise ambiguous frame follows the existing
+poison-and-recovery path. GENET has no queue reservation, priority class,
+promotion, hook, or telemetry path.
 
-Both `wifi diag` and `wifi probe-ht` emit the same passive scheduler, handoff,
-and retained-frontier records after association and maintenance state:
+`wifi diag` and `wifi dump-state` emit the same passive scheduler, handoff, and
+retained-frontier records after association and maintenance state. Legacy
+`wifi probe-ht`, `wifi load-fw`, and `wifi retry` are recognized only to return
+one typed architectural refusal; they never call a root physical probe, reload,
+retry, or linked-runtime snapshot path:
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
-wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
-wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
+wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no>
+wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
 wifi: data_handoff rx_queue stable=<yes|no> generation=<n> depth=<n>/<n> flags=0x<hex> commit_sequence=<n>
 wifi: data_handoff rx_batch stable=<yes|no> parent_sequence=<n> generation=<n> queue_commit_sequence=<n> count=<n> remaining=<n> committed_parent_sequence=<n>
-wifi: data_handoff rx_hint observed=<yes|no> authority=none history=none control_progress=ordinary-network-turn
+wifi: data_handoff rx_hint observed=no authority=none history=none sdio_deadline_hints=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
 wifi: data_handoff postcommit_first_loss=no
 wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
+wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
+wifi: root rx_hint_counters polls=<n> hits=<n>
 ```
 
-The queue and batch records report only stable committed state. A hint
-observation is current-turn telemetry and is never retained as pending work or
-used to reconstruct history. Batch `count` is one through eight,
+The queue and batch records report only stable committed state. The passive
+command never consumes a notification, so its hint record is invariantly
+`observed=no` and is never retained as pending work or used to reconstruct
+history. The separate root-hint lines report whether the generated route is
+bound and cumulative poll/hit observations made by EventPump. Those counters
+are passive diagnostics, not notification-carried work identity or scheduler
+authority. `condition=durable-service-state` names the route's durable-recheck
+contract; it is not a causal classification of the most recently consumed
+hint. Batch `count` is one through eight,
 `committed_parent_sequence` must match `parent_sequence`, and the batch's
 generation and queue commit must match the stable queue record. The separate
 `wifi_post_dhcp_rx` counters advance only when a frame crosses an actual
 smoltcp delivery boundary. Trace-only `rx-preserve` and `rx-deliver`
 observations cannot double-count one frame. Legacy `rx_watch`,
-`deadline_probes`, wake-hit, clear, and recheck fields describe rejected images
-only and are not reachable steady-state progress mechanisms.
+`deadline_probes`, and data-handoff wake-hit/clear/recheck fields describe
+rejected images only and are not reachable steady-state progress mechanisms;
+they are distinct from the live passive root-hint counters above.
 
 A live NetStack frontier supersedes retained runtime evidence only after the
 current generation has complete `8a`-through-`8h` proof and no pair recovery is
@@ -1547,8 +1566,14 @@ generation and XID.
   mints only a send-only badge-1 cap into CYW43 child CSpace slot 11; no other
   runtime may declare that route. CYW43 may signal after it commits an
   empty-to-nonempty transition, but the notification is only a current-turn
-  prompt to inspect shared state. Root never converts it into a wake-hit epoch,
-  pending latch, admission cursor, or work-history counter.
+  prompt to inspect shared state. A successful nonblocking poll may set only
+  EventPump's transient `linked_runtime_cyw43_rx_admission_pending` urgency
+  latch, and only when the post-poll durable snapshot is independently
+  schedulable. The latch is consumed after one safe Network turn; stable
+  committed work remains live through the separate durable-resume identity.
+  Root may count polls and hits for passive diagnosis, but never converts them
+  into a wake-hit epoch, admission cursor, work count, or retained scheduling
+  history.
 
   `Cyw43ServiceWorkSnapshot` binds its reason mask to the current logical
   connection generation, linked pair epoch, and completed physical-lifetime
@@ -1566,12 +1591,13 @@ generation and XID.
   immediately before choosing either CYW43 work or retained TCP flush. A
   missing, active, failed, or replaced physical epoch, or a recovery-active
   snapshot, invalidates cached queue/batch observations and admits neither
-  operation. It does not clear or consume notification history because none is
-  authoritative. The fence is CYW43-specific; GENET remains unchanged.
+  operation. It neither consults nor mutates the transient hint latch or its
+  passive counters because neither is authoritative. The fence is
+  CYW43-specific; GENET remains unchanged.
 
-  Outside an already-active `Network` turn, either a notification prompt or a
-  stable nonempty queue condition may request service at the next safe
-  physical-console boundary without rewriting an already-scheduled
+  Outside an already-active `Network` turn, either the transient current-turn
+  notification latch or a stable nonempty queue condition may request service
+  at the next safe physical-console boundary without rewriting an already-scheduled
   `LocalSeat`, `Dispatch`, or pending `Display` phase. `Serial` and remaining
   operator work complete first. Network then stable-reads the queue and batch,
   consumes up to eight frames, and rechecks durable depth after service. An op8
@@ -2422,28 +2448,32 @@ generation and XID.
   `netstats` and `wifi diag` also expose generation-scoped TX boundary counts
   and virtual-counter timing:
   `wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n>
-  credits=<n> next_issues=<n>` and
-  `wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2c=<...> c2i=<...>`
+  successor_issues=<n>` and
+  `wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2n=<...>`
   plus
   `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
   `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
   stale_purged=<n>` (`wifi diag` uses the equivalent `wifi: tx_phase*` and
   `wifi: tx_queue` prefixes). `a2i` measures actual TxToken acceptance,
-  including FIFO residence and predecessor-credit wait, to the first observed
-  issue of that immutable op7 ticket; `i2t` measures first observed issue to
-  its typed terminal; `t2c`
-  measures successful op7 terminal to SDPCM-credit proof. `next_issues` and the
-  `credit_to_next_issue` metric, printed compactly as `c2i`, measure credit
-  proof to the next actual op7 issue from the FIFO,
-  not admission of a new TxToken or an earlier local promotion. Tickets are
+  including FIFO residence and owner-lane contention, to the first observed
+  issue of that immutable op7 ticket; runtime-local `WAIT_CREDIT` begins only
+  after that issue and is therefore part of `i2t`. `i2t` measures first
+  observed issue through the joined Function-2 terminal that releases root.
+  `successor_issues` and `t2n` measure that terminal to the next actual op7
+  issue from the FIFO, not admission of a new TxToken or an earlier local
+  promotion. The interval deliberately includes any time with no successor
+  queued, so it also includes later TxToken arrival before FIFO/promotion and
+  EventPump service. Tickets are
   deduplicated and every logical connection generation resets the tracker.
-  High `a2i` locates delay in the root-to-CYW43 retained transport; high `t2c`
-  locates it in firmware credit/return service; high `i2t` locates the issued
-  runtime/SDIO transaction. `c2i` isolates credit-to-physical-issue scheduling and
-  must not be labelled stack TxToken-admission delay. Queue depth, reservations,
-  high-water mark, local drops, and stale-generation purges distinguish bounded
-  ingress pressure from the one active owner. These counters are passive and
-  do not alter Wi-Fi or GENET scheduling.
+  High `a2i` locates root queue/owner admission delay; high `i2t` locates the
+  issued runtime/SDIO transaction, including legitimate runtime credit wait;
+  high `t2n` locates the root/EventPump handoff only when queue and acceptance
+  evidence proves a successor was already waiting; otherwise it can be normal
+  idle time before new demand.
+  Queue depth, reservations, high-water mark, local drops, and
+  stale-generation purges distinguish bounded ingress pressure from the one
+  active owner. These counters are passive and do not alter Wi-Fi or GENET
+  scheduling.
   Pending-command DPC arbitration retains one immutable transaction across
   quanta. A peer notification merely prompts inspection. Non-op11 retained
   commands outside finite op7 continue to use their exact root or delegated
@@ -3134,9 +3164,13 @@ generation and XID.
   (`Serial -> LocalSeat -> Dispatch -> pending Display`) and therefore may be
   nonzero only for selected CYW43. `checkpoint_ms=25` is the independent
   elapsed-time cadence; no network-turn count is a second yield trigger.
-  `wifi_trace_tx_retries` counts only an actual action retry or an unproved TX
-  credit. A `no-completion*` software scheduling deferral is a pending
-  transition and cannot inflate that retry counter.
+  `wifi_trace_tx_retries` counts only an actual action retry. Runtime-local
+  `WAIT_CREDIT` and a `no-completion*` software scheduling deferral are pending
+  transitions and cannot inflate that retry counter.
+  Root submit/complete/free counters do not infer SDPCM credit state. Only a
+  typed data-path terminal fault may publish
+  `addr_src=wifi-tx-terminal-fault dhcp=tx-terminal-fault`; an ordinary retained
+  or in-flight owner and a successful retry remain non-fault state.
   `Display` performs at most one retained HDMI attach or frame turn after the
   Network phase or after Dispatch queues physical input echo. A partial command
   may retain the CYW43 operator fence, but it cannot route back to Serial before
@@ -3175,27 +3209,27 @@ generation and XID.
   aggregate but does not create an active op7. Urgent ARP, EAPOL, DHCP, TCP
   SYN/FIN/RST, and payload-free TCP control precede other payload-bearing TCP
   and bulk, with FIFO order within each class; both classes still feed the same
-  sole op7 owner. An unproved predecessor credit window leaves the selected
-  head queued with no TX budget charge, active op7, HAL request, or child
-  deadline. Already-authorized RX/op8 work may close that predecessor window;
-  the queued TX does not manufacture a fresh op8. Only a credit-ready head is
-  promoted, and promotion starts its retained virtual-counter deadline. Each
-  later physical Network turn advances only that exact active owner, which
+  sole op7 owner. An eligible head is promoted without a root-owned
+  predecessor-credit gate, and promotion starts its retained virtual-counter
+  deadline. The runtime alone compares its next SDPCM sequence with the
+  dongle-advertised maximum; an exhausted window retains that exact op7 in
+  `WAIT_CREDIT`, while already-authorized DPC/RX work may update the window.
+  The queued TX never manufactures a fresh op8. Each later physical Network
+  turn advances only that exact active owner, which
   retains its payload, digest, ticket, request, and generation through
   nonterminal HAL/runtime turns until the typed `Submitted` terminal or
   deadline. There is no eight-turn abandonment or other turn-count lifetime
   bound after promotion; corruption, identity loss, generation replacement, or
-  a typed terminal fault still fails closed. The regression
-  `cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery` advances
-  time beyond the complete child lease before credit and proves that promotion
-  and physical issue occur only after exact credit proof.
+  a typed terminal fault still fails closed. A successful joined Function-2
+  terminal releases the root frame immediately; it neither grants the next
+  SDPCM sequence nor waits for a later inbound header as an acknowledgement.
   EventPump is the sole production TX coordinator. An exact foreign HAL owner,
   including a retained NetData op8, remains non-revocable and leaves the op7
   head queued without spending TX budget or deadline. Once the lane is free,
   the coordinator advances an already-active op7 to its exact terminal. Before
   promoting a fresh or requestless op7, one committed copied/DPC/runtime RX
   level receives the next bounded drain or op8 turn. At full capacity,
-  promotion removes one credit-ready head and restores a paired slot before its one
+  promotion removes one eligible head and restores a paired slot before its one
   physical advance. A terminal does not promote a successor in the same turn.
   A queued,
   unissued frame has no child deadline and cannot poison the pair;
@@ -3209,8 +3243,7 @@ generation and XID.
   non-revocable. Every op8 still uses the same sole NetData/HAL/SDIO owner
   chain. CYW43 TxToken reservation is
   therefore bounded by aggregate capacity rather than by whether an older active
-  owner or unproved credit window exists; promotion into op7 and physical issue
-  both remain credit-gated. A consumed reservation cannot be reported
+  owner exists; only runtime physical issue is credit-gated. A consumed reservation cannot be reported
   successful unless its immutable frame was retained. There is no
   generic/current-TCB UART fallback. If the bounded
   linked TX queue cannot accept an operator response, EventPump retains the

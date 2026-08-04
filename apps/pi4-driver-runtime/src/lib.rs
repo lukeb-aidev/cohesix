@@ -15328,7 +15328,7 @@ fn service_cyw43_runtime(command: DriverTaskCommandRecord) -> DriverTaskCompleti
                 Cyw43RxPollResult::Idle(reason) => {
                     idle_reason = Some(reason);
                     if state.sdpcm_credit_observations != before.sdpcm_credit_observations {
-                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                        progress_frame = cyw43_sdpcm_window_snapshot_frame(state);
                     }
                     let progress = cyw43_runtime_service_progress_result(before, state);
                     cyw43_service_trace_record(
@@ -22726,7 +22726,7 @@ fn cyw43_prompt_poll_queue_completion(
             cyw43_service_trace_record(state, descriptor.op, service_reason, progress, None);
             let mut progress_frame = DriverFrameDescriptor::empty();
             if state.sdpcm_credit_observations != credit_observations_before {
-                progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                progress_frame = cyw43_sdpcm_window_snapshot_frame(state);
             }
             if progress == 0 {
                 let detail = cyw43_rx_idle_detail(reason);
@@ -23159,13 +23159,18 @@ fn service_cyw43_descriptor_command(
                         .unwrap_or_else(|| cyw43_data_tx_request_len_default(written)),
                 )
                 .ok();
-                progress_frame = cyw43_sdpcm_tx_credit_proof_frame(
+                // `sdpcm_seq_max` is the dongle's transmit-admission window,
+                // not an acknowledgement of this packet.  Preserve the
+                // exact sequence/window snapshot for diagnostics and
+                // invariant checks; the joined Function-2 terminal below is
+                // the completion authority for the submitted root frame.
+                progress_frame = cyw43_sdpcm_tx_window_snapshot_frame(
                     submitted_seq,
                     state.sdpcm_seq_max,
                     state.sdpcm_credit_observations,
                 );
             } else if state.sdpcm_credit_observations != credit_observations_before {
-                progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                progress_frame = cyw43_sdpcm_window_snapshot_frame(state);
             }
             cyw43_service_trace_record(
                 state,
@@ -23198,7 +23203,7 @@ fn service_cyw43_descriptor_command(
                 Cyw43RxPollResult::Idle(reason) => {
                     rx_idle_reason = Some(reason);
                     if state.sdpcm_credit_observations != credit_observations_before {
-                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                        progress_frame = cyw43_sdpcm_window_snapshot_frame(state);
                     }
                     let progress = cyw43_runtime_service_progress_result(before, state);
                     cyw43_service_trace_record(
@@ -23236,7 +23241,7 @@ fn service_cyw43_descriptor_command(
                 Cyw43RxPollResult::Idle(reason) => {
                     rx_idle_reason = Some(reason);
                     if state.sdpcm_credit_observations != credit_observations_before {
-                        progress_frame = cyw43_sdpcm_credit_snapshot_frame(state);
+                        progress_frame = cyw43_sdpcm_window_snapshot_frame(state);
                     }
                     let progress = cyw43_runtime_service_progress_result(before, state);
                     cyw43_service_trace_record(
@@ -39029,11 +39034,11 @@ const fn cyw43_frame_flags(channel: u8, credit: u8) -> u16 {
         | ((credit as u16) << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT)
 }
 
-const fn cyw43_sdpcm_credit_proof_flags(seq: u8, seq_max: u8) -> u16 {
+const fn cyw43_sdpcm_window_snapshot_flags(seq: u8, seq_max: u8) -> u16 {
     (seq as u16) | ((seq_max as u16) << DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT)
 }
 
-const fn cyw43_sdpcm_tx_credit_proof_frame(
+const fn cyw43_sdpcm_tx_window_snapshot_frame(
     submitted_seq: u8,
     seq_max: u8,
     credit_observations: u32,
@@ -39041,15 +39046,15 @@ const fn cyw43_sdpcm_tx_credit_proof_frame(
     DriverFrameDescriptor {
         offset: 0,
         len: (credit_observations & 0xffff) as u16,
-        flags: cyw43_sdpcm_credit_proof_flags(submitted_seq, seq_max),
+        flags: cyw43_sdpcm_window_snapshot_flags(submitted_seq, seq_max),
     }
 }
 
-const fn cyw43_sdpcm_credit_snapshot_frame(state: &Cyw43RuntimeState) -> DriverFrameDescriptor {
+const fn cyw43_sdpcm_window_snapshot_frame(state: &Cyw43RuntimeState) -> DriverFrameDescriptor {
     DriverFrameDescriptor {
         offset: 0,
         len: (state.sdpcm_credit_observations & 0xffff) as u16,
-        flags: cyw43_sdpcm_credit_proof_flags(state.sdpcm_seq, state.sdpcm_seq_max),
+        flags: cyw43_sdpcm_window_snapshot_flags(state.sdpcm_seq, state.sdpcm_seq_max),
     }
 }
 
@@ -73765,7 +73770,7 @@ mod tests {
                 data_tx_request_len as u16,
                 data_tx_len as u32,
             );
-            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(0, 2, 0);
+            completion.frame = cyw43_sdpcm_tx_window_snapshot_frame(0, 2, 0);
             completion
         });
         assert_eq!(read_ring_u16(CYW43_SDPCM_TX_OFFSET), data_tx_len as u16);
@@ -74103,7 +74108,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_eth_tx_no_credit_reports_observed_credit_snapshot() {
+    fn cyw43_eth_tx_no_credit_reports_observed_window_snapshot() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -74140,7 +74145,7 @@ mod tests {
             178,
             FAULT_NONE,
             0,
-            cyw43_sdpcm_tx_credit_proof_frame(7, 7, 1),
+            cyw43_sdpcm_tx_window_snapshot_frame(7, 7, 1),
         );
         assert_eq!(service_command(0, cyw43_descriptor_command(178)), expected);
         CYW43_RUNTIME_STATE.with_mut(|state| {
@@ -74179,7 +74184,7 @@ mod tests {
             request_len as u16,
             total_len as u32,
         );
-        resumed.frame = cyw43_sdpcm_tx_credit_proof_frame(7, 9, 2);
+        resumed.frame = cyw43_sdpcm_tx_window_snapshot_frame(7, 9, 2);
         assert_eq!(service_command(0, cyw43_descriptor_command(179)), resumed);
         assert_eq!(test_sdio_cmd53_transfer_count(2, false), 1);
         assert_eq!(test_sdio_cmd53_transfer_count(2, true), 1);
@@ -74191,7 +74196,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_eth_tx_without_completion_credit_reports_advisory_proof() {
+    fn cyw43_eth_tx_terminal_reports_admission_window_without_new_rx() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -74234,7 +74239,7 @@ mod tests {
             request_len as u16,
             total_len as u32,
         );
-        expected.frame = cyw43_sdpcm_tx_credit_proof_frame(9, 11, 0);
+        expected.frame = cyw43_sdpcm_tx_window_snapshot_frame(9, 11, 0);
         assert_eq!(service_command(0, cyw43_descriptor_command(179)), expected);
         CYW43_RUNTIME_STATE.with_mut(|state| {
             assert_eq!(state.sdpcm_seq, 10);
@@ -74485,7 +74490,7 @@ mod tests {
                 request_len as u16,
                 total_len as u32,
             );
-            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(3, 5, 0);
+            completion.frame = cyw43_sdpcm_tx_window_snapshot_frame(3, 5, 0);
             completion
         });
         assert_eq!(
@@ -74509,7 +74514,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_eth_tx_reports_submit_credit_without_completion_observation() {
+    fn cyw43_eth_tx_terminal_reports_preissue_window_without_rx_poll() {
         let _guard = test_guard();
         reset_runtime_for_test();
         init_cyw43_engine_for_test();
@@ -74558,7 +74563,7 @@ mod tests {
                 request_len as u16,
                 total_len as u32,
             );
-            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(3, 5, 0);
+            completion.frame = cyw43_sdpcm_tx_window_snapshot_frame(3, 5, 0);
             completion
         });
         assert_eq!(test_sdio_cmd53_transfer_count(2, false), 0);
@@ -74611,7 +74616,7 @@ mod tests {
                 request_len as u16,
                 total_len as u32,
             );
-            completion.frame = cyw43_sdpcm_tx_credit_proof_frame(9, 11, 0);
+            completion.frame = cyw43_sdpcm_tx_window_snapshot_frame(9, 11, 0);
             completion
         });
         assert_eq!(

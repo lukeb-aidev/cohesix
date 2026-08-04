@@ -241,21 +241,19 @@ fn format_cyw43_tx_phase_diagnostics(
     let bounded_us = |value: u64| value.min(u64::from(u32::MAX));
     let accepted_to_issue = diagnostic.accepted_to_issue;
     let issued_to_terminal = diagnostic.issued_to_terminal;
-    let terminal_to_credit = diagnostic.terminal_to_credit;
-    let credit_to_next_issue = diagnostic.credit_to_next_issue;
+    let terminal_to_next_issue = diagnostic.terminal_to_next_issue;
     let counts = format_message(format_args!(
-        "{}: {}_counts gen={} accepted={} issued={} terminals={} credits={} next_issues={}",
+        "{}: {}_counts gen={} accepted={} issued={} terminals={} successor_issues={}",
         namespace,
         metric_name,
         diagnostic.generation,
         diagnostic.accepted,
         diagnostic.issued,
         diagnostic.terminals,
-        diagnostic.credits,
-        diagnostic.next_issues,
+        diagnostic.successor_issues,
     ));
     let timing = format_message(format_args!(
-        "{}: {} gen={} us=n/last/max/avg a2i={}/{}/{}/{} t2c={}/{}/{}/{} c2i={}/{}/{}/{}",
+        "{}: {} gen={} us=n/last/max/avg a2i={}/{}/{}/{} t2n={}/{}/{}/{}",
         namespace,
         metric_name,
         diagnostic.generation,
@@ -263,14 +261,10 @@ fn format_cyw43_tx_phase_diagnostics(
         bounded_us(accepted_to_issue.last_us),
         bounded_us(accepted_to_issue.max_us),
         bounded_us(accepted_to_issue.average_us()),
-        terminal_to_credit.samples,
-        bounded_us(terminal_to_credit.last_us),
-        bounded_us(terminal_to_credit.max_us),
-        bounded_us(terminal_to_credit.average_us()),
-        credit_to_next_issue.samples,
-        bounded_us(credit_to_next_issue.last_us),
-        bounded_us(credit_to_next_issue.max_us),
-        bounded_us(credit_to_next_issue.average_us()),
+        terminal_to_next_issue.samples,
+        bounded_us(terminal_to_next_issue.last_us),
+        bounded_us(terminal_to_next_issue.max_us),
+        bounded_us(terminal_to_next_issue.average_us()),
     ));
     let issued_timing = format_message(format_args!(
         "{}: {}_i2t gen={} us=n/last/max/avg i2t={}/{}/{}/{}",
@@ -4476,8 +4470,8 @@ where
     /// The durable service snapshot is re-read after polling. A hint with no
     /// committed work cannot admit Network, while committed work remains live
     /// through the durable-resume token even when the hint was lost or
-    /// coalesced. No notification counter carries history or operation
-    /// authority.
+    /// coalesced. The poll/hit counters retain diagnostic history only; they
+    /// carry no work identity or operation authority.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn poll_linked_runtime_cyw43_rx_admission(&mut self) {
         if self.network_service_quarantined
@@ -7624,7 +7618,7 @@ where
         {
             return;
         }
-        let line = "  wifi <help|dump-state|probe-ht|diag|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)";
+        let line = "  wifi <help|dump-state|diag> - Passive WiFi diagnostics (serial/local only)";
         if serial_only {
             self.emit_serial_line(line);
         } else {
@@ -7639,7 +7633,7 @@ where
             return;
         }
         self.emit_serial_line_atomic(
-            "  wifi <help|dump-state|probe-ht|diag|load-fw|retry> - WiFi bring-up diagnostics (serial/local only)",
+            "  wifi <help|dump-state|diag> - Passive WiFi diagnostics (serial/local only)",
         );
     }
 
@@ -8907,22 +8901,18 @@ where
                 "  wifi dump-state - Show cached SDIO, clock, and contract trace state",
             );
             self.emit_console_line(
-                "  wifi probe-ht   - Show cached root-driver HT state; linked runtime returns typed unavailable",
-            );
-            self.emit_console_line(
                 "  wifi diag       - Show passive cached linked-runtime gate and owner state",
-            );
-            self.emit_console_line(
-                "  wifi load-fw    - Retry linked-runtime firmware load when the boundary supports it",
-            );
-            self.emit_console_line(
-                "  wifi retry      - Run linked-runtime transport and firmware retry when supported",
             );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
                 WIFI_DEBUG_ACK_LABEL,
                 Some("detail=subcommand=help scope=serial-local"),
             );
+            return;
+        }
+
+        if Self::wifi_debug_command_is_legacy_mutation(command) {
+            self.emit_wifi_legacy_runtime_owned_refusal(subcommand);
             return;
         }
 
@@ -8949,28 +8939,6 @@ where
                 Some(wifi_debug) => wifi_debug.dump_state("console-dump-state").map(Some),
                 None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
             },
-            WifiDebugCommand::ProbeHt => {
-                let ready = match self.wifi_debug.as_mut() {
-                    Some(wifi_debug) => wifi_debug.probe_ht_clock(),
-                    None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
-                };
-                match ready {
-                    Ok(ready) => {
-                        let detail = format_message(format_args!(
-                            "wifi ht: ready={}",
-                            if ready { "yes" } else { "no" }
-                        ));
-                        self.emit_console_line(detail.as_str());
-                        match self.wifi_debug.as_mut() {
-                            Some(wifi_debug) => wifi_debug.dump_state("console-probe-ht").map(Some),
-                            None => {
-                                Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable"))
-                            }
-                        }
-                    }
-                    Err(err) => Err(err),
-                }
-            }
             WifiDebugCommand::Diag => {
                 (|| -> Result<Option<WifiDebugSnapshot>, crate::hal::HalError> {
                     let snapshot = match self.wifi_debug.as_mut() {
@@ -8988,14 +8956,9 @@ where
                     Ok(None)
                 })()
             }
-            WifiDebugCommand::LoadFirmware => match self.wifi_debug.as_mut() {
-                Some(wifi_debug) => wifi_debug.load_firmware().map(Some),
-                None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
-            },
-            WifiDebugCommand::Retry => match self.wifi_debug.as_mut() {
-                Some(wifi_debug) => wifi_debug.retry_transport_and_firmware().map(Some),
-                None => Err(crate::hal::HalError::Unsupported("wifi-debug-unavailable")),
-            },
+            WifiDebugCommand::ProbeHt
+            | WifiDebugCommand::LoadFirmware
+            | WifiDebugCommand::Retry => return,
         };
 
         match result {
@@ -9026,10 +8989,10 @@ where
                 let error_snapshot_stage = match command {
                     WifiDebugCommand::Help => None,
                     WifiDebugCommand::DumpState => None,
-                    WifiDebugCommand::ProbeHt => Some("console-probe-ht-error"),
                     WifiDebugCommand::Diag => Some("console-diag-error"),
-                    WifiDebugCommand::LoadFirmware => Some("console-load-fw-error"),
-                    WifiDebugCommand::Retry => Some("console-retry-error"),
+                    WifiDebugCommand::ProbeHt
+                    | WifiDebugCommand::LoadFirmware
+                    | WifiDebugCommand::Retry => None,
                 };
                 if let Some(stage) = error_snapshot_stage {
                     if let Some(wifi_debug) = self.wifi_debug.as_mut() {
@@ -12912,11 +12875,32 @@ where
     const fn wifi_debug_command_profile(command: WifiDebugCommand) -> &'static str {
         match command {
             WifiDebugCommand::Help => "help",
-            WifiDebugCommand::DumpState | WifiDebugCommand::ProbeHt | WifiDebugCommand::Diag => {
-                "bounded"
-            }
-            WifiDebugCommand::LoadFirmware | WifiDebugCommand::Retry => "stateful",
+            WifiDebugCommand::DumpState | WifiDebugCommand::Diag => "bounded",
+            WifiDebugCommand::ProbeHt
+            | WifiDebugCommand::LoadFirmware
+            | WifiDebugCommand::Retry => "unavailable",
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_debug_command_is_legacy_mutation(command: WifiDebugCommand) -> bool {
+        matches!(
+            command,
+            WifiDebugCommand::ProbeHt | WifiDebugCommand::LoadFirmware | WifiDebugCommand::Retry
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_legacy_runtime_owned_refusal(&mut self, subcommand: &str) {
+        self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+        let detail = format_message(format_args!(
+            "detail=subcommand={subcommand} error=pi4-wifi-driver-task-runtime-required owner=linked-runtime"
+        ));
+        self.emit_refusal(
+            WIFI_DEBUG_ACK_LABEL,
+            RefusalReason::Policy,
+            Some(detail.as_str()),
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -12948,11 +12932,7 @@ where
     const fn wifi_command_supports_driver_task_snapshot(command: WifiDebugCommand) -> bool {
         matches!(
             command,
-            WifiDebugCommand::DumpState
-                | WifiDebugCommand::Diag
-                | WifiDebugCommand::ProbeHt
-                | WifiDebugCommand::LoadFirmware
-                | WifiDebugCommand::Retry
+            WifiDebugCommand::DumpState | WifiDebugCommand::Diag
         )
     }
 
@@ -13341,14 +13321,13 @@ where
         work: crate::drivers::driver_task_net::Cyw43HostEapolWorkDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: host_eapol detail deferred_reauth={} prompt_poll={} pending_events={} pending_eapol={} tx_submit={} key_install={} tx_drain={} bssid_obligation={}",
+            "wifi: host_eapol detail deferred_reauth={} prompt_poll={} pending_events={} pending_eapol={} tx_submit={} key_install={} bssid_obligation={}",
             Self::yes_no(work.deferred_reauth),
             Self::yes_no(work.prompt_poll),
             work.pending_events,
             work.pending_eapol_frames,
             Self::yes_no(work.pending_tx_submit),
             Self::yes_no(work.pending_key_install),
-            Self::yes_no(work.pending_tx_drain),
             Self::yes_no(work.bssid_obligation),
         ))
     }
@@ -13501,23 +13480,76 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_data_handoff_lane_line(
-        handoff: crate::drivers::driver_task_net::Cyw43DataHandoffDiagnostic,
+    fn wifi_diag_data_handoff_rx_queue_line(
+        queue: Option<pi4_driver_abi::DriverRuntimeCyw43RxQueueState>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let (stable, generation, depth, capacity, flags, commit_sequence) = match queue {
+            Some(queue) => (
+                "yes",
+                queue.generation,
+                queue.queue_depth,
+                queue.queue_capacity,
+                queue.flags,
+                queue.commit_sequence,
+            ),
+            None => (
+                "no",
+                0,
+                0,
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16,
+                0,
+                0,
+            ),
+        };
+        format_message(format_args!(
+            "wifi: data_handoff rx_queue stable={} generation={} depth={}/{} flags=0x{:08x} commit_sequence={}",
+            stable, generation, depth, capacity, flags, commit_sequence,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_rx_batch_line(
+        batch: Option<pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord>,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let (
+            stable,
+            parent_sequence,
+            generation,
+            queue_commit_sequence,
+            count,
+            remaining,
+            committed_parent_sequence,
+        ) = match batch {
+            Some(batch) => (
+                "yes",
+                batch.parent_sequence,
+                batch.generation,
+                batch.queue_commit_sequence,
+                batch.count,
+                batch.remaining,
+                batch.committed_parent_sequence,
+            ),
+            None => ("no", 0, 0, 0, 0, 0, 0),
+        };
+        format_message(format_args!(
+            "wifi: data_handoff rx_batch stable={} parent_sequence={} generation={} queue_commit_sequence={} count={} remaining={} committed_parent_sequence={}",
+            stable,
+            parent_sequence,
+            generation,
+            queue_commit_sequence,
+            count,
+            remaining,
+            committed_parent_sequence,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_data_handoff_rx_hint_line(
+        sdio_deadline_hints: u32,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: data_handoff lane consumer={} rx_watch={} rx_generation={} rx_pair={} rx_physical={} deadline_probes={} sdio_deadline_hints={} terminals={} control_progress=ordinary-network-turn",
-            if handoff.consumer_open {
-                "open"
-            } else {
-                "blocked"
-            },
-            handoff.rx_watch_state,
-            handoff.rx_watch_generation,
-            handoff.rx_watch_pair_epoch,
-            handoff.rx_watch_physical_lifetime_epoch,
-            handoff.rx_watch_deadline_probes,
-            handoff.sdio_deadline_hints,
-            handoff.rx_watch_terminals,
+            "wifi: data_handoff rx_hint observed=no authority=none history=none sdio_deadline_hints={} control_progress=ordinary-network-turn",
+            sdio_deadline_hints,
         ))
     }
 
@@ -14039,7 +14071,7 @@ where
         HeaplessString<DEFAULT_LINE_CAPACITY>,
     ) {
         let state = format_message(format_args!(
-            "wifi: root rx_hint bound={} badge={} authority=none condition=committed-runtime-queue",
+            "wifi: root rx_hint bound={} badge={} authority=none condition=durable-service-state",
             Self::yes_no(wake.bound),
             wake.badge,
         ));
@@ -14287,9 +14319,19 @@ where
             self.emit_console_line(detail.as_str());
         }
         let handoff = crate::drivers::driver_task_net::cyw43_data_handoff_diagnostic();
+        let (rx_queue, rx_batch) =
+            match crate::hal::driver_task::driver_task_cyw43_rx_batch_diagnostic_snapshot() {
+                Some((queue, batch)) => (Some(queue), Some(batch)),
+                None => (
+                    crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot(),
+                    None,
+                ),
+            };
         for detail in [
             Self::wifi_diag_data_handoff_state_line(handoff),
-            Self::wifi_diag_data_handoff_lane_line(handoff),
+            Self::wifi_diag_data_handoff_rx_queue_line(rx_queue),
+            Self::wifi_diag_data_handoff_rx_batch_line(rx_batch),
+            Self::wifi_diag_data_handoff_rx_hint_line(handoff.sdio_deadline_hints),
             Self::wifi_diag_data_handoff_counters_line(handoff),
             Self::wifi_diag_data_handoff_stale_purge_line(handoff),
             Self::wifi_diag_data_handoff_boot_loss_line(handoff),
@@ -14373,7 +14415,7 @@ where
             let completion_source = if live_net_supersedes_runtime {
                 "live-net-status"
             } else {
-                "linked-runtime-replay-failure"
+                "linked-runtime-retained-state"
             };
             let status_detail =
                 format_message(format_args!("result=ok source={completion_source}"));
@@ -16195,17 +16237,20 @@ where
             ),
             "nettest-netstats-cohsh",
         );
+        let (acceptance_evidence, acceptance_network_evidence) =
+            self.wifi_diag_acceptance_evidence();
         self.emit_wifi_gate_line(
             10,
             "nettest-netstats-cohsh",
             Self::wifi_startup_gate_status(10, direct_proof_gate, failing_gate),
             format_args!(
                 "{} dependency={}",
-                self.wifi_diag_acceptance_evidence(),
+                acceptance_evidence,
                 Self::wifi_gate_dependency_label(10, failing_gate),
             ),
             "acceptance-complete",
         );
+        self.emit_console_line(acceptance_network_evidence.as_str());
         if let Some(fault) = fault {
             let owner_fault = Self::wifi_diag_cyw43_sdio_owner_fault_status(fault);
             let fault_line = Self::wifi_diag_cyw43_fault_summary(fault, true);
@@ -18098,12 +18143,22 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_acceptance_evidence(&self) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+    fn wifi_diag_acceptance_evidence(
+        &self,
+    ) -> (
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+    ) {
         #[cfg(feature = "net-console")]
         if self.network_service_quarantined {
-            return format_message(format_args!(
-                "nettest=unavailable netstats=unavailable cohsh=unavailable dpc=unavailable profile_backend=quarantined active_driver=cyw43 tcp_ready=no"
-            ));
+            return (
+                format_message(format_args!(
+                    "nettest=unavailable netstats=unavailable cohsh=unavailable dpc=unavailable"
+                )),
+                format_message(format_args!(
+                    "wifi: acceptance network profile_backend=quarantined active_driver=cyw43 tcp_ready=no tcp_accepts=0 tcp_auth=0 tcp_rx_bytes=0"
+                )),
+            );
         }
         #[cfg(feature = "net-console")]
         {
@@ -18118,24 +18173,34 @@ where
                 });
                 let dpc_pass = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic()
                     .is_some_and(Self::wifi_diag_dpc_acceptance_pass_from);
-                return format_message(format_args!(
-                    "nettest={} netstats={} cohsh={} dpc={} profile_backend={} active_driver={} tcp_ready={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={}",
-                    if nettest_pass { "pass" } else { "requires-command" },
-                    if stats.rx_packets != 0 && stats.tx_packets != 0 { "pass" } else { "requires-command" },
-                    if stats.tcp_auth_sessions != 0 { "authenticated" } else { "requires-auth" },
-                    if dpc_pass { "pass" } else { "requires-proof" },
-                    status.profile_backend,
-                    status.active_driver,
-                    if status.tcp_ready { "yes" } else { "no" },
-                    stats.tcp_accepts,
-                    stats.tcp_auth_sessions,
-                    stats.tcp_rx_bytes,
-                ));
+                return (
+                    format_message(format_args!(
+                        "nettest={} netstats={} cohsh={} dpc={}",
+                        if nettest_pass { "pass" } else { "requires-command" },
+                        if stats.rx_packets != 0 && stats.tx_packets != 0 { "pass" } else { "requires-command" },
+                        if stats.tcp_auth_sessions != 0 { "authenticated" } else { "requires-auth" },
+                        if dpc_pass { "pass" } else { "requires-proof" },
+                    )),
+                    format_message(format_args!(
+                        "wifi: acceptance network profile_backend={} active_driver={} tcp_ready={} tcp_accepts={} tcp_auth={} tcp_rx_bytes={}",
+                        status.profile_backend,
+                        status.active_driver,
+                        if status.tcp_ready { "yes" } else { "no" },
+                        stats.tcp_accepts,
+                        stats.tcp_auth_sessions,
+                        stats.tcp_rx_bytes,
+                    )),
+                );
             }
         }
-        format_message(format_args!(
-            "nettest=unavailable netstats=unavailable cohsh=unavailable dpc=unavailable profile_backend=none active_driver=none tcp_ready=no"
-        ))
+        (
+            format_message(format_args!(
+                "nettest=unavailable netstats=unavailable cohsh=unavailable dpc=unavailable"
+            )),
+            format_message(format_args!(
+                "wifi: acceptance network profile_backend=none active_driver=none tcp_ready=no tcp_accepts=0 tcp_auth=0 tcp_rx_bytes=0"
+            )),
+        )
     }
 
     #[cfg(feature = "net-console")]
@@ -22074,24 +22139,22 @@ mod tests {
                 accepted: u32::MAX,
                 issued: u32::MAX,
                 terminals: u32::MAX,
-                credits: u32::MAX,
-                next_issues: u32::MAX,
+                successor_issues: u32::MAX,
                 accepted_to_issue: metric,
                 issued_to_terminal: metric,
-                terminal_to_credit: metric,
-                credit_to_next_issue: metric,
+                terminal_to_next_issue: metric,
             },
         );
 
         assert!(!counts.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{counts}");
         assert_eq!(
             counts.as_str(),
-            "netstats: wifi_tx_phase_counts gen=4294967295 accepted=4294967295 issued=4294967295 terminals=4294967295 credits=4294967295 next_issues=4294967295"
+            "netstats: wifi_tx_phase_counts gen=4294967295 accepted=4294967295 issued=4294967295 terminals=4294967295 successor_issues=4294967295"
         );
         assert!(!timing.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{timing}");
         assert_eq!(
             timing.as_str(),
-            "netstats: wifi_tx_phase gen=4294967295 us=n/last/max/avg a2i=4294967295/4294967295/4294967295/4294967295 t2c=4294967295/4294967295/4294967295/4294967295 c2i=4294967295/4294967295/4294967295/4294967295"
+            "netstats: wifi_tx_phase gen=4294967295 us=n/last/max/avg a2i=4294967295/4294967295/4294967295/4294967295 t2n=4294967295/4294967295/4294967295/4294967295"
         );
         assert!(
             !issued_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
@@ -25182,7 +25245,6 @@ mod tests {
             pending_eapol_frames: u32::MAX,
             pending_tx_submit: true,
             pending_key_install: true,
-            pending_tx_drain: true,
             bssid_obligation: true,
         };
         let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
@@ -25357,7 +25419,7 @@ mod tests {
             "work_pending=yes blocker=bssid-obligation generation=4294967295 open_network=no"
         ));
         assert!(lines[2].contains(
-            "deferred_reauth=yes prompt_poll=yes pending_events=4294967295 pending_eapol=4294967295 tx_submit=yes key_install=yes tx_drain=yes bssid_obligation=yes"
+            "deferred_reauth=yes prompt_poll=yes pending_events=4294967295 pending_eapol=4294967295 tx_submit=yes key_install=yes bssid_obligation=yes"
         ));
         assert!(lines[3].contains(
             "event_armed=yes event_generation=4294967295 terminal_failure=yes deferred_reauth=yes deferred_generation=4294967295"
@@ -25596,10 +25658,7 @@ mod tests {
             wake.contains("rx_hint bound=yes badge=1 authority=none"),
             "{wake}"
         );
-        assert!(
-            wake.ends_with("condition=committed-runtime-queue"),
-            "{wake}"
-        );
+        assert!(wake.ends_with("condition=durable-service-state"), "{wake}");
         assert!(
             !wake_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER),
             "{wake_counters}"
@@ -25622,13 +25681,7 @@ mod tests {
             publication_epoch_token: u64::MAX,
             committed: true,
             consumer_open: true,
-            rx_watch_state: "idle",
-            rx_watch_generation: u32::MAX,
-            rx_watch_pair_epoch: u64::MAX,
-            rx_watch_physical_lifetime_epoch: u32::MAX,
-            rx_watch_deadline_probes: 0,
             sdio_deadline_hints: 0,
-            rx_watch_terminals: u32::MAX,
             baseline_generation: u32::MAX,
             root_rx_queue_len: 50,
             root_rx_queue_cap: 50,
@@ -25673,16 +25726,37 @@ mod tests {
             "baseline_token=18446744073709551615 publication_token=18446744073709551615 baseline_generation=4294967295"
         ));
         assert!(handoff_state.contains("queue=50/50 high_water=50"));
-        let handoff_lane = KernelConsoleTestPump::wifi_diag_data_handoff_lane_line(handoff);
-        assert!(!handoff_lane.contains(DIAGNOSTIC_TRUNCATION_MARKER));
-        assert!(handoff_lane.len() < DEFAULT_LINE_CAPACITY);
-        assert!(handoff_lane.contains(
-            "consumer=open rx_watch=idle rx_generation=4294967295 rx_pair=18446744073709551615"
+        let mut queue = pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty();
+        queue.generation = u32::MAX;
+        queue.queue_depth = 50;
+        queue.flags = u32::MAX;
+        queue.commit_sequence = u32::MAX;
+        let handoff_queue =
+            KernelConsoleTestPump::wifi_diag_data_handoff_rx_queue_line(Some(queue));
+        assert!(!handoff_queue.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_queue.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_queue.contains(
+            "rx_queue stable=yes generation=4294967295 depth=50/50 flags=0xffffffff commit_sequence=4294967295"
         ));
-        assert!(handoff_lane.contains(
-            "rx_physical=4294967295 deadline_probes=0 sdio_deadline_hints=0 terminals=4294967295"
+        let mut batch = pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord::empty();
+        batch.parent_sequence = u32::MAX;
+        batch.generation = u32::MAX;
+        batch.queue_commit_sequence = u32::MAX;
+        batch.count = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP as u16;
+        batch.remaining = 50;
+        batch.committed_parent_sequence = u32::MAX;
+        let handoff_batch =
+            KernelConsoleTestPump::wifi_diag_data_handoff_rx_batch_line(Some(batch));
+        assert!(!handoff_batch.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+        assert!(handoff_batch.len() < DEFAULT_LINE_CAPACITY);
+        assert!(handoff_batch.contains(
+            "rx_batch stable=yes parent_sequence=4294967295 generation=4294967295 queue_commit_sequence=4294967295 count=8 remaining=50 committed_parent_sequence=4294967295"
         ));
-        assert!(handoff_lane.ends_with("control_progress=ordinary-network-turn"));
+        let handoff_hint = KernelConsoleTestPump::wifi_diag_data_handoff_rx_hint_line(u32::MAX);
+        assert_eq!(
+            handoff_hint,
+            "wifi: data_handoff rx_hint observed=no authority=none history=none sdio_deadline_hints=4294967295 control_progress=ordinary-network-turn"
+        );
         let handoff_counters = KernelConsoleTestPump::wifi_diag_data_handoff_counters_line(handoff);
         assert!(!handoff_counters.contains(DIAGNOSTIC_TRUNCATION_MARKER));
         assert!(handoff_counters.len() < DEFAULT_LINE_CAPACITY);
@@ -25813,6 +25887,55 @@ mod tests {
         assert!(line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
         assert!(line.ends_with(" next=acceptance-complete"), "{line}");
         assert!(!line.ends_with("next="), "{line}");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn wifi_gate10_acceptance_evidence_preserves_all_network_counters() {
+        let driver = LoopbackSerial::<32>::new();
+        let serial = SerialPort::<_, 32, 32, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.status.profile_backend = "bcmgenet-v5";
+        net.status.active_driver = "cyw43";
+        net.status.tcp_ready = true;
+        net.counters.rx_packets = u64::MAX;
+        net.counters.tx_packets = u64::MAX;
+        net.counters.tcp_accepts = u64::MAX;
+        net.counters.tcp_auth_sessions = u64::MAX;
+        net.counters.tcp_rx_bytes = u64::MAX;
+        let pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+
+        let (gate_evidence, network_evidence) = pump.wifi_diag_acceptance_evidence();
+        let gate = KernelConsoleTestPump::wifi_gate_line(
+            10,
+            "nettest-netstats-cohsh",
+            "pass",
+            format_args!("{} dependency=none", gate_evidence.as_str()),
+            "acceptance-complete",
+        );
+
+        assert!(!gate.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{gate}");
+        assert!(gate.contains("nettest=requires-command"), "{gate}");
+        assert!(gate.contains("cohsh=authenticated"), "{gate}");
+        assert!(
+            !network_evidence.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{network_evidence}"
+        );
+        assert!(
+            network_evidence
+                .contains("profile_backend=bcmgenet-v5 active_driver=cyw43 tcp_ready=yes"),
+            "{network_evidence}"
+        );
+        assert!(
+            network_evidence.contains(
+                "tcp_accepts=18446744073709551615 tcp_auth=18446744073709551615 tcp_rx_bytes=18446744073709551615"
+            ),
+            "{network_evidence}"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -26483,7 +26606,6 @@ mod tests {
     struct FakeWifiDebug {
         snapshot: WifiDebugSnapshot,
         control_trace: WifiControlPlaneTrace,
-        ht_ready: bool,
         calls: heapless::Vec<&'static str, 8>,
         expect_breadcrumb_suppression: bool,
         breadcrumb_suppression_observed: bool,
@@ -26578,7 +26700,6 @@ mod tests {
                         records
                     },
                 },
-                ht_ready: true,
                 calls: heapless::Vec::new(),
                 expect_breadcrumb_suppression: false,
                 breadcrumb_suppression_observed: false,
@@ -26692,36 +26813,6 @@ mod tests {
         fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
             self.require_breadcrumb_suppression();
             Some(self.control_trace)
-        }
-
-        fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
-            self.push_call("probe-ht");
-            if self.runtime_required {
-                return Err(HalError::Unsupported(
-                    "pi4-wifi-driver-task-runtime-required",
-                ));
-            }
-            Ok(self.ht_ready)
-        }
-
-        fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-            self.push_call("load-fw");
-            if self.runtime_required {
-                return Err(HalError::Unsupported(
-                    "pi4-wifi-driver-task-runtime-required",
-                ));
-            }
-            Ok(self.snapshot)
-        }
-
-        fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-            self.push_call("retry");
-            if self.runtime_required {
-                return Err(HalError::Unsupported(
-                    "pi4-wifi-driver-task-runtime-required",
-                ));
-            }
-            Ok(self.snapshot)
         }
     }
 
@@ -38295,6 +38386,20 @@ mod tests {
             "{rendered}"
         );
         assert!(
+            rendered
+                .contains("wifi dump-state - Show cached SDIO, clock, and contract trace state"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "wifi diag       - Show passive cached linked-runtime gate and owner state"
+            ),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("wifi probe-ht"), "{rendered}");
+        assert!(!rendered.contains("wifi load-fw"), "{rendered}");
+        assert!(!rendered.contains("wifi retry"), "{rendered}");
+        assert!(
             rendered.contains("OK USB detail=subcommand=help scope=serial-local"),
             "{rendered}"
         );
@@ -38558,11 +38663,11 @@ mod tests {
         );
         assert!(rendered.contains("wifi: next_action="), "{rendered}");
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-replay-failure"),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-retained-state"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
             "{rendered}"
         );
         assert!(
@@ -38622,7 +38727,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
             "{rendered}"
         );
     }
@@ -38696,7 +38801,7 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
             "{rendered}"
         );
     }
@@ -39454,7 +39559,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_probe_ht_reports_linked_runtime_unavailable_despite_live_dhcp_frontier() {
+    fn serial_wifi_probe_ht_is_refused_before_linked_runtime_snapshot() {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -39491,24 +39596,25 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
+            rendered.contains(
+                "ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required owner=linked-runtime"
+            ),
+            "{rendered}"
+        );
+        assert!(
             !rendered.contains("wifi: driver-task replay state detail=live-net-frontier"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
-            "{rendered}"
-        );
-        assert!(
-            rendered.contains(
-                "ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"
-            ),
+            !rendered.contains("wifi: debug subcommand=probe-ht"),
             "{rendered}"
         );
         assert!(
             !rendered.contains("OK WIFI detail=subcommand=probe-ht"),
             "{rendered}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
+        assert_eq!(rendered.matches("ERR WIFI").count(), 1, "{rendered}");
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -39556,11 +39662,11 @@ mod tests {
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-replay-failure"),
+            rendered.contains("wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok source=linked-runtime-retained-state"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-replay-failure"),
+            rendered.contains("OK WIFI detail=subcommand=diag scope=serial-local source=linked-runtime-retained-state"),
             "{rendered}"
         );
         assert!(
@@ -39573,7 +39679,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_probe_ht_reports_runtime_required_driver_task_snapshot_error() {
+    fn serial_wifi_probe_ht_refusal_does_not_replay_runtime_snapshot() {
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -39604,23 +39710,24 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=cyw43-command driver-task runtime init failed"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required owner=linked-runtime"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            !rendered.contains("wifi: driver-task replay failure"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
+            !rendered.contains("wifi: debug subcommand=probe-ht"),
             "{rendered}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["probe-ht"]);
+        assert_eq!(rendered.matches("ERR WIFI").count(), 1, "{rendered}");
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_load_fw_reports_runtime_required_driver_task_snapshot_error() {
+    fn serial_wifi_load_fw_is_refused_before_linked_runtime_snapshot() {
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -39651,23 +39758,24 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=sdio-host driver-task runtime init failed"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=load-fw error=pi4-wifi-driver-task-runtime-required owner=linked-runtime"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=load-fw action=complete profile=stateful mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            !rendered.contains("wifi: driver-task replay failure"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=load-fw error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
+            !rendered.contains("wifi: debug subcommand=load-fw"),
             "{rendered}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["load-fw"]);
+        assert_eq!(rendered.matches("ERR WIFI").count(), 1, "{rendered}");
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn serial_wifi_retry_reports_runtime_required_driver_task_snapshot_error() {
+    fn serial_wifi_retry_is_refused_before_linked_runtime_snapshot() {
         let driver = LoopbackSerial::<32768>::new();
         let serial = SerialPort::<_, 4096, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
@@ -39698,18 +39806,19 @@ mod tests {
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
-            rendered.contains("wifi: driver-task replay failure detail=net-disabled cause=sdio-host driver-task runtime init failed"),
+            rendered.contains("ERR WIFI reason=policy detail=subcommand=retry error=pi4-wifi-driver-task-runtime-required owner=linked-runtime"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("wifi: debug subcommand=retry action=complete profile=stateful mode=one-shot result=err source=linked-runtime-replay-failure error=pi4-wifi-driver-task-runtime-required"),
+            !rendered.contains("wifi: driver-task replay failure"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("ERR WIFI reason=policy detail=subcommand=retry error=pi4-wifi-driver-task-runtime-required source=linked-runtime-replay-failure"),
+            !rendered.contains("wifi: debug subcommand=retry"),
             "{rendered}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["retry"]);
+        assert_eq!(rendered.matches("ERR WIFI").count(), 1, "{rendered}");
+        assert!(wifi.calls.is_empty());
     }
 
     #[cfg(feature = "kernel")]
@@ -41312,7 +41421,7 @@ mod tests {
         });
         local_seat.mark_root_console_ready();
         let mut wifi = FakeWifiDebug::new();
-        local_seat.enqueue_keyboard_bytes(b"wifi probe-ht\n");
+        local_seat.enqueue_keyboard_bytes(b"wifi diag\n");
 
         let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
             .with_wifi_debug(&mut wifi)
@@ -41325,26 +41434,31 @@ mod tests {
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert!(
             mirrored.iter().any(|line| line.contains(
-                "wifi: debug subcommand=probe-ht action=begin profile=bounded mode=one-shot"
+                "wifi: debug subcommand=diag action=begin profile=bounded mode=one-shot"
             )),
             "{mirrored:?}"
         );
         assert!(
             mirrored
                 .iter()
-                .any(|line| line.contains("wifi ht: ready=yes")),
+                .any(|line| line.contains("wifi: diag snapshot=cached mutation=no")),
             "{mirrored:?}"
         );
-        assert!(mirrored.iter().any(|line| line.contains(
-            "wifi: debug subcommand=probe-ht action=complete profile=bounded mode=one-shot result=ok"
-        )), "{mirrored:?}");
+        assert!(
+            mirrored.iter().any(|line| {
+                line.contains(
+                    "wifi: debug subcommand=diag action=complete profile=bounded mode=one-shot result=ok",
+                )
+            }),
+            "{mirrored:?}"
+        );
         assert!(
             mirrored
                 .iter()
-                .any(|line| line.contains("OK WIFI detail=subcommand=probe-ht")),
+                .any(|line| line.contains("OK WIFI detail=subcommand=diag")),
             "{mirrored:?}"
         );
-        assert_eq!(wifi.calls.as_slice(), &["probe-ht", "dump-state"]);
+        assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

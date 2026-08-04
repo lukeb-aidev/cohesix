@@ -673,17 +673,13 @@ fn cyw43_status_blocker_for(
             dhcp_phase: "host-eapol-m3-missing",
         });
     }
-    if counters.wifi_data_trace_faults != 0
-        || (counters.tx_submit > counters.tx_complete
-            && (counters.wifi_data_trace_tx_retries != 0 || counters.tx_in_flight != 0))
-        || (counters.wifi_data_trace_tx_retries != 0
-            && counters.tx_free == 0
-            && counters.tx_in_flight == 0
-            && counters.tx_submit != 0)
-    {
+    // Root submit/complete/free counters describe logical ownership, not the
+    // runtime's SDPCM credit window. An ordinary retained or in-flight owner is
+    // not a fault; only a typed data-path terminal fault may replace status.
+    if counters.wifi_data_trace_faults != 0 {
         return Some(Cyw43StatusBlocker {
-            address_source: "wifi-tx-credit-anomaly",
-            dhcp_phase: "tx-credit-anomaly",
+            address_source: "wifi-tx-terminal-fault",
+            dhcp_phase: "tx-terminal-fault",
         });
     }
     None
@@ -11601,12 +11597,12 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_status_reports_tx_credit_anomaly_until_host_proof() {
+    fn cyw43_status_reports_typed_tx_terminal_fault_until_host_proof() {
         let counters = NetCounters {
             tx_submit: 60,
             tx_free: 0,
             tx_in_flight: 0,
-            wifi_data_trace_tx_retries: 3,
+            wifi_data_trace_faults: 3,
             ..NetCounters::default()
         };
 
@@ -11628,8 +11624,8 @@ mod tests {
         assert_eq!(
             cyw43_status_blocker_for("cyw43", "wifi", counters),
             Some(Cyw43StatusBlocker {
-                address_source: "wifi-tx-credit-anomaly",
-                dhcp_phase: "tx-credit-anomaly"
+                address_source: "wifi-tx-terminal-fault",
+                dhcp_phase: "tx-terminal-fault"
             })
         );
         assert_eq!(
@@ -11643,10 +11639,8 @@ mod tests {
                     ..NetCounters::default()
                 }
             ),
-            Some(Cyw43StatusBlocker {
-                address_source: "wifi-tx-credit-anomaly",
-                dhcp_phase: "tx-credit-anomaly"
-            })
+            None,
+            "an ordinary exact in-flight TX owner is not a credit or terminal fault"
         );
         assert_eq!(
             cyw43_status_blocker_for(

@@ -6826,8 +6826,9 @@ fn poll_cyw43_root_wake_slot(slot: &DriverTaskCommandSlot) -> bool {
 /// Poll the unbound CYW43 child-to-root RX wake once.
 ///
 /// The result is an urgency hint for this scheduling turn only. Queue state in
-/// the sequence-last CYW43 record remains the sole authority and history;
-/// consuming this binary notification never creates a software latch.
+/// the sequence-last CYW43 record remains the sole work authority and history.
+/// HAL retains no software work latch; EventPump may combine this returned bit
+/// with a fresh durable snapshot to form one transient scheduling urgency.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub fn poll_cyw43_root_wake_notification() -> bool {
@@ -7340,6 +7341,29 @@ pub(crate) fn driver_task_cyw43_rx_batch_snapshot(
     batch
         .valid_for_parent_and_queue_state(expected_parent_sequence, current_queue_state)
         .then_some(batch)
+}
+
+/// Return one passive, mutually valid queue/batch diagnostic snapshot.
+///
+/// This helper confers no parent or scheduling authority: it accepts the
+/// runtime's sequence-last records only when the batch is complete and no
+/// newer queue sample invalidates its generation or commit frontier.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_rx_batch_diagnostic_snapshot() -> Option<(
+    DriverRuntimeCyw43RxQueueState,
+    DriverRuntimeCyw43RxBatchRecord,
+)> {
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    let queue_state = driver_task_cyw43_rx_queue_state_snapshot()?;
+    let batch = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
+    if !batch.valid_for_parent_and_queue_state(batch.parent_sequence, queue_state) {
+        return None;
+    }
+    let current_queue_state = driver_task_cyw43_rx_queue_state_snapshot()?;
+    batch
+        .valid_for_parent_and_queue_state(batch.parent_sequence, current_queue_state)
+        .then_some((current_queue_state, batch))
 }
 
 #[cfg(feature = "kernel")]
@@ -27058,6 +27082,10 @@ mod tests {
             driver_task_cyw43_rx_batch_snapshot(17, queue_state),
             Some(batch)
         );
+        assert_eq!(
+            driver_task_cyw43_rx_batch_diagnostic_snapshot(),
+            Some((queue_state, batch))
+        );
         assert!(driver_task_cyw43_rx_batch_snapshot(18, queue_state).is_none());
         let mut copied = vec![0u8; usize::from(entries[2].len)];
         assert_eq!(
@@ -27107,6 +27135,11 @@ mod tests {
             Some(batch),
             "later same-generation queue progress must not invalidate the immutable batch"
         );
+        assert_eq!(
+            driver_task_cyw43_rx_batch_diagnostic_snapshot(),
+            Some((later_queue_state, batch)),
+            "passive diagnostics must preserve the validated current queue frontier"
+        );
 
         let mut poisoned = later_queue_state;
         poisoned.flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED;
@@ -27119,6 +27152,7 @@ mod tests {
             usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES),
         );
         assert!(driver_task_cyw43_rx_batch_snapshot(17, queue_state).is_none());
+        assert!(driver_task_cyw43_rx_batch_diagnostic_snapshot().is_none());
         clear_driver_task_transport(contract);
         reset_cyw43_sdio_pair_recovery_for_test();
     }

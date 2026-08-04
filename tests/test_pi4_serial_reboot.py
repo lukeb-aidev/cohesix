@@ -150,9 +150,6 @@ NETTEST_STATUS_FAILURE = (
 )
 NETSTATS_TERMINAL_PASS = NETTEST_STATUS_PASS + NETSTATS_OK
 NETSTATS_TERMINAL_FAILURE = NETTEST_STATUS_FAILURE + NETSTATS_OK
-WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL = (
-    pi4_serial_reboot.WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL + b"\ncohesix>"
-)
 
 
 def wifi_supervisor_record(
@@ -160,13 +157,18 @@ def wifi_supervisor_record(
     *,
     attempt: int = 1,
     console_seq: int = 5,
+    next_attempt_ms: int | None = None,
 ) -> bytes:
     """Build one current production CYW43 supervisor wire record."""
 
+    if next_attempt_ms is None:
+        next_attempt_ms = (
+            pi4_serial_reboot.U64_MAX if status == "failed" else 12345
+        )
     return (
         "CYW43_BOOTSTRAP_SUPERVISOR "
         f"attempt={attempt} status={status} "
-        "backoff_ms=0 next_attempt_ms=12345 "
+        f"backoff_ms=0 next_attempt_ms={next_attempt_ms} "
         "serial=ready local_seat=enabled recovery=full "
         f"console_seq={console_seq} "
         "telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes\n"
@@ -546,8 +548,8 @@ def test_wifi_supervisor_parser_accepts_only_terminal_records() -> None:
     assert trailing_retry_error == "attempt-2-forbidden"
 
 
-def test_wifi_supervisor_parser_tracks_ready_retraction_and_republication() -> None:
-    """Same-attempt recovery revokes Ready until a fresh candidate is published."""
+def test_wifi_supervisor_parser_treats_runtime_recovery_as_proof_failure() -> None:
+    """Post-Ready recovery fails the sample and bootstrap Ready stays unique."""
 
     retracted = (
         wifi_supervisor_record("begin", console_seq=3)
@@ -557,10 +559,14 @@ def test_wifi_supervisor_parser_tracks_ready_retraction_and_republication() -> N
         + wifi_supervisor_record("stabilizing", console_seq=7)
     )
 
-    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(retracted) is None
-    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
+    assert pi4_serial_reboot.parse_wifi_supervisor_terminal(retracted) == (
+        1,
+        "recovery",
+    )
+    _, republished_ready_error = pi4_serial_reboot.inspect_wifi_supervisor_evidence(
         retracted + wifi_supervisor_record("ready", console_seq=8)
-    ) == (1, "ready")
+    )
+    assert republished_ready_error == "bootstrap-ready-republication-forbidden"
     assert pi4_serial_reboot.parse_wifi_supervisor_terminal(
         retracted + wifi_supervisor_record("permanent", console_seq=8)
     ) == (1, "permanent")
@@ -621,7 +627,6 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -688,7 +693,6 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
             NETSTATS_OK,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -719,7 +723,6 @@ def test_wifi_ready_observation_rejects_later_attempt_before_any_command() -> No
             NETSTATS_OK,
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -761,7 +764,6 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
             NETSTATS_OK,
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -786,7 +788,6 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
         "netstats",
         "netstats",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -802,8 +803,8 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
     assert "wifi-supervisor:permanent" in controller.notes[-1]
 
 
-def test_wifi_ready_retraction_without_terminal_continues_passive_wait() -> None:
-    """A retracted candidate cannot fall through to commands while still busy."""
+def test_wifi_post_ready_recovery_stops_passive_wait_immediately() -> None:
+    """Runtime recovery fails repeatability without waiting for a later terminal."""
 
     controller = FakeController(
         [wifi_supervisor_record("permanent", console_seq=8)]
@@ -819,20 +820,21 @@ def test_wifi_ready_retraction_without_terminal_continues_passive_wait() -> None
         240.0,
     )
 
-    assert status == "permanent"
+    assert status == "recovery"
     assert wifi_supervisor_record("recovery", console_seq=6) in observed
-    assert wifi_supervisor_record("permanent", console_seq=8) in observed
+    assert wifi_supervisor_record("permanent", console_seq=8) not in observed
     assert controller.sent == []
     assert controller.diagnostic_barriers == []
     assert any(
-        "wifi supervisor ready retracted" in note
-        and "action=continue-passive-lifetime-observation" in note
+        "wifi supervisor terminal" in note
+        and "status=recovery" in note
+        and "action=diagnostics-admitted" in note
         for note in controller.notes
     )
 
 
-def test_wifi_republished_ready_restarts_full_passive_stability_window() -> None:
-    """A fresh Ready after recovery earns its own complete quiet observation."""
+def test_wifi_republished_bootstrap_ready_is_rejected() -> None:
+    """Runtime restoration cannot publish a second bootstrap Ready record."""
 
     controller = FakeController(
         [
@@ -841,7 +843,6 @@ def test_wifi_republished_ready_restarts_full_passive_stability_window() -> None
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -858,29 +859,24 @@ def test_wifi_republished_ready_restarts_full_passive_stability_window() -> None
         ]
     )
 
-    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
-        controller,
-        "wifi",
-        prompt_ready=False,
-        boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
-    )
+    with pytest.raises(
+        RuntimeError,
+        match="bootstrap-ready-republication-forbidden",
+    ):
+        pi4_serial_reboot.run_diagnostics(
+            controller,
+            "wifi",
+            prompt_ready=False,
+            boot_snapshot=wifi_supervisor_record("ready", console_seq=5),
+        )
 
-    assert diagnostics_ok
-    assert controller.drains[:2] == [
+    assert controller.drains == [
         (
             pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
             "post-ready stable-lifetime observation",
-        ),
-        (
-            pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
-            "post-ready stable-lifetime observation",
-        ),
+        )
     ]
-    assert any(
-        "wifi supervisor ready retracted" in note
-        and "action=continue-passive-lifetime-observation" in note
-        for note in controller.notes
-    )
+    assert controller.sent == []
 
 
 def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
@@ -909,7 +905,6 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         [
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -929,7 +924,6 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         "netstats",
         "netstats",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -938,7 +932,6 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
     assert 0 < controller.dhcp_result_timeout_s <= 0.5
     assert controller.diagnostic_deadlines[0] is not None
     assert controller.diagnostic_deadlines[1:] == [
-        None,
         None,
         None,
         None,
@@ -1009,7 +1002,6 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
-            WIFI_PROBE_HT_LINKED_RUNTIME_REFUSAL,
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK SMP\ncohesix>",
@@ -1029,19 +1021,17 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "nettest",
         "netstats",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
-    assert controller.reinforced == [True, True, True, True, True, True, True, True]
+    assert controller.reinforced == [True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
         "nettest",
         "netstats-final",
         "wifi diag",
-        "wifi probe-ht",
         "usb diag",
         "usb probe-kbd",
         "smp activity",
@@ -1055,12 +1045,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "nettest terminal generation=14 run_generation=31 "
         "running=false result=pass source=netstats"
     ) in controller.notes
-    assert (
-        "diagnostic terminal command='wifi probe-ht' "
-        "label='wifi probe-ht' result=expected-refusal "
-        "reason=pi4-wifi-driver-task-runtime-required "
-        "action=record-informational"
-    ) in controller.notes
+    assert "wifi probe-ht" not in controller.sent
     assert "diagnostics complete result=pass" in controller.notes
     assert controller.drains == [
         (
@@ -1073,39 +1058,6 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             "nettest terminal observation window",
         ),
     ]
-
-
-def test_wifi_probe_ht_wrong_error_fails_diagnostics() -> None:
-    """Only the exact linked-runtime refusal is informational."""
-
-    controller = FakeController(
-        [
-            b"[local-seat] usb keyboard command-ready "
-            b"action=enable-command-input\n",
-            NETSTATS_WIFI_BOUND,
-            NETTEST_STARTED,
-            NETTEST_RESULT,
-            NETSTATS_TERMINAL_PASS,
-            b"OK WIFI\ncohesix>",
-            b"ERR WIFI reason=busy detail=subcommand=probe-ht\ncohesix>",
-            b"OK USB\ncohesix>",
-            b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
-        ]
-    )
-
-    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
-        controller,
-        "wifi",
-        prompt_ready=True,
-        boot_snapshot=wifi_supervisor_record("ready") + b"cohesix> ",
-    )
-
-    assert not diagnostics_ok
-    assert (
-        "diagnostics complete result=fail failures=wifi probe-ht:err"
-        in controller.notes
-    )
 
 
 def test_diagnostics_accept_interleaved_result_marker() -> None:

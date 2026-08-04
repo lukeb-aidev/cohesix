@@ -88,6 +88,10 @@ response transcript.
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
 and `wifi` diagnostic families. Their gate meanings are documented in
 [DRIVERS.md](DRIVERS.md).
+The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`, and
+`wifi diag`. Legacy `wifi probe-ht`, `wifi load-fw`, and `wifi retry` spellings
+remain recognized only to return one typed linked-runtime ownership refusal;
+they do not invoke a debug callback, snapshot traversal, or physical operation.
 
 After `nettest` admission, allow its bounded 15-second window to finish and
 query `netstats`. The authoritative line is

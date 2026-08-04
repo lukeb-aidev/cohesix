@@ -38,7 +38,6 @@ REQUIRE_INPUT_RESPONSIVE=0
 DEFAULT_COMMANDS=(
     "smp activity"
     "wifi diag"
-    "wifi probe-ht"
     "nettest"
     "netstats"
     "usb status"
@@ -136,7 +135,6 @@ Options:
 Default proof commands:
   smp activity
   wifi diag
-  wifi probe-ht
   nettest
   netstats
   usb status

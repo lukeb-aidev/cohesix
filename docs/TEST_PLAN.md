@@ -719,23 +719,20 @@ prove all of the following:
   NetData op8, must remain unchanged while the queued op7 stays requestless and
   the TX hook spends no service budget, deadline, or recovery. After that owner
   reaches its terminal, the coordinator must advance one active op7 or promote
-  and advance one credit-ready FIFO head before a continuously replenished
+  and advance one eligible FIFO head before a continuously replenished
   copied-RX queue. Copied RX may return first,
   with zero physical operations and before pending ARP staging, only when no op7
-  is legally runnable, including predecessor-credit discovery or a retained
-  foreign owner. With all 16 aggregate slots occupied, the dedicated
-  pre-smoltcp EventPump hook must prove that promotion removes one credit-ready
+  is legally runnable because a retained foreign owner holds the lane. With all
+  16 aggregate slots occupied, the dedicated pre-smoltcp EventPump hook must
+  prove that promotion removes one eligible
   head and restores paired capacity before exactly one physical advance. A
   terminal must not promote a successor; that frame remains queued for a later
-  coordinator turn. Before charging the TX
-  service budget or promoting a FIFO head, the hook must prove that the predecessor
-  SDPCM-credit window is closed. While it is unproved, the immutable frame must
-  remain queued with no active op7, HAL request, child deadline, TX budget
-  charge, drop, or recovery. Already-authorized NetData RX/op8 continuation or
-  source work must remain admissible, while the queued TX must not manufacture
-  a fresh op8. Exact credit proof must then permit promotion and start the op7
-  lifetime. A queued, unissued frame has no deadline and cannot poison the
-  pair. Generation/reset must purge queued never-issued frames locally, while
+  coordinator turn. Promotion starts the one op7 lifetime without a root-owned
+  credit mirror. The runtime alone compares `sdpcm_seq` with `tx_max`; a closed
+  window must retain the exact promoted op7 in `WAIT_CREDIT`, and DPC may update
+  that window without changing parent identity. A joined Function-2 terminal
+  must release root and allow a later successor with no intervening RX credit
+  acknowledgement. Generation/reset must purge queued never-issued frames locally, while
   issued/ambiguous active ownership remains poison-and-recovery work. All
   classing, reservation, promotion, service, and telemetry behavior must be
   absent from GENET.
@@ -744,12 +741,15 @@ prove all of the following:
   `pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP=50`. They must reject
   divergent private capacities, prove the root can preserve one complete child
   backlog, and keep queue saturation subject to the Gate 8h rules above.
-- `wifi diag` and `wifi probe-ht` formatting coverage must preserve six
-  untruncated `wifi: data_handoff` records: generation/commit/baseline tokens,
-  baseline generation, and `queue=<used>/50`; current/baseline root-drop and runtime-overflow counters;
-  total/last-token/last-count stale-purge state; boot-first loss state; and
-  current-handoff post-commit first-loss state; plus explicit
-  `consumer=<blocked|open>` control-lane state. It must also preserve
+- `wifi diag` and `wifi dump-state` formatting coverage must preserve the
+  untruncated passive `wifi: data_handoff` records: generation/commit/baseline
+  tokens, baseline generation, and `queue=<used>/50`; one stable root RX-queue
+  snapshot; one stable runtime RX-batch snapshot; an RX notification-hint
+  record that explicitly carries no authority or history and includes the
+  bounded SDIO deadline-hint count; current/baseline root-drop and
+  runtime-overflow counters; total/last-token/last-count stale-purge state;
+  boot-first loss state; and current-handoff post-commit first-loss state. It
+  must also preserve
   boot-cumulative association service-turn/Join-start counters and the latest
   complete non-recovery Gate 8 frontier so sticky recovery cannot replace the
   causal subgate with only a generic pair-failure state. The passive
@@ -1799,7 +1799,10 @@ generation, queue commit, count, remaining depth, and entry bounds, copy all
 frames, and reject the entire batch if the post-copy header differs. The same
 batch must deliver once with its notification delivered, suppressed,
 coalesced, or repeated. No wake-hit, pending, clear, recheck, or per-frame
-terminal state may influence the result.
+terminal state may influence the batch identity, content, or result. A
+successful root-wake poll may set only the transient EventPump admission latch
+for one safe Network turn, and passive poll/hit counters may record that
+observation; both still require independently schedulable durable state.
 
 Sideband coverage must then reuse that batch layout under one still-active
 persistent op11. It must prove EVENT/DATA before the exact BCDC reply commits a
@@ -1841,12 +1844,12 @@ op8 plus a queued DHCP-sized op7 must preserve the op8 request and identity,
 spend no TX budget, create no op7 request or recovery, complete op8 first, and
 only then admit op7. A committed copied/DPC/runtime RX level must run before a
 fresh or requestless op7, while an already-started op7 remains exact through
-its terminal and cannot be displaced by later RX. An unproved
-predecessor credit window must leave it queued with no active op7, HAL request,
-child deadline, or TX budget charge. Focused coverage must advance virtual time
-beyond the complete child lease with zero drop or recovery and unchanged TX
-budget, inject exact credit through RX/op8 accounting, and only then observe
-promotion and first physical issue. Once promoted, the active op7 must retain
+its terminal and cannot be displaced by later RX. Once promoted, the runtime
+must retain that exact op7 in `WAIT_CREDIT` without root replay, drop, or
+recovery until DPC commits an admissible window. A separate no-RX
+counterfactual must prove the joined Function-2 terminal releases the root
+owner and permits a later queued successor without a credit-acknowledgement
+poll. The active op7 must retain
 its payload, digest, ticket, request, and generation through nonterminal
 HAL/runtime turns until a typed `Submitted` terminal or its retained
 virtual-counter deadline. No fixed turn count may abandon it after promotion.
@@ -1899,11 +1902,14 @@ classify the yield as `turn_cap`, not `time_cap`. Request substitution,
 must request pair recovery. After the exact parent terminates, restore order
 must be CYW43 then SDIO before the EventPump exits the slice.
 Fresh generic NetData pre-poll admission at both the outer stack wrapper and
-inner budgeted service must also reject any retained host-EAPOL
-TX/key/drain owner. Coverage must stage a request-less post-secure M4 op7,
+inner budgeted service must also reject any retained host-EAPOL TX/key owner.
+Coverage must stage a request-less post-secure M4 op7,
 prove fresh op8 admission is closed without changing the WiFi data-ready
 label, prove an already-assigned exact NetData continuation remains
 non-revocable, and prove fresh admission reopens only after the M4 terminal.
+The successful exact M4 Function-2 terminal must rearm only its retained
+post-secure M3 tuple for a later AP-driven retransmission; a submit fault must
+not rearm it, and neither case may create a proactive replay or poller.
 This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
@@ -1932,16 +1938,26 @@ netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
 
-`wifi diag` and `wifi probe-ht` must report stable RX queue generation,
+`wifi diag` and `wifi dump-state` must report stable RX queue generation,
 depth/capacity, flags and commit sequence; batch parent, generation,
-queue-commit, count, remaining and final committed parent; and current-turn hint
-observation with `authority=none history=none`. Tests must prove stable
+queue-commit, count, remaining and final committed parent; and the passive
+constant `rx_hint observed=no authority=none history=none` plus the fault-only
+`sdio_deadline_hints` count. They must separately report the root-hint route as
+`authority=none condition=durable-service-state` and cumulative root-wake
+poll/hit counters. The condition label is a route/recheck contract, not a
+causal attribution for the most recent hint. Those counters are passive
+observations only: tests must
+prove that the transient admission latch is consumed after one safe Network
+turn, cannot admit an operation without durable work, and leaves the
+generation/pair/physical-lifetime-bound durable-resume identity live while
+work remains. Tests must also prove stable
 double-sampling, one terminal per batch, post-copy header revalidation,
 continued service from remaining committed depth, identical behavior with a
 missing/coalesced/repeated notification, identity-cut rejection, and GENET
 non-interaction. Legacy `rx_watch`, `deadline_probes`, wake-hit, clear, and
-recheck fields may remain only in old-capture parser fixtures and must not be
-treated as reachable driver state.
+recheck fields on the data-handoff record may remain only in old-capture parser
+fixtures and must not be treated as reachable driver state; they are distinct
+from the live passive root-hint counters.
 
 The focused acceptance tests
 `cyw43_sdio_network_priority_lease_amortizes_scheduler_transitions`,
@@ -1984,8 +2000,8 @@ The focused acceptance tests
 `production_owner_notification_is_hint_for_one_exact_granted_quantum`,
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
 `cyw43_non_rx_work_reasons_cannot_manufacture_fresh_batch`,
-`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
-`cyw43_data_tx_credit_wait_stays_queued_without_budget_or_recovery`,
+`cyw43_data_tx_terminal_admits_successor_without_inbound_credit_ack`,
+`cyw43_eth_tx_no_credit_reports_observed_window_snapshot`,
 `cyw43_receive_delivers_copied_rx_without_advancing_queued_paired_tx`,
 `cyw43_copied_rx_is_delivered_before_pending_data_tx_progress`,
 `cyw43_event_tx_hook_drains_copied_rx_before_fresh_tx`,
@@ -1995,7 +2011,7 @@ The focused acceptance tests
 `cyw43_event_tx_hook_does_not_stage_arp_into_the_paired_rx_slot`,
 `cyw43_event_tx_hook_preserves_paired_rx_slot_ahead_of_arp`,
 `cyw43_event_tx_hook_frees_full_fifo_for_pending_rx`,
-`cyw43_full_fifo_credit_wait_uses_queued_credit_to_release_paired_rx`,
+`cyw43_eth_tx_terminal_reports_admission_window_without_new_rx`,
 `steady_network_dpc_condition_preserves_ack_before_sequence_publication_order`,
 `sdio_dpc_snapshot_exposes_front_only_after_sequence_last_producer_commit`,
 `cyw43_rx_queue_signal_is_only_a_non_authoritative_hint`,
@@ -2101,8 +2117,9 @@ target the persistent durable-condition transaction. TX coverage must prove
 the aggregate-capacity-16 urgent/bulk priority classes, EventPump-only
 coordination, queue-only TxToken consumption, exact foreign-owner preservation,
 active-op7 terminal priority, committed RX before fresh/requestless TX, copied
-RX before ARP when paired-response capacity exists, no same-turn successor
-promotion, and credit-timeout exact-pair recovery.
+  RX before ARP when paired-response capacity exists, no same-turn successor
+  promotion, runtime-window retention of the exact op7, and joined-terminal
+  root release.
 
 The exact `25f406d9cc26` image (image id
 `92d8326196f954c5f56b45b092cc2b17ae7cf5ffe9bfff7bbc6df806c1030884`,
@@ -2219,8 +2236,10 @@ tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
 29 sequential requests/s. The aggressive low-overhead target is p95 at most 10
 ms and at least 100 requests/s. At true idle the committed queue must be stably
 empty, no batch parent may be active, and elapsed time alone must produce zero
-Function-2 reads, op8 parents, priority leases, notification history, or GENET
-work. A deadline may terminate only an already-active exact request whose
+Function-2 reads, op8 parents, priority leases, live notification-derived
+admission latch, or GENET work. Historical passive root-wake poll/hit counters
+may remain nonzero but cannot schedule work. A deadline may terminate only an
+already-active exact request whose
 physical completion failed to arrive; it must never create a source
 inspection, infer RX demand, or rescue traffic. A visible queue level must
 produce one immutable op8 parent whose single `0x5803` terminal carries up to
@@ -2241,9 +2260,9 @@ image produces this evidence, the cold-neighbor repair and both performance
 thresholds remain source claims rather than hardware results.
 
 CYW43 device tests must also prove that a retained TX blocks another physical
-issue, while an unproved predecessor credit window blocks both FIFO-head
-promotion and physical issue but not an available bounded aggregate reservation
-or memory-only copied-RX delivery. They must preserve the sole active owner,
+issue, while a runtime-closed SDPCM window retains the already-promoted exact
+op7 in `WAIT_CREDIT` without blocking bounded root-queue reservation or
+memory-only copied-RX delivery. They must preserve the sole active owner,
 urgent-before-bulk selection and FIFO-within-class order, reserve paired
 response capacity before dequeueing RX, and produce zero fabricated TX drops.
 TxToken consumption must remain queue-only. An exact retained op8 must defer
@@ -2252,12 +2271,11 @@ lane is free, the coordinator must advance an active op7 to terminal, then
 drain one committed copied/DPC/runtime RX level before promoting a fresh or
 requestless op7. Copied RX must return before pending ARP while paired-response
 capacity remains available.
-Full-capacity backpressure may promote and advance only the credit-ready head
+Full-capacity backpressure may promote and advance only one eligible head
 and must never issue a second operation or promote a successor in the same outer
-turn. An unproved predecessor credit window
-must survive longer than the complete child lease with no active op7, TX budget
-charge, child deadline, or recovery; exact credit proof must then promote the
-same immutable FIFO head and begin its op7 lifetime.
+turn. Runtime `WAIT_CREDIT` must preserve the same immutable parent, and a newer
+DPC window may resume only that exact op7. A terminal-release counterfactual
+must then admit a successor without any root credit-proof event.
 
 The socket pack must cover the maximum enabled profile: one raw ICMP responder,
 active and standby console acceptors, DHCP, two UDP self-test sockets, two TCP
@@ -2479,7 +2497,7 @@ The focused adversarial cases include
 `cyw43_gate8_ready_publication_is_a_separate_retractable_consumer_fence`,
 `cyw43_idle_receive_lifetime_fails_closed_on_pair_or_physical_change`,
 `cyw43_committed_queue_level_schedules_one_batch_parent_while_idle_stays_quiet`,
-`cyw43_submitted_tx_does_not_create_receive_demand_or_fence_credited_tx`,
+`cyw43_data_tx_terminal_admits_successor_without_inbound_credit_ack`,
 `cyw43_rx_hint_carries_no_authority_history_or_work_count`,
 `cyw43_rx_condition_before_sleep_needs_no_second_hint`,
 `linked_cyw43_persistent_usb_service_debt_gets_one_operator_rotation`,
@@ -2788,9 +2806,9 @@ a later masked producer window before the consumer sleeps, and prove the
 retained parent still yields for that terminal; an admitted-only parent
 predicate must fail that test. Root counterfactuals must likewise prove that
 fresh TX cannot outrun copied or durable runtime RX, an already-active exact TX
-remains non-preemptible, a full aggregate admits only the queue-only op8 needed
-to discover predecessor credit, and the HAL front-event snapshot exposes only
-the sequence-last committed event.
+remains non-preemptible, a full aggregate restores paired capacity by promoting
+one eligible head without manufacturing op8 credit discovery, and the HAL
+front-event snapshot exposes only the sequence-last committed event.
 
 Driver-runtime ABI v7 episode-ledger coverage must prove the exact 49,344
 offset, 128-byte/cache-line-isolated size, final-word publication commit,
@@ -3046,22 +3064,23 @@ weakening old-capture parsing.
 
 The same `netstats` snapshot must include complete maximum-width
 `wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n>
-credits=<n> next_issues=<n>` and
-`wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2c=<...> c2i=<...>`
+successor_issues=<n>` and
+`wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2n=<...>`
 records, followed by
 `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
 `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
 stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
 `wifi: tx_queue` records. Focused tests must prove generation reset, ticket
 deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
-sampling, direct and later credit sampling, saturating counters, bounded
-formatting, FIFO HWM/drop/stale-purge accounting, and no GENET output or
-scheduling change. Hardware analysis must use high `a2i` for acceptance/FIFO
-wait through first issue, high `i2t` for issued runtime/SDIO service, and high
-`t2c` for firmware-credit/return delay. `next_issues` and the
-`credit_to_next_issue` metric, printed compactly as `c2i`, mean credit proof to
-the next actual op7 issue, not TxToken admission, an earlier local promotion,
-or general smoltcp delay.
+sampling, terminal-to-successor timing, saturating counters, bounded formatting,
+FIFO HWM/drop/stale-purge accounting, and no GENET output or scheduling change.
+Hardware analysis must use high `a2i` for acceptance/FIFO/owner wait through
+first issue, high `i2t` for issued runtime/SDIO service including runtime
+`WAIT_CREDIT`, and high `t2n` for the post-terminal EventPump handoff only when
+queue/acceptance evidence proves a successor was already waiting. Without that
+evidence, `t2n` includes ordinary idle time and later TxToken arrival.
+`successor_issues` counts only a later actual op7 issue, not TxToken admission,
+an earlier local promotion, or general smoltcp delay.
 
 `wifi diag` emits the proof only after a stable valid read of the admitted SDIO
 owner ring and a current v11 CYW43 client-counter sample for that same physical
@@ -3501,7 +3520,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
 - Require the exact Stage 01 common-hermetic attestation instead of rerunning
   compiler, generated-contract, DHCP, log-dump, CYW43, or GENET name filters.
   Its broad suites cover bounded DHCP policy, log streaming, suppressed
-  benchmark traces, credit-gated CYW43 TX/RX ordering, and GENET service
+  benchmark traces, runtime-window-gated CYW43 TX/RX ordering, and GENET service
   budgets. Conditional F adds only image, boot, capture, repeatability, and
   live-hardware proof.
 - Pi 4 image / U-Boot gate:
@@ -3666,7 +3685,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
   - `netstats` must report:
     - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`.
     - exactly one complete `nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>` status line. `OK NETTEST detail=started run_generation=<run>` admits one immutable run; only a terminal line for the same positive run generation is proof. An internal-only asynchronous log, an incomplete or truncated line, or a prior connection/run-generation verdict is not terminal proof; backend and target strings remain on the separate `nettargets:` line.
-    - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is credit-backed SDPCM completion proof and `tx_submit > tx_complete` is a Wi-Fi TX credit anomaly until host TCP/cohsh evidence proves the path recovered.
+    - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`
     - driver-task scheduling evidence for the active hardware path in reopened 26a/26b acceptance captures: contract name, service class, isolation mode, poll/service count, budget exhaustion/yield count, RX/TX queue depth, drop count, manifest-selected affinity core, observed service latency, and timer backend proof. The normalizer exposes this as `TIMER_BACKEND`, `TIMER_CLOCK_HZ`, `TIMER_EL0_COUNTER`, `DUMMY_TIMER_SEEN`, `DRIVER_TASK_CONTRACTS`, `DRIVER_TASK_DEDICATED`, `DRIVER_TASK_COMPATIBILITY`, `DRIVER_TASK_DEDICATED_READY`, `DRIVER_TASK_SERIAL_DEDICATED`, `DRIVER_TASK_USB_DEDICATED`, `DRIVER_TASK_DISPLAY_DEDICATED`, `DRIVER_TASK_NET_DEDICATED`, `DRIVER_TASK_SDIO_DEDICATED`, `DRIVER_TASK_PCIE_DEDICATED`, `DRIVER_TASK_SUBSTRATE_READY`, `DRIVER_TASK_FAILED_COUNT`, `DRIVER_TASK_CAPSET_PROOF`, `DRIVER_TASK_FAULT_PROOF`, `DRIVER_TASK_REVOKE_PROOF`, `DRIVER_TASK_SCHED_PROOF`, `DRIVER_TASK_AFFINITY_PROOF`, `DRIVER_TASK_AFFINITY_CONFIGURED`, `DRIVER_TASK_AFFINITY_APPLIED`, `DRIVER_TASK_AFFINITY_MANIFEST_PROOF`, `DRIVER_TASK_AFFINITY_MANIFEST_MATCHES`, `DRIVER_TASK_AFFINITY_MANIFEST_MISSING`, `DRIVER_TASK_AFFINITY_MANIFEST_MISMATCHES`, `DRIVER_TASK_VSPACE_PROOF`, `DRIVER_TASK_POINTER_FREE_IPC_PROOF`, `DRIVER_TASK_OWNER_STATE_PROOF`, `DRIVER_TASK_DMA_PROOFS`, `DRIVER_TASK_DMA_BLOCKER`, `PI4_RUNTIME_DMA_PROOF`, `PI4_RUNTIME_DMA_PROOF_REASON`, `PI4_RUNTIME_DMA_COUNTER_PROOF`, `DRIVER_TASK_ACTIVE_NET`, `DRIVER_TASK_BUDGET_OVERRUNS`, `DRIVER_TASK_LATENCY_PROOFS`, `DRIVER_TASK_RING_CALL_BEGIN`, `DRIVER_TASK_RING_CALL_RETURN`, `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_TIMEOUT`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, `DRIVER_TASK_RESOURCE_INIT`, `DRIVER_TASK_RESOURCE_BLOCKER`, and `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER`. `DRIVER_TASK_OWNER_STATE_PROOF=yes` must be backed by per-hot-path owner-state descriptor lines for serial, USB, HDMI, PCIe, and the selected network owner set (`cyw43-wifi` plus `sdio-host` when `DRIVER_TASK_ACTIVE_NET=cyw43`, or `genet-nic` when `DRIVER_TASK_ACTIVE_NET=genet`). Pi 4 performance evidence must report `TIMER_BACKEND=arch-counter`, `TIMER_CLOCK_HZ=54000000`, `TIMER_EL0_COUNTER=vct`, `DUMMY_TIMER_SEEN=no`, `DRIVER_TASK_DMA_BLOCKER=none`, and `PI4_RUNTIME_DMA_COUNTER_PROOF=counter-qualified`; otherwise latency proof is red even if driver-task owner-state proof is present. `DRIVER_TASK_RESOURCE_BLOCKER` is the first lost resource proof in the capture; `DRIVER_TASK_RESOURCE_CURRENT_BLOCKER` is the latest non-ready resource-init blocker. The source `DRIVER_TASK_RESOURCE_INIT` line carries the current isolated runtime owner/action, active request, `expected_request_valid` / `expected_aux0_valid`, expected aux/request values when present, same-request flag, and child progress marker needed to diagnose the live turn. Any positive `DRIVER_TASK_RING_CALL_OUTSTANDING`, `DRIVER_TASK_RING_CALL_UNRESOLVED_TIMEOUT`, `DRIVER_TASK_BOOTSTRAP_DEFERRED`, or non-`none` resource blocker is an isolated runtime no-reply/deferred-proof frontier; raw `DRIVER_TASK_RING_CALL_TIMEOUT` counts remain diagnostic when a later return closes the same request. Contract-only root-task compatibility evidence, resource-init breadcrumbs, and declared `max_service_us` budgets are diagnostic and must not be counted as dedicated driver-task closure or latency proof.
     - driver-task counter evidence for performance triage is separate from owner-state proof. Activity-gated `DRIVER_TASK_COUNTER` lines are normalized as `DRIVER_TASK_COUNTER_SNAPSHOTS`, `DRIVER_TASK_COUNTER_INVALID`, `DRIVER_TASK_COUNTER_BUSY`, `DRIVER_TASK_COUNTER_SAME_REQUEST`, `DRIVER_TASK_COUNTER_TIMEOUTS`, `DRIVER_TASK_COUNTER_KEEP_ACTIVE`, `DRIVER_TASK_COUNTER_ABORTS`, `DRIVER_TASK_COUNTER_STAGED_BYTES`, `DRIVER_TASK_COUNTER_CACHE_OPS`, `DRIVER_TASK_COUNTER_CACHE_BYTES`, `DRIVER_TASK_COUNTER_RX_FRAMES`, `DRIVER_TASK_COUNTER_TX_FRAMES`, `DRIVER_TASK_COUNTER_RX_BYTES`, and `DRIVER_TASK_COUNTER_TX_BYTES`. `DRIVER_TASK_COUNTER_SNAPSHOTS` counts distinct `(contract, hot_path)` owners and the totals aggregate only each owner's latest cumulative snapshot; repeated diagnostic commands therefore cannot inflate activity. `DRIVER_TASK_COUNTER_INVALID` still counts every observed empty, truncated, non-root-ring, or otherwise malformed line, including an invalid sample superseded by a later valid one. Reopened 26b performance evidence must keep `DRIVER_TASK_COUNTER_INVALID=0`, and selected Wi-Fi counter qualification requires current CYW43 plus SDIO owner snapshots rather than unrelated USB, HDMI, or PCIe activity.

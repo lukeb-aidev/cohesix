@@ -133,7 +133,7 @@ CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
 )
 CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
     r"^ serial=(?P<serial>ready|blocked) "
-    r"local_seat=(?:enabled|disabled|ready) "
+    r"local_seat=(?:enabled|disabled) "
     r"recovery=full "
     r"console_seq=(?P<console_seq>[0-9]+) "
     r"telemetry_sinks=serial\+qlog\+hdmi "
@@ -141,7 +141,7 @@ CYW43_BOOTSTRAP_SUPERVISOR_PRODUCTION_SUFFIX_RE = re.compile(
 )
 CYW43_BOOTSTRAP_SUPERVISOR_PREFLIGHT_SUFFIX_RE = re.compile(
     r"^ serial=(?P<serial>blocked) "
-    r"local_seat=(?:enabled|disabled|ready) "
+    r"local_seat=(?:enabled|disabled) "
     r"recovery=full "
     r"console_seq=(?P<console_seq>[0-9]+) "
     r"telemetry_sinks=serial\+queen-log "
@@ -4734,8 +4734,8 @@ def normalize_wifi_blocker(value: str) -> str:
         return "wifi-rx-starvation"
     if "host-eapol-m3-missing" in lower:
         return "host-eapol-m3-missing"
-    if "wifi-tx-credit-anomaly" in lower or stripped == "tx-credit-anomaly":
-        return "wifi-tx-credit-anomaly"
+    if "wifi-tx-terminal-fault" in lower or stripped == "tx-terminal-fault":
+        return "wifi-tx-terminal-fault"
     if "cyw43-transport-command-admission" in lower:
         return "cyw43-runtime-command-rejected"
     if stripped in {"21259", "0x530b"}:
@@ -9696,8 +9696,8 @@ def wifi_cyw43_status_blocker(fields: Mapping[str, str]) -> tuple[str, str] | No
         return "wifi-rx-starvation", "runtime-rx"
     if addr_src == "host-eapol-m3-missing" or dhcp == "host-eapol-m3-missing":
         return "host-eapol-m3-missing", "join-security"
-    if addr_src == "wifi-tx-credit-anomaly" or dhcp == "tx-credit-anomaly":
-        return "wifi-tx-credit-anomaly", "data-tx"
+    if addr_src == "wifi-tx-terminal-fault" or dhcp == "tx-terminal-fault":
+        return "wifi-tx-terminal-fault", "data-tx"
     return None
 
 
@@ -13438,29 +13438,6 @@ def summarize_cyw43_bootstrap_supervisor(
         for event in event_list
         if event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
     ]
-    if any(event.raw.startswith("CYW43_GATE8_COMMIT ") for event in event_list):
-        # The first service-ready supervisor record terminally closes bootstrap.
-        # Later `status=recovery`/`status=stabilizing` records belong to the
-        # separately identified runtime-recovery lifetime and must neither
-        # erase bootstrap Ready nor demand a duplicate supervisor Ready.
-        first_ready_line = next(
-            (
-                event.line
-                for event in supervisor_events
-                if (
-                    (match := CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE.fullmatch(event.raw))
-                    is not None
-                    and match.group("status") == "ready"
-                )
-            ),
-            None,
-        )
-        if first_ready_line is not None:
-            supervisor_events = [
-                event
-                for event in supervisor_events
-                if event.line <= first_ready_line
-            ]
     if not supervisor_events:
         return Cyw43BootstrapSupervisorProof()
 
@@ -13477,6 +13454,7 @@ def summarize_cyw43_bootstrap_supervisor(
     last_preflight_next_attempt_ms: int | None = None
     last_console_sequence: int | None = None
     recovery_used_in_episode = False
+    bootstrap_ready_seen = False
 
     def mark_blocker(reason: str) -> None:
         nonlocal blocker
@@ -13610,13 +13588,15 @@ def summarize_cyw43_bootstrap_supervisor(
             continue
 
         if status == "recovery":
-            sequence_valid = (
-                state in {"active", "stabilizing", "ready"}
-                and attempt == current_attempt == 1
-                and backoff_ms == 0
-            )
-            if recovery_used_in_episode:
+            sequence_valid = True
+            if not bootstrap_ready_seen:
+                mark_blocker("pre-ready-recovery-forbidden")
+                sequence_valid = False
+            elif recovery_used_in_episode:
                 mark_blocker("recovery-limit-exceeded")
+                sequence_valid = False
+            elif state != "ready" or attempt != current_attempt or attempt != 1:
+                mark_blocker("invalid-status-sequence")
                 sequence_valid = False
             if backoff_ms != 0:
                 mark_blocker("malformed-backoff-progression")
@@ -13636,14 +13616,12 @@ def summarize_cyw43_bootstrap_supervisor(
             continue
 
         if status == "stabilizing":
-            # Ready is a revocable same-generation stability observation, not
-            # an ownership release. Loss of a logical carrier may retract the
-            # same attempt to Stabilizing without entering pair recovery.
-            sequence_valid = (
-                state in {"active", "ready"} and attempt == current_attempt
-            )
+            sequence_valid = state == "active" and attempt == current_attempt
+            if state == "ready" and bootstrap_ready_seen:
+                mark_blocker("stabilizing-after-ready-without-recovery")
+                sequence_valid = False
             if not sequence_valid:
-                if state in {"active", "ready"} and attempt < current_attempt:
+                if state == "active" and attempt < current_attempt:
                     mark_blocker("attempt-regression")
                 else:
                     mark_blocker("invalid-status-sequence")
@@ -13656,6 +13634,9 @@ def summarize_cyw43_bootstrap_supervisor(
 
         if status == "ready":
             sequence_valid = state == "stabilizing" and attempt == current_attempt
+            if bootstrap_ready_seen:
+                mark_blocker("bootstrap-ready-duplicate")
+                sequence_valid = False
             if not sequence_valid:
                 if attempt < current_attempt:
                     mark_blocker("attempt-regression")
@@ -13666,6 +13647,7 @@ def summarize_cyw43_bootstrap_supervisor(
                 sequence_valid = False
             if sequence_valid:
                 state = "ready"
+                bootstrap_ready_seen = True
             continue
 
         if status == "exhausted":
@@ -13712,7 +13694,9 @@ def summarize_cyw43_bootstrap_supervisor(
         current_attempt = attempt
 
     if blocker is None:
-        if state == "active":
+        if recoveries != 0:
+            blocker = "in-attempt-recovery-used"
+        elif state == "active":
             blocker = "begin-not-terminal"
         elif state == "stabilizing":
             blocker = "stabilizing-not-terminal"
@@ -13726,8 +13710,6 @@ def summarize_cyw43_bootstrap_supervisor(
             blocker = "attempt-count-invalid"
         elif transient_retries != 0:
             blocker = "outer-backoff-forbidden"
-        elif recoveries != 0:
-            blocker = "in-attempt-recovery-used"
 
     ready = (
         state == "ready"

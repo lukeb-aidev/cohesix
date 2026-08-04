@@ -380,9 +380,6 @@ pub trait WifiDebugOps {
     fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
         None
     }
-    fn probe_ht_clock(&mut self) -> Result<bool, HalError>;
-    fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
-    fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError>;
 }
 
 /// HAL-provided firmware payloads for the Pi 4 Wi-Fi path.
@@ -5561,18 +5558,6 @@ impl WifiDebugOps for KernelWifiDebugHandle {
 
     fn control_plane_trace(&mut self) -> Option<WifiControlPlaneTrace> {
         None
-    }
-
-    fn probe_ht_clock(&mut self) -> Result<bool, HalError> {
-        Err(self.linked_runtime_required())
-    }
-
-    fn load_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        Err(self.linked_runtime_required())
-    }
-
-    fn retry_transport_and_firmware(&mut self) -> Result<WifiDebugSnapshot, HalError> {
-        Err(self.linked_runtime_required())
     }
 }
 

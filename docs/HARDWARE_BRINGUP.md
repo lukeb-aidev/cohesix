@@ -26,7 +26,7 @@ in [BOOT_REFERENCE.md](BOOT_REFERENCE.md), acceptance predicates in
 | Pi 4 exact `494e9cb0e9ad` Wi-Fi diagnostic | Cold plus warm R01-R05 passed first-pair Gate 8a-8h and DHCP 6/6 with exact DPC capture/publication/consumption/rearm accounting and zero queue, overflow, drop, or owner faults, but acceptable transport was 0/6. Cold TCP median was about 654 ms and warm medians about 604-686 ms. R05 accepted-to-issued averaged about 410 ms and reached 1.877 seconds, while issued-to-terminal averaged about 48 ms. Unchanged same-image and prior GENET evidence remains sub-millisecond and about 667-701 operations/s. | The full-lifecycle durable-condition repair: persistent op11, disjoint commit-last sideband RX/ACK, the first-post-release through steady DPC event lease, urgent-op7 condition-driven continuation, root masking of only exact persistent-op11 `Waiting` self-demand, joined SDHCI/DMA completion, per-pair fault accounting, and a fault-only SDIO deadline arm relayed over the existing root-to-CYW43-to-SDIO hint chain. It also does not prove per-lifetime live p95 at or below 40 ms, at least 29 sequential requests/s, `sdio_deadline_hints=0` under ordinary and pressure traffic, zero timer-created source polls or fallback lane, zero warmed loss/reconnect/timeout, REST/hive pressure, or repeatability closure. |
 | Pi 4 exact `0dcfe550048c` Wi-Fi diagnostic | The read-back image `7856d079fea3ff1f9de353d2daab3b499ed53bde293ceab4a4242e5b158c8971` was 0/5 for stable warm service. R01 reached Gate 8/DHCP before pair replacement and permanent Gate 8e failure; R02/R04/R05 failed first-pair Gate 8e; R03 reached Gate 8/DHCP twice but lost both pairs and exhausted recovery. The paired Wi-Fi cutoff contains brief DHCP but zero Pi-address TCP or ICMP. | No warm lifetime retained TCP reachability, so `.coh`, ping/latency, REST, and hive pressure were correctly withheld. This image exposed that SDHCI `DATA_END` and DMA channel-4 terminal need two generated IRQ inputs; it is current-image failure evidence, not proof of the two-IRQ source repair or acceptable performance. |
 | Pi 4 exact `7e042363b446` Wi-Fi diagnostic | The settled cold boot and warm R01-R05 advanced the corrected DMA4-backed firmware path through Gates 1-7. Warm stable service was 0/5: R01/R03/R04/R05 terminated at generation 6 with `host-eapol-prerequisite-required`; R02 passed Gate 8a-8h and reached Ready at generation 5, then retracted on an unobserved 42-byte ARP op7 incorrectly tagged `0x0040`. The clean Wi-Fi cutoff contains 30 Pi-source LLC/XID probes, two DHCP frames, two ARP frames, and zero Pi TCP. | `.coh`, TCP latency/error-rate qualification, and REST/hive pressure were correctly withheld. This proves firmware-DMA and Gates 1-7 progress, not a complete DMA/GIC acknowledgement lifetime, repeatable Wi-Fi, or acceptable TCP. The next image must prove phase-separated pre-Gate-8 DPC, exact direct-TxToken provenance, independent DMA terminal and delivered-handler closure, then the current 5/5 candidate gate and per-lifetime performance floor. |
-| Pi 4 exact `5fa7c3871d96` Wi-Fi diagnostic | Cold, R02, and R03 stranded an intake-sealed M4 parent after child reply handling but before the parent terminal. R01 reached Gate 8 and sent 14 DHCP Requests; its paired capture recorded valid AP replies about 1-2 ms later, while root recorded 1,850 durable RX-hint hits and no delivered root RX terminal. DPC publication/consumption stayed balanced with no ring poison or queue pressure. | This 0/4 DHCP/TCP result identifies two retained-condition seams, not smoltcp or radio latency. The current source removes the finite-EAPOL pre-TX rejection, retains the exact parent across the ACK-before-event producer window, admits committed DPC/runtime RX ahead of fresh TX, and preserves the full-FIFO queue-only op8 credit escape. Driver-runtime ABI v7 adds a diagnostic-only, scrub-surviving `CYW43_BUS_EPISODE` record at shared offset 49,344. All of these remain source/model results until a new exact image is built, read back, and booted; they do not prove Gate 8, DHCP, TCP, repeatability, or performance. |
+| Pi 4 exact `5fa7c3871d96` Wi-Fi diagnostic | Cold, R02, and R03 stranded an intake-sealed M4 parent after child reply handling but before the parent terminal. R01 reached Gate 8 and sent 14 DHCP Requests; its paired capture recorded valid AP replies about 1-2 ms later, while root recorded 1,850 durable RX-hint hits and no delivered root RX terminal. DPC publication/consumption stayed balanced with no ring poison or queue pressure. | This 0/4 DHCP/TCP result identifies two retained-condition seams, not smoltcp or radio latency. The current source removes the finite-EAPOL pre-TX rejection, retains the exact parent across the ACK-before-event producer window, admits committed DPC/runtime RX ahead of fresh TX, releases root on the exact Function-2 terminal, and leaves subsequent SDPCM-window admission solely to the runtime. Driver-runtime ABI v7 adds a diagnostic-only, scrub-surviving `CYW43_BUS_EPISODE` record at shared offset 49,344. All of these remain source/model results until a new exact image is built, read back, and booted; they do not prove Gate 8, DHCP, TCP, repeatability, or performance. |
 | Pi 4 pre-v16 live diagnostic | Exact commit `7328bedd6142` / image `5a9f812c5408998e3292b4c4475bee545a4c8f2d0e5781a238054598ff313001` starts both linked runtimes, proves the selected GPIO34-GPIO39 ALT3/pull fields by live readback, completes the strict retained CYW43 extra-pull-up clear, keeps the operator console live through bounded supervision, and reaches Gate 6. Its first 2-KiB/count-32 firmware CMD53 receives a clean R5 and advances exactly two 64-byte blocks before stalling with `DATA_END` absent and BCM2835 DMA active/DREQ-held. | This is historical diagnostic evidence, not seL4 16 proof. No association, EAPOL, DHCP, TCP, `cohsh`, repeatability, or performance proof exists for that image. The all-request Linux watchdog, live pre-firmware contract reproof, exact interrupt mask, and telemetry-v3 changes remain an offline source-and-image candidate until that exact candidate is read back and booted on the Pi. |
 
 Maintainers may keep a workstation-local boot ledger while an investigation is
@@ -451,13 +451,12 @@ unavailable `nettest` work rather than accepting a stale prior verdict. These
 waits keep retained bootstrap output from colliding with serial commands. They
 do not alter the GENET diagnostic order or its existing timeouts.
 
-The production helper issues guarded, paced `wifi probe-ht` after `wifi diag`.
-The physical linked-runtime profile returns the exact typed refusal
-`ERR WIFI reason=policy detail=subcommand=probe-ht error=pi4-wifi-driver-task-runtime-required`
-because no root-owned live SDIO probe exists. Operators may issue the command
-manually to verify that boundary. The helper records only that complete current
-refusal as informational; any other `ERR`, truncated terminal, or missing
-terminal remains a diagnostic failure.
+The production helper issues only guarded, paced `wifi diag` for Wi-Fi owner
+evidence. It never submits the legacy `wifi probe-ht`, `wifi load-fw`, or
+`wifi retry` verbs. Those spellings remain parser-compatible, but root refuses
+each with one typed `pi4-wifi-driver-task-runtime-required` terminal before a
+debug handle, retained snapshot, or physical operation can be reached. Any
+`ERR`, truncated terminal, or missing terminal remains a diagnostic failure.
 
 `usb diag` returns the compact cached ten-gate report; use `usb status` only
 when the additional counter detail is needed. A complete response includes
@@ -504,9 +503,9 @@ authoritative over later generic replay/recovery progress. That cache is
 transport-generation scoped: clearing or rebinding the physical linked-runtime
 transport zeros progress magic, sequence, phase, and auxiliary identity before
 a replacement generation can be admitted. On the physical linked-runtime
-profile, `wifi probe-ht` exposes only cached root-driver state when that debug
-handle exists; the linked runtime returns a typed runtime-required error after
-printing the passive startup blackbox and never starts a root-owned live probe.
+profile, the legacy mutation verbs return one typed runtime-required error
+without printing the passive startup blackbox and never start a root-owned
+probe, firmware reload, retry, or snapshot traversal.
 The blackbox maps a firmware-preparation terminal from its contextual semantic
 detail: live CCCR/FBR and clock/backplane contract failures remain at Gates
 3–5, while ARMCR4/D11 passive core preparation remains Gate 6. It never
@@ -1040,31 +1039,33 @@ prevents a prompt DHCP reply or TCP request from remaining behind a later
 retry. `Device::receive` and reservation failure never service TX. The hook may move
 one eligible ARP/GARP
 record into the same urgent aggregate before its single op7 advance. With all 16
-slots in use, promotion removes one credit-ready head and restores a paired slot
+slots in use, promotion removes one eligible head and restores a paired slot
 before its one advance. A terminal never promotes a successor; that frame
-remains queued until a later EventPump turn. Before charging the TX service
-budget or promoting a FIFO head,
-the hook proves that the predecessor SDPCM-credit window is closed. Without
-that proof, the immutable frame remains queued with no active op7, HAL request,
-or child deadline; the hook spends no TX budget and yields to already-authorized
-NetData RX/op8 continuation or source work. A queued frame cannot expire or
-poison the pair. Credit-bearing RX/op8 work may close the predecessor window;
-promotion then starts the op7 lifetime. A generation/reset boundary purges
+remains queued until a later EventPump turn. Promotion starts the op7 lifetime
+without a root-owned predecessor-credit check. The runtime alone compares its
+next SDPCM sequence with the dongle-advertised window and retains the exact op7
+in `WAIT_CREDIT` when physical issue is not yet admissible. A generation/reset boundary purges
 never-issued queued frames; issued or otherwise ambiguous active ownership
 remains fail-closed and poisons through the existing recovery path. This
 aggregate and service hook are CYW43-only; GENET retains its existing direct
 device path.
 
-Only a credit-ready FIFO head is promoted, and promotion starts the retained
+Only an eligible FIFO head is promoted, and promotion starts the retained
 op7 owner's real virtual-counter deadline. From then on the owner keeps its
 exact payload, digest, ticket, request, and generation across nonterminal
 HAL/runtime turns until a typed `Submitted` terminal or deadline. A fixed turn
 count is not a second lifetime bound: there is no eight-turn abandonment after
 promotion. Corruption, lost ownership, generation replacement, deadline
-expiry, or a typed fatal terminal remains fail-closed. The focused regression
-advances time beyond the complete child lease while the immutable frame remains
-queued without TX budget or recovery, then supplies exact credit proof and
-observes promotion and physical issue.
+expiry, or a typed fatal terminal remains fail-closed. Focused regressions hold
+the promoted immutable frame through runtime `WAIT_CREDIT`, then advance the
+same op7 after DPC commits a newer window; a separate zero-RX counterfactual
+proves the joined terminal releases root and admits a later successor without
+a fabricated credit acknowledgement.
+
+For post-secure M4, that terminal is deliberately only bus-completion proof,
+not AP-receipt proof. It rearms the exact retained M3 identity so a later AP
+retransmission can request another M4; it never sends proactively, and a submit
+fault cannot open the duplicate window.
 
 Bounded data traffic is legal while 8h passes: non-full root RX, pending data
 TX/ARP, runtime backlog, and an exact assigned current-generation NetData
@@ -1107,8 +1108,12 @@ batch until the exact generation/parent/queue/count ACK matches; only the later
 exact CONTROL reply terminalizes op11.
 
 The runtime may signal after the commit, but the notification is only a prompt
-to read durable state. HAL and root retain no wake-hit epoch, pending latch,
-clear/recheck history, or notification-derived authority. A missing,
+to read durable state. A successful EventPump poll may set one transient
+`linked_runtime_cyw43_rx_admission_pending` urgency latch only when the
+post-poll durable snapshot is schedulable; the next safe Network turn consumes
+it. HAL may retain cumulative root-wake poll/hit counters for passive diagnosis,
+but neither those counters nor the latch carry work identity, admit an
+operation without durable state, or survive as scheduler history. A missing,
 coalesced, or repeated signal produces the same result. Committed remaining
 depth retains service without another signal. The event-sequence DPC lease,
 which is the sole production DPC mode from the first post-release event,
@@ -1129,31 +1134,40 @@ paired pcap, check both that outbound TCP trains do not suppress peer ACK/FIN
 ingress and that inbound traffic after a quiet interval triggers a prompt reply
 without unrelated TX.
 
-Capture the passive scheduler, handoff, and retained-frontier lines from both
-`wifi diag` and `wifi probe-ht`:
+Capture the passive scheduler, handoff, and retained-frontier lines from
+`wifi diag`:
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
-wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|tx-drain|bssid-obligation> generation=<n> open_network=<yes|no>
-wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> tx_drain=<yes|no> bssid_obligation=<yes|no>
+wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no>
+wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
 wifi: data_handoff rx_queue stable=<yes|no> generation=<n> depth=<n>/<n> flags=0x<hex> commit_sequence=<n>
 wifi: data_handoff rx_batch stable=<yes|no> parent_sequence=<n> generation=<n> queue_commit_sequence=<n> count=<n> remaining=<n> committed_parent_sequence=<n>
-wifi: data_handoff rx_hint observed=<yes|no> authority=none history=none control_progress=ordinary-network-turn
+wifi: data_handoff rx_hint observed=no authority=none history=none sdio_deadline_hints=<n> control_progress=ordinary-network-turn
 wifi: data_handoff counters root_drops=<n> baseline_drops=<n> drop_token=<t> runtime_overflows=<n> baseline_overflows=<n>
 wifi: data_handoff stale_purge total=<n> last_token=<t> last_count=<n>
 wifi: data_handoff boot_first_loss=no
 wifi: data_handoff postcommit_first_loss=no
 wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
+wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
+wifi: root rx_hint_counters polls=<n> hits=<n>
 ```
 
-Queue/batch fields report only stable committed state. A hint observation is
-current-turn telemetry and is neither pending work nor historical truth. Batch
+Queue/batch fields report only stable committed state. The passive command
+does not consume a notification, so the hint line is invariantly
+`observed=no`; it is neither pending work nor historical truth. The separate
+root-hint counters are cumulative passive observations of EventPump polls and
+hits, not notification-carried work identity or scheduling authority.
+`condition=durable-service-state` names the route's durable-recheck contract,
+not the causal class of the most recently consumed hint. Batch
 `count` is one through eight, `committed_parent_sequence` must match
 `parent_sequence`, and generation/queue commit must match the stable queue
-record. Legacy `rx_watch`, `deadline_probes`, wake-hit, clear, and recheck fields
-describe rejected images only and are not reachable steady-state progress.
+record. Legacy `rx_watch`, `deadline_probes`, and data-handoff
+wake-hit/clear/recheck fields describe rejected images only and are not
+reachable steady-state progress; they are distinct from the live passive
+root-hint counters above.
 `netstats: wifi_post_dhcp_rx` counts frames only when they cross an actual
 smoltcp delivery boundary, so trace-only preserve/deliver events cannot count
 one frame twice.
@@ -2132,28 +2146,32 @@ file-backed nonzero state image changes packaging size without changing the
 runtime aperture, replay capacity, or state semantics.
 
 Initial bootstrap is exactly one finite outer boot episode, always
-`attempt=1`. It emits `status=begin`, may emit `status=stabilizing` and one
-consumed-once `status=recovery`, and ends in `status=ready`, `status=failed`, or
-`status=permanent`; it never emits `status=backoff`, never resets into another
-`status=begin`, and never admits attempts 2 through 5. This differs from both
-the retired Cohesix five-attempt supervisor and Linux's gate-local
+`attempt=1`. It emits `status=begin`, may emit `status=stabilizing`, and ends in
+one unique `status=ready`, `status=failed`, or `status=permanent`; it never emits
+pre-service `status=recovery`, never emits `status=backoff`, never resets into
+another `status=begin`, and never admits attempts 2 through 5. This differs
+from both the retired Cohesix five-attempt supervisor and Linux's gate-local
 `BRCMF_SDIO_MAX_ACCESS_ERRORS` budget: neither is authority to retry the
 complete production bootstrap. Fallible supervisor construction or immutable
 configuration/artifact validation may instead emit
 `attempt=1 status=permanent` before `begin`; that is the sole terminal result,
 not another boot path.
 
-The sole boot episode may consume at most one ordered full CYW43/SDIO pair
-repair. Descriptor/engine/context replay completion alone cannot reset that
-bound or renew the one absolute Gate 8 deadline. A recurring pre-ready
-transport fault after the repair is spent fails with
-`cyw43-pair-recovery-limit`; other non-Gate8 retryable terminal bootstrap faults
-emit one `status=failed`. Gate 8 logical failure instead remains pending to its
-absolute deadline and then emits `CYW43_GATE8_TERMINAL ... action=quarantine`
-plus `status=permanent`, without pair repair. A lease conflict before issue
-that made no scheduler change fails locally; issued or scheduler-mutating
-uncertainty consumes the ordered repair. Terminal bootstrap performs no
-automatic next child operation, whole-bootstrap reset, or pair repair. The
+Before the unique service-ready terminal, an uncertain exact owner may be
+drained and fenced, but the initial physical pair cannot be restarted and the
+one absolute Gate 8 deadline cannot be renewed. A pre-service transport fault
+therefore terminates and quarantines the boot episode. Exact service readiness
+alone admits at most one later ordered CYW43/SDIO runtime pair repair. Its
+admission may publish bootstrap-supervisor `status=recovery`; restored service
+publishes the distinct `CYW43_RUNTIME_RECOVERY status=ready` record and never a
+second bootstrap `status=ready`. Any runtime recovery fails the repeatability
+acceptance proof even when service is restored. Gate 8 logical failure remains
+pending to its absolute deadline and then emits `CYW43_GATE8_TERMINAL ...
+action=quarantine` plus `status=permanent`, without pair repair. A lease conflict
+before issue that made no scheduler change fails locally; issued or
+scheduler-mutating uncertainty consumes the post-ready runtime repair. Terminal
+bootstrap performs no automatic next child operation, whole-bootstrap reset,
+or pair repair. The
 supervisor quarantines network service and returns to the ordinary EventPump
 with Wi-Fi acceptance red. An
 already-attached stack remains available to passive
@@ -2167,7 +2185,7 @@ failure, including missing ready-generation proof, must emit one permanent
 terminal status, apply the same network quarantine, and enter the same ordinary
 operator mode rather than repeating bootstrap-only turns. Paced serial and
 local-seat commands remain dispatchable: `netstats`, `nettest`, `wifi diag`,
-`wifi probe-ht`, `usb diag`, `usb probe-kbd`, `smp`, authentication,
+`usb diag`, `usb probe-kbd`, `smp`, authentication,
 and `reboot` must return their documented result or a typed unavailable/fenced
 error rather than being swallowed by the failed bootstrap. In the ordinary
 linked-runtime rotation, quarantine neither interprets a CYW43 notification nor
@@ -2264,8 +2282,9 @@ heartbeat every five virtual-time seconds. Routine serial bootstrap telemetry
 must not starve that independent display turn; authenticated serial response
 tails retain priority and may delay it only until their bounded tail is
 complete.
-For the selected Wi-Fi/DHCP lane, supervisor `ready` is driver readiness only.
-HDMI may render `Ready to use` only after current-generation DHCP is bound and
+For the selected Wi-Fi/DHCP lane, supervisor `ready` is service readiness, not
+end-to-end TCP acceptance. HDMI may render `Ready to use` only after
+current-generation DHCP is bound and
 the TCP console listener is bound, non-deferred, and admitted. Listener
 readiness is intentionally distinct from end-to-end `tcp_ready`, which
 additionally requires accepted or authenticated physical data-path proof. The
@@ -2403,8 +2422,8 @@ Record the four additive Wi-Fi TX lines from both `netstats` and
 `wifi diag`:
 
 ```text
-netstats: wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n> credits=<n> next_issues=<n>
-netstats: wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<n>/<last>/<max>/<avg> t2c=<n>/<last>/<max>/<avg> c2i=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n> successor_issues=<n>
+netstats: wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<n>/<last>/<max>/<avg> t2n=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_purged=<n>
 ```
@@ -2413,16 +2432,18 @@ netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_p
 `wifi: tx_phase`, `wifi: tx_phase_i2t`, and `wifi: tx_queue` prefixes. The
 tracker resets on logical connection generation, deduplicates immutable
 tickets, and scales from the generated virtual-counter frequency. `a2i` is
-TxToken acceptance, including FIFO and predecessor-credit wait, to first
-observed op7 issue; `i2t` is issue to typed terminal; and `t2c` is successful
-terminal to SDPCM-credit
-proof. `next_issues` and the `credit_to_next_issue` metric, printed compactly as
-`c2i`, mean credit proof to the next actual op7 issue, not acceptance of a new
-TxToken or an earlier local FIFO-head promotion. High
-`a2i`, `i2t`, and `t2c` respectively implicate queued/root
-transport, issued runtime/SDIO service, and firmware credit return. Queue depth,
-reservations, HWM, drops, and stale purges expose bounded ingress pressure.
-These lines are passive and must be absent from GENET output.
+TxToken acceptance, including FIFO and owner-lane wait, to first observed op7
+issue. Runtime `WAIT_CREDIT` begins after that issue and is included in `i2t`,
+which ends at the joined Function-2 terminal. `successor_issues` and `t2n`
+measure that terminal to the next actual op7 issue, not acceptance of a new
+TxToken or an earlier local FIFO-head promotion. The interval includes time
+with no queued successor, including later TxToken arrival. High `a2i` and
+`i2t` respectively implicate root queue/owner admission and issued
+runtime/SDIO service including its admission window. High `t2n` implicates a
+post-terminal EventPump handoff only when queue/acceptance evidence proves a
+successor was already waiting; otherwise it can be normal idle demand. Queue
+depth, reservations, HWM, drops, and stale purges expose bounded ingress
+pressure. These lines are passive and must be absent from GENET output.
 
 One root Network continuation quantum has the compiler-declared CYW43
 `max_ops_per_turn` hard bound (currently 192 admitted parent operations). Exact
@@ -2555,8 +2576,9 @@ assigned before op7 promotion is instead non-revocable: the queued op7 must
 remain requestless until that owner reaches its typed terminal. Once neither
 owner is active, a paired aggregate permit and committed copied/DPC/runtime RX
 level admit that RX before any fresh or requestless op7. Its response remains
-urgent in the same bounded aggregate and cannot become the sole op7 until the
-predecessor credit window closes. Only when the bounded
+urgent in the same bounded aggregate and may become the sole op7 when the
+coordinator lane is eligible; the runtime contains any subsequent
+`WAIT_CREDIT`. Only when the bounded
 linked TX queue is full does complete output remain retained. Three backlog
 records are
 reserved for response tails; ordinary `Line` and nonessential `BackgroundLine`

@@ -282,8 +282,9 @@ pub fn main(ctx: BootContext) -> ! {
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
             // Publish serial/local-seat before touching the potentially slow
-            // physical Wi-Fi bootstrap. The supervisor below polls these
-            // operator surfaces between complete, fenced retry attempts.
+            // physical Wi-Fi bootstrap. The single-attempt supervisor below
+            // gives operator surfaces their own bounded phase between Driver
+            // turns without creating another boot or hardware-service lane.
             start_root_console_prompt(&mut pump);
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             {
