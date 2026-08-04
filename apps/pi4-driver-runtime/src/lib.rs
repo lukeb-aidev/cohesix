@@ -24881,6 +24881,15 @@ impl Cyw43ForegroundTurnState {
         self.pending = true;
     }
 
+    const fn committed_child_replay_due(&self) -> bool {
+        // `replay_index` is the intra-turn cursor and is deliberately parked
+        // at `completed_count` by the terminal-poll turn. The durable
+        // between-turn condition is instead the committed prefix that the
+        // current invocation has not replayed. It survives `begin_turn` and
+        // clears only as `replay_cached_child` consumes the exact prefix.
+        self.replayed_count < self.completed_count
+    }
+
     fn replay_cached_child(&mut self) -> Option<u16> {
         if self.replay_index >= self.completed_count {
             return None;
@@ -28385,6 +28394,10 @@ fn runtime_steady_cyw43_local_continuation_due(
         return false;
     }
 
+    if transaction.turn.committed_child_replay_due() {
+        return true;
+    }
+
     if runtime_cyw43_foreground_dpc_service_due(transaction, state, child_active, dpc_event) {
         return true;
     }
@@ -28495,6 +28508,10 @@ fn runtime_persistent_cyw43_local_continuation_due(
     // unchanged controller snapshot must not turn that wait into polling.
     if transaction.frontier_submitted || child_active {
         return false;
+    }
+
+    if transaction.turn.committed_child_replay_due() {
+        return true;
     }
 
     if runtime_cyw43_foreground_dpc_service_due(transaction, state, child_active, dpc_event) {
@@ -58941,6 +58958,104 @@ mod tests {
     }
 
     #[test]
+    fn persistent_committed_child_terminal_reenters_parent_before_reply_wait() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_5213;
+        let (parent, parent_descriptor) =
+            install_persistent_control_parent_fixture(0x4359_5214, 0, physical_generation);
+        CYW43_ACTIVE_PARENT_SEQUENCE.store(parent.sequence, Ordering::Release);
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            assert!(cyw43_control_exchange_begin(
+                state,
+                parent_descriptor,
+                parent.aux1,
+            ));
+            state.control_exchange.phase = Cyw43ControlExchangePhase::WaitReplyDeadline;
+            state.rx_queue_count = 0;
+        });
+
+        assert!(cyw43_foreground_begin_turn(parent));
+        let child = CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            let descriptor = cyw43_foreground_scope_prepared_descriptor(
+                transaction,
+                steady_tx_function2_descriptor(),
+            )
+            .expect("persistent parent scopes one exact Function-2 child");
+            transaction.prepared_sequence = 0x8000_5215;
+            transaction.prepared_descriptor = descriptor;
+            transaction.prepared_descriptor_valid = true;
+            transaction.prepared_write_len = descriptor.len;
+            transaction.prepared_write[..usize::from(descriptor.len)].fill(0x5a);
+            let mut child =
+                stage_sdio_descriptor_service_command(transaction.prepared_sequence, descriptor);
+            child.flags |= DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+            let child = cyw43_foreground_bind_prepared_command(transaction, child)
+                .expect("exact child inherits the persistent parent identity");
+            assert!(cyw43_foreground_reserve_frontier(transaction, child));
+            assert!(cyw43_foreground_submit_frontier(transaction));
+            transaction.executing = false;
+            child
+        });
+
+        let completion = DriverTaskCompletionRecord::progress(
+            child.sequence,
+            u32::from(steady_tx_function2_descriptor().len),
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert_eq!(
+            recheck_runtime_steady_cyw43_child_before_wait(
+                RuntimeNotificationRoute::Cyw43Client,
+                Some(parent),
+            ),
+            RuntimeSteadyCyw43PrewaitRecheck::YieldForExactChildTerminal,
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 2));
+            assert_eq!(
+                cyw43_foreground_poll_frontier(transaction),
+                Some(completion),
+            );
+            assert!(transaction.turn.pending);
+            assert!(transaction.turn.action_consumed);
+            assert_eq!(transaction.turn.replay_index, 1);
+            assert_eq!(transaction.turn.replayed_count, 0);
+            assert_eq!(transaction.turn.completed_count, 1);
+            transaction.executing = false;
+        });
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+
+        let replay_ready = runtime_persistent_cyw43_foreground_semantic_snapshot();
+        assert!(
+            matches!(
+                replay_ready,
+                RuntimeSteadySemanticSnapshot::PersistentCyw43Foreground(snapshot)
+                    if snapshot.replayed_count < snapshot.completed_count
+                        && snapshot.local_continuation_due
+            ),
+            "a committed child terminal remains authoritative until parent replay: {replay_ready:?}",
+        );
+        let mut previous = None;
+        let disposition = runtime_steady_semantic_disposition(&mut previous, replay_ready);
+        assert_eq!(
+            disposition,
+            RuntimeSteadyPendingDisposition::SemanticProgress,
+        );
+        assert_eq!(
+            runtime_durable_pending_route(disposition),
+            RuntimeDurablePendingRoute::ContinueToQuiescence,
+        );
+    }
+
+    #[test]
     fn persistent_transaction_rejects_every_noncanonical_parent_budget_before_child_issue() {
         let _guard = test_guard();
         let physical_generation = 0x4359_5214;
@@ -60253,6 +60368,70 @@ mod tests {
         );
         assert_eq!(lease.completed_slices(), 1);
         assert_eq!(publications.get(), 1);
+    }
+
+    #[test]
+    fn steady_tx_committed_child_terminal_reenters_parent_without_second_wake() {
+        let _guard = test_guard();
+        let generation = 0x4359_5192;
+        let (parent, child) =
+            install_steady_tx_pending_child_fixture(0x4359_5193, 0x8000_5194, generation);
+        let completion = DriverTaskCompletionRecord::progress(
+            child.sequence,
+            u32::from(steady_tx_function2_descriptor().len),
+        );
+        let mut owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert!(runtime_ring_write_completion_staged(
+            &mut owner_ring,
+            runtime_staged_completion(completion),
+        ));
+        assert!(runtime_ring_commit_completion_sequence(
+            &mut owner_ring,
+            completion.sequence,
+        ));
+        assert_eq!(
+            recheck_runtime_steady_cyw43_child_before_wait(
+                RuntimeNotificationRoute::Cyw43Client,
+                Some(parent),
+            ),
+            RuntimeSteadyCyw43PrewaitRecheck::YieldForExactChildTerminal,
+        );
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            assert!(transaction.begin_turn(parent, 2));
+            assert_eq!(
+                cyw43_foreground_poll_frontier(transaction),
+                Some(completion),
+            );
+            assert!(transaction.turn.pending);
+            assert!(transaction.turn.action_consumed);
+            assert_eq!(transaction.turn.replay_index, 1);
+            assert_eq!(transaction.turn.replayed_count, 0);
+            assert_eq!(transaction.turn.completed_count, 1);
+            transaction.executing = false;
+        });
+        assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+
+        let replay_ready = runtime_steady_cyw43_foreground_semantic_snapshot();
+        assert!(
+            matches!(
+                replay_ready,
+                RuntimeSteadySemanticSnapshot::Cyw43Foreground(snapshot)
+                    if snapshot.replayed_count < snapshot.completed_count
+                        && snapshot.local_continuation_due
+            ),
+            "a committed child terminal remains authoritative until parent replay: {replay_ready:?}",
+        );
+        let mut previous = None;
+        let disposition = runtime_steady_semantic_disposition(&mut previous, replay_ready);
+        assert_eq!(
+            disposition,
+            RuntimeSteadyPendingDisposition::SemanticProgress,
+        );
+        assert_eq!(
+            runtime_durable_pending_route(disposition),
+            RuntimeDurablePendingRoute::ContinueToQuiescence,
+        );
     }
 
     #[test]
@@ -71638,6 +71817,7 @@ mod tests {
         ));
         assert!(transaction.turn.action_consumed);
         assert!(transaction.turn.pending);
+        assert!(!transaction.turn.committed_child_replay_due());
         assert!(transaction.frontier_submitted);
         assert_eq!(io.command_issue_count(), 0);
         let owner_command = runtime_ring_read_command_stable(&ring)
@@ -71670,6 +71850,7 @@ mod tests {
         transaction.retain_frontier_wait(1, true);
         assert!(transaction.turn.action_consumed);
         assert!(transaction.turn.pending);
+        assert!(!transaction.turn.committed_child_replay_due());
         assert!(transaction.frontier_continuation_grant_required);
         assert!(transaction.frontier_continuation_grant_publish);
         assert_eq!(transaction.frontier_grant_id, 1);
@@ -71723,6 +71904,7 @@ mod tests {
         };
         assert!(transaction.commit_frontier_completion(completion));
         assert_eq!(transaction.turn.completed_count, 1);
+        assert!(transaction.turn.committed_child_replay_due());
         assert!(!transaction.frontier_valid);
         assert_eq!(
             cyw43_foreground_frontier_route(1, 1, true, false, false, true, true, false, false),
@@ -71732,6 +71914,7 @@ mod tests {
         assert_eq!(io.command_issue_count(), 1);
 
         assert!(transaction.begin_turn(parent, 5));
+        assert!(transaction.turn.committed_child_replay_due());
         transaction.prepared_sequence = command.sequence;
         transaction.prepared_descriptor = desc;
         transaction.prepared_descriptor_valid = true;
@@ -71742,6 +71925,7 @@ mod tests {
             command,
         ));
         assert_eq!(transaction.turn.replay_cached_child(), Some(0));
+        assert!(!transaction.turn.committed_child_replay_due());
         assert_eq!(transaction.turn.replay_cached_child(), None);
         assert_eq!(io.command_issue_count(), 1);
     }
