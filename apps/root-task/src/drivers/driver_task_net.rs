@@ -35993,7 +35993,10 @@ mod tests {
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    fn run_eventpump_join_issue_and_terminal_episode(recovery_before_terminal_consume: bool) {
+    fn run_eventpump_join_issue_and_terminal_episode(
+        recovery_before_terminal_consume: bool,
+        outer_lease_preopened: bool,
+    ) {
         struct NoTickTimer;
 
         impl crate::event::TimerSource for NoTickTimer {
@@ -36059,11 +36062,21 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
         let lease_baseline = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        let _priority_lease =
-            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::open();
-        let opened_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        assert_eq!(opened_lease.phase, Cyw43SdioNetworkPriorityLeasePhase::Open);
-        assert_eq!(opened_lease.opens, lease_baseline.opens + 1);
+        let _priority_model = if outer_lease_preopened {
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::open()
+        } else {
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::enable()
+        };
+        let entry_phase = if outer_lease_preopened {
+            Cyw43SdioNetworkPriorityLeasePhase::Open
+        } else {
+            Cyw43SdioNetworkPriorityLeasePhase::Inactive
+        };
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            entry_phase,
+            "the production model must preserve its declared outer-lease entry state",
+        );
 
         let credentials =
             WifiCredentials::new("cohesix", "").expect("valid open-network credentials");
@@ -36106,7 +36119,8 @@ mod tests {
         assert!(pump.test_linked_runtime_network_phase());
         assert_eq!(
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            Cyw43SdioNetworkPriorityLeasePhase::Open,
+            entry_phase,
+            "the Serial handoff cannot change pair-lease ownership before the first Network turn",
         );
 
         // One admitted outer Network turn owns the real NetStack association
@@ -36140,24 +36154,40 @@ mod tests {
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
         let issued_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        assert_eq!(
-            issued_lease.amortized_requests,
-            lease_baseline.amortized_requests + 1,
-            "Issue must prove physical outer-lease coverage exactly once",
-        );
-        assert_eq!(
-            issued_lease.phase,
-            Cyw43SdioNetworkPriorityLeasePhase::Open,
-            "the signalled Join must not close its outer lease before child intake or terminal",
-        );
+        if outer_lease_preopened {
+            assert_eq!(
+                issued_lease.amortized_requests,
+                lease_baseline.amortized_requests + 1,
+                "Issue must prove physical outer-lease coverage exactly once",
+            );
+            assert_eq!(
+                issued_lease.phase,
+                Cyw43SdioNetworkPriorityLeasePhase::Open,
+                "the signalled Join must not close its outer lease before child intake or terminal",
+            );
+        } else {
+            assert_eq!(issued_lease.opens, lease_baseline.opens);
+            assert_eq!(
+                issued_lease.amortized_requests,
+                lease_baseline.amortized_requests
+            );
+            assert_eq!(
+                issued_lease.phase,
+                Cyw43SdioNetworkPriorityLeasePhase::Inactive
+            );
+            assert!(
+                crate::hal::driver_task::test_cyw43_request_bound_preissue_issued(request),
+                "same-call preissue completion must retain both exact request-bound reservations",
+            );
+        }
         assert!(
             pump.test_linked_runtime_network_phase(),
             "the next outer turn must remain the same Join Network episode",
         );
         assert!(
-            crate::hal::driver_task::cyw43_sdio_network_persistent_parent_pre_wait(
+            crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(
                 issued_command.aux1,
-            ),
+            ) == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::PreWait,
             "Issue remains runnable until the child commits its exact external-wait receipt",
         );
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
@@ -36172,14 +36202,21 @@ mod tests {
         // to Closing before the autonomous child reaches its wait. That phase
         // change must preserve the same prompt op11 handoff; it cannot become
         // an externally visible idle gap or authorize a second signal.
-        assert_eq!(
-            crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
-            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested,
-        );
-        assert_eq!(
-            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            Cyw43SdioNetworkPriorityLeasePhase::Closing,
-        );
+        if outer_lease_preopened {
+            assert_eq!(
+                crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
+                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested,
+            );
+            assert_eq!(
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                Cyw43SdioNetworkPriorityLeasePhase::Closing,
+            );
+        } else {
+            assert_eq!(
+                crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
+                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Inactive,
+            );
+        }
         pump.poll();
         let closing_pre_wait = cyw43_association_diagnostic();
         assert_eq!(closing_pre_wait.service_turns, 2);
@@ -36203,9 +36240,9 @@ mod tests {
         // poll the parent nor create a grant, signal, request, or restart.
         ring_guard.publish_persistent_wait_receipt(issued_command, 1);
         assert!(
-            !crate::hal::driver_task::cyw43_sdio_network_persistent_parent_pre_wait(
+            crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(
                 issued_command.aux1,
-            ),
+            ) == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Waiting,
             "the exact receipt closes the notify-to-wait scheduling cut",
         );
         assert!(
@@ -36216,7 +36253,11 @@ mod tests {
         );
         pump.poll();
         let parked = cyw43_association_diagnostic();
-        assert_eq!(parked.service_turns, 2);
+        assert_eq!(
+            parked.service_turns,
+            if outer_lease_preopened { 2 } else { 3 },
+            "request-bound ownership consumes one final receipt-classification turn before parking",
+        );
         assert_eq!(parked.join_starts, 1);
         assert!(parked.association_join_pending());
         assert_eq!(parked.retained_request, request);
@@ -36224,7 +36265,11 @@ mod tests {
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
         assert_eq!(
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            Cyw43SdioNetworkPriorityLeasePhase::Closing,
+            if outer_lease_preopened {
+                Cyw43SdioNetworkPriorityLeasePhase::Closing
+            } else {
+                Cyw43SdioNetworkPriorityLeasePhase::Inactive
+            },
         );
         assert!(
             !pump.test_linked_runtime_network_phase(),
@@ -36268,10 +36313,18 @@ mod tests {
         );
         assert_eq!(
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            Cyw43SdioNetworkPriorityLeasePhase::Closing,
+            if outer_lease_preopened {
+                Cyw43SdioNetworkPriorityLeasePhase::Closing
+            } else {
+                Cyw43SdioNetworkPriorityLeasePhase::Inactive
+            },
         );
 
         if recovery_before_terminal_consume {
+            assert!(
+                outer_lease_preopened,
+                "the Closing recovery model requires an outer lease",
+            );
             // Recovery fences every successor, but this sequence-last terminal
             // already belongs to the typed Closing parent. The focused live
             // gate injects recovery only after constructing that exact owner
@@ -36294,12 +36347,23 @@ mod tests {
             }
             assert!(
                 terminal_resume_turns < 8,
-                "the exact terminal must resume promptly",
+                "the exact terminal must resume promptly: diagnostic={diagnostic:?} lease={:?} active={:?} parent={:?} persistent={:?} work={:?}",
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot(),
+                crate::hal::driver_task::active_driver_task_retained_request(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                ),
+                cyw43_canonical_parent_cut(),
+                crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request),
+                cyw43_service_work_snapshot(),
             );
             pump.poll();
             terminal_resume_turns = terminal_resume_turns.saturating_add(1);
         };
-        assert_eq!(consumed.service_turns, 3);
+        assert_eq!(
+            consumed.service_turns,
+            if outer_lease_preopened { 3 } else { 7 },
+            "request-bound terminal consumption keeps each restore as one bounded HAL turn",
+        );
         assert_eq!(consumed.join_starts, 1);
         assert!(consumed.primary_join_ready);
         assert!(!consumed.association_join_pending());
@@ -36310,7 +36374,10 @@ mod tests {
             .is_none()
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
-        assert!(terminal_resume_turns <= 4);
+        assert!(
+            terminal_resume_turns <= 8,
+            "terminal restore exceeded the fixed EventPump bound: {terminal_resume_turns}",
+        );
         assert_eq!(
             crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT,)
                 .expect("the consumed Join retains its reciprocal counters")
@@ -36341,13 +36408,19 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn eventpump_join_issue_and_terminal_share_one_open_network_episode() {
-        run_eventpump_join_issue_and_terminal_episode(false);
+        run_eventpump_join_issue_and_terminal_episode(false, true);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn eventpump_join_request_bound_preissue_completes_from_inactive_outer_lease() {
+        run_eventpump_join_issue_and_terminal_episode(false, false);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn eventpump_closing_recovery_still_consumes_the_exact_join_terminal() {
-        run_eventpump_join_issue_and_terminal_episode(true);
+        run_eventpump_join_issue_and_terminal_episode(true, true);
     }
 
     #[cfg(feature = "kernel")]

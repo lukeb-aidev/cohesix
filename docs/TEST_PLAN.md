@@ -2913,12 +2913,20 @@ offset 40, exact 24-byte size, distinct magic, logical generation zero, body
 clean/barrier and commit-last publication, producer-monotonic nonzero epoch and
 overflow failure, stable root double-read, and rejection of torn, stale,
 wrong-request, wrong-fingerprint, wrong-generation, wrong-epoch, and
-wrong-commit state. Production tests must cross ABI-invisible `Stage`, receipt
-clearing, full-body clean/barrier, sequence-last `CommitRing`, `Issued`, and
-exactly one signal-last notification inside the same admitted op11 producer
-call, then reach the exact persistent wait receipt or terminal and terminal
-consumption with no `PublishGrant`, grant 19, replacement grant, or
-later `NotifyRing`. They must cover changed-condition clearing,
+wrong-commit state. Production tests must cover both an already-open pair lease
+and an initially inactive outer lease without calling a test pre-open helper.
+The inactive case must cross ABI-invisible `Stage`, request-bound SDIO boost,
+request-bound CYW43 boost, receipt clearing, full-body clean/barrier,
+sequence-last `CommitRing`, `Issued`, and exactly one signal-last notification
+inside the same admitted op11 producer call. The open case must reuse its pair
+reservations with no duplicate boost. Both then reach the exact persistent wait
+receipt or terminal and terminal consumption with no `PublishGrant`, grant 19,
+replacement grant, later `NotifyRing`, or same-call `PollRing`, terminal
+consumption, or priority restoration. A request-bound terminal must remain
+canonically exact through separate CYW43 restore, SDIO restore, and
+`ReadyToComplete` turns, with no second notification. A valid unacknowledged
+sideband batch plus stable exact terminal must be rejected in each restore
+phase without incrementing `send_attempts`. Tests must cover changed-condition clearing,
 terminal-before-receipt, terminal-after-receipt, publish/clear failure,
 clear-before-wake interpretation, ordinary receipt park, later exact-terminal
 resume, semantic consumption, and deterministic lease release. The composed

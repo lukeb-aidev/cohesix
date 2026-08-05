@@ -2557,15 +2557,17 @@ fn driver_task_ring_commit_command_sequence(
 
 /// Materialize one retained command's complete input at its issue boundary.
 ///
-/// Retained service first publishes only a zero-sequence command identity,
-/// then spends separate outer turns acquiring the linked-runtime priority
-/// lease. Bytes copied before those scheduler turns are not authoritative
-/// command input: reciprocal linked-runtime work may still be active, and the
-/// caller must present the same fingerprint-matched snapshot at commit. Copy
-/// that snapshot and refresh the zero-sequence records in the dedicated commit
-/// turn; the following sequence-last store is then the single child-visible
-/// publication boundary. CYW43's descriptor itself occupies a disjoint slot,
-/// so it also remains immutable after this publication.
+/// Retained service first publishes only a zero-sequence command identity.
+/// Generic commands then spend separate outer turns acquiring their linked-
+/// runtime priority lease; exact fresh persistent op11 instead completes its
+/// bounded preissue boosts in the same producer call. Bytes copied before that
+/// scheduling admission are not authoritative command input: reciprocal
+/// linked-runtime work may still be active, and the caller must present the
+/// same fingerprint-matched snapshot at commit. Copy that snapshot and refresh
+/// the zero-sequence records at the commit boundary; the following sequence-
+/// last store is then the single child-visible publication boundary. CYW43's
+/// descriptor itself occupies a disjoint slot, so it also remains immutable
+/// after this publication.
 #[cfg(feature = "kernel")]
 fn driver_task_ring_prepare_retained_issue(
     slot: &DriverTaskCommandSlot,
@@ -3002,9 +3004,20 @@ fn driver_task_persistent_transaction_parent_identity_matches(
             request as usize,
             command_fingerprint,
         )
-        && DriverTaskRetainedLeasePhase::from_usize(
-            slot.retained_priority_lease_phase.load(Ordering::Acquire),
-        ) == Some(DriverTaskRetainedLeasePhase::Issued)
+        && {
+            let phase = DriverTaskRetainedLeasePhase::from_usize(
+                slot.retained_priority_lease_phase.load(Ordering::Acquire),
+            );
+            phase == Some(DriverTaskRetainedLeasePhase::Issued)
+                || (matches!(
+                    phase,
+                    Some(
+                        DriverTaskRetainedLeasePhase::RestorePrimary
+                            | DriverTaskRetainedLeasePhase::RestoreBus
+                            | DriverTaskRetainedLeasePhase::ReadyToComplete
+                    )
+                ) && driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request))
+        }
         && slot.retained_doorbell_issued.load(Ordering::Acquire) != 0
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) == 0
         && slot.retained_grant_id.load(Ordering::Acquire) == 0
@@ -8306,6 +8319,9 @@ pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
     if request != batch.parent_sequence
+        || DriverTaskRetainedLeasePhase::from_usize(
+            slot.retained_priority_lease_phase.load(Ordering::Acquire),
+        ) != Some(DriverTaskRetainedLeasePhase::Issued)
         || !driver_task_persistent_transaction_parent_identity_matches(
             slot,
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -9044,6 +9060,41 @@ enum DriverTaskRetainedLeaseTurn {
     Pending,
     ReadyToComplete,
     Failed,
+}
+
+/// Maximum number of existing request-bound lease transitions needed to reach
+/// exact persistent op11's child-visible issue boundary: SDIO boost, CYW43
+/// boost, then `CommitRing`. A smaller live mask reaches `CommitRing` sooner.
+#[cfg(feature = "kernel")]
+const FRESH_PERSISTENT_OP11_PREISSUE_STEP_BOUND: usize = 3;
+
+/// Complete only fresh exact persistent op11's bounded preissue lease policy.
+///
+/// The caller supplies the ordinary single-step state machine so every
+/// identity, generation, reservation, and doorbell check is repeated. No
+/// post-issue state is accepted here: grant publication, notification polling,
+/// completion polling, and priority restoration remain later outer turns.
+#[cfg(feature = "kernel")]
+fn complete_fresh_persistent_op11_preissue<F>(mut step: F) -> DriverTaskRetainedLeaseTurn
+where
+    F: FnMut() -> DriverTaskRetainedLeaseTurn,
+{
+    for _ in 0..FRESH_PERSISTENT_OP11_PREISSUE_STEP_BOUND {
+        match step() {
+            DriverTaskRetainedLeaseTurn::Pending => {}
+            DriverTaskRetainedLeaseTurn::CommitRing => {
+                return DriverTaskRetainedLeaseTurn::CommitRing;
+            }
+            DriverTaskRetainedLeaseTurn::PublishGrant
+            | DriverTaskRetainedLeaseTurn::NotifyRing
+            | DriverTaskRetainedLeaseTurn::PollRing
+            | DriverTaskRetainedLeaseTurn::ReadyToComplete
+            | DriverTaskRetainedLeaseTurn::Failed => {
+                return DriverTaskRetainedLeaseTurn::Failed;
+            }
+        }
+    }
+    DriverTaskRetainedLeaseTurn::Failed
 }
 
 #[cfg(feature = "kernel")]
@@ -10030,11 +10081,15 @@ pub(crate) struct TestCyw43SdioNetworkPriorityPhysicalModelGuard {
     mask: usize,
     cyw43_owner: usize,
     sdio_owner: usize,
+    cyw43_steady_priority: usize,
+    sdio_steady_priority: usize,
+    cyw43_steady_priority_state: usize,
+    sdio_steady_priority_state: usize,
 }
 
 #[cfg(all(feature = "kernel", test))]
 impl TestCyw43SdioNetworkPriorityPhysicalModelGuard {
-    pub(crate) fn open() -> Self {
+    pub(crate) fn enable() -> Self {
         let guard = Self {
             lease: cyw43_sdio_network_priority_lease_snapshot(),
             mask: CYW43_SDIO_NETWORK_PRIORITY_LEASE
@@ -10045,6 +10100,18 @@ impl TestCyw43SdioNetworkPriorityPhysicalModelGuard {
                 .load(Ordering::Acquire),
             sdio_owner: DRIVER_TASK_SLOT_SDIO_HOST
                 .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            cyw43_steady_priority: DRIVER_TASK_SLOT_CYW43455
+                .steady_priority
+                .load(Ordering::Acquire),
+            sdio_steady_priority: DRIVER_TASK_SLOT_SDIO_HOST
+                .steady_priority
+                .load(Ordering::Acquire),
+            cyw43_steady_priority_state: DRIVER_TASK_SLOT_CYW43455
+                .steady_priority_state
+                .load(Ordering::Acquire),
+            sdio_steady_priority_state: DRIVER_TASK_SLOT_SDIO_HOST
+                .steady_priority_state
                 .load(Ordering::Acquire),
         };
         assert_eq!(
@@ -10064,6 +10131,27 @@ impl TestCyw43SdioNetworkPriorityPhysicalModelGuard {
             Ok(0),
             "only one host test may model the physical Network priority lease",
         );
+        DRIVER_TASK_SLOT_CYW43455.steady_priority.store(
+            usize::from(CYW43_WIFI_DRIVER_TASK_CONTRACT.sel4_priority()),
+            Ordering::Release,
+        );
+        DRIVER_TASK_SLOT_SDIO_HOST.steady_priority.store(
+            usize::from(SDIO_HOST_DRIVER_TASK_CONTRACT.sel4_priority()),
+            Ordering::Release,
+        );
+        DRIVER_TASK_SLOT_CYW43455.steady_priority_state.store(
+            DriverTaskSteadyPriorityState::Active.as_usize(),
+            Ordering::Release,
+        );
+        DRIVER_TASK_SLOT_SDIO_HOST.steady_priority_state.store(
+            DriverTaskSteadyPriorityState::Active.as_usize(),
+            Ordering::Release,
+        );
+        guard
+    }
+
+    pub(crate) fn open() -> Self {
+        let guard = Self::enable();
         test_open_cyw43_sdio_network_priority_lease_for_current_pair();
         driver_task_counter_add(&CYW43_SDIO_NETWORK_PRIORITY_LEASE.opens, 1);
         guard
@@ -10079,6 +10167,18 @@ impl Drop for TestCyw43SdioNetworkPriorityPhysicalModelGuard {
         DRIVER_TASK_SLOT_SDIO_HOST
             .retained_priority_boost_active
             .store(self.sdio_owner, Ordering::Release);
+        DRIVER_TASK_SLOT_CYW43455
+            .steady_priority
+            .store(self.cyw43_steady_priority, Ordering::Release);
+        DRIVER_TASK_SLOT_SDIO_HOST
+            .steady_priority
+            .store(self.sdio_steady_priority, Ordering::Release);
+        DRIVER_TASK_SLOT_CYW43455
+            .steady_priority_state
+            .store(self.cyw43_steady_priority_state, Ordering::Release);
+        DRIVER_TASK_SLOT_SDIO_HOST
+            .steady_priority_state
+            .store(self.sdio_steady_priority_state, Ordering::Release);
         CYW43_SDIO_NETWORK_PRIORITY_LEASE
             .pair_epoch
             .store(self.lease.pair_epoch, Ordering::Relaxed);
@@ -10108,6 +10208,44 @@ impl Drop for TestCyw43SdioNetworkPriorityPhysicalModelGuard {
             .store(self.lease.phase.as_u32(), Ordering::Release);
         TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL.store(0, Ordering::Release);
     }
+}
+
+/// Test-only proof that exact op11 owns both request-bound reservations after
+/// same-call preissue completion without manufacturing an outer Network lease.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_cyw43_request_bound_preissue_issued(request: u32) -> bool {
+    let Ok(request) = usize::try_from(request) else {
+        return false;
+    };
+    let owner_token = driver_task_contract_key(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+        .map(|task_key| task_key.saturating_add(1))
+        .unwrap_or(0);
+    request != 0
+        && owner_token != 0
+        && CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .load(Ordering::Acquire)
+            == Cyw43SdioNetworkPriorityLeasePhase::Inactive.as_u32()
+        && DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_lease_request
+            .load(Ordering::Acquire)
+            == request
+        && DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_lease_phase
+            .load(Ordering::Acquire)
+            == DriverTaskRetainedLeasePhase::Issued.as_usize()
+        && DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_lease_mask
+            .load(Ordering::Acquire)
+            == DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS
+        && DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == owner_token
+        && DRIVER_TASK_SLOT_SDIO_HOST
+            .retained_priority_boost_active
+            .load(Ordering::Acquire)
+            == owner_token
 }
 
 #[cfg(feature = "kernel")]
@@ -10354,9 +10492,12 @@ fn initialize_driver_task_retained_priority_lease(
 
 /// Advance one request-bound retained scheduling lease turn.
 ///
-/// Each `Pending` result performed at most one scheduler syscall. The caller
-/// must return to the outer EventPump before asking for the ring send/poll or
-/// the next boost/restore step.
+/// Each `Pending` result performed at most one scheduler syscall. Generic and
+/// resumed callers must return to the outer EventPump before asking for the
+/// next step. The sole exception is fresh exact persistent op11, whose caller
+/// may use `complete_fresh_persistent_op11_preissue` to bounded-drain only the
+/// two preissue boosts through `CommitRing`; polling and restoration remain
+/// separate outer turns.
 #[cfg(feature = "kernel")]
 fn step_driver_task_retained_priority_lease(
     slot: &DriverTaskCommandSlot,
@@ -17709,20 +17850,26 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         return None;
     }
 
-    // Eligibility is admitted only on the fresh Stage boundary and remains a
-    // private per-slot cadence bit. Every later retained turn must still arrive
-    // through the urgent-op7 entry point and independently revalidate the live
-    // Network lease before using this cadence.
+    // Eligibility is admitted only on the fresh Stage boundary. Every later
+    // retained turn remains an ordinary single-step resume; exact op11's
+    // bounded completion below may never consume a post-issue phase.
 
     let retained_lease_turn = if mode == DriverTaskRingCommandMode::RetainedTurn {
-        let turn = step_driver_task_retained_priority_lease(
-            slot,
-            contract,
-            command,
-            request,
-            command_fingerprint,
-            closing_cyw43_parent_resume,
-        );
+        let mut step = || {
+            step_driver_task_retained_priority_lease(
+                slot,
+                contract,
+                command,
+                request,
+                command_fingerprint,
+                closing_cyw43_parent_resume,
+            )
+        };
+        let turn = if retained_request_prepared && persistent_transaction {
+            complete_fresh_persistent_op11_preissue(&mut step)
+        } else {
+            step()
+        };
         match turn {
             DriverTaskRetainedLeaseTurn::CommitRing
             | DriverTaskRetainedLeaseTurn::PublishGrant
@@ -25695,6 +25842,57 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn fresh_persistent_op11_preissue_policy_is_exactly_bounded_to_commit() {
+        let ordered = [
+            DriverTaskRetainedLeaseTurn::Pending,
+            DriverTaskRetainedLeaseTurn::Pending,
+            DriverTaskRetainedLeaseTurn::CommitRing,
+        ];
+        let mut ordered_calls = 0usize;
+        assert_eq!(
+            complete_fresh_persistent_op11_preissue(|| {
+                let turn = ordered[ordered_calls];
+                ordered_calls = ordered_calls.saturating_add(1);
+                turn
+            }),
+            DriverTaskRetainedLeaseTurn::CommitRing,
+        );
+        assert_eq!(ordered_calls, FRESH_PERSISTENT_OP11_PREISSUE_STEP_BOUND);
+
+        let mut bounded_calls = 0usize;
+        assert_eq!(
+            complete_fresh_persistent_op11_preissue(|| {
+                bounded_calls = bounded_calls.saturating_add(1);
+                DriverTaskRetainedLeaseTurn::Pending
+            }),
+            DriverTaskRetainedLeaseTurn::Failed,
+        );
+        assert_eq!(bounded_calls, FRESH_PERSISTENT_OP11_PREISSUE_STEP_BOUND);
+
+        for unexpected in [
+            DriverTaskRetainedLeaseTurn::PublishGrant,
+            DriverTaskRetainedLeaseTurn::NotifyRing,
+            DriverTaskRetainedLeaseTurn::PollRing,
+            DriverTaskRetainedLeaseTurn::ReadyToComplete,
+            DriverTaskRetainedLeaseTurn::Failed,
+        ] {
+            let mut calls = 0usize;
+            assert_eq!(
+                complete_fresh_persistent_op11_preissue(|| {
+                    calls = calls.saturating_add(1);
+                    unexpected
+                }),
+                DriverTaskRetainedLeaseTurn::Failed,
+            );
+            assert_eq!(
+                calls, 1,
+                "unexpected post-issue state must fail immediately"
+            );
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_open_network_parent_requires_complete_current_identity() {
         let lease = Cyw43SdioNetworkPriorityLeaseState::new();
         let cyw43 = network_priority_test_slot(160);
@@ -27328,10 +27526,21 @@ mod tests {
             core::ptr::write_volatile(completion_ptr as *mut u32, command.sequence);
         }
 
-        assert_eq!(
-            cyw43_persistent_transaction_parent_condition(command.sequence),
-            Cyw43PersistentTransactionParentCondition::TerminalVisible,
-        );
+        for phase in [
+            DriverTaskRetainedLeasePhase::Issued,
+            DriverTaskRetainedLeasePhase::RestorePrimary,
+            DriverTaskRetainedLeasePhase::RestoreBus,
+            DriverTaskRetainedLeasePhase::ReadyToComplete,
+        ] {
+            DRIVER_TASK_SLOT_CYW43455
+                .retained_priority_lease_phase
+                .store(phase.as_usize(), Ordering::Release);
+            assert_eq!(
+                cyw43_persistent_transaction_parent_condition(command.sequence),
+                Cyw43PersistentTransactionParentCondition::TerminalVisible,
+                "the exact terminal must remain canonical through {phase:?}",
+            );
+        }
         assert!(!cyw43_sdio_pair_restart_required());
         assert_eq!(test_root_grant_action_counts(), (0, 0));
         assert!(driver_task_ring_read_continuation_grant(ring_root_ptr).is_none());
@@ -28496,6 +28705,7 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_durable_queue_batch_copy_and_ack_survive_later_enqueue() {
+        let _counter = DriverTaskTestCounterOverride::new();
         let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
             .lock()
             .expect("persistent op11 batch ACK test lock");
@@ -28626,6 +28836,49 @@ mod tests {
             .counters
             .send_attempts
             .load(Ordering::Acquire);
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut terminal = DriverTaskCompletionRecord::progress(command.sequence, 1);
+        terminal.sequence = 0;
+        // SAFETY: This is the fixed completion record in the aligned,
+        // test-owned ring. The body is written before the sequence-last commit.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, command.sequence);
+        }
+        for phase in [
+            DriverTaskRetainedLeasePhase::RestorePrimary,
+            DriverTaskRetainedLeasePhase::RestoreBus,
+            DriverTaskRetainedLeasePhase::ReadyToComplete,
+        ] {
+            DRIVER_TASK_SLOT_CYW43455
+                .retained_priority_lease_phase
+                .store(phase.as_usize(), Ordering::Release);
+            assert!(
+                !acknowledge_driver_task_cyw43_rx_sideband_batch(batch),
+                "terminal restore phase {phase:?} cannot admit a sideband ACK",
+            );
+            assert!(!driver_task_cyw43_rx_batch_acknowledged(batch));
+            assert_eq!(
+                DRIVER_TASK_SLOT_CYW43455
+                    .counters
+                    .send_attempts
+                    .load(Ordering::Acquire),
+                sends_before,
+                "terminal restore phase {phase:?} cannot mint a notification",
+            );
+        }
+        // SAFETY: Clearing the sequence commit invalidates only this test-owned
+        // completion so the existing pre-terminal positive ACK path can run.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr as *mut u32, 0);
+        }
+        DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_lease_phase
+            .store(
+                DriverTaskRetainedLeasePhase::Issued.as_usize(),
+                Ordering::Release,
+            );
         assert!(acknowledge_driver_task_cyw43_rx_sideband_batch(batch));
         assert!(driver_task_cyw43_rx_batch_acknowledged(batch));
         let sends_after = DRIVER_TASK_SLOT_CYW43455

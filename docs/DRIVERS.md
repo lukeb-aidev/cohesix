@@ -1534,6 +1534,16 @@ generation and XID.
   identifies deterministic private work; each immutable hardware request
   remains single-issue.
 
+  The first Join can be discovered only after EventPump has sampled whether
+  that outer lease is actionable. If it therefore enters HAL with the outer
+  lease inactive, exact op11 uses the same request-bound reservations already
+  owned by the retained command state machine. Without returning to EventPump,
+  that one producer call reserves and boosts SDIO, reserves and boosts CYW43,
+  reaches `CommitRing`, moves to `Issued`, and emits its sole signal. This is
+  request-bound preissue completion, not another issuer or physical lane.
+  `PublishGrant`, `PollRing`, terminal consumption, and priority restoration
+  are excluded from that bounded preissue call.
+
   Quantum close first changes the lease to `Closing`, which fences every fresh
   pair parent. An exact already-`Prepared` or already-`Issued` CYW43 parent may
   drain, and no other work may borrow the closing generation. Its durable
@@ -1580,17 +1590,25 @@ generation and XID.
   generation zero nor a nonzero logical generation is ever compared with, or
   rewritten into, the physical epoch. A changed parent identity or a stale
   physical ring epoch rejects before child issue. `Stage` remains invisible to
-  the child. For exact persistent op11, the same admitted producer call refreshes
+  the child. For exact persistent op11, the same admitted producer call first
+  completes any required request-bound `SDIO boost -> CYW43 boost`, then refreshes
   and cleans the complete body/payload, executes the barrier, commits the
   nonzero command sequence last, moves the retained request to `Issued`, and
-  signals the reserved-root-badge notification exactly once. Other retained
+  signals the reserved-root-badge notification exactly once. An already-open
+  outer pair lease makes both boosts unnecessary but changes no other identity.
+  Other retained
   transaction classes keep their declared phase-separated Stage contract. The
   committed command and sealed private cursor
   then authorize the complete control exchange. A `Pending` completion poll
   retains `Issued` and schedules no `PublishGrant`, replacement grant,
   `NotifyRing`, re-signal, or endpoint send. Only the exact terminal or typed
-  fault containment closes the parent. Thus the sequence
-  `Stage -> sequence-last commit -> one notification -> Issued -> terminal`
+  fault containment closes the parent. A stable terminal remains the same exact
+  canonical parent while the request-bound state machine restores CYW43, then
+  SDIO, then reaches `ReadyToComplete`, one bounded later turn at a time; these
+  restore phases cannot mint a signal, grant, request, or completion poll.
+  Sideband ACK admission remains `Issued`-only and rejects every restore phase.
+  Thus the sequence
+  `Stage -> optional bounded pair boosts -> sequence-last commit -> one notification -> Issued -> terminal -> bounded restore`
   contains no recurrent root scheduling edge. Root samples one non-renewable
   30-second CNTVCT parent deadline from the issue commit. After expiry it
   stable-reads the exact terminal twice; a matching sequence wins, while a
