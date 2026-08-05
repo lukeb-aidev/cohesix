@@ -648,8 +648,10 @@ prove all of the following:
   control-program, carrier, security, handoff, recovery, rejoin, or
   post-publication loss-invariant failure. The old snapshot becomes
   non-authorizing and a later commit requires a complete new snapshot. A
-  delayed HDMI Ready/prompt, including bytes already handed to the local-seat
-  queue, is superseded by a canonical Stabilizing redraw. Conversely, bounded
+  delayed HDMI Wi-Fi/console-Ready claim, including bytes already handed to
+  the local-seat queue, is superseded by a canonical Stabilizing redraw while
+  one independent open root prompt/input row is retained and repainted.
+  Conversely, bounded
   same-pair/current-generation post-secure key maintenance must keep the commit
   and the exact data consumer published while 8a through 8f, secure carrier,
   control program, handoff/publication token, and loss-free data-plane
@@ -1495,13 +1497,29 @@ same committed batch must drain with the notification delivered, lost,
 coalesced, or repeated. Coverage must exercise every reason-mask class,
 torn/stale queue and batch records, physical-lifetime changes, pair and
 connection generation changes, quarantine, reboot, and selected-NIC change.
+Coverage must also prove that a stable committed poisoned queue whose
+generation matches the stable active SDIO DPC owner and whose two restart
+contexts exist latches the one existing pair-recovery supervisor without a
+signal, grant, or fallback lane. Unpoisoned, torn/unavailable,
+generation-mismatched, owner-inactive, and context-incomplete samples must not
+latch recovery; aggregate DPC client-sample staleness with a healthy ring must
+remain diagnostic only. Repeated reads of the accepted poison must be
+idempotent, and pair scrub must clear the old queue record before a replacement
+owner becomes active.
 A complete TCP command, actual physical response/buffered input, hard turn cap,
 and fresh-parent time cap must retain unfinished Wi-Fi work behind a fence and
 prove `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded
 turn before Network re-admission. The 25-ms time cap must not interrupt an exact
 already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
 the hard ordinary-EventPump turn cap may yield root admission only with the same
-identity retained. That fairness cap is not the persistent parent's
+identity retained. A consumed terminal that sequence-publishes one immutable
+request-less same-generation successor must also survive the fresh-parent cap
+after stable before/after generation, pair, and physical-lifetime checks. Tests
+must cover M4-to-PTK, active-parent-to-causal and causal-to-active handoffs,
+requestless child-progress data TX, urgent paired-RX/control/authenticated-console
+TX, wrong-generation rejection, and prove the continuation grants neither a
+second operation nor generic host-EAPOL authority. Generic bulk TX remains
+fresh-parent work. That fairness cap is not the persistent parent's
 192-operation budget and cannot become a runtime progress clock. A
 queued USB report and a buffered complete network command must not be bypassed.
 GENET must neither sample nor retain the CYW43 queue/batch snapshot and must
@@ -1723,6 +1741,16 @@ with the notification respectively delivered, suppressed, and coalesced. The
 prompt must not skip or rewrite the already-scheduled `LocalSeat`, `Dispatch`,
 or pending `Display` phase. At the next safe boundary, a stable nonempty queue
 read admits `Network` when no physical-input or recovery owner is pending. The
+independent durable HDMI queue must likewise admit one bounded `Display` phase
+after `Dispatch` when CYW43 is idle, quarantined, or has no retained rotation
+token. After a completed CYW43 physical-operator rotation it receives exactly
+one bounded turn before the same durable Network identity resumes; after any
+Display turn, a one-shot Network entitlement prevents a persistent redraw or
+no-reply level from starving CYW43 discovery or GENET. Outside that bounded
+post-rotation exception it must not overtake actionable durable Network work or
+a physical response tail. Root-prompt coverage must combine visible pre-terminal prompt,
+USB parser-ingress false, final-Ready false, and the explanatory USB-starting
+line in one state rather than inferring authority from separate fixtures. The
 admitted turn must still use the sole existing CYW43 owner. Repeating or
 consuming the notification cannot re-arm admission or skip another phase. Real
 serial/local-seat input and USB recovery retain their operator precedence.
@@ -2624,8 +2652,9 @@ Ready.
 Bootstrap has exactly one outer episode, always `attempt=1`. Its raw lifecycle
 is `status=begin|recovery|stabilizing|ready|failed|permanent`;
 `attempt=0 status=preflight` remains the linked-serial admission state. A failed
-or permanent episode may release a diagnostic HDMI console and prompt, but
-must never render the Wi-Fi `Ready to use` banner. The episode admits no
+or permanent episode retains the already-published diagnostic HDMI root prompt
+and may release further diagnostic lines, but must never render the Wi-Fi
+`Ready to use` banner. The episode admits no
 automatic whole-bootstrap backoff, reset, second `begin`, or attempt 2. Once
 both linked-runtime restart contexts exist, the initial physical pair remains
 the only pre-service lifetime. A typed runtime/SDIO or issued-unknown physical
@@ -3639,10 +3668,13 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing
       at the documented 5-10 s cadence, and new output scrolling the isolated
-      HDMI viewport like a serial terminal without full-screen blink. On a
-      pre-terminal or failed Wi-Fi episode, the final ready banner/prompt may
-      remain withheld, but admitted USB characters must still update a visible
-      input row. A partial line must schedule
+      HDMI viewport like a serial terminal without full-screen blink. As soon
+      as root-console and display-retry readiness hold, the independent
+      `cohesix>` prompt must be visible before Wi-Fi terminal state and before
+      USB command admission; `USB console starting...` must explain the latter,
+      while parser ingress and the final Ready banner remain false. On a
+      pre-terminal or failed Wi-Fi episode, admitted USB characters must still
+      update that visible input row. A partial line must schedule
       `Dispatch -> Display -> Serial` before any Network turn while retaining
       the exact CYW43 operator fence and parent, except that a pending reboot
       acknowledgement or physical response tail retains immediate Serial
@@ -3652,7 +3684,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       nonempty-address, and TCP-listener-admission cut and releases the HDMI
       Wi-Fi `Ready to use` banner. USB command-ready proof remains an independent
       hardware acceptance gate, not a prerequisite for Wi-Fi Ready. `failed` or
-      `permanent` may expose a diagnostic prompt but must never show Wi-Fi ready.
+      `permanent` retains the diagnostic root prompt but must never show Wi-Fi ready.
       Preflight may report diagnostics available but must not claim Wi-Fi or
       interactive-console readiness. The first attached viewport snapshot is
       one-shot, and asynchronous driver milestones arriving during a partial

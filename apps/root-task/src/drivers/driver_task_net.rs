@@ -5624,6 +5624,7 @@ pub(crate) struct Cyw43ServiceWorkSnapshot {
     bound_physical_lifetime_epoch: u32,
     dpc_condition: Cyw43SdioDpcRootCondition,
     reason_mask: u64,
+    causal_continuation: bool,
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -5679,6 +5680,19 @@ impl Cyw43ServiceWorkSnapshot {
         self.reason_mask
     }
 
+    /// Return whether current durable requestless state belongs to this same
+    /// bus-service episode.
+    ///
+    /// This is continuation authority only at the Network quantum boundary.
+    /// It cannot issue a HAL request and never promotes generic Host-EAPOL
+    /// policy, notifications, or deadlines into transaction authority. It
+    /// includes terminal-created policy successors plus current urgent or
+    /// already-started data-TX cursors with immutable provenance.
+    #[must_use]
+    pub(crate) const fn causal_continuation(self) -> bool {
+        self.causal_continuation
+    }
+
     #[must_use]
     const fn dpc_publication_pending(self) -> bool {
         matches!(
@@ -5701,6 +5715,20 @@ impl Cyw43ServiceWorkSnapshot {
             bound_physical_lifetime_epoch: physical_lifetime_epoch,
             dpc_condition: Cyw43SdioDpcRootCondition::Idle,
             reason_mask,
+            causal_continuation: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn for_test_with_causal_continuation(
+        generation: u32,
+        pair_epoch: u64,
+        physical_lifetime_epoch: u32,
+        reason_mask: u64,
+    ) -> Self {
+        Self {
+            causal_continuation: true,
+            ..Self::for_test(generation, pair_epoch, physical_lifetime_epoch, reason_mask)
         }
     }
 
@@ -5719,6 +5747,7 @@ impl Cyw43ServiceWorkSnapshot {
             bound_physical_lifetime_epoch,
             dpc_condition: Cyw43SdioDpcRootCondition::Idle,
             reason_mask,
+            causal_continuation: false,
         }
     }
 
@@ -6582,6 +6611,10 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
     });
     let runtime_rx_queue_poisoned = runtime_rx_queue_state
         .is_some_and(|queue| Some(queue.generation) == expected_dpc_generation && queue.poisoned());
+    let pair_restart_required =
+        crate::hal::driver_task::cyw43_sdio_pair_restart_required_with_rx_queue_state(
+            runtime_rx_queue_state,
+        );
     #[cfg(test)]
     let dpc_override = *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock();
     #[cfg(test)]
@@ -6696,7 +6729,7 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         maintenance,
         recovery: CYW43_GENERATION_RECOVERY_ACTIVE.load(Ordering::Acquire) != 0
             || runtime_rx_queue_poisoned
-            || crate::hal::driver_task::cyw43_sdio_pair_restart_required()
+            || pair_restart_required
             || crate::hal::driver_task::cyw43_sdio_pair_context_replay_required(),
         finite_parent_terminal,
     };
@@ -6708,6 +6741,7 @@ pub(crate) fn cyw43_service_work_snapshot() -> Cyw43ServiceWorkSnapshot {
         bound_physical_lifetime_epoch: CYW43_BOUND_PHYSICAL_LIFETIME_EPOCH.load(Ordering::Acquire),
         dpc_condition,
         reason_mask: inputs.schedulable_reason_mask(exact_parent_waiting),
+        causal_continuation: cyw43_network_causal_continuation_pending(generation),
     }
 }
 
@@ -9629,6 +9663,7 @@ pub(crate) struct Cyw43HostEapolWorkDiagnostic {
     pub pending_tx_submit: bool,
     pub pending_key_install: bool,
     pub bssid_obligation: bool,
+    pub causal_continuation: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -9993,6 +10028,87 @@ fn cyw43_host_eapol_runtime_work_pending() -> bool {
         })
 }
 
+/// Return whether a consumed Gate-8 terminal has already published its exact
+/// requestless successor into the sole policy owner.
+///
+/// The successor payload/state is immutable before this predicate becomes
+/// true. This level therefore survives a coalesced notification and a Network
+/// time-cap boundary, but it supplies no HAL authority: the ordinary owner
+/// still publishes and advances at most one request in a later outer turn.
+#[cfg(feature = "kernel")]
+fn cyw43_association_causal_continuation_pending(generation: u32) -> bool {
+    let host_causal = {
+        let session = CYW43_HOST_EAPOL_SESSION.lock();
+        session.as_ref().is_some_and(|session| {
+            session.progress.connection_epoch == generation
+                && (session.pending_tx_submit.as_ref().is_some_and(|pending| {
+                    pending.connection_epoch == generation
+                        && pending.request.is_none()
+                        && pending.continuation.finite_tx_operation().is_some()
+                }) || session.pending_key_install.as_ref().is_some_and(|pending| {
+                    pending.connection_epoch == generation
+                        && pending.request.is_none()
+                        && !pending.logical_epoch_stale
+                }))
+        })
+    };
+    if host_causal {
+        return true;
+    }
+
+    let maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+    if maintenance.generation != generation {
+        return false;
+    }
+    maintenance.action.is_some_and(|action| {
+        action.generation == generation && action.request.is_none() && action.issued
+    }) || (maintenance.action.is_none()
+        && maintenance.requested & CYW43_MAINTENANCE_POST_KEY_MASK != 0)
+        || maintenance
+            .bssid_result
+            .is_some_and(|result| result.generation == generation)
+}
+
+/// Return whether current requestless data-TX state belongs to the bus episode
+/// that produced it.
+///
+/// An already-started child cursor is immutable lifetime progress even after
+/// its root request retires. Before child start, only an urgent frame with
+/// durable paired-RX, control, or authenticated-console provenance can retain
+/// the episode. Generic bulk TX remains fresh-parent work and the ordinary HAL
+/// lease/fresh-admission checks retain sole issue authority.
+#[cfg(feature = "kernel")]
+fn cyw43_data_tx_causal_continuation_pending(generation: u32) -> bool {
+    let pending_causal = {
+        let pending = *CYW43_PENDING_DATA_TX.lock();
+        pending.as_ref().is_some_and(|pending| {
+            pending.generation == generation
+                && pending.request.is_none()
+                && pending.steady_lifetime.current()
+                && (pending.child_cursor_started || pending.urgent)
+        })
+    };
+    if pending_causal {
+        return true;
+    }
+
+    let queue = CYW43_DATA_TX_QUEUE.lock();
+    queue.generation == generation
+        && queue
+            .urgent_frames
+            .iter()
+            .any(|queued| queued.generation == generation && queued.urgent)
+}
+
+/// Return current causal state that may preserve one bounded Network episode.
+/// Association causality remains a separate predicate so ordinary data TX can
+/// never grant Host-EAPOL policy authority.
+#[cfg(feature = "kernel")]
+fn cyw43_network_causal_continuation_pending(generation: u32) -> bool {
+    cyw43_association_causal_continuation_pending(generation)
+        || cyw43_data_tx_causal_continuation_pending(generation)
+}
+
 #[cfg(feature = "kernel")]
 pub(crate) fn cyw43_host_eapol_work_diagnostic() -> Cyw43HostEapolWorkDiagnostic {
     let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
@@ -10061,6 +10177,7 @@ pub(crate) fn cyw43_host_eapol_work_diagnostic() -> Cyw43HostEapolWorkDiagnostic
         pending_tx_submit,
         pending_key_install,
         bssid_obligation,
+        causal_continuation: cyw43_association_causal_continuation_pending(generation),
     }
 }
 
@@ -12141,13 +12258,21 @@ impl Cyw43AssociationSupervisor {
                 }
                 if observation.progress_epoch != progress_epoch {
                     // Progress may refresh diagnostics, never the absolute
-                    // ceiling for this join attempt.
+                    // ceiling for this join attempt. A committed terminal may
+                    // have advanced this epoch while publishing its immutable
+                    // requestless successor. Keep that successor in the same
+                    // bus episode; this bookkeeping branch performs no child
+                    // operation and therefore does not widen HAL authority.
                     self.phase = Cyw43AssociationPhase::Awaiting {
                         since_ms,
                         progress_epoch: observation.progress_epoch,
                     };
                     return Cyw43AssociationServiceOutcome {
                         activity: true,
+                        host_eapol_allowed: observation.mode == Cyw43AssociationAuthMode::HostEapol
+                            && cyw43_association_causal_continuation_pending(
+                                observation.generation,
+                            ),
                         ..Cyw43AssociationServiceOutcome::default()
                     };
                 }
@@ -35444,6 +35569,22 @@ mod tests {
                     .copy_from_slice(&value.to_ne_bytes());
             }
         }
+
+        fn publish_rx_queue_state(
+            &mut self,
+            state: pi4_driver_abi::DriverRuntimeCyw43RxQueueState,
+        ) {
+            let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET);
+            // SAFETY: The 4096-byte-aligned test ring owns the complete fixed
+            // queue-state record at the compiler-declared aligned offset.
+            unsafe {
+                core::ptr::write_volatile(
+                    self._page.0.as_mut_ptr().add(offset)
+                        as *mut pi4_driver_abi::DriverRuntimeCyw43RxQueueState,
+                    state,
+                );
+            }
+        }
     }
 
     impl Drop for TestCyw43RingGuard {
@@ -35627,6 +35768,19 @@ mod tests {
                 let start = offset + index * core::mem::size_of::<u32>();
                 self._page.0[start..start + core::mem::size_of::<u32>()]
                     .copy_from_slice(&word.to_ne_bytes());
+            }
+        }
+
+        fn publish_dpc_ring(&mut self, ring: pi4_driver_abi::DriverRuntimeDpcEventRing) {
+            let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET);
+            // SAFETY: The 4096-byte-aligned test ring owns the complete fixed
+            // DPC record at the compiler-declared aligned offset.
+            unsafe {
+                core::ptr::write_volatile(
+                    self._page.0.as_mut_ptr().add(offset)
+                        as *mut pi4_driver_abi::DriverRuntimeDpcEventRing,
+                    ring,
+                );
             }
         }
     }
@@ -37112,11 +37266,28 @@ mod tests {
     fn association_deadline_preserves_requestless_m4_key_install_continuation() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let _ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
         CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
         CYW43_PRIMARY_BSSCFG_JOIN_READY.store(1, Ordering::Release);
         CYW43_HOST_EAPOL_ACTIVE.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
         let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
             .expect("valid host-EAPOL credentials");
+        let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 0);
+        let supervisor_progress_epoch = CYW43_ASSOCIATION_PROGRESS_EPOCH.load(Ordering::Acquire);
         let mut session =
             Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
         begin_cyw43_pre_secure_key_install(
@@ -37129,21 +37300,171 @@ mod tests {
             .pending_key_install
             .is_some_and(|pending| pending.request.is_none() && !pending.issued));
         *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
-        let mut supervisor = Cyw43AssociationSupervisor::new(true, Some(credentials), 0, 0);
+        let successor_progress_epoch = record_cyw43_association_progress();
+        assert_ne!(successor_progress_epoch, supervisor_progress_epoch);
+        begin_cyw43_outer_event_turn();
 
         let outcome = supervisor.service(Some(credentials), CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS);
 
         assert!(outcome.activity);
         assert!(outcome.host_eapol_allowed);
+        assert_eq!(
+            cyw43_outer_event_turn_operation_count(),
+            0,
+            "refreshing the observation epoch is bookkeeping, not a second physical operation",
+        );
         assert!(matches!(
             supervisor.phase,
-            Cyw43AssociationPhase::Awaiting { .. }
+            Cyw43AssociationPhase::Awaiting {
+                progress_epoch,
+                ..
+            } if progress_epoch == successor_progress_epoch
         ));
+        let key_install = service_cyw43_host_eapol_slice_with_outcome(
+            credentials,
+            1,
+            CYW43_HOST_EAPOL_JOIN_TIMEOUT_MS,
+        );
+        assert!(key_install.progress.is_some());
+        assert_eq!(
+            cyw43_outer_event_turn_operation_count(),
+            1,
+            "the requestless PTK successor must reach the sole HAL lane in the same outer turn",
+        );
         assert!(CYW43_HOST_EAPOL_SESSION
             .lock()
-            .is_some_and(|session| session.pending_key_install.is_some()));
+            .as_ref()
+            .and_then(|session| session.pending_key_install)
+            .is_some_and(|pending| pending.request.is_some() && !pending.logical_epoch_stale));
         assert!(CYW43_DEFERRED_RECOVERY.lock().is_none());
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn association_causal_continuation_is_current_requestless_state_not_a_notification_edge() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.pending_key_install =
+            Some(test_pending_pre_secure_key(Cyw43PreSecureKeyPhase::Ptk, 73));
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+
+        assert!(
+            cyw43_association_causal_continuation_pending(generation),
+            "the committed M4 terminal's requestless PTK successor is durable scheduling state",
+        );
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_mut()
+            .and_then(|session| session.pending_key_install.as_mut())
+            .expect("requestless PTK remains present")
+            .logical_epoch_stale = true;
+        assert!(
+            !cyw43_association_causal_continuation_pending(generation),
+            "a stale logical successor cannot retain the current bus episode",
+        );
+
+        *CYW43_HOST_EAPOL_SESSION.lock() = None;
+        {
+            let mut maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+            maintenance.generation = generation;
+            maintenance.requested = CYW43_MAINTENANCE_BSSID;
+        }
+        assert!(
+            !cyw43_association_causal_continuation_pending(generation),
+            "a newly latched pre-association BSSID probe is fresh policy work, not a terminal successor",
+        );
+        {
+            let mut maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+            maintenance.generation = generation;
+            maintenance.requested = CYW43_MAINTENANCE_SCB;
+        }
+        assert!(
+            cyw43_association_causal_continuation_pending(generation),
+            "terminal-created post-key maintenance remains the same causal episode before request publication",
+        );
+        {
+            let mut maintenance = CYW43_MAINTENANCE_CURSOR.lock();
+            maintenance.requested = 0;
+            maintenance.bssid_result = Some(Cyw43MaintenanceBssidResult {
+                generation,
+                context: Cyw43MaintenanceBssidContext {
+                    purpose: Cyw43MaintenanceBssidPurpose::PostAssociation,
+                    station_mac: CYW43_DRIVER_TASK_MAC,
+                    poll: 3,
+                },
+                outcome: Cyw43MaintenanceBssidOutcome::Observed(EthernetAddress([
+                    0xf0, 0x72, 0xea, 0x4c, 0xc7, 0xa5,
+                ])),
+            });
+        }
+        assert!(
+            cyw43_association_causal_continuation_pending(generation),
+            "a committed maintenance result remains causal until the policy owner consumes it",
+        );
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn urgent_and_started_requestless_data_tx_retain_only_current_network_episode() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let generation = 91;
+        mark_cyw43_gate8_ready_for_test(generation);
+
+        let frame = [0u8; 64];
+        assert!(enqueue_unreserved_cyw43_data_tx(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            &frame,
+            true,
+            true,
+        ));
+        assert!(cyw43_data_tx_causal_continuation_pending(generation));
+        assert!(cyw43_network_causal_continuation_pending(generation));
+        assert!(cyw43_service_work_snapshot().causal_continuation());
+        assert!(
+            !cyw43_association_causal_continuation_pending(generation),
+            "urgent data TX must never grant Host-EAPOL policy authority",
+        );
+        assert!(!cyw43_network_causal_continuation_pending(
+            generation.wrapping_add(1),
+        ));
+
+        assert!(promote_one_cyw43_data_tx_if_ready(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        ));
+        {
+            let mut pending = CYW43_PENDING_DATA_TX.lock();
+            let pending = pending.as_mut().expect("urgent TX is promoted");
+            assert!(pending.request.is_none());
+            pending.urgent = false;
+        }
+        assert!(
+            !cyw43_data_tx_causal_continuation_pending(generation),
+            "ordinary requestless TX that never reached its child remains fresh work",
+        );
+        CYW43_PENDING_DATA_TX
+            .lock()
+            .as_mut()
+            .expect("requestless TX remains retained")
+            .child_cursor_started = true;
+        assert!(
+            cyw43_data_tx_causal_continuation_pending(generation),
+            "child lifetime progress remains causal after the root request retires",
+        );
+        assert!(!cyw43_data_tx_causal_continuation_pending(
+            generation.wrapping_add(1),
+        ));
 
         reset_cyw43_status_flags();
     }
@@ -45797,6 +46118,129 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn committed_live_queue_poison_reaches_retained_supervisor_recovery() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        crate::hal::driver_task::test_reset_root_grant_action_counts();
+
+        let generation = cyw43_sdio_dpc_expected_generation()
+            .expect("generated CYW43/SDIO link has one nonzero epoch");
+        let mut cyw43_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut cyw43_ring = test_publish_cyw43_ring(&mut cyw43_page);
+        let mut sdio_ring = test_publish_sdio_ring();
+        let owner_guard = crate::hal::driver_task::test_delegate_cyw43_sdio_dpc_owner();
+
+        let cyw43_descriptor = test_pair_restart_descriptor(
+            DriverTaskHotPath::Cyw43Wifi,
+            crate::hal::driver_task::DRIVER_TASK_KEY_CYW43455 as u32,
+        );
+        let sdio_descriptor = test_pair_restart_descriptor(
+            DriverTaskHotPath::SdioHost,
+            crate::hal::driver_task::DRIVER_TASK_KEY_SDIO_HOST as u32,
+        );
+        assert!(
+            crate::hal::driver_task::record_driver_runtime_descriptor_seal(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi,
+                &cyw43_descriptor,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::record_driver_runtime_descriptor_seal(
+                SDIO_HOST_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::SdioHost,
+                &sdio_descriptor,
+            )
+        );
+
+        let poisoned_queue = pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+            generation,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            commit_sequence: 99,
+            ..pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty()
+        };
+        cyw43_ring.publish_rx_queue_state(poisoned_queue);
+        let mut dpc_ring = pi4_driver_abi::DriverRuntimeDpcEventRing::empty(generation);
+        dpc_ring.flags |= pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE;
+        sdio_ring.publish_dpc_ring(dpc_ring);
+
+        assert_eq!(
+            crate::hal::driver_task::driver_task_cyw43_rx_queue_state_snapshot(),
+            Some(poisoned_queue),
+        );
+        let dpc_snapshot = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()
+            .expect("sealed delegated SDIO owner publishes one stable DPC level");
+        assert_eq!(dpc_snapshot.epoch, generation);
+        assert_ne!(
+            dpc_snapshot.flags & pi4_driver_abi::DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
+            0,
+        );
+        assert!(!cyw43_recovery_required());
+
+        let grants_before = crate::hal::driver_task::test_root_grant_action_counts();
+        let work = cyw43_service_work_snapshot();
+        assert_ne!(work.reason_mask() & CYW43_SERVICE_WORK_RECOVERY, 0);
+        assert!(!work.ordinary_network_admissible());
+        assert!(cyw43_recovery_required());
+        assert!(cyw43_recovery_required(), "recovery is a durable level");
+        assert_eq!(
+            crate::hal::driver_task::test_root_grant_action_counts(),
+            grants_before,
+            "condition intake must not signal, poll, or manufacture a child grant",
+        );
+
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor.generation = 7;
+        supervisor.phase = Cyw43BootstrapPhase::Complete;
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+        begin_cyw43_outer_event_turn();
+        let mut hal = Cyw43SupervisorTestHal;
+        assert!(matches!(
+            supervisor.service_turn(&mut hal),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-pair-recovery-signalled",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::PoisonGeneration),
+        );
+        assert_eq!(supervisor.ready_generation, None);
+        assert_eq!(supervisor.gate8_generation, None);
+        assert_eq!(supervisor.stable_generation, None);
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+
+        begin_cyw43_outer_event_turn();
+        assert!(matches!(
+            supervisor.service_turn(&mut hal),
+            Cyw43BootstrapTurnOutcome::Pending {
+                stage: "cyw43-generation-poisoned",
+                operation_executed: false,
+                ..
+            }
+        ));
+        assert_eq!(
+            supervisor.phase,
+            Cyw43BootstrapPhase::Recovery(Cyw43RecoveryPhase::BeginPairRestart),
+        );
+        assert_eq!(cyw43_outer_event_turn_operation_count(), 0);
+        assert_eq!(
+            crate::hal::driver_task::test_root_grant_action_counts(),
+            grants_before,
+            "the retained supervisor must preserve the sole later pair cursor lane",
+        );
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        drop(owner_guard);
+        drop(cyw43_ring);
+        drop(sdio_ring);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_firmware_recovery_suppresses_redundant_replay_brackets() {
         assert!(cyw43_sdio_replay_resource_status_is_redundant(
             "cyw43-firmware-recover",
@@ -47032,6 +47476,7 @@ mod tests {
                 pending_tx_submit: false,
                 pending_key_install: false,
                 bssid_obligation: false,
+                causal_continuation: false,
             },
             "wifi diag must identify the exact leaf behind the aggregate 8g fence"
         );

@@ -447,7 +447,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET, DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
     DRIVER_RUNTIME_CYW43_RX_BATCH_SHARED_PAGES, DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES,
-    DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET,
+    DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET, DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
 };
 use pi4_driver_abi::{
     DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
@@ -4675,20 +4675,84 @@ fn latch_cyw43_sdio_pair_restart_request() {
     CYW43_SDIO_PAIR_RESTART_PENDING.store(1, Ordering::Release);
 }
 
-/// Return whether the linked runtime has requested a root-authoritative pair restart.
+/// Return whether one stable runtime queue level proves that the current
+/// linked CYW43/SDIO lifetime must enter the existing pair-recovery lane.
 ///
-/// This probes the live progress record even while the immutable parent ring
-/// request remains active, then latches the request. Join/service state machines
-/// must consult it before short-circuiting on an active fingerprint.
+/// The queue's sequence-last commit is the durable fault condition. The DPC
+/// owner epoch and retained restart contexts bind it to the one live physical
+/// pair; neither a notification nor aggregate diagnostic counters can create
+/// recovery authority.
 #[cfg(feature = "kernel")]
-#[must_use]
-pub fn cyw43_sdio_pair_restart_required() -> bool {
+fn cyw43_sdio_pair_restart_required_from_rx_queue(
+    queue_state: Option<DriverRuntimeCyw43RxQueueState>,
+    dpc_ring: Option<DriverTaskSdioDpcRingSnapshot>,
+    restart_context_available: bool,
+) -> bool {
+    restart_context_available
+        && queue_state.is_some_and(|queue| {
+            queue.poisoned()
+                && dpc_ring.is_some_and(|dpc| {
+                    dpc.epoch == queue.generation
+                        && dpc.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE != 0
+                })
+        })
+}
+
+#[cfg(feature = "kernel")]
+fn latch_cyw43_sdio_pair_restart_from_rx_queue_samples(
+    queue_state: Option<DriverRuntimeCyw43RxQueueState>,
+    dpc_ring: Option<DriverTaskSdioDpcRingSnapshot>,
+    restart_context_available: bool,
+) -> bool {
+    if !cyw43_sdio_pair_restart_required_from_rx_queue(
+        queue_state,
+        dpc_ring,
+        restart_context_available,
+    ) {
+        return false;
+    }
+    poison_cyw43_sdio_network_priority_lease_if_owned();
+    latch_cyw43_sdio_pair_restart_request();
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn latch_cyw43_sdio_pair_restart_from_rx_queue(
+    queue_state: Option<DriverRuntimeCyw43RxQueueState>,
+) -> bool {
+    if !queue_state.is_some_and(DriverRuntimeCyw43RxQueueState::poisoned) {
+        return false;
+    }
+    latch_cyw43_sdio_pair_restart_from_rx_queue_samples(
+        queue_state,
+        driver_task_sdio_dpc_ring_snapshot(),
+        cyw43_sdio_pair_restart_context_available(),
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_pair_restart_already_latched() -> bool {
     if CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) != 0 {
         clear_cyw43_sdio_cold_bootstrap_epoch_token();
         poison_cyw43_sdio_network_priority_lease_if_owned();
         return true;
     }
-    if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) != 0 {
+    CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) != 0
+}
+
+/// Check the sole pair-recovery condition using a queue sample already taken
+/// by the root service scheduler.
+///
+/// Reusing the sample avoids another cache-maintenance round trip on the
+/// ordinary Network path. The sample remains passive until a current poisoned
+/// generation is also bound to the active physical DPC owner and both restart
+/// contexts.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_pair_restart_required_with_rx_queue_state(
+    queue_state: Option<DriverRuntimeCyw43RxQueueState>,
+) -> bool {
+    if cyw43_sdio_pair_restart_already_latched() {
         return true;
     }
     let Some(slot) = slot_for_task_key(DRIVER_TASK_KEY_CYW43455) else {
@@ -4699,13 +4763,33 @@ pub fn cyw43_sdio_pair_restart_required() -> bool {
         return false;
     }
     let progress = driver_task_ring_read_progress_record(ring_root_ptr);
-    if !cyw43_sdio_pair_restart_progress(progress) {
-        return false;
+    if cyw43_sdio_pair_restart_progress(progress) {
+        record_driver_task_ring_progress(slot, progress);
+        poison_cyw43_sdio_network_priority_lease_if_owned();
+        latch_cyw43_sdio_pair_restart_request();
+        return true;
     }
-    record_driver_task_ring_progress(slot, progress);
-    poison_cyw43_sdio_network_priority_lease_if_owned();
-    latch_cyw43_sdio_pair_restart_request();
-    true
+    latch_cyw43_sdio_pair_restart_from_rx_queue(queue_state)
+}
+
+/// Return whether the linked runtime has requested a root-authoritative pair restart.
+///
+/// This probes the live progress record even while the immutable parent ring
+/// request remains active, then latches the request. Join/service state machines
+/// must consult it before short-circuiting on an active fingerprint.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub fn cyw43_sdio_pair_restart_required() -> bool {
+    if cyw43_sdio_pair_restart_already_latched() {
+        return true;
+    }
+    // The general recovery predicate is used throughout TX, EAPOL, and Gate
+    // 8 hot paths. It may inspect the compact progress marker, but must not
+    // resample the larger private-RX queue on every call. The root scheduler's
+    // condition-before-sleep snapshot is the one authoritative intake for
+    // queue poison and passes that exact stable sample through the dedicated
+    // helper above.
+    cyw43_sdio_pair_restart_required_with_rx_queue_state(None)
 }
 
 /// Latch a root-authoritative CYW43/SDIO pair restart for the next safe turn.
@@ -4864,6 +4948,46 @@ pub(crate) fn reset_cyw43_sdio_pair_recovery_for_test() {
 #[cfg(all(feature = "kernel", test))]
 pub(crate) fn test_publish_cyw43_sdio_pair_restart_context_available() {
     DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.store(1, Ordering::Release);
+}
+
+/// Scope one test-owned live SDIO DPC owner without weakening production
+/// descriptor or delegation checks.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) struct TestCyw43SdioDpcOwnerGuard {
+    previous_descriptor_seals: usize,
+    previous_ring_producer: usize,
+    previous_restart_context: usize,
+}
+
+#[cfg(all(feature = "kernel", test))]
+impl Drop for TestCyw43SdioDpcOwnerGuard {
+    fn drop(&mut self) {
+        DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK
+            .store(self.previous_descriptor_seals, Ordering::Release);
+        DRIVER_TASK_SLOT_SDIO_HOST
+            .ring_producer
+            .store(self.previous_ring_producer, Ordering::Release);
+        DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE
+            .store(self.previous_restart_context, Ordering::Release);
+    }
+}
+
+/// Enter the exact delegated-owner preconditions used by the production DPC
+/// snapshot while retaining the prior global test state for scoped cleanup.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn test_delegate_cyw43_sdio_dpc_owner() -> TestCyw43SdioDpcOwnerGuard {
+    let previous_descriptor_seals =
+        DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_HOT_PATH_MASK.load(Ordering::Acquire);
+    let previous_ring_producer = DRIVER_TASK_SLOT_SDIO_HOST
+        .ring_producer
+        .swap(SDIO_RING_PRODUCER_CYW43_RUNTIME, Ordering::AcqRel);
+    let previous_restart_context =
+        DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE.swap(1, Ordering::AcqRel);
+    TestCyw43SdioDpcOwnerGuard {
+        previous_descriptor_seals,
+        previous_ring_producer,
+        previous_restart_context,
+    }
 }
 
 /// Exercise physical-profile deferred descriptor replay in host tests.
@@ -25127,6 +25251,138 @@ mod tests {
             active_driver_task_retained_request_for_slot(&usb_slot),
             Some(DriverTaskRetainedRequestState::Invalid { request: 81 })
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn committed_current_rx_queue_poison_enters_only_the_pair_recovery_lane() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("CYW43 pair recovery test lock");
+        reset_cyw43_sdio_pair_recovery_for_test();
+
+        let generation = 0x4359_9201;
+        let poisoned = DriverRuntimeCyw43RxQueueState {
+            generation,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            commit_sequence: 99,
+            ..DriverRuntimeCyw43RxQueueState::empty()
+        };
+        assert!(poisoned.poisoned());
+        let owner = DriverTaskSdioDpcRingSnapshot {
+            epoch: generation,
+            producer: 7,
+            consumer: 7,
+            front_event_sequence: 0,
+            front_event_flags: 0,
+            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
+            overruns: 0,
+            ack_failures: 0,
+        };
+
+        let mut unpoisoned = poisoned;
+        unpoisoned.flags = 0;
+        let mut stale_queue = poisoned;
+        stale_queue.generation = generation.wrapping_sub(1);
+        let mut inactive_owner = owner;
+        inactive_owner.flags = 0;
+        for (reason, queue, dpc, contexts) in [
+            ("unpoisoned", Some(unpoisoned), Some(owner), true),
+            ("torn-or-unavailable", None, Some(owner), true),
+            ("stale-generation", Some(stale_queue), Some(owner), true),
+            ("owner-inactive", Some(poisoned), Some(inactive_owner), true),
+            ("dpc-unavailable", Some(poisoned), None, true),
+            (
+                "restart-context-unavailable",
+                Some(poisoned),
+                Some(owner),
+                false,
+            ),
+        ] {
+            assert!(
+                !cyw43_sdio_pair_restart_required_from_rx_queue(queue, dpc, contexts),
+                "{reason} must not manufacture pair-restart authority",
+            );
+        }
+
+        let grant_counts_before = test_root_grant_action_counts();
+        let signals_before = DRIVER_TASK_SLOT_CYW43455
+            .counters
+            .send_attempts
+            .load(Ordering::Acquire);
+        assert!(latch_cyw43_sdio_pair_restart_from_rx_queue_samples(
+            Some(poisoned),
+            Some(owner),
+            true,
+        ));
+        assert!(cyw43_sdio_pair_restart_required());
+        assert!(cyw43_sdio_pair_restart_required());
+        assert_eq!(test_root_grant_action_counts(), grant_counts_before);
+        assert_eq!(
+            DRIVER_TASK_SLOT_CYW43455
+                .counters
+                .send_attempts
+                .load(Ordering::Acquire),
+            signals_before,
+            "durable poison intake must not create a signal or fallback grant",
+        );
+
+        reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn general_pair_restart_probe_does_not_resample_private_rx_queue() {
+        let _guard = PERSISTENT_OP11_DEADLINE_TEST_LOCK
+            .lock()
+            .expect("CYW43 pair recovery test lock");
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
+
+        let mut ring = AlignedDriverTaskRing([0; DRIVER_TASK_RING_PAGE_BYTES / 4]);
+        let ring_root_ptr = ring.0.as_mut_ptr() as usize;
+        let queue_state = DriverRuntimeCyw43RxQueueState {
+            generation: 0x4359_9201,
+            commit_sequence: 17,
+            ..DriverRuntimeCyw43RxQueueState::empty()
+        };
+        let queue_ptr = ring_root_ptr + usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET);
+        // SAFETY: `queue_ptr` is aligned and wholly within the test-owned ring
+        // page at the compiler-declared private-RX queue-state offset.
+        unsafe {
+            core::ptr::write_volatile(
+                queue_ptr as *mut DriverRuntimeCyw43RxQueueState,
+                queue_state,
+            );
+        }
+        let slot = &DRIVER_TASK_SLOT_CYW43455;
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.root_ring_writers.store(0, Ordering::Release);
+        slot.counters
+            .cache_invalidate_ops
+            .store(0, Ordering::Release);
+        slot.counters
+            .cache_invalidate_bytes
+            .store(0, Ordering::Release);
+
+        assert!(!cyw43_sdio_pair_restart_required());
+        assert_eq!(
+            slot.counters.cache_invalidate_ops.load(Ordering::Acquire),
+            0,
+            "the ubiquitous progress probe must not sample the private RX queue",
+        );
+        assert_eq!(
+            driver_task_cyw43_rx_queue_state_snapshot(),
+            Some(queue_state),
+        );
+        assert_eq!(
+            slot.counters.cache_invalidate_ops.load(Ordering::Acquire),
+            2,
+            "the explicit scheduler intake owns one stable two-read sample",
+        );
+
+        clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
+        reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]

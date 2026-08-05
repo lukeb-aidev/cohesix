@@ -599,8 +599,14 @@ offset 36,864 and one through eight fixed 1,536-byte payload slots beginning at
 double-samples the queue and batch state, validates generation, queue commit,
 parent sequence and entry bounds, copies every frame, and revalidates the
 unchanged header before delivery. Remaining committed queue depth retains
-Network without another notification. For active op11, the same stable batch is
-nonterminal; root commits the exact 64-byte cache-line-disjoint ACK at shared
+Network without another notification. A stable committed queue poison is a
+durable recovery condition, not an empty queue or a consumed wake. HAL latches
+the existing sole pair-restart supervisor only when that poison generation
+matches the stable active SDIO DPC-owner epoch and both linked restart contexts
+exist. Torn, stale, owner-inactive, or context-less samples confer no authority;
+aggregate DPC diagnostic staleness is never substituted for the queue record.
+For active op11, the same stable batch is nonterminal; root commits the exact
+64-byte cache-line-disjoint ACK at shared
 offset 49,280 only after delivery, and CYW43 preserves parent and batch until
 that ACK matches. At the condition-before-sleep boundary, every active
 autonomous SDIO phase that can remain blocked commits its exact counter expiry
@@ -1152,8 +1158,9 @@ one final typed-recovery probe either declines terminal policy or commits its
 explicit decision cut immediately before atomic batch retention. That decision
 linearizes terminal policy, and no child/network poll may reopen the episode
 while the batch and adjacent Permanent record drain.
-Retraction also invalidates queued HDMI Ready/prompt bytes and schedules a
-canonical Stabilizing redraw. There is no automatic whole-bootstrap backoff,
+Retraction invalidates queued Wi-Fi/console-Ready claims and schedules a
+canonical Stabilizing redraw, while retaining and repainting the independent
+root `cohesix>` prompt/open input row. There is no automatic whole-bootstrap backoff,
 reset, or attempt 2. Gate-local association, DHCP, and protocol retries remain
 bounded inside their owning gates and do not create another outer episode.
 Only exact service readiness admits one bounded runtime pair-repair episode.
@@ -1274,7 +1281,7 @@ retry, or linked-runtime snapshot path:
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
-wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no>
+wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no> causal_continuation=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
 wifi: data_handoff rx_queue stable=<yes|no> generation=<n> depth=<n>/<n> flags=0x<hex> commit_sequence=<n>
@@ -2643,13 +2650,17 @@ generation and XID.
   Pre-terminal HDMI text reports startup/diagnostic availability only. The
   linked display schedules its canonical attach snapshot once, immediately at
   successful attach and before queued incremental startup text can drain.
-  Once the root console admits USB input, pre-terminal bytes update a live HDMI
-  input row even though the final ready banner and `cohesix>` prompt remain
-  withheld. Wi-Fi startup, quarantine, or terminal failure must never make a
-  working keyboard blind. Later Wi-Fi milestones are inserted above an open
-  command row with the exact typed row restored and cleared to end-of-line; a
-  closed command retains its newline before response text, rather than
-  restarting a viewport redraw.
+  Once the root console is ready and the display retry state is healthy, HDMI
+  publishes the independent `cohesix>` prompt without waiting for Wi-Fi
+  terminal state or USB command admission. When USB is not yet admitted, the
+  display first shows `USB console starting...`; the visible prompt is display
+  feedback and does not grant parser ingress. The final console-Ready banner
+  still requires the terminal Wi-Fi cut plus USB command readiness. Admitted
+  pre-terminal USB bytes update the live row, so Wi-Fi startup, quarantine, or
+  terminal failure never makes a working keyboard blind. Later Wi-Fi
+  milestones are inserted above that open command row with the exact prompt,
+  typed bytes, and cursor restored. A closed command retains its newline before
+  response text rather than restarting a viewport redraw.
   Every cold boot enters the same sole 22-action pair transaction and context
   replay used by recovery before firmware/control. Descriptor and mailbox
   admission touch no physical engine; the transaction's SDIO engine replay
@@ -3076,6 +3087,18 @@ generation and XID.
   root queue, or actual TCP socket/parser/response work. The identity-only
   lifetime cursor and any notification observation are permission/prompt
   context, not retention authority.
+  A consumed terminal may publish one immutable, request-less same-generation
+  successor, such as M4-to-PTK key installation. That durable causal state may
+  retain the existing bus episode across the fresh-parent time cap after a
+  stable before/after identity recheck; it cannot issue a second child or grant
+  generic host-EAPOL authority. Physical-response pressure and the hard turn
+  cap still force the bounded `Serial -> LocalSeat -> Dispatch` checkpoint with
+  the exact successor retained. The same Network-only continuation applies to
+  a current requestless data-TX cursor that already advanced its immutable
+  child lifetime, and to an urgent queued/promoted TX whose durable provenance
+  is exact paired RX, control traffic, or the authenticated console. It never
+  widens association/Host-EAPOL policy and generic bulk TX remains fresh-parent
+  work.
   During Gate 8, exact `wifi-associating` and nonterminal
   `wifi-host-eapol-pending` status are also actionable under that same bounded
   quantum so the association-to-EAPOL transition cannot lose its scheduler
@@ -3172,7 +3195,12 @@ generation and XID.
   `addr_src=wifi-tx-terminal-fault dhcp=tx-terminal-fault`; an ordinary retained
   or in-flight owner and a successful retry remain non-fault state.
   `Display` performs at most one retained HDMI attach or frame turn after the
-  Network phase or after Dispatch queues physical input echo. A partial command
+  Network phase or after Dispatch queues physical input echo. A completed
+  CYW43 physical-operator rotation admits one such Display operation before
+  resuming the exact durable Network identity. Display then grants one
+  condition-checked Network turn after the following
+  `Serial -> LocalSeat -> Dispatch` cut, so a persistent redraw/no-reply level
+  cannot form a display-only loop or starve CYW43 discovery or GENET. A partial command
   may retain the CYW43 operator fence, but it cannot route back to Serial before
   that pending Display turn unless a reboot acknowledgement or physical
   response tail already owns Serial. Display then returns to Serial with the

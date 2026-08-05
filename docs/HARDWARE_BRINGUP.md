@@ -1089,7 +1089,12 @@ the sole `NetData` op8/DPC lane. CYW43 publishes the 24-byte sequence-last
 `DriverRuntimeCyw43RxQueueState` at local-ring offset 192. It clears the commit
 before changing the body, then cleans/barriers and writes a new nonzero commit
 sequence last. Root accepts only a stable double-sample with matching current
-identity.
+identity. If that exact record is poisoned, ordinary Network remains fenced and
+HAL routes it into the existing sole pair-recovery supervisor only after the
+queue generation matches the stable active SDIO DPC-owner epoch and both
+linked restart contexts exist. Do not infer this condition from aggregate DPC
+`poisoned=yes`: a stale client sample with `ring_poisoned=no` has no recovery
+authority.
 
 For one immutable op8 parent, CYW43 writes the 128-byte
 `DriverRuntimeCyw43RxBatchRecord` at shared offset 36,864 and one through eight
@@ -1139,7 +1144,7 @@ Capture the passive scheduler, handoff, and retained-frontier lines from
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
-wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no>
+wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no> causal_continuation=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
 wifi: data_handoff rx_queue stable=<yes|no> generation=<n> depth=<n>/<n> flags=0x<hex> commit_sequence=<n>
@@ -1225,8 +1230,9 @@ terminal transaction, only the hardware-free operator-output turn may run. A
   decision cut, not later output drain, linearizes terminal policy; no
   network/child poll may reopen it while the batch and adjacent Permanent record
   drain. No pre-service fault may publish Recovery or open a second physical
-  pair. Retraction purges
-queued HDMI Ready/prompt bytes and forces a canonical Stabilizing redraw.
+  pair. Retraction purges queued Wi-Fi/console-Ready claims and forces a
+canonical Stabilizing redraw while retaining and repainting the independent
+root `cohesix>` prompt/open input row.
 Gate-local association, DHCP, and protocol retries remain bounded inside their
 owning gates. Gate 9 DHCP/address and Gate 10 nettest, TCP, and authenticated
 `cohsh` must remain in the accepted Gate 8 connection generation. Each DHCP
@@ -2472,6 +2478,15 @@ already-`Prepared` or already-`Issued` parent continues despite elapsed time
 until a typed terminal or a required physical-operator checkpoint; its immutable
 contract budget, not repeated completion polls or scheduler turns, is the hard
 bound.
+When a consumed terminal has already published its immutable request-less
+same-generation successor, such as M4-to-PTK installation, stable before/after
+generation, pair, and physical-lifetime samples retain that causal continuation
+across the fresh-parent cap. A current requestless data-TX cursor with child
+progress, or urgent paired-RX/control/authenticated-console TX already queued
+inside that lifetime, receives the same Network-only retention. Association
+policy remains separate, generic bulk TX remains fresh work, and every
+successor still reaches the sole HAL issuer without bypassing a
+physical-response checkpoint or the hard turn bound.
 the next slice may resume only that identity. Raw DPC and retained owner work
 remain eligible before authentication. The passive snapshot changes scheduling
 weight only, never issues or completes child work, and rejects stale-epoch,
@@ -2730,7 +2745,17 @@ USB keyboard readiness requires isolated-runtime command and first-report
 proof. A prompt displayed on HDMI does not prove keyboard input, and a USB
 descriptor does not prove command readiness. `Ready to use` requires DHCP bound
 plus TCP-listener readiness but does not prove the stronger end-to-end
-`tcp_ready` predicate. Under load, preserve serial and
+`tcp_ready` predicate. Once the root console and display retry state are ready,
+HDMI must show the independent `cohesix>` prompt even while Wi-Fi is still
+stabilizing or USB command input is not yet admitted. In the latter case it
+first shows `USB console starting...`; parser ingress remains closed until the
+separate USB proof. Durable HDMI work receives its bounded Display phase
+without requiring a CYW43 rotation token. A completed CYW43 operator rotation
+admits exactly one Display operation before the same durable Wi-Fi identity
+resumes, and every Display operation grants one later Network turn after the
+next physical-operator cut. Persistent redraw/no-reply work therefore cannot
+starve Wi-Fi discovery or GENET, while ordinary ready/terminal Wi-Fi work keeps
+Network priority at the bus boundary. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
 After attach or endpoint recovery, decoded held-key/modifier traffic is health
 telemetry only until a decoded all-zero release establishes a fresh baseline.

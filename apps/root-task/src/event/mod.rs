@@ -2836,6 +2836,8 @@ where
     linked_runtime_cyw43_durable_resume: Option<LinkedRuntimeCyw43DurableResume>,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_cyw43_operator_rotation_pending: Option<LinkedRuntimeCyw43DurableResume>,
+    #[cfg(feature = "net-console")]
+    linked_runtime_network_due_after_display: bool,
     #[cfg(feature = "kernel")]
     serial_root_uart_released_for_linked_runtime: bool,
     #[cfg(feature = "kernel")]
@@ -2940,11 +2942,11 @@ enum Cyw43NetworkDrainOwner {
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-fn cyw43_network_exact_parent_resumable() -> bool {
+fn cyw43_network_lifetime_continuation_resumable() -> bool {
     let before = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
-    if !before.ordinary_network_admissible()
-        || !crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(before.generation())
-    {
+    let active_parent =
+        crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(before.generation());
+    if !before.ordinary_network_admissible() || (!before.causal_continuation() && !active_parent) {
         return false;
     }
     let after = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
@@ -2952,15 +2954,19 @@ fn cyw43_network_exact_parent_resumable() -> bool {
         && before.generation() == after.generation()
         && before.pair_epoch() == after.pair_epoch()
         && before.physical_lifetime_epoch() == after.physical_lifetime_epoch()
+        && (after.causal_continuation()
+            || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(
+                after.generation(),
+            ))
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_network_time_cap_fences_fresh_parent(
-    exact_parent_retained: bool,
+    lifetime_continuation_retained: bool,
     consecutive_turns: u16,
     elapsed_us: u64,
 ) -> bool {
-    !exact_parent_retained
+    !lifetime_continuation_retained
         && consecutive_turns != 0
         && elapsed_us >= LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS.saturating_mul(1_000)
 }
@@ -3200,6 +3206,8 @@ where
             linked_runtime_cyw43_durable_resume: None,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_cyw43_operator_rotation_pending: None,
+            #[cfg(feature = "net-console")]
+            linked_runtime_network_due_after_display: false,
             #[cfg(feature = "kernel")]
             serial_root_uart_released_for_linked_runtime: false,
             #[cfg(feature = "kernel")]
@@ -3390,6 +3398,26 @@ where
     /// Attach a local-seat runtime without moving the event pump.
     pub fn attach_local_seat(&mut self, runtime: &'a mut LocalSeatRuntime) {
         runtime.register_boot_progress_backend();
+        if self.console_ready_announced {
+            // Late attachment must cross the same root-console publication
+            // boundary as a local seat present during announce_console_ready.
+            // Otherwise HDMI attach remains permanently fenced by
+            // root_console_ready and neither accumulated [drivers] feedback
+            // nor the independent prompt can reach the display.
+            runtime.mark_root_console_ready();
+            #[cfg(feature = "kernel")]
+            if self.cyw43_bootstrap_hdmi_ready_deferred {
+                runtime.defer_hdmi_console_ready_until_cyw43_terminal();
+                runtime.mirror_line("Cohesix startup in progress; serial console available");
+            } else if runtime.hdmi_console_ready_line_emitted() {
+                // Preserve a banner already published by USB admission.
+            } else if runtime.usb_keyboard_command_ready_latched() {
+                runtime.mirror_line("Cohesix console ready");
+            } else {
+                runtime.mirror_line("Cohesix serial console ready");
+            }
+            runtime.mirror_prompt(CONSOLE_PROMPT);
+        }
         self.local_seat = Some(runtime);
         #[cfg(all(feature = "kernel", feature = "usb"))]
         {
@@ -3648,10 +3676,6 @@ where
                 self.serial_console_turn_active = false;
             }
             LinkedRuntimeServicePhase::Dispatch => {
-                #[cfg(feature = "net-console")]
-                let cyw43_rotation_was_pending = self
-                    .linked_runtime_cyw43_operator_rotation_pending
-                    .is_some();
                 let serial_input = self.consume_serial();
                 let local_input = if serial_input {
                     false
@@ -3671,13 +3695,19 @@ where
                 {
                     self.refresh_linked_runtime_cyw43_durable_resume();
                 }
+                #[cfg(feature = "net-console")]
+                let cyw43_rotation_was_pending = self
+                    .linked_runtime_cyw43_operator_rotation_pending
+                    .is_some();
+                #[cfg(not(feature = "net-console"))]
+                let cyw43_rotation_was_pending = false;
                 let rotation_finished =
                     self.finish_linked_runtime_cyw43_operator_rotation_after_dispatch();
                 #[cfg(feature = "net-console")]
-                let display_due = cyw43_rotation_was_pending
+                let display_due = rotation_finished
                     && !self.reboot_pending
                     && !self.physical_console_response_pending()
-                    && self.linked_runtime_cyw43_operator_display_pending();
+                    && self.linked_runtime_operator_display_pending();
                 #[cfg(not(feature = "net-console"))]
                 let display_due = false;
                 #[cfg(feature = "net-console")]
@@ -3685,14 +3715,34 @@ where
                     rotation_finished && self.linked_runtime_cyw43_priority_work_due();
                 #[cfg(not(feature = "net-console"))]
                 let durable_network_due = false;
-                self.linked_runtime_service_phase = if durable_network_due {
-                    // Serial, LocalSeat, and Dispatch have completed their
-                    // bounded operator cut. A durable CYW43 continuation must
-                    // now reach Network before queued display housekeeping;
-                    // otherwise persistent USB service debt can turn
-                    // Display -> Serial into a closed cycle that strands an
-                    // already-visible bus transaction. Display still receives
-                    // the bounded post-quantum turn below.
+                #[cfg(feature = "net-console")]
+                let display_followup_network_due = rotation_finished
+                    && self.linked_runtime_network_due_after_display
+                    && self.net.is_some()
+                    && !self.network_service_quarantined
+                    && !self.reboot_pending;
+                #[cfg(not(feature = "net-console"))]
+                let display_followup_network_due = false;
+                let post_rotation_display_due = cyw43_rotation_was_pending && display_due;
+                self.linked_runtime_service_phase = if display_followup_network_due {
+                    // A prior bounded Display turn cannot form a closed
+                    // Serial -> LocalSeat -> Dispatch -> Display loop when
+                    // redraw or USB service debt remains level-triggered.
+                    // Consume its one-shot Network entitlement only after the
+                    // full physical-operator cut has completed.
+                    #[cfg(feature = "net-console")]
+                    {
+                        self.linked_runtime_network_due_after_display = false;
+                    }
+                    LinkedRuntimeServicePhase::Network
+                } else if post_rotation_display_due {
+                    // One completed CYW43 fairness rotation owns one bounded
+                    // display operation before the same durable bus identity
+                    // resumes. This is the only display-over-Network
+                    // exception; Display publishes a one-shot Network
+                    // entitlement so a persistent redraw cannot loop here.
+                    LinkedRuntimeServicePhase::Display
+                } else if durable_network_due {
                     LinkedRuntimeServicePhase::Network
                 } else if display_due {
                     LinkedRuntimeServicePhase::Display
@@ -3884,19 +3934,20 @@ where
                 #[cfg(feature = "net-console")]
                 if cyw43_lane_selected {
                     let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
-                    let exact_parent_retained = cyw43_priority_lease_drain_owner.is_some()
-                        || cyw43_network_exact_parent_resumable();
+                    let lifetime_continuation_retained = cyw43_priority_lease_drain_owner.is_some()
+                        || cyw43_network_lifetime_continuation_resumable();
                     if cyw43_network_time_cap_fences_fresh_parent(
-                        exact_parent_retained,
+                        lifetime_continuation_retained,
                         self.linked_runtime_network_consecutive_turns,
                         elapsed_us,
                     ) {
                         // The virtual-counter cap fences admission of a fresh
-                        // parent. An already-retained exact Prepared/Issued
-                        // parent must instead keep its immutable owner until a
-                        // typed terminal, physical response, dispatch line, or
-                        // hard turn cap; closing it here creates scheduler
-                        // latency without preempting the physical transaction.
+                        // parent. An exact Prepared/Issued parent, or the
+                        // immutable requestless successor created by its
+                        // consumed terminal or urgent receive-coupled TX,
+                        // keeps the same lifetime through the next publication
+                        // turn. Physical response,
+                        // dispatch, and the hard turn cap still bound it.
                         self.finish_linked_runtime_network_quantum(true, false, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.require_linked_runtime_cyw43_operator_rotation();
@@ -4052,12 +4103,13 @@ where
                         return;
                     }
                     let service_due = self.linked_runtime_cyw43_priority_work_due();
-                    let exact_parent_retained = cyw43_network_exact_parent_resumable();
+                    let lifetime_continuation_retained =
+                        cyw43_network_lifetime_continuation_resumable();
                     if service_due
                         && self.linked_runtime_network_consecutive_turns
                             < LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
                         && !cyw43_network_time_cap_fences_fresh_parent(
-                            exact_parent_retained,
+                            lifetime_continuation_retained,
                             self.linked_runtime_network_consecutive_turns,
                             elapsed_us,
                         )
@@ -4074,9 +4126,11 @@ where
                         // response is pending.
                         // Bounded physical-console checkpoints preserve the
                         // open immutable parent. The virtual-counter cap
-                        // fences only fresh-parent admission; the
-                        // compiler-declared turn cap remains the hard
-                        // retained-parent bound.
+                        // fences only fresh-parent admission. A consumed
+                        // terminal's immutable requestless successor, or an
+                        // urgent/current data-TX cursor produced within the
+                        // episode, is the same causal lifetime, while the
+                        // compiler-declared turn cap remains its hard bound.
                         if !self.route_linked_runtime_cyw43_operator_probe() {
                             self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
                         }
@@ -4118,6 +4172,12 @@ where
                     }
                 }
                 self.poll_runtime(true, false, false);
+                #[cfg(feature = "net-console")]
+                {
+                    self.linked_runtime_network_due_after_display = self.net.is_some()
+                        && !self.network_service_quarantined
+                        && !self.reboot_pending;
+                }
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
             }
         }
@@ -4461,7 +4521,7 @@ where
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
-    fn linked_runtime_cyw43_operator_display_pending(&self) -> bool {
+    fn linked_runtime_operator_display_pending(&self) -> bool {
         !self.pending_cyw43_bootstrap_hdmi_milestones.is_empty()
             || self
                 .pending_cyw43_bootstrap_hdmi_progress_milestone
@@ -5267,7 +5327,7 @@ where
     ///
     /// The marker travels in the same retained display sequence as the text,
     /// with one terminal reserve behind a saturated ordinary FIFO. This keeps
-    /// the final HDMI banner and prompt behind delayed Wi-Fi milestones while
+    /// only the final HDMI ready banner behind delayed Wi-Fi milestones while
     /// preserving one linked display operation per turn.
     #[cfg(feature = "kernel")]
     pub fn queue_cyw43_bootstrap_supervisor_status_with_terminal(
@@ -5305,7 +5365,7 @@ where
                     // A terminal status is a liveness transition, not optional
                     // display chatter. Retain it behind every already-queued
                     // milestone even if delayed HDMI service filled the normal
-                    // FIFO, so the ready banner and prompt cannot stay fenced.
+                    // FIFO, so the final ready banner cannot stay fenced.
                     self.pending_cyw43_bootstrap_hdmi_terminal_milestone = Some(terminal);
                     self.cyw43_bootstrap_hdmi_pending = true;
                     crate::log_buffer::append_log_line(
@@ -5382,10 +5442,10 @@ where
         true
     }
 
-    /// Keep only the HDMI ready banner and prompt behind the Wi-Fi terminal.
+    /// Keep only the final HDMI ready banner behind the Wi-Fi terminal.
     ///
-    /// The serial prompt and buffered USB command fence remain active before
-    /// the single-attempt bootstrap episode begins.
+    /// The serial/HDMI prompt and buffered USB command fence remain active
+    /// before the single-attempt bootstrap episode begins.
     #[cfg(feature = "kernel")]
     pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
         let invalidated = self.pending_cyw43_bootstrap_hdmi_milestones.len()
@@ -5988,7 +6048,7 @@ where
             } else {
                 runtime.mirror_line("Cohesix serial console ready");
             }
-            runtime.mirror_prompt_when_keyboard_ready_or_defer(CONSOLE_PROMPT, command_ready);
+            runtime.mirror_prompt(CONSOLE_PROMPT);
             command_ready
         } else {
             false
@@ -13324,11 +13384,12 @@ where
         work: crate::drivers::driver_task_net::Cyw43HostEapolWorkDiagnostic,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         format_message(format_args!(
-            "wifi: host_eapol work_pending={} blocker={} generation={} open_network={}",
+            "wifi: host_eapol work_pending={} blocker={} generation={} open_network={} causal_continuation={}",
             Self::yes_no(work.pending),
             work.blocker,
             work.generation,
             Self::yes_no(work.open_network),
+            Self::yes_no(work.causal_continuation),
         ))
     }
 
@@ -24020,6 +24081,10 @@ mod tests {
                 .with_local_seat(&mut local_seat);
             pump.defer_local_seat_hdmi_ready_until_cyw43_terminal();
             pump.announce_console_ready();
+            pump.local_seat
+                .as_mut()
+                .unwrap()
+                .publish_preterminal_linked_hdmi_root_prompt_for_test(CONSOLE_PROMPT);
 
             assert!(!pump
                 .local_seat
@@ -24042,6 +24107,37 @@ mod tests {
                 .mirrored_lines_snapshot()
                 .iter()
                 .any(|line| line.as_str() == "Cohesix serial console ready"));
+            assert_eq!(
+                pump.local_seat
+                    .as_ref()
+                    .unwrap()
+                    .mirrored_lines_snapshot()
+                    .iter()
+                    .filter(|line| line.as_str() == CONSOLE_PROMPT)
+                    .count(),
+                1,
+                "the root prompt is display feedback and must precede WiFi terminal state",
+            );
+            assert!(pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .mirrored_lines_snapshot()
+                .iter()
+                .any(|line| line.as_str() == "USB console starting..."));
+            assert!(
+                !crate::local_seat::local_seat_keyboard_bytes_enter_parser_state(
+                    true,
+                    pump.local_seat.as_ref().unwrap().root_console_ready(),
+                    false,
+                ),
+                "the same preterminal prompt state must retain closed USB parser ingress",
+            );
+            assert!(!pump
+                .local_seat
+                .as_ref()
+                .unwrap()
+                .hdmi_console_ready_line_emitted());
 
             assert!(pump.queue_cyw43_bootstrap_supervisor_status_with_terminal(
                 "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin",
@@ -24458,6 +24554,15 @@ mod tests {
         let pump = pump.with_local_seat(&mut local_seat);
 
         assert!(pump.post_prompt_local_seat_attach_pending_for_test());
+        let runtime = pump
+            .local_seat
+            .as_ref()
+            .expect("the late local seat remains attached");
+        assert!(runtime.root_console_ready());
+        assert!(runtime
+            .mirrored_lines_snapshot()
+            .iter()
+            .any(|line| line.as_str() == CONSOLE_PROMPT));
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -25262,6 +25367,7 @@ mod tests {
             pending_tx_submit: true,
             pending_key_install: true,
             bssid_obligation: true,
+            causal_continuation: true,
         };
         let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
             cause: "issued-owner-unknown",
@@ -33379,14 +33485,48 @@ mod tests {
                 LinkedRuntimeServicePhase::Dispatch
             );
             assert!(
-                pump.linked_runtime_cyw43_operator_display_pending(),
+                pump.linked_runtime_operator_display_pending(),
                 "the regression must retain display housekeeping at the Dispatch boundary"
             );
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "a completed CYW43 operator rotation must service one queued HDMI operation"
+            );
+            assert_eq!(
+                pump.linked_runtime_cyw43_durable_resume,
+                Some(durable_identity),
+                "the display turn must preserve the exact durable WiFi identity"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+            assert_eq!(pump.metrics.net_cyw43_service_turns, 0);
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the bounded Display turn must return to physical-operator service"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat,
+                "persistent USB service debt still receives its one bounded turn"
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
                 LinkedRuntimeServicePhase::Network,
-                "USB service debt and queued display housekeeping cannot retain the WiFi fence after Dispatch"
+                "the Display turn's one-shot entitlement must break a persistent redraw loop"
             );
             assert_eq!(
                 pump.linked_runtime_cyw43_durable_resume,
@@ -33410,7 +33550,7 @@ mod tests {
                 LinkedRuntimeServicePhase::Display,
                 "exact idle after the admitted Network turn must release queued display work"
             );
-            assert!(pump.linked_runtime_cyw43_operator_display_pending());
+            assert!(pump.linked_runtime_operator_display_pending());
 
             pump.poll();
             assert_eq!(
@@ -33418,6 +33558,145 @@ mod tests {
                 LinkedRuntimeServicePhase::Serial,
                 "the bounded Display turn must return to the physical-operator rotation"
             );
+        }
+
+        assert_eq!(net.polls, 1);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn idle_cyw43_dispatches_durable_hdmi_without_rotation_token() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(
+                    None,
+                );
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(61, 13, 9, 0),
+        ));
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "durable HDMI work must schedule from its own level without a WiFi rotation token",
+            );
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, 0,
+                "idle WiFi must not acquire a physical service turn to unlock HDMI",
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+            );
+        }
+
+        assert_eq!(net.polls, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn persistent_hdmi_backlog_yields_one_network_turn_after_display() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+        local_seat.inject_linked_hdmi_pending_bytes_for_test(8);
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(false);
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Display,
+                "independent HDMI work must receive one bounded turn"
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "a level-triggered redraw cannot starve the ordinary network lane"
+            );
+            pump.poll();
         }
 
         assert_eq!(net.polls, 1);
@@ -35213,6 +35492,33 @@ mod tests {
         assert!(
             !cyw43_network_time_cap_fences_fresh_parent(false, 1, deadline_us.saturating_sub(1),),
             "fresh work remains admissible within the bounded quantum",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn requestless_causal_successor_survives_network_time_cap() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test_with_causal_continuation(
+                73,
+                19,
+                1,
+                1,
+            ),
+        ));
+
+        assert!(
+            cyw43_network_lifetime_continuation_resumable(),
+            "a sequence-committed requestless successor is the same bus lifetime without an active HAL parent",
+        );
+        assert!(
+            !cyw43_network_time_cap_fences_fresh_parent(
+                cyw43_network_lifetime_continuation_resumable(),
+                1,
+                LINKED_RUNTIME_NETWORK_QUANTUM_DEADLINE_MS * 1_000,
+            ),
+            "the ordinary time cap may fence only a fresh parent, not the terminal's causal successor",
         );
     }
 
@@ -39691,7 +39997,7 @@ mod tests {
         );
         assert!(
             rendered.contains(
-                "wifi: host_eapol work_pending=no blocker=none generation=0 open_network=no"
+                "wifi: host_eapol work_pending=no blocker=none generation=0 open_network=no causal_continuation=no"
             ),
             "{rendered}"
         );

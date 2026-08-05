@@ -6770,6 +6770,25 @@ copied/DPC/runtime RX drains before any fresh retry or bulk TX. This preserves
 the historical 5/5 oracle's ability to revisit unfinished levels without
 restoring its recurrent grant cadence or second-scale TCP latency.
 
+The 2026-08-05 exact `514036b706f5` boot associated and completed M1 through
+M4, then exposed two later durable-lifetime gaps. The CYW43 runtime had
+sequence-committed a current-generation private RX queue poison, so ordinary
+Network correctly fenced itself, but the attached supervisor consulted only
+the separate pair-progress latch and could enter neither service nor recovery.
+HAL now admits that committed poison to the one existing pair-restart
+supervisor only when its generation matches the stable active SDIO DPC owner
+and both restart contexts exist; no aggregate diagnostic, wake edge, poller,
+grant, or fallback lane can authorize it. Separately, M4 terminal retirement
+had already published an immutable request-less PTK successor, but the
+fresh-parent time cap recognized only an extant HAL parent and rotated that
+successor out. Current-generation causal successor state now survives the cap
+after stable identity rechecks and reaches the same sole issuer in the same bus
+episode. The same boot also proved the HDMI runtime healthy while root stranded
+durable display output behind CYW43/USB edges. HDMI display admission and the
+root prompt are now independent durable levels; final Wi-Fi/console Ready and
+USB parser ingress retain their separate proofs. Fresh exact-image Pi Gate 8,
+DHCP, TCP-quality, recovery, and HDMI evidence remain pending.
+
 **Why now (operator continuity):**  
 Milestone 26b depends on completed 26a driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
 
