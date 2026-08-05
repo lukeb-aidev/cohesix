@@ -23837,7 +23837,7 @@ mod tests {
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == "Cohesix serial console ready"));
-        assert!(!local_seat
+        assert!(local_seat
             .mirrored_lines_snapshot()
             .iter()
             .any(|line| line.as_str() == CONSOLE_PROMPT));
@@ -35539,8 +35539,8 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Display,
-                "a partial local-seat line must receive one echo Display turn before Serial"
+                LinkedRuntimeServicePhase::Serial,
+                "serial remains the first physical operator after local-seat dispatch"
             );
             assert!(pump
                 .linked_runtime_cyw43_operator_rotation_pending
@@ -35552,8 +35552,8 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "Display must return to Serial while the partial-line operator fence remains"
+                LinkedRuntimeServicePhase::LocalSeat,
+                "Serial must preserve the fixed local-seat turn before Display"
             );
             assert!(pump
                 .linked_runtime_cyw43_operator_rotation_pending
@@ -35561,6 +35561,25 @@ mod tests {
             assert_eq!(
                 pump.metrics.net_cyw43_service_turns, 0,
                 "HDMI echo must not compose with or admit a CYW43 Network turn"
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "the bounded local-seat turn must release into Dispatch before Display"
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "the partial local-seat line must retain the operator fence ahead of Display"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(
+                pump.metrics.net_cyw43_service_turns, 0,
+                "retained local input must fence both Display and Network until its boundary"
             );
 
             pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
@@ -36302,8 +36321,8 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Serial,
-                "the physical barrier must own the turn immediately after the ACK flush"
+                LinkedRuntimeServicePhase::Network,
+                "an incomplete network ACK drain must retain its exact Network turn"
             );
             assert_eq!(pump.metrics.net_cyw43_service_quanta, 1);
             assert_eq!(pump.metrics.net_cyw43_service_turns, 1);
@@ -36431,7 +36450,7 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Network
+                LinkedRuntimeServicePhase::Display
             );
             assert!(pump.local_line.is_empty());
             assert_eq!(pump.local_seat_escape_state, LocalSeatEscapeState::Idle);
@@ -36444,11 +36463,6 @@ mod tests {
                 1
             );
 
-            pump.poll();
-            assert_eq!(
-                pump.linked_runtime_service_phase,
-                LinkedRuntimeServicePhase::Display
-            );
             assert_eq!(
                 pump.metrics.net_cyw43_service_quanta, 0,
                 "a non-CYW43 Network turn must not contaminate Wi-Fi telemetry"
