@@ -2074,15 +2074,18 @@ struct LinkedRuntimeCyw43DurableResume {
     physical_lifetime_epoch: u32,
 }
 
-/// Admit one exact terminal ahead of fresh lease policy only while recovery is
-/// not already authoritative. Sticky pair recovery drains the same terminal
-/// through its existing exact-issued recovery lane instead of normal policy.
+/// Admit one exact terminal ahead of fresh lease policy even when recovery is
+/// already authoritative for successor work.
+///
+/// Recovery may fence a new lease, but the committed parent still belongs to
+/// its canonical policy state machine. HAL separately revalidates the exact
+/// issued identity before admitting that one retirement turn.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_terminal_retirement_override_from(
-    recovery_required: bool,
+    _recovery_required: bool,
     terminal_pending: bool,
 ) -> bool {
-    !recovery_required && terminal_pending
+    terminal_pending
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console", test))]
@@ -2104,19 +2107,16 @@ fn set_cyw43_terminal_pending_test_override(value: Option<bool>) {
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn cyw43_terminal_retirement_override() -> bool {
     #[cfg(test)]
-    let terminal_pending =
-        match CYW43_TERMINAL_PENDING_TEST_OVERRIDE.load(core::sync::atomic::Ordering::Acquire) {
-            1 => false,
-            2 => true,
-            _ => crate::drivers::driver_task_net::cyw43_persistent_terminal_pending(),
-        };
-    #[cfg(not(test))]
-    let terminal_pending = crate::drivers::driver_task_net::cyw43_persistent_terminal_pending();
-
-    cyw43_terminal_retirement_override_from(
-        crate::drivers::driver_task_net::cyw43_recovery_required(),
-        terminal_pending,
-    )
+    match CYW43_TERMINAL_PENDING_TEST_OVERRIDE.load(core::sync::atomic::Ordering::Acquire) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+    let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
+    let terminal_pending = crate::drivers::driver_task_net::cyw43_canonical_policy_snapshot()
+        .cut()
+        .runnable();
+    cyw43_terminal_retirement_override_from(recovery_required, terminal_pending)
 }
 
 /// Admit either ordinary current-lifetime work or one already-committed exact
@@ -2943,21 +2943,100 @@ enum Cyw43NetworkDrainOwner {
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 fn cyw43_network_lifetime_continuation_resumable() -> bool {
-    let before = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
-    let active_parent =
-        crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(before.generation());
-    if !before.ordinary_network_admissible() || (!before.causal_continuation() && !active_parent) {
+    let routed = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
+    let current = crate::drivers::driver_task_net::cyw43_fresh_network_lifetime_cut();
+    if !routed.ordinary_network_admissible()
+        || !current.ordinary_network_admissible()
+        || routed.generation() != current.generation()
+        || routed.pair_epoch() != current.pair_epoch()
+        || routed.physical_lifetime_epoch() != current.physical_lifetime_epoch()
+    {
         return false;
     }
-    let after = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
-    after.ordinary_network_admissible()
-        && before.generation() == after.generation()
-        && before.pair_epoch() == after.pair_epoch()
-        && before.physical_lifetime_epoch() == after.physical_lifetime_epoch()
-        && (after.causal_continuation()
-            || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(
-                after.generation(),
-            ))
+    current.causal_continuation()
+        || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(current.generation())
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct Cyw43NetworkResumeCondition {
+    service_due: bool,
+    lifetime_continuation: bool,
+    routed_work_allowed: bool,
+}
+
+/// Classify one stable pre-sleep Network cut without granting work authority.
+///
+/// An unfinished exact parent masks only policy self-demand. Independent DPC
+/// and RX levels remain runnable, while exact parent progress is authoritative
+/// regardless of those policy levels.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_network_resume_condition_from_levels(
+    active_parent: bool,
+    active_parent_progress: bool,
+    independent_work_visible: bool,
+    policy_work_visible: bool,
+    causal_continuation: bool,
+) -> Cyw43NetworkResumeCondition {
+    Cyw43NetworkResumeCondition {
+        service_due: active_parent_progress
+            || independent_work_visible
+            || (!active_parent && (policy_work_visible || causal_continuation)),
+        lifetime_continuation: causal_continuation || active_parent,
+        routed_work_allowed: !active_parent || active_parent_progress,
+    }
+}
+
+/// Compose the cached routing hint with the authoritative pre-sleep cut.
+///
+/// Cached upper-stack demand may retain Network only when the stable fresh cut
+/// proves that no unfinished non-progress parent owns the physical lifetime.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_network_service_due(
+    routed_service_due: bool,
+    resume: Cyw43NetworkResumeCondition,
+) -> bool {
+    resume.service_due || (resume.routed_work_allowed && routed_service_due)
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_network_drain_parent_should_park(resume: Cyw43NetworkResumeCondition) -> bool {
+    !resume.service_due && !resume.routed_work_allowed
+}
+
+/// Recheck durable CYW43 work immediately before closing the Network phase.
+///
+/// The full classifier remains an immutable routing hint for this outer turn.
+/// This two-cut check is intentionally narrower and authoritative: a DPC,
+/// queue level, requestless causal successor, or exact parent terminal that
+/// became visible during the turn keeps the same bounded service episode live
+/// without consuming another notification edge.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_network_resume_condition() -> Cyw43NetworkResumeCondition {
+    let before = crate::drivers::driver_task_net::cyw43_fresh_network_resume_cut();
+    let after = crate::drivers::driver_task_net::cyw43_fresh_network_resume_cut();
+    if !before.ordinary_network_admissible()
+        || !after.ordinary_network_admissible()
+        || before.generation() != after.generation()
+        || before.pair_epoch() != after.pair_epoch()
+        || before.physical_lifetime_epoch() != after.physical_lifetime_epoch()
+    {
+        return Cyw43NetworkResumeCondition::default();
+    }
+
+    let active_parent = after.exact_parent_waiting()
+        || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(after.generation());
+    let active_parent_progress =
+        crate::hal::driver_task::cyw43_sdio_network_active_parent_progress_visible(
+            after.generation(),
+        );
+    cyw43_network_resume_condition_from_levels(
+        active_parent,
+        active_parent_progress,
+        after.independent_work_visible(),
+        after.policy_work_visible(),
+        after.causal_continuation(),
+    )
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -3522,6 +3601,9 @@ where
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         #[cfg(feature = "kernel")]
+        let _cyw43_outer_event_turn =
+            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
+        #[cfg(feature = "kernel")]
         let _ = crate::hal::driver_task::poll_driver_task_sdio_deadline_fault_hint();
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         self.poll_linked_runtime_cyw43_rx_admission();
@@ -3932,6 +4014,23 @@ where
                     None
                 };
                 #[cfg(feature = "net-console")]
+                if cyw43_priority_lease_drain_owner.is_some()
+                    && cyw43_network_drain_parent_should_park(cyw43_network_resume_condition())
+                {
+                    // Closing and unleased-boundary parents retain their exact
+                    // immutable identity, but an issued parent with no fresh
+                    // physical progress is a sleep condition. Rotate without
+                    // polling either child; CARD_INT/DMA completion, durable
+                    // DPC/root-RX, or the exact sequence-last terminal will
+                    // make the next fresh cut runnable.
+                    self.linked_runtime_network_consecutive_turns = 0;
+                    self.linked_runtime_network_quantum_started_ms = None;
+                    self.linked_runtime_network_quantum_started_ticks = 0;
+                    self.clear_linked_runtime_network_operator_checkpoint_clock();
+                    self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                    return;
+                }
+                #[cfg(feature = "net-console")]
                 if cyw43_lane_selected {
                     let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
                     let lifetime_continuation_retained = cyw43_priority_lease_drain_owner.is_some()
@@ -4102,14 +4201,14 @@ where
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
-                    let service_due = self.linked_runtime_cyw43_priority_work_due();
-                    let lifetime_continuation_retained =
-                        cyw43_network_lifetime_continuation_resumable();
+                    let routed_service_due = self.linked_runtime_cyw43_priority_work_due();
+                    let resume = cyw43_network_resume_condition();
+                    let service_due = cyw43_network_service_due(routed_service_due, resume);
                     if service_due
                         && self.linked_runtime_network_consecutive_turns
                             < LINKED_RUNTIME_NETWORK_QUANTUM_MAX_TURNS
                         && !cyw43_network_time_cap_fences_fresh_parent(
-                            lifetime_continuation_retained,
+                            resume.lifetime_continuation,
                             self.linked_runtime_network_consecutive_turns,
                             elapsed_us,
                         )
@@ -4630,6 +4729,13 @@ where
             }
             if cyw43_terminal_retirement_override() {
                 return true;
+            }
+            if snapshot.exact_parent_waiting() {
+                // A queued console response, retained Echo Reply, flush tail,
+                // or association status cannot advance an issued physical
+                // parent. Only independent committed driver work may reopen
+                // the one CYW43 lane until that exact terminal is visible.
+                return snapshot.schedulable_network_work();
             }
             let counters = net.stats();
             let status = net.status_report();
@@ -5508,6 +5614,9 @@ where
     pub fn poll_pre_root_network(&mut self) {
         #[cfg(feature = "kernel")]
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        #[cfg(feature = "kernel")]
+        let _cyw43_outer_event_turn =
+            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
         self.poll_runtime(true, false, true);
     }
 
@@ -6196,6 +6305,8 @@ where
         }
 
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        let _cyw43_outer_event_turn =
+            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
         debug_assert!(!self.cyw43_bootstrap_operator_turn_active);
         self.cyw43_bootstrap_operator_turn_active = true;
         self.reconcile_physical_response_barrier();
@@ -13102,6 +13213,34 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_retained_exact_gate8_terminal(
+        pair_recovery_active: bool,
+        recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+    ) -> bool {
+        pair_recovery_active
+            && recovery.is_some_and(|recovery| recovery.gate == 8 && recovery.terminal_observed)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_live_exact_gate8_terminal_retirement(
+        recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+        canonical_cut: crate::drivers::driver_task_net::Cyw43CanonicalParentCut,
+    ) -> bool {
+        recovery.is_some_and(|recovery| {
+            recovery.gate == 8
+                && recovery.terminal_observed
+                && matches!(
+                    canonical_cut,
+                    crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                        generation,
+                        request,
+                    } if generation == recovery.owner_generation
+                        && request == recovery.completion_sequence
+                )
+        })
+    }
+
+    #[cfg(feature = "kernel")]
     fn wifi_diag_cyw43_sdio_owner_fault_status(
         fault: crate::drivers::driver_task_net::Cyw43RuntimeCommandFaultStatus,
     ) -> Option<crate::drivers::driver_task_net::Cyw43SdioOwnerFaultStatus> {
@@ -15556,7 +15695,7 @@ where
         // epoch-bound control program. Reaching both is stronger than the
         // unversioned last-progress breadcrumbs left by bootstrap and proves
         // that this boot already crossed Gates 1-7.
-        let gate8_prerequisites_ready =
+        let current_gate8_prerequisites_ready =
             Self::wifi_gate8_prerequisites_supersede_runtime_progress(gate8, pair_recovery_active);
         // A partially alive NetStack is not stronger than the current CYW43
         // owner. It supersedes old bootstrap breadcrumbs only after this exact
@@ -15580,6 +15719,19 @@ where
             })
         };
         let deferred_gate8 = deferred_recovery.filter(|recovery| recovery.gate == 8);
+        let retained_exact_gate8_terminal =
+            Self::wifi_retained_exact_gate8_terminal(pair_recovery_active, deferred_gate8);
+        let live_exact_gate8_terminal_retirement = retained_exact_gate8_terminal
+            && Self::wifi_live_exact_gate8_terminal_retirement(
+                deferred_gate8,
+                crate::drivers::driver_task_net::cyw43_canonical_parent_cut(),
+            );
+        // Recovery may scrub the current pair and its clock snapshot, but it
+        // cannot erase the causal prefix already proven by an exact Gate 8
+        // terminal. Historical evidence proves that Gates 1-7 ran; only the
+        // exact runnable parent can report live canonical-owner retirement.
+        let gate8_prerequisites_ready =
+            current_gate8_prerequisites_ready || retained_exact_gate8_terminal;
         let explicit_exact_error = if live_net_supersedes_runtime {
             ""
         } else {
@@ -15676,7 +15828,9 @@ where
                 sdio_progress_gate,
             )
         };
-        let linked_clock_snapshot_blocked = linked_sdio_clock_required && !linked_sdio_clock_ready;
+        let linked_clock_snapshot_blocked = linked_sdio_clock_required
+            && !linked_sdio_clock_ready
+            && !retained_exact_gate8_terminal;
         let driver_task_gate = match reported_driver_task_gate {
             Some(gate) if gate < 4 => Some(gate),
             _ if linked_clock_snapshot_blocked => Some(4),
@@ -15687,15 +15841,16 @@ where
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
         let firmware_prep_complete =
             fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_prep_complete);
-        let power_ready = physical_lifetime_ready
-            && (gate8_prerequisites_ready
-                || live_net_channel_ready
-                || firmware_ready
-                || snapshot.is_some_and(|snapshot| {
-                    matches!(snapshot.power_state, WifiPowerState::On)
-                        && matches!(snapshot.reset_state, WifiResetState::Deasserted)
-                })
-                || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready));
+        let power_ready = retained_exact_gate8_terminal
+            || (physical_lifetime_ready
+                && (gate8_prerequisites_ready
+                    || live_net_channel_ready
+                    || firmware_ready
+                    || snapshot.is_some_and(|snapshot| {
+                        matches!(snapshot.power_state, WifiPowerState::On)
+                            && matches!(snapshot.reset_state, WifiResetState::Deasserted)
+                    })
+                    || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)));
         let card_selected = gate8_prerequisites_ready
             || live_net_channel_ready
             || firmware_prep_complete
@@ -15720,7 +15875,7 @@ where
                 || snapshot.is_some_and(Self::wifi_snapshot_ht_avail)
                 || firmware_trace.is_some_and(|trace| trace.sr_kso_clock_ready)
         } else {
-            linked_sdio_clock_ready
+            retained_exact_gate8_terminal || linked_sdio_clock_ready
         };
         let backplane_ready = gate8_prerequisites_ready
             || live_net_channel_ready
@@ -15823,7 +15978,11 @@ where
         let reported_proof_gate =
             Self::wifi_startup_reported_proof_gate(direct_proof_gate, driver_task_gate);
         let active_blocker = if failing_gate == 8 {
-            if let Some(recovery) = deferred_gate8 {
+            if live_exact_gate8_terminal_retirement {
+                "canonical-terminal-retirement-pending"
+            } else if retained_exact_gate8_terminal {
+                "pair-recovery-required"
+            } else if let Some(recovery) = deferred_gate8 {
                 recovery.subphase
             } else if direct_gate8_terminal {
                 fault.map_or_else(
@@ -15869,7 +16028,11 @@ where
         } else {
             Self::wifi_startup_blocker_for_gate(failing_gate, exact_error)
         };
-        let next_action = if self.network_service_quarantined && failing_gate == 8 {
+        let next_action = if live_exact_gate8_terminal_retirement && failing_gate == 8 {
+            "retire-exact-gate8-terminal-through-canonical-owner"
+        } else if retained_exact_gate8_terminal && failing_gate == 8 {
+            "run-pair-recovery-after-terminal-retirement"
+        } else if self.network_service_quarantined && failing_gate == 8 {
             "repair-causal-linked-runtime-and-reboot"
         } else if failing_gate == 8 {
             if let Some(recovery) = deferred_gate8 {
@@ -15922,7 +16085,9 @@ where
         } else {
             Self::wifi_startup_next_action_for_gate(failing_gate, exact_error)
         };
-        let gate1_power = if let Some(snapshot) = snapshot {
+        let gate1_power = if retained_exact_gate8_terminal {
+            "proven-on-by-gate8-terminal"
+        } else if let Some(snapshot) = snapshot {
             Self::wifi_power_label(snapshot.power_state)
         } else if firmware_ready
             || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)
@@ -15931,7 +16096,9 @@ where
         } else {
             "unknown"
         };
-        let gate1_reset = if let Some(snapshot) = snapshot {
+        let gate1_reset = if retained_exact_gate8_terminal {
+            "proven-deasserted-by-gate8-terminal"
+        } else if let Some(snapshot) = snapshot {
             Self::wifi_reset_label(snapshot.reset_state)
         } else if firmware_ready
             || fault.is_some_and(Self::wifi_runtime_fault_implies_hal_power_ready)
@@ -16075,7 +16242,7 @@ where
             "runtime-power-reset",
             if runtime_bootstrap_failed
                 || cyw43_sdio_pair_restart_blocks_gate_one
-                || !physical_lifetime_ready
+                || (!physical_lifetime_ready && !retained_exact_gate8_terminal)
             {
                 "blocked"
             } else {
@@ -16091,14 +16258,16 @@ where
                     "runtime-resource-admission"
                 } else if cyw43_sdio_pair_restart_blocks_gate_one {
                     "cyw43-sdio-pair-restart"
-                } else if !physical_lifetime_ready {
+                } else if !physical_lifetime_ready && !retained_exact_gate8_terminal {
                     "sdio-physical-lifetime"
+                } else if retained_exact_gate8_terminal {
+                    "retained-exact-gate8-terminal"
                 } else {
                     "none"
                 },
                 source,
             ),
-            if physical_lifetime_ready {
+            if physical_lifetime_ready || retained_exact_gate8_terminal {
                 "sdio-card-select"
             } else {
                 "run-canonical-pair-transaction"
@@ -16175,7 +16344,9 @@ where
         } else {
             format_message(format_args!(
                 "clock_snapshot=unavailable requested=unavailable effective=unavailable width=unavailable reason={} source=sdio-owner",
-                if raw_sdio_clock_snapshot.is_some() {
+                if retained_exact_gate8_terminal {
+                    "post-scrub-retained-gate8-terminal-proves-prerequisite"
+                } else if raw_sdio_clock_snapshot.is_some() {
                     "stale-physical-lifetime"
                 } else {
                     "no-stable-owner-readback"
@@ -22062,6 +22233,8 @@ mod tests {
         crate::drivers::driver_task_net::set_cyw43_bus_episode_diagnostic_test_override(None);
         crate::drivers::driver_task_net::set_cyw43_sdio_dpc_diagnostic_test_override(None);
         crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(None);
+        crate::drivers::driver_task_net::set_cyw43_outer_event_turn_enforced_for_test(false);
+        crate::drivers::driver_task_net::reset_cyw43_service_work_derivations_for_test();
         crate::drivers::driver_task_net::set_cyw43_service_physical_lifetime_epoch_test_override(
             None,
         );
@@ -26347,6 +26520,161 @@ mod tests {
         assert!(carrier.contains("request=3780 completion_sequence=3780"));
         assert!(carrier.contains("exact_request_match=yes current_state=secondary"));
         assert!(!carrier.contains(DIAGNOSTIC_TRUNCATION_MARKER));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_retained_exact_gate8_terminal_preserves_the_causal_boot_prefix() {
+        let mut recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+            cause: "pair-signal",
+            subphase: "cyw43-association-join",
+            generation: 1,
+            owner_generation: 1,
+            descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            descriptor_flags: 0x0003,
+            descriptor_target_addr: 0,
+            descriptor_payload_offset: 0,
+            descriptor_payload_len: 89,
+            descriptor_total_len: 89,
+            descriptor_arg0: 0x0000_0107,
+            descriptor_arg1: 36,
+            ticket_id: 64,
+            completion_detail: 0,
+            completion_result: 73,
+            completion_sequence: 64,
+            terminal_observed: true,
+            turn_id: 17_352,
+            gate: 8,
+        };
+        assert!(
+            KernelConsoleTestPump::wifi_retained_exact_gate8_terminal(true, Some(recovery)),
+            "the exact Gate 8 terminal remains historical proof after pair scrub",
+        );
+        assert!(
+            KernelConsoleTestPump::wifi_live_exact_gate8_terminal_retirement(
+                Some(recovery),
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                    generation: recovery.owner_generation,
+                    request: recovery.completion_sequence,
+                },
+            )
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_live_exact_gate8_terminal_retirement(
+                Some(recovery),
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Waiting {
+                    generation: recovery.owner_generation,
+                    request: recovery.completion_sequence,
+                },
+            ),
+            "a sleeping parent is not terminal-retirement authority",
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_live_exact_gate8_terminal_retirement(
+                Some(recovery),
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+            ),
+            "retained history cannot manufacture a live owner after finalization",
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_retained_exact_gate8_terminal(false, Some(recovery)),
+            "ordinary retained history must not override a healthy live pair",
+        );
+
+        recovery.gate = 4;
+        assert!(
+            !KernelConsoleTestPump::wifi_retained_exact_gate8_terminal(true, Some(recovery)),
+            "a lower-gate terminal cannot manufacture a Gate 8 causal prefix",
+        );
+        recovery.gate = 8;
+        recovery.terminal_observed = false;
+        assert!(
+            !KernelConsoleTestPump::wifi_retained_exact_gate8_terminal(true, Some(recovery)),
+            "an unobserved notification is not durable completion authority",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_gate8_rendering_separates_live_retirement_from_retained_history() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        let recovery = crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic {
+            cause: "pair-signal",
+            subphase: "cyw43-association-join",
+            generation: 1,
+            owner_generation: 1,
+            descriptor_op: pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
+            descriptor_flags: 0x0003,
+            descriptor_target_addr: 0,
+            descriptor_payload_offset: 0,
+            descriptor_payload_len: 89,
+            descriptor_total_len: 89,
+            descriptor_arg0: 0x0000_0107,
+            descriptor_arg1: 36,
+            ticket_id: 64,
+            completion_detail: 0,
+            completion_result: 73,
+            completion_sequence: 64,
+            terminal_observed: true,
+            turn_id: 17_352,
+            gate: 8,
+        };
+        let render = |cut| {
+            crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(Some(
+                cut,
+            ));
+            let driver = LoopbackSerial::<32768>::new();
+            let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+            let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+            let ipc = NullIpc;
+            let mut store: TicketTable<4> = TicketTable::new();
+            store.register(Role::Queen, "ticket").unwrap();
+            let mut audit = AuditLog::new();
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+            pump.emit_wifi_startup_gates_from_evidence(
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some(recovery),
+                "linked-runtime-test",
+            );
+            let transcript = pump.serial_mut().driver_mut().drain_tx();
+            String::from_utf8(transcript.to_vec()).expect("serial output must be utf8")
+        };
+
+        let live = render(
+            crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                generation: recovery.owner_generation,
+                request: recovery.completion_sequence,
+            },
+        );
+        assert!(live.contains("power=proven-on-by-gate8-terminal"), "{live}");
+        assert!(
+            live.contains("next_action=retire-exact-gate8-terminal-through-canonical-owner blocker=canonical-terminal-retirement-pending"),
+            "{live}",
+        );
+
+        let finalized = render(crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent);
+        assert!(
+            finalized.contains("power=proven-on-by-gate8-terminal"),
+            "historical causal proof must survive owner finalization: {finalized}",
+        );
+        assert!(
+            finalized.contains("next_action=run-pair-recovery-after-terminal-retirement blocker=pair-recovery-required"),
+            "{finalized}",
+        );
+        assert!(
+            !finalized.contains("retire-exact-gate8-terminal-through-canonical-owner"),
+            "{finalized}",
+        );
+
+        crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(None);
+        crate::hal::driver_task::reset_cyw43_sdio_pair_recovery_for_test();
     }
 
     #[cfg(feature = "kernel")]
@@ -34171,6 +34499,64 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn unfinished_parent_masks_upper_stack_demand_but_not_driver_progress() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test_with_waiting_parent(
+                75, 21, 1, 0,
+            ),
+        ));
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.active_conn_id = Some(23);
+        wifi.console_service_pending = true;
+        wifi.icmp_echo_due = true;
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::repeated(2, 1),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_network(&mut wifi);
+        pump.pending_net_flush = PendingNetFlush {
+            conn_id: Some(23),
+            remaining_turns: 16,
+        };
+
+        assert!(pump.pending_net_flush.active());
+        assert!(pump
+            .net
+            .as_ref()
+            .is_some_and(|net| { net.console_service_pending() && net.icmp_echo_service_due(0) }));
+        assert!(
+            !pump.linked_runtime_cyw43_network_burst_due(),
+            "flush, console, and Echo Reply policy cannot hot-poll an issued parent",
+        );
+
+        for (source, reason_mask) in [("DPC", 1u64 << 0), ("root RX", 1u64 << 7)] {
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test_with_waiting_parent(
+                    75,
+                    21,
+                    1,
+                    reason_mask,
+                ),
+            ));
+            assert!(
+                pump.linked_runtime_cyw43_network_burst_due(),
+                "fresh {source} must remain runnable beside the sleeping exact parent",
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn retained_icmp_echo_due_extends_only_the_cyw43_network_lane() {
         let _progress_guard = wifi_driver_task_progress_test_guard();
 
@@ -34556,7 +34942,7 @@ mod tests {
 
         let _progress_guard = wifi_driver_task_progress_test_guard();
         assert!(super::cyw43_terminal_retirement_override_from(false, true));
-        assert!(!super::cyw43_terminal_retirement_override_from(true, true));
+        assert!(super::cyw43_terminal_retirement_override_from(true, true));
         assert!(!super::cyw43_terminal_retirement_override_from(
             false, false
         ));
@@ -35507,6 +35893,10 @@ mod tests {
                 1,
             ),
         ));
+        crate::drivers::driver_task_net::set_cyw43_outer_event_turn_enforced_for_test(true);
+        crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        crate::drivers::driver_task_net::reset_cyw43_service_work_derivations_for_test();
+        let _ = crate::drivers::driver_task_net::cyw43_service_work_snapshot();
 
         assert!(
             cyw43_network_lifetime_continuation_resumable(),
@@ -35520,6 +35910,103 @@ mod tests {
             ),
             "the ordinary time cap may fence only a fresh parent, not the terminal's causal successor",
         );
+        assert_eq!(
+            crate::drivers::driver_task_net::cyw43_service_work_derivations_for_test(),
+            1,
+            "the time-cap identity check must reuse the routing snapshot rather than rebuild the full service classifier",
+        );
+        crate::drivers::driver_task_net::finish_cyw43_outer_event_turn();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn network_resume_condition_parks_parent_policy_but_not_independent_work() {
+        let waiting = cyw43_network_resume_condition_from_levels(true, false, false, true, true);
+        assert_eq!(
+            waiting,
+            Cyw43NetworkResumeCondition {
+                service_due: false,
+                lifetime_continuation: true,
+                routed_work_allowed: false,
+            },
+            "an issued unconsumed parent must mask policy and causal self-demand",
+        );
+        assert!(cyw43_network_drain_parent_should_park(waiting));
+        assert!(
+            !cyw43_network_service_due(true, waiting),
+            "stale routed upper-stack demand cannot override the fresh wait condition",
+        );
+
+        let independent = cyw43_network_resume_condition_from_levels(true, false, true, true, true);
+        assert!(
+            independent.service_due,
+            "fresh DPC or root RX must remain runnable beside an unfinished parent",
+        );
+        assert!(independent.lifetime_continuation);
+        assert!(!independent.routed_work_allowed);
+        assert!(!cyw43_network_drain_parent_should_park(independent));
+
+        let terminal = cyw43_network_resume_condition_from_levels(true, true, false, true, false);
+        assert!(
+            terminal.service_due,
+            "exact same-turn terminal progress must retain Network",
+        );
+        assert!(terminal.lifetime_continuation);
+        assert!(terminal.routed_work_allowed);
+
+        let unstable = Cyw43NetworkResumeCondition::default();
+        assert!(
+            !cyw43_network_service_due(true, unstable),
+            "inadmissible or identity-unstable cuts must fail closed over stale routing demand",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn fresh_durable_level_overrides_stale_same_turn_routing_before_sleep() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_outer_event_turn_enforced_for_test(true);
+        // These stable reason bits are part of the diagnostic ABI: DPC is bit
+        // zero and copied root RX is bit seven.
+        for (source, reason_mask) in [("DPC", 1u64 << 0), ("root RX", 1u64 << 7)] {
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(74, 20, 2, 0),
+            ));
+            crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+            crate::drivers::driver_task_net::reset_cyw43_service_work_derivations_for_test();
+            assert!(
+                !crate::drivers::driver_task_net::cyw43_service_work_snapshot().more_work(),
+                "the immutable routing hint starts idle",
+            );
+
+            crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+                crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(
+                    74,
+                    20,
+                    2,
+                    reason_mask,
+                ),
+            ));
+            assert!(
+                !crate::drivers::driver_task_net::cyw43_service_work_snapshot().more_work(),
+                "mid-turn publication cannot rewrite the routing cache",
+            );
+            let resume = cyw43_network_resume_condition();
+            assert!(
+                resume.service_due,
+                "fresh {source} must retain Network without another notification edge",
+            );
+            assert!(
+                !resume.lifetime_continuation,
+                "generic {source} work must not bypass the virtual-time fence as an exact causal parent",
+            );
+            assert_eq!(
+                crate::drivers::driver_task_net::cyw43_service_work_derivations_for_test(),
+                1,
+                "condition-before-sleep must not rebuild the full service classifier",
+            );
+            crate::drivers::driver_task_net::finish_cyw43_outer_event_turn();
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]

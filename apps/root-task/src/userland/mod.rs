@@ -594,6 +594,7 @@ enum DeferredCyw43SupervisorPhase {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DeferredCyw43AttachedTurn {
     NetworkControl,
+    CanonicalWait,
     RecoverySupervisor,
 }
 
@@ -602,12 +603,17 @@ enum DeferredCyw43AttachedTurn {
     feature = "kernel",
     feature = "net-console"
 ))]
-const fn deferred_cyw43_attached_turn(recovery_required: bool) -> DeferredCyw43AttachedTurn {
-    if recovery_required {
-        DeferredCyw43AttachedTurn::RecoverySupervisor
-    } else {
-        DeferredCyw43AttachedTurn::NetworkControl
+const fn deferred_cyw43_attached_turn(
+    recovery_required: bool,
+    canonical_parent: crate::drivers::driver_task_net::Cyw43CanonicalParentCut,
+) -> DeferredCyw43AttachedTurn {
+    if !recovery_required || canonical_parent.runnable() {
+        return DeferredCyw43AttachedTurn::NetworkControl;
     }
+    if canonical_parent.waiting() {
+        return DeferredCyw43AttachedTurn::CanonicalWait;
+    }
+    DeferredCyw43AttachedTurn::RecoverySupervisor
 }
 
 #[cfg(all(
@@ -2068,11 +2074,20 @@ where
         // Gate 8 then consumes a fresh passive snapshot. Its deadline belongs
         // to the one cold-pair attempt. A pre-service fault may drain and fence
         // its exact owner but cannot start another pair or renew the deadline.
-        if network_attached && bootstrap.is_ready() {
+        let recovery_required = crate::drivers::driver_task_net::cyw43_recovery_required();
+        // Healthy attached traffic enters EventPump immediately, where one
+        // outer-turn routing snapshot owns this proof. Reconstruct the full
+        // immutable parent only when the bootstrap/recovery decision needs it;
+        // otherwise this pre-pump read is redundant hot-path housekeeping.
+        let canonical_parent = if recovery_required || !bootstrap.is_ready() {
+            crate::drivers::driver_task_net::cyw43_canonical_parent_cut()
+        } else {
+            crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent
+        };
+        if network_attached && (bootstrap.is_ready() || canonical_parent.retains_canonical_owner())
+        {
             'attached_network_control: {
-                match deferred_cyw43_attached_turn(
-                    crate::drivers::driver_task_net::cyw43_recovery_required(),
-                ) {
+                match deferred_cyw43_attached_turn(recovery_required, canonical_parent) {
                     DeferredCyw43AttachedTurn::NetworkControl => {
                         run_deferred_cyw43_attached_network_control_turn(
                             || pump.poll(),
@@ -2086,10 +2101,13 @@ where
                         // generation; the bootstrap generation names the
                         // independently retained firmware/control pair.
                     }
-                    DeferredCyw43AttachedTurn::RecoverySupervisor => {
+                    DeferredCyw43AttachedTurn::CanonicalWait
+                    | DeferredCyw43AttachedTurn::RecoverySupervisor => {
                         // The common phase alternator below owns recovery
-                        // operator and driver turns. Do not poll either lane here:
-                        // Operator must yield before Driver may service a child.
+                        // operator and driver turns. A canonical wait keeps the
+                        // bootstrap supervisor in Complete, so that alternator
+                        // performs only operator service plus a durable parent
+                        // recheck until the exact continuation becomes visible.
                         break 'attached_network_control;
                     }
                 }
@@ -2382,6 +2400,8 @@ where
         let attempt = CYW43_BOOTSTRAP_ATTEMPT;
         wifi_operation_started = true;
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+        let _cyw43_outer_event_turn =
+            crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
         let Some(turn) = with_deferred_net_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
             // The entry check above proves this unreachable unless the
             // retained bootstrap pointer was corrupted after validation.
@@ -4170,12 +4190,29 @@ mod tests {
         use core::cell::Cell;
 
         assert_eq!(
-            super::deferred_cyw43_attached_turn(false),
+            super::deferred_cyw43_attached_turn(
+                false,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+            ),
             super::DeferredCyw43AttachedTurn::NetworkControl,
         );
         assert_eq!(
-            super::deferred_cyw43_attached_turn(true),
+            super::deferred_cyw43_attached_turn(
+                true,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+            ),
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(
+                true,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Runnable {
+                    generation: 7,
+                    request: 64,
+                },
+            ),
+            super::DeferredCyw43AttachedTurn::NetworkControl,
+            "a committed exact terminal keeps its canonical policy turn",
         );
 
         let stage = Cell::new(0u8);
@@ -4270,13 +4307,30 @@ mod tests {
     #[test]
     fn attached_recovery_scheduler_is_network_then_operator_then_driver() {
         assert_eq!(
-            super::deferred_cyw43_attached_turn(false),
+            super::deferred_cyw43_attached_turn(
+                false,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+            ),
             super::DeferredCyw43AttachedTurn::NetworkControl,
         );
         assert_eq!(
-            super::deferred_cyw43_attached_turn(true),
+            super::deferred_cyw43_attached_turn(
+                true,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Absent,
+            ),
             super::DeferredCyw43AttachedTurn::RecoverySupervisor,
             "typed recovery leaves both hardware lanes to the common phase alternator",
+        );
+        assert_eq!(
+            super::deferred_cyw43_attached_turn(
+                true,
+                crate::drivers::driver_task_net::Cyw43CanonicalParentCut::Waiting {
+                    generation: 7,
+                    request: 64,
+                },
+            ),
+            super::DeferredCyw43AttachedTurn::CanonicalWait,
+            "an exact waiting parent rotates through operator/recheck only",
         );
 
         let (operator, after_operator) = super::deferred_cyw43_supervisor_phase_step(

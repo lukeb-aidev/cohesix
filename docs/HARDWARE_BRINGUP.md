@@ -752,6 +752,18 @@ Keeping the owner record separate ensures the following Gate 1 status retains
 its complete `pwrseq_phase`, `dependency`, `source`, and `next` fields within
 the 256-byte console bound.
 
+An exact observed Gate 8 terminal retained across pair scrub is historical
+causal proof that Gates 1-7 ran; it is not automatically a live owner. While
+the same generation/request remains a runnable canonical cut, `wifi diag`
+reports `blocker=canonical-terminal-retirement-pending` and
+`next_action=retire-exact-gate8-terminal-through-canonical-owner`. After the
+outer finalizer releases that owner, the same historical evidence may continue
+to prove Gates 1-7, but Gate 8 must instead report
+`blocker=pair-recovery-required` and
+`next_action=run-pair-recovery-after-terminal-retirement`. A post-scrub missing
+clock snapshot must never demote this retained causal prefix to a new Gate 4
+failure.
+
 On the clean cold path, exactly one new begun epoch may appear and that same
 epoch must complete without becoming the current failed epoch. Gate 1 may pass
 only when the record is valid and inactive, the nonzero
@@ -2523,12 +2535,19 @@ owner receives the next unowned turn. A repeated op8 after that key response
 has acquired its exact request is failed service evidence.
 
 The central EventPump `network_contract_service_admissible` fence covers both
-ordinary `poll_runtime` and pre-root `poll_pre_root_network`. It rechecks the
-CYW43 service snapshot before Network service and again immediately before
-either a NIC poll or retained TCP flush. A missing, active, failed, or replaced
-physical epoch, or a recovery-active snapshot, clears Wi-Fi scheduling tokens
-and permits neither operation. The fence is CYW43-specific and leaves GENET
-behavior unchanged.
+ordinary `poll_runtime` and pre-root `poll_pre_root_network`. It checks the
+per-turn CYW43 routing snapshot before either a NIC poll or retained TCP flush.
+Immediately before Network sleeps, a separate two-sample narrow resume cut
+rechecks the current physical lifetime, recovery, DPC/runtime/root queues,
+control and requestless policy levels; HAL independently rechecks exact active
+parent progress. Fresh work can therefore override a stale idle routing hint
+without rebuilding the full classifier or requiring another notification. An
+issued parent without fresh physical progress masks retained TCP flush,
+console, ICMP, association, and host-policy demand; fresh DPC, runtime/root RX,
+or the exact terminal still resumes the same bus episode. A
+missing, active, failed, or replaced physical epoch, or recovery-active cut,
+clears Wi-Fi scheduling tokens and permits neither operation. The fence is
+CYW43-specific and leaves GENET behavior unchanged.
 
 Run `netstats` after WiFi readiness and again after the sequential `.coh`
 sample. Alongside the existing quantum records, selected WiFi must emit:

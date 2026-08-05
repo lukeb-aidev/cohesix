@@ -3187,6 +3187,31 @@ pub(crate) fn cyw43_retained_parent_condition(
     }
 }
 
+/// Passively prove a stable terminal for an exact retained CYW43 parent whose
+/// operation class has no root-continuation grant protocol.
+///
+/// Deferred runtime-descriptor replay is one such parent. Its immutable active
+/// command plus sequence-last completion are sufficient; requiring an op8
+/// continuation grant would incorrectly classify the exact terminal as absent.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_exact_retained_terminal_visible(expected_request: u32) -> bool {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let Some(DriverTaskRetainedRequestState::Issued { request, command }) =
+        active_driver_task_retained_request_for_slot(slot)
+    else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    expected_request != 0
+        && request == expected_request
+        && command.sequence == request
+        && ring_root_ptr != 0
+        && slot.active_command_fingerprint.load(Ordering::Acquire) != 0
+        && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+        && driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+}
+
 /// Recheck durable terminal state immediately before suppressing one issued op7.
 ///
 /// Notifications are urgency hints only. Exact immutable request identity and
@@ -3918,6 +3943,10 @@ struct DriverTaskCommandSlot {
     ring_producer: AtomicUsize,
     root_ring_writers: AtomicUsize,
     active_command_fingerprint: AtomicU32,
+    semantic_terminal_request: AtomicU32,
+    semantic_terminal_fingerprint: AtomicU32,
+    semantic_terminal_aux1: AtomicU32,
+    semantic_terminal_pair_epoch: AtomicU32,
     timeout_resumes: AtomicUsize,
     last_progress_magic: AtomicU32,
     last_progress_sequence: AtomicU32,
@@ -4430,6 +4459,10 @@ impl DriverTaskCommandSlot {
             ring_producer: AtomicUsize::new(SDIO_RING_PRODUCER_ROOT_BOOTSTRAP),
             root_ring_writers: AtomicUsize::new(0),
             active_command_fingerprint: AtomicU32::new(0),
+            semantic_terminal_request: AtomicU32::new(0),
+            semantic_terminal_fingerprint: AtomicU32::new(0),
+            semantic_terminal_aux1: AtomicU32::new(0),
+            semantic_terminal_pair_epoch: AtomicU32::new(0),
             timeout_resumes: AtomicUsize::new(0),
             last_progress_magic: AtomicU32::new(0),
             last_progress_sequence: AtomicU32::new(0),
@@ -5431,6 +5464,8 @@ static CYW43_PAIR_TERMINAL_DRAIN_GENERATION: AtomicU32 = AtomicU32::new(0);
 static CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT: AtomicU32 = AtomicU32::new(0);
+#[cfg(feature = "kernel")]
+static CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH: AtomicU32 = AtomicU32::new(0);
 #[cfg(all(feature = "kernel", test))]
 static DRIVER_TASK_TEST_CYW43_SDIO_RESTART_CONTEXT_AVAILABLE: AtomicUsize = AtomicUsize::new(0);
 #[cfg(all(feature = "kernel", test))]
@@ -6115,6 +6150,114 @@ pub(crate) fn cyw43_sdio_network_active_parent_resumable(
     )
 }
 
+/// Re-read the exact active CYW43 parent immediately before Network sleeps.
+///
+/// A merely issued parent is not runnable work: it may sleep until its
+/// physical interrupt commits a terminal. Prepared input, a stable
+/// sequence-last terminal, a published op8 grant awaiting its notify turn, or
+/// a consumed/current op8 grant is runnable and must retain the bounded Network
+/// episode without relying on another notification edge. This predicate never
+/// samples a deadline or mutates the parent.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_network_active_parent_progress_visible(
+    expected_connection_generation: u32,
+) -> bool {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let snapshot = active_driver_task_retained_request_for_slot(slot).map(|state| {
+        DriverTaskRetainedRequestSnapshot {
+            state,
+            command_fingerprint: slot.active_command_fingerprint.load(Ordering::Acquire),
+        }
+    });
+    let current_pair_epoch = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    let pair_current = CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
+    if !cyw43_sdio_network_active_parent_resumable_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        slot,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        snapshot,
+        expected_connection_generation,
+        current_pair_epoch,
+        pair_current,
+    ) {
+        return false;
+    }
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    cyw43_sdio_network_active_parent_progress_visible_for_slot(slot, snapshot)
+}
+
+/// Classify runnable progress for an already-revalidated Network parent.
+///
+/// Keeping this condition separate from lease admission makes its phase
+/// contract directly testable: a published grant still needs its notify turn,
+/// an issued unconsumed grant may sleep, and a sequence-last terminal always
+/// wins over the intermediate grant state.
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_active_parent_progress_visible_for_slot(
+    slot: &DriverTaskCommandSlot,
+    snapshot: DriverTaskRetainedRequestSnapshot,
+) -> bool {
+    let (request, command) = match snapshot.state {
+        DriverTaskRetainedRequestState::Prepared { .. } => return true,
+        DriverTaskRetainedRequestState::Issued { request, command } => (request, command),
+        DriverTaskRetainedRequestState::Invalid { .. } => return false,
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return true;
+    }
+    if !driver_task_retained_uses_root_grant(CYW43_WIFI_DRIVER_TASK_CONTRACT, command) {
+        return false;
+    }
+
+    let phase = DriverTaskRetainedLeasePhase::from_usize(
+        slot.retained_priority_lease_phase.load(Ordering::Acquire),
+    );
+    let current_grant = slot.retained_grant_id.load(Ordering::Acquire);
+    match phase {
+        Some(DriverTaskRetainedLeasePhase::GrantRequired) if current_grant == 0 => {
+            driver_task_ring_read_continuation_grant(ring_root_ptr).is_none()
+        }
+        Some(DriverTaskRetainedLeasePhase::GrantRequired) => {
+            read_driver_task_retained_root_grant_stable_with(command, current_grant, || {
+                driver_task_ring_read_continuation_grant(ring_root_ptr)
+            })
+            .is_some_and(|grant| grant.consumed_grant_id == current_grant)
+        }
+        Some(DriverTaskRetainedLeasePhase::Granted) => {
+            current_grant != 0
+                && read_driver_task_retained_root_grant_stable_with(command, current_grant, || {
+                    driver_task_ring_read_continuation_grant(ring_root_ptr)
+                })
+                .is_some()
+        }
+        Some(DriverTaskRetainedLeasePhase::Issued) => {
+            current_grant != 0
+                && read_driver_task_retained_root_grant_stable_with(command, current_grant, || {
+                    driver_task_ring_read_continuation_grant(ring_root_ptr)
+                })
+                .is_some_and(|grant| grant.consumed_grant_id == current_grant)
+        }
+        Some(
+            DriverTaskRetainedLeasePhase::Inactive
+            | DriverTaskRetainedLeasePhase::BoostBus
+            | DriverTaskRetainedLeasePhase::BoostPrimary
+            | DriverTaskRetainedLeasePhase::ReadyToIssue
+            | DriverTaskRetainedLeasePhase::Committed
+            | DriverTaskRetainedLeasePhase::RestorePrimary
+            | DriverTaskRetainedLeasePhase::RestoreBus
+            | DriverTaskRetainedLeasePhase::ReadyToComplete
+            | DriverTaskRetainedLeasePhase::Poisoned,
+        )
+        | None => false,
+    }
+}
+
 /// Open the sole pair-fenced continuation lane for one already-issued CYW43
 /// request.
 ///
@@ -6142,8 +6285,16 @@ pub(crate) fn begin_cyw43_pair_terminal_drain(generation: u32, request: u32) -> 
         return false;
     }
     let current = CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire);
-    if current != 0 && current != request {
-        return false;
+    let pair_epoch = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    if current != 0 {
+        // A published request is sequence-last authority. Never rewrite its
+        // body in place, even for an apparently idempotent second admission.
+        return current == request
+            && CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Relaxed) == generation
+            && CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Relaxed) == command.aux1
+            && CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Relaxed)
+                == snapshot.command_fingerprint
+            && CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.load(Ordering::Relaxed) == pair_epoch;
     }
     CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(generation, Ordering::Relaxed);
     // Engine-init commands intentionally keep ABI aux1 at zero, while normal
@@ -6153,30 +6304,305 @@ pub(crate) fn begin_cyw43_pair_terminal_drain(generation: u32, request: u32) -> 
     // retained-slot fingerprint fence.
     CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(command.aux1, Ordering::Relaxed);
     CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(snapshot.command_fingerprint, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.store(pair_epoch, Ordering::Relaxed);
     CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(request, Ordering::Release);
     true
 }
 
-/// Close one exact pair-fenced terminal continuation authority.
+/// Passively confirm the sole pair-fenced continuation authority.
+///
+/// Scheduler observations use this only to distinguish a supervisor-opened
+/// exact bootstrap drain from an unadmitted recovery turn. It performs no ring
+/// write, grant publication, notification, or authority mutation.
 #[cfg(feature = "kernel")]
-pub(crate) fn finish_cyw43_pair_terminal_drain(generation: u32, request: u32) {
-    if CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) == request
-        && CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Acquire) == generation
+#[must_use]
+pub(crate) fn cyw43_pair_terminal_drain_authorized(generation: u32, request: u32) -> bool {
+    if request == 0
+        || CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) != request
+        || CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Acquire) != generation
     {
-        CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(0, Ordering::Release);
-        CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(0, Ordering::Relaxed);
-        CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
-        CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(0, Ordering::Relaxed);
+        return false;
     }
+    let Some(snapshot) =
+        active_driver_task_retained_request_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+    else {
+        return false;
+    };
+    let DriverTaskRetainedRequestState::Issued {
+        request: active_request,
+        command,
+    } = snapshot.state
+    else {
+        return false;
+    };
+    active_request == request
+        && snapshot.command_fingerprint != 0
+        && CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Acquire) == command.aux1
+        && CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Acquire)
+            == snapshot.command_fingerprint
+        && CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.load(Ordering::Acquire)
+            == CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire)
+}
+
+/// Non-copyable authority to close one exact pair-fenced continuation.
+#[cfg(feature = "kernel")]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43PairTerminalDrainReceipt {
+    generation: u32,
+    request: u32,
+    command_aux1: u32,
+    command_fingerprint: u32,
+    pair_epoch: u32,
+}
+
+#[cfg(feature = "kernel")]
+const CYW43_PAIR_TERMINAL_DRAIN_RETIRING: u32 = u32::MAX;
+
+/// Acquire one stable, exact pair-drain receipt without advancing it.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_pair_terminal_drain_receipt(
+    generation: u32,
+    request: u32,
+) -> Option<Cyw43PairTerminalDrainReceipt> {
+    if request == 0 || request == CYW43_PAIR_TERMINAL_DRAIN_RETIRING {
+        return None;
+    }
+    let first = CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire);
+    if first != request {
+        return None;
+    }
+    let receipt = Cyw43PairTerminalDrainReceipt {
+        generation: CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Relaxed),
+        request,
+        command_aux1: CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Relaxed),
+        command_fingerprint: CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Relaxed),
+        pair_epoch: CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.load(Ordering::Relaxed),
+    };
+    let second = CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire);
+    (second == first
+        && receipt.generation == generation
+        && receipt.command_fingerprint != 0
+        && receipt.pair_epoch == CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire))
+    .then_some(receipt)
+}
+
+/// Revalidate a previously acquired pair-drain authority.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_pair_terminal_drain_receipt_matches(
+    receipt: &Cyw43PairTerminalDrainReceipt,
+) -> bool {
+    CYW43_PAIR_TERMINAL_DRAIN_REQUEST.load(Ordering::Acquire) == receipt.request
+        && CYW43_PAIR_TERMINAL_DRAIN_GENERATION.load(Ordering::Relaxed) == receipt.generation
+        && CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Relaxed) == receipt.command_aux1
+        && CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Relaxed)
+            == receipt.command_fingerprint
+        && CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.load(Ordering::Relaxed) == receipt.pair_epoch
+        && receipt.command_fingerprint != 0
+        && receipt.pair_epoch == CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire)
+}
+
+/// Compare-clear one exact pair-drain authority after semantic commit.
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_cyw43_pair_terminal_drain_receipt(
+    receipt: Cyw43PairTerminalDrainReceipt,
+) -> bool {
+    if !cyw43_pair_terminal_drain_receipt_matches(&receipt)
+        || CYW43_PAIR_TERMINAL_DRAIN_REQUEST
+            .compare_exchange(
+                receipt.request,
+                CYW43_PAIR_TERMINAL_DRAIN_RETIRING,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_err()
+    {
+        return false;
+    }
+    CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(0, Ordering::Release);
+    true
+}
+
+/// Exact HAL proof that one persistent op11 parent reached a stable terminal.
+///
+/// This replaces the active retained slot after terminal observation and
+/// remains authoritative until the root protocol owner has copied/routed the
+/// result and committed its semantic state. The request is the sequence-last
+/// publication word; notifications carry none of this authority.
+#[cfg(feature = "kernel")]
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43SemanticTerminalReceipt {
+    request: u32,
+    command_fingerprint: u32,
+    command_aux1: u32,
+    pair_epoch: u32,
+}
+
+#[cfg(feature = "kernel")]
+const CYW43_SEMANTIC_TERMINAL_RETIRING: u32 = u32::MAX;
+
+#[cfg(feature = "kernel")]
+fn publish_cyw43_semantic_terminal_receipt(
+    slot: &DriverTaskCommandSlot,
+    request: u32,
+    command: DriverTaskCommandRecord,
+    command_fingerprint: u32,
+) -> bool {
+    if request == 0
+        || request == CYW43_SEMANTIC_TERMINAL_RETIRING
+        || command_fingerprint == 0
+        || slot.semantic_terminal_request.load(Ordering::Acquire) != 0
+    {
+        return false;
+    }
+    slot.semantic_terminal_fingerprint
+        .store(command_fingerprint, Ordering::Relaxed);
+    slot.semantic_terminal_aux1
+        .store(command.aux1, Ordering::Relaxed);
+    slot.semantic_terminal_pair_epoch.store(
+        CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+        Ordering::Relaxed,
+    );
+    slot.semantic_terminal_request
+        .store(request, Ordering::Release);
+    true
+}
+
+/// Passively acquire the exact persistent-op11 terminal receipt.
+#[cfg(feature = "kernel")]
+fn cyw43_semantic_terminal_receipt_from_slot(
+    slot: &DriverTaskCommandSlot,
+    request: u32,
+) -> Option<Cyw43SemanticTerminalReceipt> {
+    if request == 0 || request == CYW43_SEMANTIC_TERMINAL_RETIRING {
+        return None;
+    }
+    let first = slot.semantic_terminal_request.load(Ordering::Acquire);
+    if first != request {
+        return None;
+    }
+    let receipt = Cyw43SemanticTerminalReceipt {
+        request,
+        command_fingerprint: slot.semantic_terminal_fingerprint.load(Ordering::Relaxed),
+        command_aux1: slot.semantic_terminal_aux1.load(Ordering::Relaxed),
+        pair_epoch: slot.semantic_terminal_pair_epoch.load(Ordering::Relaxed),
+    };
+    let second = slot.semantic_terminal_request.load(Ordering::Acquire);
+    (second == first && receipt.command_fingerprint != 0).then_some(receipt)
+}
+
+/// Passively acquire the exact persistent-op11 terminal receipt.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_semantic_terminal_receipt(
+    request: u32,
+) -> Option<Cyw43SemanticTerminalReceipt> {
+    cyw43_semantic_terminal_receipt_from_slot(&DRIVER_TASK_SLOT_CYW43455, request)
+}
+
+/// Passively revalidate a previously acquired semantic terminal receipt.
+#[cfg(feature = "kernel")]
+fn cyw43_semantic_terminal_receipt_matches_slot(
+    slot: &DriverTaskCommandSlot,
+    receipt: &Cyw43SemanticTerminalReceipt,
+) -> bool {
+    slot.semantic_terminal_request.load(Ordering::Acquire) == receipt.request
+        && slot.semantic_terminal_fingerprint.load(Ordering::Relaxed) == receipt.command_fingerprint
+        && slot.semantic_terminal_aux1.load(Ordering::Relaxed) == receipt.command_aux1
+        && slot.semantic_terminal_pair_epoch.load(Ordering::Relaxed) == receipt.pair_epoch
+}
+
+/// Passively revalidate a previously acquired semantic terminal receipt.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_semantic_terminal_receipt_matches(
+    receipt: &Cyw43SemanticTerminalReceipt,
+) -> bool {
+    cyw43_semantic_terminal_receipt_matches_slot(&DRIVER_TASK_SLOT_CYW43455, receipt)
+}
+
+/// Compare-clear one exact persistent-op11 terminal after semantic commit.
+#[cfg(feature = "kernel")]
+fn finish_cyw43_semantic_terminal_receipt_in_slot(
+    slot: &DriverTaskCommandSlot,
+    receipt: Cyw43SemanticTerminalReceipt,
+) -> bool {
+    if slot.semantic_terminal_request.load(Ordering::Acquire) != receipt.request
+        || slot.semantic_terminal_fingerprint.load(Ordering::Relaxed) != receipt.command_fingerprint
+        || slot.semantic_terminal_aux1.load(Ordering::Relaxed) != receipt.command_aux1
+        || slot.semantic_terminal_pair_epoch.load(Ordering::Relaxed) != receipt.pair_epoch
+    {
+        return false;
+    }
+    if slot
+        .semantic_terminal_request
+        .compare_exchange(
+            receipt.request,
+            CYW43_SEMANTIC_TERMINAL_RETIRING,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    slot.semantic_terminal_fingerprint
+        .store(0, Ordering::Relaxed);
+    slot.semantic_terminal_aux1.store(0, Ordering::Relaxed);
+    slot.semantic_terminal_pair_epoch
+        .store(0, Ordering::Relaxed);
+    slot.semantic_terminal_request.store(0, Ordering::Release);
+    true
+}
+
+/// Compare-clear one exact persistent-op11 terminal after semantic commit.
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_cyw43_semantic_terminal_receipt(
+    receipt: Cyw43SemanticTerminalReceipt,
+) -> bool {
+    finish_cyw43_semantic_terminal_receipt_in_slot(&DRIVER_TASK_SLOT_CYW43455, receipt)
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_semantic_terminal_receipt() {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    slot.semantic_terminal_request.store(0, Ordering::Release);
+    slot.semantic_terminal_fingerprint
+        .store(0, Ordering::Relaxed);
+    slot.semantic_terminal_aux1.store(0, Ordering::Relaxed);
+    slot.semantic_terminal_pair_epoch
+        .store(0, Ordering::Relaxed);
+}
+
+/// Close one exact pair-fenced terminal continuation authority.
+///
+/// The return value confirms that the caller retired the same generation and
+/// immutable request that opened the exception. A semantic owner must treat a
+/// mismatch as a pair-lifetime fault rather than silently continuing after a
+/// different or already-cleared authority record.
+#[cfg(feature = "kernel")]
+pub(crate) fn finish_cyw43_pair_terminal_drain(generation: u32, request: u32) -> bool {
+    cyw43_pair_terminal_drain_receipt(generation, request)
+        .is_some_and(finish_cyw43_pair_terminal_drain_receipt)
+}
+
+/// Passively validate the stored pair-drain identity after the active slot has
+/// been replaced by its terminal receipt.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_pair_terminal_drain_identity_matches(generation: u32, request: u32) -> bool {
+    cyw43_pair_terminal_drain_receipt(generation, request).is_some()
 }
 
 /// Revoke any terminal-drain exception before deterministic pair teardown.
 #[cfg(feature = "kernel")]
 pub(crate) fn clear_cyw43_pair_terminal_drain() {
+    clear_cyw43_semantic_terminal_receipt();
     CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(0, Ordering::Release);
     CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(0, Ordering::Relaxed);
     CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(0, Ordering::Relaxed);
     CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(0, Ordering::Relaxed);
+    CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.store(0, Ordering::Relaxed);
 }
 
 /// Snapshot the exact root-owned continuation state without advancing it.
@@ -8303,6 +8729,8 @@ fn cyw43_pair_fence_allows_exact_terminal_retained_turn(
         || slot.request_seq.load(Ordering::Acquire) != authorized_request as usize
         || CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.load(Ordering::Acquire) != command.aux1
         || CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.load(Ordering::Acquire) != command_fingerprint
+        || CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.load(Ordering::Acquire)
+            != CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire)
         || slot.active_command_fingerprint.load(Ordering::Acquire) != command_fingerprint
         || slot.retained_doorbell_issued.load(Ordering::Acquire) == 0
     {
@@ -16542,6 +16970,22 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
     let mut cache_counter_batch = DriverTaskCacheCounterBatch::new();
 
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && slot.semantic_terminal_request.load(Ordering::Acquire) != 0
+    {
+        // A completed persistent parent still belongs to its semantic owner.
+        // No successor request may reuse the physical slot until that exact
+        // receipt is compare-cleared or deterministic pair recovery scrubs it.
+        request_cyw43_sdio_pair_restart();
+        emit_driver_task_ring_resource_submit_status(
+            contract,
+            command,
+            "runtime-ring-submit",
+            "semantic-terminal-owner-active",
+        );
+        return None;
+    }
+
     let active_before_submit = slot.active.load(Ordering::Acquire) != 0;
     if active_before_submit
         && !exact_terminal_drain
@@ -17572,6 +18016,23 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             progress_advanced,
             timeout_progress,
         );
+    }
+    if completion.sequence == request as u32
+        && persistent_transaction
+        && !publish_cyw43_semantic_terminal_receipt(
+            slot,
+            request as u32,
+            command,
+            command_fingerprint,
+        )
+    {
+        // The child terminal is already durable but its replacement authority
+        // could not be published. Preserve the active slot and enter the sole
+        // pair-recovery lane; never return a body without a lifetime receipt.
+        request_cyw43_sdio_pair_restart();
+        fail_driver_task_retained_priority_lease(slot, contract);
+        cache_counter_batch.flush(slot);
+        return None;
     }
     if completion.sequence == request as u32 || !keep_active_on_timeout {
         slot.active.store(0, Ordering::Release);
@@ -18674,6 +19135,59 @@ pub(crate) fn test_root_grant_action_counts() -> (usize, usize) {
         TEST_ROOT_GRANT_PUBLICATIONS.load(Ordering::Acquire),
         TEST_ROOT_NOTIFICATION_SIGNALS.load(Ordering::Acquire),
     )
+}
+
+/// Clear the sequence-last terminal of one exact issued CYW43 test parent.
+///
+/// This models a child that has accepted the request but has not yet committed
+/// a terminal, without changing its immutable command identity.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_clear_cyw43_retained_completion() -> Option<u32> {
+    let Some(slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return None;
+    };
+    let Some(active) = active_driver_task_retained_request(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return None;
+    };
+    if !active.issued() {
+        return None;
+    }
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if ring_root_ptr == 0 {
+        return None;
+    }
+    let completion_ptr =
+        (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+    // SAFETY: This test seam operates on the aligned, page-sized ring already
+    // published by the current test. Clearing the sequence commit models an
+    // exact issued parent before its child terminal becomes durable; no
+    // production completion is modified.
+    unsafe {
+        core::ptr::write_volatile(completion_ptr, DriverTaskCompletionRecord::idle(0));
+    }
+    Some(active.request())
+}
+
+/// Force the exact active CYW43 parent to the durable GrantRequired level.
+///
+/// This host-test seam models a root continuation that recovery must contain
+/// without publishing a grant or signalling either linked runtime.
+#[cfg(all(test, feature = "kernel"))]
+pub(crate) fn test_force_cyw43_retained_continuation_ready() -> bool {
+    let Some(request) = test_clear_cyw43_retained_completion() else {
+        return false;
+    };
+    let Some(slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    driver_task_ring_clear_continuation_grant(slot, ring_root_ptr);
+    slot.retained_grant_id.store(0, Ordering::Relaxed);
+    slot.retained_priority_lease_phase.store(
+        DriverTaskRetainedLeasePhase::GrantRequired.as_usize(),
+        Ordering::Release,
+    );
+    cyw43_retained_parent_condition(request) == Cyw43RetainedParentCondition::ContinuationReady
 }
 
 /// Publish a delayed reciprocal-ring completion without consuming root state.
@@ -22825,6 +23339,10 @@ mod tests {
         CYW43_PAIR_TERMINAL_DRAIN_GENERATION.store(command.aux1, Ordering::Relaxed);
         CYW43_PAIR_TERMINAL_DRAIN_COMMAND_AUX1.store(command.aux1, Ordering::Relaxed);
         CYW43_PAIR_TERMINAL_DRAIN_FINGERPRINT.store(fingerprint, Ordering::Relaxed);
+        CYW43_PAIR_TERMINAL_DRAIN_PAIR_EPOCH.store(
+            CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire),
+            Ordering::Relaxed,
+        );
         CYW43_PAIR_TERMINAL_DRAIN_REQUEST.store(command.sequence, Ordering::Release);
         assert!(cyw43_pair_fence_allows_exact_terminal_retained_turn(
             &slot,
@@ -23196,6 +23714,104 @@ mod tests {
         command.aux0 = DRIVER_RUNTIME_CYW43_COMMAND_AUX;
         command.aux1 = generation;
         command
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn semantic_terminal_receipt_compare_clear_binds_all_fields_and_rejects_duplicate_publication()
+    {
+        let slot = DriverTaskCommandSlot::new();
+        let request = 73;
+        let mut command = persistent_transaction_test_command(7);
+        command.sequence = request;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags)
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        let command_fingerprint = driver_task_ring_command_fingerprint(command, 0x4359_0011);
+
+        assert!(publish_cyw43_semantic_terminal_receipt(
+            &slot,
+            request,
+            command,
+            command_fingerprint,
+        ));
+        let receipt = cyw43_semantic_terminal_receipt_from_slot(&slot, request)
+            .expect("the sequence-last receipt must be stable");
+        assert_eq!(receipt.request, request);
+        assert_eq!(receipt.command_fingerprint, command_fingerprint);
+        assert_eq!(receipt.command_aux1, command.aux1);
+
+        let mismatched = [
+            Cyw43SemanticTerminalReceipt {
+                request: receipt.request.wrapping_add(1),
+                command_fingerprint: receipt.command_fingerprint,
+                command_aux1: receipt.command_aux1,
+                pair_epoch: receipt.pair_epoch,
+            },
+            Cyw43SemanticTerminalReceipt {
+                request: receipt.request,
+                command_fingerprint: receipt.command_fingerprint ^ 0x0001_0000,
+                command_aux1: receipt.command_aux1,
+                pair_epoch: receipt.pair_epoch,
+            },
+            Cyw43SemanticTerminalReceipt {
+                request: receipt.request,
+                command_fingerprint: receipt.command_fingerprint,
+                command_aux1: receipt.command_aux1 ^ 1,
+                pair_epoch: receipt.pair_epoch,
+            },
+            Cyw43SemanticTerminalReceipt {
+                request: receipt.request,
+                command_fingerprint: receipt.command_fingerprint,
+                command_aux1: receipt.command_aux1,
+                pair_epoch: receipt.pair_epoch.wrapping_add(1),
+            },
+        ];
+        for mismatched_receipt in mismatched {
+            assert!(!cyw43_semantic_terminal_receipt_matches_slot(
+                &slot,
+                &mismatched_receipt,
+            ));
+            assert!(!finish_cyw43_semantic_terminal_receipt_in_slot(
+                &slot,
+                mismatched_receipt,
+            ));
+            assert!(cyw43_semantic_terminal_receipt_matches_slot(
+                &slot, &receipt,
+            ));
+        }
+
+        assert!(!publish_cyw43_semantic_terminal_receipt(
+            &slot,
+            request,
+            command,
+            command_fingerprint,
+        ));
+        let mut distinct_command = command;
+        distinct_command.aux1 ^= 1;
+        let distinct_fingerprint =
+            driver_task_ring_command_fingerprint(distinct_command, 0x4359_0011);
+        assert!(!publish_cyw43_semantic_terminal_receipt(
+            &slot,
+            request.wrapping_add(1),
+            distinct_command,
+            distinct_fingerprint,
+        ));
+        assert!(cyw43_semantic_terminal_receipt_matches_slot(
+            &slot, &receipt,
+        ));
+
+        assert!(finish_cyw43_semantic_terminal_receipt_in_slot(
+            &slot, receipt,
+        ));
+        assert!(cyw43_semantic_terminal_receipt_from_slot(&slot, request).is_none());
+        assert_eq!(slot.semantic_terminal_request.load(Ordering::Acquire), 0);
+        assert_eq!(
+            slot.semantic_terminal_fingerprint.load(Ordering::Relaxed),
+            0,
+        );
+        assert_eq!(slot.semantic_terminal_aux1.load(Ordering::Relaxed), 0);
+        assert_eq!(slot.semantic_terminal_pair_epoch.load(Ordering::Relaxed), 0,);
     }
 
     #[cfg(feature = "kernel")]
@@ -24309,6 +24925,60 @@ mod tests {
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
         reset_cyw43_sdio_pair_recovery_for_test();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_network_resume_progress_distinguishes_notify_wait_and_terminal() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let request = 0x4359_8018usize;
+        let grant_id = 7;
+        let (command, command_fingerprint) =
+            seed_recurrent_root_grant_test_slot(&slot, ring_root_ptr, request, 19, grant_id, 0);
+        let snapshot = DriverTaskRetainedRequestSnapshot {
+            state: DriverTaskRetainedRequestState::Issued {
+                request: request as u32,
+                command,
+            },
+            command_fingerprint,
+        };
+
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Granted.as_usize(),
+            Ordering::Release,
+        );
+        assert!(
+            cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "a sequence-last published grant still requires its notify-or-ack turn",
+        );
+
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        assert!(
+            !cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "an issued unconsumed grant must sleep until durable progress appears",
+        );
+
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let mut terminal = DriverTaskCompletionRecord::progress(request as u32, 1);
+        terminal.sequence = 0;
+        // SAFETY: `completion_ptr` addresses the fixed completion record in
+        // this test-owned aligned ring. The sequence is committed last.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, request as u32);
+        }
+        assert!(
+            cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "a same-turn sequence-last terminal must outrank the unconsumed grant wait",
+        );
     }
 
     #[cfg(feature = "kernel")]

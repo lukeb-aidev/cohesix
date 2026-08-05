@@ -1066,6 +1066,44 @@ issue: a stable terminal at expiry must win, while a double stable miss must
 request the existing pair recovery with zero added grant, signal, replay, or
 runtime wake.
 
+Semantic-retirement coverage must exercise the production root/HAL path for a
+healthy logical op11 terminal, an interleaved EVENT/DATA physical terminal,
+recovery becoming sticky before canonical consumption, and an omitted
+outer-turn finalizer. Construction-level coverage separately requires a
+dropped uncommitted raw-retirement token to fail closed before semantic
+publication; receipt-level coverage compare-validates every exact identity
+field before release.
+Before finalization, tests require the copied or routed semantic body to be
+visible, the active HAL request to be replaced by its exact
+request/fingerprint/`aux1`/pair-epoch receipt, and the logical owner to remain
+live. A normal finalizer clears the matching logical owner, receipt, and
+pair-terminal-drain authority without introducing another recovery; an interleaved finalizer clears
+only physical authority. Every dropped, orphaned, duplicate, or mismatched case
+must preserve the fence, admit no successor operation, and request the sole
+pair recovery where the corresponding production state is reachable. The
+paired diagnostic counterfactual requires an exact observed Gate 8 terminal
+retained across pair scrub to preserve the Gates 1-7 causal prefix. It reports
+canonical retirement only while the same exact runnable parent is live; after
+finalization it reports pair recovery while preserving the historical prefix.
+An unobserved hint or lower-gate terminal must not gain that authority.
+
+Scheduler coverage must prove that repeated canonical cut/owner and combined
+service-level questions in one active outer policy turn each derive one
+immutable routing snapshot, while the next turn derives fresh snapshots and
+outside-turn diagnostics never reuse them. A real sleeping op7 must remain one
+cached hint when its child commits asynchronously, then expose the terminal on
+the next turn without a successor issue. Separately, publish DPC and copied
+root-RX levels after an idle routing snapshot in the same outer turn and
+require the narrow condition-before-sleep cut to retain Network while the
+full-classifier derivation count remains unchanged. Generic work must not acquire
+same-lifetime time-cap authority, and an issued waiting parent must mask
+identity-only policy levels plus retained TCP flush, console, and ICMP demand.
+Fresh DPC, copied root RX, and the exact sequence-last terminal must remain
+runnable beside that sleeping parent. These caches are performance assertions only: the
+production consumer, HAL admission, and explicit condition-before-sleep
+boundary retain independent exact durable rechecks, and a cached hint cannot
+issue, consume, retire, recover, or make notification history authoritative.
+
 `PreTxDpcProbe` must classify the durable generation condition without exposing
 housekeeping as a bus transaction. A valid current-physical-generation,
 owner-active, empty/unmasked ring continues locally with no `DPC_ACTIVATE`

@@ -487,7 +487,38 @@ descriptor and payload, performs ABI-invisible `Stage`, cleans/barriers the
 complete body, commits the command sequence last, records `Issued`, and signals
 CYW43 exactly once. Every later root poll can observe only the durable terminal
 or contain a fault; it cannot publish grant 19, re-signal, or manufacture a
-rescue edge. CYW43 derives a paired marker for each exact CMD52, CMD53, or
+rescue edge.
+
+HAL does not release an exact op11 at raw ring observation. Before clearing the
+active retained request, it publishes a sequence-last semantic-terminal receipt
+binding request, command fingerprint, logical `aux1`, and physical pair epoch.
+The canonical CYW43 policy owner first copies or routes the completion body and
+commits its immediate semantic cursor, then stages one non-copyable retirement
+token. Only the finalizer spanning the complete outer EventPump or bootstrap
+turn may compare-validate and clear the logical owner, HAL receipt, and any
+matching pair-terminal-drain authority. Interleaved EVENT/DATA retires only the
+completed physical request and preserves the logical BCDC transaction. A
+dropped token, omitted finalizer, duplicate receipt, or identity mismatch
+leaves successor work fenced and requests the sole pair recovery; no fallback
+path may reuse the slot.
+
+EventPump derives both the canonical parent's typed routing cut and the
+combined DPC/RX/op7/op8/op11 service level once per active outer policy turn.
+Those immutable hints avoid repeated stable ring reads and rebuilding or
+hashing the same staged WiFi payload at each scheduler question. They carry no
+issue, completion, retirement, or recovery authority. The selected consumer,
+HAL admission, and the explicit before-sleep stability boundary still re-read
+exact durable state. That final boundary does not rebuild the full classifier:
+it double-samples a narrow `Cyw43NetworkResumeCut` containing current lifetime,
+recovery, DPC/runtime/root RX, control, and requestless policy levels, then HAL
+rechecks the active parent's exact sequence-last completion or op8 grant.
+Fresh visible work overrides an idle same-turn routing hint. An issued waiting
+parent masks identity-only policy levels, so the recheck cannot become a poll
+clock; only independent DPC/RX/control work or exact parent progress retains
+Network. The outer-turn finalizer invalidates both hints; passive diagnostics
+outside an active turn always derive fresh state.
+
+CYW43 derives a paired marker for each exact CMD52, CMD53, or
 `DPC_ACTIVATE` child. The sole SDIO owner retains that immutable child across
 bounded physical quanta with zero delegated grants, and commits the terminal
 before signalling. The post-release `DPC_ACTIVATE` establishes one
@@ -1331,7 +1362,16 @@ pair recovery rewrites live Gate 8 as the generic
 `8a-pair-generation/pair-recovery-required` state. The association counters
 are boot-cumulative and passive: a `join-submit-pending` frontier with zero
 service turns and zero Join starts proves scheduler starvation rather than RF
-or hardware warm-up.
+or hardware warm-up. When the retained recovery record contains an exact
+observed Gate 8 terminal, `wifi diag` preserves that causal prefix as proof that
+Gates 1-7 ran even if pair scrub has removed the current physical-lifetime and
+clock snapshots. Only an exact runnable canonical cut with the same generation
+and request reports `canonical-terminal-retirement-pending` and directs the
+operator to retire that live owner. After the outer finalizer releases it, the
+historical prefix remains proof of Gates 1-7, while Gate 8 honestly reports
+`pair-recovery-required`; it must not relabel that history as live authority or
+a new Gate 4 failure. An unobserved hint or lower-gate record cannot create this
+exception.
 
 When losses exist, the fourth and fifth lines have these exact shapes:
 
@@ -1601,6 +1641,14 @@ generation and XID.
   operation. It neither consults nor mutates the transient hint latch or its
   passive counters because neither is authoritative. The fence is
   CYW43-specific; GENET remains unchanged.
+
+  While one exact CYW43 parent is issued but has no committed physical
+  progress, retained TCP flush, console, ICMP, association, and host-policy
+  demand cannot keep Network hot or reopen it after the physical-operator
+  rotation. The parent sleeps on its durable condition. Fresh DPC, runtime or
+  copied root RX, and its exact sequence-last terminal remain independently
+  runnable and resume the same bounded bus-service episode without notification
+  history.
 
   Outside an already-active `Network` turn, either the transient current-turn
   notification latch or a stable nonempty queue condition may request service

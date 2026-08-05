@@ -208,6 +208,12 @@ WIFI_DETAIL_BLOCKERS = {
     "21289": "cyw43-firmware-retry-exhausted",
 }
 
+WIFI_LIFECYCLE_BLOCKERS = frozenset(
+    {
+        "pair-recovery-required",
+    }
+)
+
 
 def normalized_detail_blocker(
     fields: dict[str, str], mapping: dict[str, str]
@@ -611,6 +617,7 @@ def update_wifi(summary: LogSummary, line: str, fields: dict[str, str]) -> None:
         or "timeout" in blocker
         or "firmware-retry-exhausted" in blocker
         or "failed" in blocker
+        or blocker in WIFI_LIFECYCLE_BLOCKERS
     ):
         summary.wifi_blocker_seen = True
         if summary.wifi_blocker == "none" or structured_blocker != "none":

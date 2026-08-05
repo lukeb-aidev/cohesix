@@ -5149,7 +5149,13 @@ impl<D: NetDevice> NetStack<D> {
 
         activity |= self.service_wifi_host_eapol_slice(now_ms);
         activity |= self.sync_interface_hardware_addr(now_ms);
-        if wifi_host_eapol_blocks_data_path(self.device.bringup_status_label()) {
+        let host_eapol_blocks_data =
+            wifi_host_eapol_blocks_data_path(self.device.bringup_status_label());
+        let canonical_net_data = matches!(
+            crate::drivers::driver_task_net::cyw43_canonical_policy_owner(),
+            Some(crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::NetData)
+        );
+        if host_eapol_blocks_data && !canonical_net_data {
             self.finish_poll_turn(now_ms, activity);
             return activity;
         }
@@ -5166,9 +5172,16 @@ impl<D: NetDevice> NetStack<D> {
                 self.finish_poll_turn(now_ms, activity);
                 return activity;
             }
-            if cyw43_pre_poll_activity {
+            if cyw43_pre_poll_activity && !host_eapol_blocks_data {
                 activity |= self.poll_smoltcp_once(timestamp, now_ms, "cyw43-pre-poll-drain");
             }
+        }
+        if host_eapol_blocks_data {
+            // A recovery-fenced NetData terminal reached its canonical prompt
+            // owner above. Keep DHCP/TCP closed until pair recovery completes;
+            // this exception exists only to retire the exact old parent.
+            self.finish_poll_turn(now_ms, activity);
+            return activity;
         }
         activity |= self.retry_blocked_cyw43_rx_admission(now_ms);
         if self.wifi_rx_admission_blocked {
@@ -5536,11 +5549,28 @@ impl<D: NetDevice> NetStack<D> {
             {
                 return false;
             }
-            let association = self
-                .wifi_association_supervisor
-                .service(self.wifi_credentials, now_ms);
-            let mut activity = association.activity;
-            if !association.claimed_runtime_turn && association.host_eapol_allowed {
+            let canonical_owner = crate::drivers::driver_task_net::cyw43_canonical_policy_owner();
+            let defer_association = matches!(
+                canonical_owner,
+                Some(
+                    crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::HostPolicy
+                        | crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::NetData
+                )
+            );
+            let association = (!defer_association).then(|| {
+                self.wifi_association_supervisor
+                    .service(self.wifi_credentials, now_ms)
+            });
+            let mut activity = association.is_some_and(|outcome| outcome.activity);
+            let association_claimed =
+                association.is_some_and(|outcome| outcome.claimed_runtime_turn);
+            let host_policy_turn = matches!(
+                canonical_owner,
+                Some(crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::HostPolicy)
+            );
+            let host_eapol_allowed =
+                host_policy_turn || association.is_some_and(|outcome| outcome.host_eapol_allowed);
+            if !association_claimed && host_eapol_allowed {
                 if let Some(credentials) = self.wifi_credentials {
                     activity |= crate::drivers::driver_task_net::service_cyw43_host_eapol_slice(
                         credentials,
@@ -5567,6 +5597,15 @@ impl<D: NetDevice> NetStack<D> {
         {
             if D::driver_task_contract() != crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
             {
+                return false;
+            }
+            if matches!(
+                crate::drivers::driver_task_net::cyw43_canonical_policy_owner(),
+                Some(
+                    crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::HostPolicy
+                        | crate::drivers::driver_task_net::Cyw43CanonicalPolicyOwner::NetData
+                )
+            ) {
                 return false;
             }
             return self

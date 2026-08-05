@@ -324,6 +324,49 @@ def test_latest_diagnostics_classify_cyw43_descriptor_invalid(
     assert fields["NEW_WIFI_BLOCKER"] == "cyw43-descriptor-invalid"
 
 
+def test_pair_recovery_diagnostic_is_a_wifi_blocker(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Canonical pair recovery remains visible after terminal retirement."""
+
+    old_path = _write_log(tmp_path, "old.log", _old_good_log())
+    new_path = _write_log(
+        tmp_path,
+        "new.log",
+        [
+            "U-Boot 2026.01-dirty",
+            "[Cohesix] Root console ready (type 'help' for commands)",
+            "cohesix> wifi diag",
+            "wifi: gate 8 name=firmware-channel status=fail "
+            "evidence=exact=pair-recovery-required control_stage=none "
+            "sdhci=unknown reply_mode=unknown dependency=pair-recovery-required "
+            "next=dhcp-bound",
+            "wifi: next_action=run-pair-recovery-after-terminal-retirement "
+            "blocker=pair-recovery-required proof_gate=7 target_gate=10",
+        ],
+    )
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "--old",
+            str(old_path),
+            "--new",
+            str(new_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    fields = _parse_env(result.stdout)
+
+    assert result.returncode == 0
+    assert fields["NEW_WIFI_BLOCKER_SEEN"] == "yes"
+    assert fields["NEW_WIFI_BLOCKER"] == "pair-recovery-required"
+
+
 def test_usb_runtime_ring_busy_overrides_stale_link_blocker(
     tmp_path: pathlib.Path,
 ) -> None:

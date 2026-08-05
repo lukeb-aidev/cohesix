@@ -16962,6 +16962,63 @@ def test_gate8_postexhaust_passive_diag_cannot_mutate_retained_frontier() -> Non
     )
 
 
+def test_retained_gate8_labels_preserve_prefix_after_terminal_retirement() -> None:
+    """Historical Gate 8 proof must not become a fresh Gate 4 failure."""
+
+    lines = [
+        "wifi: gate 1 name=runtime-power-reset status=pass "
+        "evidence=power=proven-on-by-gate8-terminal "
+        "reset=proven-deasserted-by-gate8-terminal pwrseq_status=unknown "
+        "pwrseq_phase=none dependency=retained-exact-gate8-terminal "
+        "source=driver-task next=sdio-card-select",
+        "wifi: gate 2 name=sdio-card-select status=pass "
+        "evidence=card=unknown rca=0x0000 ocr=0x00000000 "
+        "next=cccr-fbr-ready",
+        "wifi: gate 3 name=cccr-fbr-ready status=pass "
+        "evidence=ioex=none iordy=none fbr1_blk=none fbr2_blk=none "
+        "sequencer_proof=none next=ht-clock",
+        "wifi: gate 4 name=ht-clock status=pass "
+        "evidence=clock_snapshot=unavailable requested=unavailable "
+        "effective=unavailable width=unavailable "
+        "reason=post-scrub-retained-gate8-terminal-proves-prerequisite "
+        "source=sdio-owner next=backplane-window",
+        "wifi: gate 5 name=backplane-window status=pass "
+        "evidence=programmed=unknown shadow=unknown fn=unknown "
+        "sequencer_proof=none next=firmware-upload",
+        "wifi: gate 6 name=firmware-upload status=pass "
+        "evidence=uploaded=yes verified=yes fault_detail=0x0000 "
+        "next=function2-ready",
+        "wifi: gate 7 name=function2-ready status=pass "
+        "evidence=f2_enabled=yes f2_ready=yes f2_state=post-release-ready "
+        "dependency=none next=firmware-channel",
+        "wifi: gate 8 name=firmware-channel status=fail "
+        "evidence=exact=pair-recovery-required control_stage=none "
+        "sdhci=unknown reply_mode=unknown dependency=pair-recovery-required "
+        "next=dhcp-bound",
+        *wifi_gate8_snapshot_lines(
+            0,
+            pair_epoch=2,
+            generation=7,
+            status="fail",
+            blocker="pair-recovery-required",
+        ),
+        "wifi: next_action=run-pair-recovery-after-terminal-retirement "
+        "blocker=pair-recovery-required proof_gate=7 target_gate=10",
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "pair-recovery-required"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_BLOCKER"] == "pair-recovery-required"
+    assert record["WIFI_BLOCKER"] != "ht-clock"
+    assert "post-scrub" not in str(record["WIFI_BLOCKER"])
+
+
 def test_bootstrap_supervisor_rejects_legacy_exhaustion_sequence() -> None:
     """A historical five-attempt exhaustion cannot satisfy current proof."""
 
