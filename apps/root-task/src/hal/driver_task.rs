@@ -17697,11 +17697,14 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         && slot.retained_steady_tx_fast_lane.load(Ordering::Acquire) != 0;
     let persistent_transaction = persistent_transaction_requested
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0;
-    if retained_request_prepared && !steady_tx_fast_lane {
-        // Generic, cold, control, untyped op7, bulk, and recovery commands keep
-        // Stage as their own retained outer turn. A typed finite op7 may
-        // continue only when its scheduler coverage has already reached the
-        // issue boundary; no continuation grant is created after publication.
+    if retained_request_prepared && !steady_tx_fast_lane && !persistent_transaction {
+        // Generic, cold, non-op11 control, untyped op7, bulk, and recovery
+        // commands keep Stage as their own retained outer turn. A typed finite
+        // op7 or exact persistent op11 may continue only through its existing
+        // request-bound scheduler coverage. For op11 this closes the
+        // sequence-zero Stage cut inside the already-admitted producer call;
+        // its sequence-last commit and sole notification below remain the
+        // child-visible authority transfer.
         cache_counter_batch.flush(slot);
         return None;
     }

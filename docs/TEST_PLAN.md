@@ -1050,10 +1050,12 @@ epoch, parent `aux1` remains logical, and every retained transaction and SDIO
 child carries the physical epoch. A changed logical parent or stale physical
 epoch must reject without publishing a child; comparing either domain directly
 with the other is a regression.
-The sequence-zero `Stage` remains invisible; the next producer turn writes and
-cleans the full command body/payload, executes the barrier, commits the nonzero
-sequence last, records `Issued`, and emits exactly one reserved-root-badge
-notification. One HAL admission with zero root continuation-grant publications
+The sequence-zero `Stage` remains invisible; for exact persistent op11, the
+same admitted producer call writes and cleans the full command body/payload,
+executes the barrier, commits the nonzero sequence last, records `Issued`, and
+emits exactly one reserved-root-badge notification. Other retained transaction
+classes retain their declared phase-separated Stage contract. One HAL admission
+with zero root continuation-grant publications
 must advance a real Join from `PreTxDpcProbe` through `PreTxDrain` to
 `WaitCredit` and onward without grant 19, replacement grant,
 second notification, or endpoint send. Every completion miss retains `Issued`;
@@ -2912,9 +2914,10 @@ clean/barrier and commit-last publication, producer-monotonic nonzero epoch and
 overflow failure, stable root double-read, and rejection of torn, stale,
 wrong-request, wrong-fingerprint, wrong-generation, wrong-epoch, and
 wrong-commit state. Production tests must cross ABI-invisible `Stage`, receipt
-clearing, full-body clean/barrier, sequence-last `CommitRing`, `Issued`, exactly
-one signal-last notification, exact persistent wait receipt or terminal, and
-terminal consumption with no `PublishGrant`, grant 19, replacement grant, or
+clearing, full-body clean/barrier, sequence-last `CommitRing`, `Issued`, and
+exactly one signal-last notification inside the same admitted op11 producer
+call, then reach the exact persistent wait receipt or terminal and terminal
+consumption with no `PublishGrant`, grant 19, replacement grant, or
 later `NotifyRing`. They must cover changed-condition clearing,
 terminal-before-receipt, terminal-after-receipt, publish/clear failure,
 clear-before-wake interpretation, ordinary receipt park, later exact-terminal

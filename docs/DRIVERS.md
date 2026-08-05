@@ -1580,10 +1580,12 @@ generation and XID.
   generation zero nor a nonzero logical generation is ever compared with, or
   rewritten into, the physical epoch. A changed parent identity or a stale
   physical ring epoch rejects before child issue. `Stage` remains invisible to
-  the child. The following producer turn refreshes and cleans the complete
-  body/payload, executes the barrier, commits the nonzero command sequence last,
-  moves the retained request to `Issued`, and signals the reserved-root-badge
-  notification exactly once. The committed command and sealed private cursor
+  the child. For exact persistent op11, the same admitted producer call refreshes
+  and cleans the complete body/payload, executes the barrier, commits the
+  nonzero command sequence last, moves the retained request to `Issued`, and
+  signals the reserved-root-badge notification exactly once. Other retained
+  transaction classes keep their declared phase-separated Stage contract. The
+  committed command and sealed private cursor
   then authorize the complete control exchange. A `Pending` completion poll
   retains `Issued` and schedules no `PublishGrant`, replacement grant,
   `NotifyRing`, re-signal, or endpoint send. Only the exact terminal or typed

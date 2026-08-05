@@ -32901,7 +32901,7 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
-    fn cyw43_preissue_payload_identity_uses_hal_staging_fingerprint() {
+    fn cyw43_generic_preissue_payload_identity_uses_hal_staging_fingerprint() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
@@ -32926,20 +32926,15 @@ mod tests {
             )
         );
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
-        let descriptor = DriverRuntimeCyw43CommandDescriptor {
-            op: DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
-            flags: DRIVER_RUNTIME_CYW43_FLAG_CONTROL_PRE_TX_DRAIN,
-            arg0: CYW43_WLC_SET_VAR,
-            arg1: 38,
-            ..DriverRuntimeCyw43CommandDescriptor::empty()
-        };
         let payload = [0x5au8; 22];
+        let descriptor =
+            cyw43_control_frame_descriptor(payload.len(), Cyw43ControlHeaderMode::Extended, true);
 
         begin_cyw43_outer_event_turn();
         let first = run_cyw43_runtime_descriptor_turn_raw(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
             0,
-            "cyw43-staging-fingerprint-test",
+            "cyw43-generic-staging-fingerprint-test",
             descriptor,
             &payload,
         )
@@ -36114,47 +36109,24 @@ mod tests {
             Cyw43SdioNetworkPriorityLeasePhase::Open,
         );
 
-        // Outer Network turn A owns the real NetStack association policy and
-        // stages one immutable op11 Join. The child cannot see it yet.
-        pump.poll();
-        let staged = cyw43_association_diagnostic();
-        assert_eq!(staged.service_turns, 1);
-        assert_eq!(staged.join_starts, 1);
-        assert!(staged.association_join_pending());
-        assert_ne!(staged.retained_request, 0);
-        assert!(!staged.retained_issued);
-        let request = staged.retained_request;
-        let prepared = crate::hal::driver_task::active_driver_task_retained_request(
-            CYW43_WIFI_DRIVER_TASK_CONTRACT,
-        )
-        .expect("Join Stage retains one HAL request");
-        assert_eq!(prepared.request(), request);
-        assert!(!prepared.issued());
-        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
-        let staged_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        assert_eq!(staged_lease.phase, Cyw43SdioNetworkPriorityLeasePhase::Open);
-        assert_eq!(
-            staged_lease.amortized_requests, lease_baseline.amortized_requests,
-            "Stage has not yet admitted the child-visible request",
-        );
-        assert!(pump.test_linked_runtime_network_phase());
-        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
-
-        // Outer Network turn B commits and signals that same request. Before
-        // the autonomous child has taken any turn, the open lease and Network
-        // phase must remain contiguous; this does not authorize post-intake
-        // hot polling of an ordinarily Waiting parent.
+        // One admitted outer Network turn owns the real NetStack association
+        // policy and the complete root producer transaction for one immutable
+        // op11 Join. Stage remains sequence-zero internally, but may not
+        // become an externally visible scheduler cut: the same call must
+        // refresh the body, commit the sequence last, and signal exactly once
+        // before returning to EventPump.
         pump.poll();
         let issued = cyw43_association_diagnostic();
-        assert_eq!(issued.service_turns, 2);
+        assert_eq!(issued.service_turns, 1);
         assert_eq!(issued.join_starts, 1);
         assert!(issued.association_join_pending());
-        assert_eq!(issued.retained_request, request);
+        assert_ne!(issued.retained_request, 0);
         assert!(issued.retained_issued);
+        let request = issued.retained_request;
         let active = crate::hal::driver_task::active_driver_task_retained_request(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
         )
-        .expect("Join Issue retains the same HAL request");
+        .expect("the admitted Join call reaches Issue before returning");
         assert_eq!(active.request(), request);
         assert!(active.issued());
         let issued_command = active.command().expect("issued Join retains its command");
@@ -36210,7 +36182,7 @@ mod tests {
         );
         pump.poll();
         let closing_pre_wait = cyw43_association_diagnostic();
-        assert_eq!(closing_pre_wait.service_turns, 3);
+        assert_eq!(closing_pre_wait.service_turns, 2);
         assert_eq!(closing_pre_wait.join_starts, 1);
         assert_eq!(closing_pre_wait.retained_request, request);
         assert!(closing_pre_wait.retained_issued);
@@ -36244,7 +36216,7 @@ mod tests {
         );
         pump.poll();
         let parked = cyw43_association_diagnostic();
-        assert_eq!(parked.service_turns, 3);
+        assert_eq!(parked.service_turns, 2);
         assert_eq!(parked.join_starts, 1);
         assert!(parked.association_join_pending());
         assert_eq!(parked.retained_request, request);
@@ -36327,7 +36299,7 @@ mod tests {
             pump.poll();
             terminal_resume_turns = terminal_resume_turns.saturating_add(1);
         };
-        assert_eq!(consumed.service_turns, 4);
+        assert_eq!(consumed.service_turns, 3);
         assert_eq!(consumed.join_starts, 1);
         assert!(consumed.primary_join_ready);
         assert!(!consumed.association_join_pending());
