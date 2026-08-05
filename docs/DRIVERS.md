@@ -2714,6 +2714,17 @@ generation and XID.
   admission touch no physical engine; the transaction's SDIO engine replay
   owns the one physical lifetime. It is part of the sole outer boot episode,
   always `attempt=1`, and is not an implicit retry.
+  Pair-restart state and context-replay state are distinct authority facts.
+  A pending or in-progress pair restart fences fresh raw CYW43 work and first
+  yields to an exact runnable canonical terminal. Context replay instead blocks
+  generic submissions while it is merely `required`; after the bootstrap
+  supervisor atomically changes it to `owned`, that capability admits only the
+  retained firmware/control sequence that completes the replay. The still-live
+  replay level cannot fence its own `TRANSPORT_INIT`, and a newly pending pair
+  restart supersedes the owned replay through the existing recovery path. If a
+  retained action's exact terminal drives bootstrap failure, failure policy
+  preserves its sequence-last HAL receipt and any pair-drain exception until
+  the enclosing outer-turn semantic finalizer releases that same identity.
   There is no automatic whole-bootstrap backoff, reset, attempt 2, or
   pre-service pair repair. A fault before exact DHCP/listener service readiness
   drains and fences its accepted owner, emits one terminal bootstrap result,
