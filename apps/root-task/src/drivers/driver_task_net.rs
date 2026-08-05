@@ -35997,6 +35997,387 @@ mod tests {
         reset_cyw43_status_flags();
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn run_eventpump_join_issue_and_terminal_episode(recovery_before_terminal_consume: bool) {
+        struct NoTickTimer;
+
+        impl crate::event::TimerSource for NoTickTimer {
+            fn poll(&mut self, _now_ms: u64) -> Option<crate::event::TickEvent> {
+                None
+            }
+        }
+
+        struct NullIpc;
+
+        impl crate::event::IpcDispatcher for NullIpc {
+            fn dispatch(&mut self, _now_ms: u64) {}
+        }
+
+        struct NullAudit;
+
+        impl crate::event::AuditSink for NullAudit {
+            fn info(&mut self, _message: &str) {}
+
+            fn denied(&mut self, _message: &str) {}
+        }
+
+        struct TestReset;
+
+        impl Drop for TestReset {
+            fn drop(&mut self) {
+                CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+                crate::serial::test_end_linked_runtime_only_transport();
+                reset_cyw43_status_flags();
+            }
+        }
+
+        let _status_guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        crate::hal::driver_task::test_reset_root_grant_action_counts();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = TestReset;
+        let _net_stack_guard = crate::net::TestNetStackStateGuard::acquire();
+
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        let rx_generation = cyw43_sdio_dpc_expected_generation()
+            .expect("the Pi 4 profile declares one CYW43/SDIO link epoch");
+        ring_guard.publish_rx_queue_state(pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
+            generation: rx_generation,
+            commit_sequence: 1,
+            ..pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty()
+        });
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        set_cyw43_service_physical_lifetime_epoch_test_override(Some(1));
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let lease_baseline = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        let _priority_lease =
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::open();
+        let opened_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        assert_eq!(opened_lease.phase, Cyw43SdioNetworkPriorityLeasePhase::Open);
+        assert_eq!(opened_lease.opens, lease_baseline.opens + 1);
+
+        let credentials =
+            WifiCredentials::new("cohesix", "").expect("valid open-network credentials");
+        let mut config = ConsoleNetConfig::default();
+        config.auth_token = "eventpump-join-test";
+        config.backend = crate::net::NetBackend::BcmGenet;
+        config.policy.mode = crate::net::NetMode::Static;
+        config.policy.interface = NetInterfacePolicy::Wifi;
+        config.wifi_credentials = Some(credentials);
+        let mut hal = Cyw43SupervisorTestHal;
+        let mut stack = crate::net::NetStack::<Cyw43DriverTaskDevice>::new(
+            &mut hal,
+            config,
+            crate::net::NetBackend::BcmGenet,
+        )
+        .expect("the production CYW43 NetStack fixture constructs");
+        let serial = crate::serial::SerialPort::<
+            _,
+            32768,
+            32768,
+            { crate::serial::DEFAULT_LINE_CAPACITY },
+        >::new(crate::serial::test_support::LoopbackSerial::<32768>::new());
+        let mut audit = NullAudit;
+        let mut pump = crate::event::EventPump::new(
+            serial,
+            NoTickTimer,
+            NullIpc,
+            crate::event::TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_network(stack.as_mut());
+
+        // EventPump starts with the physical Serial owner. This warm-up turn
+        // performs no network operation and hands the current lifetime to the
+        // first association Network turn.
+        pump.poll();
+        let warm = cyw43_association_diagnostic();
+        assert_eq!(warm.service_turns, 0);
+        assert_eq!(warm.join_starts, 0);
+        assert!(pump.test_linked_runtime_network_phase());
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Open,
+        );
+
+        // Outer Network turn A owns the real NetStack association policy and
+        // stages one immutable op11 Join. The child cannot see it yet.
+        pump.poll();
+        let staged = cyw43_association_diagnostic();
+        assert_eq!(staged.service_turns, 1);
+        assert_eq!(staged.join_starts, 1);
+        assert!(staged.association_join_pending());
+        assert_ne!(staged.retained_request, 0);
+        assert!(!staged.retained_issued);
+        let request = staged.retained_request;
+        let prepared = crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("Join Stage retains one HAL request");
+        assert_eq!(prepared.request(), request);
+        assert!(!prepared.issued());
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+        let staged_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        assert_eq!(staged_lease.phase, Cyw43SdioNetworkPriorityLeasePhase::Open);
+        assert_eq!(
+            staged_lease.amortized_requests, lease_baseline.amortized_requests,
+            "Stage has not yet admitted the child-visible request",
+        );
+        assert!(pump.test_linked_runtime_network_phase());
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        // Outer Network turn B commits and signals that same request. Before
+        // the autonomous child has taken any turn, the open lease and Network
+        // phase must remain contiguous; this does not authorize post-intake
+        // hot polling of an ordinarily Waiting parent.
+        pump.poll();
+        let issued = cyw43_association_diagnostic();
+        assert_eq!(issued.service_turns, 2);
+        assert_eq!(issued.join_starts, 1);
+        assert!(issued.association_join_pending());
+        assert_eq!(issued.retained_request, request);
+        assert!(issued.retained_issued);
+        let active = crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .expect("Join Issue retains the same HAL request");
+        assert_eq!(active.request(), request);
+        assert!(active.issued());
+        let issued_command = active.command().expect("issued Join retains its command");
+        assert_eq!(
+            u32::from_ne_bytes(
+                ring_guard.bytes()[..core::mem::size_of::<u32>()]
+                    .try_into()
+                    .expect("ring sequence bytes"),
+            ),
+            request,
+        );
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+        let issued_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        assert_eq!(
+            issued_lease.amortized_requests,
+            lease_baseline.amortized_requests + 1,
+            "Issue must prove physical outer-lease coverage exactly once",
+        );
+        assert_eq!(
+            issued_lease.phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Open,
+            "the signalled Join must not close its outer lease before child intake or terminal",
+        );
+        assert!(
+            pump.test_linked_runtime_network_phase(),
+            "the next outer turn must remain the same Join Network episode",
+        );
+        assert!(
+            crate::hal::driver_task::cyw43_sdio_network_persistent_parent_pre_wait(
+                issued_command.aux1,
+            ),
+            "Issue remains runnable until the child commits its exact external-wait receipt",
+        );
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+        let submitted_after_issue =
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT)
+                .expect("the issued Join retains its reciprocal counters")
+                .submitted_turns;
+        let actions_after_issue = crate::hal::driver_task::test_root_grant_action_counts();
+        assert_eq!(actions_after_issue, (0, 1));
+
+        // A bounded operator checkpoint may move the outer scheduling lease
+        // to Closing before the autonomous child reaches its wait. That phase
+        // change must preserve the same prompt op11 handoff; it cannot become
+        // an externally visible idle gap or authorize a second signal.
+        assert_eq!(
+            crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested,
+        );
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Closing,
+        );
+        pump.poll();
+        let closing_pre_wait = cyw43_association_diagnostic();
+        assert_eq!(closing_pre_wait.service_turns, 3);
+        assert_eq!(closing_pre_wait.join_starts, 1);
+        assert_eq!(closing_pre_wait.retained_request, request);
+        assert!(closing_pre_wait.retained_issued);
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+        assert!(
+            pump.test_linked_runtime_network_phase(),
+            "Closing cannot park the exact parent before the child wait receipt",
+        );
+        assert_eq!(
+            crate::hal::driver_task::test_root_grant_action_counts(),
+            actions_after_issue,
+        );
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        // The child now proves that every durable condition and exact child
+        // terminal was rechecked immediately before its generated local wait.
+        // Root may park only at this named external boundary; it must neither
+        // poll the parent nor create a grant, signal, request, or restart.
+        ring_guard.publish_persistent_wait_receipt(issued_command, 1);
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_network_persistent_parent_pre_wait(
+                issued_command.aux1,
+            ),
+            "the exact receipt closes the notify-to-wait scheduling cut",
+        );
+        assert!(
+            !crate::hal::driver_task::cyw43_sdio_network_active_parent_progress_visible(
+                issued_command.aux1,
+            ),
+            "a parked exact parent cannot become an empty-poll clock",
+        );
+        pump.poll();
+        let parked = cyw43_association_diagnostic();
+        assert_eq!(parked.service_turns, 3);
+        assert_eq!(parked.join_starts, 1);
+        assert!(parked.association_join_pending());
+        assert_eq!(parked.retained_request, request);
+        assert!(parked.retained_issued);
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Closing,
+        );
+        assert!(
+            !pump.test_linked_runtime_network_phase(),
+            "the exact local wait returns the cooperative scheduler to its ordinary rotation",
+        );
+        assert_eq!(
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT,)
+                .expect("the parked Join retains its reciprocal counters")
+                .submitted_turns,
+            submitted_after_issue,
+        );
+        assert_eq!(
+            crate::hal::driver_task::test_root_grant_action_counts(),
+            actions_after_issue,
+        );
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        // The isolated runtime now commits the exact child terminal outside
+        // root's turn. Clear models the runtime's mandatory pre-wake
+        // invalidation; the durable terminal must promptly re-admit the same
+        // request without a second signal, grant, or parent publication.
+        ring_guard.clear_persistent_wait_receipt();
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        CYW43_SUPERVISOR_FRAME_READY.store(1, Ordering::Release);
+        assert!(
+            crate::hal::driver_task::test_service_pending_driver_task_ring_command(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            ),
+            "the autonomous child commits the exact Join terminal",
+        );
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert_eq!(
+            CYW43_SUPERVISOR_LAST_OP.load(Ordering::Acquire),
+            u32::from(DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE),
+        );
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Closing,
+        );
+
+        if recovery_before_terminal_consume {
+            // Recovery fences every successor, but this sequence-last terminal
+            // already belongs to the typed Closing parent. The focused live
+            // gate injects recovery only after constructing that exact owner
+            // and requires the pre-poll bypass before ordinary EventPump
+            // consumption can proceed.
+            assert!(
+                crate::event::test_closing_recovery_exact_terminal_bypasses_park(request, true,)
+            );
+            assert!(cyw43_recovery_required());
+        }
+
+        let mut terminal_resume_turns = 0usize;
+        let consumed = loop {
+            let diagnostic = cyw43_association_diagnostic();
+            let lease_closed =
+                !crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot()
+                    .close_pending();
+            if diagnostic.primary_join_ready && (recovery_before_terminal_consume || lease_closed) {
+                break diagnostic;
+            }
+            assert!(
+                terminal_resume_turns < 8,
+                "the exact terminal must resume promptly",
+            );
+            pump.poll();
+            terminal_resume_turns = terminal_resume_turns.saturating_add(1);
+        };
+        assert_eq!(consumed.service_turns, 4);
+        assert_eq!(consumed.join_starts, 1);
+        assert!(consumed.primary_join_ready);
+        assert!(!consumed.association_join_pending());
+        assert!(
+            crate::hal::driver_task::active_driver_task_retained_request(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+            .is_none()
+        );
+        assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 1);
+        assert!(terminal_resume_turns <= 4);
+        assert_eq!(
+            crate::hal::driver_task::driver_task_counter_snapshot(CYW43_WIFI_DRIVER_TASK_CONTRACT,)
+                .expect("the consumed Join retains its reciprocal counters")
+                .submitted_turns,
+            submitted_after_issue,
+            "receipt park and terminal retirement cannot publish another Join",
+        );
+        assert_eq!(
+            crate::hal::driver_task::test_root_grant_action_counts(),
+            actions_after_issue,
+            "receipt park and terminal retirement require no grant or rescue signal",
+        );
+        let terminal_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        if !recovery_before_terminal_consume {
+            assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert!(
+                !terminal_lease.close_pending(),
+                "terminal consumer must release its outer lease: {terminal_lease:?}",
+            );
+            assert_eq!(terminal_lease.failures, lease_baseline.failures);
+            assert_eq!(
+                terminal_lease.recovery_revocations,
+                lease_baseline.recovery_revocations,
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn eventpump_join_issue_and_terminal_share_one_open_network_episode() {
+        run_eventpump_join_issue_and_terminal_episode(false);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn eventpump_closing_recovery_still_consumes_the_exact_join_terminal() {
+        run_eventpump_join_issue_and_terminal_episode(true);
+    }
+
     #[cfg(feature = "kernel")]
     #[test]
     fn dropped_raw_terminal_authority_fails_closed_before_semantic_retirement() {
@@ -37704,6 +38085,82 @@ mod tests {
                     state,
                 );
             }
+        }
+
+        fn publish_persistent_wait_receipt(
+            &mut self,
+            command: DriverTaskCommandRecord,
+            wait_epoch: u32,
+        ) {
+            let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
+            let fingerprint = pi4_driver_abi::driver_runtime_continuation_action_fingerprint(
+                command.opcode,
+                command.flags,
+                command.arg0,
+                command.arg1,
+                command.aux0,
+                command.aux1,
+                command.budget.max_ops,
+                command.budget.max_frames,
+                command.budget.max_bytes,
+                command.frame.offset,
+                command.frame.len,
+                command.frame.flags,
+            );
+            let receipt = pi4_driver_abi::DriverRuntimePersistentWaitReceipt::new(
+                command.sequence,
+                fingerprint,
+                command.aux1,
+                wait_epoch,
+            );
+            let receipt_ptr = self._page.0.as_mut_ptr().wrapping_add(offset)
+                as *mut pi4_driver_abi::DriverRuntimePersistentWaitReceipt;
+            // SAFETY: The 4096-byte-aligned test ring owns the complete fixed
+            // auxiliary record at the compiler-declared aligned offset. The
+            // commit is invalidated first and published last, matching the
+            // runtime's sequence-last receipt contract.
+            unsafe {
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).committed_wait_epoch),
+                    0,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).magic),
+                    receipt.magic,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).request_sequence),
+                    receipt.request_sequence,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).action_fingerprint),
+                    receipt.action_fingerprint,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).logical_generation),
+                    receipt.logical_generation,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).wait_epoch),
+                    receipt.wait_epoch,
+                );
+                core::ptr::write_volatile(
+                    core::ptr::addr_of_mut!((*receipt_ptr).committed_wait_epoch),
+                    receipt.committed_wait_epoch,
+                );
+            }
+        }
+
+        fn clear_persistent_wait_receipt(&mut self) {
+            let offset = usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET)
+                + core::mem::offset_of!(
+                    pi4_driver_abi::DriverRuntimePersistentWaitReceipt,
+                    committed_wait_epoch
+                );
+            let commit_ptr = self._page.0.as_mut_ptr().wrapping_add(offset) as *mut u32;
+            // SAFETY: `commit_ptr` addresses the aligned sequence-last commit
+            // word in this test-owned fixed auxiliary record.
+            unsafe { core::ptr::write_volatile(commit_ptr, 0) };
         }
     }
 

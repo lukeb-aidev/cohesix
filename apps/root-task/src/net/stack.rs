@@ -9581,45 +9581,71 @@ pub fn run_tcp_console<D: NetDevice>(
 }
 
 #[cfg(test)]
+static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+#[cfg(test)]
+fn reset_console_storage_state() {
+    SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
+    SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
+    SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *SOCKET_STORAGE_TAG_LABEL.lock() = None;
+
+    ICMP_ECHO_STORAGE_IN_USE.store(false, Ordering::Release);
+    ICMP_ECHO_STORAGE_OWNER.store(0, Ordering::Release);
+    ICMP_ECHO_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *ICMP_ECHO_STORAGE_TAG_LABEL.lock() = None;
+
+    TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+    TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
+    TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
+
+    TCP_TX_STORAGE_IN_USE.store(false, Ordering::Release);
+    TCP_TX_STORAGE_OWNER.store(0, Ordering::Release);
+    TCP_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *TCP_TX_STORAGE_TAG_LABEL.lock() = None;
+
+    TCP_STANDBY_RX_STORAGE_IN_USE.store(false, Ordering::Release);
+    TCP_STANDBY_RX_STORAGE_OWNER.store(0, Ordering::Release);
+    TCP_STANDBY_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *TCP_STANDBY_RX_STORAGE_TAG_LABEL.lock() = None;
+
+    TCP_STANDBY_TX_STORAGE_IN_USE.store(false, Ordering::Release);
+    TCP_STANDBY_TX_STORAGE_OWNER.store(0, Ordering::Release);
+    TCP_STANDBY_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
+    *TCP_STANDBY_TX_STORAGE_TAG_LABEL.lock() = None;
+}
+
+/// Serialize one test-owned production `NetStack` and reset its singleton.
+#[cfg(test)]
+pub struct TestNetStackStateGuard {
+    _lock: spin::MutexGuard<'static, ()>,
+}
+
+#[cfg(test)]
+impl TestNetStackStateGuard {
+    pub(crate) fn acquire() -> Self {
+        let lock = NET_STACK_STORAGE_TEST_LOCK.lock();
+        NETSTACK_STATE.store(NET_STATE_NEVER, Ordering::Release);
+        reset_console_storage_state();
+        Self { _lock: lock }
+    }
+}
+
+#[cfg(test)]
+impl Drop for TestNetStackStateGuard {
+    fn drop(&mut self) {
+        NETSTACK_STATE.store(NET_STATE_NEVER, Ordering::Release);
+        reset_console_storage_state();
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use core::convert::Infallible;
 
     use super::*;
     use smoltcp::phy::{Loopback, Medium};
-
-    static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    fn reset_console_storage_state() {
-        SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
-        SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
-        SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *SOCKET_STORAGE_TAG_LABEL.lock() = None;
-
-        ICMP_ECHO_STORAGE_IN_USE.store(false, Ordering::Release);
-        ICMP_ECHO_STORAGE_OWNER.store(0, Ordering::Release);
-        ICMP_ECHO_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *ICMP_ECHO_STORAGE_TAG_LABEL.lock() = None;
-
-        TCP_RX_STORAGE_IN_USE.store(false, Ordering::Release);
-        TCP_RX_STORAGE_OWNER.store(0, Ordering::Release);
-        TCP_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *TCP_RX_STORAGE_TAG_LABEL.lock() = None;
-
-        TCP_TX_STORAGE_IN_USE.store(false, Ordering::Release);
-        TCP_TX_STORAGE_OWNER.store(0, Ordering::Release);
-        TCP_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *TCP_TX_STORAGE_TAG_LABEL.lock() = None;
-
-        TCP_STANDBY_RX_STORAGE_IN_USE.store(false, Ordering::Release);
-        TCP_STANDBY_RX_STORAGE_OWNER.store(0, Ordering::Release);
-        TCP_STANDBY_RX_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *TCP_STANDBY_RX_STORAGE_TAG_LABEL.lock() = None;
-
-        TCP_STANDBY_TX_STORAGE_IN_USE.store(false, Ordering::Release);
-        TCP_STANDBY_TX_STORAGE_OWNER.store(0, Ordering::Release);
-        TCP_STANDBY_TX_STORAGE_TAG_ID.store(0, Ordering::Release);
-        *TCP_STANDBY_TX_STORAGE_TAG_LABEL.lock() = None;
-    }
 
     #[test]
     fn console_tcp_socket_disables_delayed_ack() {

@@ -561,13 +561,14 @@ use pi4_driver_abi::{
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
-    DriverRuntimeSdioClockSnapshot, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
-    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET,
-    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
+    DriverRuntimePersistentWaitReceipt, DriverRuntimeSteadyServiceProgress,
+    DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
-    DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE,
+    DriverRuntimeSdioClockSnapshot, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_BYTES,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_MAGIC, DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_OFFSET,
+    DRIVER_RUNTIME_SDIO_CLOCK_SNAPSHOT_VERSION,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -6688,17 +6689,35 @@ fn read_runtime_steady_service_progress_at(
 }
 
 #[cfg(any(target_os = "none", test))]
+const fn runtime_steady_service_progress_command_valid(
+    command: DriverTaskCommandRecord,
+    generation: u32,
+) -> bool {
+    if command.sequence == 0
+        || command.opcode != OPCODE_SERVICE
+        || command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY == 0
+        || command.aux1 != generation
+        || generation == 0
+    {
+        return false;
+    }
+    let steady = command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0;
+    let persistent_sdio = command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+        && command.arg0 == HOT_PATH_SDIO_HOST
+        && command.arg1 == ROLE_SDIO
+        && command.aux0 != 0;
+    steady || persistent_sdio
+}
+
+#[cfg(any(target_os = "none", test))]
 fn publish_runtime_steady_service_progress_at(
     base: usize,
     command: DriverTaskCommandRecord,
     generation: u32,
     service_slice: u32,
 ) -> bool {
-    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
-        || command.aux1 != generation
-        || generation == 0
-        || service_slice == 0
-    {
+    if !runtime_steady_service_progress_command_valid(command, generation) || service_slice == 0 {
         return false;
     }
     let progress = DriverRuntimeSteadyServiceProgress::new(
@@ -6780,6 +6799,162 @@ fn runtime_steady_service_progress_advance(
         && progress.generation == generation
         && progress.service_slice > previous_slice)
         .then_some(progress.service_slice)
+}
+
+#[cfg(test)]
+fn read_runtime_persistent_wait_receipt_at(
+    base: usize,
+) -> Option<DriverRuntimePersistentWaitReceipt> {
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
+    driver_task_shared_invalidate_range(
+        address,
+        usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES),
+    );
+    let first_commit = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+    )?;
+    if first_commit == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let observed = DriverRuntimePersistentWaitReceipt {
+        magic: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, magic),
+        )?,
+        request_sequence: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, request_sequence),
+        )?,
+        action_fingerprint: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, action_fingerprint),
+        )?,
+        logical_generation: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, logical_generation),
+        )?,
+        wait_epoch: runtime_continuation_grant_read_u32(
+            base,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, wait_epoch),
+        )?,
+        committed_wait_epoch: first_commit,
+    };
+    driver_task_shared_load_barrier();
+    driver_task_shared_invalidate_range(
+        address + core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        core::mem::size_of::<u32>(),
+    );
+    let second_commit = runtime_continuation_grant_read_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+    )?;
+    (first_commit == second_commit && observed.valid()).then_some(observed)
+}
+
+#[cfg(any(target_os = "none", test))]
+const fn runtime_persistent_wait_receipt_command_valid(command: DriverTaskCommandRecord) -> bool {
+    command.sequence != 0
+        && command.opcode == OPCODE_SERVICE
+        && command.flags
+            == DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
+        && cyw43_command_uses_foreground_transaction(command)
+        && cyw43_persistent_parent_budget_valid(command)
+}
+
+#[cfg(any(target_os = "none", test))]
+fn publish_runtime_persistent_wait_receipt_at(
+    base: usize,
+    command: DriverTaskCommandRecord,
+    wait_epoch: u32,
+) -> bool {
+    if !runtime_persistent_wait_receipt_command_valid(command) || wait_epoch == 0 {
+        return false;
+    }
+    let receipt = DriverRuntimePersistentWaitReceipt::new(
+        command.sequence,
+        runtime_continuation_action_fingerprint(command),
+        command.aux1,
+        wait_epoch,
+    );
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        0,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        core::mem::size_of::<u32>(),
+    );
+    for (offset, value) in [
+        (
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, magic),
+            receipt.magic,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, request_sequence),
+            receipt.request_sequence,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, action_fingerprint),
+            receipt.action_fingerprint,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, logical_generation),
+            receipt.logical_generation,
+        ),
+        (
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, wait_epoch),
+            receipt.wait_epoch,
+        ),
+    ] {
+        if !runtime_continuation_grant_write_u32(base, offset, value) {
+            return false;
+        }
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+    );
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        receipt.committed_wait_epoch,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        core::mem::size_of::<u32>(),
+    );
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn clear_runtime_persistent_wait_receipt_at(base: usize) -> bool {
+    let address = base + usize::from(pi4_driver_abi::DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
+    if !runtime_continuation_grant_write_u32(
+        base,
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        0,
+    ) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        address + core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+        core::mem::size_of::<u32>(),
+    );
+    true
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -8408,6 +8583,7 @@ struct RuntimePersistentTransactionService {
     generation: u32,
     binding_sequence: u32,
     service_slices: u32,
+    wait_epochs: u32,
     semantic_snapshot: Option<RuntimeSteadySemanticSnapshot>,
 }
 
@@ -8420,6 +8596,7 @@ impl RuntimePersistentTransactionService {
             generation: 0,
             binding_sequence: 0,
             service_slices: 0,
+            wait_epochs: 0,
             semantic_snapshot: None,
         }
     }
@@ -8457,6 +8634,7 @@ impl RuntimePersistentTransactionService {
             generation: command.aux1,
             binding_sequence: command.aux0,
             service_slices: 0,
+            wait_epochs: 0,
             semantic_snapshot: None,
         };
         true
@@ -8484,9 +8662,39 @@ impl RuntimePersistentTransactionService {
         Some(disposition)
     }
 
+    fn next_wait_epoch(&mut self, command: DriverTaskCommandRecord) -> Option<u32> {
+        if !self.active_for(command) || !runtime_persistent_wait_receipt_command_valid(command) {
+            return None;
+        }
+        let next = self.wait_epochs.checked_add(1)?;
+        if next == 0 {
+            return None;
+        }
+        self.wait_epochs = next;
+        Some(next)
+    }
+
     fn clear(&mut self) {
         *self = Self::empty();
     }
+}
+
+#[cfg(any(target_os = "none", test))]
+fn runtime_persistent_wait_epoch_for_route(
+    service: &mut RuntimePersistentTransactionService,
+    command: DriverTaskCommandRecord,
+    disposition: RuntimeSteadyPendingDisposition,
+    route: RuntimeNotificationRoute,
+) -> Option<Option<u32>> {
+    if !service.active_for(command) {
+        return None;
+    }
+    if disposition != RuntimeSteadyPendingDisposition::WaitForWake
+        || route != RuntimeNotificationRoute::Cyw43Client
+    {
+        return Some(None);
+    }
+    service.next_wait_epoch(command).map(Some)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -15053,6 +15261,11 @@ fn runtime_block_on_steady_semantic_wake(route: RuntimeNotificationRoute) -> Run
 }
 
 #[cfg(target_os = "none")]
+fn runtime_block_on_persistent_semantic_wake() -> Option<u32> {
+    wait_runtime_local_notification()
+}
+
+#[cfg(target_os = "none")]
 fn runtime_handoff_steady_pending(
     disposition: RuntimeSteadyPendingDisposition,
     route: RuntimeNotificationRoute,
@@ -15064,6 +15277,7 @@ fn runtime_handoff_steady_pending(
         route,
         exact_steady_cyw43_parent,
         semantic_snapshot,
+        None,
     )
 }
 
@@ -15073,8 +15287,15 @@ fn runtime_handoff_persistent_pending(
     route: RuntimeNotificationRoute,
     exact_cyw43_parent: Option<DriverTaskCommandRecord>,
     semantic_snapshot: RuntimeSteadySemanticSnapshot,
+    wait_epoch: Option<u32>,
 ) {
-    runtime_handoff_durable_pending(disposition, route, exact_cyw43_parent, semantic_snapshot)
+    runtime_handoff_durable_pending(
+        disposition,
+        route,
+        exact_cyw43_parent,
+        semantic_snapshot,
+        wait_epoch,
+    )
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -15128,9 +15349,9 @@ fn runtime_current_semantic_snapshot_for(
 /// Final decision after any passive pre-wait checkpoint has been published.
 ///
 /// The checkpoint may lengthen the interval since the caller's first durable
-/// observation, so production must run this exact helper after it. No shared
-/// read or diagnostic write may intervene between the returned `Block` and the
-/// local-notification wait.
+/// observation, so production must run this exact helper after it. A persistent
+/// CYW43 caller may next publish its wait receipt and repeat this complete
+/// recheck; all other callers perform no shared work between `Block` and wait.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeFinalPrewaitRoute {
@@ -15161,12 +15382,87 @@ where
     }
 }
 
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePersistentWaitReceiptPrewaitRoute {
+    ReenterOwner,
+    Block,
+    FailClosed,
+}
+
+#[cfg(any(target_os = "none", test))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RuntimePersistentWaitReceiptWakeRoute {
+    InterpretBadge(u32),
+    WaitUnavailable,
+    FailClosed,
+}
+
+/// Gate all wake-badge interpretation on clearing the named wait receipt.
+///
+/// The notification wait has already returned a raw word, but no badge bit may
+/// route work until the receipt commit is durably absent. A failed clear is an
+/// exact-parent identity fault even when the returned badge names useful work.
+#[cfg(any(target_os = "none", test))]
+const fn runtime_persistent_wait_receipt_wake_route(
+    receipt_cleared: bool,
+    raw_badge: Option<u32>,
+) -> RuntimePersistentWaitReceiptWakeRoute {
+    if !receipt_cleared {
+        return RuntimePersistentWaitReceiptWakeRoute::FailClosed;
+    }
+    match raw_badge {
+        Some(raw_badge) => RuntimePersistentWaitReceiptWakeRoute::InterpretBadge(raw_badge),
+        None => RuntimePersistentWaitReceiptWakeRoute::WaitUnavailable,
+    }
+}
+
+/// Commit one exact persistent wait receipt, then close the publication race.
+///
+/// `Block` is returned only while the receipt remains committed and a complete
+/// second durable-condition/child-terminal check is unchanged. The caller must
+/// immediately enter the level-sensitive local-notification wait. A changed
+/// condition clears the commit before owner re-entry; inability to publish or
+/// clear is a transaction identity failure rather than permission to sleep.
+#[cfg(any(target_os = "none", test))]
+fn runtime_persistent_wait_receipt_final_prewait_after<P, C>(
+    expected_semantic_snapshot: RuntimeSteadySemanticSnapshot,
+    route: RuntimeNotificationRoute,
+    exact_cyw43_parent: DriverTaskCommandRecord,
+    wait_epoch: u32,
+    publish_receipt: P,
+    clear_receipt: C,
+) -> RuntimePersistentWaitReceiptPrewaitRoute
+where
+    P: FnOnce() -> bool,
+    C: FnOnce() -> bool,
+{
+    if wait_epoch == 0 || !publish_receipt() {
+        return RuntimePersistentWaitReceiptPrewaitRoute::FailClosed;
+    }
+    if runtime_durable_condition_changed(
+        expected_semantic_snapshot,
+        runtime_current_semantic_snapshot_for(expected_semantic_snapshot, route),
+    ) || recheck_runtime_steady_cyw43_child_before_wait(route, Some(exact_cyw43_parent))
+        == RuntimeSteadyCyw43PrewaitRecheck::YieldForExactChildTerminal
+    {
+        if clear_receipt() {
+            RuntimePersistentWaitReceiptPrewaitRoute::ReenterOwner
+        } else {
+            RuntimePersistentWaitReceiptPrewaitRoute::FailClosed
+        }
+    } else {
+        RuntimePersistentWaitReceiptPrewaitRoute::Block
+    }
+}
+
 #[cfg(target_os = "none")]
 fn runtime_handoff_durable_pending(
     disposition: RuntimeSteadyPendingDisposition,
     route: RuntimeNotificationRoute,
     exact_cyw43_parent: Option<DriverTaskCommandRecord>,
     expected_semantic_snapshot: RuntimeSteadySemanticSnapshot,
+    persistent_wait_epoch: Option<u32>,
 ) {
     match runtime_durable_pending_route(disposition) {
         RuntimeDurablePendingRoute::ContinueToQuiescence => {
@@ -15215,7 +15511,63 @@ fn runtime_handoff_durable_pending(
             {
                 return;
             }
-            match runtime_block_on_steady_semantic_wake(route) {
+            if let Some(wait_epoch) = persistent_wait_epoch {
+                let Some(exact_cyw43_parent) = exact_cyw43_parent else {
+                    runtime_fail_closed_steady_wait_unavailable(route, None);
+                    return;
+                };
+                match runtime_persistent_wait_receipt_final_prewait_after(
+                    expected_semantic_snapshot,
+                    route,
+                    exact_cyw43_parent,
+                    wait_epoch,
+                    || {
+                        publish_runtime_persistent_wait_receipt_at(
+                            DRIVER_TASK_RING_VADDR,
+                            exact_cyw43_parent,
+                            wait_epoch,
+                        )
+                    },
+                    || clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+                ) {
+                    RuntimePersistentWaitReceiptPrewaitRoute::ReenterOwner => return,
+                    RuntimePersistentWaitReceiptPrewaitRoute::Block => {}
+                    RuntimePersistentWaitReceiptPrewaitRoute::FailClosed => {
+                        runtime_fail_closed_steady_wait_unavailable(
+                            route,
+                            Some(exact_cyw43_parent),
+                        );
+                        return;
+                    }
+                }
+            }
+            let wake = if persistent_wait_epoch.is_some() {
+                let raw_badge = runtime_block_on_persistent_semantic_wake();
+                let receipt_cleared =
+                    clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR);
+                match runtime_persistent_wait_receipt_wake_route(receipt_cleared, raw_badge) {
+                    RuntimePersistentWaitReceiptWakeRoute::InterpretBadge(raw_badge) => {
+                        // The receipt is cleared above before this wake is
+                        // interpreted or allowed to schedule any peer prompt.
+                        if route == RuntimeNotificationRoute::Cyw43Client
+                            && raw_badge & DRIVER_RUNTIME_RESERVED_ROOT_BADGE != 0
+                        {
+                            let _ = cyw43_forward_expired_sdio_deadline_hint();
+                        }
+                        runtime_steady_local_notification_wake_route(route, raw_badge)
+                    }
+                    RuntimePersistentWaitReceiptWakeRoute::WaitUnavailable => {
+                        RuntimeSteadyWaitWake::WaitUnavailable
+                    }
+                    RuntimePersistentWaitReceiptWakeRoute::FailClosed => {
+                        runtime_fail_closed_steady_wait_unavailable(route, exact_cyw43_parent);
+                        return;
+                    }
+                }
+            } else {
+                runtime_block_on_steady_semantic_wake(route)
+            };
+            match wake {
                 RuntimeSteadyWaitWake::ServiceSdioIrq(badge) => {
                     // The physical IRQ is only a prompt. Service its bounded
                     // owner quantum, then immediately recheck the durable state
@@ -15224,6 +15576,12 @@ fn runtime_handoff_durable_pending(
                 }
                 RuntimeSteadyWaitWake::Resume => {}
                 RuntimeSteadyWaitWake::RetryLocalNotificationWait => {
+                    if persistent_wait_epoch.is_some() {
+                        // An unbadged bind/restart or malformed edge grants no
+                        // work. Re-enter the exact durable classifier so the
+                        // next block receives a new monotonic receipt.
+                        return;
+                    }
                     runtime_fail_closed_steady_wait_unavailable(route, exact_cyw43_parent);
                 }
                 RuntimeSteadyWaitWake::WaitUnavailable => {
@@ -55521,12 +55879,16 @@ pub fn runtime_main(task_key: usize) -> ! {
                             command,
                             snapshot,
                             |command, generation, service_slice| {
-                                publish_runtime_steady_service_progress_at(
-                                    DRIVER_TASK_RING_VADDR,
-                                    command,
-                                    generation,
-                                    service_slice,
-                                )
+                                if notification_route == RuntimeNotificationRoute::SdioOwner {
+                                    publish_runtime_steady_service_progress_at(
+                                        DRIVER_TASK_RING_VADDR,
+                                        command,
+                                        generation,
+                                        service_slice,
+                                    )
+                                } else {
+                                    true
+                                }
                             },
                         );
                     if autonomous_transaction_pending.is_none() {
@@ -55541,7 +55903,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 }
             }
         }
-        let RuntimeCommandTurn::Complete(completion) = turn else {
+        let RuntimeCommandTurn::Complete(mut completion) = turn else {
             // Retain the exact command intake and any implicit reply cap while
             // one Linux-ordered SDIO power-sequence phase is pending. No
             // completion sequence or completion/DPC notification is published until the
@@ -55571,11 +55933,24 @@ pub fn runtime_main(task_key: usize) -> ! {
                 if let Some(snapshot) =
                     persistent_transaction_service.semantic_snapshot_for(command)
                 {
+                    let Some(wait_epoch) = runtime_persistent_wait_epoch_for_route(
+                        &mut persistent_transaction_service,
+                        command,
+                        disposition,
+                        notification_route,
+                    ) else {
+                        runtime_fail_closed_steady_wait_unavailable(
+                            notification_route,
+                            exact_autonomous_cyw43_parent,
+                        );
+                        continue;
+                    };
                     runtime_handoff_persistent_pending(
                         disposition,
                         notification_route,
                         exact_autonomous_cyw43_parent,
                         snapshot,
+                        wait_epoch,
                     );
                 } else if let Some(snapshot) = steady_service_lease.semantic_snapshot_for(command) {
                     runtime_handoff_steady_pending(
@@ -55631,6 +56006,17 @@ pub fn runtime_main(task_key: usize) -> ! {
             }
             continue;
         };
+        // Retire the externally visible wait before any terminal cleanup or
+        // publication makes this owner runnable under a different condition.
+        if persistent_transaction_service.matches(command) {
+            if notification_route == RuntimeNotificationRoute::Cyw43Client
+                && !clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR)
+            {
+                runtime_fail_closed_steady_wait_unavailable(notification_route, Some(command));
+                completion = persistent_transaction_identity_completion(command);
+            }
+            persistent_transaction_service.clear();
+        }
         // Intake sealing precedes delegated-generation admission, so every
         // outer terminal path must release its exact seal even when dispatch
         // never reached the SDIO service helper. This is idempotent with the
@@ -55639,9 +56025,6 @@ pub fn runtime_main(task_key: usize) -> ! {
         sdio_external_dma_clear_intake_on_terminal(command);
         if steady_service_lease.matches(command) {
             steady_service_lease.clear();
-        }
-        if persistent_transaction_service.matches(command) {
-            persistent_transaction_service.clear();
         }
         pending_command_gate.complete();
         driver_task_shared_store_barrier();
@@ -59189,6 +59572,54 @@ mod tests {
         let mut service = RuntimePersistentTransactionService::empty();
         assert!(service.admit(child));
         let mut terminal = None;
+        let mut saw_pending = false;
+        let mut saw_sdio_wait = false;
+        let mut last_progress_slice = 0u32;
+        if expected_engine == SdioRequestEngine::ExternalDma {
+            let stable_irq_wait = runtime_steady_sdio_semantic_snapshot();
+            assert_eq!(
+                service.record_semantic_progress_with(
+                    child,
+                    stable_irq_wait,
+                    |command, generation, service_slice| {
+                        publish_runtime_steady_service_progress_at(
+                            DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                            command,
+                            generation,
+                            service_slice,
+                        )
+                    },
+                ),
+                Some(RuntimeSteadyPendingDisposition::SemanticProgress),
+            );
+            let stable_disposition = service
+                .record_semantic_progress_with(child, stable_irq_wait, |_, _, _| true)
+                .expect("the unchanged DMA condition retains its exact owner");
+            assert_eq!(
+                stable_disposition,
+                RuntimeSteadyPendingDisposition::WaitForWake,
+            );
+            assert_eq!(
+                runtime_persistent_wait_epoch_for_route(
+                    &mut service,
+                    child,
+                    stable_disposition,
+                    RuntimeNotificationRoute::SdioOwner,
+                ),
+                Some(None),
+                "persistent SDIO uses its ordinary IRQ wait without a DRPW epoch",
+            );
+            let initial_progress =
+                read_runtime_steady_service_progress_at(DRIVER_TASK_SDIO_BUS_RING_VADDR)
+                    .expect("the changed physical condition publishes one exact child heartbeat");
+            assert_eq!(initial_progress.service_slice, 1);
+            assert!(
+                read_runtime_persistent_wait_receipt_at(DRIVER_TASK_SDIO_BUS_RING_VADDR,).is_none(),
+                "persistent SDIO can never publish the CYW43 parent wait receipt",
+            );
+            saw_sdio_wait = true;
+            last_progress_slice = initial_progress.service_slice;
+        }
         for _ in 0..512 {
             let turn = service_sdio_external_dma_admitted_turn_with_io(child, &mut io)
                 .expect("the exact owner child stays on the retained SDIO lane");
@@ -59198,6 +59629,7 @@ mod tests {
             );
             match turn {
                 RuntimeCommandTurn::Pending => {
+                    saw_pending = true;
                     if expected_engine == SdioRequestEngine::ExternalDma
                         && io.dma_cs & BCM2835_DMA_CS_INT != 0
                     {
@@ -59220,9 +59652,46 @@ mod tests {
                         );
                     }
                     let snapshot = runtime_steady_sdio_semantic_snapshot();
-                    assert!(service
-                        .record_semantic_progress_with(child, snapshot, |_, _, _| true)
-                        .is_some());
+                    let progress_before =
+                        read_runtime_steady_service_progress_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
+                    let disposition = service
+                        .record_semantic_progress_with(
+                            child,
+                            snapshot,
+                            |command, generation, service_slice| {
+                                publish_runtime_steady_service_progress_at(
+                                    DRIVER_TASK_SDIO_BUS_RING_VADDR,
+                                    command,
+                                    generation,
+                                    service_slice,
+                                )
+                            },
+                        )
+                        .expect("the exact persistent SDIO service remains admitted");
+                    saw_sdio_wait |= disposition == RuntimeSteadyPendingDisposition::WaitForWake;
+                    let progress_after =
+                        read_runtime_steady_service_progress_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
+                    if progress_after != progress_before {
+                        let progress = progress_after
+                            .expect("changed SDIO semantics publish one exact heartbeat");
+                        assert!(progress.service_slice > last_progress_slice);
+                        last_progress_slice = progress.service_slice;
+                    }
+                    assert_eq!(
+                        runtime_persistent_wait_epoch_for_route(
+                            &mut service,
+                            child,
+                            disposition,
+                            RuntimeNotificationRoute::SdioOwner,
+                        ),
+                        Some(None),
+                        "persistent SDIO blocks on its IRQ without publishing a parent receipt",
+                    );
+                    assert!(
+                        read_runtime_persistent_wait_receipt_at(DRIVER_TASK_SDIO_BUS_RING_VADDR,)
+                            .is_none(),
+                        "the physical-owner heartbeat cannot alias a DRPW parent receipt",
+                    );
                 }
                 RuntimeCommandTurn::Complete(completion) => {
                     terminal = Some(completion);
@@ -59231,6 +59700,27 @@ mod tests {
             }
         }
         let completion = terminal.expect("persistent owner reaches one bounded terminal");
+        let physical_progress =
+            read_runtime_steady_service_progress_at(DRIVER_TASK_SDIO_BUS_RING_VADDR);
+        if saw_pending {
+            let physical_progress = physical_progress
+                .expect("pending SDIO retains its exact sequence-last physical heartbeat");
+            assert_eq!(physical_progress.request_sequence, child.sequence);
+            assert_eq!(physical_progress.generation, child.aux1);
+            assert_ne!(physical_progress.service_slice, 0);
+        } else {
+            assert_eq!(expected_engine, SdioRequestEngine::Pio);
+            assert!(physical_progress.is_none());
+        }
+        if expected_engine == SdioRequestEngine::ExternalDma {
+            assert!(saw_pending);
+            assert!(
+                saw_sdio_wait,
+                "persistent DMA must reach its ordinary IRQ wait"
+            );
+            assert_ne!(last_progress_slice, 0);
+        }
+        assert_eq!(service.wait_epochs, 0);
         assert_eq!(
             completion,
             DriverTaskCompletionRecord::progress(child.sequence, u32::from(descriptor.len)),
@@ -59426,6 +59916,175 @@ mod tests {
             runtime_current_semantic_snapshot_for(expected, RuntimeNotificationRoute::Cyw43Client,),
         ));
         CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 0);
+    }
+
+    #[test]
+    fn persistent_wait_receipt_publishes_after_final_recheck_and_clears_before_reentry() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_523b;
+        let (parent, parent_descriptor) =
+            install_persistent_control_parent_fixture(0x4359_523c, 0, physical_generation);
+        assert!(cyw43_foreground_begin_turn(parent));
+        cyw43_bus_episode_begin_foreground(parent, parent_descriptor, physical_generation);
+        CYW43_FOREGROUND_TRANSACTION.with_mut(|transaction| {
+            transaction.executing = false;
+            transaction.turn.pending = true;
+        });
+        CYW43_RUNTIME_STATE.with_mut(|state| state.sdpcm_seq_max = state.sdpcm_seq);
+        let expected = runtime_persistent_cyw43_foreground_semantic_snapshot();
+
+        let mut tracker = RuntimePersistentTransactionService::empty();
+        assert!(tracker.admit(parent));
+        assert_eq!(
+            tracker.record_semantic_progress_with(parent, expected, |_, _, _| true),
+            Some(RuntimeSteadyPendingDisposition::WaitForWake),
+        );
+        assert_eq!(
+            runtime_final_prewait_recheck_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                Some(parent),
+                || {},
+            ),
+            RuntimeFinalPrewaitRoute::Block,
+        );
+
+        let first_wait_epoch = tracker
+            .next_wait_epoch(parent)
+            .expect("the exact persistent parent arms its first wait epoch");
+        assert_eq!(first_wait_epoch, 1);
+        assert_eq!(
+            runtime_persistent_wait_receipt_final_prewait_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                parent,
+                first_wait_epoch,
+                || {
+                    publish_runtime_persistent_wait_receipt_at(
+                        DRIVER_TASK_RING_VADDR,
+                        parent,
+                        first_wait_epoch,
+                    )
+                },
+                || clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            ),
+            RuntimePersistentWaitReceiptPrewaitRoute::Block,
+        );
+        assert_eq!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR)
+                .expect("the receipt stays committed for the blocking wait")
+                .wait_epoch,
+            first_wait_epoch,
+        );
+        assert!(clear_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR
+        ));
+        assert!(read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none());
+
+        let second_wait_epoch = tracker
+            .next_wait_epoch(parent)
+            .expect("re-entry allocates a fresh wait epoch");
+        assert_eq!(second_wait_epoch, 2);
+        assert_eq!(
+            runtime_persistent_wait_receipt_final_prewait_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                parent,
+                second_wait_epoch,
+                || {
+                    let published = publish_runtime_persistent_wait_receipt_at(
+                        DRIVER_TASK_RING_VADDR,
+                        parent,
+                        second_wait_epoch,
+                    );
+                    CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 1);
+                    published
+                },
+                || clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            ),
+            RuntimePersistentWaitReceiptPrewaitRoute::ReenterOwner,
+            "a condition that changes across receipt publication must prevent sleep",
+        );
+        assert!(read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none());
+        CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 0);
+
+        let third_wait_epoch = tracker
+            .next_wait_epoch(parent)
+            .expect("the exact parent retains monotonic wait identity");
+        assert_eq!(third_wait_epoch, 3);
+        assert_eq!(
+            runtime_persistent_wait_receipt_final_prewait_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                parent,
+                third_wait_epoch,
+                || {
+                    let published = publish_runtime_persistent_wait_receipt_at(
+                        DRIVER_TASK_RING_VADDR,
+                        parent,
+                        third_wait_epoch,
+                    );
+                    CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 1);
+                    published
+                },
+                || false,
+            ),
+            RuntimePersistentWaitReceiptPrewaitRoute::FailClosed,
+            "a changed condition plus failed receipt clear can never enter the wait",
+        );
+        assert!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_some(),
+            "the failing clear branch must be observable to fail-closed containment",
+        );
+        assert!(clear_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+        ));
+        CYW43_RUNTIME_STATE.with_mut(|state| state.rx_queue_count = 0);
+
+        let fourth_wait_epoch = tracker
+            .next_wait_epoch(parent)
+            .expect("the exact parent retains monotonic wait identity after containment");
+        assert_eq!(fourth_wait_epoch, 4);
+        assert_eq!(
+            runtime_persistent_wait_receipt_final_prewait_after(
+                expected,
+                RuntimeNotificationRoute::Cyw43Client,
+                parent,
+                fourth_wait_epoch,
+                || false,
+                || clear_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            ),
+            RuntimePersistentWaitReceiptPrewaitRoute::FailClosed,
+        );
+        runtime_fail_closed_steady_wait_unavailable(
+            RuntimeNotificationRoute::Cyw43Client,
+            Some(parent),
+        );
+        assert!(CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| transaction.poisoned));
+        assert!(CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        assert!(read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none());
+
+        tracker.wait_epochs = u32::MAX;
+        assert_eq!(
+            tracker.next_wait_epoch(parent),
+            None,
+            "wait-epoch overflow is an identity fault, not permission to reuse an epoch",
+        );
+
+        let root_badge = DRIVER_RUNTIME_RESERVED_ROOT_BADGE | 0x20;
+        assert_eq!(
+            runtime_persistent_wait_receipt_wake_route(false, Some(root_badge)),
+            RuntimePersistentWaitReceiptWakeRoute::FailClosed,
+            "a failed clear must prevent every badge bit from being interpreted",
+        );
+        assert_eq!(
+            runtime_persistent_wait_receipt_wake_route(true, Some(root_badge)),
+            RuntimePersistentWaitReceiptWakeRoute::InterpretBadge(root_badge),
+        );
+        assert_eq!(
+            runtime_persistent_wait_receipt_wake_route(true, None),
+            RuntimePersistentWaitReceiptWakeRoute::WaitUnavailable,
+        );
     }
 
     #[test]
@@ -62709,6 +63368,95 @@ mod tests {
             read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR).is_none(),
             "the typed progress record cannot alias continuation-grant authority",
         );
+    }
+
+    #[test]
+    fn persistent_wait_receipt_is_sequence_last_and_cross_class_fail_closed() {
+        let _guard = test_guard();
+        let physical_generation = 0x4359_510a;
+        let (parent, _) =
+            install_persistent_control_parent_fixture(0x4359_510b, 0, physical_generation);
+        assert_eq!(parent.aux1, 0, "bootstrap logical generation is valid");
+        assert!(publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            parent,
+            1,
+        ));
+        let first = read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR)
+            .expect("the parent ring exposes one sequence-last wait receipt");
+        assert_eq!(first.request_sequence, parent.sequence);
+        assert_eq!(
+            first.action_fingerprint,
+            runtime_continuation_action_fingerprint(parent),
+        );
+        assert_eq!(first.logical_generation, 0);
+        assert_eq!((first.wait_epoch, first.committed_wait_epoch), (1, 1));
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_RING_VADDR).is_none(),
+            "the typed receipt cannot alias continuation authority",
+        );
+        assert!(
+            read_runtime_steady_service_progress_at(DRIVER_TASK_RING_VADDR).is_none(),
+            "the typed receipt cannot alias finite steady progress",
+        );
+
+        let mut ordinary = parent;
+        ordinary.flags = DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY;
+        assert!(!publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            ordinary,
+            2,
+        ));
+        let mut steady = parent;
+        steady.flags |= DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE;
+        assert!(!publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            steady,
+            2,
+        ));
+        let mut wrong_lane = parent;
+        wrong_lane.aux0 = wrong_lane.aux0.wrapping_add(1);
+        assert!(!publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            wrong_lane,
+            2,
+        ));
+        assert!(!publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            parent,
+            0,
+        ));
+        assert_eq!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            Some(first),
+            "a rejected cross-class publication cannot mutate the exact receipt",
+        );
+
+        assert!(runtime_continuation_grant_write_u32(
+            DRIVER_TASK_RING_VADDR,
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
+            0,
+        ));
+        assert_eq!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR),
+            None,
+            "an uncommitted body is never observable as a wait receipt",
+        );
+        assert!(publish_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR,
+            parent,
+            2,
+        ));
+        assert_eq!(
+            read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR)
+                .expect("the same parent may arm its next monotonic wait")
+                .wait_epoch,
+            2,
+        );
+        assert!(clear_runtime_persistent_wait_receipt_at(
+            DRIVER_TASK_RING_VADDR
+        ));
+        assert!(read_runtime_persistent_wait_receipt_at(DRIVER_TASK_RING_VADDR).is_none());
     }
 
     #[test]

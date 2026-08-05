@@ -7,8 +7,8 @@
 
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
-/// Runtime descriptor layout version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 7;
+/// Runtime descriptor layout and shared-protocol version.
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 8;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -628,19 +628,32 @@ pub const DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET: u16 = 40;
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES: u16 = 24;
 /// Magic value for a retained-command continuation grant.
 pub const DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC: u32 = 0x4452_4347;
-/// Fixed offset of the exact heartbeat for a grant-free steady-service lease.
+/// Fixed offset of the exact heartbeat for a grant-free owner command.
 ///
-/// A steady lease and a continuation grant are mutually exclusive authority
-/// modes for one immutable command, so their records deliberately share the
-/// same fixed 24-byte slot. Distinct magic values make cross-mode samples fail
-/// closed.
+/// A finite steady lease or persistent physical SDIO child and a continuation
+/// grant are mutually exclusive authority modes for one immutable command, so
+/// their records deliberately share the same fixed 24-byte slot. Distinct
+/// magic values make cross-mode samples fail closed.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET: u16 =
     DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET;
-/// Bytes in one exact steady-service heartbeat record.
+/// Bytes in one exact grant-free owner heartbeat record.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES: u16 =
     DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
-/// Magic value for a steady-service heartbeat record.
+/// Magic value for a grant-free owner heartbeat record.
 pub const DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC: u32 = 0x4452_5350;
+/// Fixed offset of the exact persistent-transaction wait receipt.
+///
+/// Continuation grants, finite steady-service progress, and persistent op11
+/// waits are mutually exclusive command modes, so all three records share the
+/// same fixed 24-byte auxiliary slot. Their distinct magic values make a
+/// cross-mode sample fail closed.
+pub const DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET: u16 =
+    DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET;
+/// Bytes in one exact persistent-transaction wait receipt.
+pub const DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES: u16 =
+    DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES;
+/// Magic value for a committed persistent-transaction wait receipt (`DRPW`).
+pub const DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC: u32 = 0x4452_5057;
 /// Bytes in the runtime progress marker.
 pub const DRIVER_RUNTIME_RING_PROGRESS_BYTES: u16 = 16;
 /// Runtime progress-marker magic.
@@ -3368,6 +3381,75 @@ impl DriverRuntimeSteadyServiceProgress {
     }
 }
 
+/// Exact receipt that one persistent op11 owner armed its external wait.
+///
+/// The CYW43 runtime publishes this record only after exhausting deterministic
+/// local work and rechecking every durable parent, child, DPC, queue, credit,
+/// and terminal condition. `committed_wait_epoch` is published last. Root may
+/// use a stable exact-identity receipt only to release prompt pre-wait
+/// scheduling adjacency; it grants no operation, wake, retry, or deadline
+/// renewal. The runtime clears the commit before re-entering runnable owner
+/// work or publishing the parent terminal.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimePersistentWaitReceipt {
+    /// Fixed [`DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// Immutable persistent parent command sequence.
+    pub request_sequence: u32,
+    /// Fingerprint of every command action field except the sequence.
+    pub action_fingerprint: u32,
+    /// Root-owned logical connection generation; zero is a valid bootstrap value.
+    pub logical_generation: u32,
+    /// Nonzero monotonic wait epoch for this exact parent.
+    pub wait_epoch: u32,
+    /// Sequence-last commit copy of [`Self::wait_epoch`].
+    pub committed_wait_epoch: u32,
+}
+
+impl DriverRuntimePersistentWaitReceipt {
+    /// Return a byte-zero, uncommitted wait receipt.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: 0,
+            request_sequence: 0,
+            action_fingerprint: 0,
+            logical_generation: 0,
+            wait_epoch: 0,
+            committed_wait_epoch: 0,
+        }
+    }
+
+    /// Build one exact receipt whose commit copy is published last.
+    #[must_use]
+    pub const fn new(
+        request_sequence: u32,
+        action_fingerprint: u32,
+        logical_generation: u32,
+        wait_epoch: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
+            request_sequence,
+            action_fingerprint,
+            logical_generation,
+            wait_epoch,
+            committed_wait_epoch: wait_epoch,
+        }
+    }
+
+    /// Return whether the sequence-last record is structurally committed.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.magic == DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC
+            && self.request_sequence != 0
+            && self.action_fingerprint != 0
+            && self.wait_epoch != 0
+            && self.committed_wait_epoch == self.wait_epoch
+    }
+}
+
 const fn driver_runtime_continuation_fingerprint_mix(mut hash: u32, value: u32) -> u32 {
     hash ^= value;
     hash = hash.wrapping_mul(16_777_619);
@@ -5944,6 +6026,14 @@ mod tests {
             core::mem::align_of::<DriverRuntimeSteadyServiceProgress>(),
             4
         );
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimePersistentWaitReceipt>(),
+            24
+        );
+        assert_eq!(
+            core::mem::align_of::<DriverRuntimePersistentWaitReceipt>(),
+            4
+        );
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET, 40);
         assert_eq!(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES, 24);
         assert_eq!(
@@ -5953,6 +6043,22 @@ mod tests {
         assert_eq!(
             DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES,
             DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
+        );
+        assert_eq!(
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC,
+        );
+        assert_ne!(
+            DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_MAGIC,
+            DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
         );
         assert!(
             usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
@@ -5973,6 +6079,14 @@ mod tests {
         );
         assert_eq!(
             core::mem::offset_of!(DriverRuntimeSteadyServiceProgress, committed_slice),
+            20,
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, wait_epoch),
+            16,
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch),
             20,
         );
 
@@ -6069,6 +6183,53 @@ mod tests {
     }
 
     #[test]
+    fn persistent_wait_receipt_is_exact_commit_last_and_accepts_generation_zero() {
+        let fingerprint = driver_runtime_continuation_action_fingerprint(
+            1,
+            DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+            HOT_PATH_CYW43_WIFI,
+            DRIVER_RUNTIME_ROLE_NET,
+            DRIVER_RUNTIME_CYW43_COMMAND_AUX,
+            0,
+            DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_OPS,
+            DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_FRAMES,
+            DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_BYTES,
+            u32::from(DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET),
+            core::mem::size_of::<DriverRuntimeCyw43CommandDescriptor>() as u16,
+            0,
+        );
+        let receipt = DriverRuntimePersistentWaitReceipt::new(73, fingerprint, 0, 1);
+        assert!(
+            receipt.valid(),
+            "logical generation zero is a valid persistent op11 identity"
+        );
+
+        assert!(!DriverRuntimePersistentWaitReceipt {
+            committed_wait_epoch: 0,
+            ..receipt
+        }
+        .valid());
+        assert!(!DriverRuntimePersistentWaitReceipt {
+            committed_wait_epoch: 2,
+            ..receipt
+        }
+        .valid());
+        assert!(!DriverRuntimePersistentWaitReceipt {
+            action_fingerprint: 0,
+            ..receipt
+        }
+        .valid());
+        assert!(!DriverRuntimePersistentWaitReceipt {
+            wait_epoch: 0,
+            committed_wait_epoch: 0,
+            ..receipt
+        }
+        .valid());
+        assert_eq!(DriverRuntimePersistentWaitReceipt::empty().magic, 0);
+    }
+
+    #[test]
     fn cyw43_root_continuation_identity_is_generation_and_sequence_independent() {
         assert!(driver_runtime_is_cyw43_root_continuation(
             HOT_PATH_CYW43_WIFI,
@@ -6129,7 +6290,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 7);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 8);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET

@@ -423,7 +423,7 @@ or a relaxed host-EAPOL `wsec_key` gate.
 
 Reopened Milestones 26a/26b also require HAL driver-task contract coverage before hardware claims: `hal::driver_task` must validate the serial, USB/local-seat, HDMI, GENET, CYW43, SDIO host, PCIe root, RTL8139, and virtio-net contracts. Historical M26B completion evidence remains a compatibility baseline, not reopened acceptance proof. Reopened Pi 4 captures must include compact `DRIVER_TASK_*`, `SCHED_CONTRACT`, `BUDGET_OVERRUN`, observed per-driver latency, `SERIAL_ECHO`, `USB_BURST`, and `HDMI_RESPONSIVE` evidence; `scripts/pi4_trace_normalize.py --gate-summary` exposes those as machine-checkable hardware proof fields.
 
-Dedicated-driver-task closure is stricter than contract declaration: `DRIVER_TASK_DEDICATED` must cover the required active roles, `DRIVER_TASK_COMPATIBILITY` must be `0`, `DRIVER_TASK_DEDICATED_READY=yes` must be present, `DRIVER_TASK_FAILED_COUNT=0` must be present, serial, USB/local-seat, display, selected network, selected-role SDIO (`DRIVER_TASK_SDIO_DEDICATED=yes`) for Wi-Fi, and PCIe role booleans must all be `yes`, and substrate/capset/fault/revoke/scheduling/per-driver-affinity/VSpace plus pointer-free IPC, owner-state proof, sealed runtime descriptor proof, and active-network identity fields must all be `yes` when `scripts/pi4_gate_proof.sh --require-driver-task-proof` is used. Physical Pi bootstrap is limited to the selected generated isolated runtime hardware contracts; RTL8139 and virtio-net remain QEMU compatibility contract coverage only. Owner-state proof requires one `DRIVER_TASK_OWNER_STATE ... hot_path=<exact> owner_state=driver-owned descriptor=present descriptor_version=7 descriptor_seal=valid artifact_hash=nonzero root_pointer=no` line for each current acceptance hot path: `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network path (`genet-nic` for wired or `cyw43-wifi` plus `sdio-host` for Wi-Fi). The canonical sealed descriptor fragment is `DRIVER_TASK_OWNER_STATE ... descriptor=present descriptor_version=7 descriptor_seal=valid`. Split clients must carry `bus_link_seal=valid` for USB-to-PCIe or CYW43-to-SDIO while non-split roles report `bus_link_seal=none`. Aggregate owner-state text, inferred hot paths, inactive-network hot paths, truthy aliases such as `owner_state=yes`, or pre-seal `descriptor=present root_pointer=no` logs without descriptor-seal fields must fail current closure.
+Dedicated-driver-task closure is stricter than contract declaration: `DRIVER_TASK_DEDICATED` must cover the required active roles, `DRIVER_TASK_COMPATIBILITY` must be `0`, `DRIVER_TASK_DEDICATED_READY=yes` must be present, `DRIVER_TASK_FAILED_COUNT=0` must be present, serial, USB/local-seat, display, selected network, selected-role SDIO (`DRIVER_TASK_SDIO_DEDICATED=yes`) for Wi-Fi, and PCIe role booleans must all be `yes`, and substrate/capset/fault/revoke/scheduling/per-driver-affinity/VSpace plus pointer-free IPC, owner-state proof, sealed runtime descriptor proof, and active-network identity fields must all be `yes` when `scripts/pi4_gate_proof.sh --require-driver-task-proof` is used. Physical Pi bootstrap is limited to the selected generated isolated runtime hardware contracts; RTL8139 and virtio-net remain QEMU compatibility contract coverage only. Owner-state proof requires one `DRIVER_TASK_OWNER_STATE ... hot_path=<exact> owner_state=driver-owned descriptor=present descriptor_version=8 descriptor_seal=valid artifact_hash=nonzero root_pointer=no` line for each current acceptance hot path: `serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, and the selected network path (`genet-nic` for wired or `cyw43-wifi` plus `sdio-host` for Wi-Fi). The canonical sealed descriptor fragment is `DRIVER_TASK_OWNER_STATE ... descriptor=present descriptor_version=8 descriptor_seal=valid`. Split clients must carry `bus_link_seal=valid` for USB-to-PCIe or CYW43-to-SDIO while non-split roles report `bus_link_seal=none`. Aggregate owner-state text, inferred hot paths, inactive-network hot paths, truthy aliases such as `owner_state=yes`, historical descriptor versions, or pre-seal `descriptor=present root_pointer=no` logs without descriptor-seal fields must fail current closure.
 Pi serial migration proof additionally requires
 `DRIVER_TASK_IRQ_TOPOLOGY contract=serial irq=125 badge=126 handler_slot=4 notification_slot=3 trigger=level status=bound proof_effect=irq-rx-ready`
 and `DRIVER_TASK_NOTIFICATION_BOUND contract=serial ... source=generated-serial-irq-topology`
@@ -2877,8 +2877,9 @@ remains non-preemptible, a full aggregate restores paired capacity by promoting
 one eligible head without manufacturing op8 credit discovery, and the HAL
 front-event snapshot exposes only the sequence-last committed event.
 
-Driver-runtime ABI v7 episode-ledger coverage must prove the exact 49,344
-offset, 128-byte/cache-line-isolated size, final-word publication commit,
+The episode ledger introduced by driver-runtime ABI v7 and retained unchanged
+by ABI v8 must prove the exact 49,344 offset, 128-byte/cache-line-isolated size,
+final-word publication commit,
 staged/torn/wrong-version/wrong-sequence rejection, body clean/barrier before
 commit, and zero notification-count change. Foreground and DPC accumulators
 must coexist without identity corruption; foreground clear,
@@ -2898,18 +2899,34 @@ values and survives the linked-runtime serial transport without truncation.
 The trace normalizer must accept only the anchored compact grammar and expose it
 as passive diagnostic structure; the record must not change any Pi gate or DPC
 acceptance result. The trace normalizer and Pi gate fixtures must require
-descriptor version 7; older descriptor versions remain parseable historical
-text but cannot satisfy current sealed-owner acceptance.
+descriptor version 8; descriptor version 7 and older remain parseable
+historical text but cannot satisfy current sealed-owner acceptance.
 Expiry may select exact recovery only and must not create a source probe, poll,
 replay, or fallback. Ordinary post-Gate-8 TCP
 must retain its O(1) finite-op7 classification and service path without running
 the EAPOL-Key parser.
 Every exact op11 instead uses one HAL-derived persistent marker regardless of
-logical generation or lifecycle: tests must cross ABI-invisible `Stage`,
-full-body clean/barrier, sequence-last `CommitRing`, `Issued`, exactly one
-signal-last notification, and terminal polling with no `PublishGrant`, grant 19,
-replacement grant, or later `NotifyRing`. The request must remain `Issued`
-through incomplete completion reads. GENET cannot acquire or inspect this state,
+logical generation or lifecycle. ABI coverage must prove the receipt's exact
+offset 40, exact 24-byte size, distinct magic, logical generation zero, body
+clean/barrier and commit-last publication, producer-monotonic nonzero epoch and
+overflow failure, stable root double-read, and rejection of torn, stale,
+wrong-request, wrong-fingerprint, wrong-generation, wrong-epoch, and
+wrong-commit state. Production tests must cross ABI-invisible `Stage`, receipt
+clearing, full-body clean/barrier, sequence-last `CommitRing`, `Issued`, exactly
+one signal-last notification, exact persistent wait receipt or terminal, and
+terminal consumption with no `PublishGrant`, grant 19, replacement grant, or
+later `NotifyRing`. They must cover changed-condition clearing,
+terminal-before-receipt, terminal-after-receipt, publish/clear failure,
+clear-before-wake interpretation, ordinary receipt park, later exact-terminal
+resume, semantic consumption, and deterministic lease release. The composed
+EventPump test must preserve one externally uninterrupted same-parent
+bus-service episode across HAL admission, CYW43 protocol ownership, and SDIO
+physical ownership. Open, bounded Closing, and exact handoff-boundary phases may
+schedule required Serial/LocalSeat/Dispatch fairness checkpoints, but must admit
+no idle gap, unrelated policy/NIC owner, second request, signal, grant, or
+issue. Receipt and terminal are alternative handoff proofs, never simultaneous
+authority. The request must remain `Issued` through incomplete completion
+reads. GENET cannot acquire or inspect this state,
 the finite op7 steady lease retains its separate identity, admission, and
 budget while using the common condition-driven continuation route, and typed
 cold provenance cannot authorize another publication lane. Tests must reject caller-supplied or partial
@@ -3020,13 +3037,17 @@ exact-root-grant cadence and reject endpoint continuation. An exact op11 instead
 commits once, signals once, remains `Issued`, and advances from its durable
 parent/child state with no recurrent root or delegated grant. Delegated initial
 intake uses the coalescing badge-256 notification and sequence-last ring
-command. After `Pending`, a persistent op11 parent or child continues whenever
-its current durable condition is locally runnable, including equal
-deterministic private state; an exact post-TX `WaitReply` blocks on
+command. Before a stable `DriverRuntimePersistentWaitReceipt` proves that the
+child is armed on its local notification, the issued parent is a runnable
+notify/wake handoff and retains the existing open Network lease for prompt
+re-admission without a second signal or request. After `Pending`, a
+persistent op11 parent or child continues whenever its current durable
+condition is locally runnable, including equal deterministic private state; an
+exact post-TX `WaitReply` blocks on
 CARD_INT/DPC/RX/credit/child-terminal state with no forced source probe or
 ordinary-traffic deadline hint. Interleaved EVENT/DATA uses the durable
-sideband batch and exact ACK without terminating op11. While HAL reports exact
-op11 `Waiting`, root must mask
+sideband batch and exact ACK without terminating op11. Once the exact wait
+receipt is committed, while HAL reports op11 `Waiting`, root must mask
 only that parent's descriptor/logical-owner/HAL-lease self-demand; independent
 DPC/RX/sideband/deadline/terminal work remains schedulable, and
 `TerminalVisible` restores the

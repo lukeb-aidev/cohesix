@@ -17,25 +17,25 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4_gate_proof.sh"
 def _driver_task_owner_state_lines() -> list[str]:
     return [
         "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=bcmgenet-v5 hot_path=genet-nic "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no",
         "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
-        "owner_state=driver-owned descriptor=present descriptor_version=7 "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no",
     ]
 
@@ -88,7 +88,7 @@ def _strip_runtime_descriptor_seal_fields(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=7",
+            " descriptor_version=8",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",
@@ -102,14 +102,14 @@ def _strip_runtime_descriptor_seal_fields(lines: list[str]) -> list[str]:
 def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
     lines = [
         "DRIVER_TASK_DMA_PROOF contract=serial hot_path=serial-console "
-        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
         "owner=linked-runtime mmio_pages=0 dma_pages=0 shared_pages=4 "
         "bus_address_policy=zero-dma cache_policy=uncached-plus-root-maintenance "
         "cache_clean_ops=0 cache_clean_bytes=0 cache_invalidate_ops=0 "
         "cache_invalidate_bytes=0 proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_DMA_PROOF contract=usb-local-seat hot_path=usb-keyboard "
-        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no "
         "owner=linked-runtime mmio_pages=0 dma_pages=128 shared_pages=32 "
         "bus_address_policy=hal-bounded-bus-address "
@@ -117,14 +117,14 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
         "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
         "proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_DMA_PROOF contract=hdmi-text hot_path=hdmi-text "
-        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
         "owner=linked-runtime mmio_pages=0 dma_pages=0 shared_pages=16 "
         "bus_address_policy=zero-dma cache_policy=uncached-plus-root-maintenance "
         "cache_clean_ops=0 cache_clean_bytes=0 cache_invalidate_ops=0 "
         "cache_invalidate_bytes=0 proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_DMA_PROOF contract=bcmgenet-v5 hot_path=genet-nic "
-        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
         "owner=linked-runtime mmio_pages=6 dma_pages=64 shared_pages=32 "
         "bus_address_policy=hal-bounded-bus-address "
@@ -132,7 +132,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
         "cache_clean_bytes=64 cache_invalidate_ops=1 cache_invalidate_bytes=64 "
         "proof_effect=runtime-dma-proof-ready",
         "DRIVER_TASK_DMA_PROOF contract=pcie-root hot_path=pcie-root "
-        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+        "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
         "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none root_pointer=no "
         "owner=linked-runtime mmio_pages=10 dma_pages=0 shared_pages=16 "
         "bus_address_policy=zero-dma cache_policy=uncached-plus-root-maintenance "
@@ -143,7 +143,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
         lines.extend(
             [
                 "DRIVER_TASK_DMA_PROOF contract=cyw43455 hot_path=cyw43-wifi "
-                "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+                "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
                 "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no "
                 "owner=linked-runtime mmio_pages=0 dma_pages=0 shared_pages=64 "
                 "bus_address_policy=zero-dma "
@@ -151,7 +151,7 @@ def _driver_task_dma_proof_lines(include_wifi: bool = True) -> list[str]:
                 "cache_clean_bytes=0 cache_invalidate_ops=0 cache_invalidate_bytes=0 "
                 "proof_effect=runtime-dma-proof-ready",
                 "DRIVER_TASK_DMA_PROOF contract=sdio-host hot_path=sdio-host "
-                "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=7 "
+                "status=ready profile=bounded-no-iommu descriptor=present descriptor_version=8 "
                 "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid root_pointer=no "
                 "owner=linked-runtime mmio_pages=1 dma_pages=0 shared_pages=32 "
                 "bus_address_policy=zero-dma "
@@ -1061,6 +1061,48 @@ def test_gate_proof_rejects_pre_seal_driver_task_proof(
         "\n".join(_strip_runtime_descriptor_seal_fields(_strong_driver_task_proof_lines())),
         encoding="utf-8",
     )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-driver-task-proof",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "DRIVER_TASK_OWNER_STATE_PROOF=yes" in result.stdout
+    assert "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF=no" in result.stdout
+    assert (
+        "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF expected yes got no"
+        in result.stderr
+    )
+    assert "PI4_RUNTIME_DMA_PROOF=diagnostic" in result.stdout
+
+
+def test_gate_proof_rejects_v7_runtime_descriptor_proof(
+    tmp_path: pathlib.Path,
+) -> None:
+    """Strict proof rejects sealed ABI v7 lines after the v8 authority change."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    stale_lines = [
+        line.replace("descriptor_version=8", "descriptor_version=7")
+        for line in _strong_driver_task_proof_lines()
+    ]
+    log_path = tmp_path / "pi4-serial-v7.log"
+    log_path.write_text("\n".join(stale_lines), encoding="utf-8")
 
     result = subprocess.run(
         [

@@ -10861,7 +10861,7 @@ def _owner_state_proven(fields: dict[str, str]) -> bool:
     return explicit.lower() == "driver-owned"
 
 
-RUNTIME_DESCRIPTOR_SEAL_VERSION = 7
+RUNTIME_DESCRIPTOR_SEAL_VERSION = 8
 SPLIT_RUNTIME_DESCRIPTOR_SEAL_HOT_PATHS = frozenset(
     {"usb-keyboard", "cyw43-wifi", "sdio-host"}
 )

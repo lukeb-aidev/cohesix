@@ -2967,23 +2967,27 @@ struct Cyw43NetworkResumeCondition {
 
 /// Classify one stable pre-sleep Network cut without granting work authority.
 ///
-/// An unfinished exact parent masks only policy self-demand. Independent DPC
-/// and RX levels remain runnable, while exact parent progress is authoritative
-/// regardless of those policy levels.
+/// An unfinished exact parent masks policy self-demand. Independent DPC and RX
+/// levels remain runnable. Exact persistent pre-wait state retains only the
+/// same physical handoff; a terminal or other exact parent progress may also
+/// re-enable its routed semantic consumer.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_network_resume_condition_from_levels(
     active_parent: bool,
     active_parent_progress: bool,
+    persistent_parent_pre_wait: bool,
     independent_work_visible: bool,
     policy_work_visible: bool,
     causal_continuation: bool,
 ) -> Cyw43NetworkResumeCondition {
     Cyw43NetworkResumeCondition {
-        service_due: active_parent_progress
+        service_due: persistent_parent_pre_wait
+            || active_parent_progress
             || independent_work_visible
             || (!active_parent && (policy_work_visible || causal_continuation)),
         lifetime_continuation: causal_continuation || active_parent,
-        routed_work_allowed: !active_parent || active_parent_progress,
+        routed_work_allowed: !active_parent
+            || (active_parent_progress && !persistent_parent_pre_wait),
     }
 }
 
@@ -3000,8 +3004,103 @@ const fn cyw43_network_service_due(
 }
 
 #[cfg(all(feature = "kernel", feature = "net-console"))]
-const fn cyw43_network_drain_parent_should_park(resume: Cyw43NetworkResumeCondition) -> bool {
-    !resume.service_due && !resume.routed_work_allowed
+const fn cyw43_network_drain_parent_should_park(
+    drain_owner: Option<Cyw43NetworkDrainOwner>,
+    resume: Cyw43NetworkResumeCondition,
+    exact_terminal_retirement: bool,
+) -> bool {
+    drain_owner.is_some()
+        && !exact_terminal_retirement
+        && !resume.service_due
+        && !resume.routed_work_allowed
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_network_drain_terminal_can_bypass_park(
+    canonical_terminal: bool,
+    exact_hal_terminal: bool,
+    stable_drain_owner: bool,
+) -> bool {
+    canonical_terminal && exact_hal_terminal && stable_drain_owner
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_network_drain_owner_identity(owner: Cyw43NetworkDrainOwner) -> Option<(u32, u32)> {
+    let active = crate::hal::driver_task::active_driver_task_retained_request(
+        crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+    )?;
+    match owner {
+        Cyw43NetworkDrainOwner::Closing(
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request,
+                issued,
+            },
+        ) if active.request() == request && active.issued() == issued => {}
+        Cyw43NetworkDrainOwner::Boundary(expected)
+            if expected.resumable()
+                && crate::hal::driver_task::cyw43_sdio_network_boundary_parent() == expected
+                && active.request() == expected.request()
+                && active.issued()
+                    == matches!(
+                        expected,
+                        crate::hal::driver_task::Cyw43SdioNetworkBoundaryParent::Issued { .. }
+                    ) => {}
+        Cyw43NetworkDrainOwner::Closing(_) | Cyw43NetworkDrainOwner::Boundary(_) => return None,
+    }
+    active
+        .command()
+        .map(|command| (active.request(), command.aux1))
+}
+
+/// Revalidate the exact typed drain terminal immediately before Network parks.
+///
+/// The canonical policy terminal alone is deliberately insufficient: the same
+/// Closing or boundary owner must bracket HAL's exact request-bound terminal
+/// classification. Recovery remains an admission fence for every other owner.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_network_drain_owner_exact_terminal(drain_owner: Option<Cyw43NetworkDrainOwner>) -> bool {
+    let Some(drain_owner) = drain_owner else {
+        return false;
+    };
+    let canonical_before = cyw43_terminal_retirement_override();
+    let Some((request, generation)) = cyw43_network_drain_owner_identity(drain_owner) else {
+        return false;
+    };
+    let exact_hal_terminal =
+        crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request)
+            == crate::hal::driver_task::Cyw43PersistentTransactionParentCondition::TerminalVisible;
+    let stable_drain_owner =
+        cyw43_network_drain_owner_identity(drain_owner) == Some((request, generation));
+    let canonical_after = cyw43_terminal_retirement_override();
+    cyw43_network_drain_terminal_can_bypass_park(
+        canonical_before && canonical_after,
+        exact_hal_terminal,
+        stable_drain_owner,
+    )
+}
+
+/// Exercise the live typed Closing gate with recovery injected at its cut.
+#[cfg(all(feature = "kernel", feature = "net-console", test))]
+pub(crate) fn test_closing_recovery_exact_terminal_bypasses_park(
+    request: u32,
+    issued: bool,
+) -> bool {
+    crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
+    let _outer_turn = crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
+    let owner = Some(Cyw43NetworkDrainOwner::Closing(
+        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+            request,
+            issued,
+        },
+    ));
+    crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+    let exact_terminal = cyw43_network_drain_owner_exact_terminal(owner);
+    exact_terminal
+        && !cyw43_network_drain_parent_should_park(
+            owner,
+            Cyw43NetworkResumeCondition::default(),
+            exact_terminal,
+        )
 }
 
 /// Recheck durable CYW43 work immediately before closing the Network phase.
@@ -3026,13 +3125,26 @@ fn cyw43_network_resume_condition() -> Cyw43NetworkResumeCondition {
 
     let active_parent = after.exact_parent_waiting()
         || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(after.generation());
-    let active_parent_progress =
-        crate::hal::driver_task::cyw43_sdio_network_active_parent_progress_visible(
+    let persistent_parent =
+        crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(after.generation());
+    if persistent_parent
+        == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
+    {
+        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+        return Cyw43NetworkResumeCondition::default();
+    }
+    let persistent_parent_pre_wait = persistent_parent
+        == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::PreWait;
+    let persistent_terminal = persistent_parent
+        == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Terminal;
+    let active_parent_progress = persistent_terminal
+        || crate::hal::driver_task::cyw43_sdio_network_active_parent_progress_visible(
             after.generation(),
         );
     cyw43_network_resume_condition_from_levels(
         active_parent,
         active_parent_progress,
+        persistent_parent_pre_wait,
         after.independent_work_visible(),
         after.policy_work_visible(),
         after.causal_continuation(),
@@ -3575,6 +3687,11 @@ where
         self
     }
 
+    #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+    pub(crate) fn test_linked_runtime_network_phase(&self) -> bool {
+        self.linked_runtime_service_phase == LinkedRuntimeServicePhase::Network
+    }
+
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
         self.reconcile_physical_response_barrier();
@@ -3854,6 +3971,39 @@ where
                 let cyw43_lane_selected = self.linked_runtime_cyw43_lane_selected();
                 #[cfg(feature = "net-console")]
                 if cyw43_lane_selected
+                    && crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase
+                        == crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Closing
+                    && crate::hal::driver_task::active_driver_task_retained_request(
+                        crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                    )
+                    .is_none()
+                {
+                    // The prior turn consumed the exact physical terminal and
+                    // completed its semantic owner. Restore both scheduling
+                    // reservations before any successor policy poll. This is
+                    // the final deterministic drain edge of the same retained
+                    // episode, never authority to admit a fresh request.
+                    match Self::close_cyw43_sdio_network_priority_lease() {
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Inactive
+                        | crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::Closed => {
+                            self.linked_runtime_network_consecutive_turns = 0;
+                            self.linked_runtime_network_quantum_started_ms = None;
+                            self.linked_runtime_network_quantum_started_ticks = 0;
+                            self.clear_linked_runtime_network_operator_checkpoint_clock();
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                            return;
+                        }
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                            ..
+                        } => {}
+                        crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::RecoveryRequired => {
+                            self.cancel_linked_runtime_network_quantum();
+                            return;
+                        }
+                    }
+                }
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected
                     && !cyw43_network_dispatch_admissible(
                         crate::drivers::driver_task_net::cyw43_service_work_snapshot(),
                     )
@@ -3890,15 +4040,17 @@ where
                 #[cfg(feature = "net-console")]
                 let cyw43_priority_lease_actionable = self.linked_runtime_cyw43_priority_work_due();
                 #[cfg(feature = "net-console")]
-                let cyw43_owner_override_actionable =
-                    cyw43_lane_selected && cyw43_terminal_retirement_override();
+                let cyw43_owner_override_actionable = cyw43_lane_selected
+                    && cyw43_terminal_retirement_override()
+                    && crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase
+                        != crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Closing;
                 #[cfg(feature = "net-console")]
                 let cyw43_priority_lease_drain_owner = if cyw43_owner_override_actionable {
                     // This exact owner crossed admission before the current
                     // policy/recovery state. Do not close or validate it via
-                    // the fresh Network lease: op11 has no such lease, and an
-                    // op7 terminal must restore HAL before a sticky recovery
-                    // result is allowed to finalize the outer quantum.
+                    // a fresh Network lease. A Closing outer lease is excluded
+                    // above: its typed drain owner must consume the terminal
+                    // and restore both scheduling reservations in one turn.
                     None
                 } else if cyw43_priority_lease_actionable {
                     match crate::hal::driver_task::begin_cyw43_sdio_network_priority_lease() {
@@ -4015,14 +4167,21 @@ where
                 };
                 #[cfg(feature = "net-console")]
                 if cyw43_priority_lease_drain_owner.is_some()
-                    && cyw43_network_drain_parent_should_park(cyw43_network_resume_condition())
+                    && cyw43_network_drain_parent_should_park(
+                        cyw43_priority_lease_drain_owner,
+                        cyw43_network_resume_condition(),
+                        cyw43_network_drain_owner_exact_terminal(cyw43_priority_lease_drain_owner),
+                    )
                 {
                     // Closing and unleased-boundary parents retain their exact
                     // immutable identity, but an issued parent with no fresh
                     // physical progress is a sleep condition. Rotate without
                     // polling either child; CARD_INT/DMA completion, durable
                     // DPC/root-RX, or the exact sequence-last terminal will
-                    // make the next fresh cut runnable.
+                    // make the next fresh cut runnable. A terminal already
+                    // committed for this typed drain owner must instead reach
+                    // its canonical consumer even when recovery fences every
+                    // fresh Network admission.
                     self.linked_runtime_network_consecutive_turns = 0;
                     self.linked_runtime_network_quantum_started_ms = None;
                     self.linked_runtime_network_quantum_started_ticks = 0;
@@ -4733,9 +4892,27 @@ where
             if snapshot.exact_parent_waiting() {
                 // A queued console response, retained Echo Reply, flush tail,
                 // or association status cannot advance an issued physical
-                // parent. Only independent committed driver work may reopen
-                // the one CYW43 lane until that exact terminal is visible.
-                return snapshot.schedulable_network_work();
+                // parent. Independent committed driver work may reopen the
+                // one CYW43 lane. Persistent op11 additionally retains this
+                // exact pre-wait handoff until the child commits its durable
+                // local-notification receipt; the receipt then restores the
+                // ordinary sleeping-parent mask without a poll clock.
+                let persistent_parent =
+                    crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(
+                        snapshot.generation(),
+                    );
+                if persistent_parent
+                    == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
+                {
+                    crate::hal::driver_task::request_cyw43_sdio_pair_restart();
+                    return false;
+                }
+                return snapshot.schedulable_network_work()
+                    || matches!(
+                        persistent_parent,
+                        crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::PreWait
+                            | crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Terminal
+                    );
             }
             let counters = net.stats();
             let status = net.status_report();
@@ -35940,7 +36117,35 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn network_resume_condition_parks_parent_policy_but_not_independent_work() {
-        let waiting = cyw43_network_resume_condition_from_levels(true, false, false, true, true);
+        let drain_owner = Some(Cyw43NetworkDrainOwner::Closing(
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request: 1,
+                issued: true,
+            },
+        ));
+        let pre_wait =
+            cyw43_network_resume_condition_from_levels(true, true, true, false, true, true);
+        assert_eq!(
+            pre_wait,
+            Cyw43NetworkResumeCondition {
+                service_due: true,
+                lifetime_continuation: true,
+                routed_work_allowed: false,
+            },
+            "an exact unarmed op11 retains only its prompt physical handoff",
+        );
+        assert!(!cyw43_network_drain_parent_should_park(
+            drain_owner,
+            pre_wait,
+            false,
+        ));
+        assert!(
+            cyw43_network_service_due(false, pre_wait),
+            "pre-wait handoff cannot depend on cached upper-policy demand",
+        );
+
+        let waiting =
+            cyw43_network_resume_condition_from_levels(true, false, false, false, true, true);
         assert_eq!(
             waiting,
             Cyw43NetworkResumeCondition {
@@ -35950,22 +36155,32 @@ mod tests {
             },
             "an issued unconsumed parent must mask policy and causal self-demand",
         );
-        assert!(cyw43_network_drain_parent_should_park(waiting));
+        assert!(cyw43_network_drain_parent_should_park(
+            drain_owner,
+            waiting,
+            false,
+        ));
         assert!(
             !cyw43_network_service_due(true, waiting),
             "stale routed upper-stack demand cannot override the fresh wait condition",
         );
 
-        let independent = cyw43_network_resume_condition_from_levels(true, false, true, true, true);
+        let independent =
+            cyw43_network_resume_condition_from_levels(true, false, false, true, true, true);
         assert!(
             independent.service_due,
             "fresh DPC or root RX must remain runnable beside an unfinished parent",
         );
         assert!(independent.lifetime_continuation);
         assert!(!independent.routed_work_allowed);
-        assert!(!cyw43_network_drain_parent_should_park(independent));
+        assert!(!cyw43_network_drain_parent_should_park(
+            drain_owner,
+            independent,
+            false,
+        ));
 
-        let terminal = cyw43_network_resume_condition_from_levels(true, true, false, true, false);
+        let terminal =
+            cyw43_network_resume_condition_from_levels(true, true, false, false, true, false);
         assert!(
             terminal.service_due,
             "exact same-turn terminal progress must retain Network",
@@ -35977,6 +36192,61 @@ mod tests {
         assert!(
             !cyw43_network_service_due(true, unstable),
             "inadmissible or identity-unstable cuts must fail closed over stale routing demand",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn closing_recovery_exact_terminal_bypasses_only_the_pre_poll_park() {
+        let closing = Cyw43NetworkDrainOwner::Closing(
+            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
+                request: 0x4359_8011,
+                issued: true,
+            },
+        );
+        let recovery_fenced_resume = Cyw43NetworkResumeCondition::default();
+
+        assert!(
+            cyw43_network_drain_parent_should_park(Some(closing), recovery_fenced_resume, false,),
+            "a Closing parent without an exact terminal must remain parked under recovery",
+        );
+        for (canonical_terminal, exact_hal_terminal, stable_drain_owner) in [
+            (false, true, true),
+            (true, false, true),
+            (true, true, false),
+        ] {
+            assert!(
+                cyw43_network_drain_parent_should_park(
+                    Some(closing),
+                    recovery_fenced_resume,
+                    cyw43_network_drain_terminal_can_bypass_park(
+                        canonical_terminal,
+                        exact_hal_terminal,
+                        stable_drain_owner,
+                    ),
+                ),
+                "canonical, exact-HAL, and stable-owner proof are all required",
+            );
+        }
+        assert!(
+            !cyw43_network_drain_parent_should_park(
+                Some(closing),
+                recovery_fenced_resume,
+                cyw43_network_drain_terminal_can_bypass_park(true, true, true),
+            ),
+            "the committed exact terminal must reach its canonical consumer before recovery",
+        );
+        assert!(
+            !cyw43_network_drain_parent_should_park(
+                Some(closing),
+                Cyw43NetworkResumeCondition {
+                    service_due: true,
+                    lifetime_continuation: false,
+                    routed_work_allowed: false,
+                },
+                false,
+            ),
+            "independent durable work remains runnable without borrowing terminal authority",
         );
     }
 

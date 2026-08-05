@@ -512,9 +512,15 @@ exact durable state. That final boundary does not rebuild the full classifier:
 it double-samples a narrow `Cyw43NetworkResumeCut` containing current lifetime,
 recovery, DPC/runtime/root RX, control, and requestless policy levels, then HAL
 rechecks the active parent's exact sequence-last completion or op8 grant.
-Fresh visible work overrides an idle same-turn routing hint. An issued waiting
-parent masks identity-only policy levels, so the recheck cannot become a poll
-clock; only independent DPC/RX/control work or exact parent progress retains
+Fresh visible work overrides an idle same-turn routing hint. An issued
+persistent op11 whose child has not yet committed its exact wait receipt is
+still in its notify/wake handoff: it retains the existing open Network quantum
+for prompt re-admission without granting, signalling, or issuing again. Only a
+stable same-request `DriverRuntimePersistentWaitReceipt`, committed at the
+child's final condition-before-sleep boundary, proves that CYW43 is durably
+armed on its local notification. Once that receipt is visible, a waiting parent
+masks identity-only policy levels so the recheck cannot become a poll clock;
+independent DPC/RX/control work or the exact parent terminal still retains
 Network. The outer-turn finalizer invalidates both hints; passive diagnostics
 outside an active turn always derive fresh state.
 
@@ -564,8 +570,28 @@ These authorities never substitute for one another.
 Notifications are optional coalescing prompts; they carry neither authority nor
 history.
 
-Driver-runtime ABI v7 adds one bounded diagnostic ledger for this same
-lifetime; it does not add a service mechanism. The CYW43/root-private shared
+Driver-runtime ABI v8 adds one typed scheduling receipt without changing the
+shared-page topology. Persistent op11 reuses the 24-byte auxiliary slot that
+ordinary retained commands use for a continuation grant and finite steady
+commands use for diagnostic progress; those three command classes are mutually
+exclusive. At the final CYW43 condition-before-sleep boundary,
+`DriverRuntimePersistentWaitReceipt` clears its commit, publishes the exact
+request, action fingerprint, logical generation (including zero), and nonzero
+wait epoch, then commits that epoch last. The producer advances one monotonic
+nonzero epoch for each named wait publication; wrap or exhaustion fails closed
+instead of reusing an identity. CYW43 repeats the complete durable condition and
+child-terminal checks after the commit. A changed condition clears the receipt
+before local re-entry; a blocked owner retains it only while armed on the
+generated local notification, then clears it before interpreting the wake or
+publishing a terminal. Root accepts only a stable double-read matching every
+exact field. Torn, stale, wrong-identity, absent, or failed publications never
+authorize sleep; publication or clear failure poisons the exact transaction and
+enters the existing fail-closed pair path. The receipt grants no request,
+physical operation, retry, signal, deadline renewal, or recovery authority.
+
+Driver-runtime ABI v7 added one bounded diagnostic ledger for this same
+lifetime; ABI v8 retains that ledger unchanged and it remains non-authoritative.
+The CYW43/root-private shared
 tail reserves one cache-isolated 128-byte
 `DriverRuntimeCyw43BusEpisodeRecord` at absolute offset 49,344, after the
 disjoint RX-batch ACK and outside the SDIO owner's eight-page aperture. CYW43
@@ -1497,13 +1523,16 @@ generation and XID.
   immutable request, grant, sequence, and completion state machines; they do
   not repeat the four TCB-priority writes for every parent. This amortization
   changes scheduling only. An active exact parent keeps the open quantum
-  actionable even while its sequence-zero `Prepared` descriptor is deliberately
-  absent from the shared ABI aperture. Each ordinary outer EventPump turn still
-  admits at most one root CYW43 parent operation. Inside an admitted persistent
-  op11, urgent-op7, or DPC event lifetime, the linked runtimes may continue
-  through bounded helpers only while the current durable condition identifies
-  deterministic private work; each immutable hardware request remains
-  single-issue.
+  actionable while its sequence-zero `Prepared` descriptor is deliberately
+  absent from the shared ABI aperture and after sequence-last issue until the
+  exact child commits its same-request local-wait receipt or terminal. That
+  pre-wait continuation closes the design-created gap between HAL admission
+  and child wake; it is not recurrent completion polling. Each ordinary outer EventPump
+  turn still admits at most one root CYW43 parent operation. Inside an admitted
+  persistent op11, urgent-op7, or DPC event lifetime, the linked runtimes may
+  continue through bounded helpers only while the current durable condition
+  identifies deterministic private work; each immutable hardware request
+  remains single-issue.
 
   Quantum close first changes the lease to `Closing`, which fences every fresh
   pair parent. An exact already-`Prepared` or already-`Issued` CYW43 parent may
@@ -3207,11 +3236,12 @@ generation and XID.
   WiFi work opens the current-generation pair priority lease before the first
   such turn, reserves and boosts SDIO then CYW43 once, and reuses it for exact
   parents until the quantum closes. An exact active parent, including an
-  ABI-invisible sequence-zero `Prepared` parent, prevents an open lease from
-  closing between its stages. Close fences fresh pair work; an exact active
-  root parent drains alone, with request/issue identity rechecked after every
-  admitted Network turn and each immutable hardware request issued at most
-  once. The 25-ms cap cannot interrupt that exact parent; the hard ordinary
+  ABI-invisible sequence-zero `Prepared` parent or an issued persistent parent
+  without an exact committed local-wait receipt, prevents an open lease
+  from closing between its stages. Close fences fresh pair work; an exact
+  active root parent drains alone, with request/issue identity rechecked after
+  every admitted Network turn and each immutable hardware request issued at
+  most once. The 25-ms cap cannot interrupt that exact parent; the hard ordinary
   EventPump fairness cap or an operator response may yield without admitting a
   different parent, and the same identity resumes later. The persistent
   parent's 192-operation budget is not a root-turn count. HAL restores CYW43

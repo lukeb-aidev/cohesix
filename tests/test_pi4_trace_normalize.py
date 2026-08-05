@@ -50,7 +50,7 @@ def descriptor_seal_suffix(hot_path: str) -> str:
         "valid" if hot_path in {"usb-keyboard", "cyw43-wifi", "sdio-host"} else "none"
     )
     return (
-        "descriptor_version=7 descriptor_seal=valid "
+        "descriptor_version=8 descriptor_seal=valid "
         f"artifact_hash=nonzero bus_link_seal={bus_link_seal}"
     )
 
@@ -85,7 +85,7 @@ def strip_driver_task_runtime_descriptor_seals(lines: list[str]) -> list[str]:
     stripped: list[str] = []
     for line in lines:
         for token in (
-            " descriptor_version=7",
+            " descriptor_version=8",
             " descriptor_seal=valid",
             " artifact_hash=nonzero",
             " bus_link_seal=valid",
@@ -1901,6 +1901,25 @@ def test_gate_summary_rejects_pre_seal_runtime_dma_as_fresh_pi() -> None:
     assert "driver-task-runtime-descriptor-seal-missing" in (
         normalizer.boot_evidence_blockers(record)
     )
+
+
+def test_gate_summary_rejects_v7_runtime_descriptor_as_stale() -> None:
+    """ABI v7 owner proof remains historical and cannot satisfy v8 closure."""
+
+    stale_lines = [
+        line.replace("descriptor_version=8", "descriptor_version=7")
+        for line in strict_wired_boot_proof_lines()
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(stale_lines)
+    ).to_record()
+
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "yes"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "no"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_BLOCKER"].endswith(
+        ":descriptor-version-missing"
+    )
+    assert record["PI4_RUNTIME_DMA_PROOF"] == "diagnostic"
 
 
 def test_gate_summary_accepts_late_wired_owner_state_refresh() -> None:

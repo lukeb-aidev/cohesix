@@ -25,13 +25,14 @@ use pi4_driver_abi::{
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
-    DriverRuntimeSdioClockSnapshot, DriverRuntimeSdioDeadlineArm,
-    DriverRuntimeSdioPhysicalLifetimeRecord, DriverRuntimeSteadyServiceProgress,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
+    DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
+    DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
@@ -47,6 +48,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY, DRIVER_RUNTIME_INIT_VERSION,
     DRIVER_RUNTIME_IRQ_TRIGGER_LEVEL, DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX, DRIVER_RUNTIME_NET_INIT_AUX,
+    DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES, DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET,
     DRIVER_RUNTIME_RING_PROGRESS_COMMAND_OBSERVED, DRIVER_RUNTIME_RING_PROGRESS_COMMAND_VALIDATED,
     DRIVER_RUNTIME_RING_PROGRESS_COMPLETION_PUBLISH,
     DRIVER_RUNTIME_RING_PROGRESS_CYW43_BACKPLANE_ALP_POLL,
@@ -2726,6 +2728,59 @@ fn driver_task_ring_read_steady_service_progress(
     .then_some(progress)
 }
 
+/// Stable-read the exact external-wait receipt for one persistent op11.
+///
+/// The receipt overlays the auxiliary grant/progress slot because persistent
+/// op11 cannot use either of those mutually exclusive command modes. Root
+/// accepts two equal nonzero commit samples around a structurally valid body;
+/// absent, torn, stale, or wrong-mode records never prove that CYW43 may sleep.
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_persistent_wait_receipt(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimePersistentWaitReceipt> {
+    let base_offset = usize::from(DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET);
+    let base = ring_root_ptr + base_offset;
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    driver_task_ring_invalidate_root_range(
+        base,
+        usize::from(DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_BYTES),
+    );
+    let word = |offset: usize| ring.read_u32(base_offset.checked_add(offset)?);
+    let commit_offset =
+        core::mem::offset_of!(DriverRuntimePersistentWaitReceipt, committed_wait_epoch);
+    let first_commit = word(commit_offset)?;
+    if first_commit == 0 {
+        return None;
+    }
+    driver_task_shared_load_barrier();
+    let receipt = DriverRuntimePersistentWaitReceipt {
+        magic: word(core::mem::offset_of!(
+            DriverRuntimePersistentWaitReceipt,
+            magic
+        ))?,
+        request_sequence: word(core::mem::offset_of!(
+            DriverRuntimePersistentWaitReceipt,
+            request_sequence
+        ))?,
+        action_fingerprint: word(core::mem::offset_of!(
+            DriverRuntimePersistentWaitReceipt,
+            action_fingerprint
+        ))?,
+        logical_generation: word(core::mem::offset_of!(
+            DriverRuntimePersistentWaitReceipt,
+            logical_generation
+        ))?,
+        wait_epoch: word(core::mem::offset_of!(
+            DriverRuntimePersistentWaitReceipt,
+            wait_epoch
+        ))?,
+        committed_wait_epoch: first_commit,
+    };
+    driver_task_shared_load_barrier();
+    driver_task_ring_invalidate_root_range(base + commit_offset, core::mem::size_of::<u32>());
+    (word(commit_offset)? == first_commit && receipt.valid()).then_some(receipt)
+}
+
 /// Consume only a strictly newer service heartbeat for this exact tagged parent.
 #[cfg(feature = "kernel")]
 fn driver_task_ring_steady_service_progress_advanced(
@@ -2910,13 +2965,9 @@ fn driver_task_steady_service_parent_wait_identity_matches(
 }
 
 #[cfg(feature = "kernel")]
-fn driver_task_persistent_transaction_parent_identity_matches(
-    slot: &DriverTaskCommandSlot,
+fn driver_task_persistent_transaction_command_shape(
     contract: DriverTaskContract,
     command: DriverTaskCommandRecord,
-    ring_root_ptr: usize,
-    request: u32,
-    command_fingerprint: u32,
 ) -> bool {
     contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
         && command.aux0 == DRIVER_RUNTIME_CYW43_COMMAND_AUX
@@ -2925,6 +2976,18 @@ fn driver_task_persistent_transaction_parent_identity_matches(
         && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0
         && !driver_task_retained_uses_root_grant(contract, command)
         && driver_runtime_is_cyw43_root_continuation(command.arg0, command.arg1, command.aux0)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_persistent_transaction_parent_identity_matches(
+    slot: &DriverTaskCommandSlot,
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    ring_root_ptr: usize,
+    request: u32,
+    command_fingerprint: u32,
+) -> bool {
+    driver_task_persistent_transaction_command_shape(contract, command)
         && request != 0
         && command.sequence == request
         && ring_root_ptr != 0
@@ -2950,6 +3013,50 @@ fn driver_task_persistent_transaction_parent_identity_matches(
             .load(Ordering::Acquire)
             != 0
         && driver_task_ring_exact_command_is_stable(ring_root_ptr, command)
+}
+
+/// Return whether one exact issued op11 is durably armed on CYW43's wait.
+///
+/// The terminal is checked before and after the receipt so it wins every race.
+/// No sample is cached and this receipt never renews the parent deadline.
+#[cfg(feature = "kernel")]
+fn driver_task_persistent_transaction_wait_armed(
+    slot: &DriverTaskCommandSlot,
+    snapshot: DriverTaskRetainedRequestSnapshot,
+) -> bool {
+    let DriverTaskRetainedRequestState::Issued { request, command } = snapshot.state else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if !driver_task_persistent_transaction_parent_identity_matches(
+        slot,
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        command,
+        ring_root_ptr,
+        request,
+        snapshot.command_fingerprint,
+    ) || driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+    {
+        return false;
+    }
+    let Some(receipt) = driver_task_ring_read_persistent_wait_receipt(ring_root_ptr) else {
+        return false;
+    };
+    if receipt.request_sequence != request
+        || receipt.action_fingerprint != driver_task_runtime_continuation_fingerprint(command)
+        || receipt.logical_generation != command.aux1
+    {
+        return false;
+    }
+    driver_task_persistent_transaction_parent_identity_matches(
+        slot,
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        command,
+        ring_root_ptr,
+        request,
+        snapshot.command_fingerprint,
+    ) && !driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+        && driver_task_ring_read_persistent_wait_receipt(ring_root_ptr) == Some(receipt)
 }
 
 /// Root-side condition for one immutable issued CYW43 steady-service parent.
@@ -4213,6 +4320,21 @@ pub(crate) enum Cyw43SdioNetworkBoundaryParent {
     },
 }
 
+/// Exact persistent-parent state at the outer Network scheduling boundary.
+///
+/// `PreWait` is the only state that retains prompt Network service without
+/// upper-policy authority. `Waiting` proves the generated local-notification
+/// wait is armed. `Terminal` is runnable for the final semantic consumer.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Cyw43SdioNetworkPersistentParentCondition {
+    NotApplicable,
+    PreWait,
+    Waiting,
+    Terminal,
+    Invalid,
+}
+
 #[cfg(feature = "kernel")]
 impl Cyw43SdioNetworkBoundaryParent {
     #[must_use]
@@ -5436,6 +5558,9 @@ const CYW43_SDIO_NETWORK_PRIORITY_OWNER_TOKEN: usize = usize::MAX;
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_NETWORK_PRIORITY_LEASE: Cyw43SdioNetworkPriorityLeaseState =
     Cyw43SdioNetworkPriorityLeaseState::new();
+
+#[cfg(all(feature = "kernel", test))]
+static TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static CYW43_SDIO_PAIR_RESTART_IN_PROGRESS: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
@@ -6033,6 +6158,29 @@ fn cyw43_sdio_network_active_parent_resumable_with(
     current_pair_epoch: u32,
     pair_current: bool,
 ) -> bool {
+    cyw43_sdio_network_active_parent_resumable_for_phase_with(
+        lease,
+        cyw43_slot,
+        sdio_slot,
+        snapshot,
+        expected_connection_generation,
+        current_pair_epoch,
+        pair_current,
+        false,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_active_parent_resumable_for_phase_with(
+    lease: &Cyw43SdioNetworkPriorityLeaseState,
+    cyw43_slot: &DriverTaskCommandSlot,
+    sdio_slot: &DriverTaskCommandSlot,
+    snapshot: Option<DriverTaskRetainedRequestSnapshot>,
+    expected_connection_generation: u32,
+    current_pair_epoch: u32,
+    pair_current: bool,
+    closing_parent_resume: bool,
+) -> bool {
     let Some(snapshot) = snapshot else {
         return false;
     };
@@ -6069,7 +6217,9 @@ fn cyw43_sdio_network_active_parent_resumable_with(
     let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(lease.phase.load(Ordering::Acquire));
     let mask = lease.mask.load(Ordering::Acquire);
     let valid_mask = DRIVER_TASK_RETAINED_LEASE_PRIMARY | DRIVER_TASK_RETAINED_LEASE_BUS;
-    if phase != Some(Cyw43SdioNetworkPriorityLeasePhase::Open)
+    let phase_covered = phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Open)
+        || (closing_parent_resume && phase == Some(Cyw43SdioNetworkPriorityLeasePhase::Closing));
+    if !phase_covered
         || lease.pair_epoch.load(Ordering::Acquire) != current_pair_epoch
         || mask == 0
         || mask & !valid_mask != 0
@@ -6152,12 +6302,12 @@ pub(crate) fn cyw43_sdio_network_active_parent_resumable(
 
 /// Re-read the exact active CYW43 parent immediately before Network sleeps.
 ///
-/// A merely issued parent is not runnable work: it may sleep until its
-/// physical interrupt commits a terminal. Prepared input, a stable
-/// sequence-last terminal, a published op8 grant awaiting its notify turn, or
-/// a consumed/current op8 grant is runnable and must retain the bounded Network
-/// episode without relying on another notification edge. This predicate never
-/// samples a deadline or mutates the parent.
+/// Prepared input, a persistent op11 without an exact committed wait receipt,
+/// a stable sequence-last terminal, a published op8 grant awaiting its notify
+/// turn, or a consumed/current op8 grant is runnable and must retain the
+/// bounded Network episode without relying on another notification edge. Only
+/// an exact persistent receipt proves the child is durably parked. This
+/// predicate never samples a deadline or mutates the parent.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_sdio_network_active_parent_progress_visible(
@@ -6191,12 +6341,191 @@ pub(crate) fn cyw43_sdio_network_active_parent_progress_visible(
     cyw43_sdio_network_active_parent_progress_visible_for_slot(slot, snapshot)
 }
 
+/// Return whether exact persistent op11 is still crossing its notify/wait cut.
+///
+/// This is narrower than generic runnable-parent progress: EventPump must keep
+/// the same Network episode live, but upper policy demand stays masked until a
+/// stable wait receipt proves the child parked or the exact terminal appears.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_network_persistent_parent_pre_wait(
+    expected_connection_generation: u32,
+) -> bool {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let snapshot = active_driver_task_retained_request_for_slot(slot).map(|state| {
+        DriverTaskRetainedRequestSnapshot {
+            state,
+            command_fingerprint: slot.active_command_fingerprint.load(Ordering::Acquire),
+        }
+    });
+    let current_pair_epoch = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    let pair_current = CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
+    if !cyw43_sdio_network_active_parent_resumable_with(
+        &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+        slot,
+        &DRIVER_TASK_SLOT_SDIO_HOST,
+        snapshot,
+        expected_connection_generation,
+        current_pair_epoch,
+        pair_current,
+    ) {
+        return false;
+    }
+    let Some(snapshot) = snapshot else {
+        return false;
+    };
+    let DriverTaskRetainedRequestState::Issued { request, command } = snapshot.state else {
+        return false;
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0
+        && driver_task_persistent_transaction_parent_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            snapshot.command_fingerprint,
+        )
+        && !driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request)
+        && !driver_task_persistent_transaction_wait_armed(slot, snapshot)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_network_persistent_parent_condition_for_slot(
+    slot: &DriverTaskCommandSlot,
+    snapshot: DriverTaskRetainedRequestSnapshot,
+) -> Cyw43SdioNetworkPersistentParentCondition {
+    let Some(command) = snapshot.state.command() else {
+        return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+    };
+    if !driver_task_persistent_transaction_command_shape(CYW43_WIFI_DRIVER_TASK_CONTRACT, command) {
+        return Cyw43SdioNetworkPersistentParentCondition::NotApplicable;
+    }
+    let (request, command) = match snapshot.state {
+        DriverTaskRetainedRequestState::Prepared { .. } => {
+            return Cyw43SdioNetworkPersistentParentCondition::PreWait;
+        }
+        DriverTaskRetainedRequestState::Issued { request, command } => (request, command),
+        DriverTaskRetainedRequestState::Invalid { .. } => {
+            return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+        }
+    };
+    let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
+    if !driver_task_persistent_transaction_parent_identity_matches(
+        slot,
+        CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        command,
+        ring_root_ptr,
+        request,
+        snapshot.command_fingerprint,
+    ) {
+        return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+    }
+    if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        return Cyw43SdioNetworkPersistentParentCondition::Terminal;
+    }
+    if driver_task_persistent_transaction_wait_armed(slot, snapshot) {
+        Cyw43SdioNetworkPersistentParentCondition::Waiting
+    } else if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
+        Cyw43SdioNetworkPersistentParentCondition::Terminal
+    } else {
+        Cyw43SdioNetworkPersistentParentCondition::PreWait
+    }
+}
+
+/// Classify exact op11 across Open, Closing, and typed boundary ownership.
+///
+/// The outer scheduling phase may change for bounded operator fairness, but
+/// that cannot create a sleep edge between root Issue and the child's named
+/// local-notification wait. Every phase revalidates the same immutable parent,
+/// pair epoch, connection generation, and retained HAL lease before exposing
+/// `PreWait`, `Waiting`, or `Terminal`.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_network_persistent_parent_condition(
+    expected_connection_generation: u32,
+) -> Cyw43SdioNetworkPersistentParentCondition {
+    let slot = &DRIVER_TASK_SLOT_CYW43455;
+    let snapshot = active_driver_task_retained_request_for_slot(slot).map(|state| {
+        DriverTaskRetainedRequestSnapshot {
+            state,
+            command_fingerprint: slot.active_command_fingerprint.load(Ordering::Acquire),
+        }
+    });
+    let Some(snapshot) = snapshot else {
+        return Cyw43SdioNetworkPersistentParentCondition::NotApplicable;
+    };
+    let Some(command) = snapshot.state.command() else {
+        return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+    };
+    if !driver_task_persistent_transaction_command_shape(CYW43_WIFI_DRIVER_TASK_CONTRACT, command) {
+        return Cyw43SdioNetworkPersistentParentCondition::NotApplicable;
+    }
+    if command.aux1 != expected_connection_generation {
+        return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+    }
+
+    let current_pair_epoch = CYW43_SDIO_PAIR_RESTART_EPOCH.load(Ordering::Acquire);
+    let pair_current = CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_RESTART_PENDING.load(Ordering::Acquire) == 0
+        && CYW43_SDIO_PAIR_CONTEXT_REPLAY_STATE.load(Ordering::Acquire) == 0;
+    let phase = Cyw43SdioNetworkPriorityLeasePhase::from_u32(
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .load(Ordering::Acquire),
+    );
+    let exact_outer_owner = match phase {
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Open) => {
+            cyw43_sdio_network_active_parent_resumable_for_phase_with(
+                &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+                slot,
+                &DRIVER_TASK_SLOT_SDIO_HOST,
+                Some(snapshot),
+                expected_connection_generation,
+                current_pair_epoch,
+                pair_current,
+                false,
+            )
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Closing) => {
+            cyw43_sdio_network_active_parent_resumable_for_phase_with(
+                &CYW43_SDIO_NETWORK_PRIORITY_LEASE,
+                slot,
+                &DRIVER_TASK_SLOT_SDIO_HOST,
+                Some(snapshot),
+                expected_connection_generation,
+                current_pair_epoch,
+                pair_current,
+                true,
+            )
+        }
+        Some(Cyw43SdioNetworkPriorityLeasePhase::Inactive) => {
+            let expected = classify_cyw43_sdio_network_boundary_parent(Some(snapshot));
+            expected.resumable() && cyw43_sdio_network_boundary_parent() == expected
+        }
+        Some(
+            Cyw43SdioNetworkPriorityLeasePhase::Acquiring
+            | Cyw43SdioNetworkPriorityLeasePhase::Restoring
+            | Cyw43SdioNetworkPriorityLeasePhase::Poisoned,
+        )
+        | None => false,
+    };
+    if !exact_outer_owner {
+        return Cyw43SdioNetworkPersistentParentCondition::Invalid;
+    }
+    cyw43_sdio_network_persistent_parent_condition_for_slot(slot, snapshot)
+}
+
 /// Classify runnable progress for an already-revalidated Network parent.
 ///
 /// Keeping this condition separate from lease admission makes its phase
-/// contract directly testable: a published grant still needs its notify turn,
-/// an issued unconsumed grant may sleep, and a sequence-last terminal always
-/// wins over the intermediate grant state.
+/// contract directly testable: persistent op11 stays runnable until its exact
+/// wait receipt, a published grant still needs its notify turn, an issued
+/// unconsumed grant may sleep, and a sequence-last terminal always wins over
+/// either intermediate state.
 #[cfg(feature = "kernel")]
 fn cyw43_sdio_network_active_parent_progress_visible_for_slot(
     slot: &DriverTaskCommandSlot,
@@ -6210,6 +6539,9 @@ fn cyw43_sdio_network_active_parent_progress_visible_for_slot(
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     if driver_task_ring_exact_completion_is_stable(slot, ring_root_ptr, request) {
         return true;
+    }
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION != 0 {
+        return !driver_task_persistent_transaction_wait_armed(slot, snapshot);
     }
     if !driver_task_retained_uses_root_grant(CYW43_WIFI_DRIVER_TASK_CONTRACT, command) {
         return false;
@@ -8967,6 +9299,11 @@ fn retained_priority_lease_target_mask(
     closing_parent_resume: bool,
 ) -> Option<usize> {
     if !physical_pi_driver_task_only_owner_state_active() {
+        #[cfg(test)]
+        if TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL.load(Ordering::Acquire) == 0 {
+            return Some(0);
+        }
+        #[cfg(not(test))]
         return Some(0);
     }
     let Some(cyw43_slot) = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT) else {
@@ -9038,6 +9375,13 @@ fn set_driver_task_retained_priority(
     owner_token: usize,
     boost: bool,
 ) -> bool {
+    #[cfg(test)]
+    if TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL.load(Ordering::Acquire) != 0 {
+        let _ = boost;
+        return driver_task_slot_for_contract(_contract)
+            .is_some_and(|target| core::ptr::eq(target, slot))
+            && slot.retained_priority_boost_active.load(Ordering::Acquire) == owner_token;
+    }
     if slot.retained_priority_boost_active.load(Ordering::Acquire) != owner_token {
         return false;
     }
@@ -9677,6 +10021,93 @@ pub(crate) fn test_open_cyw43_sdio_network_priority_lease_for_current_pair() {
         Cyw43SdioNetworkPriorityLeasePhase::Open.as_u32(),
         Ordering::Release,
     );
+}
+
+/// Scope a host test that models the physical outer Network priority lease.
+#[cfg(all(feature = "kernel", test))]
+pub(crate) struct TestCyw43SdioNetworkPriorityPhysicalModelGuard {
+    lease: Cyw43SdioNetworkPriorityLeaseSnapshot,
+    mask: usize,
+    cyw43_owner: usize,
+    sdio_owner: usize,
+}
+
+#[cfg(all(feature = "kernel", test))]
+impl TestCyw43SdioNetworkPriorityPhysicalModelGuard {
+    pub(crate) fn open() -> Self {
+        let guard = Self {
+            lease: cyw43_sdio_network_priority_lease_snapshot(),
+            mask: CYW43_SDIO_NETWORK_PRIORITY_LEASE
+                .mask
+                .load(Ordering::Acquire),
+            cyw43_owner: DRIVER_TASK_SLOT_CYW43455
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+            sdio_owner: DRIVER_TASK_SLOT_SDIO_HOST
+                .retained_priority_boost_active
+                .load(Ordering::Acquire),
+        };
+        assert_eq!(
+            guard.lease.phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Inactive,
+            "the physical lease model starts from a reset HAL lease",
+        );
+        assert_eq!(guard.cyw43_owner, 0);
+        assert_eq!(guard.sdio_owner, 0);
+        assert_eq!(
+            TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL.compare_exchange(
+                0,
+                1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ),
+            Ok(0),
+            "only one host test may model the physical Network priority lease",
+        );
+        test_open_cyw43_sdio_network_priority_lease_for_current_pair();
+        driver_task_counter_add(&CYW43_SDIO_NETWORK_PRIORITY_LEASE.opens, 1);
+        guard
+    }
+}
+
+#[cfg(all(feature = "kernel", test))]
+impl Drop for TestCyw43SdioNetworkPriorityPhysicalModelGuard {
+    fn drop(&mut self) {
+        DRIVER_TASK_SLOT_CYW43455
+            .retained_priority_boost_active
+            .store(self.cyw43_owner, Ordering::Release);
+        DRIVER_TASK_SLOT_SDIO_HOST
+            .retained_priority_boost_active
+            .store(self.sdio_owner, Ordering::Release);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .pair_epoch
+            .store(self.lease.pair_epoch, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .mask
+            .store(self.mask, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .opens
+            .store(self.lease.opens, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .closes
+            .store(self.lease.closes, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .restores
+            .store(self.lease.restores, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .recovery_revocations
+            .store(self.lease.recovery_revocations, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .amortized_requests
+            .store(self.lease.amortized_requests, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .failures
+            .store(self.lease.failures, Ordering::Relaxed);
+        CYW43_SDIO_NETWORK_PRIORITY_LEASE
+            .phase
+            .store(self.lease.phase.as_u32(), Ordering::Release);
+        TEST_CYW43_SDIO_NETWORK_PRIORITY_PHYSICAL_MODEL.store(0, Ordering::Release);
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -24978,6 +25409,174 @@ mod tests {
         assert!(
             cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
             "a same-turn sequence-last terminal must outrank the unconsumed grant wait",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn persistent_wait_receipt_alone_parks_exact_op11_and_terminal_wins() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut ring_page = Box::new(AlignedDriverTaskRing(
+            [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+        ));
+        let ring_root_ptr = ring_page.0.as_mut_ptr() as usize;
+        let command_ptr = ring_root_ptr as *mut DriverTaskCommandRecord;
+        let completion_ptr =
+            (ring_root_ptr + DRIVER_TASK_RING_COMPLETION_OFFSET) as *mut DriverTaskCompletionRecord;
+        let request = 0x4359_8021u32;
+        let mut command = persistent_transaction_test_command(0);
+        command.sequence = request;
+        command.flags =
+            driver_task_ring_flags_for_mode(DriverTaskRingCommandMode::RetainedTurn, command.flags)
+                | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        let command_fingerprint = driver_task_ring_command_fingerprint(command, 0x4359_0011);
+        let receipt_ptr = (ring_root_ptr
+            + usize::from(DRIVER_RUNTIME_PERSISTENT_WAIT_RECEIPT_OFFSET))
+            as *mut DriverRuntimePersistentWaitReceipt;
+        // SAFETY: `receipt_ptr` addresses the fixed auxiliary record in this
+        // test-owned aligned ring page.
+        unsafe {
+            core::ptr::write_volatile(
+                receipt_ptr,
+                DriverRuntimePersistentWaitReceipt::new(request.wrapping_sub(1), 0x4359_8020, 0, 9),
+            );
+        }
+        driver_task_ring_publish_command_record(
+            &slot,
+            ring_root_ptr,
+            command_ptr,
+            completion_ptr,
+            command,
+            DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand),
+        );
+        assert_eq!(
+            driver_task_ring_read_persistent_wait_receipt(ring_root_ptr),
+            None,
+            "Stage must clear every prior auxiliary-slot command mode",
+        );
+        slot.active.store(1, Ordering::Release);
+        slot.ring_root_ptr.store(ring_root_ptr, Ordering::Release);
+        slot.root_notification.store(0x77, Ordering::Release);
+        slot.request_seq.store(request as usize, Ordering::Release);
+        slot.active_command_fingerprint
+            .store(command_fingerprint, Ordering::Release);
+        slot.retained_priority_lease_request
+            .store(request as usize, Ordering::Release);
+        slot.retained_priority_lease_fingerprint
+            .store(command_fingerprint, Ordering::Release);
+        slot.retained_priority_lease_generation.store(
+            driver_task_retained_lease_generation(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+            Ordering::Release,
+        );
+        slot.retained_priority_lease_phase.store(
+            DriverTaskRetainedLeasePhase::Issued.as_usize(),
+            Ordering::Release,
+        );
+        slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_persistent_transaction_start_ticks
+            .store(1, Ordering::Release);
+        let snapshot = DriverTaskRetainedRequestSnapshot {
+            state: DriverTaskRetainedRequestState::Issued { request, command },
+            command_fingerprint,
+        };
+        let publish = |receipt: DriverRuntimePersistentWaitReceipt| {
+            // SAFETY: `receipt_ptr` addresses the fixed auxiliary record in
+            // this test-owned aligned ring page.
+            unsafe { core::ptr::write_volatile(receipt_ptr, receipt) };
+        };
+
+        assert!(cyw43_sdio_network_active_parent_progress_visible_for_slot(
+            &slot, snapshot,
+        ));
+        assert!(!driver_task_persistent_transaction_wait_armed(
+            &slot, snapshot,
+        ));
+
+        let mut terminal_before_receipt = DriverTaskCompletionRecord::progress(request, 1);
+        terminal_before_receipt.sequence = 0;
+        // SAFETY: `completion_ptr` addresses the fixed completion record in
+        // this test-owned aligned ring. The request sequence commits last.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal_before_receipt);
+            core::ptr::write_volatile(completion_ptr as *mut u32, request);
+        }
+        assert!(!driver_task_persistent_transaction_wait_armed(
+            &slot, snapshot,
+        ));
+        assert!(
+            cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "an exact terminal committed before any receipt must resume the parent",
+        );
+        // SAFETY: clearing the sequence word invalidates the test-owned
+        // completion before exercising the alternative named-wait branch.
+        unsafe { core::ptr::write_volatile(completion_ptr as *mut u32, 0) };
+
+        let exact = DriverRuntimePersistentWaitReceipt::new(
+            request,
+            driver_task_runtime_continuation_fingerprint(command),
+            0,
+            1,
+        );
+        publish(exact);
+        assert_eq!(
+            driver_task_ring_read_persistent_wait_receipt(ring_root_ptr),
+            Some(exact),
+        );
+        assert!(driver_task_persistent_transaction_wait_armed(
+            &slot, snapshot,
+        ));
+        assert!(
+            !cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "only the exact committed local-wait receipt may park persistent op11",
+        );
+
+        for invalid in [
+            DriverRuntimePersistentWaitReceipt { magic: 0, ..exact },
+            DriverRuntimePersistentWaitReceipt {
+                committed_wait_epoch: 0,
+                ..exact
+            },
+            DriverRuntimePersistentWaitReceipt {
+                committed_wait_epoch: exact.wait_epoch.wrapping_add(1),
+                ..exact
+            },
+            DriverRuntimePersistentWaitReceipt {
+                request_sequence: request.wrapping_add(1),
+                ..exact
+            },
+            DriverRuntimePersistentWaitReceipt {
+                action_fingerprint: exact.action_fingerprint ^ 1,
+                ..exact
+            },
+            DriverRuntimePersistentWaitReceipt {
+                logical_generation: 1,
+                ..exact
+            },
+        ] {
+            publish(invalid);
+            assert!(!driver_task_persistent_transaction_wait_armed(
+                &slot, snapshot,
+            ));
+            assert!(cyw43_sdio_network_active_parent_progress_visible_for_slot(
+                &slot, snapshot,
+            ));
+        }
+
+        publish(exact);
+        let mut terminal = DriverTaskCompletionRecord::progress(request, 1);
+        terminal.sequence = 0;
+        // SAFETY: `completion_ptr` addresses the fixed completion record in
+        // this test-owned aligned ring. The request sequence commits last.
+        unsafe {
+            core::ptr::write_volatile(completion_ptr, terminal);
+            core::ptr::write_volatile(completion_ptr as *mut u32, request);
+        }
+        assert!(!driver_task_persistent_transaction_wait_armed(
+            &slot, snapshot,
+        ));
+        assert!(
+            cyw43_sdio_network_active_parent_progress_visible_for_slot(&slot, snapshot),
+            "the exact terminal must outrank a still-visible wait receipt",
         );
     }
 
