@@ -1421,7 +1421,16 @@ pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub root_request: u32,
     pub root_generation: u32,
     pub root_command_sequence: u32,
+    pub root_command_flags: u16,
+    pub root_command_aux0: u32,
     pub root_doorbell_issued: bool,
+    pub root_signal_returned: bool,
+    pub root_parent_deadline_expired: bool,
+    pub child_terminal_observed: bool,
+    pub child_wait_receipt_observed: bool,
+    pub child_bus_episode_observed: bool,
+    pub child_bus_parent_sequence: u32,
+    pub child_bus_parent_op: u16,
 }
 
 #[cfg(feature = "kernel")]
@@ -1440,7 +1449,16 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
                 root_request: snapshot.root_request,
                 root_generation: snapshot.root_generation,
                 root_command_sequence: snapshot.root_command_sequence,
+                root_command_flags: snapshot.root_command_flags,
+                root_command_aux0: snapshot.root_command_aux0,
                 root_doorbell_issued: snapshot.root_doorbell_issued,
+                root_signal_returned: snapshot.root_signal_returned,
+                root_parent_deadline_expired: snapshot.root_parent_deadline_expired,
+                child_terminal_observed: snapshot.child_terminal_observed,
+                child_wait_receipt_observed: snapshot.child_wait_receipt_observed,
+                child_bus_episode_observed: snapshot.child_bus_episode_observed,
+                child_bus_parent_sequence: snapshot.child_bus_parent_sequence,
+                child_bus_parent_op: snapshot.child_bus_parent_op,
             };
         }
         Self {
@@ -1454,7 +1472,16 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             root_request: 0,
             root_generation: 0,
             root_command_sequence: 0,
+            root_command_flags: 0,
+            root_command_aux0: 0,
             root_doorbell_issued: false,
+            root_signal_returned: false,
+            root_parent_deadline_expired: false,
+            child_terminal_observed: false,
+            child_wait_receipt_observed: false,
+            child_bus_episode_observed: false,
+            child_bus_parent_sequence: 0,
+            child_bus_parent_op: 0,
         }
     }
 
@@ -1471,7 +1498,16 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             root_request: 0,
             root_generation: 0,
             root_command_sequence: 0,
+            root_command_flags: 0,
+            root_command_aux0: 0,
             root_doorbell_issued: false,
+            root_signal_returned: false,
+            root_parent_deadline_expired: false,
+            child_terminal_observed: false,
+            child_wait_receipt_observed: false,
+            child_bus_episode_observed: false,
+            child_bus_parent_sequence: 0,
+            child_bus_parent_op: 0,
         }
     }
 }

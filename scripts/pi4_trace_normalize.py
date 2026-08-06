@@ -176,6 +176,7 @@ WIFI_GATE8_SUBGATE_RE = re.compile(
 CYW43_BOOTSTRAP_MAX_ATTEMPTS = 1
 U64_MAX = (1 << 64) - 1
 U32_MAX = (1 << 32) - 1
+U16_MAX = (1 << 16) - 1
 CYW43_BOOTSTRAP_NO_ATTEMPT_MS = U64_MAX
 CYW43_BOOTSTRAP_SERIAL_RETRY_MS = 250
 USB_HINTS = ("usb", "xhci", "vl805", "keyboard", "local-seat", "usbhid")
@@ -708,6 +709,15 @@ class WifiPriorityEpisodeSummary:
     scheduler_root_generation: int = 0
     scheduler_root_command_sequence: int = 0
     scheduler_root_doorbell_issued: str = "unknown"
+    scheduler_publication_latched: str = "unknown"
+    scheduler_signal_returned: str = "unknown"
+    scheduler_parent_deadline_expired: str = "unknown"
+    scheduler_child_terminal: str = "unknown"
+    scheduler_child_wait_receipt: str = "unknown"
+    scheduler_child_bus_episode: str = "unknown"
+    scheduler_bus_parent_sequence: int = 0
+    scheduler_bus_parent_op: int = 0
+    causal_frontier: str = "none"
 
 
 @dataclass(frozen=True)
@@ -825,6 +835,15 @@ class GateSummary:
     wifi_deferred_recovery_scheduler_root_generation: int = 0
     wifi_deferred_recovery_scheduler_root_command_sequence: int = 0
     wifi_deferred_recovery_scheduler_root_doorbell_issued: str = "unknown"
+    wifi_deferred_recovery_scheduler_publication_latched: str = "unknown"
+    wifi_deferred_recovery_scheduler_signal_returned: str = "unknown"
+    wifi_deferred_recovery_scheduler_parent_deadline_expired: str = "unknown"
+    wifi_deferred_recovery_scheduler_child_terminal: str = "unknown"
+    wifi_deferred_recovery_scheduler_child_wait_receipt: str = "unknown"
+    wifi_deferred_recovery_scheduler_child_bus_episode: str = "unknown"
+    wifi_deferred_recovery_scheduler_bus_parent_sequence: int = 0
+    wifi_deferred_recovery_scheduler_bus_parent_op: int = 0
+    wifi_causal_frontier: str = "none"
     wifi_rx_irq_preserve_count: int = 0
     wifi_rx_irq_preserve_reason: str = "none"
     wifi_rx_irq_preserve_int: int = 0
@@ -1142,6 +1161,31 @@ class GateSummary:
             "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED": (
                 self.wifi_deferred_recovery_scheduler_root_doorbell_issued
             ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_PUBLICATION_LATCHED": (
+                self.wifi_deferred_recovery_scheduler_publication_latched
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_SIGNAL_RETURNED": (
+                self.wifi_deferred_recovery_scheduler_signal_returned
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_PARENT_DEADLINE_EXPIRED": (
+                self.wifi_deferred_recovery_scheduler_parent_deadline_expired
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_TERMINAL": (
+                self.wifi_deferred_recovery_scheduler_child_terminal
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_WAIT_RECEIPT": (
+                self.wifi_deferred_recovery_scheduler_child_wait_receipt
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE": (
+                self.wifi_deferred_recovery_scheduler_child_bus_episode
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE": (
+                self.wifi_deferred_recovery_scheduler_bus_parent_sequence
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": (
+                f"0x{self.wifi_deferred_recovery_scheduler_bus_parent_op:04x}"
+            ),
+            "WIFI_CAUSAL_FRONTIER": self.wifi_causal_frontier,
             "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
             "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
             "WIFI_RX_IRQ_PRESERVE_INT": f"0x{self.wifi_rx_irq_preserve_int:08x}",
@@ -1930,6 +1974,8 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
         stage = "priority-episode-faults"
     elif line.startswith("wifi: deferred_recovery scheduler scope="):
         stage = "deferred-recovery-scheduler"
+    elif line.startswith("wifi: deferred_recovery scheduler_edge "):
+        stage = "deferred-recovery-scheduler-edge"
     elif line.startswith("wifi: root grant "):
         stage = "root-grant"
     elif line.startswith("wifi: root grant_ids "):
@@ -7172,6 +7218,7 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
                 "priority-episode-counts",
                 "priority-episode-faults",
                 "deferred-recovery-scheduler",
+                "deferred-recovery-scheduler-edge",
                 "root-grant",
                 "root-grant-ids",
             }
@@ -9962,6 +10009,31 @@ WIFI_ROOT_PRIORITY_PHASES = {
 CYW43_SDIO_PRIORITY_MASK = 0x03
 
 
+def classify_wifi_scheduler_causal_frontier(
+    summary: WifiPriorityEpisodeSummary,
+) -> str:
+    """Return the immutable scheduler tuple's causal progress frontier."""
+
+    if summary.scheduler_scope != "first-pre-fence":
+        return "none"
+    if summary.scheduler_child_terminal == "yes":
+        return "child-terminal"
+    if summary.scheduler_child_wait_receipt == "yes":
+        return "child-external-wait"
+    if summary.scheduler_child_bus_episode == "yes":
+        return "child-bus-episode"
+    if summary.scheduler_signal_returned == "yes":
+        return "root-signal-returned"
+    if (
+        summary.scheduler_publication_latched == "yes"
+        and summary.scheduler_root_phase == "issued"
+    ):
+        return "root-issued-phase"
+    if summary.scheduler_publication_latched == "yes":
+        return "root-publication-latched"
+    return "none"
+
+
 def summarize_wifi_priority_episode(
     events: Iterable[TraceEvent],
 ) -> WifiPriorityEpisodeSummary:
@@ -9973,6 +10045,7 @@ def summarize_wifi_priority_episode(
     """
 
     summary = WifiPriorityEpisodeSummary()
+    scheduler_line = 0
     for event in events:
         fields = event.fields
         raw = event.raw.lower()
@@ -10036,6 +10109,77 @@ def summarize_wifi_priority_episode(
                     recovery_revocations=recovery_revocations,
                 )
             continue
+        if raw.startswith("wifi: deferred_recovery scheduler_edge "):
+            if (
+                summary.scheduler_scope != "first-pre-fence"
+                or scheduler_line == 0
+                or event.line != scheduler_line + 1
+                or fields.get("evidence") != "exact-only"
+            ):
+                continue
+            publication_latched = field_lower(event, "publication_latched")
+            signal_returned = field_lower(event, "signal_returned")
+            parent_deadline_expired = field_lower(
+                event, "parent_deadline_expired"
+            )
+            child_terminal = field_lower(event, "child_terminal")
+            child_wait_receipt = field_lower(event, "child_wait_receipt")
+            child_bus_episode = field_lower(event, "child_bus_episode")
+            bus_parent = fields.get("bus_parent", "").split("/")
+            bus_parent_sequence = (
+                parse_hex_int(bus_parent[0]) if len(bus_parent) == 2 else None
+            )
+            bus_parent_op = (
+                parse_hex_int(bus_parent[1]) if len(bus_parent) == 2 else None
+            )
+            exact_facts = (
+                publication_latched,
+                signal_returned,
+                parent_deadline_expired,
+                child_terminal,
+                child_wait_receipt,
+                child_bus_episode,
+            )
+            if (
+                any(fact not in {"yes", "no"} for fact in exact_facts)
+                or publication_latched
+                != summary.scheduler_root_doorbell_issued
+                or bus_parent_sequence is None
+                or not 0 <= bus_parent_sequence <= U32_MAX
+                or bus_parent_op is None
+                or not 0 <= bus_parent_op <= U16_MAX
+                or (signal_returned == "yes" and publication_latched != "yes")
+                or (
+                    "yes"
+                    in (child_terminal, child_wait_receipt, child_bus_episode)
+                    and signal_returned != "yes"
+                )
+                or (
+                    child_bus_episode == "yes"
+                    and (
+                        bus_parent_sequence
+                        != summary.scheduler_root_command_sequence
+                        or bus_parent_op == 0
+                    )
+                )
+                or (
+                    child_bus_episode == "no"
+                    and (bus_parent_sequence != 0 or bus_parent_op != 0)
+                )
+            ):
+                continue
+            summary = replace(
+                summary,
+                scheduler_publication_latched=publication_latched,
+                scheduler_signal_returned=signal_returned,
+                scheduler_parent_deadline_expired=parent_deadline_expired,
+                scheduler_child_terminal=child_terminal,
+                scheduler_child_wait_receipt=child_wait_receipt,
+                scheduler_child_bus_episode=child_bus_episode,
+                scheduler_bus_parent_sequence=bus_parent_sequence,
+                scheduler_bus_parent_op=bus_parent_op,
+            )
+            continue
         if not raw.startswith(
             "wifi: deferred_recovery scheduler scope=first-pre-fence "
         ):
@@ -10051,7 +10195,12 @@ def summarize_wifi_priority_episode(
         root_generation = parse_hex_int(root[4])
         root_command_sequence = parse_hex_int(fields.get("command_sequence"))
         root_active = root[0].lower()
-        root_doorbell_issued = field_lower(event, "doorbell_issued")
+        legacy_doorbell_issued = field_lower(event, "doorbell_issued")
+        publication_latched = field_lower(event, "publication_latched")
+        if not publication_latched:
+            publication_latched = legacy_doorbell_issued
+        if not legacy_doorbell_issued:
+            legacy_doorbell_issued = publication_latched
         numeric_values = (
             outer_pair_epoch,
             outer_mask,
@@ -10065,7 +10214,8 @@ def summarize_wifi_priority_episode(
             or outer[0].lower() not in WIFI_PRIORITY_EPISODE_PHASES
             or root_active not in {"yes", "no"}
             or root[1].lower() not in WIFI_ROOT_PRIORITY_PHASES
-            or root_doorbell_issued not in {"yes", "no"}
+            or legacy_doorbell_issued not in {"yes", "no"}
+            or publication_latched not in {"yes", "no"}
             or not all(
                 value is not None and 0 <= value <= U32_MAX
                 for value in numeric_values
@@ -10086,9 +10236,14 @@ def summarize_wifi_priority_episode(
             scheduler_root_request=root_request or 0,
             scheduler_root_generation=root_generation or 0,
             scheduler_root_command_sequence=root_command_sequence or 0,
-            scheduler_root_doorbell_issued=root_doorbell_issued,
+            scheduler_root_doorbell_issued=legacy_doorbell_issued,
+            scheduler_publication_latched=publication_latched,
         )
-    return summary
+        scheduler_line = event.line
+    return replace(
+        summary,
+        causal_frontier=classify_wifi_scheduler_causal_frontier(summary),
+    )
 
 
 WIFI_RX_IRQ_PRESERVE_REASONS = {
@@ -11228,6 +11383,9 @@ def summarize_driver_task_proofs(
     contracts: set[str] = set()
     dedicated_contracts: set[str] = set()
     compatibility_contracts: set[str] = set()
+    summary_contract_count = 0
+    summary_dedicated_count = 0
+    summary_compatibility_count = 0
     dedicated_hot_roles: set[str] = set()
     dedicated_ready_claimed = False
     acceptance_compatibility_count: int | None = None
@@ -11268,7 +11426,6 @@ def summarize_driver_task_proofs(
             selected_only |= fields.get("active_contracts", "").lower() == "selected-only"
             selected_net = fields.get("net", selected_net).lower()
         if driver_task_line:
-            owner_state_line = "driver_task_owner_state" in raw
             if raw.startswith("driver_task_boot ") or raw.startswith(
                 "driver_task_boot_smoke "
             ):
@@ -11311,7 +11468,7 @@ def summarize_driver_task_proofs(
                 and "driver_task_summary" not in raw
             )
             contract_names: set[str] = set()
-            if not owner_state_line:
+            if contract_declaration_line:
                 for key in ("contract", "name", "task", "driver"):
                     value = fields.get(key)
                     if value:
@@ -11351,14 +11508,24 @@ def summarize_driver_task_proofs(
                 elif compatibility:
                     compatibility_contracts.add(name)
             if "driver_task_summary" in raw:
+                contracts_summary = parse_hex_int(fields.get("contracts"))
+                if contracts_summary is not None:
+                    summary_contract_count = max(
+                        summary_contract_count,
+                        contracts_summary,
+                    )
                 dedicated_summary = parse_hex_int(fields.get("dedicated"))
                 if dedicated_summary is not None:
-                    for index in range(dedicated_summary):
-                        dedicated_contracts.add(f"summary-dedicated-{index}")
+                    summary_dedicated_count = max(
+                        summary_dedicated_count,
+                        dedicated_summary,
+                    )
                 compatibility_summary = parse_hex_int(fields.get("compatibility"))
                 if compatibility_summary is not None:
-                    for index in range(compatibility_summary):
-                        compatibility_contracts.add(f"summary-compatibility-{index}")
+                    summary_compatibility_count = max(
+                        summary_compatibility_count,
+                        compatibility_summary,
+                    )
             if "driver_task_acceptance" in raw:
                 dedicated_ready_claimed |= (
                     fields.get("dedicated_ready", "").lower() == "yes"
@@ -11488,9 +11655,17 @@ def summarize_driver_task_proofs(
     affinity_manifest_proof = (
         affinity_manifest_missing == 0 and affinity_manifest_mismatches == 0
     )
-    compatibility_free = not compatibility_contracts and (
-        acceptance_compatibility_count in {None, 0}
+    contract_count = max(len(contracts), summary_contract_count)
+    dedicated_contract_count = max(
+        len(dedicated_contracts),
+        summary_dedicated_count,
     )
+    compatibility_contract_count = max(
+        len(compatibility_contracts),
+        summary_compatibility_count,
+        acceptance_compatibility_count or 0,
+    )
+    compatibility_free = compatibility_contract_count == 0
     dedicated_ready = (
         dedicated_ready_claimed
         and substrate_ready
@@ -11510,9 +11685,9 @@ def summarize_driver_task_proofs(
     return (
         default_requested,
         live_hot_paths,
-        len(contracts),
-        len(dedicated_contracts),
-        len(compatibility_contracts),
+        contract_count,
+        dedicated_contract_count,
+        compatibility_contract_count,
         dedicated_ready,
         "serial" in dedicated_hot_roles,
         "usb" in dedicated_hot_roles,
@@ -15024,6 +15199,31 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_deferred_recovery_scheduler_root_doorbell_issued=(
             wifi_priority_episode.scheduler_root_doorbell_issued
         ),
+        wifi_deferred_recovery_scheduler_publication_latched=(
+            wifi_priority_episode.scheduler_publication_latched
+        ),
+        wifi_deferred_recovery_scheduler_signal_returned=(
+            wifi_priority_episode.scheduler_signal_returned
+        ),
+        wifi_deferred_recovery_scheduler_parent_deadline_expired=(
+            wifi_priority_episode.scheduler_parent_deadline_expired
+        ),
+        wifi_deferred_recovery_scheduler_child_terminal=(
+            wifi_priority_episode.scheduler_child_terminal
+        ),
+        wifi_deferred_recovery_scheduler_child_wait_receipt=(
+            wifi_priority_episode.scheduler_child_wait_receipt
+        ),
+        wifi_deferred_recovery_scheduler_child_bus_episode=(
+            wifi_priority_episode.scheduler_child_bus_episode
+        ),
+        wifi_deferred_recovery_scheduler_bus_parent_sequence=(
+            wifi_priority_episode.scheduler_bus_parent_sequence
+        ),
+        wifi_deferred_recovery_scheduler_bus_parent_op=(
+            wifi_priority_episode.scheduler_bus_parent_op
+        ),
+        wifi_causal_frontier=wifi_priority_episode.causal_frontier,
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,

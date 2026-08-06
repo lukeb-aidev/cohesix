@@ -499,6 +499,7 @@ snapshot also emits:
 ```text
 wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
 ```
 
 HAL captures that scheduler record sequence-last immediately before the first
@@ -520,8 +521,24 @@ wifi: root grant_ids notify_bound=<yes|no> producer=<n> shared=<n> consumed=<n> 
 ```
 
 `sequence_published=yes` requires the nonzero request to equal
-`command_sequence`; it is not implied by `doorbell_issued=yes`. The trace
-normalizer treats a dependency-aware Gate 8
+`command_sequence`; it is not implied by `doorbell_issued=yes`.
+The adjacent bounded `scheduler_edge` record uses `publication_latched` to name
+the same retained issue latch as `doorbell_issued`. `signal_returned=yes` is a
+post-syscall latch bound to the exact request and proves only that the sole
+signal syscall returned; it does not prove delivery, remote scheduling, or
+child intake. `parent_deadline_expired` samples the exact persistent-parent
+lifetime condition. `child_terminal`, `child_wait_receipt`, and
+`child_bus_episode` are separate same-request downstream evidence from a stable
+completion, full wait-receipt identity, or sequence-last bus-episode record;
+`bus_parent` reports that episode's parent sequence and operation. No progress
+marker contributes to this record. A `no` value means only that the named exact
+proof was absent at capture, not that the edge did not happen or that the fault
+has been localized. `evidence=exact-only` separates this immutable frontier
+from derived gates, breadcrumbs, and post-recovery progress. On the non-MCS Pi
+profile, a successful persistent-op11 signal crosses from authority core 0 to
+the linked-runtime driver core 3. Root-core `seL4_Yield` is not a child-dispatch
+operation and cannot be treated as proof of CYW43 intake. The trace normalizer treats a
+dependency-aware Gate 8
 `evidence=exact=<association-blocker>` plus its matching evidence boundary as
 authoritative over later generic replay/recovery progress. That cache is
 transport-generation scoped: clearing or rebinding the physical linked-runtime
@@ -1417,7 +1434,14 @@ completion miss leaves it `Issued`; no grant 19, replacement grant, re-signal,
 or endpoint send can advance it. Missing, coalesced, or repeated notifications
 only prompt re-reading the committed parent and terminal state. Endpoint
 delivery is rejected for this lane. Other retained runtimes keep their endpoint
-rendezvous. No completion is
+rendezvous. At the final idle blocking boundary, both linked runtimes re-read
+their sequence-last command ring. That one recheck covers root-originated
+one-way CYW43 parents as well as reciprocal one-way CYW43-to-SDIO children. A
+command committed after the earlier empty sample, or whose notification was
+coalesced or consumed while prior durable work completed, re-enters command
+arbitration instead of sleeping. An unchanged ring enters the existing blocking
+receive. This adds no polling loop, timer, notification, owner, retry, or
+alternate execution path. No completion is
 exposed until all leased priorities have returned to their manifest values. An
 unresolved lease is cleared only inside fenced pair restart after both runtimes
 are suspended.

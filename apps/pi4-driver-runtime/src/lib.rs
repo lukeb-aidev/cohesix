@@ -8005,11 +8005,11 @@ enum RuntimeCommandLoopRoute {
 
 /// Final durable-condition decision before an idle runtime blocks.
 ///
-/// Root-originated commands rendezvous through the command endpoint, but a
-/// reciprocal CYW43-to-SDIO child is intentionally ring-only. The latter must
-/// therefore be re-read immediately before `Recv`; its notification can
-/// shorten scheduling latency but cannot carry the child's history or
-/// liveness.
+/// Reply-cap commands rendezvous through the command endpoint. Reciprocal
+/// CYW43-to-SDIO children and root-originated one-way CYW43 parents are
+/// sequence-last ring commands with coalescing notification hints. Re-read
+/// either immediately before `Recv`; a hint consumed while finishing prior
+/// durable service cannot carry the successor command's history or liveness.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeIdlePrewaitRoute {
@@ -8022,8 +8022,10 @@ const fn runtime_idle_prewait_route(
     route: RuntimeNotificationRoute,
     admission: RuntimeCommandAdmission,
 ) -> RuntimeIdlePrewaitRoute {
-    if matches!(route, RuntimeNotificationRoute::SdioOwner)
-        && matches!(admission, RuntimeCommandAdmission::OneWay)
+    if matches!(
+        route,
+        RuntimeNotificationRoute::SdioOwner | RuntimeNotificationRoute::Cyw43Client
+    ) && matches!(admission, RuntimeCommandAdmission::OneWay)
     {
         RuntimeIdlePrewaitRoute::ReenterCommandPoll
     } else {
@@ -55581,12 +55583,12 @@ pub fn runtime_main(task_key: usize) -> ! {
                 runtime_command_admission(read_runtime_command_record(), last_sequence),
             ) == RuntimeIdlePrewaitRoute::ReenterCommandPoll
             {
-                // CYW43 committed a ring-only child after the earlier intake
-                // sample, or its doorbell was coalesced with other owner work.
-                // Re-enter the stable ring reader now. The sequence-last
-                // command, not notification history, is the complete work
-                // condition; a signal racing this final check remains latched
-                // for the blocking receive below.
+                // A reciprocal CYW43 child or root one-way CYW43 parent
+                // committed after the earlier intake sample, or its doorbell
+                // was coalesced with prior owner work. Re-enter the stable ring
+                // reader now. The sequence-last command, not notification
+                // history, is the complete work condition; a signal racing
+                // this final check remains latched for the blocking receive.
                 continue;
             }
             // Every non-MCS runtime blocks on its command endpoint after the
@@ -66589,7 +66591,19 @@ mod tests {
     }
 
     #[test]
-    fn idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child() {
+    fn idle_prewait_reenters_for_each_fresh_ring_only_command() {
+        let mut cyw43_parent = root_retained_gate_test_intake(64, 11).command;
+        cyw43_parent.flags |= DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION;
+        let cyw43_admission = runtime_command_admission(cyw43_parent, 63);
+        assert_eq!(cyw43_admission, RuntimeCommandAdmission::OneWay);
+        assert_eq!(
+            runtime_idle_prewait_route(
+                RuntimeNotificationRoute::Cyw43Client,
+                cyw43_admission,
+            ),
+            RuntimeIdlePrewaitRoute::ReenterCommandPoll,
+            "a durable persistent CYW43 parent remains the work condition after its hint was consumed",
+        );
         assert_eq!(
             runtime_idle_prewait_route(
                 RuntimeNotificationRoute::SdioOwner,
@@ -66608,7 +66622,7 @@ mod tests {
             ),
             (
                 RuntimeNotificationRoute::Cyw43Client,
-                RuntimeCommandAdmission::OneWay,
+                RuntimeCommandAdmission::NeedsReplyCap,
             ),
             (
                 RuntimeNotificationRoute::Unavailable,

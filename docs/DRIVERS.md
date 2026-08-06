@@ -1355,6 +1355,8 @@ wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
+wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
 wifi: root grant state=<state> active=<yes|no> phase=<phase> mask=0x<mask> request=<n> generation=<n> command_sequence=<n> sequence_published=<yes|no> doorbell_issued=<yes|no>
 wifi: root grant_ids notify_bound=<yes|no> producer=<n> shared=<n> consumed=<n> exact=<yes|no|not-published>
 ```
@@ -1552,7 +1554,21 @@ generation and XID.
   does not depend on the rendered network-status string. The production Join
   crosses `Stage`, sequence-last `CommitRing`, `Issued`, and its sole signal
   under that already-open outer lease; ordinary association does not use
-  request-bound boost/restore as its scheduling path.
+  request-bound boost/restore as its scheduling path. Root runs on authority
+  core 0 while both linked runtimes run on driver core 3; the cross-core signal
+  prompts remote scheduling, and a root-core yield is not a child-dispatch
+  operation. All transaction correctness remains sequence-last and condition-
+  driven.
+
+  At the final idle blocking boundary, both linked runtimes re-read their
+  sequence-last command ring. This covers a root-originated one-way CYW43
+  parent as well as a reciprocal one-way CYW43-to-SDIO child. If the command
+  committed after the earlier empty sample, or its notification was coalesced
+  or consumed while the runtime completed prior durable work, the runtime
+  re-enters command arbitration instead of sleeping. This is one
+  condition-before-sleep recheck, not a polling lane: it adds no timer,
+  notification, owner, retry, or alternate execution path. An unchanged ring
+  proceeds to the existing blocking receive.
 
   Before the exact wait receipt, the parent keeps the Network quantum
   actionable. After that receipt proves the generated external wait,
@@ -2937,13 +2953,27 @@ generation and XID.
   ```text
   wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
   wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+  wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
   ```
 
   `refinement=pair-placeholder` means no exact descriptor/ticket evidence,
   `owner-context` means partial owner evidence, and `exact-owner` requires both
   descriptor operation and ticket identity. `sequence_published=yes` in the
   split root-grant telemetry means the nonzero request equals the committed
-  command sequence; it is distinct from `doorbell_issued=yes`.
+  command sequence. The adjacent bounded `scheduler_edge` line names
+  `publication_latched` as the same retained issue latch as `doorbell_issued`.
+  `signal_returned=yes` is a post-syscall latch bound to that exact request: it
+  proves only that the sole signal syscall returned, not notification delivery,
+  remote scheduling, or child intake. `parent_deadline_expired` records the
+  exact persistent-parent lifetime condition at capture. The downstream
+  `child_terminal`, `child_wait_receipt`, and `child_bus_episode` fields use
+  only same-request stable completion, full wait-receipt identity, or a
+  sequence-last bus-episode record; `bus_parent` exposes that episode's parent
+  sequence and operation. Best-effort progress markers do not contribute to
+  this line. A `no` value means only that the named exact proof was absent at
+  capture; it neither proves the boundary did not occur nor localizes the
+  failure. `evidence=exact-only` distinguishes this retained causal tuple from
+  derived gates, breadcrumbs, and post-recovery progress.
   `scope=unavailable` is a fail-closed telemetry result and cannot establish a
   causal scheduler tuple.
   Publication performs only lock-free admission fencing; it cannot clear
@@ -3609,9 +3639,11 @@ remain separated explicitly for non-CYW43 root commands.
 Root-to-CYW43 tests reject endpoint wakes, preserve ordinary grants across
 coalesced peer service, and prove an exact op11 plus its marker-paired children
 reach the same terminal with a missing, coalesced, or repeated scheduling hint.
-The SDIO runtime-loop test additionally publishes a fresh ring-only child after
-the earlier idle sample and proves the final pre-wait command-ring read re-enters
-owner arbitration; endpoint and unrelated notification routes still block.
+The linked runtime-loop tests additionally publish both kinds of fresh
+ring-only command after the earlier idle sample: a reciprocal one-way SDIO
+child and a root-originated one-way CYW43 parent. They prove the final pre-wait
+command-ring read re-enters owner arbitration for either command while endpoint
+and unrelated notification routes still block.
 SDIO deadline tests must prove every timed autonomous owner wait selects and
 commits the exact phase expiry in `DriverRuntimeSdioDeadlineArm` body before
 request sequence, including pre-issue inhibit and status-clear, and prove

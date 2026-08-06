@@ -4047,6 +4047,7 @@ struct DriverTaskCommandSlot {
     retained_steady_tx_last_progress_slice: AtomicU32,
     retained_steady_tx_last_progress_ticks: AtomicU64,
     retained_persistent_transaction_start_ticks: AtomicU64,
+    retained_persistent_signal_returned_request: AtomicU32,
     endpoint: AtomicUsize,
     root_notification: AtomicUsize,
     root_wake_notification: AtomicUsize,
@@ -4232,7 +4233,16 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) root_request: u32,
     pub(crate) root_generation: u32,
     pub(crate) root_command_sequence: u32,
+    pub(crate) root_command_flags: u16,
+    pub(crate) root_command_aux0: u32,
     pub(crate) root_doorbell_issued: bool,
+    pub(crate) root_signal_returned: bool,
+    pub(crate) root_parent_deadline_expired: bool,
+    pub(crate) child_terminal_observed: bool,
+    pub(crate) child_wait_receipt_observed: bool,
+    pub(crate) child_bus_episode_observed: bool,
+    pub(crate) child_bus_parent_sequence: u32,
+    pub(crate) child_bus_parent_op: u16,
 }
 
 #[cfg(feature = "kernel")]
@@ -4249,7 +4259,16 @@ struct Cyw43FirstRecoverySchedulerState {
     root_request: AtomicU32,
     root_generation: AtomicU32,
     root_command_sequence: AtomicU32,
+    root_command_flags: AtomicU32,
+    root_command_aux0: AtomicU32,
     root_doorbell_issued: AtomicU32,
+    root_signal_returned: AtomicU32,
+    root_parent_deadline_expired: AtomicU32,
+    child_terminal_observed: AtomicU32,
+    child_wait_receipt_observed: AtomicU32,
+    child_bus_episode_observed: AtomicU32,
+    child_bus_parent_sequence: AtomicU32,
+    child_bus_parent_op: AtomicU32,
 }
 
 #[cfg(feature = "kernel")]
@@ -4266,7 +4285,16 @@ impl Cyw43FirstRecoverySchedulerState {
             root_request: AtomicU32::new(0),
             root_generation: AtomicU32::new(0),
             root_command_sequence: AtomicU32::new(0),
+            root_command_flags: AtomicU32::new(0),
+            root_command_aux0: AtomicU32::new(0),
             root_doorbell_issued: AtomicU32::new(0),
+            root_signal_returned: AtomicU32::new(0),
+            root_parent_deadline_expired: AtomicU32::new(0),
+            child_terminal_observed: AtomicU32::new(0),
+            child_wait_receipt_observed: AtomicU32::new(0),
+            child_bus_episode_observed: AtomicU32::new(0),
+            child_bus_parent_sequence: AtomicU32::new(0),
+            child_bus_parent_op: AtomicU32::new(0),
         }
     }
 }
@@ -4633,6 +4661,7 @@ impl DriverTaskCommandSlot {
             retained_steady_tx_last_progress_slice: AtomicU32::new(0),
             retained_steady_tx_last_progress_ticks: AtomicU64::new(0),
             retained_persistent_transaction_start_ticks: AtomicU64::new(0),
+            retained_persistent_signal_returned_request: AtomicU32::new(0),
             endpoint: AtomicUsize::new(0),
             root_notification: AtomicUsize::new(0),
             root_wake_notification: AtomicUsize::new(0),
@@ -9230,6 +9259,8 @@ fn reset_driver_task_retained_priority_lease_slot(slot: &DriverTaskCommandSlot) 
         .store(0, Ordering::Release);
     slot.retained_persistent_transaction_start_ticks
         .store(0, Ordering::Release);
+    slot.retained_persistent_signal_returned_request
+        .store(0, Ordering::Release);
 }
 
 #[cfg(feature = "kernel")]
@@ -10184,14 +10215,60 @@ pub(crate) fn capture_first_cyw43_recovery_scheduler_snapshot() {
     let ring = (ring_root_ptr != 0)
         .then(|| DriverTaskRingView::new(ring_root_ptr))
         .flatten();
-    let root_command_sequence = ring
-        .as_ref()
-        .and_then(|ring| ring.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, sequence)))
-        .unwrap_or(0);
-    let root_generation = ring
-        .as_ref()
-        .and_then(|ring| ring.read_u32(core::mem::offset_of!(DriverTaskCommandRecord, aux1)))
-        .unwrap_or(0);
+    let root_command = ring.as_ref().and_then(|ring| {
+        driver_task_ring_invalidate_root_range(
+            ring_root_ptr,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        let first = ring.read_command();
+        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_root_range(
+            ring_root_ptr,
+            core::mem::size_of::<DriverTaskCommandRecord>(),
+        );
+        let second = ring.read_command();
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(
+            &slot.counters.cache_invalidate_bytes,
+            core::mem::size_of::<DriverTaskCommandRecord>().saturating_mul(2),
+        );
+        (first == second).then_some(second).flatten()
+    });
+    let root_command_sequence = root_command.map_or(0, |command| command.sequence);
+    let root_generation = root_command.map_or(0, |command| command.aux1);
+    let root_command_flags = root_command.map_or(0, |command| command.flags);
+    let root_command_aux0 = root_command.map_or(0, |command| command.aux0);
+    let root_persistent_command = root_command.is_some_and(|command| {
+        driver_task_persistent_transaction_command_shape(CYW43_WIFI_DRIVER_TASK_CONTRACT, command)
+    });
+    let root_doorbell_issued = slot.retained_doorbell_issued.load(Ordering::Acquire) != 0;
+    // The phase is committed before the sole signal syscall. Only this
+    // request-bound post-return latch proves that the syscall boundary itself
+    // returned; best-effort progress records are deliberately excluded from
+    // the causal snapshot.
+    let root_signal_returned = root_persistent_command
+        && slot
+            .retained_persistent_signal_returned_request
+            .load(Ordering::Acquire)
+            == root_command_sequence;
+    let root_parent_deadline_expired = root_persistent_command
+        && driver_task_persistent_transaction_lifetime_expired(slot) == Some(true);
+    let child_terminal_observed = root_command_sequence != 0
+        && driver_task_ring_stable_completion_snapshot(slot, ring_root_ptr)
+            .is_some_and(|completion| completion.sequence == root_command_sequence);
+    let child_wait_receipt_observed = root_command.is_some_and(|command| {
+        driver_task_ring_read_persistent_wait_receipt(ring_root_ptr).is_some_and(|receipt| {
+            receipt.request_sequence == command.sequence
+                && receipt.action_fingerprint
+                    == driver_task_runtime_continuation_fingerprint(command)
+                && receipt.logical_generation == command.aux1
+        })
+    });
+    let child_bus_episode = driver_task_cyw43_bus_episode_snapshot_for_slot(slot)
+        .filter(|episode| episode.parent_sequence == root_command_sequence);
+    let child_bus_episode_observed = root_command_sequence != 0 && child_bus_episode.is_some();
+    let child_bus_parent_sequence = child_bus_episode.map_or(0, |episode| episode.parent_sequence);
+    let child_bus_parent_op = child_bus_episode.map_or(0, |episode| episode.parent_op);
     CYW43_FIRST_RECOVERY_SCHEDULER
         .outer_phase
         .store(outer.phase.as_u32(), Ordering::Relaxed);
@@ -10220,10 +10297,36 @@ pub(crate) fn capture_first_cyw43_recovery_scheduler_snapshot() {
     CYW43_FIRST_RECOVERY_SCHEDULER
         .root_command_sequence
         .store(root_command_sequence, Ordering::Relaxed);
-    CYW43_FIRST_RECOVERY_SCHEDULER.root_doorbell_issued.store(
-        u32::from(slot.retained_doorbell_issued.load(Ordering::Acquire) != 0),
-        Ordering::Relaxed,
-    );
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .root_command_flags
+        .store(u32::from(root_command_flags), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .root_command_aux0
+        .store(root_command_aux0, Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .root_doorbell_issued
+        .store(u32::from(root_doorbell_issued), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .root_signal_returned
+        .store(u32::from(root_signal_returned), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .root_parent_deadline_expired
+        .store(u32::from(root_parent_deadline_expired), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .child_terminal_observed
+        .store(u32::from(child_terminal_observed), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .child_wait_receipt_observed
+        .store(u32::from(child_wait_receipt_observed), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .child_bus_episode_observed
+        .store(u32::from(child_bus_episode_observed), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .child_bus_parent_sequence
+        .store(child_bus_parent_sequence, Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .child_bus_parent_op
+        .store(u32::from(child_bus_parent_op), Ordering::Relaxed);
     // Sequence-last publication: readers cannot observe a partial tuple.
     CYW43_FIRST_RECOVERY_SCHEDULER
         .state
@@ -10277,10 +10380,42 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
         root_command_sequence: CYW43_FIRST_RECOVERY_SCHEDULER
             .root_command_sequence
             .load(Ordering::Relaxed),
+        root_command_flags: CYW43_FIRST_RECOVERY_SCHEDULER
+            .root_command_flags
+            .load(Ordering::Relaxed) as u16,
+        root_command_aux0: CYW43_FIRST_RECOVERY_SCHEDULER
+            .root_command_aux0
+            .load(Ordering::Relaxed),
         root_doorbell_issued: CYW43_FIRST_RECOVERY_SCHEDULER
             .root_doorbell_issued
             .load(Ordering::Relaxed)
             != 0,
+        root_signal_returned: CYW43_FIRST_RECOVERY_SCHEDULER
+            .root_signal_returned
+            .load(Ordering::Relaxed)
+            != 0,
+        root_parent_deadline_expired: CYW43_FIRST_RECOVERY_SCHEDULER
+            .root_parent_deadline_expired
+            .load(Ordering::Relaxed)
+            != 0,
+        child_terminal_observed: CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_terminal_observed
+            .load(Ordering::Relaxed)
+            != 0,
+        child_wait_receipt_observed: CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_wait_receipt_observed
+            .load(Ordering::Relaxed)
+            != 0,
+        child_bus_episode_observed: CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_bus_episode_observed
+            .load(Ordering::Relaxed)
+            != 0,
+        child_bus_parent_sequence: CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_bus_parent_sequence
+            .load(Ordering::Relaxed),
+        child_bus_parent_op: CYW43_FIRST_RECOVERY_SCHEDULER
+            .child_bus_parent_op
+            .load(Ordering::Relaxed) as u16,
     };
     (CYW43_FIRST_RECOVERY_SCHEDULER.state.load(Ordering::Acquire) == committed_version)
         .then_some(snapshot)
@@ -11291,6 +11426,8 @@ where
     #[cfg(test)]
     TEST_ROOT_NOTIFICATION_SIGNALS.fetch_add(1, Ordering::AcqRel);
     signal(notification);
+    slot.retained_persistent_signal_returned_request
+        .store(request as u32, Ordering::Release);
     true
 }
 
@@ -17979,6 +18116,8 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
             .store(0, Ordering::Release);
         slot.retained_persistent_transaction_start_ticks
             .store(0, Ordering::Release);
+        slot.retained_persistent_signal_returned_request
+            .store(0, Ordering::Release);
         command.sequence = request as u32;
         let completion_reset =
             DriverTaskCompletionRecord::fault(0, DriverTaskFaultCode::RejectedCommand);
@@ -24652,6 +24791,8 @@ mod tests {
             Ordering::Release,
         );
         slot.retained_doorbell_issued.store(1, Ordering::Release);
+        slot.retained_persistent_signal_returned_request
+            .store(request, Ordering::Release);
     }
 
     #[cfg(feature = "kernel")]
@@ -26811,7 +26952,19 @@ mod tests {
         assert_eq!(retained.root_request, request);
         assert_eq!(retained.root_generation, generation);
         assert_eq!(retained.root_command_sequence, request);
+        assert_eq!(
+            retained.root_command_flags,
+            DRIVER_TASK_RING_FLAG_ONE_WAY | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+        );
+        assert_eq!(retained.root_command_aux0, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
         assert!(retained.root_doorbell_issued);
+        assert!(retained.root_signal_returned);
+        assert!(!retained.root_parent_deadline_expired);
+        assert!(!retained.child_terminal_observed);
+        assert!(!retained.child_wait_receipt_observed);
+        assert!(!retained.child_bus_episode_observed);
+        assert_eq!(retained.child_bus_parent_sequence, 0);
+        assert_eq!(retained.child_bus_parent_op, 0);
 
         clear_driver_task_transport(CYW43_WIFI_DRIVER_TASK_CONTRACT);
         clear_driver_task_transport(SDIO_HOST_DRIVER_TASK_CONTRACT);
@@ -26897,7 +27050,19 @@ mod tests {
         assert_eq!(retained.root_request, request);
         assert_eq!(retained.root_generation, generation);
         assert_eq!(retained.root_command_sequence, request);
+        assert_eq!(
+            retained.root_command_flags,
+            DRIVER_TASK_RING_FLAG_ONE_WAY | DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION
+        );
+        assert_eq!(retained.root_command_aux0, DRIVER_RUNTIME_CYW43_COMMAND_AUX);
         assert!(retained.root_doorbell_issued);
+        assert!(retained.root_signal_returned);
+        assert!(!retained.root_parent_deadline_expired);
+        assert!(!retained.child_terminal_observed);
+        assert!(!retained.child_wait_receipt_observed);
+        assert!(!retained.child_bus_episode_observed);
+        assert_eq!(retained.child_bus_parent_sequence, 0);
+        assert_eq!(retained.child_bus_parent_op, 0);
         assert_eq!(test_root_grant_action_counts(), (0, 0));
         assert_eq!(
             DRIVER_TASK_SLOT_CYW43455
@@ -28226,6 +28391,12 @@ mod tests {
             },
         ));
         assert_eq!(signals.get(), 1);
+        assert_eq!(
+            slot.retained_persistent_signal_returned_request
+                .load(Ordering::Acquire),
+            command.sequence,
+            "the exact request is latched only after the signal boundary returns",
+        );
         assert!(!signal_cyw43_persistent_transaction_with(
             context(),
             || {},

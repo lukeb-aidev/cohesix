@@ -1402,6 +1402,15 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_GENERATION": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_COMMAND_SEQUENCE": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_PUBLICATION_LATCHED": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_SIGNAL_RETURNED": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_PARENT_DEADLINE_EXPIRED": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_TERMINAL": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_WAIT_RECEIPT": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": "0x0000",
+        "WIFI_CAUSAL_FRONTIER": "none",
         "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
         "WIFI_RX_IRQ_PRESERVE_INT": "0x00000000",
@@ -2380,6 +2389,10 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "wifi: deferred_recovery scheduler scope=first-pre-fence "
         "outer=open/7/0x03 root=yes/issued/0x03/64/11 "
         "command_sequence=64 doorbell_issued=yes",
+        "wifi: deferred_recovery scheduler_edge publication_latched=yes "
+        "signal_returned=yes parent_deadline_expired=yes "
+        "child_terminal=no child_wait_receipt=no child_bus_episode=no "
+        "bus_parent=0/0x0000 evidence=exact-only",
         "wifi: deferred_recovery scheduler scope=first-pre-fence "
         "outer=closing/8/0x03 root=malformed command_sequence=65 "
         "doorbell_issued=no",
@@ -2402,6 +2415,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "priority-episode-counts",
         "priority-episode-faults",
         "deferred-recovery-scheduler",
+        "deferred-recovery-scheduler-edge",
         "deferred-recovery-scheduler",
         "deferred-recovery-scheduler",
         "root-grant",
@@ -2409,8 +2423,16 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     ]
     assert events[4].fields["outer"] == "open/7/0x03"
     assert events[4].fields["root"] == "yes/issued/0x03/64/11"
-    assert events[7].fields["command_sequence"] == "64"
-    assert events[7].fields["doorbell_issued"] == "yes"
+    assert events[5].fields["publication_latched"] == "yes"
+    assert events[5].fields["signal_returned"] == "yes"
+    assert events[5].fields["parent_deadline_expired"] == "yes"
+    assert events[5].fields["child_terminal"] == "no"
+    assert events[5].fields["child_wait_receipt"] == "no"
+    assert events[5].fields["child_bus_episode"] == "no"
+    assert events[5].fields["bus_parent"] == "0/0x0000"
+    assert events[5].fields["evidence"] == "exact-only"
+    assert events[8].fields["command_sequence"] == "64"
+    assert events[8].fields["doorbell_issued"] == "yes"
     assert record["WIFI_PRIORITY_EPISODE_SCOPE"] == "current"
     assert record["WIFI_PRIORITY_EPISODE_PHASE"] == "open"
     assert record["WIFI_PRIORITY_EPISODE_PAIR_EPOCH"] == 7
@@ -2434,6 +2456,18 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_GENERATION"] == 11
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_COMMAND_SEQUENCE"] == 64
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_PUBLICATION_LATCHED"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SIGNAL_RETURNED"] == "yes"
+    assert (
+        record["WIFI_DEFERRED_RECOVERY_SCHEDULER_PARENT_DEADLINE_EXPIRED"]
+        == "yes"
+    )
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_TERMINAL"] == "no"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_WAIT_RECEIPT"] == "no"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE"] == "no"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE"] == 0
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP"] == "0x0000"
+    assert record["WIFI_CAUSAL_FRONTIER"] == "root-signal-returned"
     for key in (
         "WIFI_GATE",
         "WIFI_BLOCKER",
@@ -2487,6 +2521,64 @@ def test_unavailable_recovery_scheduler_is_parsed_but_not_promoted_to_proof() ->
 
     assert [event.stage for event in events] == ["deferred-recovery-scheduler"]
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE"] == "none"
+
+
+def test_recovery_scheduler_keeps_legacy_doorbell_compatibility() -> None:
+    """Legacy doorbell telemetry maps only to the publication latch fact."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: deferred_recovery scheduler scope=first-pre-fence "
+            "outer=open/7/0x03 root=yes/issued/0x03/64/11 "
+            "command_sequence=64 doorbell_issued=yes"
+        ]
+    )
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_PUBLICATION_LATCHED"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SIGNAL_RETURNED"] == "unknown"
+    assert (
+        record["WIFI_DEFERRED_RECOVERY_SCHEDULER_PARENT_DEADLINE_EXPIRED"]
+        == "unknown"
+    )
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_TERMINAL"] == "unknown"
+    assert (
+        record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_WAIT_RECEIPT"]
+        == "unknown"
+    )
+    assert (
+        record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE"]
+        == "unknown"
+    )
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE"] == 0
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP"] == "0x0000"
+    assert record["WIFI_CAUSAL_FRONTIER"] == "root-issued-phase"
+
+
+def test_recovery_scheduler_edge_requires_adjacent_retained_tuple() -> None:
+    """A delayed edge cannot attach child facts to an older scheduler tuple."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: deferred_recovery scheduler scope=first-pre-fence "
+            "outer=open/7/0x03 root=yes/issued/0x03/64/11 "
+            "command_sequence=64 doorbell_issued=yes",
+            "wifi: priority_episode scope=current phase=poisoned "
+            "pair_epoch=7 mask=0x00",
+            "wifi: deferred_recovery scheduler_edge publication_latched=yes "
+            "signal_returned=yes parent_deadline_expired=yes "
+            "child_terminal=no child_wait_receipt=no child_bus_episode=no "
+            "bus_parent=0/0x0000 evidence=exact-only",
+        ]
+    )
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_PUBLICATION_LATCHED"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SIGNAL_RETURNED"] == "unknown"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_TERMINAL"] == "unknown"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE"] == 0
+    assert record["WIFI_CAUSAL_FRONTIER"] == "root-issued-phase"
 
 
 @pytest.mark.parametrize(
@@ -3106,6 +3198,34 @@ def test_gate_summary_requires_live_hot_path_for_dedicated_role() -> None:
     assert record["DRIVER_TASK_SDIO_DEDICATED"] == "no"
     assert record["DRIVER_TASK_PCIE_DEDICATED"] == "no"
     assert record["DRIVER_TASK_LATENCY_PROOFS"] == 4
+
+
+def test_gate_summary_deduplicates_driver_task_summary_and_role_replay() -> None:
+    """Aggregate counts and role-only replay facts must not mint contracts."""
+
+    events = normalizer.parse_events(
+        [
+            "SCHED_CONTRACT contract=serial isolation=dedicated-sel4-task",
+            "DRIVER_TASK role=serial contract=serial "
+            "isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated",
+            "SCHED_CONTRACT contract=cyw43455 isolation=dedicated-sel4-task",
+            "DRIVER_TASK role=net contract=cyw43455 "
+            "isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated",
+            "DRIVER_TASK_SUMMARY contracts=2 dedicated=2 compatibility=0",
+            "DRIVER_TASK_BUS_LINK contract=usb-keyboard owner=pcie-root "
+            "channel=usb-pcie",
+            "NET_DRIVER_TASK_REPLAY_STATUS role=cyw43-wifi selected=yes "
+            "events=1 blocker=none",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host selected=yes "
+            "events=1 blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["DRIVER_TASK_CONTRACTS"] == 2
+    assert record["DRIVER_TASK_DEDICATED"] == 2
+    assert record["DRIVER_TASK_COMPATIBILITY"] == 0
 
 
 def test_gate_summary_counts_driver_task_budget_overruns() -> None:
