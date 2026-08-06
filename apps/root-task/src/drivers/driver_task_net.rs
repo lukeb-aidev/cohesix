@@ -1399,6 +1399,81 @@ pub(crate) struct Cyw43DeferredRecoveryDiagnostic {
     pub terminal_observed: bool,
     pub turn_id: u64,
     pub gate: u8,
+    pub scheduler: Cyw43DeferredRecoverySchedulerDiagnostic,
+}
+
+/// Passive scheduling state captured before the first recovery fence mutates it.
+///
+/// This record is diagnostic only. It cannot reserve a scheduling context,
+/// issue a request, signal a runtime, or authorize recovery. Keeping it inside
+/// the retained first-cause record prevents pair scrub from presenting current
+/// idle state as the state that caused the failure.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
+    pub scope: &'static str,
+    pub outer_phase: &'static str,
+    pub outer_pair_epoch: u32,
+    pub outer_priority_mask: usize,
+    pub root_active: bool,
+    pub root_phase: &'static str,
+    pub root_priority_mask: usize,
+    pub root_request: u32,
+    pub root_generation: u32,
+    pub root_command_sequence: u32,
+    pub root_doorbell_issued: bool,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43DeferredRecoverySchedulerDiagnostic {
+    fn capture() -> Self {
+        crate::hal::driver_task::capture_first_cyw43_recovery_scheduler_snapshot();
+        if let Some(snapshot) = crate::hal::driver_task::first_cyw43_recovery_scheduler_snapshot() {
+            return Self {
+                scope: "first-pre-fence",
+                outer_phase: snapshot.outer_phase.as_str(),
+                outer_pair_epoch: snapshot.outer_pair_epoch,
+                outer_priority_mask: snapshot.outer_priority_mask,
+                root_active: snapshot.root_active,
+                root_phase: snapshot.root_phase_name,
+                root_priority_mask: snapshot.root_priority_mask,
+                root_request: snapshot.root_request,
+                root_generation: snapshot.root_generation,
+                root_command_sequence: snapshot.root_command_sequence,
+                root_doorbell_issued: snapshot.root_doorbell_issued,
+            };
+        }
+        Self {
+            scope: "unavailable",
+            outer_phase: "unavailable",
+            outer_pair_epoch: 0,
+            outer_priority_mask: 0,
+            root_active: false,
+            root_phase: "unavailable",
+            root_priority_mask: 0,
+            root_request: 0,
+            root_generation: 0,
+            root_command_sequence: 0,
+            root_doorbell_issued: false,
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) const fn empty() -> Self {
+        Self {
+            scope: "first-pre-fence",
+            outer_phase: "inactive",
+            outer_pair_epoch: 0,
+            outer_priority_mask: 0,
+            root_active: false,
+            root_phase: "inactive",
+            root_priority_mask: 0,
+            root_request: 0,
+            root_generation: 0,
+            root_command_sequence: 0,
+            root_doorbell_issued: false,
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -1670,6 +1745,7 @@ impl Cyw43BootstrapSupervisor {
             return false;
         }
         *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
+        crate::hal::driver_task::clear_first_cyw43_recovery_scheduler_snapshot();
         *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
         true
     }
@@ -8278,9 +8354,13 @@ pub(crate) fn cyw43_connection_generation() -> u32 {
 
 #[cfg(feature = "kernel")]
 fn fence_cyw43_root_admission_for_recovery() {
-    // This boundary is safe while a steady-path mutex is held: it touches only
-    // atomics. Mutex-owned sessions, queues, and cursors are cleared later by
-    // the retained supervisor after the outer EventPump turn has unwound.
+    // Preserve the HAL-owned pre-fence scheduler tuple before changing root
+    // admission. The capture reads only admitted ring identity and atomics; it
+    // performs no grant validation, cache operation, signal, or driver action,
+    // so this boundary remains safe while a steady-path mutex is held.
+    crate::hal::driver_task::capture_first_cyw43_recovery_scheduler_snapshot();
+    // Mutex-owned sessions, queues, and cursors are cleared later by the
+    // retained supervisor after the outer EventPump turn has unwound.
     CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
@@ -8341,6 +8421,7 @@ fn cyw43_deferred_recovery_diagnostic_gate(
 fn cyw43_deferred_recovery_diagnostic_record(
     recovery: Cyw43DeferredRecovery,
     subphase: &'static str,
+    scheduler: Option<Cyw43DeferredRecoverySchedulerDiagnostic>,
 ) -> Cyw43DeferredRecoveryDiagnostic {
     let descriptor = recovery.descriptor;
     Cyw43DeferredRecoveryDiagnostic {
@@ -8363,6 +8444,7 @@ fn cyw43_deferred_recovery_diagnostic_record(
         terminal_observed: recovery.terminal_observed,
         turn_id: recovery.turn_id,
         gate: cyw43_deferred_recovery_diagnostic_gate(recovery.cause, subphase),
+        scheduler: scheduler.unwrap_or_else(Cyw43DeferredRecoverySchedulerDiagnostic::capture),
     }
 }
 
@@ -8372,6 +8454,7 @@ fn retain_first_cyw43_deferred_recovery_diagnostic(
     subphase: &'static str,
 ) {
     let mut slot = CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock();
+    let scheduler = slot.as_ref().map(|existing| existing.scheduler);
     if let Some(existing) = *slot {
         let generic_pair_placeholder = !existing.terminal_observed
             && existing.cause == Cyw43RecoveryCause::PairSignal.diagnostic_label()
@@ -8410,7 +8493,7 @@ fn retain_first_cyw43_deferred_recovery_diagnostic(
         }
     }
     *slot = Some(cyw43_deferred_recovery_diagnostic_record(
-        recovery, subphase,
+        recovery, subphase, scheduler,
     ));
 }
 
@@ -8746,7 +8829,9 @@ fn refine_cyw43_pair_signal_with_exact_issued_owner(
         });
         if replace_diagnostic {
             *diagnostic = Some(cyw43_deferred_recovery_diagnostic_record(
-                proposed, subphase,
+                proposed,
+                subphase,
+                diagnostic.as_ref().map(|existing| existing.scheduler),
             ));
         }
     }
@@ -12139,6 +12224,7 @@ pub(crate) fn test_clear_cyw43_runtime_replay_status() {
     finish_cyw43_bootstrap_causal_fault_capture();
     clear_cyw43_runtime_command_fault_status();
     *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
+    crate::hal::driver_task::clear_first_cyw43_recovery_scheduler_snapshot();
     *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
     *SDIO_LAST_RUNTIME_REPLAY_STATUS.lock() = None;
 }
@@ -12326,6 +12412,19 @@ fn run_driver_task_net_service_retained_turn_staged(
     staging_segments: &[DriverTaskStagingSegment<'_>],
 ) -> DriverTaskRetainedServiceTurn {
     crate::hal::driver_task::run_driver_task_ring_service_retained_service_turn_staged(
+        contract,
+        command,
+        staging_segments,
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn run_driver_task_net_service_retained_association_join_turn_staged(
+    contract: DriverTaskContract,
+    command: DriverTaskCommandRecord,
+    staging_segments: &[DriverTaskStagingSegment<'_>],
+) -> DriverTaskRetainedServiceTurn {
+    crate::hal::driver_task::run_driver_task_ring_service_retained_association_join_turn_staged(
         contract,
         command,
         staging_segments,
@@ -27544,6 +27643,13 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
                         &staging_segments,
                     )
                 }
+                None if stage == CYW43_ASSOCIATION_JOIN_STAGE => {
+                    run_driver_task_net_service_retained_association_join_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
                 None => run_driver_task_net_service_retained_turn_staged(
                     contract,
                     command,
@@ -27566,6 +27672,13 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
                 }
                 Some(Cyw43SteadyDataPlaneOp::HostEapolTx) => {
                     run_driver_task_net_service_retained_host_eapol_tx_turn_staged(
+                        contract,
+                        command,
+                        &staging_segments,
+                    )
+                }
+                None if stage == CYW43_ASSOCIATION_JOIN_STAGE => {
+                    run_driver_task_net_service_retained_association_join_turn_staged(
                         contract,
                         command,
                         &staging_segments,
@@ -30103,6 +30216,7 @@ mod tests {
         *CYW43_RETAINED_RECOVERY_CONTEXT.lock() = None;
         *CYW43_DEFERRED_RECOVERY.lock() = None;
         *CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock() = None;
+        crate::hal::driver_task::clear_first_cyw43_recovery_scheduler_snapshot();
         *CYW43_FIRST_TERMINAL_DRAIN_DIAGNOSTIC.lock() = None;
         *CYW43_BOOT_FIRST_ASSOCIATION_TERMINAL_EVENT.lock() = None;
         clear_cyw43_logical_control_owner();
@@ -36154,30 +36268,21 @@ mod tests {
         );
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
         let issued_lease = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        if outer_lease_preopened {
+        assert_eq!(
+            issued_lease.amortized_requests,
+            lease_baseline.amortized_requests + 1,
+            "Issue must prove physical outer-lease coverage exactly once",
+        );
+        assert_eq!(
+            issued_lease.phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Open,
+            "the signalled Join must not close its outer lease before child intake or terminal",
+        );
+        if !outer_lease_preopened {
             assert_eq!(
-                issued_lease.amortized_requests,
-                lease_baseline.amortized_requests + 1,
-                "Issue must prove physical outer-lease coverage exactly once",
-            );
-            assert_eq!(
-                issued_lease.phase,
-                Cyw43SdioNetworkPriorityLeasePhase::Open,
-                "the signalled Join must not close its outer lease before child intake or terminal",
-            );
-        } else {
-            assert_eq!(issued_lease.opens, lease_baseline.opens);
-            assert_eq!(
-                issued_lease.amortized_requests,
-                lease_baseline.amortized_requests
-            );
-            assert_eq!(
-                issued_lease.phase,
-                Cyw43SdioNetworkPriorityLeasePhase::Inactive
-            );
-            assert!(
-                crate::hal::driver_task::test_cyw43_request_bound_preissue_issued(request),
-                "same-call preissue completion must retain both exact request-bound reservations",
+                issued_lease.opens,
+                lease_baseline.opens + 1,
+                "the production EventPump path must open the inactive physical lease before Join",
             );
         }
         assert!(
@@ -36198,11 +36303,15 @@ mod tests {
         let actions_after_issue = crate::hal::driver_task::test_root_grant_action_counts();
         assert_eq!(actions_after_issue, (0, 1));
 
-        // A bounded operator checkpoint may move the outer scheduling lease
-        // to Closing before the autonomous child reaches its wait. That phase
-        // change must preserve the same prompt op11 handoff; it cannot become
-        // an externally visible idle gap or authorize a second signal.
-        if outer_lease_preopened {
+        // Explicit recovery may move the outer scheduling lease to Closing
+        // before the autonomous child reaches its wait. That phase change
+        // must preserve the same prompt op11 handoff; it cannot become an
+        // externally visible idle gap or authorize a second signal.
+        if recovery_before_terminal_consume {
+            assert!(
+                outer_lease_preopened,
+                "the Closing recovery model requires a pre-opened outer lease",
+            );
             assert_eq!(
                 crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
                 crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Requested,
@@ -36210,11 +36319,6 @@ mod tests {
             assert_eq!(
                 crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
                 Cyw43SdioNetworkPriorityLeasePhase::Closing,
-            );
-        } else {
-            assert_eq!(
-                crate::hal::driver_task::request_cyw43_sdio_network_priority_lease_close(),
-                crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseCloseRequest::Inactive,
             );
         }
         pump.poll();
@@ -36254,9 +36358,8 @@ mod tests {
         pump.poll();
         let parked = cyw43_association_diagnostic();
         assert_eq!(
-            parked.service_turns,
-            if outer_lease_preopened { 2 } else { 3 },
-            "request-bound ownership consumes one final receipt-classification turn before parking",
+            parked.service_turns, 2,
+            "the open pair episode parks without an extra request-bound scheduling turn",
         );
         assert_eq!(parked.join_starts, 1);
         assert!(parked.association_join_pending());
@@ -36265,11 +36368,12 @@ mod tests {
         assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
         assert_eq!(
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            if outer_lease_preopened {
+            if recovery_before_terminal_consume {
                 Cyw43SdioNetworkPriorityLeasePhase::Closing
             } else {
-                Cyw43SdioNetworkPriorityLeasePhase::Inactive
+                Cyw43SdioNetworkPriorityLeasePhase::Open
             },
+            "an ordinary child wait must retain the open pair episode",
         );
         assert!(
             !pump.test_linked_runtime_network_phase(),
@@ -36286,6 +36390,46 @@ mod tests {
             actions_after_issue,
         );
         assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        if !recovery_before_terminal_consume {
+            // Complete a real Serial/Dispatch rotation with no terminal, then
+            // let a physical response become pending at the next Network
+            // boundary. Operator priority must remain orthogonal to the
+            // sleeping child's exact pair episode: no cancel path may convert
+            // Open into Closing or manufacture another root/runtime turn.
+            let mut operator_rotation_turns = 0usize;
+            while !pump.test_linked_runtime_network_phase() {
+                assert!(
+                    operator_rotation_turns < 4,
+                    "the parked parent must return to its passive Network boundary",
+                );
+                pump.poll();
+                operator_rotation_turns = operator_rotation_turns.saturating_add(1);
+                assert_eq!(
+                    crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                    Cyw43SdioNetworkPriorityLeasePhase::Open,
+                    "ordinary operator rotation cannot close the waiting pair episode",
+                );
+            }
+            pump.test_set_physical_response_pending(true);
+            pump.poll();
+            pump.test_set_physical_response_pending(false);
+            assert_eq!(
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                Cyw43SdioNetworkPriorityLeasePhase::Open,
+                "a response arriving between Dispatch and Network must preserve the open wait",
+            );
+            assert_eq!(
+                cyw43_association_diagnostic().service_turns,
+                2,
+                "operator output cannot poll an externally waiting Join",
+            );
+            assert_eq!(CYW43_SUPERVISOR_RING_TURNS.load(Ordering::Acquire), 0);
+            assert_eq!(
+                crate::hal::driver_task::test_root_grant_action_counts(),
+                actions_after_issue,
+            );
+        }
 
         // The isolated runtime now commits the exact child terminal outside
         // root's turn. Clear models the runtime's mandatory pre-wake
@@ -36313,10 +36457,10 @@ mod tests {
         );
         assert_eq!(
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
-            if outer_lease_preopened {
+            if recovery_before_terminal_consume {
                 Cyw43SdioNetworkPriorityLeasePhase::Closing
             } else {
-                Cyw43SdioNetworkPriorityLeasePhase::Inactive
+                Cyw43SdioNetworkPriorityLeasePhase::Open
             },
         );
 
@@ -36360,9 +36504,8 @@ mod tests {
             terminal_resume_turns = terminal_resume_turns.saturating_add(1);
         };
         assert_eq!(
-            consumed.service_turns,
-            if outer_lease_preopened { 3 } else { 7 },
-            "request-bound terminal consumption keeps each restore as one bounded HAL turn",
+            consumed.service_turns, 3,
+            "the same open pair episode carries Join through terminal consumption",
         );
         assert_eq!(consumed.join_starts, 1);
         assert!(consumed.primary_join_ready);
@@ -36413,7 +36556,7 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn eventpump_join_request_bound_preissue_completes_from_inactive_outer_lease() {
+    fn eventpump_join_opens_one_network_episode_from_inactive_outer_lease() {
         run_eventpump_join_issue_and_terminal_episode(false, false);
     }
 

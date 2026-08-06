@@ -682,6 +682,35 @@ class Cyw43BootstrapSupervisorProof:
 
 
 @dataclass(frozen=True)
+class WifiPriorityEpisodeSummary:
+    """Current priority episode and immutable first-recovery scheduler evidence."""
+
+    episode_scope: str = "none"
+    episode_phase: str = "none"
+    episode_pair_epoch: int = 0
+    episode_mask: int = 0
+    counts_scope: str = "none"
+    faults_scope: str = "none"
+    opens: int = 0
+    closes: int = 0
+    restores: int = 0
+    amortized_requests: int = 0
+    failures: int = 0
+    recovery_revocations: int = 0
+    scheduler_scope: str = "none"
+    scheduler_outer_phase: str = "none"
+    scheduler_outer_pair_epoch: int = 0
+    scheduler_outer_mask: int = 0
+    scheduler_root_active: str = "unknown"
+    scheduler_root_phase: str = "none"
+    scheduler_root_mask: int = 0
+    scheduler_root_request: int = 0
+    scheduler_root_generation: int = 0
+    scheduler_root_command_sequence: int = 0
+    scheduler_root_doorbell_issued: str = "unknown"
+
+
+@dataclass(frozen=True)
 class GateSummary:
     """Current USB/WiFi hardware bring-up gate state."""
 
@@ -773,6 +802,29 @@ class GateSummary:
     wifi_service_eapol_m2: int = 0
     wifi_service_eapol_m3: int = 0
     wifi_service_eapol_m4: int = 0
+    wifi_priority_episode_scope: str = "none"
+    wifi_priority_episode_phase: str = "none"
+    wifi_priority_episode_pair_epoch: int = 0
+    wifi_priority_episode_mask: int = 0
+    wifi_priority_episode_counts_scope: str = "none"
+    wifi_priority_episode_faults_scope: str = "none"
+    wifi_priority_episode_opens: int = 0
+    wifi_priority_episode_closes: int = 0
+    wifi_priority_episode_restores: int = 0
+    wifi_priority_episode_amortized_requests: int = 0
+    wifi_priority_episode_failures: int = 0
+    wifi_priority_episode_recovery_revocations: int = 0
+    wifi_deferred_recovery_scheduler_scope: str = "none"
+    wifi_deferred_recovery_scheduler_outer_phase: str = "none"
+    wifi_deferred_recovery_scheduler_outer_pair_epoch: int = 0
+    wifi_deferred_recovery_scheduler_outer_mask: int = 0
+    wifi_deferred_recovery_scheduler_root_active: str = "unknown"
+    wifi_deferred_recovery_scheduler_root_phase: str = "none"
+    wifi_deferred_recovery_scheduler_root_mask: int = 0
+    wifi_deferred_recovery_scheduler_root_request: int = 0
+    wifi_deferred_recovery_scheduler_root_generation: int = 0
+    wifi_deferred_recovery_scheduler_root_command_sequence: int = 0
+    wifi_deferred_recovery_scheduler_root_doorbell_issued: str = "unknown"
     wifi_rx_irq_preserve_count: int = 0
     wifi_rx_irq_preserve_reason: str = "none"
     wifi_rx_irq_preserve_int: int = 0
@@ -1037,6 +1089,59 @@ class GateSummary:
             "WIFI_SERVICE_EAPOL_M2": self.wifi_service_eapol_m2,
             "WIFI_SERVICE_EAPOL_M3": self.wifi_service_eapol_m3,
             "WIFI_SERVICE_EAPOL_M4": self.wifi_service_eapol_m4,
+            "WIFI_PRIORITY_EPISODE_SCOPE": self.wifi_priority_episode_scope,
+            "WIFI_PRIORITY_EPISODE_PHASE": self.wifi_priority_episode_phase,
+            "WIFI_PRIORITY_EPISODE_PAIR_EPOCH": self.wifi_priority_episode_pair_epoch,
+            "WIFI_PRIORITY_EPISODE_MASK": f"0x{self.wifi_priority_episode_mask:02x}",
+            "WIFI_PRIORITY_EPISODE_COUNTS_SCOPE": (
+                self.wifi_priority_episode_counts_scope
+            ),
+            "WIFI_PRIORITY_EPISODE_FAULTS_SCOPE": (
+                self.wifi_priority_episode_faults_scope
+            ),
+            "WIFI_PRIORITY_EPISODE_OPENS": self.wifi_priority_episode_opens,
+            "WIFI_PRIORITY_EPISODE_CLOSES": self.wifi_priority_episode_closes,
+            "WIFI_PRIORITY_EPISODE_RESTORES": self.wifi_priority_episode_restores,
+            "WIFI_PRIORITY_EPISODE_AMORTIZED_REQUESTS": (
+                self.wifi_priority_episode_amortized_requests
+            ),
+            "WIFI_PRIORITY_EPISODE_FAILURES": self.wifi_priority_episode_failures,
+            "WIFI_PRIORITY_EPISODE_RECOVERY_REVOCATIONS": (
+                self.wifi_priority_episode_recovery_revocations
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE": (
+                self.wifi_deferred_recovery_scheduler_scope
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE": (
+                self.wifi_deferred_recovery_scheduler_outer_phase
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PAIR_EPOCH": (
+                self.wifi_deferred_recovery_scheduler_outer_pair_epoch
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_MASK": (
+                f"0x{self.wifi_deferred_recovery_scheduler_outer_mask:02x}"
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_ACTIVE": (
+                self.wifi_deferred_recovery_scheduler_root_active
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_PHASE": (
+                self.wifi_deferred_recovery_scheduler_root_phase
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_MASK": (
+                f"0x{self.wifi_deferred_recovery_scheduler_root_mask:02x}"
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_REQUEST": (
+                self.wifi_deferred_recovery_scheduler_root_request
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_GENERATION": (
+                self.wifi_deferred_recovery_scheduler_root_generation
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_COMMAND_SEQUENCE": (
+                self.wifi_deferred_recovery_scheduler_root_command_sequence
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED": (
+                self.wifi_deferred_recovery_scheduler_root_doorbell_issued
+            ),
             "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
             "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
             "WIFI_RX_IRQ_PRESERVE_INT": f"0x{self.wifi_rx_irq_preserve_int:08x}",
@@ -1813,6 +1918,22 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     if bus_episode is not None:
         stage = "cyw43-bus-episode"
         message = "bus-episode diagnostic=passive"
+    elif line.startswith("wifi: priority_episode scope=current "):
+        stage = "priority-episode"
+    elif line.startswith(
+        "wifi: priority_episode_counts scope=boot-cumulative "
+    ):
+        stage = "priority-episode-counts"
+    elif line.startswith(
+        "wifi: priority_episode_faults scope=boot-cumulative "
+    ):
+        stage = "priority-episode-faults"
+    elif line.startswith("wifi: deferred_recovery scheduler scope="):
+        stage = "deferred-recovery-scheduler"
+    elif line.startswith("wifi: root grant "):
+        stage = "root-grant"
+    elif line.startswith("wifi: root grant_ids "):
+        stage = "root-grant-ids"
     elif line == "halting...":
         fields = {**fields, "halt": "yes", "reason": "kernel-halt"}
         stage = "halt"
@@ -7043,7 +7164,18 @@ def summarize_wifi_gate(events: Iterable[TraceEvent]) -> tuple[int, str]:
     wifi_events = [
         event
         for event in events
-        if event.domain == "wifi"
+        if (
+            event.domain == "wifi"
+            and event.stage
+            not in {
+                "priority-episode",
+                "priority-episode-counts",
+                "priority-episode-faults",
+                "deferred-recovery-scheduler",
+                "root-grant",
+                "root-grant-ids",
+            }
+        )
         or (
             event.domain == "driver"
             and normalize_wifi_blocker(event.raw) == "wifi-driver-task-runtime-unproved"
@@ -9802,6 +9934,161 @@ def summarize_wifi_service_turn(
             parse_hex_int(fields.get("eapol_m4")) or 0,
         )
     return latest
+
+
+WIFI_PRIORITY_EPISODE_PHASES = {
+    "inactive",
+    "acquiring",
+    "open",
+    "closing",
+    "restoring",
+    "poisoned",
+}
+WIFI_ROOT_PRIORITY_PHASES = {
+    "inactive",
+    "boost-bus",
+    "boost-primary",
+    "ready-to-issue",
+    "grant-required",
+    "granted",
+    "committed",
+    "issued",
+    "restore-primary",
+    "restore-bus",
+    "ready-to-complete",
+    "poisoned",
+    "unavailable",
+}
+CYW43_SDIO_PRIORITY_MASK = 0x03
+
+
+def summarize_wifi_priority_episode(
+    events: Iterable[TraceEvent],
+) -> WifiPriorityEpisodeSummary:
+    """Return current and first-pre-fence CYW43 scheduling evidence.
+
+    Each telemetry scope has a separate owner. A malformed later line cannot
+    erase an earlier well-formed record, and these passive facts never advance
+    or demote a WiFi gate.
+    """
+
+    summary = WifiPriorityEpisodeSummary()
+    for event in events:
+        fields = event.fields
+        raw = event.raw.lower()
+        if raw.startswith("wifi: priority_episode scope=current "):
+            phase = field_lower(event, "phase")
+            pair_epoch = parse_hex_int(fields.get("pair_epoch"))
+            mask = parse_hex_int(fields.get("mask"))
+            if (
+                fields.get("scope") == "current"
+                and phase in WIFI_PRIORITY_EPISODE_PHASES
+                and pair_epoch is not None
+                and 0 <= pair_epoch <= U32_MAX
+                and mask is not None
+                and 0 <= mask <= CYW43_SDIO_PRIORITY_MASK
+            ):
+                summary = replace(
+                    summary,
+                    episode_scope="current",
+                    episode_phase=phase,
+                    episode_pair_epoch=pair_epoch,
+                    episode_mask=mask,
+                )
+            continue
+        if raw.startswith(
+            "wifi: priority_episode_counts scope=boot-cumulative "
+        ):
+            values = tuple(
+                parse_hex_int(fields.get(key))
+                for key in ("opens", "closes", "restores", "amortized_requests")
+            )
+            if (
+                fields.get("scope") == "boot-cumulative"
+                and all(value is not None and value >= 0 for value in values)
+            ):
+                opens, closes, restores, amortized_requests = values
+                summary = replace(
+                    summary,
+                    counts_scope="boot-cumulative",
+                    opens=opens or 0,
+                    closes=closes or 0,
+                    restores=restores or 0,
+                    amortized_requests=amortized_requests or 0,
+                )
+            continue
+        if raw.startswith(
+            "wifi: priority_episode_faults scope=boot-cumulative "
+        ):
+            failures = parse_hex_int(fields.get("failures"))
+            recovery_revocations = parse_hex_int(fields.get("recovery_revocations"))
+            if (
+                fields.get("scope") == "boot-cumulative"
+                and failures is not None
+                and failures >= 0
+                and recovery_revocations is not None
+                and recovery_revocations >= 0
+            ):
+                summary = replace(
+                    summary,
+                    faults_scope="boot-cumulative",
+                    failures=failures,
+                    recovery_revocations=recovery_revocations,
+                )
+            continue
+        if not raw.startswith(
+            "wifi: deferred_recovery scheduler scope=first-pre-fence "
+        ):
+            continue
+        outer = fields.get("outer", "").split("/")
+        root = fields.get("root", "").split("/")
+        if len(outer) != 3 or len(root) != 5:
+            continue
+        outer_pair_epoch = parse_hex_int(outer[1])
+        outer_mask = parse_hex_int(outer[2])
+        root_mask = parse_hex_int(root[2])
+        root_request = parse_hex_int(root[3])
+        root_generation = parse_hex_int(root[4])
+        root_command_sequence = parse_hex_int(fields.get("command_sequence"))
+        root_active = root[0].lower()
+        root_doorbell_issued = field_lower(event, "doorbell_issued")
+        numeric_values = (
+            outer_pair_epoch,
+            outer_mask,
+            root_mask,
+            root_request,
+            root_generation,
+            root_command_sequence,
+        )
+        if (
+            fields.get("scope") != "first-pre-fence"
+            or outer[0].lower() not in WIFI_PRIORITY_EPISODE_PHASES
+            or root_active not in {"yes", "no"}
+            or root[1].lower() not in WIFI_ROOT_PRIORITY_PHASES
+            or root_doorbell_issued not in {"yes", "no"}
+            or not all(
+                value is not None and 0 <= value <= U32_MAX
+                for value in numeric_values
+            )
+            or outer_mask > CYW43_SDIO_PRIORITY_MASK
+            or root_mask > CYW43_SDIO_PRIORITY_MASK
+        ):
+            continue
+        summary = replace(
+            summary,
+            scheduler_scope="first-pre-fence",
+            scheduler_outer_phase=outer[0].lower(),
+            scheduler_outer_pair_epoch=outer_pair_epoch or 0,
+            scheduler_outer_mask=outer_mask or 0,
+            scheduler_root_active=root_active,
+            scheduler_root_phase=root[1].lower(),
+            scheduler_root_mask=root_mask or 0,
+            scheduler_root_request=root_request or 0,
+            scheduler_root_generation=root_generation or 0,
+            scheduler_root_command_sequence=root_command_sequence or 0,
+            scheduler_root_doorbell_issued=root_doorbell_issued,
+        )
+    return summary
 
 
 WIFI_RX_IRQ_PRESERVE_REASONS = {
@@ -13610,7 +13897,11 @@ def summarize_cyw43_bootstrap_supervisor(
             continue
 
         if status == "backoff":
-            mark_blocker("outer-backoff-forbidden")
+            # Outer backoff is the stronger explanation when an attempt had
+            # not reached ready; retain any earlier independent ready-state
+            # violation such as duplicate publication.
+            if blocker in {None, "pre-ready-recovery-forbidden"}:
+                blocker = "outer-backoff-forbidden"
             state = "backoff"
             current_attempt = attempt
             continue
@@ -13981,6 +14272,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_service_eapol_m3,
         wifi_service_eapol_m4,
     ) = summarize_wifi_service_turn(event_list)
+    wifi_priority_episode = summarize_wifi_priority_episode(event_list)
     (
         wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason,
@@ -14683,6 +14975,55 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_service_eapol_m2=wifi_service_eapol_m2,
         wifi_service_eapol_m3=wifi_service_eapol_m3,
         wifi_service_eapol_m4=wifi_service_eapol_m4,
+        wifi_priority_episode_scope=wifi_priority_episode.episode_scope,
+        wifi_priority_episode_phase=wifi_priority_episode.episode_phase,
+        wifi_priority_episode_pair_epoch=wifi_priority_episode.episode_pair_epoch,
+        wifi_priority_episode_mask=wifi_priority_episode.episode_mask,
+        wifi_priority_episode_counts_scope=wifi_priority_episode.counts_scope,
+        wifi_priority_episode_faults_scope=wifi_priority_episode.faults_scope,
+        wifi_priority_episode_opens=wifi_priority_episode.opens,
+        wifi_priority_episode_closes=wifi_priority_episode.closes,
+        wifi_priority_episode_restores=wifi_priority_episode.restores,
+        wifi_priority_episode_amortized_requests=(
+            wifi_priority_episode.amortized_requests
+        ),
+        wifi_priority_episode_failures=wifi_priority_episode.failures,
+        wifi_priority_episode_recovery_revocations=(
+            wifi_priority_episode.recovery_revocations
+        ),
+        wifi_deferred_recovery_scheduler_scope=(
+            wifi_priority_episode.scheduler_scope
+        ),
+        wifi_deferred_recovery_scheduler_outer_phase=(
+            wifi_priority_episode.scheduler_outer_phase
+        ),
+        wifi_deferred_recovery_scheduler_outer_pair_epoch=(
+            wifi_priority_episode.scheduler_outer_pair_epoch
+        ),
+        wifi_deferred_recovery_scheduler_outer_mask=(
+            wifi_priority_episode.scheduler_outer_mask
+        ),
+        wifi_deferred_recovery_scheduler_root_active=(
+            wifi_priority_episode.scheduler_root_active
+        ),
+        wifi_deferred_recovery_scheduler_root_phase=(
+            wifi_priority_episode.scheduler_root_phase
+        ),
+        wifi_deferred_recovery_scheduler_root_mask=(
+            wifi_priority_episode.scheduler_root_mask
+        ),
+        wifi_deferred_recovery_scheduler_root_request=(
+            wifi_priority_episode.scheduler_root_request
+        ),
+        wifi_deferred_recovery_scheduler_root_generation=(
+            wifi_priority_episode.scheduler_root_generation
+        ),
+        wifi_deferred_recovery_scheduler_root_command_sequence=(
+            wifi_priority_episode.scheduler_root_command_sequence
+        ),
+        wifi_deferred_recovery_scheduler_root_doorbell_issued=(
+            wifi_priority_episode.scheduler_root_doorbell_issued
+        ),
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
         wifi_rx_irq_preserve_int=wifi_rx_irq_preserve_int,

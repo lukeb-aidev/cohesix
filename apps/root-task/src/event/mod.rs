@@ -210,9 +210,10 @@ fn format_cyw43_priority_lease_netstats(
     let active = if lease.active() { "yes" } else { "no" };
     let close_pending = if lease.close_pending() { "yes" } else { "no" };
     let state = format_message(format_args!(
-        "netstats: cyw43_priority_lease state={} pair_epoch={} active={} close_pending={}",
+        "netstats: cyw43_priority_lease state={} pair_epoch={} mask=0x{:02x} active={} close_pending={}",
         lease.phase.as_str(),
         lease.pair_epoch,
+        lease.mask,
         active,
         close_pending,
     ));
@@ -688,17 +689,6 @@ fn net_status_pre_root_serial_release_reason(status: &NetStatusReport) -> Option
         return Some("wired-address-ready");
     }
     net_status_terminal_failure_reason(status)
-}
-
-#[cfg(feature = "net-console")]
-/// Return the passive pre-poll signal for a CYW43 association-owner turn.
-///
-/// The priority lease must be decided before `NetStack::poll_with_budget`
-/// asks the association supervisor to claim the turn. `wifi-associating` is
-/// the as-built status throughout that pre-Join window, including the first
-/// turn that prepares the immutable op11 parent.
-fn net_status_cyw43_association_turn_pending(status: &NetStatusReport) -> bool {
-    status.active_interface == "wifi" && status.address_source == "wifi-associating"
 }
 
 #[cfg(feature = "net-console")]
@@ -3015,6 +3005,25 @@ const fn cyw43_network_drain_parent_should_park(
         && !resume.routed_work_allowed
 }
 
+/// Keep one already-open pair episode across an exact child's external wait.
+///
+/// The child is asleep on its generated notification/IRQ boundary, so keeping
+/// the scheduling reservations does not poll either runtime or consume CPU.
+/// CARD_INT, DMA completion, durable RX/DPC work, or the exact terminal makes
+/// `service_due` true and resumes the same episode. Closing here would split a
+/// terminal and its immediate requestless successor across two priority
+/// owners, forcing the successor back through request-bound scheduling.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+fn cyw43_network_open_parent_should_park(
+    lease_phase: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase,
+    resume: Cyw43NetworkResumeCondition,
+) -> bool {
+    lease_phase == crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Open
+        && resume.lifetime_continuation
+        && !resume.service_due
+        && !resume.routed_work_allowed
+}
+
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 const fn cyw43_network_drain_terminal_can_bypass_park(
     canonical_terminal: bool,
@@ -3692,6 +3701,15 @@ where
         self.linked_runtime_service_phase == LinkedRuntimeServicePhase::Network
     }
 
+    #[cfg(all(test, feature = "kernel", feature = "net-console"))]
+    pub(crate) fn test_set_physical_response_pending(&mut self, pending: bool) {
+        self.physical_response_barrier = if pending {
+            PhysicalResponseBarrier::AwaitingTail
+        } else {
+            PhysicalResponseBarrier::Idle
+        };
+    }
+
     /// Execute a single cooperative polling cycle.
     pub fn poll(&mut self) {
         self.reconcile_physical_response_barrier();
@@ -4015,6 +4033,27 @@ where
                     self.clear_linked_runtime_cyw43_scheduler_state();
                     self.cancel_linked_runtime_network_quantum();
                     return;
+                }
+                #[cfg(feature = "net-console")]
+                if cyw43_lane_selected {
+                    let lease_phase =
+                        crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase;
+                    if cyw43_network_open_parent_should_park(
+                        lease_phase,
+                        cyw43_network_resume_condition(),
+                    ) {
+                        // An exact sleeping child keeps the already-open pair
+                        // episode, but is never polled as policy work. This
+                        // check precedes ordinary operator-response routing so
+                        // serial, local-seat, and Dispatch can run without
+                        // turning their fairness cut into a lease close.
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_network_quantum_started_ms = None;
+                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.clear_linked_runtime_network_operator_checkpoint_clock();
+                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        return;
+                    }
                 }
                 #[cfg(feature = "net-console")]
                 if self.physical_console_response_pending()
@@ -4349,6 +4388,24 @@ where
                         .as_ref()
                         .is_some_and(|net| net.buffered_console_lines_pending());
                     let elapsed_us = self.linked_runtime_network_quantum_elapsed_us();
+                    let routed_service_due = self.linked_runtime_cyw43_priority_work_due();
+                    let resume = cyw43_network_resume_condition();
+                    if cyw43_network_open_parent_should_park(
+                        crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                        resume,
+                    ) {
+                        // Check the exact external wait before routing a
+                        // buffered command or physical response. Those owners
+                        // still receive their normal bounded rotation, but do
+                        // not close the sleeping child's pair episode.
+                        self.linked_runtime_network_consecutive_turns = 0;
+                        self.linked_runtime_network_quantum_started_ms = None;
+                        self.linked_runtime_network_quantum_started_ticks = 0;
+                        self.clear_linked_runtime_network_operator_checkpoint_clock();
+                        self.linked_runtime_service_phase =
+                            self.linked_runtime_network_followup_phase();
+                        return;
+                    }
                     if buffered_console_line {
                         // A complete command is root-owned work now. End the
                         // retained NIC burst and run the fixed physical
@@ -4360,8 +4417,6 @@ where
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
-                    let routed_service_due = self.linked_runtime_cyw43_priority_work_due();
-                    let resume = cyw43_network_resume_condition();
                     let service_due = cyw43_network_service_due(routed_service_due, resume);
                     if service_due
                         && self.linked_runtime_network_consecutive_turns
@@ -4459,6 +4514,32 @@ where
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     fn cancel_linked_runtime_network_quantum(&mut self) {
+        if !self.network_service_quarantined
+            && !self.reboot_pending
+            && self.linked_runtime_cyw43_lane_selected()
+            && cyw43_network_open_parent_should_park(
+                crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                cyw43_network_resume_condition(),
+            )
+        {
+            // Ordinary operator routing is not a Network-lifetime terminal.
+            // Keep the exact waiting pair reservations and rotate without
+            // calling the close path. Quarantine and reboot remain explicit
+            // destructive cuts and are excluded above.
+            if self.physical_console_response_pending()
+                || self
+                    .linked_physical_operator_work()
+                    .needs_operator_rotation()
+            {
+                self.require_linked_runtime_cyw43_operator_rotation();
+            }
+            self.linked_runtime_network_consecutive_turns = 0;
+            self.linked_runtime_network_quantum_started_ms = None;
+            self.linked_runtime_network_quantum_started_ticks = 0;
+            self.clear_linked_runtime_network_operator_checkpoint_clock();
+            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+            return;
+        }
         if self.network_service_quarantined || self.reboot_pending {
             self.clear_linked_runtime_cyw43_scheduler_state();
         } else if self.physical_console_response_pending()
@@ -4916,12 +4997,14 @@ where
             }
             let counters = net.stats();
             let status = net.status_report();
+            let association_turn_pending =
+                net.cyw43_association_runtime_turn_pending(self.now_ms);
             self.pending_net_flush.active()
                 || net.console_service_pending()
                 || net.icmp_echo_service_due(self.now_ms)
                 || counters.wifi_rx_runtime_queue_count != 0
                 || counters.wifi_rx_pending_queue_count != 0
-                || net_status_cyw43_association_turn_pending(&status)
+                || association_turn_pending
                 || net_status_needs_host_eapol_burst(&status)
                 || crate::drivers::driver_task_net::cyw43_steady_network_work_pending(
                     net.driver_task_contract(),
@@ -5295,13 +5378,14 @@ where
             self.cyw43_bootstrap_hdmi_progress
                 .observe(1, frontier, self.now_ms);
         }
-        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 5>::new();
+        let mut lines = HeaplessVec::<HeaplessString<DEFAULT_LINE_CAPACITY>, 6>::new();
         if let Some(recovery) = recovery {
             for line in [
                 Self::wifi_diag_deferred_recovery_line(recovery, live_generation),
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
                 Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
             ] {
                 if lines.push(line).is_err() {
                     return false;
@@ -14047,14 +14131,77 @@ where
         recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
         live_generation: u32,
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let refinement = if recovery.descriptor_op != 0 && recovery.ticket_id != 0 {
+            "exact-owner"
+        } else if recovery.descriptor_op != 0
+            || recovery.ticket_id != 0
+            || recovery.completion_sequence != 0
+        {
+            "owner-context"
+        } else {
+            "pair-placeholder"
+        };
         format_message(format_args!(
-            "wifi: deferred_recovery retained=yes refinement=exact-owner logical_terminal_observed={} cause={} subphase={} gate={} current={} live_generation={}",
+            "wifi: deferred_recovery retained=yes refinement={} logical_terminal_observed={} cause={} subphase={} gate={} current={} live_generation={}",
+            refinement,
             Self::yes_no(recovery.terminal_observed),
             recovery.cause,
             recovery.subphase,
             recovery.gate,
             Self::yes_no(recovery.generation == live_generation),
             live_generation,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_priority_episode_line(
+        lease: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: priority_episode scope=current phase={} pair_epoch={} mask=0x{:02x}",
+            lease.phase.as_str(),
+            lease.pair_epoch,
+            lease.mask,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_priority_episode_count_lines(
+        lease: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot,
+    ) -> (
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+    ) {
+        (
+            format_message(format_args!(
+                "wifi: priority_episode_counts scope=boot-cumulative opens={} closes={} restores={} amortized_requests={}",
+                lease.opens, lease.closes, lease.restores, lease.amortized_requests,
+            )),
+            format_message(format_args!(
+                "wifi: priority_episode_faults scope=boot-cumulative failures={} recovery_revocations={}",
+                lease.failures, lease.recovery_revocations,
+            )),
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_deferred_recovery_scheduler_line(
+        recovery: crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        let scheduler = recovery.scheduler;
+        format_message(format_args!(
+            "wifi: deferred_recovery scheduler scope={} outer={}/{}/0x{:02x} root={}/{}/0x{:02x}/{}/{} command_sequence={} doorbell_issued={}",
+            scheduler.scope,
+            scheduler.outer_phase,
+            scheduler.outer_pair_epoch,
+            scheduler.outer_priority_mask,
+            Self::yes_no(scheduler.root_active),
+            scheduler.root_phase,
+            scheduler.root_priority_mask,
+            scheduler.root_request,
+            scheduler.root_generation,
+            scheduler.root_command_sequence,
+            Self::yes_no(scheduler.root_doorbell_issued),
         ))
     }
 
@@ -14406,9 +14553,12 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn wifi_diag_root_grant_line(
+    fn wifi_diag_root_grant_lines(
         grant: crate::hal::driver_task::DriverTaskRetainedGrantSnapshot,
-    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+    ) -> (
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+    ) {
         let state = if !grant.active {
             "idle"
         } else if Self::wifi_root_grant_prepared(grant) {
@@ -14421,20 +14571,28 @@ where
         } else {
             Self::yes_no(grant.exact)
         };
-        format_message(format_args!(
-            "wifi: root grant state={} active={} phase={} request={} generation={} sequence_published={} notify_bound={} producer={} shared={} consumed={} exact={}",
+        let sequence_published = grant.request != 0 && grant.command_sequence == grant.request;
+        let state = format_message(format_args!(
+            "wifi: root grant state={} active={} phase={} mask=0x{:02x} request={} generation={} command_sequence={} sequence_published={} doorbell_issued={}",
             state,
             Self::yes_no(grant.active),
             grant.phase_name,
+            grant.priority_mask,
             grant.request,
             grant.generation,
+            grant.command_sequence,
+            Self::yes_no(sequence_published),
             Self::yes_no(grant.sequence_issued),
+        ));
+        let identity = format_message(format_args!(
+            "wifi: root grant_ids notify_bound={} producer={} shared={} consumed={} exact={}",
             Self::yes_no(grant.root_notification_bound),
             grant.producer_grant_id,
             grant.shared_grant_id,
             grant.consumed_grant_id,
             exact,
-        ))
+        ));
+        (state, identity)
     }
 
     #[cfg(feature = "kernel")]
@@ -14525,6 +14683,13 @@ where
         }
         let live_net_frontier = self.wifi_live_net_frontier();
         let gate8 = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
+        let priority_episode =
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
+        self.emit_console_line(Self::wifi_diag_priority_episode_line(priority_episode).as_str());
+        let (priority_episode_counts, priority_episode_faults) =
+            Self::wifi_diag_priority_episode_count_lines(priority_episode);
+        self.emit_console_line(priority_episode_counts.as_str());
+        self.emit_console_line(priority_episode_faults.as_str());
         let pair_recovery_active = crate::drivers::driver_task_net::cyw43_recovery_required();
         let gate8_frontier = gate8
             .subgates
@@ -14755,6 +14920,7 @@ where
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
                 Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -14763,8 +14929,9 @@ where
         if let Some(grant) = crate::hal::driver_task::driver_task_retained_grant_snapshot(
             crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
         ) {
-            let detail = Self::wifi_diag_root_grant_line(grant);
-            self.emit_console_line(detail.as_str());
+            let (state, identity) = Self::wifi_diag_root_grant_lines(grant);
+            self.emit_console_line(state.as_str());
+            self.emit_console_line(identity.as_str());
         }
         if let Some(parent) = crate::hal::driver_task::cyw43_steady_service_parent_diagnostic() {
             let detail = Self::wifi_diag_finite_parent_line(parent);
@@ -14971,6 +15138,18 @@ where
             None
         } else {
             sdio_progress_gate
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_driver_task_gate_with_clock_evidence(
+        reported_gate: Option<u8>,
+        linked_clock_snapshot_blocked: bool,
+    ) -> Option<u8> {
+        match reported_gate {
+            Some(gate) if gate < 4 => Some(gate),
+            _ if linked_clock_snapshot_blocked => Some(4),
+            gate => gate,
         }
     }
 
@@ -15779,6 +15958,7 @@ where
                 Self::wifi_diag_deferred_recovery_identity_line(recovery),
                 Self::wifi_diag_deferred_recovery_completion_line(recovery),
                 Self::wifi_diag_deferred_recovery_descriptor_line(recovery),
+                Self::wifi_diag_deferred_recovery_scheduler_line(recovery),
             ] {
                 self.emit_console_line(detail.as_str());
             }
@@ -16008,11 +16188,10 @@ where
         let linked_clock_snapshot_blocked = linked_sdio_clock_required
             && !linked_sdio_clock_ready
             && !retained_exact_gate8_terminal;
-        let driver_task_gate = match reported_driver_task_gate {
-            Some(gate) if gate < 4 => Some(gate),
-            _ if linked_clock_snapshot_blocked => Some(4),
-            gate => gate,
-        };
+        let driver_task_gate = Self::wifi_driver_task_gate_with_clock_evidence(
+            reported_driver_task_gate,
+            linked_clock_snapshot_blocked,
+        );
         let direct_gate8_terminal = cyw43_fault_gate == Some(8) || sdio_replay_gate == Some(8);
         let live_net_channel_ready = live_net_supersedes_runtime;
         let firmware_ready = fault.is_some_and(Self::wifi_runtime_fault_implies_firmware_ready);
@@ -22526,27 +22705,74 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn cyw43_priority_lease_netstats_remain_parseable_at_maximum_counters() {
-        let (state, counts) = format_cyw43_priority_lease_netstats(
-            crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot {
-                phase: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Restoring,
-                pair_epoch: u32::MAX,
-                opens: usize::MAX,
-                closes: usize::MAX,
-                restores: usize::MAX,
-                recovery_revocations: usize::MAX,
-                amortized_requests: usize::MAX,
-                failures: usize::MAX,
-            },
-        );
+        let lease = crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseSnapshot {
+            phase: crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Restoring,
+            pair_epoch: u32::MAX,
+            mask: 3,
+            opens: usize::MAX,
+            closes: usize::MAX,
+            restores: usize::MAX,
+            recovery_revocations: usize::MAX,
+            amortized_requests: usize::MAX,
+            failures: usize::MAX,
+        };
+        let (state, counts) = format_cyw43_priority_lease_netstats(lease);
 
         assert!(!state.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{state}");
         assert!(!counts.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{counts}");
         assert_eq!(
             state.as_str(),
-            "netstats: cyw43_priority_lease state=restoring pair_epoch=4294967295 active=yes close_pending=yes"
+            "netstats: cyw43_priority_lease state=restoring pair_epoch=4294967295 mask=0x03 active=yes close_pending=yes"
         );
         assert!(counts.starts_with("netstats: cyw43_priority_lease_counts opens="));
         assert!(counts.ends_with(&format!(" failures={}", usize::MAX)));
+        let episode = KernelConsoleTestPump::wifi_diag_priority_episode_line(lease);
+        let (episode_counts, episode_faults) =
+            KernelConsoleTestPump::wifi_diag_priority_episode_count_lines(lease);
+        assert!(!episode.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{episode}");
+        assert!(
+            !episode_counts.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{episode_counts}"
+        );
+        assert!(
+            !episode_faults.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{episode_faults}"
+        );
+        assert_eq!(
+            episode.as_str(),
+            "wifi: priority_episode scope=current phase=restoring pair_epoch=4294967295 mask=0x03"
+        );
+        assert!(episode_counts
+            .starts_with("wifi: priority_episode_counts scope=boot-cumulative opens="));
+        assert!(episode_counts.ends_with(&format!(" amortized_requests={}", usize::MAX)));
+        assert!(episode_faults
+            .starts_with("wifi: priority_episode_faults scope=boot-cumulative failures="));
+        assert!(episode_faults.ends_with(&format!(" recovery_revocations={}", usize::MAX)));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn missing_clock_caps_untyped_gate_but_not_exact_retained_receipt() {
+        assert_eq!(
+            KernelConsoleTestPump::wifi_driver_task_gate_with_clock_evidence(Some(8), true),
+            Some(4),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_driver_task_gate_with_clock_evidence(Some(10), true),
+            Some(4),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_driver_task_gate_with_clock_evidence(Some(8), false),
+            Some(8),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_driver_task_gate_with_clock_evidence(Some(7), true),
+            Some(4),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_driver_task_gate_with_clock_evidence(Some(3), true),
+            Some(3),
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -25739,6 +25965,19 @@ mod tests {
             terminal_observed: true,
             turn_id: u64::MAX,
             gate: 8,
+            scheduler: crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic {
+                scope: "first-pre-fence",
+                outer_phase: "restoring",
+                outer_pair_epoch: u32::MAX,
+                outer_priority_mask: usize::MAX,
+                root_active: true,
+                root_phase: "ready-to-complete",
+                root_priority_mask: usize::MAX,
+                root_request: u32::MAX,
+                root_generation: u32::MAX,
+                root_command_sequence: u32::MAX,
+                root_doorbell_issued: true,
+            },
         };
         let owner = crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic {
             generation: 1,
@@ -25870,6 +26109,7 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(Some(owner)),
             KernelConsoleTestPump::wifi_diag_terminal_drain_physical_line(terminal),
             KernelConsoleTestPump::wifi_diag_terminal_drain_completion_line(terminal),
@@ -25900,10 +26140,10 @@ mod tests {
         assert!(lines[5].contains(
             "request=4294967295 issued=yes accepted=yes finite_tx=yes join_tx_committed=yes"
         ));
-        assert!(lines[16].contains(
+        assert!(lines[17].contains(
             "scope=boot-first present=yes generation=4294967295 pair_epoch=18446744073709551615 source_stage=cyw43-runtime-event-frame"
         ));
-        assert!(lines[17].contains(
+        assert!(lines[18].contains(
             "type=0xff status=0xffffffff reason=0xffffffff auth_type=0xffffffff join_request=4294967295 join_issued=yes join_accepted=yes join_tx_committed=yes"
         ));
         assert!(lines[6].contains(
@@ -25911,6 +26151,28 @@ mod tests {
         ));
         assert!(lines[6].contains("subphase=cyw43-host-eapol-control-poll gate=8"));
         assert!(lines[6].contains("current=no live_generation=3"));
+        let mut placeholder = recovery;
+        placeholder.cause = "pair-signal";
+        placeholder.subphase = "cyw43-pair-recovery-signalled";
+        placeholder.descriptor_op = 0;
+        placeholder.ticket_id = 0;
+        placeholder.completion_sequence = 0;
+        placeholder.terminal_observed = false;
+        let placeholder_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(placeholder, 3);
+        assert!(placeholder_line.contains(
+            "refinement=pair-placeholder logical_terminal_observed=no cause=pair-signal"
+        ));
+        let mut owner_context = placeholder;
+        owner_context.descriptor_op = pi4_driver_abi::DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE;
+        let owner_context_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(owner_context, 3);
+        assert!(owner_context_line.contains("refinement=owner-context"));
+        let mut ticket_context = placeholder;
+        ticket_context.ticket_id = 11;
+        let ticket_context_line =
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_line(ticket_context, 3);
+        assert!(ticket_context_line.contains("refinement=owner-context"));
         assert!(lines[7].contains("ticket=18446744073709551615"));
         assert!(lines[7].contains("completion_detail=0xffff"));
         assert!(lines[7].contains("completion_result=0xffffffff"));
@@ -25971,10 +26233,15 @@ mod tests {
             "sdio-generation-commit-admission",
         );
         assert!(lines[9].contains("descriptor op=0xffff flags=0xffff"));
-        assert!(lines[10].contains("active=yes generation=1"));
-        assert!(lines[10].contains("cmd=0x0000001a id=37"));
-        assert!(lines[12].contains("code=5 code_name=fault"));
-        assert!(lines[12].contains("detail=0x0001 detail_name=rejected-command"));
+        assert!(lines[10]
+            .contains("scope=first-pre-fence outer=restoring/4294967295/0xffffffffffffffff"));
+        assert!(lines[10]
+            .contains("root=yes/ready-to-complete/0xffffffffffffffff/4294967295/4294967295"));
+        assert!(lines[10].ends_with("command_sequence=4294967295 doorbell_issued=yes"));
+        assert!(lines[11].contains("active=yes generation=1"));
+        assert!(lines[11].contains("cmd=0x0000001a id=37"));
+        assert!(lines[13].contains("code=5 code_name=fault"));
+        assert!(lines[13].contains("detail=0x0001 detail_name=rejected-command"));
         for (result, expected) in [
             (0x5344_0001, "sdio-intake-seal-busy"),
             (0x5344_0002, "sdio-intake-seal-missing"),
@@ -26023,14 +26290,14 @@ mod tests {
             control_fault_line.contains("detail=0x530b detail_name=cyw43-control-exchange"),
             "{control_fault_line}",
         );
-        assert!(lines[13].contains("offset=0 len=0"));
-        assert!(lines[14].contains("terminal=no owner_conflict=yes"));
-        assert!(lines[14].contains("owner_scope=root-logical-capture"));
-        assert!(lines[14].contains("owner_cmd=0x0000001a owner_id=37"));
-        assert!(lines[15].contains(
+        assert!(lines[14].contains("offset=0 len=0"));
+        assert!(lines[15].contains("terminal=no owner_conflict=yes"));
+        assert!(lines[15].contains("owner_scope=root-logical-capture"));
+        assert!(lines[15].contains("owner_cmd=0x0000001a owner_id=37"));
+        assert!(lines[16].contains(
             "service_turns=4294967295 join_starts=4294967295 control_progress=ordinary-network-turn"
         ));
-        assert!(lines[11].contains("completion_sequence=3907 exact_request_match=yes"));
+        assert!(lines[12].contains("completion_sequence=3907 exact_request_match=yes"));
         assert_eq!(
             KernelConsoleTestPump::wifi_diag_logical_control_owner_line(None).as_str(),
             "wifi: logical_control_owner active=no",
@@ -26050,12 +26317,14 @@ mod tests {
             KernelConsoleTestPump::wifi_deferred_recovery_next_action(pair_signal),
             "recover-pair-signal-with-retained-association-parent"
         );
-        let grant = KernelConsoleTestPump::wifi_diag_root_grant_line(
+        let (grant, grant_ids) = KernelConsoleTestPump::wifi_diag_root_grant_lines(
             crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
                 active: true,
                 phase_name: "grant-required",
+                priority_mask: 3,
                 request: u32::MAX,
                 generation: u32::MAX,
+                command_sequence: u32::MAX,
                 sequence_issued: true,
                 root_notification_bound: true,
                 producer_grant_id: u32::MAX,
@@ -26066,18 +26335,27 @@ mod tests {
         );
         assert!(!grant.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{grant}");
         assert!(
+            !grant_ids.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{grant_ids}"
+        );
+        assert!(
             grant.contains(
-                "state=grant-required active=yes phase=grant-required request=4294967295 generation=4294967295 sequence_published=yes"
+                "state=grant-required active=yes phase=grant-required mask=0x03 request=4294967295 generation=4294967295 command_sequence=4294967295 sequence_published=yes doorbell_issued=yes"
             ),
             "{grant}"
         );
-        assert!(grant.ends_with("consumed=4294967295 exact=yes"), "{grant}");
-        let prepared = KernelConsoleTestPump::wifi_diag_root_grant_line(
+        assert!(
+            grant_ids.ends_with("consumed=4294967295 exact=yes"),
+            "{grant_ids}"
+        );
+        let (prepared, prepared_ids) = KernelConsoleTestPump::wifi_diag_root_grant_lines(
             crate::hal::driver_task::DriverTaskRetainedGrantSnapshot {
                 active: true,
                 phase_name: "inactive",
+                priority_mask: 0,
                 request: 320,
                 generation: 1,
+                command_sequence: 0,
                 sequence_issued: false,
                 root_notification_bound: true,
                 producer_grant_id: 0,
@@ -26090,7 +26368,10 @@ mod tests {
             prepared.contains("state=prepared-root-continuation active=yes phase=inactive"),
             "{prepared}"
         );
-        assert!(prepared.ends_with("exact=not-published"), "{prepared}");
+        assert!(
+            prepared_ids.ends_with("exact=not-published"),
+            "{prepared_ids}"
+        );
         let finite_parent = KernelConsoleTestPump::wifi_diag_finite_parent_line(
             crate::hal::driver_task::Cyw43SteadyServiceParentDiagnostic {
                 request: 1923,
@@ -26722,6 +27003,8 @@ mod tests {
             terminal_observed: true,
             turn_id: 17_352,
             gate: 8,
+            scheduler:
+                crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic::empty(),
         };
         assert!(
             KernelConsoleTestPump::wifi_retained_exact_gate8_terminal(true, Some(recovery)),
@@ -26796,6 +27079,8 @@ mod tests {
             terminal_observed: true,
             turn_id: 17_352,
             gate: 8,
+            scheduler:
+                crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic::empty(),
         };
         let render = |cut| {
             crate::drivers::driver_task_net::set_cyw43_canonical_parent_cut_test_override(Some(
@@ -27023,6 +27308,8 @@ mod tests {
         authenticated_conn_id: Option<u64>,
         console_service_pending: bool,
         icmp_echo_due: bool,
+        cyw43_association_turn_pending: bool,
+        expect_cyw43_priority_lease_open_on_poll: bool,
         console_output_drained: bool,
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
@@ -27057,6 +27344,8 @@ mod tests {
                 authenticated_conn_id: None,
                 console_service_pending: false,
                 icmp_echo_due: false,
+                cyw43_association_turn_pending: false,
+                expect_cyw43_priority_lease_open_on_poll: false,
                 console_output_drained: true,
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
@@ -27068,6 +27357,13 @@ mod tests {
     #[cfg(feature = "net-console")]
     impl NetPoller for FakeNet {
         fn poll(&mut self, _now_ms: u64) -> bool {
+            if self.expect_cyw43_priority_lease_open_on_poll {
+                assert_eq!(
+                    crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+                    crate::hal::driver_task::Cyw43SdioNetworkPriorityLeasePhase::Open,
+                    "EventPump must open the physical pair episode before NetStack can claim association",
+                );
+            }
             self.polls = self.polls.saturating_add(1);
             if self
                 .tcp_ready_after_polls
@@ -27207,6 +27503,10 @@ mod tests {
 
         fn icmp_echo_service_due(&self, _now_ms: u64) -> bool {
             self.icmp_echo_due
+        }
+
+        fn cyw43_association_runtime_turn_pending(&self, _now_ms: u64) -> bool {
+            self.cyw43_association_turn_pending
         }
 
         fn console_listener_ready(&self) -> bool {
@@ -29733,7 +30033,7 @@ mod tests {
         #[cfg(feature = "kernel")]
         assert!(
             rendered.contains(
-                "netstats: cyw43_priority_lease state=inactive pair_epoch=0 active=no close_pending=no"
+                "netstats: cyw43_priority_lease state=inactive pair_epoch=0 mask=0x00 active=no close_pending=no"
             ),
             "{rendered}"
         );
@@ -32581,6 +32881,8 @@ mod tests {
             terminal_observed: true,
             turn_id: 701,
             gate: 8,
+            scheduler:
+                crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic::empty(),
         };
         crate::drivers::driver_task_net::test_record_cyw43_deferred_recovery_diagnostic(recovery);
 
@@ -32604,17 +32906,18 @@ mod tests {
             KernelConsoleTestPump::wifi_diag_deferred_recovery_identity_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_completion_line(recovery),
             KernelConsoleTestPump::wifi_diag_deferred_recovery_descriptor_line(recovery),
+            KernelConsoleTestPump::wifi_diag_deferred_recovery_scheduler_line(recovery),
         ];
         let retained: Vec<&str> = pump
             .pending_cyw43_bootstrap_serial_milestones
             .iter()
             .map(|line| line.as_str())
             .collect();
-        assert_eq!(retained.len(), 5);
-        for (actual, expected) in retained.iter().take(4).zip(expected.iter()) {
+        assert_eq!(retained.len(), 6);
+        for (actual, expected) in retained.iter().take(5).zip(expected.iter()) {
             assert_eq!(*actual, expected.as_str());
         }
-        assert_eq!(retained[4], pair_recovery);
+        assert_eq!(retained[5], pair_recovery);
 
         // Model the next PoisonGeneration teardown after the output
         // transaction is already retained. The causal snapshot and its queued
@@ -32698,6 +33001,9 @@ mod tests {
                 terminal_observed: true,
                 turn_id: 701,
                 gate: 8,
+                scheduler:
+                    crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic::empty(
+                    ),
             },
         );
         crate::drivers::driver_task_net::test_record_cyw43_terminal_drain_diagnostic(
@@ -34805,8 +35111,12 @@ mod tests {
         wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
         wifi.status.active_driver = "cyw43";
         wifi.status.active_interface = "wifi";
-        wifi.status.address_source = "wifi-associating";
-        wifi.status.dhcp_phase = "associating";
+        wifi.status.address_source = "driver-task-ring-client";
+        wifi.status.dhcp_phase = "deferred";
+        wifi.cyw43_association_turn_pending = true;
+        wifi.expect_cyw43_priority_lease_open_on_poll = true;
+        let _priority_model =
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::enable();
 
         let mut pump =
             EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut wifi);
@@ -34821,7 +35131,7 @@ mod tests {
         assert_eq!(pump.linked_runtime_network_consecutive_turns, 0);
         assert!(
             pump.linked_runtime_cyw43_network_burst_due(),
-            "the first association owner turn must open the CYW43 priority lane before preparing Join"
+            "the exact association claim must preopen the CYW43 priority lane even when presentation status is stale"
         );
         assert!(
             pump.linked_runtime_cyw43_priority_work_due(),
@@ -34838,6 +35148,45 @@ mod tests {
             pump.linked_runtime_service_phase,
             LinkedRuntimeServicePhase::Network,
             "Serial must hand the healthy lifetime directly to the durable association owner"
+        );
+        pump.poll_with_linked_serial_runtime();
+        drop(pump);
+        assert_eq!(
+            wifi.polls, 1,
+            "the exact association claim must reach one Network poll under the open pair lease",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn rendered_wifi_associating_status_cannot_replace_the_exact_claim() {
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::drivers::driver_task_net::set_cyw43_service_work_snapshot_test_override(Some(
+            crate::drivers::driver_task_net::Cyw43ServiceWorkSnapshot::for_test(72, 18, 1, 0),
+        ));
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let mut audit = AuditLog::new();
+        let mut wifi = FakeNet::new();
+        wifi.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        wifi.status.active_driver = "cyw43";
+        wifi.status.active_interface = "wifi";
+        wifi.status.address_source = "wifi-associating";
+        wifi.status.dhcp_phase = "deferred";
+        wifi.cyw43_association_turn_pending = false;
+
+        let pump = EventPump::new(
+            serial,
+            TestTimer::repeated(2, 1),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        )
+        .with_network(&mut wifi);
+        assert!(
+            !pump.linked_runtime_cyw43_network_burst_due(),
+            "rendered association status is presentation only and cannot open the hardware lane",
         );
     }
 

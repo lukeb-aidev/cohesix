@@ -1338,6 +1338,9 @@ retry, or linked-runtime snapshot path:
 
 ```text
 wifi: association scheduler service_turns=<n> join_starts=<n> control_progress=ordinary-network-turn
+wifi: priority_episode scope=current phase=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> mask=0x<mask>
+wifi: priority_episode_counts scope=boot-cumulative opens=<n> closes=<n> restores=<n> amortized_requests=<n>
+wifi: priority_episode_faults scope=boot-cumulative failures=<n> recovery_revocations=<n>
 wifi: host_eapol work_pending=<yes|no> blocker=<none|deferred-reauth|prompt-poll|pending-event|queued-eapol|tx-submit|key-install|bssid-obligation> generation=<n> open_network=<yes|no> causal_continuation=<yes|no>
 wifi: host_eapol detail deferred_reauth=<yes|no> prompt_poll=<yes|no> pending_events=<n> pending_eapol=<n> tx_submit=<yes|no> key_install=<yes|no> bssid_obligation=<yes|no>
 wifi: data_handoff generation=<n> committed=<yes|no> commit_token=<t> baseline_token=<t> baseline_generation=<n> queue=<used>/50 high_water=<n>
@@ -1352,7 +1355,16 @@ wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
+wifi: root grant state=<state> active=<yes|no> phase=<phase> mask=0x<mask> request=<n> generation=<n> command_sequence=<n> sequence_published=<yes|no> doorbell_issued=<yes|no>
+wifi: root grant_ids notify_bound=<yes|no> producer=<n> shared=<n> consumed=<n> exact=<yes|no|not-published>
 ```
+
+The current, transition-count, and fault records are independent observations.
+The normalizer reports `WIFI_PRIORITY_EPISODE_COUNTS_SCOPE` and
+`WIFI_PRIORITY_EPISODE_FAULTS_SCOPE` separately; an absent record is
+`scope=none`, not an observed zero. The retained scheduler tuple is latched
+sequence-last by HAL immediately before the first outer-lease poison or sticky
+pair-restart mutation, then preserved by driver-layer cause refinement.
 
 The queue and batch records report only stable committed state. The passive
 command never consumes a notification, so its hint record is invariantly
@@ -1534,15 +1546,21 @@ generation and XID.
   identifies deterministic private work; each immutable hardware request
   remains single-issue.
 
-  The first Join can be discovered only after EventPump has sampled whether
-  that outer lease is actionable. If it therefore enters HAL with the outer
-  lease inactive, exact op11 uses the same request-bound reservations already
-  owned by the retained command state machine. Without returning to EventPump,
-  that one producer call reserves and boosts SDIO, reserves and boosts CYW43,
-  reaches `CommitRing`, moves to `Issued`, and emits its sole signal. This is
-  request-bound preissue completion, not another issuer or physical lane.
-  `PublishGrant`, `PollRing`, terminal consumption, and priority restoration
-  are excluded from that bounded preissue call.
+  EventPump evaluates the same side-effect-free association-owner predicate
+  that NetStack uses and opens the generation-bound CYW43/SDIO pair lease
+  before the first association poll can allocate Join. Admission therefore
+  does not depend on the rendered network-status string. The production Join
+  crosses `Stage`, sequence-last `CommitRing`, `Issued`, and its sole signal
+  under that already-open outer lease; ordinary association does not use
+  request-bound boost/restore as its scheduling path.
+
+  Before the exact wait receipt, the parent keeps the Network quantum
+  actionable. After that receipt proves the generated external wait,
+  EventPump masks the sleeping child and performs no CYW43 or SDIO poll, but
+  retains the outer lease in `Open` with both pair reservations intact. A
+  durable CARD_INT, DMA completion, DPC/RX level, or exact terminal resumes the
+  same episode. Only semantic terminal retirement or an explicit
+  `Closing`/recovery fence restores CYW43 then SDIO and releases the lease.
 
   Quantum close first changes the lease to `Closing`, which fences every fresh
   pair parent. An exact already-`Prepared` or already-`Issued` CYW43 parent may
@@ -1590,30 +1608,52 @@ generation and XID.
   generation zero nor a nonzero logical generation is ever compared with, or
   rewritten into, the physical epoch. A changed parent identity or a stale
   physical ring epoch rejects before child issue. `Stage` remains invisible to
-  the child. For exact persistent op11, the same admitted producer call first
-  completes any required request-bound `SDIO boost -> CYW43 boost`, then refreshes
+  the child. For exact persistent op11, the admitted producer call refreshes
   and cleans the complete body/payload, executes the barrier, commits the
   nonzero command sequence last, moves the retained request to `Issued`, and
-  signals the reserved-root-badge notification exactly once. An already-open
-  outer pair lease makes both boosts unnecessary but changes no other identity.
-  Other retained
+  signals the reserved-root-badge notification exactly once. The ordinary
+  association Join must already be covered by EventPump's outer pair episode.
+  On the physical profile after both peers enter steady priority, HAL rejects
+  every persistent op11 presented with an inactive outer episode before active
+  slot, request sequence, grant, doorbell, signal, or ring state can change;
+  the sole pair-recovery lane records that scheduling-contract violation.
+  Cold bootstrap/replay with both peers still in `Bootstrap` uses the same
+  persistent identity with priority mask zero because its declared priority-255
+  envelope is already active.
+  Request-bound preissue remains available only to the intake-sealed,
+  current-generation EAPOL-Key M2, M4, and group-key finite-op7 class when it
+  arrives without the steady outer lease. Other retained
   transaction classes keep their declared phase-separated Stage contract. The
   committed command and sealed private cursor
   then authorize the complete control exchange. A `Pending` completion poll
   retains `Issued` and schedules no `PublishGrant`, replacement grant,
   `NotifyRing`, re-signal, or endpoint send. Only the exact terminal or typed
   fault containment closes the parent. A stable terminal remains the same exact
-  canonical parent while the request-bound state machine restores CYW43, then
-  SDIO, then reaches `ReadyToComplete`, one bounded later turn at a time; these
+  canonical parent while the owning outer pair episode, or that named finite
+  urgent-op7 request-bound state, restores
+  CYW43, then SDIO, then reaches `ReadyToComplete`, one bounded later turn at a
+  time; these
   restore phases cannot mint a signal, grant, request, or completion poll.
   Sideband ACK admission remains `Issued`-only and rejects every restore phase.
   Thus the sequence
-  `Stage -> optional bounded pair boosts -> sequence-last commit -> one notification -> Issued -> terminal -> bounded restore`
+  `Stage -> scheduling coverage -> sequence-last commit -> one notification -> Issued -> terminal -> bounded restore`
   contains no recurrent root scheduling edge. Root samples one non-renewable
   30-second CNTVCT parent deadline from the issue commit. After expiry it
   stable-reads the exact terminal twice; a matching sequence wins, while a
   stable miss enters the existing coordinated pair recovery without signalling
   or granting either runtime.
+
+  The production transaction-class matrix is closed and class-specific:
+
+  | Class | Scheduling lifetime and authority |
+  | --- | --- |
+  | Cold reset, engine/descriptor/context replay | Bootstrap/recovery alone owns the pair at priority 255. Non-op11 work uses its exact grant cadence; exact op11 uses the persistent marker. The steady Network lease is unavailable. |
+  | Ordinary control and association op11, including Join | EventPump opens the generation-bound outer pair episode from the exact association/policy claim before NetStack polls. The persistent marker carries the one signal; an exact external wait retains the outer episode `Open`. |
+  | op7 TX | Ordinary data/TCP uses the finite steady-service marker inside the current Network episode. Only an intake-sealed current-generation EAPOL-Key M2, M4, or group-key response may use the request-bound paired finite-op7 lifetime. |
+  | op8 RX/DPC | The immutable event-sequence steady-service lease and durable CARD_INT/IRQ/DPC state authorize physical service; no mutable Gate state, recurrent grant, or notification history does. |
+  | Idle and recovery | True idle opens no pair episode. Typed recovery fences fresh work, preserves any exact issued owner, raises and replays SDIO before CYW43 at priority 255, then restores owner-first before a new steady episode. |
+
+  No class may borrow another row's marker, grant, wake, timer, or restore path.
 
   EVENT and DATA frames that precede the exact BCDC reply do not terminalize
   this parent. CYW43 retains op11 and exports up to eight already-decoded frames
@@ -2889,7 +2929,23 @@ generation and XID.
   separately binds the current recovery generation and the generation that
   owned the immutable action, plus the cause, descriptor, payload digest,
   ticket, completion detail, result, sequence, terminal-observed state, and
-  outer turn ID.
+  outer turn ID. HAL sequence-last snapshots the outer pair lease and root
+  retained-request state immediately before the first outer-lease poison or
+  sticky pair-restart mutation. The first driver-layer record adopts that
+  tuple and preserves it through later refinement:
+
+  ```text
+  wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
+  wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+  ```
+
+  `refinement=pair-placeholder` means no exact descriptor/ticket evidence,
+  `owner-context` means partial owner evidence, and `exact-owner` requires both
+  descriptor operation and ticket identity. `sequence_published=yes` in the
+  split root-grant telemetry means the nonzero request equals the committed
+  command sequence; it is distinct from `doorbell_issued=yes`.
+  `scope=unavailable` is a fail-closed telemetry result and cannot establish a
+  causal scheduler tuple.
   Publication performs only lock-free admission fencing; it cannot clear
   mutex-owned sessions or poison the generation. After the originating
   EventPump turn releases every service guard, the retained supervisor adopts
@@ -3256,9 +3312,12 @@ generation and XID.
   WiFi work opens the current-generation pair priority lease before the first
   such turn, reserves and boosts SDIO then CYW43 once, and reuses it for exact
   parents until the quantum closes. An exact active parent, including an
-  ABI-invisible sequence-zero `Prepared` parent or an issued persistent parent
-  without an exact committed local-wait receipt, prevents an open lease
-  from closing between its stages. Close fences fresh pair work; an exact
+  ABI-invisible sequence-zero `Prepared` parent, a persistent parent before its
+  local-wait receipt, and the same exact persistent parent in `Waiting`, retains
+  the pair lease across its stages. `Waiting` masks only child self-demand and
+  polling; it does not permit ordinary close or release either reservation.
+  Close fences fresh pair work only after semantic terminal retirement or an
+  explicit recovery fence; an exact
   active root parent drains alone, with request/issue identity rechecked after
   every admitted Network turn and each immutable hardware request issued at
   most once. The 25-ms cap cannot interrupt that exact parent; the hard ordinary
@@ -3277,15 +3336,17 @@ generation and XID.
   ```text
   netstats: cyw43_quantum runs=<n> turns=<n> max_turns=<n> max_elapsed_us=<n> operator_yields=<n> checkpoint_ms=25
   netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
-  netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
+  netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> mask=0x<mask> active=<yes|no> close_pending=<yes|no>
   netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
   ```
 
   The split keeps every field parseable even when counters reach their maximum
   width. The policy line must report exactly
   `m26d_net_first=no physical_input_yield=enabled`; the retired network-first
-  policy is failed evidence. A clean terminal/idle sample has `state=inactive active=no
-  close_pending=no` and `failures=0`, equal open/close/restore counts, and no
+  policy is failed evidence. Mask `0x01` is CYW43, `0x02` is SDIO, and `0x03`
+  proves both reservations. A clean terminal/idle sample has
+  `state=inactive mask=0x00 active=no close_pending=no` and `failures=0`, equal
+  open/close/restore counts, and no
   recovery revocation unless the same evidence slice contains its exact typed
   pair recovery. Once steady WiFi parents have run,
   `amortized_requests` must be nonzero and may exceed `opens`, proving that

@@ -755,6 +755,22 @@ prove all of the following:
   boot-cumulative association service-turn/Join-start counters and the latest
   complete non-recovery Gate 8 frontier so sticky recovery cannot replace the
   causal subgate with only a generic pair-failure state. The passive
+  current-episode, boot-cumulative transition-count, and boot-cumulative fault
+  records must remain separate and untruncated at maximum widths. The
+  normalizer's `WIFI_PRIORITY_EPISODE_COUNTS_SCOPE` and
+  `WIFI_PRIORITY_EPISODE_FAULTS_SCOPE` must remain independently `none` when
+  only the other record is present. Coverage must distinguish
+  `pair-placeholder`, `owner-context`, and `exact-owner`, preserve the immutable
+  valid `scope=first-pre-fence` scheduler tuple latched sequence-last at the HAL
+  outer-lease-poison/sticky-restart seam through refinement, reject
+  `scope=unavailable` as causal proof, and distinguish
+  the root command sequence from the doorbell-issued fact. The retained summary
+  must preserve the exact bounded grammar
+  `wifi: deferred_recovery retained=yes refinement=<...>
+  logical_terminal_observed=<...> cause=<...> subphase=<...> gate=<...>
+  current=<...> live_generation=<...>`. A retained Gate 8
+  or Gate 10 receipt must outrank a later post-scrub missing-clock snapshot;
+  Gates 4 through 7 still require current clock evidence. The passive
   maintenance snapshot must render as adjacent state and action records,
   preserve generation/current/pending, all four masks, next stage, exact action
   generation/request/issued/turn fields at their maximum widths, and never
@@ -1946,8 +1962,11 @@ acknowledgement or physical response tail must instead route Dispatch directly
 to Serial and leave the echo pending. Tests must also
 prove that a quantum already at its deadline and without an exact retained
 parent returns to `Serial` with zero additional NIC/SDIO operations. An idle
-selected interface must not acquire the pair priority lease. The first
-actionable selected-WiFi turn must reserve and boost SDIO then CYW43 once;
+selected interface must not acquire the pair priority lease. EventPump must
+evaluate the exact side-effect-free association-owner predicate and open the
+outer pair lease before NetStack polls or allocates the first Join, including
+when the rendered status remains stale. The first actionable selected-WiFi
+turn must reserve and boost SDIO then CYW43 once;
 later exact current-generation parents in the same quantum must add no
 scheduler writes. Every quantum exit path must latch the fresh-work close
 fence. An exact active parent, including an ABI-invisible
@@ -1956,7 +1975,10 @@ between stages only after HAL proves a root-continuation operation, a nonzero
 immutable fingerprint, matching request and logical generation, current pair
 epoch, open priority
 reservations, and no pair restart or context replay. This identity must remain
-stable across the EventPump's before/after snapshot. If close has already
+stable across the EventPump's before/after snapshot. Once its exact wait
+receipt proves the child is blocked, EventPump must perform no CYW43/SDIO poll
+while retaining the lease `Open`; a durable IRQ/DPC/RX/terminal condition must
+resume that same episode. If close has already
 fenced it, successive admitted `Network` turns may advance only that same root
 parent while rechecking request identity and monotonic issue state after every
 turn. Inside an admitted persistent or finite event lifetime, bounded linked
@@ -2002,7 +2024,7 @@ emit:
 ```text
 netstats: cyw43_quantum runs=<n> turns=<n> max_turns=<n> max_elapsed_us=<n> operator_yields=<n> checkpoint_ms=25
 netstats: proof_policy m26d_net_first=no physical_input_yield=enabled
-netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> active=<yes|no> close_pending=<yes|no>
+netstats: cyw43_priority_lease state=<inactive|acquiring|open|closing|restoring|poisoned> pair_epoch=<n> mask=0x<mask> active=<yes|no> close_pending=<yes|no>
 netstats: cyw43_priority_lease_counts opens=<n> closes=<n> restores=<n> recovery_revocations=<n> amortized_requests=<n> failures=<n>
 ```
 
@@ -2032,6 +2054,9 @@ The focused acceptance tests
 `cyw43_sdio_network_priority_lease_closing_drains_exact_parent_and_blocks_fresh_pair_work`,
 `cyw43_sdio_network_priority_lease_partial_failure_is_rolled_back_or_poisoned`,
 `retained_priority_lease_identity_rejects_request_fingerprint_and_generation_aliases`,
+`eventpump_join_opens_one_network_episode_from_inactive_outer_lease`,
+`eventpump_join_issue_and_terminal_share_one_open_network_episode`,
+`missing_clock_caps_untyped_gate_but_not_exact_retained_receipt`,
 `pair_restart_completion_mints_only_owned_cold_epoch_provenance`,
 `recovery_request_during_cold_cursor_survives_and_supersedes_completion`,
 `cold_epoch_provenance_is_revoked_by_failure_and_unfinished_drop`,
@@ -2913,24 +2938,32 @@ offset 40, exact 24-byte size, distinct magic, logical generation zero, body
 clean/barrier and commit-last publication, producer-monotonic nonzero epoch and
 overflow failure, stable root double-read, and rejection of torn, stale,
 wrong-request, wrong-fingerprint, wrong-generation, wrong-epoch, and
-wrong-commit state. Production tests must cover both an already-open pair lease
+wrong-commit state. Focused EventPump/root-admission models must cover both an already-open pair lease
 and an initially inactive outer lease without calling a test pre-open helper.
-The inactive case must cross ABI-invisible `Stage`, request-bound SDIO boost,
-request-bound CYW43 boost, receipt clearing, full-body clean/barrier,
-sequence-last `CommitRing`, `Issued`, and exactly one signal-last notification
-inside the same admitted op11 producer call. The open case must reuse its pair
-reservations with no duplicate boost. Both then reach the exact persistent wait
-receipt or terminal and terminal consumption with no `PublishGrant`, grant 19,
-replacement grant, later `NotifyRing`, or same-call `PollRing`, terminal
-consumption, or priority restoration. A request-bound terminal must remain
-canonically exact through separate CYW43 restore, SDIO restore, and
-`ReadyToComplete` turns, with no second notification. A valid unacknowledged
+Without a test pre-open helper, production EventPump must observe the exact
+association claim, open the outer pair lease, and only then let NetStack
+allocate and issue Join. Assert one lease open, one amortized request, zero
+request-bound boost/grant/resignal actions, sequence-last `CommitRing`,
+`Issued`, and exactly one signal-last notification. The already-open case must
+reuse its pair reservations with no duplicate boost. Both then retain `Open`
+across the exact persistent wait receipt without polling, and resume the same
+parent for terminal consumption and deterministic lease close/restore with no
+`PublishGrant`, grant 19, replacement grant, later `NotifyRing`, same-call
+`PollRing`, second notification, or unrelated owner. An intake-sealed
+current-generation EAPOL-Key M2, M4, or group-key finite-op7 request-bound
+terminal must remain canonically exact through its bounded CYW43/SDIO restore
+turns. The physical inactive-outer negative path must also drive the real typed
+Join entry and prove zero active-slot, request-sequence, priority-mask, grant,
+doorbell, signal, and ring mutation. Generic cold/replay op11 with both peers
+in `Bootstrap` must retain mask zero, while the intake-sealed finite op7 class
+must still acquire its exact request-bound CYW43-plus-SDIO mask. A valid
+unacknowledged
 sideband batch plus stable exact terminal must be rejected in each restore
 phase without incrementing `send_attempts`. Tests must cover changed-condition clearing,
 terminal-before-receipt, terminal-after-receipt, publish/clear failure,
 clear-before-wake interpretation, ordinary receipt park, later exact-terminal
-resume, semantic consumption, and deterministic lease release. The composed
-EventPump test must preserve one externally uninterrupted same-parent
+resume, semantic consumption, and deterministic lease release. The focused
+EventPump/root-admission model must preserve one externally uninterrupted same-parent
 bus-service episode across HAL admission, CYW43 protocol ownership, and SDIO
 physical ownership. Open, bounded Closing, and exact handoff-boundary phases may
 schedule required Serial/LocalSeat/Dispatch fairness checkpoints, but must admit
@@ -2943,6 +2976,15 @@ budget while using the common condition-driven continuation route, and typed
 cold provenance cannot authorize another publication lane. Tests must reject caller-supplied or partial
 persistent flags, endpoint input, stale sequence, changed action/generation/body,
 and replay of an issued parent.
+
+A separate qualifying composition must start at cold bootstrap and use the
+production EventPump, HAL admission, root client, CYW43 runtime, and SDIO runtime
+dispatch. It may script AP/card responses only after the production path issues
+the physical request, then must continue through the same scheduler across the
+prior `q=0x408` DPC/RX frontier, Gates 1 through 10, and the raw-TCP software
+consumer. Manual ring publication, owner advancement, wait-receipt publication,
+synthetic terminal injection, or a completed-lifetime override remains focused
+seam coverage and cannot qualify a hardware candidate.
 
 For delegated CYW43-to-SDIO commands, tests must prove there is no usable
 endpoint after handoff. Non-op11 delegated foreground work keeps its exact

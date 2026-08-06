@@ -8796,6 +8796,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         self.icmp_echo_service_due_at(now_ms)
     }
 
+    fn cyw43_association_runtime_turn_pending(&self, now_ms: u64) -> bool {
+        self.wifi_association_claims_runtime_turn(now_ms)
+    }
+
     fn inject_console_line(&mut self, _line: &str) {}
 
     fn reset(&mut self) {
@@ -9492,6 +9496,16 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn cyw43_association_runtime_turn_pending(&self, now_ms: u64) -> bool {
+        match self {
+            Self::Rtl8139(stack) => stack.cyw43_association_runtime_turn_pending(now_ms),
+            Self::GenetDriverTask(stack) => stack.cyw43_association_runtime_turn_pending(now_ms),
+            Self::Cyw43DriverTask(stack) => stack.cyw43_association_runtime_turn_pending(now_ms),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.cyw43_association_runtime_turn_pending(now_ms),
+        }
+    }
+
     fn inject_console_line(&mut self, line: &str) {
         match self {
             Self::Rtl8139(stack) => stack.inject_console_line(line),
@@ -9585,6 +9599,12 @@ static NET_STACK_STORAGE_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[cfg(test)]
 fn reset_console_storage_state() {
+    // SAFETY: Every caller holds `NET_STACK_STORAGE_TEST_LOCK`, and the
+    // preceding test-owned `NetStack` has been dropped before its guard resets
+    // this singleton. No socket or buffer reference can remain live here.
+    unsafe {
+        SOCKET_STORAGE = [SocketStorage::EMPTY; SOCKET_CAPACITY];
+    }
     SOCKET_STORAGE_IN_USE.store(false, Ordering::Release);
     SOCKET_STORAGE_OWNER.store(0, Ordering::Release);
     SOCKET_STORAGE_TAG_ID.store(0, Ordering::Release);

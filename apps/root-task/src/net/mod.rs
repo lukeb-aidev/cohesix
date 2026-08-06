@@ -1399,6 +1399,15 @@ pub trait NetPoller {
         false
     }
 
+    /// Return the side-effect-free CYW43 association-owner claim for this turn.
+    ///
+    /// EventPump uses the same predicate immediately before opening the outer
+    /// CYW43/SDIO priority episode that `NetStack` later uses before polling.
+    /// Non-CYW43 and queue-only implementations have no such owner.
+    fn cyw43_association_runtime_turn_pending(&self, _now_ms: u64) -> bool {
+        false
+    }
+
     /// Inject a console line into the network transport (testing hook).
     fn inject_console_line(&mut self, _line: &str) {}
 

@@ -1379,6 +1379,29 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_SERVICE_EAPOL_M2": 0,
         "WIFI_SERVICE_EAPOL_M3": 0,
         "WIFI_SERVICE_EAPOL_M4": 0,
+        "WIFI_PRIORITY_EPISODE_SCOPE": "none",
+        "WIFI_PRIORITY_EPISODE_PHASE": "none",
+        "WIFI_PRIORITY_EPISODE_PAIR_EPOCH": 0,
+        "WIFI_PRIORITY_EPISODE_MASK": "0x00",
+        "WIFI_PRIORITY_EPISODE_COUNTS_SCOPE": "none",
+        "WIFI_PRIORITY_EPISODE_FAULTS_SCOPE": "none",
+        "WIFI_PRIORITY_EPISODE_OPENS": 0,
+        "WIFI_PRIORITY_EPISODE_CLOSES": 0,
+        "WIFI_PRIORITY_EPISODE_RESTORES": 0,
+        "WIFI_PRIORITY_EPISODE_AMORTIZED_REQUESTS": 0,
+        "WIFI_PRIORITY_EPISODE_FAILURES": 0,
+        "WIFI_PRIORITY_EPISODE_RECOVERY_REVOCATIONS": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE": "none",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE": "none",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PAIR_EPOCH": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_MASK": "0x00",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_ACTIVE": "unknown",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_PHASE": "none",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_MASK": "0x00",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_REQUEST": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_GENERATION": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_COMMAND_SEQUENCE": 0,
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED": "unknown",
         "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
         "WIFI_RX_IRQ_PRESERVE_INT": "0x00000000",
@@ -2342,6 +2365,128 @@ def test_gate_summary_tracks_cyw43_data_path_trace_counts() -> None:
     assert record["WIFI_DATA_PATH_RX_DELIVERED"] == 1
     assert record["WIFI_DATA_PATH_RX_DROPPED"] == 1
     assert record["WIFI_DATA_PATH_LAST"] == "rx-preserve-drop:pre-poll:dhcp-ack"
+
+
+def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -> None:
+    """Scheduling diagnostics retain exact scopes without changing gate truth."""
+
+    lines = [
+        "wifi: priority_episode scope=current phase=open pair_epoch=7 mask=0x03",
+        "wifi: priority_episode scope=current phase=open pair_epoch=4294967296 mask=0x04",
+        "wifi: priority_episode_counts scope=boot-cumulative opens=2 closes=1 "
+        "restores=1 amortized_requests=9",
+        "wifi: priority_episode_faults scope=boot-cumulative failures=3 "
+        "recovery_revocations=4",
+        "wifi: deferred_recovery scheduler scope=first-pre-fence "
+        "outer=open/7/0x03 root=yes/issued/0x03/64/11 "
+        "command_sequence=64 doorbell_issued=yes",
+        "wifi: deferred_recovery scheduler scope=first-pre-fence "
+        "outer=closing/8/0x03 root=malformed command_sequence=65 "
+        "doorbell_issued=no",
+        "wifi: deferred_recovery scheduler scope=first-pre-fence "
+        "outer=closing/4294967296/0x04 "
+        "root=yes/not-a-phase/0x04/4294967296/4294967296 "
+        "command_sequence=4294967296 doorbell_issued=no",
+        "wifi: root grant state=issued active=yes phase=issued mask=0x03 "
+        "request=64 generation=11 command_sequence=64 sequence_published=yes "
+        "doorbell_issued=yes",
+        "wifi: root grant_ids notify_bound=yes producer=9 shared=9 consumed=8 exact=yes",
+    ]
+    events = normalizer.parse_events(lines)
+    record = normalizer.summarize_gates(events).to_record()
+    baseline = normalizer.summarize_gates([]).to_record()
+
+    assert [event.stage for event in events] == [
+        "priority-episode",
+        "priority-episode",
+        "priority-episode-counts",
+        "priority-episode-faults",
+        "deferred-recovery-scheduler",
+        "deferred-recovery-scheduler",
+        "deferred-recovery-scheduler",
+        "root-grant",
+        "root-grant-ids",
+    ]
+    assert events[4].fields["outer"] == "open/7/0x03"
+    assert events[4].fields["root"] == "yes/issued/0x03/64/11"
+    assert events[7].fields["command_sequence"] == "64"
+    assert events[7].fields["doorbell_issued"] == "yes"
+    assert record["WIFI_PRIORITY_EPISODE_SCOPE"] == "current"
+    assert record["WIFI_PRIORITY_EPISODE_PHASE"] == "open"
+    assert record["WIFI_PRIORITY_EPISODE_PAIR_EPOCH"] == 7
+    assert record["WIFI_PRIORITY_EPISODE_MASK"] == "0x03"
+    assert record["WIFI_PRIORITY_EPISODE_COUNTS_SCOPE"] == "boot-cumulative"
+    assert record["WIFI_PRIORITY_EPISODE_FAULTS_SCOPE"] == "boot-cumulative"
+    assert record["WIFI_PRIORITY_EPISODE_OPENS"] == 2
+    assert record["WIFI_PRIORITY_EPISODE_CLOSES"] == 1
+    assert record["WIFI_PRIORITY_EPISODE_RESTORES"] == 1
+    assert record["WIFI_PRIORITY_EPISODE_AMORTIZED_REQUESTS"] == 9
+    assert record["WIFI_PRIORITY_EPISODE_FAILURES"] == 3
+    assert record["WIFI_PRIORITY_EPISODE_RECOVERY_REVOCATIONS"] == 4
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE"] == "first-pre-fence"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE"] == "open"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PAIR_EPOCH"] == 7
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_MASK"] == "0x03"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_ACTIVE"] == "yes"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_PHASE"] == "issued"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_MASK"] == "0x03"
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_REQUEST"] == 64
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_GENERATION"] == 11
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_COMMAND_SEQUENCE"] == 64
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_ROOT_DOORBELL_ISSUED"] == "yes"
+    for key in (
+        "WIFI_GATE",
+        "WIFI_BLOCKER",
+        "WIFI_GATE8_COMPLETE",
+        "WIFI_GATE8_STATUS",
+        "WIFI_DPC_PROOF",
+        "WIFI_DPC_REASON",
+    ):
+        assert record[key] == baseline[key]
+
+
+def test_priority_episode_count_and_fault_scopes_are_independent() -> None:
+    """Absent split records remain unobserved rather than fabricated zeros."""
+
+    counts_only = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "wifi: priority_episode_counts scope=boot-cumulative opens=2 "
+                "closes=1 restores=1 amortized_requests=9"
+            ]
+        )
+    ).to_record()
+    faults_only = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "wifi: priority_episode_faults scope=boot-cumulative failures=3 "
+                "recovery_revocations=4"
+            ]
+        )
+    ).to_record()
+
+    assert counts_only["WIFI_PRIORITY_EPISODE_COUNTS_SCOPE"] == "boot-cumulative"
+    assert counts_only["WIFI_PRIORITY_EPISODE_FAULTS_SCOPE"] == "none"
+    assert counts_only["WIFI_PRIORITY_EPISODE_FAILURES"] == 0
+    assert faults_only["WIFI_PRIORITY_EPISODE_COUNTS_SCOPE"] == "none"
+    assert faults_only["WIFI_PRIORITY_EPISODE_FAULTS_SCOPE"] == "boot-cumulative"
+    assert faults_only["WIFI_PRIORITY_EPISODE_OPENS"] == 0
+
+
+def test_unavailable_recovery_scheduler_is_parsed_but_not_promoted_to_proof() -> None:
+    """A missing immutable tuple stays visible without fabricating its scope."""
+
+    events = normalizer.parse_events(
+        [
+            "wifi: deferred_recovery scheduler scope=unavailable "
+            "outer=unavailable/0/0x00 root=no/unavailable/0x00/0/0 "
+            "command_sequence=0 doorbell_issued=no"
+        ]
+    )
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert [event.stage for event in events] == ["deferred-recovery-scheduler"]
+    assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE"] == "none"
 
 
 @pytest.mark.parametrize(
