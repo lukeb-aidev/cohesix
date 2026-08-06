@@ -1353,6 +1353,7 @@ wifi: data_handoff boot_first_loss=no
 wifi: data_handoff postcommit_first_loss=no
 wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
+wifi: diag recorder=startup-blackbox mode=passive source=<source> state_scope=<current|post-recovery-scrubbed> causal_authority=<same-snapshot|retained-deferred-recovery>
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
@@ -1372,6 +1373,12 @@ persistent-parent identity contradiction, runtime progress marker, poisoned RX
 queue, generic root request, or recovery continuation without granting any of
 those diagnostics scheduling authority. `publication_latched` in the separate
 edge line remains the sole doorbell-publication fact.
+
+When `state_scope=post-recovery-scrubbed`, the following ten-gate rows describe
+the quarantined current state only. They cannot replace the adjacent immutable
+deferred-recovery tuple as the causal boot frontier. Stale-generation recovery
+or recovery superseded by a complete current live-Net frontier is excluded
+before recorder scope is selected.
 
 The queue and batch records report only stable committed state. The passive
 command never consumes a notification, so its hint record is invariantly
@@ -1640,7 +1647,11 @@ generation and XID.
   the sole pair-recovery lane records that scheduling-contract violation.
   Cold bootstrap/replay with both peers still in `Bootstrap` uses the same
   persistent identity with priority mask zero because its declared priority-255
-  envelope is already active.
+  envelope is already active. The root's physical persistent-parent classifier
+  therefore reads only the exact HAL request and sequence-last terminal for
+  that class; it does not reinterpret an intentionally inactive steady Network
+  lease as loss of the bootstrap parent. The typed association/policy owner,
+  not the generic physical classifier, validates steady outer-lease identity.
   Request-bound preissue remains available only to the intake-sealed,
   current-generation EAPOL-Key M2, M4, and group-key finite-op7 class when it
   arrives without the steady outer lease. Other retained

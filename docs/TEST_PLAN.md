@@ -2978,6 +2978,18 @@ cold provenance cannot authorize another publication lane. Tests must reject cal
 persistent flags, endpoint input, stale sequence, changed action/generation/body,
 and replay of an issued parent.
 
+The focused `bootstrap_op11_keeps_physical_identity_during_owned_context_replay`
+case must additionally hold an exact issued bootstrap op11 while context replay
+is owned and the steady Network lease is intentionally inactive. It must prove
+that the outer policy classifier is inapplicable, the physical parent remains
+`Waiting`, no pair restart is requested, and finite-op7 diagnostics do not
+mislabel the persistent op11.
+
+Focused Pi trace-normalizer coverage must reject incomplete or internally
+contradictory SMP driver aggregates before they supersede lower-tier role
+evidence, and recorder-scope coverage must exclude live-Net-superseded and
+stale-generation recovery before labeling current gate rows.
+
 A separate qualifying composition must start at cold bootstrap and use the
 production EventPump, HAL admission, root client, CYW43 runtime, and SDIO runtime
 dispatch. It may script AP/card responses only after the production path issues

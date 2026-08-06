@@ -1634,6 +1634,79 @@ def test_gate_summary_tracks_net_and_driver_task_proof_fields() -> None:
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
 
 
+def test_latest_complete_smp_driver_proof_supersedes_provisional_roles() -> None:
+    """The latest atomic activity aggregate owns live runtime role counts."""
+
+    events = normalizer.parse_events(
+        [
+            "DRIVER_TASK_SUMMARY contracts=6 dedicated=1 compatibility=5",
+            "DRIVER_TASK role=serial contract=serial "
+            "isolation=dedicated-sel4-task live_tcb=yes hot_path=dedicated",
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=5 compat=1 substrate=yes configured=6 live=5 failed=1 "
+            "hot_mask=0x1f compat_mask=0x20",
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=6 compat=0 substrate=yes configured=6 live=6 failed=0 "
+            "hot_mask=0x3f compat_mask=0x0",
+            "[smp] activity selected profile=pi4-hardware net=wifi "
+            "active_contracts=selected-only",
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=0 compat=6 substrate=yes configured=6 live=6 failed=0 "
+            "hot_mask=0x0",
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=1 compat=5 substrate=yes configured=6 live=6 failed=0 "
+            "hot_mask=0x3f compat_mask=0x0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["DRIVER_TASK_CONTRACTS"] == 6
+    assert record["DRIVER_TASK_DEDICATED"] == 6
+    assert record["DRIVER_TASK_COMPATIBILITY"] == 0
+    assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "yes"
+    assert record["DRIVER_TASK_SERIAL_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_USB_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_DISPLAY_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_NET_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_PCIE_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+    assert record["DRIVER_TASK_OWNER_STATE_PROOF"] == "no"
+    assert record["DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF"] == "no"
+
+
+def test_latest_valid_partial_failure_supersedes_stale_healthy_aggregate() -> None:
+    """Configured handles exclude separately counted failed creations."""
+
+    events = normalizer.parse_events(
+        [
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=6 compat=0 substrate=yes configured=6 live=6 failed=0 "
+            "hot_mask=0x3f compat_mask=0x0",
+            "[smp] activity selected profile=pi4-hardware net=wifi "
+            "active_contracts=selected-only",
+            "[smp] activity driver-proof contracts=6 requested_dedicated=6 "
+            "dedicated=6 compat=0 substrate=yes configured=5 live=5 failed=1 "
+            "hot_mask=0x1f compat_mask=0x0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["DRIVER_TASK_CONTRACTS"] == 6
+    assert record["DRIVER_TASK_DEDICATED"] == 6
+    assert record["DRIVER_TASK_COMPATIBILITY"] == 0
+    assert record["DRIVER_TASK_LIVE_HOT_PATHS"] == "no"
+    assert record["DRIVER_TASK_SERIAL_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_USB_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_DISPLAY_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_NET_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_SDIO_DEDICATED"] == "yes"
+    assert record["DRIVER_TASK_PCIE_DEDICATED"] == "no"
+    assert record["DRIVER_TASK_DEDICATED_READY"] == "no"
+
+
 def test_gate_summary_tracks_smp_activity_net_state() -> None:
     """Operator activity summaries must carry Genet readiness into gate proof."""
 
@@ -2484,6 +2557,44 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "WIFI_DPC_REASON",
     ):
         assert record[key] == baseline[key]
+
+
+def test_typed_first_recovery_cause_survives_generic_supervisor_failure() -> None:
+    """The retained scheduler cause and recovery stage remain the exact fault."""
+
+    events = normalizer.parse_events(
+        [
+            bootstrap_supervisor_line(1, "begin", 0, 100, 1),
+            "wifi: deferred_recovery retained=yes refinement=exact-owner "
+            "logical_terminal_observed=no cause=pair-signal "
+            "subphase=cyw43-control-txglomalign gate=0 current=yes "
+            "live_generation=0",
+            "wifi: deferred_recovery scheduler scope=first-pre-fence "
+            "cause=persistent-parent-stable-invalid "
+            "outer=inactive/0/0x00 root=yes/issued/0x00/27/0 "
+            "command_sequence=27",
+            "wifi: deferred_recovery scheduler_edge publication_latched=yes "
+            "signal_returned=yes parent_deadline_expired=no "
+            "child_terminal=no child_wait_receipt=no child_bus_episode=no "
+            "bus_parent=0/0x0000 evidence=exact-only",
+            bootstrap_supervisor_line(
+                1,
+                "failed",
+                0,
+                normalizer.CYW43_BOOTSTRAP_NO_ATTEMPT_MS,
+                2,
+            ),
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_GATE"] == 7
+    assert record["WIFI_BLOCKER"] == "supervisor-failed"
+    assert record["WIFI_GATE8_BLOCKER"] == "supervisor-failed"
+    assert record["WIFI_EXACT"] == "persistent-parent-stable-invalid"
+    assert record["WIFI_PHASE"] == "cyw43-control-txglomalign"
+    assert record["WIFI_CAUSAL_FRONTIER"] == "root-signal-returned"
 
 
 def test_priority_episode_count_and_fault_scopes_are_independent() -> None:

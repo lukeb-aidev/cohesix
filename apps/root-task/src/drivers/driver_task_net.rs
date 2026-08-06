@@ -6232,11 +6232,13 @@ static CYW43_PERSISTENT_PARENT_CONDITION_TEST_OVERRIDE: Mutex<
     Option<(u32, Cyw43PersistentTransactionParentCondition)>,
 > = Mutex::new(None);
 
-/// Read the durable condition of the exact active persistent op11 parent.
+/// Read the durable physical condition of the exact active op11 parent.
 ///
 /// HAL-minted command authority selects this lane. The returned condition is
-/// the sole root scheduling authority: notification history, logical-owner
-/// presence, and the live descriptor cannot make a waiting parent runnable.
+/// the sole root operation authority: notification history, logical-owner
+/// presence, the live descriptor, and the outer Network policy lease cannot
+/// make a waiting parent runnable or invalidate an exact bootstrap transaction.
+/// Policy owners validate their outer lease separately at their typed boundary.
 #[cfg(feature = "kernel")]
 fn cyw43_active_persistent_parent_condition(
 ) -> Option<(u32, Cyw43PersistentTransactionParentCondition)> {
@@ -6252,12 +6254,6 @@ fn cyw43_active_persistent_parent_condition(
         return None;
     }
     let request = active.request();
-    if crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
-        command.aux1,
-    ) == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
-    {
-        return Some((request, Cyw43PersistentTransactionParentCondition::NotExact));
-    }
     Some((
         request,
         crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request),
@@ -47941,6 +47937,101 @@ mod tests {
         );
         assert!(cyw43_logical_control_owner_active());
 
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn bootstrap_op11_keeps_physical_identity_during_owned_context_replay() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let mut shared_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
+        let ring_guard = test_publish_cyw43_ring(&mut ring_page);
+        let sdio_ring_guard = test_publish_sdio_ring();
+        crate::hal::driver_task::publish_driver_task_shared_frame(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            0,
+            1,
+            shared_page.as_mut_ptr() as usize,
+        );
+        assert!(
+            crate::hal::driver_task::test_publish_driver_task_ring_endpoint(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            )
+        );
+        assert!(
+            crate::hal::driver_task::register_driver_task_pointer_free_ring_service(
+                CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                DriverTaskHotPath::Cyw43Wifi.as_u32() as usize,
+                cyw43_supervisor_ring_test_service,
+            )
+        );
+        CYW43_LINKED_RUNTIME_READY.store(1, Ordering::Release);
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
+
+        let mut supervisor = Cyw43BootstrapSupervisor::new(ConsoleNetConfig::default());
+        supervisor
+            .install_iovar_set(
+                "bus:txglomalign",
+                &CYW43_TXGLOMALIGN_AARCH64_ALIGN.to_le_bytes(),
+                "cyw43-control-txglomalign",
+                Cyw43ControlHeaderMode::Plain,
+                true,
+            )
+            .expect("the bootstrap op11 action installs");
+
+        begin_cyw43_outer_event_turn();
+        assert_eq!(
+            supervisor.service_pending_action(),
+            Cyw43RetainedActionOutcome::Pending,
+        );
+        let active = crate::hal::driver_task::active_driver_task_retained_request(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+        )
+        .filter(|active| active.issued())
+        .expect("the bootstrap op11 reaches one exact issued request");
+        let request = active.request();
+        assert_eq!(
+            crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request),
+            Cyw43PersistentTransactionParentCondition::Waiting,
+        );
+
+        assert!(
+            crate::hal::driver_task::test_begin_cyw43_sdio_pair_context_replay(),
+            "the bootstrap supervisor owns the replay capability",
+        );
+        let priority_model =
+            crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::enable();
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot().phase,
+            Cyw43SdioNetworkPriorityLeasePhase::Inactive,
+        );
+        assert_eq!(
+            crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
+                active
+                    .command()
+                    .expect("the exact request retains its command")
+                    .aux1,
+            ),
+            crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid,
+            "the outer policy classifier is intentionally inapplicable during bootstrap replay",
+        );
+        assert_eq!(
+            cyw43_active_persistent_parent_condition(),
+            Some((request, Cyw43PersistentTransactionParentCondition::Waiting)),
+            "outer policy state cannot revoke an exact physical bootstrap parent",
+        );
+        assert!(
+            crate::hal::driver_task::cyw43_steady_service_parent_diagnostic().is_none(),
+            "persistent op11 must not be labelled as a finite op7 identity fault",
+        );
+        assert!(!crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+
+        CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(0, Ordering::Release);
+        drop(priority_model);
+        drop(sdio_ring_guard);
+        drop(ring_guard);
         reset_cyw43_status_flags();
     }
 

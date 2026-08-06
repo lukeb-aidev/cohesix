@@ -1345,7 +1345,12 @@ After steady cutover, any persistent op11 presented while that outer lease is
 inactive must fail before active-slot, request, grant, doorbell, notification,
 or ring mutation and enter the sole pair-recovery lane. Cold bootstrap/replay
 with both peers still at bootstrap priority retains mask zero; it does not
-manufacture a steady request-bound boost.
+manufacture a steady request-bound boost. Once a bootstrap op11 is issued under
+that owned replay capability, its physical parent remains exact until its
+sequence-last terminal or fault-containment deadline; the intentionally
+inactive steady Network lease is outside that physical identity and cannot
+poison it. Ordinary association and policy owners retain their separate,
+typed outer-lease validation.
 Each exact current-generation root-to-CYW43 parent reuses that lease while
 retaining its own immutable sequence-zero prepare, nonzero issue commit,
 selected ordinary-grant or persistent-marker contract, notification, and

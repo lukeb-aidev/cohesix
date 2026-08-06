@@ -3434,31 +3434,30 @@ pub(crate) fn cyw43_steady_service_parent_diagnostic() -> Option<Cyw43SteadyServ
     let state = active_driver_task_retained_request_for_slot(slot)?;
     let request = state.request();
     let issued = state.issued();
-    let command = state.command();
+    let command = state.command()?;
+    if command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE == 0 {
+        return None;
+    }
     let ring_root_ptr = slot.ring_root_ptr.load(Ordering::Acquire);
     let command_fingerprint = slot.active_command_fingerprint.load(Ordering::Acquire);
     let immutable_identity = issued
-        && command.is_some_and(|command| {
-            driver_task_steady_service_parent_completion_identity_matches(
-                slot,
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                command,
-                ring_root_ptr,
-                request,
-                command_fingerprint,
-            )
-        });
+        && driver_task_steady_service_parent_completion_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            command_fingerprint,
+        );
     let wait_identity = issued
-        && command.is_some_and(|command| {
-            driver_task_steady_service_parent_wait_identity_matches(
-                slot,
-                CYW43_WIFI_DRIVER_TASK_CONTRACT,
-                command,
-                ring_root_ptr,
-                request,
-                command_fingerprint,
-            )
-        });
+        && driver_task_steady_service_parent_wait_identity_matches(
+            slot,
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            command,
+            ring_root_ptr,
+            request,
+            command_fingerprint,
+        );
     let completion = driver_task_ring_stable_completion_snapshot(slot, ring_root_ptr);
     let exact_terminal = completion.is_some_and(|completion| completion.sequence == request);
     let condition = if !issued {

@@ -15981,6 +15981,42 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_recorder_line(
+        source: &str,
+        post_recovery_scrubbed: bool,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: diag recorder=startup-blackbox mode=passive source={} state_scope={} causal_authority={}",
+            source,
+            if post_recovery_scrubbed {
+                "post-recovery-scrubbed"
+            } else {
+                "current"
+            },
+            if post_recovery_scrubbed {
+                "retained-deferred-recovery"
+            } else {
+                "same-snapshot"
+            },
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn wifi_deferred_recovery_is_effective(
+        live_net_supersedes_runtime: bool,
+        pair_recovery_active: bool,
+        recovery_generation: u32,
+        current_generation: u32,
+    ) -> bool {
+        !live_net_supersedes_runtime
+            && (pair_recovery_active
+                || Self::wifi_generation_evidence_is_current(
+                    recovery_generation,
+                    current_generation,
+                ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_startup_blackbox(
         &mut self,
         snapshot: &WifiDebugSnapshot,
@@ -16004,7 +16040,6 @@ where
             }
         }
         self.emit_wifi_logical_control_diagnostics();
-        self.emit_console_line("wifi: diag recorder=startup-blackbox mode=passive source=cached");
         self.emit_wifi_startup_gates_from_evidence(
             Some(snapshot),
             firmware_trace,
@@ -16027,10 +16062,6 @@ where
         deferred_recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
         source: &str,
     ) {
-        let recorder = format_message(format_args!(
-            "wifi: diag recorder=startup-blackbox mode=passive source={source}"
-        ));
-        self.emit_console_line(recorder.as_str());
         let sdio_runtime_status =
             crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
         self.emit_wifi_startup_gates_from_evidence(
@@ -16104,17 +16135,17 @@ where
             pair_recovery_active,
         );
         let deferred_recovery_raw = deferred_recovery;
-        let deferred_recovery = if live_net_supersedes_runtime {
-            None
-        } else {
-            deferred_recovery_raw.filter(|recovery| {
-                pair_recovery_active
-                    || Self::wifi_generation_evidence_is_current(
-                        recovery.generation,
-                        current_generation,
-                    )
-            })
-        };
+        let deferred_recovery = deferred_recovery_raw.filter(|recovery| {
+            Self::wifi_deferred_recovery_is_effective(
+                live_net_supersedes_runtime,
+                pair_recovery_active,
+                recovery.generation,
+                current_generation,
+            )
+        });
+        let recorder_source = if snapshot.is_some() { "cached" } else { source };
+        let recorder = Self::wifi_diag_recorder_line(recorder_source, deferred_recovery.is_some());
+        self.emit_console_line(recorder.as_str());
         let deferred_gate8 = deferred_recovery.filter(|recovery| recovery.gate == 8);
         let retained_exact_gate8_terminal =
             Self::wifi_retained_exact_gate8_terminal(pair_recovery_active, deferred_gate8);
@@ -40076,6 +40107,33 @@ mod tests {
         );
         assert!(rendered.contains("cohesix> "), "{rendered}");
         assert_eq!(wifi.calls.as_slice(), &["dump-state"]);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_gate_recorder_separates_scrubbed_state_from_causal_evidence() {
+        assert!(KernelConsoleTestPump::wifi_deferred_recovery_is_effective(
+            false, false, 7, 7,
+        ));
+        assert!(
+            !KernelConsoleTestPump::wifi_deferred_recovery_is_effective(true, false, 7, 7),
+            "a complete current live NetStack supersedes retained recovery evidence",
+        );
+        assert!(
+            !KernelConsoleTestPump::wifi_deferred_recovery_is_effective(false, false, 6, 7),
+            "stale-generation recovery cannot scope current gate rows",
+        );
+        assert!(KernelConsoleTestPump::wifi_deferred_recovery_is_effective(
+            false, true, 6, 7,
+        ));
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_recorder_line("cached", false).as_str(),
+            "wifi: diag recorder=startup-blackbox mode=passive source=cached state_scope=current causal_authority=same-snapshot",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::wifi_diag_recorder_line("hal-runtime-required", true).as_str(),
+            "wifi: diag recorder=startup-blackbox mode=passive source=hal-runtime-required state_scope=post-recovery-scrubbed causal_authority=retained-deferred-recovery",
+        );
     }
 
     #[cfg(feature = "kernel")]

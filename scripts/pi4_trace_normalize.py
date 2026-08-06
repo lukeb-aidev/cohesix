@@ -700,6 +700,7 @@ class WifiPriorityEpisodeSummary:
     recovery_revocations: int = 0
     scheduler_scope: str = "none"
     scheduler_cause: str = "unavailable"
+    scheduler_recovery_subphase: str = "none"
     scheduler_outer_phase: str = "none"
     scheduler_outer_pair_epoch: int = 0
     scheduler_outer_mask: int = 0
@@ -1834,6 +1835,8 @@ def classify_domain(line: str) -> str | None:
         or line.startswith("[smp] activity pump")
         or line.startswith("[smp] activity local-seat")
         or line.startswith("[smp] activity local-seat-display")
+        or line.startswith("[smp] activity driver-proof")
+        or line.startswith("[smp] activity selected")
         or "serial echo" in lower
         or "keyboard burst" in lower
         or "hdmi stats" in lower
@@ -10059,9 +10062,20 @@ def summarize_wifi_priority_episode(
 
     summary = WifiPriorityEpisodeSummary()
     scheduler_line = 0
+    retained_recovery_subphase = "none"
     for event in events:
         fields = event.fields
         raw = event.raw.lower()
+        if raw.startswith("wifi: deferred_recovery retained="):
+            subphase = field_lower(event, "subphase")
+            retained_recovery_subphase = "none"
+            if (
+                fields.get("retained", "").lower() == "yes"
+                and re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", subphase)
+                and subphase not in {"none", "unknown", "unavailable"}
+            ):
+                retained_recovery_subphase = subphase
+            continue
         if raw.startswith("wifi: priority_episode scope=current "):
             phase = field_lower(event, "phase")
             pair_epoch = parse_hex_int(fields.get("pair_epoch"))
@@ -10251,6 +10265,7 @@ def summarize_wifi_priority_episode(
             summary,
             scheduler_scope="first-pre-fence",
             scheduler_cause=scheduler_cause,
+            scheduler_recovery_subphase=retained_recovery_subphase,
             scheduler_outer_phase=outer[0].lower(),
             scheduler_outer_pair_epoch=outer_pair_epoch or 0,
             scheduler_outer_mask=outer_mask or 0,
@@ -10263,6 +10278,7 @@ def summarize_wifi_priority_episode(
             scheduler_root_doorbell_issued=legacy_doorbell_issued,
             scheduler_publication_latched=publication_latched,
         )
+        retained_recovery_subphase = "none"
         scheduler_line = event.line
     return replace(
         summary,
@@ -11231,6 +11247,109 @@ def classify_driver_task_role(label: str) -> str | None:
     return None
 
 
+DRIVER_TASK_ROLE_BITS = {
+    "serial": 1 << 0,
+    "usb": 1 << 1,
+    "display": 1 << 2,
+    "net": 1 << 3,
+    "sdio": 1 << 4,
+    "pcie": 1 << 5,
+}
+DRIVER_TASK_ROLE_MASK = sum(DRIVER_TASK_ROLE_BITS.values())
+DRIVER_TASK_AGGREGATE_MAX_CONTRACTS = 9
+
+
+@dataclass(frozen=True)
+class SmpActivityDriverProof:
+    """One complete, atomic SMP driver-runtime aggregate."""
+
+    contracts: int
+    requested_dedicated: int
+    dedicated: int
+    compatibility: int
+    substrate: bool
+    configured: int
+    live: int
+    failed: int
+    hot_mask: int
+    compatibility_mask: int
+
+
+def parse_smp_activity_driver_proof(
+    event: TraceEvent,
+) -> SmpActivityDriverProof | None:
+    """Parse one complete SMP aggregate without minting lower-level proof."""
+
+    if not event.raw.lower().startswith("[smp] activity driver-proof "):
+        return None
+    fields = event.fields
+    values = tuple(
+        parse_hex_int(fields.get(key))
+        for key in (
+            "contracts",
+            "requested_dedicated",
+            "dedicated",
+            "compat",
+            "configured",
+            "live",
+            "failed",
+            "hot_mask",
+            "compat_mask",
+        )
+    )
+    substrate = field_lower(event, "substrate")
+    if (
+        any(value is None or value < 0 for value in values)
+        or substrate not in {"yes", "no"}
+    ):
+        return None
+    (
+        contracts,
+        requested_dedicated,
+        dedicated,
+        compatibility,
+        configured,
+        live,
+        failed,
+        hot_mask,
+        compatibility_mask,
+    ) = values
+    assert contracts is not None
+    assert requested_dedicated is not None
+    assert dedicated is not None
+    assert compatibility is not None
+    assert configured is not None
+    assert live is not None
+    assert failed is not None
+    assert hot_mask is not None
+    assert compatibility_mask is not None
+    if (
+        contracts > DRIVER_TASK_AGGREGATE_MAX_CONTRACTS
+        or requested_dedicated > contracts
+        or dedicated + compatibility != contracts
+        or configured > contracts
+        or live > configured
+        or configured + failed > contracts
+        or hot_mask > DRIVER_TASK_ROLE_MASK
+        or compatibility_mask > DRIVER_TASK_ROLE_MASK
+        or hot_mask.bit_count() > dedicated
+        or compatibility_mask.bit_count() > compatibility
+    ):
+        return None
+    return SmpActivityDriverProof(
+        contracts=contracts,
+        requested_dedicated=requested_dedicated,
+        dedicated=dedicated,
+        compatibility=compatibility,
+        substrate=substrate == "yes",
+        configured=configured,
+        live=live,
+        failed=failed,
+        hot_mask=hot_mask,
+        compatibility_mask=compatibility_mask,
+    )
+
+
 REQUIRED_DRIVER_TASK_OWNER_HOT_PATHS = {
     "serial-console",
     "usb-keyboard",
@@ -11436,9 +11555,13 @@ def summarize_driver_task_proofs(
     usb_burst_proof = False
     usb_burst_drops = -1
     hdmi_responsive = False
+    latest_smp_driver_proof: SmpActivityDriverProof | None = None
     for event in events:
         raw = event.raw.lower()
         fields = event.fields
+        smp_driver_proof = parse_smp_activity_driver_proof(event)
+        if smp_driver_proof is not None:
+            latest_smp_driver_proof = smp_driver_proof
         driver_task_line = (
             "driver_task" in raw
             or "driver-task" in raw
@@ -11679,16 +11802,41 @@ def summarize_driver_task_proofs(
     affinity_manifest_proof = (
         affinity_manifest_missing == 0 and affinity_manifest_mismatches == 0
     )
-    contract_count = max(len(contracts), summary_contract_count)
-    dedicated_contract_count = max(
-        len(dedicated_contracts),
-        summary_dedicated_count,
-    )
-    compatibility_contract_count = max(
-        len(compatibility_contracts),
-        summary_compatibility_count,
-        acceptance_compatibility_count or 0,
-    )
+    if latest_smp_driver_proof is None:
+        contract_count = max(len(contracts), summary_contract_count)
+        dedicated_contract_count = max(
+            len(dedicated_contracts),
+            summary_dedicated_count,
+        )
+        compatibility_contract_count = max(
+            len(compatibility_contracts),
+            summary_compatibility_count,
+            acceptance_compatibility_count or 0,
+        )
+    else:
+        contract_count = latest_smp_driver_proof.contracts
+        dedicated_contract_count = latest_smp_driver_proof.dedicated
+        compatibility_contract_count = latest_smp_driver_proof.compatibility
+        dedicated_hot_roles = {
+            role
+            for role, bit in DRIVER_TASK_ROLE_BITS.items()
+            if latest_smp_driver_proof.hot_mask & bit != 0
+            and latest_smp_driver_proof.compatibility_mask & bit == 0
+        }
+        required_role_mask = sum(
+            DRIVER_TASK_ROLE_BITS[role] for role in required_roles
+        )
+        live_hot_paths = (
+            latest_smp_driver_proof.substrate
+            and latest_smp_driver_proof.configured > 0
+            and latest_smp_driver_proof.live
+            == latest_smp_driver_proof.configured
+            and latest_smp_driver_proof.failed == 0
+            and latest_smp_driver_proof.hot_mask & required_role_mask
+            == required_role_mask
+            and latest_smp_driver_proof.compatibility_mask & required_role_mask
+            == 0
+        )
     compatibility_free = compatibility_contract_count == 0
     dedicated_ready = (
         dedicated_ready_claimed
@@ -14990,6 +15138,18 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             wifi_exact = wifi_blocker
             wifi_phase = "gate8-stabilizing"
             wifi_blocker_line = wifi_gate8.line
+    if (
+        wifi_exact.startswith("supervisor-")
+        and wifi_priority_episode.scheduler_scope == "first-pre-fence"
+        and wifi_priority_episode.scheduler_cause
+        not in {"unavailable", "none"}
+    ):
+        wifi_exact = wifi_priority_episode.scheduler_cause
+        wifi_phase = (
+            wifi_priority_episode.scheduler_recovery_subphase
+            if wifi_priority_episode.scheduler_recovery_subphase != "none"
+            else "deferred-recovery"
+        )
     if wifi_gate8.complete and wifi_gate >= 9:
         post_ready_wifi_gate, post_ready_wifi_blocker = summarize_wifi_gate(
             acceptance_event_list
