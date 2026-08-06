@@ -763,7 +763,8 @@ prove all of the following:
   `pair-placeholder`, `owner-context`, and `exact-owner`, preserve the immutable
   valid `scope=first-pre-fence` scheduler tuple latched sequence-last at the HAL
   outer-lease-poison/sticky-restart seam through refinement, reject
-  `scope=unavailable` as causal proof, and distinguish
+  `scope=unavailable` as causal proof, preserve the first-writer recovery source
+  as `WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE`, and distinguish
   the root command sequence from the doorbell-issued fact. The retained summary
   must preserve the exact bounded grammar
   `wifi: deferred_recovery retained=yes refinement=<...>

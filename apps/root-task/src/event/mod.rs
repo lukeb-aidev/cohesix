@@ -2981,6 +2981,17 @@ const fn cyw43_network_resume_condition_from_levels(
     }
 }
 
+/// Keep one exact lifetime runnable while its canonical owner validates a
+/// stable passive-classifier contradiction.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn cyw43_network_owner_validation_resume_condition() -> Cyw43NetworkResumeCondition {
+    Cyw43NetworkResumeCondition {
+        service_due: true,
+        lifetime_continuation: true,
+        routed_work_allowed: false,
+    }
+}
+
 /// Compose the cached routing hint with the authoritative pre-sleep cut.
 ///
 /// Cached upper-stack demand may retain Network only when the stable fresh cut
@@ -3135,12 +3146,18 @@ fn cyw43_network_resume_condition() -> Cyw43NetworkResumeCondition {
     let active_parent = after.exact_parent_waiting()
         || crate::hal::driver_task::cyw43_sdio_network_active_parent_resumable(after.generation());
     let persistent_parent =
-        crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(after.generation());
+        crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
+            after.generation(),
+        );
     if persistent_parent
         == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
     {
-        crate::hal::driver_task::request_cyw43_sdio_pair_restart();
-        return Cyw43NetworkResumeCondition::default();
+        // EventPump observes scheduling state; it does not own physical-pair
+        // recovery. Keep this exact lifetime runnable for one bounded turn,
+        // while masking unrelated routed policy, so the canonical association
+        // or host-EAPOL owner can validate the request and publish the sole
+        // typed recovery if the stable contradiction is real.
+        return cyw43_network_owner_validation_resume_condition();
     }
     let persistent_parent_pre_wait = persistent_parent
         == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::PreWait;
@@ -4978,15 +4995,17 @@ where
                 // exact pre-wait handoff until the child commits its durable
                 // local-notification receipt; the receipt then restores the
                 // ordinary sleeping-parent mask without a poll clock.
-                let persistent_parent =
-                    crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition(
+                let persistent_parent = crate::hal::driver_task::
+                    cyw43_sdio_network_persistent_parent_condition_after_recheck(
                         snapshot.generation(),
                     );
                 if persistent_parent
                     == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
                 {
-                    crate::hal::driver_task::request_cyw43_sdio_pair_restart();
-                    return false;
+                    // Route one bounded turn to the exact policy owner. A
+                    // passive burst classifier cannot become a second pair-
+                    // recovery authority or close this physical episode.
+                    return true;
                 }
                 return snapshot.schedulable_network_work()
                     || matches!(
@@ -14191,8 +14210,9 @@ where
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         let scheduler = recovery.scheduler;
         format_message(format_args!(
-            "wifi: deferred_recovery scheduler scope={} outer={}/{}/0x{:02x} root={}/{}/0x{:02x}/{}/{} command_sequence={} doorbell_issued={}",
+            "wifi: deferred_recovery scheduler scope={} cause={} outer={}/{}/0x{:02x} root={}/{}/0x{:02x}/{}/{} command_sequence={}",
             scheduler.scope,
+            scheduler.cause,
             scheduler.outer_phase,
             scheduler.outer_pair_epoch,
             scheduler.outer_priority_mask,
@@ -14202,7 +14222,6 @@ where
             scheduler.root_request,
             scheduler.root_generation,
             scheduler.root_command_sequence,
-            Self::yes_no(scheduler.root_doorbell_issued),
         ))
     }
 
@@ -25988,6 +26007,7 @@ mod tests {
             gate: 8,
             scheduler: crate::drivers::driver_task_net::Cyw43DeferredRecoverySchedulerDiagnostic {
                 scope: "first-pre-fence",
+                cause: "persistent-parent-stable-invalid",
                 outer_phase: "restoring",
                 outer_pair_epoch: u32::MAX,
                 outer_priority_mask: usize::MAX,
@@ -26264,11 +26284,12 @@ mod tests {
             "sdio-generation-commit-admission",
         );
         assert!(lines[9].contains("descriptor op=0xffff flags=0xffff"));
-        assert!(lines[10]
-            .contains("scope=first-pre-fence outer=restoring/4294967295/0xffffffffffffffff"));
+        assert!(lines[10].contains(
+            "scope=first-pre-fence cause=persistent-parent-stable-invalid outer=restoring/4294967295/0xffffffffffffffff"
+        ));
         assert!(lines[10]
             .contains("root=yes/ready-to-complete/0xffffffffffffffff/4294967295/4294967295"));
-        assert!(lines[10].ends_with("command_sequence=4294967295 doorbell_issued=yes"));
+        assert!(lines[10].ends_with("command_sequence=4294967295"));
         assert!(lines[11].contains(
             "publication_latched=yes signal_returned=yes parent_deadline_expired=yes child_terminal=yes child_wait_receipt=yes child_bus_episode=yes"
         ));
@@ -36502,6 +36523,15 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn network_resume_condition_parks_parent_policy_but_not_independent_work() {
+        assert_eq!(
+            cyw43_network_owner_validation_resume_condition(),
+            Cyw43NetworkResumeCondition {
+                service_due: true,
+                lifetime_continuation: true,
+                routed_work_allowed: false,
+            },
+            "a stable passive contradiction routes only the exact owner and cannot recover or admit unrelated policy",
+        );
         let drain_owner = Some(Cyw43NetworkDrainOwner::Closing(
             crate::hal::driver_task::Cyw43SdioNetworkPriorityLeaseFinish::DrainRequired {
                 request: 1,

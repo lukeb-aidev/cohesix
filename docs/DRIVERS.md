@@ -1355,7 +1355,7 @@ wifi: gate8 retained_frontier=no
 wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> status=<pass|pending|fail> blocker=<reason>
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
-wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
 wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
 wifi: root grant state=<state> active=<yes|no> phase=<phase> mask=0x<mask> request=<n> generation=<n> command_sequence=<n> sequence_published=<yes|no> doorbell_issued=<yes|no>
 wifi: root grant_ids notify_bound=<yes|no> producer=<n> shared=<n> consumed=<n> exact=<yes|no|not-published>
@@ -1367,6 +1367,11 @@ The normalizer reports `WIFI_PRIORITY_EPISODE_COUNTS_SCOPE` and
 `scope=none`, not an observed zero. The retained scheduler tuple is latched
 sequence-last by HAL immediately before the first outer-lease poison or sticky
 pair-restart mutation, then preserved by driver-layer cause refinement.
+The adjacent `cause` is also first-writer-wins: it distinguishes a canonical
+persistent-parent identity contradiction, runtime progress marker, poisoned RX
+queue, generic root request, or recovery continuation without granting any of
+those diagnostics scheduling authority. `publication_latched` in the separate
+edge line remains the sole doorbell-publication fact.
 
 The queue and batch records report only stable committed state. The passive
 command never consumes a notification, so its hint record is invariantly
@@ -2952,7 +2957,7 @@ generation and XID.
 
   ```text
   wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
-  wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+  wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
   wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
   ```
 
@@ -2960,7 +2965,9 @@ generation and XID.
   `owner-context` means partial owner evidence, and `exact-owner` requires both
   descriptor operation and ticket identity. `sequence_published=yes` in the
   split root-grant telemetry means the nonzero request equals the committed
-  command sequence. The adjacent bounded `scheduler_edge` line names
+  command sequence. The scheduler `cause` is immutable first-source
+  provenance; it does not authorize recovery. The adjacent bounded
+  `scheduler_edge` line names
   `publication_latched` as the same retained issue latch as `doorbell_issued`.
   `signal_returned=yes` is a post-syscall latch bound to that exact request: it
   proves only that the sole signal syscall returned, not notification delivery,

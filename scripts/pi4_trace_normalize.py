@@ -699,6 +699,7 @@ class WifiPriorityEpisodeSummary:
     failures: int = 0
     recovery_revocations: int = 0
     scheduler_scope: str = "none"
+    scheduler_cause: str = "unavailable"
     scheduler_outer_phase: str = "none"
     scheduler_outer_pair_epoch: int = 0
     scheduler_outer_mask: int = 0
@@ -825,6 +826,7 @@ class GateSummary:
     wifi_priority_episode_failures: int = 0
     wifi_priority_episode_recovery_revocations: int = 0
     wifi_deferred_recovery_scheduler_scope: str = "none"
+    wifi_deferred_recovery_scheduler_cause: str = "unavailable"
     wifi_deferred_recovery_scheduler_outer_phase: str = "none"
     wifi_deferred_recovery_scheduler_outer_pair_epoch: int = 0
     wifi_deferred_recovery_scheduler_outer_mask: int = 0
@@ -1130,6 +1132,9 @@ class GateSummary:
             ),
             "WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE": (
                 self.wifi_deferred_recovery_scheduler_scope
+            ),
+            "WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE": (
+                self.wifi_deferred_recovery_scheduler_cause
             ),
             "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE": (
                 self.wifi_deferred_recovery_scheduler_outer_phase
@@ -10006,6 +10011,14 @@ WIFI_ROOT_PRIORITY_PHASES = {
     "poisoned",
     "unavailable",
 }
+WIFI_PAIR_RESTART_CAUSES = {
+    "unavailable",
+    "root-request",
+    "persistent-parent-stable-invalid",
+    "runtime-progress",
+    "rx-queue-poison",
+    "recovery-continuation",
+}
 CYW43_SDIO_PRIORITY_MASK = 0x03
 
 
@@ -10140,10 +10153,13 @@ def summarize_wifi_priority_episode(
                 child_wait_receipt,
                 child_bus_episode,
             )
+            scheduler_doorbell = summary.scheduler_root_doorbell_issued
             if (
                 any(fact not in {"yes", "no"} for fact in exact_facts)
-                or publication_latched
-                != summary.scheduler_root_doorbell_issued
+                or (
+                    scheduler_doorbell in {"yes", "no"}
+                    and publication_latched != scheduler_doorbell
+                )
                 or bus_parent_sequence is None
                 or not 0 <= bus_parent_sequence <= U32_MAX
                 or bus_parent_op is None
@@ -10170,6 +10186,7 @@ def summarize_wifi_priority_episode(
                 continue
             summary = replace(
                 summary,
+                scheduler_root_doorbell_issued=publication_latched,
                 scheduler_publication_latched=publication_latched,
                 scheduler_signal_returned=signal_returned,
                 scheduler_parent_deadline_expired=parent_deadline_expired,
@@ -10195,12 +10212,17 @@ def summarize_wifi_priority_episode(
         root_generation = parse_hex_int(root[4])
         root_command_sequence = parse_hex_int(fields.get("command_sequence"))
         root_active = root[0].lower()
+        scheduler_cause = field_lower(event, "cause") or "unavailable"
         legacy_doorbell_issued = field_lower(event, "doorbell_issued")
         publication_latched = field_lower(event, "publication_latched")
         if not publication_latched:
             publication_latched = legacy_doorbell_issued
         if not legacy_doorbell_issued:
             legacy_doorbell_issued = publication_latched
+        if not legacy_doorbell_issued:
+            legacy_doorbell_issued = "unknown"
+        if not publication_latched:
+            publication_latched = "unknown"
         numeric_values = (
             outer_pair_epoch,
             outer_mask,
@@ -10211,11 +10233,12 @@ def summarize_wifi_priority_episode(
         )
         if (
             fields.get("scope") != "first-pre-fence"
+            or scheduler_cause not in WIFI_PAIR_RESTART_CAUSES
             or outer[0].lower() not in WIFI_PRIORITY_EPISODE_PHASES
             or root_active not in {"yes", "no"}
             or root[1].lower() not in WIFI_ROOT_PRIORITY_PHASES
-            or legacy_doorbell_issued not in {"yes", "no"}
-            or publication_latched not in {"yes", "no"}
+            or legacy_doorbell_issued not in {"yes", "no", "unknown"}
+            or publication_latched not in {"yes", "no", "unknown"}
             or not all(
                 value is not None and 0 <= value <= U32_MAX
                 for value in numeric_values
@@ -10227,6 +10250,7 @@ def summarize_wifi_priority_episode(
         summary = replace(
             summary,
             scheduler_scope="first-pre-fence",
+            scheduler_cause=scheduler_cause,
             scheduler_outer_phase=outer[0].lower(),
             scheduler_outer_pair_epoch=outer_pair_epoch or 0,
             scheduler_outer_mask=outer_mask or 0,
@@ -15168,6 +15192,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         ),
         wifi_deferred_recovery_scheduler_scope=(
             wifi_priority_episode.scheduler_scope
+        ),
+        wifi_deferred_recovery_scheduler_cause=(
+            wifi_priority_episode.scheduler_cause
         ),
         wifi_deferred_recovery_scheduler_outer_phase=(
             wifi_priority_episode.scheduler_outer_phase

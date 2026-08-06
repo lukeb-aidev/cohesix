@@ -1412,6 +1412,7 @@ pub(crate) struct Cyw43DeferredRecoveryDiagnostic {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub scope: &'static str,
+    pub cause: &'static str,
     pub outer_phase: &'static str,
     pub outer_pair_epoch: u32,
     pub outer_priority_mask: usize,
@@ -1440,6 +1441,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
         if let Some(snapshot) = crate::hal::driver_task::first_cyw43_recovery_scheduler_snapshot() {
             return Self {
                 scope: "first-pre-fence",
+                cause: crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
                 outer_phase: snapshot.outer_phase.as_str(),
                 outer_pair_epoch: snapshot.outer_pair_epoch,
                 outer_priority_mask: snapshot.outer_priority_mask,
@@ -1463,6 +1465,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
         }
         Self {
             scope: "unavailable",
+            cause: crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
             outer_phase: "unavailable",
             outer_pair_epoch: 0,
             outer_priority_mask: 0,
@@ -1489,6 +1492,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
     pub(crate) const fn empty() -> Self {
         Self {
             scope: "first-pre-fence",
+            cause: "unavailable",
             outer_phase: "inactive",
             outer_pair_epoch: 0,
             outer_priority_mask: 0,
@@ -6248,6 +6252,12 @@ fn cyw43_active_persistent_parent_condition(
         return None;
     }
     let request = active.request();
+    if crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
+        command.aux1,
+    ) == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
+    {
+        return Some((request, Cyw43PersistentTransactionParentCondition::NotExact));
+    }
     Some((
         request,
         crate::hal::driver_task::cyw43_persistent_transaction_parent_condition(request),
@@ -8808,6 +8818,7 @@ fn latch_cyw43_deferred_recovery_for_owner_subphase(
             proposed
         }
     };
+    crate::hal::driver_task::record_cyw43_sdio_root_request_cause();
     if retained == proposed {
         retain_first_cyw43_deferred_recovery_diagnostic(retained, subphase);
     }
@@ -8851,6 +8862,7 @@ fn refine_cyw43_pair_signal_with_exact_issued_owner(
             (proposed, true)
         }
     };
+    crate::hal::driver_task::record_cyw43_sdio_root_request_cause();
     if replaced {
         let mut diagnostic = CYW43_FIRST_DEFERRED_RECOVERY_DIAGNOSTIC.lock();
         let replace_diagnostic = diagnostic.is_none_or(|existing| {
@@ -14181,6 +14193,17 @@ fn advance_cyw43_pending_association_join(
             Cyw43TerminalDrainOwner::Association(*pending),
         );
         if pending.issued {
+            if crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
+                pending.generation,
+            ) == crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid
+            {
+                crate::hal::driver_task::record_cyw43_sdio_persistent_parent_invalid_cause();
+                let _ = latch_cyw43_pending_association_recovery(
+                    pending,
+                    Cyw43RecoveryCause::IssuedOwnerUnknown,
+                );
+                return Cyw43AssociationJoinStep::RecoveryRequired;
+            }
             let _ = cyw43_linked_action_observe_child_progress(
                 &mut pending.deadline,
                 &mut pending.child_reply_latched,
@@ -14195,8 +14218,15 @@ fn advance_cyw43_pending_association_join(
                 Cyw43PersistentTransactionParentCondition::Waiting => {
                     return Cyw43AssociationJoinStep::Pending { activity: false };
                 }
-                Cyw43PersistentTransactionParentCondition::DeadlineFault
-                | Cyw43PersistentTransactionParentCondition::NotExact => {
+                Cyw43PersistentTransactionParentCondition::DeadlineFault => {
+                    let _ = latch_cyw43_pending_association_recovery(
+                        pending,
+                        Cyw43RecoveryCause::IssuedOwnerUnknown,
+                    );
+                    return Cyw43AssociationJoinStep::RecoveryRequired;
+                }
+                Cyw43PersistentTransactionParentCondition::NotExact => {
+                    crate::hal::driver_task::record_cyw43_sdio_persistent_parent_invalid_cause();
                     let _ = latch_cyw43_pending_association_recovery(
                         pending,
                         Cyw43RecoveryCause::IssuedOwnerUnknown,
@@ -27568,6 +27598,7 @@ fn run_cyw43_runtime_descriptor_turn_raw_with_admission(
             ));
         }
         Cyw43PersistentParentTurnRoute::IdentityFault => {
+            crate::hal::driver_task::record_cyw43_sdio_persistent_parent_invalid_cause();
             return Err(DriverTaskNetError::RuntimeInit(
                 "cyw43-persistent-transaction-identity",
             ));
@@ -36146,6 +36177,7 @@ mod tests {
     fn run_eventpump_join_issue_and_terminal_episode(
         recovery_before_terminal_consume: bool,
         outer_lease_preopened: bool,
+        invalidate_retained_parent_after_issue: bool,
     ) {
         struct NoTickTimer;
 
@@ -36212,7 +36244,7 @@ mod tests {
         CYW43_TEST_ENFORCE_OUTER_EVENT_TURN.store(1, Ordering::Release);
 
         let lease_baseline = crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        let _priority_model = if outer_lease_preopened {
+        let priority_model = if outer_lease_preopened {
             crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::open()
         } else {
             crate::hal::driver_task::TestCyw43SdioNetworkPriorityPhysicalModelGuard::enable()
@@ -36338,6 +36370,49 @@ mod tests {
                 .submitted_turns;
         let actions_after_issue = crate::hal::driver_task::test_root_grant_action_counts();
         assert_eq!(actions_after_issue, (0, 1));
+
+        if invalidate_retained_parent_after_issue {
+            priority_model.invalidate_retained_parent_fingerprint();
+            assert_eq!(
+                crate::hal::driver_task::cyw43_sdio_network_persistent_parent_condition_after_recheck(
+                    issued_command.aux1,
+                ),
+                crate::hal::driver_task::Cyw43SdioNetworkPersistentParentCondition::Invalid,
+                "the composed fixture must reproduce the stable outer-owner contradiction",
+            );
+            assert_eq!(
+                crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+                "unavailable",
+                "passive condition classification cannot acquire recovery authority",
+            );
+
+            pump.poll();
+
+            assert!(crate::hal::driver_task::cyw43_sdio_pair_restart_required());
+            assert_eq!(
+                crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+                "persistent-parent-stable-invalid",
+                "only the canonical Join owner may convert the stable contradiction into recovery",
+            );
+            let recovery = cyw43_deferred_recovery_diagnostic()
+                .expect("canonical owner recovery retains its first-pre-fence diagnostic");
+            assert_eq!(recovery.scheduler.cause, "persistent-parent-stable-invalid");
+            assert_eq!(
+                crate::hal::driver_task::driver_task_counter_snapshot(
+                    CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                )
+                .expect("the contradicted Join retains its reciprocal counters")
+                .submitted_turns,
+                submitted_after_issue,
+                "owner validation cannot republish the Join",
+            );
+            assert_eq!(
+                crate::hal::driver_task::test_root_grant_action_counts(),
+                actions_after_issue,
+                "owner validation cannot grant or signal a second physical path",
+            );
+            return;
+        }
 
         // Explicit recovery may move the outer scheduling lease to Closing
         // before the autonomous child reaches its wait. That phase change
@@ -36587,19 +36662,56 @@ mod tests {
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn eventpump_join_issue_and_terminal_share_one_open_network_episode() {
-        run_eventpump_join_issue_and_terminal_episode(false, true);
+        run_eventpump_join_issue_and_terminal_episode(false, true, false);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn eventpump_join_opens_one_network_episode_from_inactive_outer_lease() {
-        run_eventpump_join_issue_and_terminal_episode(false, false);
+        run_eventpump_join_issue_and_terminal_episode(false, false, false);
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
     fn eventpump_closing_recovery_still_consumes_the_exact_join_terminal() {
-        run_eventpump_join_issue_and_terminal_episode(true, true);
+        run_eventpump_join_issue_and_terminal_episode(true, true, false);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn eventpump_stable_invalid_parent_reaches_only_canonical_recovery_owner() {
+        run_eventpump_join_issue_and_terminal_episode(false, true, true);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn generic_deferred_recovery_captures_root_cause_before_diagnostic() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        assert!(latch_cyw43_deferred_recovery(
+            0,
+            Cyw43RecoveryCause::PairSignal,
+            DriverRuntimeCyw43CommandDescriptor::empty(),
+            cyw43_payload_digest(&[]),
+            0,
+            0,
+            0,
+        )
+        .is_some(),);
+        assert_eq!(
+            crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+            "root-request",
+        );
+        assert_eq!(
+            cyw43_deferred_recovery_diagnostic()
+                .expect("generic recovery retains one immutable diagnostic")
+                .scheduler
+                .cause,
+            "root-request",
+        );
+
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]
@@ -51118,9 +51230,21 @@ mod tests {
         supervisor.ready_generation = Some(0);
         supervisor.ready_pair_scrub_epoch = Some(CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire));
         let _sdio_lifetime_guard = test_bind_completed_physical_lifetime(&mut supervisor, 1);
+        crate::hal::driver_task::record_cyw43_sdio_persistent_parent_invalid_cause();
         retain_first_cyw43_deferred_recovery_diagnostic(
             Cyw43DeferredRecovery::pair_signal(23, 99),
             "cyw43-host-eapol-control-poll",
+        );
+        assert_eq!(
+            crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+            "persistent-parent-stable-invalid",
+        );
+        assert_eq!(
+            cyw43_deferred_recovery_diagnostic()
+                .expect("the first-cause diagnostic is retained")
+                .scheduler
+                .cause,
+            "persistent-parent-stable-invalid",
         );
 
         let snapshot = cyw43_gate8_diagnostic();
@@ -51140,8 +51264,18 @@ mod tests {
             cyw43_deferred_recovery_diagnostic().is_some(),
             "a rejected Ready publication must not erase first-cause telemetry"
         );
+        assert_eq!(
+            crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+            "persistent-parent-stable-invalid",
+            "a rejected Ready publication must retain the immutable recovery authority",
+        );
         assert!(supervisor.commit_gate8_publication(23));
         assert_eq!(cyw43_deferred_recovery_diagnostic(), None);
+        assert_eq!(
+            crate::hal::driver_task::first_cyw43_sdio_pair_restart_cause(),
+            "unavailable",
+            "only accepted Gate 8 publication starts a fresh diagnostic epoch",
+        );
 
         supervisor.arm_generation_recovery("post-stability-independent-fault");
         assert_eq!(supervisor.gate8_generation, None);

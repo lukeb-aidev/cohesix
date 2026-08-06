@@ -1392,6 +1392,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_PRIORITY_EPISODE_FAILURES": 0,
         "WIFI_PRIORITY_EPISODE_RECOVERY_REVOCATIONS": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE": "none",
+        "WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE": "unavailable",
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE": "none",
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PAIR_EPOCH": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_MASK": "0x00",
@@ -2387,8 +2388,9 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "wifi: priority_episode_faults scope=boot-cumulative failures=3 "
         "recovery_revocations=4",
         "wifi: deferred_recovery scheduler scope=first-pre-fence "
+        "cause=persistent-parent-stable-invalid "
         "outer=open/7/0x03 root=yes/issued/0x03/64/11 "
-        "command_sequence=64 doorbell_issued=yes",
+        "command_sequence=64",
         "wifi: deferred_recovery scheduler_edge publication_latched=yes "
         "signal_returned=yes parent_deadline_expired=yes "
         "child_terminal=no child_wait_receipt=no child_bus_episode=no "
@@ -2423,6 +2425,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     ]
     assert events[4].fields["outer"] == "open/7/0x03"
     assert events[4].fields["root"] == "yes/issued/0x03/64/11"
+    assert events[4].fields["cause"] == "persistent-parent-stable-invalid"
     assert events[5].fields["publication_latched"] == "yes"
     assert events[5].fields["signal_returned"] == "yes"
     assert events[5].fields["parent_deadline_expired"] == "yes"
@@ -2446,6 +2449,10 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert record["WIFI_PRIORITY_EPISODE_FAILURES"] == 3
     assert record["WIFI_PRIORITY_EPISODE_RECOVERY_REVOCATIONS"] == 4
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_SCOPE"] == "first-pre-fence"
+    assert (
+        record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE"]
+        == "persistent-parent-stable-invalid"
+    )
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PHASE"] == "open"
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_PAIR_EPOCH"] == 7
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_OUTER_MASK"] == "0x03"

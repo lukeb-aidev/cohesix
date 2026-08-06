@@ -498,13 +498,16 @@ snapshot also emits:
 
 ```text
 wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
-wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n> doorbell_issued=<yes|no>
+wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
 wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
 ```
 
 HAL captures that scheduler record sequence-last immediately before the first
 outer-lease poison or sticky pair-restart mutation, and driver-layer evidence
-preserves it through later refinement. `refinement=pair-placeholder` has no
+preserves it through later refinement. The first-writer-wins `cause` separates
+canonical persistent-parent identity failure, runtime progress, RX-queue
+poison, generic root request, and recovery continuation; it is provenance, not
+another recovery authority. `refinement=pair-placeholder` has no
 exact descriptor or ticket evidence, `owner-context` has only partial owner
 evidence, and
 `exact-owner` requires both the descriptor operation and ticket identity. A
