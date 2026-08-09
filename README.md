@@ -12,7 +12,7 @@
     />
   </div>
 </div>
-
+<br />
 Cohesix is a research operating system for edge AI, built around a simple idea:
 an AI fleet should have air-traffic control, not a pile of tools holding
 unrestricted credentials.
