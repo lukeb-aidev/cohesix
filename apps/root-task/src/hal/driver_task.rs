@@ -24,6 +24,7 @@ use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_is_cyw43_root_continuation,
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
+    DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
     DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
@@ -38,7 +39,8 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
     DRIVER_RUNTIME_COUNTER_FLAG_ROOT_SNAPSHOT, DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES,
     DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
-    DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET,
+    DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET, DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+    DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP, DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET,
     DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
     DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
@@ -8325,6 +8327,147 @@ fn driver_task_read_cyw43_bus_episode_record(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_read_cyw43_dpc_child_timing_record(
+    record_ptr: usize,
+) -> Option<DriverRuntimeCyw43DpcChildTimingRecord> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES);
+    let view = DriverTaskSharedRecordView::new(record_ptr, record_bytes)?;
+    let mut entries = [DriverRuntimeCyw43DpcChildTimingEntry::empty();
+        DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP];
+    let entries_offset = core::mem::offset_of!(DriverRuntimeCyw43DpcChildTimingRecord, entries);
+    let mut index = 0usize;
+    while index < entries.len() {
+        let entry_offset = entries_offset.checked_add(
+            index.checked_mul(core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingEntry>())?,
+        )?;
+        entries[index] = DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(DriverRuntimeCyw43DpcChildTimingEntry, child_sequence),
+            )?,
+            meta: view.read_u32(
+                entry_offset + core::mem::offset_of!(DriverRuntimeCyw43DpcChildTimingEntry, meta),
+            )?,
+            published_cntvct_lo: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(
+                        DriverRuntimeCyw43DpcChildTimingEntry,
+                        published_cntvct_lo
+                    ),
+            )?,
+            intake_cntvct_lo: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(
+                        DriverRuntimeCyw43DpcChildTimingEntry,
+                        intake_cntvct_lo
+                    ),
+            )?,
+            issued_cntvct_lo: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(
+                        DriverRuntimeCyw43DpcChildTimingEntry,
+                        issued_cntvct_lo
+                    ),
+            )?,
+            terminal_cntvct_lo: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(
+                        DriverRuntimeCyw43DpcChildTimingEntry,
+                        terminal_cntvct_lo
+                    ),
+            )?,
+            accepted_cntvct_lo: view.read_u32(
+                entry_offset
+                    + core::mem::offset_of!(
+                        DriverRuntimeCyw43DpcChildTimingEntry,
+                        accepted_cntvct_lo
+                    ),
+            )?,
+        };
+        index = index.saturating_add(1);
+    }
+    let mut reserved = [0; 8];
+    let reserved_offset = core::mem::offset_of!(DriverRuntimeCyw43DpcChildTimingRecord, reserved);
+    index = 0;
+    while index < reserved.len() {
+        reserved[index] = view.read_u8(reserved_offset + index)?;
+        index = index.saturating_add(1);
+    }
+    Some(DriverRuntimeCyw43DpcChildTimingRecord {
+        magic: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            magic
+        ))?,
+        version: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            version
+        ))?,
+        len: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            len
+        ))?,
+        publication_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            publication_sequence
+        ))?,
+        physical_epoch: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            physical_epoch
+        ))?,
+        event_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            event_sequence
+        ))?,
+        source_cntvct_lo: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            source_cntvct_lo
+        ))?,
+        queue_commit_cntvct_lo: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            queue_commit_cntvct_lo
+        ))?,
+        queue_commit_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            queue_commit_sequence
+        ))?,
+        data_len: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            data_len
+        ))?,
+        child_count: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            child_count
+        ))?,
+        flags: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            flags
+        ))?,
+        selected_source_to_queue_q11: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            selected_source_to_queue_q11
+        ))?,
+        overall_max_source_to_queue_q11: view.read_u16(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            overall_max_source_to_queue_q11
+        ))?,
+        overflow_samples: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            overflow_samples
+        ))?,
+        unknown_samples: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            unknown_samples
+        ))?,
+        reserved,
+        entries,
+        committed_publication_sequence: view.read_u32(core::mem::offset_of!(
+            DriverRuntimeCyw43DpcChildTimingRecord,
+            committed_publication_sequence
+        ))?,
+    })
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_read_cyw43_rx_batch_record(
     record_ptr: usize,
 ) -> Option<DriverRuntimeCyw43RxBatchRecord> {
@@ -8486,6 +8629,55 @@ pub(crate) fn driver_task_cyw43_bus_episode_snapshot() -> Option<DriverRuntimeCy
 {
     let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
     driver_task_cyw43_bus_episode_snapshot_for_slot(slot)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_dpc_child_timing_snapshot_for_slot(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverRuntimeCyw43DpcChildTimingRecord> {
+    const SNAPSHOT_ATTEMPTS: usize = 3;
+
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES);
+    let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET),
+        record_bytes,
+    )?;
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43DpcChildTimingRecord>()) {
+        return None;
+    }
+
+    let mut attempt = 0usize;
+    while attempt < SNAPSHOT_ATTEMPTS {
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let first = driver_task_read_cyw43_dpc_child_timing_record(record_ptr)?;
+        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let second = driver_task_read_cyw43_dpc_child_timing_record(record_ptr)?;
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(
+            &slot.counters.cache_invalidate_bytes,
+            record_bytes.saturating_mul(2),
+        );
+        if first == second && second.committed() {
+            return Some(second);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+/// Return one stable, passive CYW43 DPC child timing trace.
+///
+/// The sequence-last runtime record is diagnostic only. Root neither writes
+/// it nor turns any timing edge into admission, wake, scheduling, retry, or
+/// recovery authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_dpc_child_timing_snapshot(
+) -> Option<DriverRuntimeCyw43DpcChildTimingRecord> {
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    driver_task_cyw43_dpc_child_timing_snapshot_for_slot(slot)
 }
 
 #[cfg(feature = "kernel")]
@@ -24765,6 +24957,104 @@ mod tests {
         let words = staged.to_le_words();
         pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
         assert_eq!(driver_task_cyw43_bus_episode_snapshot_for_slot(&slot), None,);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn committed_cyw43_dpc_child_timing_for_test() -> DriverRuntimeCyw43DpcChildTimingRecord {
+        let mut entries = [DriverRuntimeCyw43DpcChildTimingEntry::empty();
+            DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP];
+        entries[0] = DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 41,
+            meta: DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                1,
+                2,
+                3,
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND as u8,
+                pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL
+                    | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED,
+            ),
+            published_cntvct_lo: 1_100,
+            intake_cntvct_lo: 1_120,
+            issued_cntvct_lo: 1_150,
+            terminal_cntvct_lo: 1_200,
+            accepted_cntvct_lo: 1_220,
+        };
+        let publication_sequence = 13;
+        DriverRuntimeCyw43DpcChildTimingRecord {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION,
+            len: DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+            publication_sequence,
+            physical_epoch: 5,
+            event_sequence: 29,
+            source_cntvct_lo: 1_000,
+            queue_commit_cntvct_lo: 1_300,
+            queue_commit_sequence: 7,
+            data_len: 128,
+            child_count: 1,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE,
+            selected_source_to_queue_q11: 0,
+            overall_max_source_to_queue_q11: 0,
+            overflow_samples: 0,
+            unknown_samples: 0,
+            reserved: [0; 8],
+            entries,
+            committed_publication_sequence: publication_sequence,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_dpc_child_timing_reader_is_stable_passive_and_sequence_last() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut pages: [Box<AlignedDriverTaskRing>;
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES] = std::array::from_fn(|_| {
+            Box::new(AlignedDriverTaskRing(
+                [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+            ))
+        });
+        for (index, page) in pages.iter_mut().enumerate() {
+            slot.shared_frame_caps[index].store(index.saturating_add(1), Ordering::Release);
+            slot.shared_frame_root_ptrs[index]
+                .store(page.0.as_mut_ptr() as usize, Ordering::Release);
+        }
+        slot.shared_frame_count.store(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
+            Ordering::Release,
+        );
+
+        let relative = usize::from(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET)
+            .checked_sub(usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE))
+            .expect("timing record lies in the shared arena");
+        let page_index = relative / DRIVER_TASK_RING_PAGE_BYTES;
+        let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+        let record_ptr = pages[page_index]
+            .0
+            .as_mut_ptr()
+            .cast::<u8>()
+            .wrapping_add(page_offset)
+            .cast::<DriverRuntimeCyw43DpcChildTimingRecord>();
+        let record = committed_cyw43_dpc_child_timing_for_test();
+        // SAFETY: the test page is 4096-byte aligned, the ABI offset is
+        // 64-byte aligned, and the fixed 512-byte record remains in this page.
+        unsafe { record_ptr.write(record) };
+        assert_eq!(
+            driver_task_cyw43_dpc_child_timing_snapshot_for_slot(&slot),
+            Some(record),
+        );
+
+        let mut staged = record;
+        staged.committed_publication_sequence = 0;
+        // SAFETY: the same aligned in-page record span remains exclusively
+        // owned by this test while the sequence-last word is cleared.
+        unsafe { record_ptr.write(staged) };
+        assert_eq!(
+            driver_task_cyw43_dpc_child_timing_snapshot_for_slot(&slot),
+            None,
+        );
     }
 
     #[test]

@@ -1191,6 +1191,63 @@ by reopened Milestone 26b task
 `m26b-wifi-sdio-notification-dpc-closure` and
 `m26b-net-control-priority`.
 
+For J4 owner-seam diagnosis, bind every conclusion to exact image
+`aabb9b39ecc4` and its same-boot serial/pcap proof. That image crossed
+first-pair Gate 8 and DHCP with no live-ring poison, RX-queue poison, runtime
+`recovery_required`, sticky root pair restart, or priority-lease poison. Its
+stale compatibility client snapshot did not poison or govern the healthy live
+owner, but raw TCP remained outside acceptance. Its valid
+worst same-sample split was 33.841 ms total: 27.154 ms source-to-queue
+(80.2%), 5.309 ms queue-to-precommit, 1.228 ms precommit-to-root-copy, and
+0.148 ms root-copy-to-paired-response acceptance. Record the classification as
+J4: J1/J2/J3 association ownership is complete and the unresolved causal edge
+lies inside source admission to durable private-RX queue commit.
+
+The next diagnostic image must preserve the two-region ownership boundary.
+`DriverRuntimeSdioChildTimingMailbox` occupies owner-ring offset 1,920 (bytes
+1,920-1,983), between the owner fault record ending at 1,912 and the passive
+clock snapshot beginning at 1,984. CYW43 first stages the exact child sequence,
+descriptor fingerprint, physical epoch, DPC event, typed action/I/O
+phase/engine, and publication CNTVCT before the ordinary command handoff. SDIO
+validates and preserves that body, records exact owner intake, physical issue,
+and joined-terminal CNTVCT, then commits the child sequence last before the
+ordinary completion.
+CYW43 stable-reads only that exact commit through the mapped SDIO-owner ring and
+adds the completion-acceptance CNTVCT; root reads only the joined CYW43 trace
+and never writes either record.
+The staged CYW43 writer and final SDIO commit writer are sequential and must not
+mutate each other's fields after handoff. The same numeric offset is CYW43's
+parent descriptor only on CYW43's physically distinct local ring; a trace that
+samples the wrong base or role is invalid. SDIO maps only its owner ring plus
+shared offsets 4,096-36,863 and
+must not access CYW43's private RX-batch region. CYW43 writes the bounded joined
+512-byte `DriverRuntimeCyw43DpcChildTimingRecord` beginning at shared offset
+49,472, after the bus-episode record at 49,344-49,471. Its sixteen 28-byte
+entries plus fixed header end at 49,984, before the private region ends at
+53,248. Root may read it, but SDIO may not.
+
+Use only exact physical-epoch, DPC-event, child-sequence,
+descriptor-fingerprint, typed action/I/O phase/engine, and
+sequence-last-publication matches from the same slow sample. Compare
+source-to-first-child publication, publication-to-SDIO intake,
+SDIO-intake-to-issue, issue-to-joined terminal,
+terminal-to-CYW43 acceptance, between-child acceptance-to-
+publication, and final acceptance to queue commit. If the first dominates
+repeatedly, inspect CYW43's local pre-child path. If publication-to-intake
+dominates, inspect only the reciprocal CYW43-to-SDIO handoff/admission seam;
+if intake-to-issue dominates, inspect only SDIO's preissue service. If physical
+service dominates, inspect only the selected SDIO/SDHCI child engine. If
+terminal-to-acceptance dominates, inspect final mailbox publication, normal
+completion handoff, and CYW43 acceptance together; only between-child or final
+acceptance-to-queue dominance selects CYW43 local continuation.
+Missing, torn, stale, overflowed, wrap-ambiguous, cross-identity, or non-worst evidence is UNKNOWN
+and authorizes no repair. The mailbox and trace are passive: their absence or
+content must never change work admission, notification, wake, issue, retry,
+rearm, deadline, recovery, retention, or scheduling. If no repeated dominant
+seam and direct code counterfactual emerge, stop the current repair sequence.
+Do not restore or merge historical `494e9cb0e9ad`; its fresh control reproduced
+first-ACK delay, retransmission, and about 1.5-second raw-TCP p95.
+
 An active persistent op11 uses that same record as nonterminal sideband state
 for preceding EVENT/DATA. Root performs the same stable copy and post-copy
 check, then commits the separate cache-line-disjoint 64-byte ACK at shared

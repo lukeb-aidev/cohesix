@@ -13309,7 +13309,7 @@ where
                 "device-addressed",
             );
             self.emit_usb_gate_line(
-                6,
+                4,
                 "device-addressed",
                 Self::usb_startup_gate_status(6, proof_gate, failing_gate),
                 format_args!(
@@ -15614,6 +15614,146 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_ticks_to_us(ticks: u32, frequency_hz: u64) -> u64 {
+        let micros = u128::from(ticks)
+            .saturating_mul(1_000_000)
+            .saturating_div(u128::from(frequency_hz));
+        micros.min(u128::from(u64::MAX)) as u64
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_interval_us(
+        start_cntvct_lo: u32,
+        end_cntvct_lo: u32,
+        frequency_hz: u64,
+    ) -> u64 {
+        Self::wifi_cyw43_dpc_child_timing_ticks_to_us(
+            end_cntvct_lo.wrapping_sub(start_cntvct_lo),
+            frequency_hz,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_q11_us(delta_q11: u16, frequency_hz: u64) -> u64 {
+        Self::wifi_cyw43_dpc_child_timing_ticks_to_us(
+            u32::from(delta_q11) << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT,
+            frequency_hz,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_header_line(
+        snapshot: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord,
+        frequency_hz: u64,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, core::fmt::Error> {
+        let last_index = usize::from(snapshot.child_count).saturating_sub(1);
+        let last_accepted = snapshot
+            .entries
+            .get(last_index)
+            .ok_or(core::fmt::Error)?
+            .accepted_cntvct_lo;
+        let source_to_queue_us = Self::wifi_cyw43_dpc_child_timing_q11_us(
+            snapshot.selected_source_to_queue_q11,
+            frequency_hz,
+        );
+        let overall_max_us = Self::wifi_cyw43_dpc_child_timing_q11_us(
+            snapshot.overall_max_source_to_queue_q11,
+            frequency_hz,
+        );
+        let tail_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            last_accepted,
+            snapshot.queue_commit_cntvct_lo,
+            frequency_hz,
+        );
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "CYW43_DPC_CHILD_TIMING v={} pe={:08x} e={:08x} src={:08x} q={:08x} qc={:08x} len={} n={} fl={:08x} s2q={} max={} ovf={} unk={} tail_us={}",
+                snapshot.version,
+                snapshot.physical_epoch,
+                snapshot.event_sequence,
+                snapshot.source_cntvct_lo,
+                snapshot.queue_commit_cntvct_lo,
+                snapshot.queue_commit_sequence,
+                snapshot.data_len,
+                snapshot.child_count,
+                snapshot.flags,
+                source_to_queue_us,
+                overall_max_us,
+                snapshot.overflow_samples,
+                snapshot.unknown_samples,
+                tail_us,
+            ),
+        )?;
+        Ok(line)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_entry_line(
+        snapshot: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord,
+        index: usize,
+        frequency_hz: u64,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, core::fmt::Error> {
+        let entry = *snapshot.entries.get(index).ok_or(core::fmt::Error)?;
+        let previous_accepted = if index == 0 {
+            snapshot.source_cntvct_lo
+        } else {
+            snapshot.entries[index - 1].accepted_cntvct_lo
+        };
+        let pre_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            previous_accepted,
+            entry.published_cntvct_lo,
+            frequency_hz,
+        );
+        let publish_to_intake_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.published_cntvct_lo,
+            entry.intake_cntvct_lo,
+            frequency_hz,
+        );
+        let intake_to_issue_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.intake_cntvct_lo,
+            entry.issued_cntvct_lo,
+            frequency_hz,
+        );
+        let issue_to_terminal_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.issued_cntvct_lo,
+            entry.terminal_cntvct_lo,
+            frequency_hz,
+        );
+        let terminal_to_accept_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.terminal_cntvct_lo,
+            entry.accepted_cntvct_lo,
+            frequency_hz,
+        );
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "CYW43_DPC_CHILD_TIMING_ENTRY i={} seq={:08x} a={:02x} k={:02x} ph={:02x} eng={:02x} vf={:02x} ts={:08x}/{:08x}/{:08x}/{:08x}/{:08x} pre_us={} p2n_us={} n2i_us={} i2t_us={} t2a_us={}",
+                index,
+                entry.child_sequence,
+                entry.action(),
+                entry.io_kind(),
+                entry.io_phase(),
+                entry.engine(),
+                entry.flags(),
+                entry.published_cntvct_lo,
+                entry.intake_cntvct_lo,
+                entry.issued_cntvct_lo,
+                entry.terminal_cntvct_lo,
+                entry.accepted_cntvct_lo,
+                pre_us,
+                publish_to_intake_us,
+                intake_to_issue_us,
+                issue_to_terminal_us,
+                terminal_to_accept_us,
+            ),
+        )?;
+        Ok(line)
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
         if let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() {
             let cause = crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(
@@ -15636,6 +15776,28 @@ where
             match Self::wifi_cyw43_bus_episode_line(episode) {
                 Ok(line) => self.emit_console_line(line.as_str()),
                 Err(_) => self.emit_console_line("CYW43_BUS_EPISODE format=overflow"),
+            }
+        }
+        if let Some(timing) = crate::drivers::driver_task_net::cyw43_dpc_child_timing_diagnostic() {
+            let Some(frequency_hz) =
+                crate::drivers::driver_task_net::cyw43_dpc_child_timing_counter_freq_hz()
+            else {
+                self.emit_console_line("CYW43_DPC_CHILD_TIMING format=counter-unavailable");
+                return;
+            };
+            match Self::wifi_cyw43_dpc_child_timing_header_line(timing, frequency_hz) {
+                Ok(line) => self.emit_console_line(line.as_str()),
+                Err(_) => self.emit_console_line("CYW43_DPC_CHILD_TIMING format=overflow"),
+            }
+            let mut index = 0usize;
+            while index < usize::from(timing.child_count) {
+                match Self::wifi_cyw43_dpc_child_timing_entry_line(timing, index, frequency_hz) {
+                    Ok(line) => self.emit_console_line(line.as_str()),
+                    Err(_) => {
+                        self.emit_console_line("CYW43_DPC_CHILD_TIMING_ENTRY format=overflow")
+                    }
+                }
+                index = index.saturating_add(1);
             }
         }
     }
@@ -27142,6 +27304,70 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn committed_cyw43_dpc_child_timing_diagnostic_for_test(
+    ) -> pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord {
+        let mut entries = [pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::empty();
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP];
+        let valid_flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED;
+        entries[0] = pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 41,
+            meta: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                1,
+                2,
+                3,
+                1,
+                valid_flags,
+            ),
+            published_cntvct_lo: 1_100,
+            intake_cntvct_lo: 1_120,
+            issued_cntvct_lo: 1_150,
+            terminal_cntvct_lo: 1_200,
+            accepted_cntvct_lo: 1_220,
+        };
+        entries[1] = pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 42,
+            meta: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                4,
+                5,
+                4,
+                2,
+                valid_flags,
+            ),
+            published_cntvct_lo: 1_250,
+            intake_cntvct_lo: 1_260,
+            issued_cntvct_lo: 1_280,
+            terminal_cntvct_lo: 1_320,
+            accepted_cntvct_lo: 1_340,
+        };
+        let publication_sequence = 13;
+        pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION,
+            len: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+            publication_sequence,
+            physical_epoch: 5,
+            event_sequence: 29,
+            source_cntvct_lo: 1_000,
+            queue_commit_cntvct_lo: 1_400,
+            queue_commit_sequence: 7,
+            data_len: 128,
+            child_count: 2,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE,
+            selected_source_to_queue_q11: 0,
+            overall_max_source_to_queue_q11: 0,
+            overflow_samples: 0,
+            unknown_samples: 0,
+            reserved: [0; 8],
+            entries,
+            committed_publication_sequence: publication_sequence,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn wifi_cyw43_bus_episode_line_is_complete_and_bounded() {
         let record = committed_cyw43_bus_episode_diagnostic_for_test();
@@ -27160,6 +27386,39 @@ mod tests {
             line.contains("hw=0003/0003 d=ffffffff o8=ffffffff r=ffffffff t=ffffffff q=0000001f")
         );
         assert!(line.ends_with("er=4/ffff/ffffffff fl=0000003f"), "{line}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_cyw43_dpc_child_timing_lines_are_complete_bounded_and_ordered() {
+        let record = committed_cyw43_dpc_child_timing_diagnostic_for_test();
+        assert!(record.committed());
+        let header =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_header_line(record, 1_000_000)
+                .expect("bounded timing header must fit");
+        let first =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_entry_line(record, 0, 1_000_000)
+                .expect("bounded first timing entry must fit");
+        let second =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_entry_line(record, 1, 1_000_000)
+                .expect("bounded second timing entry must fit");
+
+        for line in [&header, &first, &second] {
+            assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        }
+        assert_eq!(
+            header.as_str(),
+            "CYW43_DPC_CHILD_TIMING v=1 pe=00000005 e=0000001d src=000003e8 q=00000578 qc=00000007 len=128 n=2 fl=00000001 s2q=0 max=0 ovf=0 unk=0 tail_us=60"
+        );
+        assert_eq!(
+            first.as_str(),
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=0 seq=00000029 a=01 k=02 ph=03 eng=01 vf=1f ts=0000044c/00000460/0000047e/000004b0/000004c4 pre_us=100 p2n_us=20 n2i_us=30 i2t_us=50 t2a_us=20"
+        );
+        assert_eq!(
+            second.as_str(),
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=1 seq=0000002a a=04 k=05 ph=04 eng=02 vf=1f ts=000004e2/000004ec/00000500/00000528/0000053c pre_us=30 p2n_us=10 n2i_us=20 i2t_us=40 t2a_us=20"
+        );
     }
 
     #[cfg(feature = "kernel")]

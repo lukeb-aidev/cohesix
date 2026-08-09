@@ -691,6 +691,64 @@ Milestone 26b task
 `m26b-wifi-sdio-notification-dpc-closure` and
 `m26b-net-control-priority`.
 
+Exact image `aabb9b39ecc4` classified the remaining performance frontier as
+J4, not an association or Join-owner failure. It reached first-pair Gate 8 and
+DHCP without live-ring poison, RX-queue poison, `recovery_required`, sticky
+pair restart, or priority-lease poison. Its stale compatibility client snapshot
+did not poison or govern the healthy live owner. Its worst
+valid same-sample RX split was 33.841 ms total, with 27.154 ms (80.2%) in
+source-to-private-queue commit, 5.309 ms in queue-to-precommit, 1.228 ms in
+precommit-to-root-copy, and 0.148 ms in copy-to-paired-response acceptance.
+The J1/J2/J3 ownership chain is therefore complete; J4's first unresolved
+causal seam is inside source admission to durable queue commit.
+
+The passive J4 child trace uses two physically correct regions.
+`DriverRuntimeSdioChildTimingMailbox` is one cache-line-isolated record in the
+SDIO owner ring at offset 1,920, covering bytes 1,920-1,983. In that owner
+ring the existing fault record ends at 1,912, the clock snapshot begins at
+1,984, and the shared payload begins at 4,096. CYW43 stages the immutable child
+sequence, descriptor fingerprint, physical epoch, DPC event, action, I/O phase,
+engine, and publication CNTVCT before the ordinary sequence-last command
+handoff. SDIO validates and preserves that body, records exact owner intake,
+physical issue, and joined-terminal CNTVCT, then commits the child sequence
+last before publishing the ordinary completion. CYW43 stable-reads only that exact commit through its
+mapped SDIO-owner ring and adds its exact completion-acceptance CNTVCT; root
+reads only the joined CYW43 trace and never writes either record. These are sequential
+staged/commit writers, not concurrent owners, and neither may mutate the other
+side's fields after handoff. Offset 1,920 is also the CYW43 parent-descriptor
+offset, but only on CYW43's different local ring and physical page, so every
+helper must name the role and ring base. The SDIO bus link maps only its owner ring and the
+eight-page 4,096-36,863 payload aperture into both runtimes; SDIO cannot read
+or write CYW43's private RX-batch pages. CYW43 is therefore the sole writer of
+the 512-byte `DriverRuntimeCyw43DpcChildTimingRecord`, whose sixteen-entry
+bound begins at offset 49,472 immediately after the 49,344-49,471 bus-episode
+record and ends at 49,984 before the private RX-batch-region end at 53,248.
+Each 28-byte child entry carries sequence, typed metadata, and publication,
+SDIO-intake, issue, terminal, and CYW43-acceptance low CNTVCT words. Root may
+stable-read that trace for diagnostics; SDIO may not map or consume it.
+
+Each accepted sample remains bound to one physical epoch, DPC event, immutable
+child sequence, descriptor fingerprint, typed action/I/O phase/engine, and
+passive owner-mailbox publication. It may
+partition source-to-first-child publication, publication-to-SDIO intake,
+SDIO-intake-to-physical issue, issue-to-joined terminal,
+terminal-to-CYW43 acceptance, between-child acceptance-to-publication, and
+final-acceptance-to-queue commit. A dominant
+first interval selects CYW43's local pre-child DPC path. A dominant second
+interval selects the reciprocal CYW43-to-SDIO handoff/admission seam, while a
+dominant third interval selects SDIO preissue service. A dominant physical interval
+selects the SDHCI/PIO-or-DMA engine. Dominant terminal-to-acceptance selects
+the final mailbox publication plus normal completion handoff and CYW43
+acceptance; only dominant between-child or final acceptance-to-queue time
+selects CYW43 local continuation. Torn, stale, missing, overflowed,
+wrap-ambiguous, cross-epoch, cross-child, or non-worst evidence is UNKNOWN. No timestamp,
+validity bit, trace level, or derived classification may signal, wake, issue,
+retry, rearm, recover, change a deadline, retain work, or affect scheduling.
+Only a repeated dominant exact seam plus a direct production-code
+counterfactual admits one minimal correction. Otherwise the current repair
+sequence stops; historical `494e9cb0e9ad` remains a negative ordering control,
+not a transport implementation to merge or restore.
+
 For active op11, the same stable batch is nonterminal; root commits the exact
 64-byte cache-line-disjoint ACK at shared
 offset 49,280 only after delivery, and CYW43 preserves parent and batch until

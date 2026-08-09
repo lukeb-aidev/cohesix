@@ -5331,9 +5331,29 @@ pub(crate) fn cyw43_bus_episode_diagnostic(
     crate::hal::driver_task::driver_task_cyw43_bus_episode_snapshot()
 }
 
+/// Return the latest stable, read-only CYW43 DPC child timing trace.
+///
+/// The timing record is passive evidence only. It cannot admit linked work,
+/// signal either runtime, or authorize scheduling, retry, or recovery.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_dpc_child_timing_diagnostic(
+) -> Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE.lock() {
+        return Some(snapshot);
+    }
+    crate::hal::driver_task::driver_task_cyw43_dpc_child_timing_snapshot()
+}
+
 #[cfg(all(feature = "kernel", test))]
 static CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE: Mutex<
     Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
+> = Mutex::new(None);
+
+#[cfg(all(feature = "kernel", test))]
+static CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE: Mutex<
+    Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord>,
 > = Mutex::new(None);
 
 #[cfg(all(feature = "kernel", test))]
@@ -7518,6 +7538,13 @@ pub(crate) fn set_cyw43_bus_episode_diagnostic_test_override(
     snapshot: Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
 ) {
     *CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn set_cyw43_dpc_child_timing_diagnostic_test_override(
+    snapshot: Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord>,
+) {
+    *CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -21143,6 +21170,13 @@ fn cyw43_counter_freq_hz() -> Option<u64> {
     }
     #[cfg(not(test))]
     None
+}
+
+/// Return the fixed virtual-counter frequency used to render passive DPC child timing.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_dpc_child_timing_counter_freq_hz() -> Option<u64> {
+    cyw43_counter_freq_hz()
 }
 
 #[cfg(feature = "kernel")]

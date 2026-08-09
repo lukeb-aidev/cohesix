@@ -3312,6 +3312,59 @@ passive proof field is scoped to reopened Milestone 26b task
 `m26b-wifi-join-owner-forensic-decision`, within
 `m26b-wifi-sdio-notification-dpc-closure` and
 `m26b-net-control-priority`.
+
+The J4 per-child extension must additionally prove the physical two-region
+layout and sequential writer handoff. `DriverRuntimeSdioChildTimingMailbox` is
+exactly one 64-byte cache line at SDIO owner-ring offset 1,920; tests must show
+that owner fault telemetry ends at 1,912, the clock snapshot starts at 1,984,
+and the shared payload starts at 4,096. CYW43 stages the immutable child
+sequence, descriptor fingerprint, physical epoch, DPC event, typed action/I/O
+phase/engine, publication flag, and publication CNTVCT before sequence-last
+command handoff. SDIO must validate and preserve that body, add intake,
+issue, and terminal flags and CNTVCT words, and commit the matching child
+sequence last before the normal completion publication. CYW43 must accept only two identical committed
+samples and add its acceptance timestamp without mutating the mailbox. Root is
+read-only. Tests must reject a concurrent or late CYW43 mailbox mutation and
+any SDIO mutation of the staged identity. Neither side may confuse numeric
+offset 1,920 with the parent descriptor on CYW43's physically distinct local
+ring.
+
+Capability/layout tests must prove the reciprocal bus link exports only the
+SDIO owner ring and eight payload pages covering offsets 4,096-36,863. It must
+not export CYW43-private RX-batch pages to SDIO.
+`DriverRuntimeCyw43DpcChildTimingRecord` begins exactly at shared offset 49,472,
+after the 128-byte bus-episode record at 49,344, is exactly 512 bytes, retains
+at most sixteen 28-byte child entries, and ends at 49,984 before the
+RX-batch-region end at 53,248. Compile-time and ABI tests must prove 64-byte
+record alignment, fixed bounds, no overlap with the RX-batch ACK or bus-episode
+records, CYW43 as sole trace writer, root as stable read-only consumer, and no
+SDIO mapping. Each entry must preserve the same child sequence and typed
+metadata with publication, SDIO-intake, issue, terminal, and CYW43-acceptance low CNTVCT
+words.
+
+Sequence-last tests must reject torn publication, wrong version, stale physical
+epoch, wrong DPC event, child/fingerprint/typed-metadata mismatch, overflow,
+and wrap-ambiguous deltas without rejecting or delaying the underlying packet.
+Healthy coverage must carry exact source, child publication, SDIO intake,
+physical issue,
+joined physical terminal, CYW43 acceptance, between-child, and queue-commit
+evidence from the same DPC episode and preserve the current
+`s2q/q2p/p2r/r2a` result. Decision tests must classify a dominant
+source-to-first-publication interval as CYW43's local pre-child DPC path,
+publication-to-intake as the reciprocal CYW43-to-SDIO handoff/admission seam,
+intake-to-issue as SDIO preissue, issue-to-terminal as the selected SDHCI/PIO-or-DMA
+engine. Terminal-to-acceptance must classify the final mailbox publication plus
+normal completion handoff and CYW43 acceptance, while only between-child or
+final-acceptance-to-queue may classify CYW43 local continuation. Missing,
+invalid, non-worst, or mixed samples
+remain UNKNOWN. Every timing field and classification must be data-only:
+mutation or absence must leave notifications, runnable decisions, command
+publication, physical issue count, retry/rearm/deadline/recovery state, queue
+delivery, and scheduler choice identical. Hardware may admit one minimal
+correction only after repeated valid same-seam dominance and a direct
+production-code counterfactual. Otherwise stop; historical `494e9cb0e9ad` is
+not eligible for merge or restoration because its fresh raw-TCP p95 was about
+1.5 seconds with retransmission and first-ACK delay.
 Hardware analysis must use high `a2i` for acceptance/FIFO/owner wait through
 first issue, high `i2t` for issued runtime/SDIO service including runtime
 `WAIT_CREDIT`, and high `t2n` for the post-terminal EventPump handoff only when

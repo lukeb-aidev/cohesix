@@ -1656,6 +1656,56 @@ pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_WORDS: usize =
 pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_MAGIC: u32 = 0x4359_4245;
 /// Layout version for [`DriverRuntimeCyw43BusEpisodeRecord`].
 pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_VERSION: u16 = 1;
+/// Fixed offset of the passive SDIO-child timing mailbox in the linked owner ring.
+///
+/// The mailbox occupies one otherwise-unused cache line between the bounded
+/// SDIO fault telemetry and the passive clock snapshot. CYW43 stages one exact
+/// published child; the sole SDIO owner preserves that identity, adds physical
+/// timing, and commits it before CYW43 consumes it as diagnostic evidence.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_OFFSET: u16 = 1_920;
+/// Exact bytes in one passive SDIO-child timing mailbox.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES: u16 = 64;
+/// Magic value for [`DriverRuntimeSdioChildTimingMailbox`].
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_MAGIC: u32 = 0x5344_544d;
+/// Layout version for [`DriverRuntimeSdioChildTimingMailbox`].
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_VERSION: u16 = 1;
+/// The linked CYW43 producer committed the exact child publication timestamp.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_PUBLISHED: u32 = 1 << 0;
+/// The sole SDIO owner admitted the exact linked child.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_INTAKE: u32 = 1 << 1;
+/// The sole SDIO owner wrote `SDHCI_COMMAND` for the exact child.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_ISSUED: u32 = 1 << 2;
+/// The sole SDIO owner joined the exact physical terminal conditions.
+pub const DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_TERMINAL: u32 = 1 << 3;
+/// Fixed offset of the selected CYW43 DPC-child timing trace.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET: u16 =
+    DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET + DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES;
+/// Exact bytes in one selected CYW43 DPC-child timing trace.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES: u16 = 512;
+/// Maximum exact SDIO children retained for one selected DATA event.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP: usize = 16;
+/// Magic value for [`DriverRuntimeCyw43DpcChildTimingRecord`].
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC: u32 = 0x4359_4454;
+/// Layout version for [`DriverRuntimeCyw43DpcChildTimingRecord`].
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION: u16 = 1;
+/// The selected DATA event reached a complete, exact queue commit.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE: u32 = 1 << 0;
+/// More exact children were observed than the bounded trace can retain.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW: u32 = 1 << 1;
+/// At least one exact timing boundary was unavailable or mismatched.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN: u32 = 1 << 2;
+/// An SDIO mailbox did not match the exact CYW43 event/child identity.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH: u32 = 1 << 3;
+/// Entry metadata: the CYW43 child publication timestamp is valid.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED: u8 = 1 << 0;
+/// Entry metadata: the SDIO-owner intake timestamp is valid.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE: u8 = 1 << 1;
+/// Entry metadata: the physical SDHCI issue timestamp is valid.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED: u8 = 1 << 2;
+/// Entry metadata: the joined physical terminal timestamp is valid.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL: u8 = 1 << 3;
+/// Entry metadata: the exact CYW43 completion-acceptance timestamp is valid.
+pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED: u8 = 1 << 4;
 /// A root foreground command opened the bus-service episode.
 pub const DRIVER_RUNTIME_CYW43_BUS_EPISODE_CAUSE_FOREGROUND: u16 = 1;
 /// Durable CYW43 DPC work opened the bus-service episode.
@@ -1863,9 +1913,28 @@ const _: () = {
     );
     assert!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET.is_multiple_of(64));
     assert!(DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES == 128);
+    assert!(DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES == 64);
+    assert!(
+        DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_OFFSET as u32
+            + DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES as u32
+            <= DRIVER_RUNTIME_CYW43_SDPCM_TX_FRAME_OFFSET as u32
+    );
+    assert!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES == 512);
+    assert!(core::mem::size_of::<DriverRuntimeSdioChildTimingMailbox>() == 64);
+    assert!(core::mem::align_of::<DriverRuntimeSdioChildTimingMailbox>() == 64);
+    assert!(core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingEntry>() == 28);
+    assert!(core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingRecord>() == 512);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43DpcChildTimingRecord>() == 64);
     assert!(
         DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET as u32
             + DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as u32
+            == DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET as u32
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES as u32
             <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
     );
     assert!(
@@ -2518,6 +2587,426 @@ impl DriverRuntimeCyw43RxBatchAck {
         } else {
             None
         }
+    }
+}
+
+/// Passive sequence-last timing for one exact linked CYW43-to-SDIO child.
+///
+/// CYW43 publishes the exact child identity and publication tick before it
+/// signals the linked owner. SDIO preserves that body, adds the physical issue
+/// and joined-terminal ticks, and commits `child_sequence` last before normal
+/// completion publication. No field participates in admission, retry,
+/// recovery, wake, or scheduler policy.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeSdioChildTimingMailbox {
+    /// Fixed [`DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Exact nonzero linked child sequence.
+    pub child_sequence: u32,
+    /// Immutable descriptor/action fingerprint.
+    pub descriptor_fingerprint: u32,
+    /// Exact nonzero SDIO physical-owner epoch.
+    pub physical_epoch: u32,
+    /// Exact nonzero DPC event sequence.
+    pub event_sequence: u32,
+    /// Typed CYW43 DPC action.
+    pub action: u8,
+    /// Typed CYW43 DPC I/O kind.
+    pub io_kind: u8,
+    /// Typed CYW43 DPC I/O phase.
+    pub io_phase: u8,
+    /// [`DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_*`] value.
+    pub engine: u8,
+    /// `DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_*` evidence bits.
+    pub flags: u32,
+    /// Low CNTVCT word sampled for the passive mailbox stage before command commit.
+    pub published_cntvct_lo: u32,
+    /// Low CNTVCT word sampled when SDIO admits the exact linked child.
+    pub intake_cntvct_lo: u32,
+    /// Low CNTVCT word sampled immediately after physical command issue.
+    pub issued_cntvct_lo: u32,
+    /// Low CNTVCT word sampled after the joined physical terminal.
+    pub terminal_cntvct_lo: u32,
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 12],
+    /// Sequence-last commit; exactly repeats `child_sequence`.
+    pub committed_child_sequence: u32,
+}
+
+impl DriverRuntimeSdioChildTimingMailbox {
+    const FLAG_MASK: u32 = DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_PUBLISHED
+        | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_INTAKE
+        | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_ISSUED
+        | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_TERMINAL;
+
+    /// Canonical empty mailbox.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_MAGIC,
+            version: DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_VERSION,
+            len: DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES,
+            child_sequence: 0,
+            descriptor_fingerprint: 0,
+            physical_epoch: 0,
+            event_sequence: 0,
+            action: 0,
+            io_kind: 0,
+            io_phase: 0,
+            engine: 0,
+            flags: 0,
+            published_cntvct_lo: 0,
+            intake_cntvct_lo: 0,
+            issued_cntvct_lo: 0,
+            terminal_cntvct_lo: 0,
+            reserved: [0; 12],
+            committed_child_sequence: 0,
+        }
+    }
+
+    /// Whether the diagnostic body is internally consistent.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_MAGIC
+            || self.version != DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_VERSION
+            || self.len != DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES
+            || self.child_sequence == 0
+            || self.descriptor_fingerprint == 0
+            || self.physical_epoch == 0
+            || self.event_sequence == 0
+            || self.action == 0
+            || self.action > 19
+            || self.io_kind == 0
+            || self.io_kind > 6
+            || self.io_phase == 0
+            || self.io_phase > 4
+            || !(self.engine as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND
+                || self.engine as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_PIO
+                || self.engine as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_DMA)
+            || self.flags & !Self::FLAG_MASK != 0
+            || self.flags & DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_PUBLISHED == 0
+            || (self.flags & DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_ISSUED != 0
+                && self.flags & DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_INTAKE == 0)
+            || (self.flags & DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_TERMINAL != 0
+                && self.flags & DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_ISSUED == 0)
+        {
+            return false;
+        }
+        let mut index = 0;
+        while index < self.reserved.len() {
+            if self.reserved[index] != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Whether the sequence-last mailbox publication is complete.
+    #[must_use]
+    pub const fn committed(self) -> bool {
+        self.body_valid() && self.committed_child_sequence == self.child_sequence
+    }
+}
+
+/// One exact child entry in a selected CYW43 DPC DATA-event timing trace.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43DpcChildTimingEntry {
+    /// Exact nonzero linked child sequence.
+    pub child_sequence: u32,
+    /// Packed action, I/O kind, I/O phase, engine, and validity flags.
+    pub meta: u32,
+    /// Low CNTVCT word sampled for the passive mailbox stage before command commit.
+    pub published_cntvct_lo: u32,
+    /// Low CNTVCT word sampled when SDIO admits the exact linked child.
+    pub intake_cntvct_lo: u32,
+    /// Low CNTVCT word sampled immediately after `SDHCI_COMMAND` issue.
+    pub issued_cntvct_lo: u32,
+    /// Low CNTVCT word sampled after the joined physical terminal.
+    pub terminal_cntvct_lo: u32,
+    /// Low CNTVCT word sampled when CYW43 accepts the exact completion.
+    pub accepted_cntvct_lo: u32,
+}
+
+impl DriverRuntimeCyw43DpcChildTimingEntry {
+    /// Canonical empty entry.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            child_sequence: 0,
+            meta: 0,
+            published_cntvct_lo: 0,
+            intake_cntvct_lo: 0,
+            issued_cntvct_lo: 0,
+            terminal_cntvct_lo: 0,
+            accepted_cntvct_lo: 0,
+        }
+    }
+
+    /// Pack one typed entry metadata word.
+    #[must_use]
+    pub const fn pack_meta(action: u8, io_kind: u8, io_phase: u8, engine: u8, flags: u8) -> u32 {
+        action as u32
+            | ((io_kind as u32) << 8)
+            | ((io_phase as u32) << 16)
+            | (((engine & 0x03) as u32) << 24)
+            | (((flags & 0x1f) as u32) << 26)
+    }
+
+    /// Typed action stored in [`Self::meta`].
+    #[must_use]
+    pub const fn action(self) -> u8 {
+        self.meta as u8
+    }
+
+    /// Typed I/O kind stored in [`Self::meta`].
+    #[must_use]
+    pub const fn io_kind(self) -> u8 {
+        (self.meta >> 8) as u8
+    }
+
+    /// Typed I/O phase stored in [`Self::meta`].
+    #[must_use]
+    pub const fn io_phase(self) -> u8 {
+        (self.meta >> 16) as u8
+    }
+
+    /// Typed child engine stored in [`Self::meta`].
+    #[must_use]
+    pub const fn engine(self) -> u8 {
+        ((self.meta >> 24) & 0x03) as u8
+    }
+
+    /// Validity flags stored in [`Self::meta`].
+    #[must_use]
+    pub const fn flags(self) -> u8 {
+        ((self.meta >> 26) & 0x1f) as u8
+    }
+
+    /// Whether this populated entry contains a complete exact timing tuple.
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        let required = DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED;
+        self.child_sequence != 0
+            && self.action() != 0
+            && self.action() <= 19
+            && self.io_kind() >= 1
+            && self.io_kind() <= 6
+            && self.io_phase() >= 1
+            && self.io_phase() <= 4
+            && self.flags() == required
+            && self.meta & (1 << 31) == 0
+            && (self.engine() as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND
+                || self.engine() as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_PIO
+                || self.engine() as u16 == DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_DMA)
+    }
+
+    /// Whether this entry is the all-zero unused representation.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.child_sequence == 0
+            && self.meta == 0
+            && self.published_cntvct_lo == 0
+            && self.intake_cntvct_lo == 0
+            && self.issued_cntvct_lo == 0
+            && self.terminal_cntvct_lo == 0
+            && self.accepted_cntvct_lo == 0
+    }
+}
+
+/// Passive selected DATA-event trace for the unresolved CYW43 DPC interval.
+///
+/// CYW43 publishes only a complete queue-committed event, keeps the slowest
+/// source-to-queue event seen in the current physical epoch, and commits
+/// `publication_sequence` last. Root may format the record, but no consumer
+/// may use it to admit service or recovery.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43DpcChildTimingRecord {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero publication identity committed in the final word.
+    pub publication_sequence: u32,
+    /// Exact nonzero SDIO physical-owner epoch.
+    pub physical_epoch: u32,
+    /// Exact nonzero DPC event sequence.
+    pub event_sequence: u32,
+    /// Low CNTVCT word at CYW43 DPC event admission.
+    pub source_cntvct_lo: u32,
+    /// Low CNTVCT word after the successful durable DATA queue commit.
+    pub queue_commit_cntvct_lo: u32,
+    /// Exact nonzero private queue-state commit sequence.
+    pub queue_commit_sequence: u32,
+    /// Exact selected DATA frame length.
+    pub data_len: u16,
+    /// Number of populated child entries.
+    pub child_count: u16,
+    /// `DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_*` evidence bits.
+    pub flags: u32,
+    /// Selected event's source-to-queue interval in Q11 ticks.
+    pub selected_source_to_queue_q11: u16,
+    /// Largest complete source-to-queue interval observed in this epoch.
+    pub overall_max_source_to_queue_q11: u16,
+    /// Count of otherwise eligible events that exceeded the bounded entry cap.
+    pub overflow_samples: u32,
+    /// Count of otherwise eligible events with missing/mismatched child evidence.
+    pub unknown_samples: u32,
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 8],
+    /// Bounded exact child sequence in publication order.
+    pub entries:
+        [DriverRuntimeCyw43DpcChildTimingEntry; DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP],
+    /// Sequence-last commit; exactly repeats `publication_sequence`.
+    pub committed_publication_sequence: u32,
+}
+
+impl DriverRuntimeCyw43DpcChildTimingRecord {
+    const FLAG_MASK: u32 = DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE
+        | DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW
+        | DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN
+        | DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH;
+
+    /// Canonical empty trace.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION,
+            len: DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+            publication_sequence: 0,
+            physical_epoch: 0,
+            event_sequence: 0,
+            source_cntvct_lo: 0,
+            queue_commit_cntvct_lo: 0,
+            queue_commit_sequence: 0,
+            data_len: 0,
+            child_count: 0,
+            flags: 0,
+            selected_source_to_queue_q11: 0,
+            overall_max_source_to_queue_q11: 0,
+            overflow_samples: 0,
+            unknown_samples: 0,
+            reserved: [0; 8],
+            entries: [DriverRuntimeCyw43DpcChildTimingEntry::empty();
+                DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP],
+            committed_publication_sequence: 0,
+        }
+    }
+
+    /// Whether every passive body field is internally consistent.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC
+            || self.version != DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION
+            || self.len != DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES
+            || self.publication_sequence == 0
+            || self.physical_epoch == 0
+            || self.event_sequence == 0
+            || self.queue_commit_sequence == 0
+            || self.data_len == 0
+            || self.child_count == 0
+            || self.child_count as usize > DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP
+            || self.flags & !Self::FLAG_MASK != 0
+            || self.flags & DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE == 0
+        {
+            return false;
+        }
+        let exact = self.flags
+            & (DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW
+                | DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN
+                | DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH)
+            == 0;
+        if exact {
+            if self.selected_source_to_queue_q11
+                == DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+                || self.selected_source_to_queue_q11 != self.overall_max_source_to_queue_q11
+                || self.selected_source_to_queue_q11
+                    != driver_runtime_cyw43_rx_stage_delta_q11(
+                        self.source_cntvct_lo,
+                        self.queue_commit_cntvct_lo,
+                    )
+            {
+                return false;
+            }
+            let total_ticks = self
+                .queue_commit_cntvct_lo
+                .wrapping_sub(self.source_cntvct_lo);
+            let mut previous = self.source_cntvct_lo;
+            let mut stage_sum = 0u64;
+            let mut exact_index = 0usize;
+            while exact_index < self.child_count as usize {
+                let entry = self.entries[exact_index];
+                let stages = [
+                    entry.published_cntvct_lo.wrapping_sub(previous),
+                    entry
+                        .intake_cntvct_lo
+                        .wrapping_sub(entry.published_cntvct_lo),
+                    entry.issued_cntvct_lo.wrapping_sub(entry.intake_cntvct_lo),
+                    entry
+                        .terminal_cntvct_lo
+                        .wrapping_sub(entry.issued_cntvct_lo),
+                    entry
+                        .accepted_cntvct_lo
+                        .wrapping_sub(entry.terminal_cntvct_lo),
+                ];
+                let mut stage_index = 0usize;
+                while stage_index < stages.len() {
+                    if stages[stage_index] > total_ticks {
+                        return false;
+                    }
+                    stage_sum = stage_sum.saturating_add(stages[stage_index] as u64);
+                    stage_index += 1;
+                }
+                previous = entry.accepted_cntvct_lo;
+                exact_index += 1;
+            }
+            let tail = self.queue_commit_cntvct_lo.wrapping_sub(previous);
+            if tail > total_ticks || stage_sum.saturating_add(tail as u64) != total_ticks as u64 {
+                return false;
+            }
+        }
+        let mut index = 0usize;
+        while index < DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP {
+            if index < self.child_count as usize {
+                if exact && !self.entries[index].complete() {
+                    return false;
+                }
+                if self.entries[index].child_sequence == 0 {
+                    return false;
+                }
+            } else if !self.entries[index].is_empty() {
+                return false;
+            }
+            index += 1;
+        }
+        index = 0;
+        while index < self.reserved.len() {
+            if self.reserved[index] != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Whether the sequence-last trace publication is complete.
+    #[must_use]
+    pub const fn committed(self) -> bool {
+        self.body_valid() && self.committed_publication_sequence == self.publication_sequence
     }
 }
 
@@ -6072,6 +6561,143 @@ mod tests {
             ..batch
         };
         assert!(!committed.matches_batch(uncommitted_batch));
+    }
+
+    #[test]
+    fn cyw43_dpc_child_timing_layout_is_bounded_and_sequence_last() {
+        assert_eq!(DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_OFFSET, 1_920);
+        assert_eq!(DRIVER_RUNTIME_SDIO_CHILD_TIMING_MAILBOX_BYTES, 64);
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeSdioChildTimingMailbox>(),
+            64
+        );
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeSdioChildTimingMailbox,
+                committed_child_sequence
+            ),
+            60,
+        );
+        assert_eq!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET, 49_472);
+        assert_eq!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES, 512);
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingEntry>(),
+            28
+        );
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingRecord>(),
+            512
+        );
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeCyw43DpcChildTimingRecord,
+                committed_publication_sequence
+            ),
+            508,
+        );
+
+        let mut mailbox = DriverRuntimeSdioChildTimingMailbox {
+            child_sequence: 7,
+            descriptor_fingerprint: 0x1234_5678,
+            physical_epoch: 3,
+            event_sequence: 9,
+            action: 1,
+            io_kind: 1,
+            io_phase: 4,
+            engine: DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND as u8,
+            flags: DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_PUBLISHED
+                | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_INTAKE
+                | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_ISSUED
+                | DRIVER_RUNTIME_SDIO_CHILD_TIMING_FLAG_TERMINAL,
+            published_cntvct_lo: 0,
+            intake_cntvct_lo: 1,
+            issued_cntvct_lo: 2,
+            terminal_cntvct_lo: 3,
+            ..DriverRuntimeSdioChildTimingMailbox::empty()
+        };
+        assert!(
+            mailbox.body_valid(),
+            "raw low-word zero is valid timing evidence"
+        );
+        assert!(!mailbox.committed());
+        mailbox.committed_child_sequence = mailbox.child_sequence;
+        assert!(mailbox.committed());
+        let mut invalid_mailbox = mailbox;
+        invalid_mailbox.action = 20;
+        assert!(!invalid_mailbox.committed());
+        invalid_mailbox = mailbox;
+        invalid_mailbox.io_kind = 7;
+        assert!(!invalid_mailbox.committed());
+        invalid_mailbox = mailbox;
+        invalid_mailbox.io_phase = 5;
+        assert!(!invalid_mailbox.committed());
+        mailbox.committed_child_sequence = mailbox.child_sequence.wrapping_add(1);
+        assert!(!mailbox.committed());
+
+        let flags = DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL
+            | DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED;
+        let entry = DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 7,
+            meta: DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                1,
+                1,
+                4,
+                DRIVER_RUNTIME_CYW43_BUS_EPISODE_CHILD_ENGINE_COMMAND as u8,
+                flags,
+            ),
+            published_cntvct_lo: u32::MAX - 1,
+            intake_cntvct_lo: u32::MAX,
+            issued_cntvct_lo: 0,
+            terminal_cntvct_lo: 1,
+            accepted_cntvct_lo: 2,
+        };
+        assert!(entry.complete());
+        let mut trace = DriverRuntimeCyw43DpcChildTimingRecord {
+            publication_sequence: 11,
+            physical_epoch: 3,
+            event_sequence: 9,
+            source_cntvct_lo: u32::MAX - 2,
+            queue_commit_cntvct_lo: 3,
+            queue_commit_sequence: 5,
+            data_len: 64,
+            child_count: 1,
+            flags: DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE,
+            entries: {
+                let mut entries = [DriverRuntimeCyw43DpcChildTimingEntry::empty();
+                    DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP];
+                entries[0] = entry;
+                entries
+            },
+            ..DriverRuntimeCyw43DpcChildTimingRecord::empty()
+        };
+        assert!(trace.body_valid());
+        assert!(!trace.committed());
+        trace.committed_publication_sequence = trace.publication_sequence;
+        assert!(trace.committed());
+        trace.overall_max_source_to_queue_q11 = 1;
+        assert!(
+            !trace.committed(),
+            "an exact trace must carry the selected worst sample"
+        );
+        trace.overall_max_source_to_queue_q11 = trace.selected_source_to_queue_q11;
+        trace.entries[0].accepted_cntvct_lo ^= 1;
+        assert!(
+            trace.committed(),
+            "an internally consistent timing-only change remains passive evidence",
+        );
+        trace.entries[0].accepted_cntvct_lo = trace.queue_commit_cntvct_lo.wrapping_add(1);
+        assert!(
+            !trace.committed(),
+            "an inconsistent exact timing decomposition must be diagnostic UNKNOWN",
+        );
+        trace.flags |= DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN;
+        assert!(
+            trace.committed(),
+            "inexact timing remains a committed passive UNKNOWN record",
+        );
     }
 
     #[test]
