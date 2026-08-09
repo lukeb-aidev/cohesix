@@ -1252,20 +1252,36 @@ The producer clears `commit_sequence`, writes and cleans the complete 24-byte
 queue body, executes the barrier, and commits a new nonzero sequence last at
 local-ring offset 192. It then builds the real 128-byte batch record at shared
 offset 36864 with one through eight entries pointing to the fixed 1,536-byte
-payload slots beginning at 36992. Layout version 2 must retain the complete
+payload slots beginning at 36992. Layout version 3 must retain the complete
 128-byte size, keep the eight 8-byte entries unchanged, publish eight parallel
 `u32` DPC-admission low-CNTVCT words as `source_cntvct_lo: [u32; 8]` at bytes
-88-119, leave bytes 120-123 zero,
-commit the repeated parent sequence at byte 124 last, and only then signal
-root. A populated timestamp value of zero is valid modulo 32; every unused
-entry/source pair must be zero. Version 1, wrong-version, torn, and source-only
-changed samples must fail closed. One parent terminal with detail `0x5803` and
+88-119, publish `first_data_stage_deltas_q11` at bytes 120-123, commit the
+repeated parent sequence at byte 124 last, and only then signal root. The low
+`u16` must be the Q11 floor from the first populated `CHANNEL_DATA` entry's
+source to its successful sequence-last private-queue commit; the high `u16`
+must be that queue commit to the final precommit evidence-word sample. Values
+`0x0000..=0xfffe` are valid, including raw zero; `0xffff` is
+saturated/UNKNOWN. An EVENT before DATA must not take ownership of the word,
+and the runtime must write zero when no DATA entry exists. The passive word is
+excluded from body validity and authority identity. Every unused entry/source
+pair must remain zero. Every prior or otherwise wrong-version, torn, or
+source-only-changed authority sample must fail closed. Two otherwise exact
+stable samples that differ only in the packed timing word must remain
+behaviorally accepted, return `0xffff/0xffff` timing (UNKNOWN), and request no
+recovery. One parent terminal with detail `0x5803` and
 `result=count` publishes that batch. Root must double-sample the queue and batch
 headers, validate generation, queue commit, parent, count, remaining, entry
-bounds, slot bounds, and source stability, copy every frame, and revalidate the
-unchanged header after the copy. Runtime queue tests must prove source
-provenance follows logical removal and reordering and that the freed physical
-slot is cleared. It must prove an association event and a data frame are
+bounds, slot bounds, and source stability, copy every frame, and reject any
+authority-bearing header change on post-copy revalidation. A post-copy change
+confined to `first_data_stage_deltas_q11` must preserve the payload and exact
+ACK while degrading the timing halves to `0xffff/0xffff` (UNKNOWN). Runtime
+queue tests must prove source and post-commit admission provenance follow
+logical removal/reordering, that
+admission is stamped only after successful queue-state commit and before wake,
+and that the freed physical slot is cleared. Q11 tests must cover floor, raw
+zero, modulo-low-word wrap, exact `0xfffe`, saturation, placeholder-body then
+evidence-word then sequence-last commit ordering, and a production value. It
+must prove an association event and a data frame are
 delivered in order, stale work cannot mutate a replacement generation, and
 malformed, torn, or issued-unknown completion state poisons without replay. A
 zero-status `SOURCE_PENDING` event is consumed and rearmed through the ordinary
@@ -3236,6 +3252,12 @@ successor_issues=<n>` and
 records, followed by
 `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
 the passive `rx2a_mod32=n/last/max/avg` DPC-admission-to-TX-acceptance metric,
+plus
+`wifi_tx_phase_rxsplit_q11a gen=<n> us=n/last/max/avg
+s2q=<...> q2p=<...>` and
+`wifi_tx_phase_rxsplit_q11b gen=<n>
+p2r=<...> r2a=<...> sat=<n> inv=<n>
+slow=<total>/<s2q>/<q2p>/<p2r>/<r2a>`,
 then
 `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
 stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
@@ -3243,13 +3265,34 @@ stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
 deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
 sampling, terminal-to-successor timing, saturating counters, bounded formatting,
 FIFO HWM/drop/stale-purge accounting, and no GENET output or scheduling change.
-For `rx2a_mod32`, coverage must prove that accepted batch-v2 provenance survives
+For these metrics, coverage must prove that accepted batch-v3 source and stage
+provenance survives
 both direct and transferred exact copied-RX response paths and records once only
 after successful paired-TX admission; ordinary TX, nonmatching/stale RX,
 failed admission, and legacy records must produce zero samples. It must also
-prove that source word zero is present evidence rather than absence and that
-low-word wrap uses wrapping subtraction. The value measures runtime DPC-event
-admission, not radio reception or physical IRQ arrival, and must never feed a
+prove that raw zero is present evidence rather than absence, low-word wrap uses
+wrapping subtraction, `0xffff` is saturated/UNKNOWN, the immutable packed word
+is excluded from behavioral stable-sample identity, a timing-only mismatch
+degrades to `0xffff/0xffff` without rejection or recovery, the first DATA entry
+is selected after any preceding EVENT, and root's private stable-copy word stays
+attached to that same entry. Valid samples must partition source-to-acceptance
+into `s2q`, `q2p`, `p2r`, and `r2a`; the Q11 source stages are independent
+floors in 2^11 ticks (about 37.9 us per unit). `p2r` is the exact
+source-to-root-copy interval minus those two floors, so it includes their
+combined quantization remainder of less than 4,096 ticks (about 75.9 us at
+54 MHz) as well as actual precommit-to-root delay. Every split field's leading
+`n` must remain visible coverage but may legitimately be below `rx2a_mod32 n`,
+because only the first DATA entry in each batch carries packed stage evidence.
+Each missing, saturated, or invalid sample is individually UNKNOWN. Coverage
+is decision-complete for the bottleneck only when the valid same-sample
+`slow.total` equals `rx2a_mod32.max`; if `slow.total` is smaller, the worst
+sample remains UNKNOWN. `slow` must retain all five values from that one sample
+so independent maxima can never be mistaken for one episode. Source measures
+runtime DPC-event admission, not radio reception or
+physical IRQ arrival; the first stage ends only after the durable queue-state
+commit, while the second ends at the final precommit evidence-word sample
+before body clean/barrier and sequence-last parent commit.
+No passive timing value may feed a
 wake, queue, scheduling, issue, retry, deadline, or recovery predicate. This
 passive proof field is scoped to reopened Milestone 26b task
 `m26b-wifi-join-owner-forensic-decision`, within

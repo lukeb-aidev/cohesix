@@ -1630,7 +1630,11 @@ pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES: u16 =
 /// Magic value for one committed CYW43 root-visible RX batch.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC: u32 = 0x4359_5242;
 /// Layout version for [`DriverRuntimeCyw43RxBatchRecord`].
-pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 2;
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 3;
+/// Right shift applied to passive CYW43 RX stage deltas before publication.
+pub const DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT: u32 = 11;
+/// Saturated or unavailable passive CYW43 RX stage delta.
+pub const DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED: u16 = u16::MAX;
 /// Maximum frames committed in one CYW43-to-root RX batch.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP: usize = 8;
 /// Bytes reserved for each exact RX frame slot in a batch.
@@ -1770,6 +1774,45 @@ pub const fn driver_runtime_cyw43_rx_batch_payload_offset(index: usize) -> Optio
     } else {
         None
     }
+}
+
+/// Quantize one modulo-32 CNTVCT interval for passive CYW43 RX evidence.
+///
+/// Values through `0xfffe` are exact floors in units of 2^11 ticks. Larger
+/// intervals use [`DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED`].
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_stage_delta_q11(
+    start_cntvct_lo: u32,
+    end_cntvct_lo: u32,
+) -> u16 {
+    let quantized = end_cntvct_lo.wrapping_sub(start_cntvct_lo)
+        >> DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT;
+    if quantized >= u16::MAX as u32 {
+        DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+    } else {
+        quantized as u16
+    }
+}
+
+/// Pack the first RX CHANNEL_DATA entry's stage intervals into one ABI word.
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+    source_to_queue: u16,
+    queue_to_precommit: u16,
+) -> u32 {
+    source_to_queue as u32 | ((queue_to_precommit as u32) << 16)
+}
+
+/// Extract the source-to-private-queue interval from one packed ABI word.
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_stage_deltas_q11_source_to_queue(packed: u32) -> u16 {
+    packed as u16
+}
+
+/// Extract the private-queue-to-precommit interval from one packed ABI word.
+#[must_use]
+pub const fn driver_runtime_cyw43_rx_stage_deltas_q11_queue_to_precommit(packed: u32) -> u16 {
+    (packed >> 16) as u16
 }
 
 const _: () = {
@@ -2151,12 +2194,20 @@ pub struct DriverRuntimeCyw43RxBatchRecord {
     pub entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
     /// Low CNTVCT word for each entry's exact DPC source episode.
     ///
-    /// Every populated v2 slot has a valid raw modulo-32 value, including
+    /// Every populated v3 slot has a valid raw modulo-32 value, including
     /// zero. These timestamps are passive evidence and never scheduling or
     /// recovery authority.
     pub source_cntvct_lo: [u32; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
-    /// Must remain zero so future layouts fail closed.
-    pub reserved: [u8; 4],
+    /// Packed Q11 stage deltas for the first populated CHANNEL_DATA entry.
+    ///
+    /// The low half is source-to-successful private-queue commit and the high
+    /// half is that queue commit to the final precommit evidence-word sample.
+    /// Values through `0xfffe` are exact quantized floors; `0xffff` is
+    /// saturated or unknown. A batch with no CHANNEL_DATA entry publishes zero;
+    /// raw zero is also a valid measured value when a CHANNEL_DATA entry does
+    /// exist. This word is passive evidence and never wake, admission,
+    /// scheduling, or recovery authority.
+    pub first_data_stage_deltas_q11: u32,
     /// Sequence-last commit; exactly repeats `parent_sequence` when complete.
     pub committed_parent_sequence: u32,
 }
@@ -2177,13 +2228,14 @@ impl DriverRuntimeCyw43RxBatchRecord {
             entries: [DriverRuntimeCyw43RxBatchEntry::empty();
                 DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
             source_cntvct_lo: [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
-            reserved: [0; 4],
+            first_data_stage_deltas_q11: 0,
             committed_parent_sequence: 0,
         }
     }
 
     /// Construct an uncommitted body; publish it only after calling [`Self::commit`].
     #[must_use]
+    #[allow(clippy::too_many_arguments)]
     pub const fn staged(
         parent_sequence: u32,
         generation: u32,
@@ -2192,6 +2244,7 @@ impl DriverRuntimeCyw43RxBatchRecord {
         remaining: u16,
         entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
         source_cntvct_lo: [u32; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+        first_data_stage_deltas_q11: u32,
     ) -> Self {
         Self {
             magic: DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC,
@@ -2204,7 +2257,7 @@ impl DriverRuntimeCyw43RxBatchRecord {
             remaining,
             entries,
             source_cntvct_lo,
-            reserved: [0; 4],
+            first_data_stage_deltas_q11,
             committed_parent_sequence: 0,
         }
     }
@@ -2231,22 +2284,16 @@ impl DriverRuntimeCyw43RxBatchRecord {
 
         let mut index = 0;
         while index < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
-            if (index < self.count as usize && !self.entries[index].valid_for_index(index))
-                || (index >= self.count as usize
-                    && (!self.entries[index].is_empty() || self.source_cntvct_lo[index] != 0))
-            {
+            if index < self.count as usize {
+                if !self.entries[index].valid_for_index(index) {
+                    return false;
+                }
+            } else if !self.entries[index].is_empty() || self.source_cntvct_lo[index] != 0 {
                 return false;
             }
             index += 1;
         }
 
-        let mut reserved_index = 0;
-        while reserved_index < self.reserved.len() {
-            if self.reserved[reserved_index] != 0 {
-                return false;
-            }
-            reserved_index += 1;
-        }
         true
     }
 
@@ -2299,14 +2346,39 @@ impl DriverRuntimeCyw43RxBatchRecord {
             && self.valid_for_queue_state(queue_state)
     }
 
-    /// Accept two identical, valid volatile samples as one stable RX batch.
+    /// Whether two records name the same behavior-bearing batch identity.
+    ///
+    /// The first-data timing word is passive evidence only and is deliberately
+    /// excluded. A difference in that word may degrade diagnostics, but must
+    /// never reject payload, acknowledge progress, or authorize recovery.
+    #[must_use]
+    pub fn authority_identity_matches(self, other: Self) -> bool {
+        let mut left = self;
+        left.first_data_stage_deltas_q11 = 0;
+        let mut right = other;
+        right.first_data_stage_deltas_q11 = 0;
+        left == right
+    }
+
+    /// Accept two authority-identical, valid volatile samples as one stable RX batch.
     ///
     /// Callers must place their platform load/cache barriers between samples
-    /// and copy payloads only after this header has stabilized.
+    /// and copy payloads only after this header has stabilized. The passive
+    /// first-data timing word is deliberately excluded from behavioral
+    /// identity: a mismatch degrades only that evidence to saturated/unknown
+    /// and cannot reject an otherwise exact batch or authorize recovery.
     #[must_use]
     pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
-        if first == second && first.valid() {
-            Some(first)
+        if first.authority_identity_matches(second) && first.valid() && second.valid() {
+            let mut snapshot = first;
+            if first.first_data_stage_deltas_q11 != second.first_data_stage_deltas_q11 {
+                snapshot.first_data_stage_deltas_q11 =
+                    driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+                        DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+                        DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+                    );
+            }
+            Some(snapshot)
         } else {
             None
         }
@@ -2873,7 +2945,9 @@ const _: () = {
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>() == 4);
     assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, entries) == 24);
     assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, source_cntvct_lo) == 88);
-    assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved) == 120);
+    assert!(
+        core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, first_data_stage_deltas_q11) == 120
+    );
     assert!(
         core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence) == 124
     );
@@ -5638,11 +5712,55 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_stage_delta_q11_quantization_and_packing_are_exact() {
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT, 11);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED, 0xffff,);
+        assert_eq!(driver_runtime_cyw43_rx_stage_delta_q11(7, 7), 0);
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_delta_q11(1, 1 + ((1 << 11) - 1)),
+            0,
+            "quantization floors sub-Q11 intervals",
+        );
+        assert_eq!(driver_runtime_cyw43_rx_stage_delta_q11(1, 1 + (1 << 11)), 1,);
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_delta_q11(0xffff_f800, 0x0000_0800),
+            2,
+            "low-word wrap preserves a short modulo-32 interval",
+        );
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_delta_q11(0, 0xfffe << 11),
+            0xfffe,
+        );
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_delta_q11(0, 0xffff << 11),
+            DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        );
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_delta_q11(0, u32::MAX),
+            DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        );
+
+        let packed = driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+            0,
+            DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        );
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_deltas_q11_source_to_queue(packed),
+            0,
+            "a raw zero interval remains valid",
+        );
+        assert_eq!(
+            driver_runtime_cyw43_rx_stage_deltas_q11_queue_to_precommit(packed),
+            DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        );
+    }
+
+    #[test]
     fn cyw43_rx_batch_requires_exact_slots_and_final_parent_commit() {
         assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>(), 8);
         assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchRecord>(), 128);
         assert_eq!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>(), 4);
-        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION, 2);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION, 3);
         assert_eq!(
             core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, entries),
             24
@@ -5652,7 +5770,7 @@ mod tests {
             88
         );
         assert_eq!(
-            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved),
+            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, first_data_stage_deltas_q11),
             120
         );
         assert_eq!(
@@ -5676,14 +5794,44 @@ mod tests {
         let source_cntvct_lo = [0, 0x9abc_def0, 0, 0, 0, 0, 0, 0];
 
         let staged =
-            DriverRuntimeCyw43RxBatchRecord::staged(41, 7, 9, 2, 3, entries, source_cntvct_lo);
+            DriverRuntimeCyw43RxBatchRecord::staged(41, 7, 9, 2, 3, entries, source_cntvct_lo, 0);
         assert!(staged.body_valid());
+        assert_eq!(staged.first_data_stage_deltas_q11, 0, "raw zero is valid");
         assert!(!staged.committed());
         assert!(!staged.valid());
         assert_eq!(
             DriverRuntimeCyw43RxBatchRecord::stable_snapshot(staged, staged),
             None
         );
+
+        let mut event_only_entries =
+            [DriverRuntimeCyw43RxBatchEntry::empty(); DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+        event_only_entries[0] = entries[0];
+        let event_only_nonzero = DriverRuntimeCyw43RxBatchRecord::staged(
+            42,
+            7,
+            10,
+            1,
+            0,
+            event_only_entries,
+            [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+            1,
+        );
+        assert!(
+            event_only_nonzero.body_valid(),
+            "passive first-data evidence cannot change batch validity",
+        );
+        assert!(DriverRuntimeCyw43RxBatchRecord::staged(
+            42,
+            7,
+            10,
+            1,
+            0,
+            event_only_entries,
+            [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+            0,
+        )
+        .body_valid());
 
         let committed = staged.commit();
         assert!(committed.body_valid());
@@ -5696,12 +5844,12 @@ mod tests {
         );
 
         let mut prior_version = committed;
-        prior_version.version = 1;
+        prior_version.version = 2;
         assert!(!prior_version.body_valid());
         assert_eq!(
             DriverRuntimeCyw43RxBatchRecord::stable_snapshot(prior_version, prior_version),
             None,
-            "a v1 reader/writer mismatch must fail closed",
+            "a v2 reader/writer mismatch must fail closed",
         );
 
         let mut changed_source = committed;
@@ -5711,6 +5859,21 @@ mod tests {
             DriverRuntimeCyw43RxBatchRecord::stable_snapshot(committed, changed_source),
             None,
             "source-only change must not form one stable snapshot",
+        );
+
+        let mut changed_stage_deltas = committed;
+        changed_stage_deltas.first_data_stage_deltas_q11 = 0x1234_5678;
+        assert!(changed_stage_deltas.valid());
+        let degraded_stage_snapshot =
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(committed, changed_stage_deltas)
+                .expect("passive stage evidence cannot reject an exact batch");
+        assert_eq!(
+            degraded_stage_snapshot.first_data_stage_deltas_q11,
+            driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+                DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+                DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+            ),
+            "a torn passive word degrades only that evidence to unknown",
         );
 
         let queue_state = DriverRuntimeCyw43RxQueueState {
@@ -5787,10 +5950,6 @@ mod tests {
         let mut stale_source = committed;
         stale_source.source_cntvct_lo[2] = 1;
         assert!(!stale_source.body_valid());
-
-        let mut nonzero_reserved = committed;
-        nonzero_reserved.reserved[0] = 1;
-        assert!(!nonzero_reserved.body_valid());
     }
 
     #[test]
@@ -5826,9 +5985,17 @@ mod tests {
             flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA | (5 << 8),
         };
         let source_cntvct_lo = [0x0102_0304, 0x0506_0708, 0, 0, 0, 0, 0, 0];
-        let batch =
-            DriverRuntimeCyw43RxBatchRecord::staged(73, 11, 19, 2, 4, entries, source_cntvct_lo)
-                .commit();
+        let batch = DriverRuntimeCyw43RxBatchRecord::staged(
+            73,
+            11,
+            19,
+            2,
+            4,
+            entries,
+            source_cntvct_lo,
+            0x1122_3344,
+        )
+        .commit();
         assert!(batch.valid());
 
         let staged = DriverRuntimeCyw43RxBatchAck::staged(

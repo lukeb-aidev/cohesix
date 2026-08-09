@@ -8359,13 +8359,10 @@ fn driver_task_read_cyw43_rx_batch_record(
             view.read_u32(sources_offset + source_index * core::mem::size_of::<u32>())?;
         source_index = source_index.saturating_add(1);
     }
-    let mut reserved = [0; 4];
-    let reserved_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved);
-    let mut reserved_index = 0usize;
-    while reserved_index < reserved.len() {
-        reserved[reserved_index] = view.read_u8(reserved_offset + reserved_index)?;
-        reserved_index = reserved_index.saturating_add(1);
-    }
+    let first_data_stage_deltas_q11 = view.read_u32(core::mem::offset_of!(
+        DriverRuntimeCyw43RxBatchRecord,
+        first_data_stage_deltas_q11
+    ))?;
     Some(DriverRuntimeCyw43RxBatchRecord {
         magic: view.read_u32(core::mem::offset_of!(
             DriverRuntimeCyw43RxBatchRecord,
@@ -8398,7 +8395,7 @@ fn driver_task_read_cyw43_rx_batch_record(
         ))?,
         entries,
         source_cntvct_lo,
-        reserved,
+        first_data_stage_deltas_q11,
         committed_parent_sequence: view.read_u32(core::mem::offset_of!(
             DriverRuntimeCyw43RxBatchRecord,
             committed_parent_sequence
@@ -8635,7 +8632,8 @@ pub(crate) fn acknowledge_driver_task_cyw43_rx_sideband_batch(
             request,
             fingerprint,
         )
-        || driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot) != Some(batch)
+        || !driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)
+            .is_some_and(|snapshot| snapshot.authority_identity_matches(batch))
         || !driver_task_cyw43_rx_queue_state_snapshot()
             .is_some_and(|queue| batch.valid_for_parent_and_queue_state(request, queue))
     {
@@ -8759,15 +8757,17 @@ fn copy_driver_task_cyw43_rx_batch_payload(
 /// Copy one exact frame from a previously validated CYW43 RX batch.
 ///
 /// Stable header samples before and after the copy close the producer-rewrite
-/// race. A caller receives bytes only while the immutable batch commit remains
-/// unchanged across the complete payload read.
+/// race. A caller receives bytes only while the authority-bearing batch
+/// identity remains unchanged across the complete payload read. Timing-word
+/// drift preserves payload progress and degrades only that evidence to
+/// saturated/unknown.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn copy_driver_task_cyw43_rx_batch_frame(
     batch: DriverRuntimeCyw43RxBatchRecord,
     entry_index: usize,
     dest: &mut [u8],
-) -> Option<DriverRuntimeCyw43RxBatchEntry> {
+) -> Option<(DriverRuntimeCyw43RxBatchEntry, u32)> {
     if !batch.valid() || entry_index >= usize::from(batch.count) {
         return None;
     }
@@ -8778,7 +8778,7 @@ pub(crate) fn copy_driver_task_cyw43_rx_batch_frame(
     }
     let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
     let before = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
-    if before != batch {
+    if !before.authority_identity_matches(batch) {
         return None;
     }
     copy_driver_task_cyw43_rx_batch_payload(
@@ -8787,7 +8787,21 @@ pub(crate) fn copy_driver_task_cyw43_rx_batch_frame(
         &mut dest[..frame_len],
     )?;
     let after = driver_task_cyw43_rx_batch_record_snapshot_for_slot(slot)?;
-    (after == batch).then_some(entry)
+    if !after.authority_identity_matches(batch) {
+        return None;
+    }
+    let stage_deltas_q11 = if before.first_data_stage_deltas_q11
+        == batch.first_data_stage_deltas_q11
+        && after.first_data_stage_deltas_q11 == batch.first_data_stage_deltas_q11
+    {
+        batch.first_data_stage_deltas_q11
+    } else {
+        pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        )
+    };
+    Some((entry, stage_deltas_q11))
 }
 
 /// Return whether CYW43 has irreversible producer authority over the SDIO ring.
@@ -30083,6 +30097,7 @@ mod tests {
             queue_state.queue_depth,
             entries,
             source_cntvct_lo,
+            0x4359_7a05,
         )
         .commit();
         assert!(batch.valid_for_parent_and_queue_state(17, queue_state));
@@ -30130,9 +30145,10 @@ mod tests {
         }
 
         let stable_batch = driver_task_cyw43_rx_batch_snapshot(17, queue_state)
-            .expect("two identical v2 samples preserve the source array");
+            .expect("two identical v3 samples preserve passive timestamps");
         assert_eq!(stable_batch, batch);
         assert_eq!(stable_batch.source_cntvct_lo, source_cntvct_lo);
+        assert_eq!(stable_batch.first_data_stage_deltas_q11, 0x4359_7a05);
         assert_eq!(
             driver_task_cyw43_rx_batch_diagnostic_snapshot(),
             Some((queue_state, batch))
@@ -30141,9 +30157,29 @@ mod tests {
         let mut copied = vec![0u8; usize::from(entries[2].len)];
         assert_eq!(
             copy_driver_task_cyw43_rx_batch_frame(batch, 2, &mut copied),
-            Some(entries[2])
+            Some((entries[2], batch.first_data_stage_deltas_q11))
         );
         assert_eq!(copied, payload);
+        let changed_stage_deltas = 0x1234_5678;
+        let mut timing_drifted_batch = batch;
+        timing_drifted_batch.first_data_stage_deltas_q11 = changed_stage_deltas;
+        let stage_ptr = batch_ptr
+            + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, first_data_stage_deltas_q11);
+        // SAFETY: `stage_ptr` is the aligned passive timing word inside this
+        // test-owned batch header. Its authority-bearing identity stays fixed.
+        unsafe {
+            core::ptr::write_volatile(stage_ptr as *mut u32, changed_stage_deltas);
+        }
+        driver_task_ring_clean_root_range(stage_ptr, core::mem::size_of::<u32>());
+        let degraded_stage_deltas = pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+        );
+        assert_eq!(
+            copy_driver_task_cyw43_rx_batch_frame(batch, 2, &mut copied),
+            Some((entries[2], degraded_stage_deltas)),
+            "timing-only drift preserves payload progress and degrades only evidence",
+        );
         assert!(!driver_task_cyw43_rx_batch_acknowledged(batch));
         let sends_before = DRIVER_TASK_SLOT_CYW43455
             .counters
@@ -30226,12 +30262,12 @@ mod tests {
         );
         assert_eq!(
             driver_task_cyw43_rx_batch_snapshot(17, queue_state),
-            Some(batch),
+            Some(timing_drifted_batch),
             "later same-generation queue progress must not invalidate the immutable batch"
         );
         assert_eq!(
             driver_task_cyw43_rx_batch_diagnostic_snapshot(),
-            Some((later_queue_state, batch)),
+            Some((later_queue_state, timing_drifted_batch)),
             "passive diagnostics must preserve the validated current queue frontier"
         );
 

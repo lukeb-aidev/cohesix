@@ -1162,21 +1162,31 @@ the payload/body, then commits the matching parent sequence at byte 124 last.
 The single parent completion uses detail `0x5803`, `result=count`, and the batch
 header frame reference. Root validates generation, queue commit, parent
 sequence, count, remaining depth, and every entry bound; after copying all
-frames it re-reads the header and rejects any change.
+frames it re-reads the header and rejects any authority-bearing change. A
+change confined to the passive packed timing word preserves the copied payload
+and exact ACK while degrading both timing halves to `0xffff` (UNKNOWN).
 
-RX-batch layout version 2 preserves the same 128-byte record. Bytes 88-119 hold
-`source_cntvct_lo: [u32; 8]`, captured at exact runtime DPC-event
-admission, bytes 120-123 remain reserved and zero, and the sequence-last parent
-commit remains at byte 124. Every populated entry has timestamp provenance;
-the raw value zero is valid modulo 32, while unused entry/source pairs must be
-zero. Root rejects version 1, retains accepted provenance privately as
-`Option<u32>` through an exact copied-RX response reservation, and records only
-the passive DPC-admission-to-TX-acceptance modulo-32 interval after that paired
-response is successfully admitted. This field creates no wake, poll,
-scheduling, issue, deadline, retry, or recovery authority. It timestamps
-runtime DPC-event admission, not radio reception or physical IRQ arrival, so it
-cannot by itself prove over-the-air or interrupt latency. This evidence-only
-extension is authorized by reopened Milestone 26b task
+RX-batch layout version 3 preserves the fixed 128-byte record. Bytes 88-119
+hold `source_cntvct_lo: [u32; 8]`, captured at exact runtime DPC-event
+admission. Bytes 120-123 hold one sequence-covered
+`first_data_stage_deltas_q11`, and the sequence-last parent commit remains at
+byte 124. The word belongs to the first populated `CHANNEL_DATA` entry: low
+`u16` is source to successful durable private-queue commit and high `u16` is
+that queue commit to the final precommit evidence-word sample. Each is a floor
+in 2^11-CNTVCT-tick units (about 37.9 us); `0x0000..=0xfffe` are valid,
+including raw zero, while `0xffff` is saturated/UNKNOWN. An event-only batch
+is written with zero by the runtime, but the passive word is not a batch-validity
+or authority predicate. Stable sampling compares the authority fields with that
+word zeroed. A timing-only mismatch preserves the exact batch and degrades both
+halves to `0xffff` (saturated/UNKNOWN); it cannot reject traffic or request
+recovery. Root rejects wrong-version or authority-unstable records, retains
+source/stage provenance plus a private stable-copy low word through the exact
+copied-RX reservation, and records timing only after successful paired response
+admission. These fields create no wake, poll, scheduling, issue, deadline,
+retry, or recovery authority. Source timestamps runtime DPC-event admission,
+not radio reception or physical IRQ arrival, so it cannot by itself prove
+over-the-air or interrupt latency. This evidence-only extension is authorized
+by reopened Milestone 26b task
 `m26b-wifi-join-owner-forensic-decision`, within
 `m26b-wifi-sdio-notification-dpc-closure` and
 `m26b-net-control-priority`.
@@ -2539,7 +2549,7 @@ owner quanta issued. `done` counts completed DPC-admitted frames. `fdpc` and
 amplification; they neither prove live packet service nor change owner
 admission.
 
-Record the five additive Wi-Fi TX lines from both `netstats` and
+Record the seven additive Wi-Fi TX lines from both `netstats` and
 `wifi diag`:
 
 ```text
@@ -2547,12 +2557,16 @@ netstats: wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n> suc
 netstats: wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<n>/<last>/<max>/<avg> t2n=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_phase_rx2a_mod32 gen=<n> us=n/last/max/avg rx2a_mod32=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rxsplit_q11a gen=<n> us=n/last/max/avg s2q=<n>/<last>/<max>/<avg> q2p=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rxsplit_q11b gen=<n> p2r=<n>/<last>/<max>/<avg> r2a=<n>/<last>/<max>/<avg> sat=<n> inv=<n> slow=<total>/<s2q>/<q2p>/<p2r>/<r2a>
 netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_purged=<n>
 ```
 
 `wifi diag` uses the equivalent `wifi: tx_phase_counts` and
-`wifi: tx_phase`, `wifi: tx_phase_i2t`, `wifi: tx_phase_rx2a_mod32`, and
-`wifi: tx_queue` prefixes. The tracker resets on logical connection generation,
+`wifi: tx_phase`, `wifi: tx_phase_i2t`, `wifi: tx_phase_rx2a_mod32`,
+`wifi: tx_phase_rxsplit_q11a`, `wifi: tx_phase_rxsplit_q11b`, and
+`wifi: tx_queue` prefixes. The tracker
+resets on logical connection generation,
 deduplicates immutable
 tickets, and scales from the generated virtual-counter frequency. `a2i` is
 TxToken acceptance, including FIFO and owner-lane wait, to first observed op7
@@ -2560,7 +2574,24 @@ issue. Runtime `WAIT_CREDIT` begins after that issue and is included in `i2t`,
 which ends at the joined Function-2 terminal. `rx2a_mod32` is the wrapping
 CNTVCT-low interval from exact runtime DPC-event admission to successful paired
 copied-RX response acceptance. It is passive evidence, not radio/IRQ timing or
-scheduling authority. `successor_issues` and `t2n`
+scheduling authority. Batch-v3 carries the first `CHANNEL_DATA` entry's two
+Q11 floors: source to successful durable private-queue commit (`s2q`) and that
+commit to the final precommit evidence-word sample (`q2p`). The root-private
+stable-copy low word derives precommit to stable root copy (`p2r`) and root
+copy to successful paired response acceptance (`r2a`). Because the first two
+stages are independently floored, `p2r` is the exact source-to-copy residual
+after subtracting them and includes less than 4,096 ticks of combined
+quantization remainder (about 75.9 us at 54 MHz). Each Q11 unit is about
+37.9 us; raw zero through `0xfffe` is valid and `0xffff` is
+saturated/UNKNOWN. Every leading `n` remains useful coverage but may be lower
+than `rx2a_mod32 n`, because only the first DATA entry in each batch carries
+packed stage evidence. Each missing, saturated, or invalid sample is
+individually UNKNOWN. Classify the worst latency sample only when valid
+`slow.total == rx2a_mod32.max`; if `slow.total` is smaller, the bottleneck
+sample is UNKNOWN. `slow` is one same-sample `total/s2q/q2p/p2r/r2a` tuple,
+not independent stage maxima. These values split the endpoint interval without
+creating scheduling, wake, retry, deadline, or recovery authority.
+`successor_issues` and `t2n`
 measure that terminal to the next actual op7 issue, not acceptance of a new
 TxToken or an earlier local FIFO-head promotion. The interval includes time
 with no queued successor, including later TxToken arrival. High `a2i` and

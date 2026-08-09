@@ -44,7 +44,8 @@ use pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_CAPS_INVALID;
 use pi4_driver_abi::DRIVER_RUNTIME_SDIO_PWRSEQ_PROTOCOL_PHASE;
 use pi4_driver_abi::{
     driver_runtime_continuation_action_fingerprint, driver_runtime_cyw43_armcr4_reset_result,
-    driver_runtime_cyw43_rx_batch_payload_offset, driver_runtime_genet_completion_result,
+    driver_runtime_cyw43_rx_batch_payload_offset, driver_runtime_cyw43_rx_stage_delta_q11,
+    driver_runtime_cyw43_rx_stage_deltas_q11_pack, driver_runtime_genet_completion_result,
     DriverRuntimeBusLinkDescriptor, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43RxBatchAck, DriverRuntimeCyw43RxBatchEntry, DriverRuntimeCyw43RxBatchRecord,
     DriverRuntimeCyw43RxQueueState, DriverRuntimeDpcEventEntry, DriverRuntimeDpcEventRing,
@@ -4347,6 +4348,7 @@ struct Cyw43RuntimeState {
     rx_queue_lens: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_flags: [u16; CYW43_RX_QUEUE_CAP],
     rx_queue_source_cntvct_lo: [u32; CYW43_RX_QUEUE_CAP],
+    rx_queue_admit_cntvct_lo: [u32; CYW43_RX_QUEUE_CAP],
     rx_queue_frames: [[u8; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
     rx_source_empty_polls: u32,
     rx_source_snapshot: Cyw43RxSourceSnapshot,
@@ -4520,6 +4522,7 @@ impl Cyw43RuntimeState {
             rx_queue_lens: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_flags: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_source_cntvct_lo: [0; CYW43_RX_QUEUE_CAP],
+            rx_queue_admit_cntvct_lo: [0; CYW43_RX_QUEUE_CAP],
             rx_queue_frames: [[0; MAX_DRIVER_TASK_FRAME_BYTES]; CYW43_RX_QUEUE_CAP],
             rx_source_empty_polls: 0,
             rx_source_snapshot: Cyw43RxSourceSnapshot::empty(),
@@ -4818,6 +4821,7 @@ impl Cyw43RuntimeState {
         self.rx_queue_lens.fill(0);
         self.rx_queue_flags.fill(0);
         self.rx_queue_source_cntvct_lo.fill(0);
+        self.rx_queue_admit_cntvct_lo.fill(0);
         for frame in &mut self.rx_queue_frames {
             frame.fill(0);
         }
@@ -22914,15 +22918,18 @@ fn cyw43_write_rx_batch_body(record: DriverRuntimeCyw43RxBatchRecord) {
         );
         source_index += 1;
     }
-    let reserved_offset = base + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved);
-    let mut reserved_index = 0usize;
-    while reserved_index < record.reserved.len() {
-        write_runtime_payload_byte_physical(
-            reserved_offset + reserved_index,
-            record.reserved[reserved_index],
-        );
-        reserved_index += 1;
-    }
+    write_runtime_payload_u32_physical(
+        base + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, first_data_stage_deltas_q11),
+        record.first_data_stage_deltas_q11,
+    );
+}
+
+fn cyw43_write_rx_batch_stage_evidence(first_data_stage_deltas_q11: u32) {
+    write_runtime_payload_u32_physical(
+        usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET)
+            + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, first_data_stage_deltas_q11),
+        first_data_stage_deltas_q11,
+    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22990,6 +22997,7 @@ fn cyw43_publish_rx_batch_record(
     let mut entries =
         [DriverRuntimeCyw43RxBatchEntry::empty(); DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
     let mut source_cntvct_lo = [0u32; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+    let mut first_data_stage_ticks = None;
     let mut total_bytes = 0usize;
     let mut count = 0usize;
     while count < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
@@ -23018,6 +23026,15 @@ fn cyw43_publish_rx_batch_record(
         }
         entries[count] = entry;
         source_cntvct_lo[count] = state.rx_queue_source_cntvct_lo[slot];
+        if first_data_stage_ticks.is_none()
+            && flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+                == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+        {
+            first_data_stage_ticks = Some((
+                state.rx_queue_source_cntvct_lo[slot],
+                state.rx_queue_admit_cntvct_lo[slot],
+            ));
+        }
         total_bytes = total_bytes.saturating_add(len);
         cyw43_rx_queue_remove_index_unpublished(state, logical_index);
         count = count.saturating_add(1);
@@ -23040,7 +23057,7 @@ fn cyw43_publish_rx_batch_record(
     }
     state.rx_frames = state.rx_frames.saturating_add(count as u32);
 
-    let staged = DriverRuntimeCyw43RxBatchRecord::staged(
+    let mut staged = DriverRuntimeCyw43RxBatchRecord::staged(
         parent_sequence,
         state.dpc_shared_epoch,
         state.rx_queue_state_commit,
@@ -23048,12 +23065,21 @@ fn cyw43_publish_rx_batch_record(
         u16::from(state.rx_queue_count),
         entries,
         source_cntvct_lo,
+        0,
     );
     if !staged.body_valid() {
         cyw43_poison_rx_queue_state!(state);
         return None;
     }
     cyw43_write_rx_batch_body(staged);
+    if let Some((source_cntvct_lo, queue_admit_cntvct_lo)) = first_data_stage_ticks {
+        let precommit_cntvct_lo = runtime_timer_counter_ticks() as u32;
+        staged.first_data_stage_deltas_q11 = driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+            driver_runtime_cyw43_rx_stage_delta_q11(source_cntvct_lo, queue_admit_cntvct_lo),
+            driver_runtime_cyw43_rx_stage_delta_q11(queue_admit_cntvct_lo, precommit_cntvct_lo),
+        );
+        cyw43_write_rx_batch_stage_evidence(staged.first_data_stage_deltas_q11);
+    }
     driver_task_shared_store_barrier();
     driver_task_shared_clean_range(
         runtime_payload_vaddr_physical(base),
@@ -39740,6 +39766,7 @@ fn cyw43_rx_queue_push_from_runtime(
         cyw43_record_rx_queue_push_failure(state, packet_len, flags);
         return false;
     }
+    state.rx_queue_admit_cntvct_lo[slot] = runtime_timer_counter_ticks() as u32;
     if queue_was_empty {
         cyw43_signal_root_network_wake();
     }
@@ -39965,6 +39992,7 @@ fn cyw43_rx_queue_remove_index_unpublished(state: &mut Cyw43RuntimeState, logica
     state.rx_queue_lens[freed_slot] = 0;
     state.rx_queue_flags[freed_slot] = 0;
     state.rx_queue_source_cntvct_lo[freed_slot] = 0;
+    state.rx_queue_admit_cntvct_lo[freed_slot] = 0;
     state.rx_queue_count = state.rx_queue_count.saturating_sub(1);
     if was_dpc_backpressured
         && !cyw43_dpc_rx_queue_backpressured(state)
@@ -57738,11 +57766,6 @@ mod tests {
                 sources_base + index * core::mem::size_of::<u32>(),
             );
         }
-        let reserved_base = base + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved);
-        let mut reserved = [0u8; 4];
-        for (index, byte) in reserved.iter_mut().enumerate() {
-            *byte = read_runtime_payload_byte_physical(reserved_base + index);
-        }
         DriverRuntimeCyw43RxBatchRecord {
             magic: read_runtime_payload_u32_for_test(
                 base + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, magic),
@@ -57773,7 +57796,12 @@ mod tests {
             ),
             entries,
             source_cntvct_lo,
-            reserved,
+            first_data_stage_deltas_q11: read_runtime_payload_u32_for_test(
+                base + core::mem::offset_of!(
+                    DriverRuntimeCyw43RxBatchRecord,
+                    first_data_stage_deltas_q11
+                ),
+            ),
             committed_parent_sequence: read_runtime_payload_u32_for_test(
                 base + core::mem::offset_of!(
                     DriverRuntimeCyw43RxBatchRecord,
@@ -76816,6 +76844,7 @@ mod tests {
         state.rx_queue_lens[0] = 12;
         state.rx_queue_flags[0] = 0xbeef;
         state.rx_queue_source_cntvct_lo[0] = 0x4359_0001;
+        state.rx_queue_admit_cntvct_lo[0] = 0x4359_0002;
         state.rx_queue_frames[0][0] = 0xaa;
         state.rx_queue_frames[CYW43_RX_QUEUE_CAP - 1][MAX_DRIVER_TASK_FRAME_BYTES - 1] = 0xbb;
         state.tx_frames = 11;
@@ -76876,6 +76905,7 @@ mod tests {
         assert_eq!(state.rx_queue_lens[0], 0);
         assert_eq!(state.rx_queue_flags[0], 0);
         assert_eq!(state.rx_queue_source_cntvct_lo[0], 0);
+        assert_eq!(state.rx_queue_admit_cntvct_lo[0], 0);
         assert_eq!(state.rx_queue_frames[0][0], 0);
         assert_eq!(
             state.rx_queue_frames[CYW43_RX_QUEUE_CAP - 1][MAX_DRIVER_TASK_FRAME_BYTES - 1],
@@ -81461,6 +81491,7 @@ mod tests {
             0,
             entries,
             [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+            0,
         )
         .commit();
         assert!(old_batch.valid_for_queue_state(visible));
@@ -81492,7 +81523,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_batch_commit_word_is_sequence_last_and_aligned() {
+    fn cyw43_rx_batch_stage_evidence_precedes_sequence_last_commit() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let parent_sequence = 0x4359_7a04;
@@ -81515,11 +81546,23 @@ mod tests {
             0,
             entries,
             source_cntvct_lo,
+            0,
         );
         cyw43_write_rx_batch_body(staged);
-        let uncommitted = read_cyw43_rx_batch_for_test();
-        assert!(uncommitted.body_valid());
-        assert!(!uncommitted.committed());
+        let placeholder = read_cyw43_rx_batch_for_test();
+        assert!(placeholder.body_valid());
+        assert!(!placeholder.committed());
+        assert_eq!(placeholder.first_data_stage_deltas_q11, 0);
+
+        let stage_deltas_q11 = driver_runtime_cyw43_rx_stage_deltas_q11_pack(2, 3);
+        cyw43_write_rx_batch_stage_evidence(stage_deltas_q11);
+        let with_stage_evidence = read_cyw43_rx_batch_for_test();
+        assert!(with_stage_evidence.body_valid());
+        assert!(!with_stage_evidence.committed());
+        assert_eq!(
+            with_stage_evidence.first_data_stage_deltas_q11,
+            stage_deltas_q11,
+        );
 
         let commit_offset = usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_OFFSET)
             + core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence);
@@ -81536,6 +81579,7 @@ mod tests {
         let committed = read_cyw43_rx_batch_for_test();
         assert!(committed.valid());
         assert_eq!(committed.committed_parent_sequence, parent_sequence);
+        assert_eq!(committed.first_data_stage_deltas_q11, stage_deltas_q11);
     }
 
     #[test]
@@ -81578,7 +81622,8 @@ mod tests {
         let source_cntvct_lo =
             CYW43_DPC_BUS_EPISODE.with_ref(|episode| episode.first_cntvct as u32);
         assert_ne!(source_cntvct_lo, 0);
-        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0x4359_7b00, Ordering::Release);
+        let queue_admit_cntvct_lo = source_cntvct_lo.wrapping_add((3 << 11) + 0x321);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(u64::from(queue_admit_cntvct_lo), Ordering::Release);
 
         let payload = *b"root-visible";
         let payload_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x180;
@@ -81589,6 +81634,11 @@ mod tests {
             payload.len(),
             cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1),
         ));
+        let queued_slot = cyw43_rx_queue_slot_at(&state, 0);
+        assert_eq!(
+            state.rx_queue_admit_cntvct_lo[queued_slot], queue_admit_cntvct_lo,
+            "queue admission is sampled after its sequence-last state commit",
+        );
         assert_eq!(
             CYW43_DPC_BUS_EPISODE.with_ref(|episode| episode.rx_progress),
             0,
@@ -81600,11 +81650,17 @@ mod tests {
             0,
             "a committed batch parent cannot be attributed to a stale foreground lane",
         );
+        let precommit_cntvct_lo = queue_admit_cntvct_lo.wrapping_add((5 << 11) + 0x123);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(u64::from(precommit_cntvct_lo), Ordering::Release);
         let completion = cyw43_publish_rx_batch_completion(&mut state, command)
             .expect("one committed batch exposes the queued frame to root");
         assert_eq!(completion.result, 1);
         let batch = read_cyw43_rx_batch_for_test();
         assert_eq!(batch.source_cntvct_lo[0], source_cntvct_lo);
+        assert_eq!(
+            batch.first_data_stage_deltas_q11,
+            driver_runtime_cyw43_rx_stage_deltas_q11_pack(3, 5),
+        );
         assert_ne!(
             batch.source_cntvct_lo[0],
             TEST_RUNTIME_TIMER_COUNTER_TICKS.load(Ordering::Acquire) as u32,
@@ -81635,6 +81691,71 @@ mod tests {
     }
 
     #[test]
+    fn cyw43_rx_batch_stage_evidence_tracks_first_data_after_event() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 0x4359_7b01;
+        state.rx_queue_count = 2;
+
+        let event_slot = cyw43_rx_queue_slot_at(&state, 0);
+        state.rx_queue_lens[event_slot] = 4;
+        state.rx_queue_flags[event_slot] = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 1);
+        state.rx_queue_source_cntvct_lo[event_slot] = 0x1111_0000;
+        state.rx_queue_admit_cntvct_lo[event_slot] = 0x2222_0000;
+
+        let data_slot = cyw43_rx_queue_slot_at(&state, 1);
+        state.rx_queue_lens[data_slot] = 4;
+        state.rx_queue_flags[data_slot] = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 2);
+        state.rx_queue_source_cntvct_lo[data_slot] = 0xffff_f800;
+        state.rx_queue_admit_cntvct_lo[data_slot] = 0x0000_0800;
+        assert!(cyw43_publish_rx_queue_state(&mut state));
+
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(
+            u64::from(0x0000_0800u32.wrapping_add((4 << 11) + 77)),
+            Ordering::Release,
+        );
+        let batch =
+            cyw43_publish_rx_batch_record(&mut state, 0x4359_7b02, Cyw43RxBatchKind::QueueFront)
+                .expect("the event plus data batch commits one immutable header");
+        assert!(batch.valid());
+        assert_eq!(
+            batch.entries[0].flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+        );
+        assert_eq!(
+            batch.entries[1].flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
+        );
+        assert_eq!(
+            batch.first_data_stage_deltas_q11,
+            driver_runtime_cyw43_rx_stage_deltas_q11_pack(2, 4),
+            "a preceding event cannot steal the first-data stage evidence",
+        );
+
+        let mut event_only = Cyw43RuntimeState::new();
+        event_only.dpc_shared_epoch = 0x4359_7b03;
+        event_only.rx_queue_count = 1;
+        let event_only_slot = cyw43_rx_queue_slot_at(&event_only, 0);
+        event_only.rx_queue_lens[event_only_slot] = 4;
+        event_only.rx_queue_flags[event_only_slot] =
+            cyw43_frame_flags(CYW43_SDPCM_CHANNEL_EVENT, 1);
+        event_only.rx_queue_source_cntvct_lo[event_only_slot] = 0x3333_0000;
+        event_only.rx_queue_admit_cntvct_lo[event_only_slot] = 0x3333_0800;
+        assert!(cyw43_publish_rx_queue_state(&mut event_only));
+        let event_only_batch = cyw43_publish_rx_batch_record(
+            &mut event_only,
+            0x4359_7b04,
+            Cyw43RxBatchKind::QueueFront,
+        )
+        .expect("the event-only batch commits without first-data evidence");
+        assert_eq!(
+            event_only_batch.first_data_stage_deltas_q11, 0,
+            "the runtime writes zero when no CHANNEL_DATA entry exists",
+        );
+    }
+
+    #[test]
     fn cyw43_rx_batch_drains_eight_fixed_fifo_slots_and_retains_remainder() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -81649,6 +81770,8 @@ mod tests {
             state.rx_queue_flags[slot] =
                 cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, (frame_index + 1) as u8);
             state.rx_queue_source_cntvct_lo[slot] = 0x4359_0000 + frame_index as u32;
+            state.rx_queue_admit_cntvct_lo[slot] =
+                state.rx_queue_source_cntvct_lo[slot].wrapping_add(2 << 11);
             for byte_index in 0..len {
                 state.rx_queue_frames[slot][byte_index] =
                     cyw43_rx_batch_test_byte(frame_index, byte_index);
@@ -81657,6 +81780,10 @@ mod tests {
         state.rx_queue_count = LENGTHS.len() as u8;
         assert!(cyw43_publish_rx_queue_state(&mut state));
         assert_eq!(state.rx_queue_state_commit, 1);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(
+            u64::from(state.rx_queue_admit_cntvct_lo[0].wrapping_add((3 << 11) + 17)),
+            Ordering::Release,
+        );
 
         let command = DriverTaskCommandRecord {
             sequence: parent_sequence,
@@ -81709,6 +81836,10 @@ mod tests {
         assert_eq!(batch.parent_sequence, parent_sequence);
         assert_eq!(batch.committed_parent_sequence, parent_sequence);
         assert_eq!(batch.queue_commit_sequence, 2);
+        assert_eq!(
+            batch.first_data_stage_deltas_q11,
+            driver_runtime_cyw43_rx_stage_deltas_q11_pack(2, 3),
+        );
         assert_eq!(drained.queue_depth, 2);
         assert_eq!(drained.commit_sequence, 2);
         assert!(batch.valid_for_parent_and_queue_state(parent_sequence, drained));
@@ -81756,6 +81887,10 @@ mod tests {
                 0x4359_0000 + frame_index as u32,
             );
             assert_eq!(
+                state.rx_queue_admit_cntvct_lo[slot],
+                (0x4359_0000 + frame_index as u32).wrapping_add(2 << 11),
+            );
+            assert_eq!(
                 state.rx_queue_frames[slot][LENGTHS[frame_index] - 1],
                 cyw43_rx_batch_test_byte(frame_index, LENGTHS[frame_index] - 1),
             );
@@ -81768,6 +81903,8 @@ mod tests {
         let appended_slot = cyw43_rx_queue_slot_at(&state, usize::from(state.rx_queue_count));
         state.rx_queue_lens[appended_slot] = 77;
         state.rx_queue_flags[appended_slot] = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 11);
+        state.rx_queue_source_cntvct_lo[appended_slot] = 0x4359_2000;
+        state.rx_queue_admit_cntvct_lo[appended_slot] = 0x4359_2800;
         for byte_index in 0..77 {
             state.rx_queue_frames[appended_slot][byte_index] =
                 cyw43_rx_batch_test_byte(appended_index, byte_index);
@@ -81782,7 +81919,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_queue_signals_root_only_on_empty_to_nonempty_transition() {
+    fn cyw43_rx_queue_commits_and_stamps_before_empty_to_nonempty_wake() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut descriptor = descriptor_for(HOT_PATH_CYW43_WIFI, ROLE_NET);
@@ -81798,6 +81935,7 @@ mod tests {
         let payload_offset = CYW43_RUNTIME_RX_BUFFER_OFFSET + 0x100;
         let flags = cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, 1);
         stage_bytes(payload_offset, &payload);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0x4359_7c00, Ordering::Release);
 
         assert!(cyw43_rx_queue_push_from_runtime(
             &mut state,
@@ -81805,6 +81943,15 @@ mod tests {
             payload.len(),
             flags,
         ));
+        let visible = DriverRuntimeCyw43RxQueueState::stable_snapshot(
+            read_cyw43_rx_queue_state_for_test(),
+            read_cyw43_rx_queue_state_for_test(),
+        )
+        .expect("the queue level is committed before its wake hint");
+        assert_eq!(visible.queue_depth, 1);
+        assert_eq!(visible.commit_sequence, 2);
+        let first_slot = cyw43_rx_queue_slot_at(&state, 0);
+        assert_eq!(state.rx_queue_admit_cntvct_lo[first_slot], 0x4359_7c00);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
         assert!(cyw43_rx_queue_push_from_runtime(
             &mut state,
@@ -81835,7 +81982,7 @@ mod tests {
     }
 
     #[test]
-    fn cyw43_rx_queue_middle_removal_preserves_exact_source_slot_identity() {
+    fn cyw43_rx_queue_middle_removal_preserves_exact_stage_slot_identity() {
         let _guard = test_guard();
         reset_runtime_for_test();
         let mut state = Cyw43RuntimeState::new();
@@ -81846,6 +81993,7 @@ mod tests {
             state.rx_queue_flags[slot] =
                 cyw43_frame_flags(CYW43_SDPCM_CHANNEL_DATA, logical_index as u8 + 1);
             state.rx_queue_source_cntvct_lo[slot] = 0x4359_1000 + logical_index as u32;
+            state.rx_queue_admit_cntvct_lo[slot] = 0x4359_2000 + logical_index as u32;
         }
 
         let removed_slot = cyw43_rx_queue_slot_at(&state, 1);
@@ -81856,8 +82004,11 @@ mod tests {
         let second_slot = cyw43_rx_queue_slot_at(&state, 1);
         assert_eq!(state.rx_queue_source_cntvct_lo[first_slot], 0x4359_1000);
         assert_eq!(state.rx_queue_source_cntvct_lo[second_slot], 0x4359_1002);
+        assert_eq!(state.rx_queue_admit_cntvct_lo[first_slot], 0x4359_2000);
+        assert_eq!(state.rx_queue_admit_cntvct_lo[second_slot], 0x4359_2002);
         assert_eq!(state.rx_queue_lens[second_slot], 18);
         assert_eq!(state.rx_queue_source_cntvct_lo[removed_slot], 0);
+        assert_eq!(state.rx_queue_admit_cntvct_lo[removed_slot], 0);
         assert_eq!(usize::from(state.rx_queue_slots[2]), removed_slot);
     }
 
