@@ -238,11 +238,13 @@ fn format_cyw43_tx_phase_diagnostics(
     HeaplessString<DEFAULT_LINE_CAPACITY>,
     HeaplessString<DEFAULT_LINE_CAPACITY>,
     HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
 ) {
     let bounded_us = |value: u64| value.min(u64::from(u32::MAX));
     let accepted_to_issue = diagnostic.accepted_to_issue;
     let issued_to_terminal = diagnostic.issued_to_terminal;
     let terminal_to_next_issue = diagnostic.terminal_to_next_issue;
+    let rx_source_to_accepted_mod32 = diagnostic.rx_source_to_accepted_mod32;
     let counts = format_message(format_args!(
         "{}: {}_counts gen={} accepted={} issued={} terminals={} successor_issues={}",
         namespace,
@@ -277,7 +279,17 @@ fn format_cyw43_tx_phase_diagnostics(
         bounded_us(issued_to_terminal.max_us),
         bounded_us(issued_to_terminal.average_us()),
     ));
-    (counts, timing, issued_timing)
+    let rx_source_timing = format_message(format_args!(
+        "{}: {}_rx2a_mod32 gen={} us=n/last/max/avg rx2a_mod32={}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        rx_source_to_accepted_mod32.samples,
+        bounded_us(rx_source_to_accepted_mod32.last_us),
+        bounded_us(rx_source_to_accepted_mod32.max_us),
+        bounded_us(rx_source_to_accepted_mod32.average_us()),
+    ));
+    (counts, timing, issued_timing, rx_source_timing)
 }
 
 #[cfg(feature = "kernel")]
@@ -14936,7 +14948,7 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
-        let (tx_phase_counts, tx_phase_timing, tx_phase_issued_timing) =
+        let (tx_phase_counts, tx_phase_timing, tx_phase_issued_timing, tx_phase_rx_source_timing) =
             format_cyw43_tx_phase_diagnostics(
                 "wifi",
                 "tx_phase",
@@ -14950,6 +14962,7 @@ where
         self.emit_console_line(tx_phase_counts.as_str());
         self.emit_console_line(tx_phase_timing.as_str());
         self.emit_console_line(tx_phase_issued_timing.as_str());
+        self.emit_console_line(tx_phase_rx_source_timing.as_str());
         self.emit_console_line(tx_queue.as_str());
         let retained_gate8_line = Self::wifi_diag_retained_gate8_line(retained_gate8);
         self.emit_console_line(retained_gate8_line.as_str());
@@ -20565,6 +20578,7 @@ where
                             line_cyw43_tx_phase_counts,
                             line_cyw43_tx_phase,
                             line_cyw43_tx_phase_i2t,
+                            line_cyw43_tx_phase_rx2a_mod32,
                         ) = format_cyw43_tx_phase_diagnostics(
                             "netstats",
                             "wifi_tx_phase",
@@ -20778,6 +20792,7 @@ where
                                 self.emit_console_line(line_cyw43_tx_phase_counts.as_str());
                                 self.emit_console_line(line_cyw43_tx_phase.as_str());
                                 self.emit_console_line(line_cyw43_tx_phase_i2t.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_rx2a_mod32.as_str());
                                 self.emit_console_line(line_cyw43_tx_queue.as_str());
                             }
                             self.emit_console_line(line_wifi.as_str());
@@ -22856,7 +22871,7 @@ mod tests {
             last_us: u64::MAX,
             max_us: u64::MAX,
         };
-        let (counts, timing, issued_timing) = format_cyw43_tx_phase_diagnostics(
+        let (counts, timing, issued_timing, rx_source_timing) = format_cyw43_tx_phase_diagnostics(
             "netstats",
             "wifi_tx_phase",
             crate::drivers::driver_task_net::Cyw43TxPhaseDiagnostic {
@@ -22868,6 +22883,7 @@ mod tests {
                 accepted_to_issue: metric,
                 issued_to_terminal: metric,
                 terminal_to_next_issue: metric,
+                rx_source_to_accepted_mod32: metric,
             },
         );
 
@@ -22888,6 +22904,14 @@ mod tests {
         assert_eq!(
             issued_timing.as_str(),
             "netstats: wifi_tx_phase_i2t gen=4294967295 us=n/last/max/avg i2t=4294967295/4294967295/4294967295/4294967295"
+        );
+        assert!(
+            !rx_source_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{rx_source_timing}"
+        );
+        assert_eq!(
+            rx_source_timing.as_str(),
+            "netstats: wifi_tx_phase_rx2a_mod32 gen=4294967295 us=n/last/max/avg rx2a_mod32=4294967295/4294967295/4294967295/4294967295"
         );
         let queue = format_cyw43_data_tx_queue_diagnostic(
             "netstats",

@@ -662,6 +662,24 @@ the existing sole pair-restart supervisor only when that poison generation
 matches the stable active SDIO DPC-owner epoch and both linked restart contexts
 exist. Torn, stale, owner-inactive, or context-less samples confer no authority;
 aggregate DPC diagnostic staleness is never substituted for the queue record.
+
+RX-batch layout version 2 keeps that record at 128 bytes and uses its existing
+tail space for `source_cntvct_lo: [u32; 8]`, one timestamp per entry. Each
+populated slot carries the low CNTVCT word captured when the exact runtime DPC
+event was admitted; zero is a valid modulo-32 value for a populated slot, while
+unused entry/source pairs remain zero. The sequence-last commit stays at byte
+124. Root rejects version 1 and every other wrong-version record, and carries
+the accepted timestamp as private `Option<u32>` provenance through the exact
+copied-RX reservation. Only a successfully admitted exact paired response may
+update the passive DPC-admission-to-TX-acceptance modulo-32 diagnostic. The
+timestamp and derived interval grant no wake, scheduling, issue, retry,
+deadline, or recovery authority, and they measure runtime DPC-event admission,
+not radio reception or physical IRQ arrival. This bounded evidence field is
+authorized by reopened Milestone 26b task
+`m26b-wifi-join-owner-forensic-decision`, within
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`.
+
 For active op11, the same stable batch is nonterminal; root commits the exact
 64-byte cache-line-disjoint ACK at shared
 offset 49,280 only after delivery, and CYW43 preserves parent and batch until
@@ -2621,13 +2639,15 @@ generation and XID.
   boundaries, so their ratios to `done` exclude work after the newest frame.
   This is passive generation-scoped telemetry only; it changes no DPC
   authority, scheduling, timing, acknowledgement, or rearm rule.
-  `netstats` and `wifi diag` also expose generation-scoped TX boundary counts
-  and virtual-counter timing:
+  `netstats` and `wifi diag` also expose five generation-scoped TX boundary,
+  virtual-counter timing, and queue lines:
   `wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n>
   successor_issues=<n>` and
   `wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2n=<...>`
   plus
   `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
+  `wifi_tx_phase_rx2a_mod32 gen=<n> us=n/last/max/avg
+  rx2a_mod32=<...>` and
   `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
   stale_purged=<n>` (`wifi diag` uses the equivalent `wifi: tx_phase*` and
   `wifi: tx_queue` prefixes). `a2i` measures actual TxToken acceptance,
@@ -2635,6 +2655,9 @@ generation and XID.
   issue of that immutable op7 ticket; runtime-local `WAIT_CREDIT` begins only
   after that issue and is therefore part of `i2t`. `i2t` measures first
   observed issue through the joined Function-2 terminal that releases root.
+  `rx2a_mod32` measures exact runtime DPC-event admission through successful
+  paired copied-RX response acceptance using wrapping CNTVCT-low subtraction;
+  it is passive evidence and not radio/IRQ timing or scheduling authority.
   `successor_issues` and `t2n` measure that terminal to the next actual op7
   issue from the FIFO, not admission of a new TxToken or an earlier local
   promotion. The interval deliberately includes any time with no successor

@@ -1164,6 +1164,23 @@ header frame reference. Root validates generation, queue commit, parent
 sequence, count, remaining depth, and every entry bound; after copying all
 frames it re-reads the header and rejects any change.
 
+RX-batch layout version 2 preserves the same 128-byte record. Bytes 88-119 hold
+`source_cntvct_lo: [u32; 8]`, captured at exact runtime DPC-event
+admission, bytes 120-123 remain reserved and zero, and the sequence-last parent
+commit remains at byte 124. Every populated entry has timestamp provenance;
+the raw value zero is valid modulo 32, while unused entry/source pairs must be
+zero. Root rejects version 1, retains accepted provenance privately as
+`Option<u32>` through an exact copied-RX response reservation, and records only
+the passive DPC-admission-to-TX-acceptance modulo-32 interval after that paired
+response is successfully admitted. This field creates no wake, poll,
+scheduling, issue, deadline, retry, or recovery authority. It timestamps
+runtime DPC-event admission, not radio reception or physical IRQ arrival, so it
+cannot by itself prove over-the-air or interrupt latency. This evidence-only
+extension is authorized by reopened Milestone 26b task
+`m26b-wifi-join-owner-forensic-decision`, within
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`.
+
 An active persistent op11 uses that same record as nonterminal sideband state
 for preceding EVENT/DATA. Root performs the same stable copy and post-copy
 check, then commits the separate cache-line-disjoint 64-byte ACK at shared
@@ -2522,23 +2539,28 @@ owner quanta issued. `done` counts completed DPC-admitted frames. `fdpc` and
 amplification; they neither prove live packet service nor change owner
 admission.
 
-Record the four additive Wi-Fi TX lines from both `netstats` and
+Record the five additive Wi-Fi TX lines from both `netstats` and
 `wifi diag`:
 
 ```text
 netstats: wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n> successor_issues=<n>
 netstats: wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<n>/<last>/<max>/<avg> t2n=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rx2a_mod32 gen=<n> us=n/last/max/avg rx2a_mod32=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_purged=<n>
 ```
 
 `wifi diag` uses the equivalent `wifi: tx_phase_counts` and
-`wifi: tx_phase`, `wifi: tx_phase_i2t`, and `wifi: tx_queue` prefixes. The
-tracker resets on logical connection generation, deduplicates immutable
+`wifi: tx_phase`, `wifi: tx_phase_i2t`, `wifi: tx_phase_rx2a_mod32`, and
+`wifi: tx_queue` prefixes. The tracker resets on logical connection generation,
+deduplicates immutable
 tickets, and scales from the generated virtual-counter frequency. `a2i` is
 TxToken acceptance, including FIFO and owner-lane wait, to first observed op7
 issue. Runtime `WAIT_CREDIT` begins after that issue and is included in `i2t`,
-which ends at the joined Function-2 terminal. `successor_issues` and `t2n`
+which ends at the joined Function-2 terminal. `rx2a_mod32` is the wrapping
+CNTVCT-low interval from exact runtime DPC-event admission to successful paired
+copied-RX response acceptance. It is passive evidence, not radio/IRQ timing or
+scheduling authority. `successor_issues` and `t2n`
 measure that terminal to the next actual op7 issue, not acceptance of a new
 TxToken or an earlier local FIFO-head promotion. The interval includes time
 with no queued successor, including later TxToken arrival. High `a2i` and

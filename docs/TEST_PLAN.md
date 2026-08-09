@@ -1252,12 +1252,20 @@ The producer clears `commit_sequence`, writes and cleans the complete 24-byte
 queue body, executes the barrier, and commits a new nonzero sequence last at
 local-ring offset 192. It then builds the real 128-byte batch record at shared
 offset 36864 with one through eight entries pointing to the fixed 1,536-byte
-payload slots beginning at 36992, commits the repeated parent sequence at byte
-124 last, and only then signals root. One parent terminal with detail `0x5803`
-and `result=count` publishes that batch. Root must double-sample the queue and
-batch headers, validate generation, queue commit, parent, count, remaining,
-entry bounds, and slot bounds, copy every frame, and revalidate the unchanged
-header after the copy. It must prove an association event and a data frame are
+payload slots beginning at 36992. Layout version 2 must retain the complete
+128-byte size, keep the eight 8-byte entries unchanged, publish eight parallel
+`u32` DPC-admission low-CNTVCT words as `source_cntvct_lo: [u32; 8]` at bytes
+88-119, leave bytes 120-123 zero,
+commit the repeated parent sequence at byte 124 last, and only then signal
+root. A populated timestamp value of zero is valid modulo 32; every unused
+entry/source pair must be zero. Version 1, wrong-version, torn, and source-only
+changed samples must fail closed. One parent terminal with detail `0x5803` and
+`result=count` publishes that batch. Root must double-sample the queue and batch
+headers, validate generation, queue commit, parent, count, remaining, entry
+bounds, slot bounds, and source stability, copy every frame, and revalidate the
+unchanged header after the copy. Runtime queue tests must prove source
+provenance follows logical removal and reordering and that the freed physical
+slot is cleared. It must prove an association event and a data frame are
 delivered in order, stale work cannot mutate a replacement generation, and
 malformed, torn, or issued-unknown completion state poisons without replay. A
 zero-status `SOURCE_PENDING` event is consumed and rearmed through the ordinary
@@ -3227,12 +3235,26 @@ successor_issues=<n>` and
 `wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2n=<...>`
 records, followed by
 `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
+the passive `rx2a_mod32=n/last/max/avg` DPC-admission-to-TX-acceptance metric,
+then
 `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
 stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
 `wifi: tx_queue` records. Focused tests must prove generation reset, ticket
 deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
 sampling, terminal-to-successor timing, saturating counters, bounded formatting,
 FIFO HWM/drop/stale-purge accounting, and no GENET output or scheduling change.
+For `rx2a_mod32`, coverage must prove that accepted batch-v2 provenance survives
+both direct and transferred exact copied-RX response paths and records once only
+after successful paired-TX admission; ordinary TX, nonmatching/stale RX,
+failed admission, and legacy records must produce zero samples. It must also
+prove that source word zero is present evidence rather than absence and that
+low-word wrap uses wrapping subtraction. The value measures runtime DPC-event
+admission, not radio reception or physical IRQ arrival, and must never feed a
+wake, queue, scheduling, issue, retry, deadline, or recovery predicate. This
+passive proof field is scoped to reopened Milestone 26b task
+`m26b-wifi-join-owner-forensic-decision`, within
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`.
 Hardware analysis must use high `a2i` for acceptance/FIFO/owner wait through
 first issue, high `i2t` for issued runtime/SDIO service including runtime
 `WAIT_CREDIT`, and high `t2n` for the post-terminal EventPump handoff only when

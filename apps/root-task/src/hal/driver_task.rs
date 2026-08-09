@@ -8351,7 +8351,15 @@ fn driver_task_read_cyw43_rx_batch_record(
         };
         index = index.saturating_add(1);
     }
-    let mut reserved = [0; 36];
+    let sources_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, source_cntvct_lo);
+    let mut source_cntvct_lo = [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+    let mut source_index = 0usize;
+    while source_index < source_cntvct_lo.len() {
+        source_cntvct_lo[source_index] =
+            view.read_u32(sources_offset + source_index * core::mem::size_of::<u32>())?;
+        source_index = source_index.saturating_add(1);
+    }
+    let mut reserved = [0; 4];
     let reserved_offset = core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved);
     let mut reserved_index = 0usize;
     while reserved_index < reserved.len() {
@@ -8389,6 +8397,7 @@ fn driver_task_read_cyw43_rx_batch_record(
             remaining
         ))?,
         entries,
+        source_cntvct_lo,
         reserved,
         committed_parent_sequence: view.read_u32(core::mem::offset_of!(
             DriverRuntimeCyw43RxBatchRecord,
@@ -30062,6 +30071,10 @@ mod tests {
                 flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             };
         }
+        let mut source_cntvct_lo = [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+        for (index, source) in source_cntvct_lo.iter_mut().take(3).enumerate() {
+            *source = 0x4359_0000 + index as u32;
+        }
         let batch = DriverRuntimeCyw43RxBatchRecord::staged(
             17,
             queue_state.generation,
@@ -30069,6 +30082,7 @@ mod tests {
             3,
             queue_state.queue_depth,
             entries,
+            source_cntvct_lo,
         )
         .commit();
         assert!(batch.valid_for_parent_and_queue_state(17, queue_state));
@@ -30115,10 +30129,10 @@ mod tests {
             );
         }
 
-        assert_eq!(
-            driver_task_cyw43_rx_batch_snapshot(17, queue_state),
-            Some(batch)
-        );
+        let stable_batch = driver_task_cyw43_rx_batch_snapshot(17, queue_state)
+            .expect("two identical v2 samples preserve the source array");
+        assert_eq!(stable_batch, batch);
+        assert_eq!(stable_batch.source_cntvct_lo, source_cntvct_lo);
         assert_eq!(
             driver_task_cyw43_rx_batch_diagnostic_snapshot(),
             Some((queue_state, batch))

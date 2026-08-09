@@ -1630,7 +1630,7 @@ pub const DRIVER_RUNTIME_CYW43_RX_SHARED_PAYLOAD_BYTES: u16 =
 /// Magic value for one committed CYW43 root-visible RX batch.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC: u32 = 0x4359_5242;
 /// Layout version for [`DriverRuntimeCyw43RxBatchRecord`].
-pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 1;
+pub const DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION: u16 = 2;
 /// Maximum frames committed in one CYW43-to-root RX batch.
 pub const DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP: usize = 8;
 /// Bytes reserved for each exact RX frame slot in a batch.
@@ -2149,8 +2149,14 @@ pub struct DriverRuntimeCyw43RxBatchRecord {
     pub remaining: u16,
     /// Fixed metadata for each exact payload slot.
     pub entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+    /// Low CNTVCT word for each entry's exact DPC source episode.
+    ///
+    /// Every populated v2 slot has a valid raw modulo-32 value, including
+    /// zero. These timestamps are passive evidence and never scheduling or
+    /// recovery authority.
+    pub source_cntvct_lo: [u32; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
     /// Must remain zero so future layouts fail closed.
-    pub reserved: [u8; 36],
+    pub reserved: [u8; 4],
     /// Sequence-last commit; exactly repeats `parent_sequence` when complete.
     pub committed_parent_sequence: u32,
 }
@@ -2170,7 +2176,8 @@ impl DriverRuntimeCyw43RxBatchRecord {
             remaining: 0,
             entries: [DriverRuntimeCyw43RxBatchEntry::empty();
                 DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
-            reserved: [0; 36],
+            source_cntvct_lo: [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+            reserved: [0; 4],
             committed_parent_sequence: 0,
         }
     }
@@ -2184,6 +2191,7 @@ impl DriverRuntimeCyw43RxBatchRecord {
         count: u16,
         remaining: u16,
         entries: [DriverRuntimeCyw43RxBatchEntry; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
+        source_cntvct_lo: [u32; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP],
     ) -> Self {
         Self {
             magic: DRIVER_RUNTIME_CYW43_RX_BATCH_MAGIC,
@@ -2195,7 +2203,8 @@ impl DriverRuntimeCyw43RxBatchRecord {
             count,
             remaining,
             entries,
-            reserved: [0; 36],
+            source_cntvct_lo,
+            reserved: [0; 4],
             committed_parent_sequence: 0,
         }
     }
@@ -2223,7 +2232,8 @@ impl DriverRuntimeCyw43RxBatchRecord {
         let mut index = 0;
         while index < DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP {
             if (index < self.count as usize && !self.entries[index].valid_for_index(index))
-                || (index >= self.count as usize && !self.entries[index].is_empty())
+                || (index >= self.count as usize
+                    && (!self.entries[index].is_empty() || self.source_cntvct_lo[index] != 0))
             {
                 return false;
             }
@@ -2861,6 +2871,9 @@ const _: () = {
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchEntry>() == 4);
     assert!(core::mem::size_of::<DriverRuntimeCyw43RxBatchRecord>() == 128);
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>() == 4);
+    assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, entries) == 24);
+    assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, source_cntvct_lo) == 88);
+    assert!(core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved) == 120);
     assert!(
         core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence) == 124
     );
@@ -5629,6 +5642,19 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>(), 8);
         assert_eq!(core::mem::size_of::<DriverRuntimeCyw43RxBatchRecord>(), 128);
         assert_eq!(core::mem::align_of::<DriverRuntimeCyw43RxBatchRecord>(), 4);
+        assert_eq!(DRIVER_RUNTIME_CYW43_RX_BATCH_VERSION, 2);
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, entries),
+            24
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, source_cntvct_lo),
+            88
+        );
+        assert_eq!(
+            core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, reserved),
+            120
+        );
         assert_eq!(
             core::mem::offset_of!(DriverRuntimeCyw43RxBatchRecord, committed_parent_sequence),
             124
@@ -5647,7 +5673,10 @@ mod tests {
             flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA | (12 << 8),
         };
 
-        let staged = DriverRuntimeCyw43RxBatchRecord::staged(41, 7, 9, 2, 3, entries);
+        let source_cntvct_lo = [0, 0x9abc_def0, 0, 0, 0, 0, 0, 0];
+
+        let staged =
+            DriverRuntimeCyw43RxBatchRecord::staged(41, 7, 9, 2, 3, entries, source_cntvct_lo);
         assert!(staged.body_valid());
         assert!(!staged.committed());
         assert!(!staged.valid());
@@ -5660,9 +5689,28 @@ mod tests {
         assert!(committed.body_valid());
         assert!(committed.committed());
         assert!(committed.valid());
+        assert_eq!(committed.source_cntvct_lo[0], 0);
         assert_eq!(
             DriverRuntimeCyw43RxBatchRecord::stable_snapshot(committed, committed),
             Some(committed)
+        );
+
+        let mut prior_version = committed;
+        prior_version.version = 1;
+        assert!(!prior_version.body_valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(prior_version, prior_version),
+            None,
+            "a v1 reader/writer mismatch must fail closed",
+        );
+
+        let mut changed_source = committed;
+        changed_source.source_cntvct_lo[1] ^= 1;
+        assert!(changed_source.valid());
+        assert_eq!(
+            DriverRuntimeCyw43RxBatchRecord::stable_snapshot(committed, changed_source),
+            None,
+            "source-only change must not form one stable snapshot",
         );
 
         let queue_state = DriverRuntimeCyw43RxQueueState {
@@ -5736,6 +5784,10 @@ mod tests {
         };
         assert!(!stale_tail.body_valid());
 
+        let mut stale_source = committed;
+        stale_source.source_cntvct_lo[2] = 1;
+        assert!(!stale_source.body_valid());
+
         let mut nonzero_reserved = committed;
         nonzero_reserved.reserved[0] = 1;
         assert!(!nonzero_reserved.body_valid());
@@ -5773,7 +5825,10 @@ mod tests {
             len: 512,
             flags: DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA | (5 << 8),
         };
-        let batch = DriverRuntimeCyw43RxBatchRecord::staged(73, 11, 19, 2, 4, entries).commit();
+        let source_cntvct_lo = [0x0102_0304, 0x0506_0708, 0, 0, 0, 0, 0, 0];
+        let batch =
+            DriverRuntimeCyw43RxBatchRecord::staged(73, 11, 19, 2, 4, entries, source_cntvct_lo)
+                .commit();
         assert!(batch.valid());
 
         let staged = DriverRuntimeCyw43RxBatchAck::staged(
