@@ -2765,7 +2765,7 @@ Deliverables:
 
 Title/ID: m20g-swarmui-header
 Goal: Add Cohesix header branding to the SwarmUI shell.
-Inputs: apps/swarmui/frontend/index.html, apps/swarmui/frontend/assets/icons/cohesix-header.svg, apps/swarmui/frontend/styles/.
+Inputs: apps/swarmui/frontend/index.html, docs/COHESIX_LOGO.png, apps/swarmui/frontend/styles/.
 Changes:
   - apps/swarmui/frontend/index.html — add Cohesix header at the top of the SwarmUI shell.
   - apps/swarmui/frontend/styles/ — define header layout and spacing rules.

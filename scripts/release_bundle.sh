@@ -582,6 +582,8 @@ PY
   done
 
   cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${bundle_dir}/QUICKSTART.md"
+  require_file "${ROOT_DIR}/docs/COHESIX_LOGO.png"
+  cp -p "${ROOT_DIR}/docs/COHESIX_LOGO.png" "${bundle_dir}/docs/COHESIX_LOGO.png"
   cp -p "${ROOT_DIR}/README.md" "${bundle_dir}/README.md"
   cp -p "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md" "${bundle_dir}/RELEASE_NOTES.md"
   cp -p "${ROOT_DIR}/LICENSE.txt" "${bundle_dir}/LICENSE.txt"
@@ -596,10 +598,6 @@ bundle = Path(os.environ["BUNDLE_DIR"])
 readme = bundle / "README.md"
 if readme.exists():
     text = readme.read_text(encoding="utf-8")
-    text = text.replace(
-        "apps/swarmui/frontend/assets/icons/cohesix-header.svg",
-        "ui/swarmui/assets/icons/cohesix-header.svg",
-    )
     text = text.replace(
         "## Status\n- [docs/BUILD_PLAN.md](docs/BUILD_PLAN.md) \n",
         "## Status\nSee `docs/QUICKSTART.md` for how to run this bundle.\n",

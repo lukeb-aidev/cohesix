@@ -7,7 +7,7 @@
   <tr>
     <td align="center" bgcolor="#333333">
       <img
-        src="apps/swarmui/frontend/assets/icons/cohesix-header.svg"
+        src="docs/COHESIX_LOGO.png"
         alt="Cohesix"
         width="720"
       />
