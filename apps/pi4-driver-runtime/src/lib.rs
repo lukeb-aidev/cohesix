@@ -26180,6 +26180,31 @@ fn cyw43_foreground_exact_child_pending() -> bool {
 }
 
 #[cfg(any(target_os = "none", test))]
+fn cyw43_foreground_exact_child_waiting() -> bool {
+    let child_active = CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire);
+    let child_sequence = CYW43_SDIO_CHILD_EXPECTED_SEQUENCE.load(Ordering::Acquire);
+    let child_issued_unknown = CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire);
+    let pair_restart_required = CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire);
+    CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+        transaction.executing
+            && transaction.turn.pending
+            && transaction.frontier_ticket_valid()
+            && transaction.frontier_submitted
+            && !transaction.issued_unknown
+            && !transaction.poisoned
+            && child_active
+            && child_sequence == transaction.frontier.command.sequence
+            && !child_issued_unknown
+            && !pair_restart_required
+    })
+}
+
+#[cfg(not(any(target_os = "none", test)))]
+const fn cyw43_foreground_exact_child_waiting() -> bool {
+    false
+}
+
+#[cfg(any(target_os = "none", test))]
 fn cyw43_foreground_exact_completion_pending_replay() -> bool {
     CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
         transaction.executing && transaction.turn.replay_index < transaction.turn.completed_count
@@ -35486,6 +35511,7 @@ fn cyw43_function2_execute_transfer_with_write_window(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Cyw43TxTransferResult {
     NotAttempted,
+    RetainedChildPending,
     DeferredForDpc,
     Submitted,
     Ambiguous,
@@ -35646,7 +35672,15 @@ fn cyw43_function2_execute_tx_transfer_once(
         cyw43_f2_tx_prepare_reset(state);
         Cyw43TxTransferResult::Submitted
     } else {
-        let result = cyw43_tx_transfer_failure_result(sdio_last_transfer_failure());
+        let transfer_failure = sdio_last_transfer_failure();
+        if transfer_failure == 0 && cyw43_foreground_exact_child_waiting() {
+            // The linked bus call published one exact reciprocal child and
+            // returned Pending before its owner terminal. This is ordinary
+            // retained progress, not missing failure telemetry or an
+            // issued-unknown Function-2 write.
+            return Cyw43TxTransferResult::RetainedChildPending;
+        }
+        let result = cyw43_tx_transfer_failure_result(transfer_failure);
         if result == Cyw43TxTransferResult::DeferredForDpc {
             // The DPC may alter the Function-1 backplane window. Keep the
             // logical SDPCM frame; the next admitted parent rechecks the shared
@@ -36312,6 +36346,9 @@ fn cyw43_submit_sdpcm_frame_with_credit_policy(
     };
     match tx_result {
         Cyw43TxTransferResult::NotAttempted => {
+            return Cyw43SdpcmSubmitResult::NotAttempted;
+        }
+        Cyw43TxTransferResult::RetainedChildPending => {
             return Cyw43SdpcmSubmitResult::NotAttempted;
         }
         Cyw43TxTransferResult::DeferredForDpc => {
@@ -93883,12 +93920,19 @@ mod tests {
         let mut io = production_owner_io();
         let mut previous_sequence = 0u32;
         let mut first_f2_child = None;
+        let mut queue_state_before_f2 = None;
         for _ in 0..8 {
+            let queue_state_before_child = DriverRuntimeCyw43RxQueueState::stable_snapshot(
+                read_cyw43_rx_queue_state_for_test(),
+                read_cyw43_rx_queue_state_for_test(),
+            )
+            .expect("the pre-child RX queue state is stable");
             let (child, child_descriptor) = next_child_after(parent, previous_sequence);
             configure_control_child(&mut io, child_descriptor);
             if child_descriptor.op == DRIVER_RUNTIME_SDIO_OP_CMD53_WRITE
                 && child_descriptor.function == 2
             {
+                queue_state_before_f2 = Some(queue_state_before_child);
                 first_f2_child = Some((child, child_descriptor));
                 break;
             }
@@ -93910,10 +93954,43 @@ mod tests {
         }
         let (first_f2_child, first_f2_descriptor) =
             first_f2_child.expect("Join publishes its first exact Function-2 child");
+        let queue_state_before_f2 =
+            queue_state_before_f2.expect("Join records the queue state before child publication");
         assert_ne!(
             first_f2_descriptor.flags & DriverRuntimeSdioCommandDescriptor::FLAG_PRE_TX_DPC_FENCE,
             0,
         );
+        let pending_queue_state = DriverRuntimeCyw43RxQueueState::stable_snapshot(
+            read_cyw43_rx_queue_state_for_test(),
+            read_cyw43_rx_queue_state_for_test(),
+        )
+        .expect("an exact pending Join child keeps one stable RX queue level");
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        assert!(!CYW43_SDIO_CHILD_ISSUED_UNKNOWN.load(Ordering::Acquire));
+        assert!(!pending_queue_state.poisoned());
+        assert_eq!(
+            pending_queue_state.commit_sequence,
+            queue_state_before_f2.commit_sequence,
+        );
+        assert_eq!(pending_queue_state.recovery_source_line, 0);
+        assert_eq!(pending_queue_state.recovery_source_line(), None);
+        assert!(!CYW43_SDIO_PAIR_RESTART_REQUIRED.load(Ordering::Acquire));
+        CYW43_RUNTIME_STATE.with_ref(|state| {
+            assert!(!state.recovery_required);
+            assert!(!state.sdpcm_tx_write_ambiguous);
+            assert_eq!(state.tx_frames, 0);
+            assert_eq!(state.sdpcm_seq, initial_sdpcm_sequence);
+        });
+        CYW43_FOREGROUND_TRANSACTION.with_ref(|transaction| {
+            assert!(transaction.active);
+            assert!(transaction.turn.pending);
+            assert!(transaction.frontier_valid);
+            assert!(transaction.frontier_submitted);
+            assert!(!transaction.issued_unknown);
+            assert!(!transaction.poisoned);
+            assert_eq!(transaction.parent, parent);
+            assert_eq!(transaction.frontier.command, first_f2_child);
+        });
         io.set_register(SDHCI_INT_STATUS, SDHCI_INT_CARD_INT);
         let first_f2_issues_before = io.command_issue_count();
         let deferred = drive_production_owner_child_to_completion(
