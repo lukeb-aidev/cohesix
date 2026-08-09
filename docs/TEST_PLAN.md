@@ -3954,10 +3954,16 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       parser ingress on the live prompt row, boot/progress messages refreshing
       at the documented 5-10 s cadence, and new output scrolling the isolated
       HDMI viewport like a serial terminal without full-screen blink. As soon
-      as root-console and display-retry readiness hold, the independent
-      `cohesix>` prompt must be visible before Wi-Fi terminal state and before
-      USB command admission; `USB console starting...` must explain the latter,
-      while parser ingress and the final Ready banner remain false. On a
+      as root-console and display-retry readiness hold, HDMI must keep the
+      interactive `cohesix>` prompt withheld until USB command admission while
+      showing `USB controller starting...` plus bounded stage feedback. A stage
+      change appears immediately and an unchanged stage no more than once every
+      two seconds. `USB console ready` reports the observed stage timings, but
+      it is a passive EventPump record and may follow local-seat prompt release
+      from the same command-readiness transition; the test must not require
+      either record/prompt ordering. Prompt release itself still requires USB
+      command readiness plus display health. Parser ingress and the final Ready
+      banner remain false until their independent gates hold. On a
       pre-terminal or failed Wi-Fi episode, admitted USB characters must still
       update that visible input row. A partial line must schedule
       `Dispatch -> Display -> Serial` before any Network turn while retaining
@@ -3974,11 +3980,21 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       interactive-console readiness. The first attached viewport snapshot is
       one-shot, and asynchronous driver milestones arriving during a partial
       command must use the bounded row-preserving update and restore the exact
-      prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape
-      sequences navigate the bounded root-owned HDMI history and trigger
-      cursor-home redraws from canonical scrollback; redraws must use the
-      framebuffer-derived safe-area row count even when the payload spans
-      multiple bounded HDMI service turns. Each rendered row must use
+      prompt, typed bytes, backspace floor, and cursor. The canonical input row
+      remains dirty until the matching generation receipt completes; an older
+      completion cannot acknowledge newer input. Older FIFO output stays before
+      the row and later FIFO output stays after it; reserved high-impact status,
+      the closed command row, and its response retain their order under
+      pressure. Readiness invalidation retracts the prompt and stale
+      console-ready banner without losing the typed suffix, and a stale
+      retraction receipt cannot acknowledge the row restored by fresh
+      readiness. Held USB up/down arrows use a 300 ms initial
+      and 50 ms repeat deadline from the virtual counter. Once a canonical
+      viewport is materialized, each repeat advances it by one bounded CSI
+      `S`/`T` row;
+      a full redraw is reserved for initial or recovery materialization and must
+      use the framebuffer-derived safe-area row count even when the payload
+      spans multiple bounded HDMI service turns. Each rendered row must use
       clear-to-end-of-line and the final chunk must use clear-to-end so
       framebuffer-derived wide modes cannot retain stale text on the right or
       below the viewport. Redraws must leave the cursor at the real end of the
@@ -3990,10 +4006,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       rather than replaying raw payload tails; a capture with repeated
       `hdmi-text` no-reply growth, saturated `pending_bytes`, or
       jumbled/repeated screen content is not HDMI acceptance even if USB reaches
-      Gate 10. Stage 01 driver coverage guards the cadence constants, serial
-      runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and
+      Gate 10. Stage 01 driver coverage guards held-arrow timing and steady-poll
+      emission, one-row HDMI scroll rendering, canonical input-row receipt and
+      FIFO ordering, command-readiness invalidation/re-release, prompt and
+      ready-banner readiness, startup-feedback cadence/timing, serial runtime
+      ring RX/TX turns, and
       Wi-Fi progress suppression during USB boot activity and after USB
-      first-byte proof. Pi 4 manifest-default boots must use
+      first-byte proof. These checks introduce no console command, driver-task
+      ABI field, or USB/HDMI authority change. Pi 4 manifest-default boots must use
       `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
       `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing
       declared devices fail visibly. Runtime backend attach failures may

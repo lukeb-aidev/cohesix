@@ -613,6 +613,128 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_EXHAUSTED_ATTEMPTS: u16 = 32;
 // replay needed for driver-task acceptance.
 const POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS: u16 = 4;
 
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+const USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS: u64 = 2_000;
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbConsoleStartupStage {
+    Controller,
+    KeyboardEnumeration,
+    FirstReport,
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+impl UsbConsoleStartupStage {
+    fn from_frontier(frontier: &str) -> Self {
+        match frontier {
+            "usb-keyboard-ready" => Self::FirstReport,
+            "usb-keyboard-enumeration-pending" | "usb-xhci-ready" => Self::KeyboardEnumeration,
+            _ => Self::Controller,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Controller => "controller",
+            Self::KeyboardEnumeration => "keyboard-enumeration",
+            Self::FirstReport => "first-report",
+        }
+    }
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbConsoleStartupFeedbackEvent {
+    Progress {
+        stage: UsbConsoleStartupStage,
+        elapsed_ms: u64,
+    },
+    Ready {
+        controller_ms: u64,
+        enumeration_ms: u64,
+        command_ms: u64,
+        total_ms: u64,
+    },
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct UsbConsoleStartupFeedback {
+    started_ms: Option<u64>,
+    controller_ready_ms: Option<u64>,
+    keyboard_ready_ms: Option<u64>,
+    last_feedback_ms: Option<u64>,
+    last_stage: Option<UsbConsoleStartupStage>,
+    ready_logged: bool,
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+impl UsbConsoleStartupFeedback {
+    fn begin(&mut self, now_ms: u64) {
+        if self.started_ms.is_some() {
+            return;
+        }
+        self.started_ms = Some(now_ms);
+        self.last_feedback_ms = Some(now_ms);
+        self.last_stage = Some(UsbConsoleStartupStage::Controller);
+    }
+
+    fn observe(
+        &mut self,
+        now_ms: u64,
+        frontier: &'static str,
+        command_ready: bool,
+    ) -> Option<UsbConsoleStartupFeedbackEvent> {
+        self.begin(now_ms);
+        let started_ms = self.started_ms.unwrap_or(now_ms);
+        let stage = if command_ready {
+            UsbConsoleStartupStage::FirstReport
+        } else {
+            UsbConsoleStartupStage::from_frontier(frontier)
+        };
+
+        if !matches!(stage, UsbConsoleStartupStage::Controller)
+            && self.controller_ready_ms.is_none()
+        {
+            self.controller_ready_ms = Some(now_ms);
+        }
+        if matches!(stage, UsbConsoleStartupStage::FirstReport) && self.keyboard_ready_ms.is_none()
+        {
+            self.keyboard_ready_ms = Some(now_ms);
+        }
+
+        if command_ready {
+            if self.ready_logged {
+                return None;
+            }
+            self.ready_logged = true;
+            let controller_ready_ms = self.controller_ready_ms.unwrap_or(now_ms);
+            let keyboard_ready_ms = self.keyboard_ready_ms.unwrap_or(now_ms);
+            return Some(UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms: controller_ready_ms.saturating_sub(started_ms),
+                enumeration_ms: keyboard_ready_ms.saturating_sub(controller_ready_ms),
+                command_ms: now_ms.saturating_sub(keyboard_ready_ms),
+                total_ms: now_ms.saturating_sub(started_ms),
+            });
+        }
+
+        let stage_changed = self.last_stage != Some(stage);
+        let heartbeat_due = self.last_feedback_ms.is_none_or(|last_ms| {
+            now_ms.saturating_sub(last_ms) >= USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS
+        });
+        if !stage_changed && !heartbeat_due {
+            return None;
+        }
+        self.last_stage = Some(stage);
+        self.last_feedback_ms = Some(now_ms);
+        Some(UsbConsoleStartupFeedbackEvent::Progress {
+            stage,
+            elapsed_ms: now_ms.saturating_sub(started_ms),
+        })
+    }
+}
+
 const fn local_seat_usb_burst_proof(
     accepted_bytes: u64,
     drained_bytes: u64,
@@ -2973,6 +3095,8 @@ where
     post_prompt_local_seat_attach_active_usb_traced: bool,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_exhausted_traced: bool,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    usb_console_startup_feedback: UsbConsoleStartupFeedback,
     #[cfg(all(test, feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_usb_active_override: Option<bool>,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
@@ -3570,6 +3694,8 @@ where
             post_prompt_local_seat_attach_active_usb_traced: false,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_exhausted_traced: false,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            usb_console_startup_feedback: UsbConsoleStartupFeedback::default(),
             #[cfg(all(test, feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_usb_active_override: None,
             last_smp_activity_snapshot: None,
@@ -4628,6 +4754,8 @@ where
                 // with the USB poll that delivered it.
                 self.poll_local_seat_backend_for_ingress();
                 self.poll_runtime(true, false, false);
+                #[cfg(feature = "usb")]
+                self.maybe_emit_usb_console_startup_feedback();
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
             }
             LinkedRuntimeServicePhase::Display => {
@@ -6010,8 +6138,9 @@ where
 
     /// Keep only the final HDMI ready banner behind the Wi-Fi terminal.
     ///
-    /// The serial/HDMI prompt and buffered USB command fence remain active
-    /// before the single-attempt bootstrap episode begins.
+    /// The serial prompt and buffered USB command fence remain active before
+    /// the single-attempt bootstrap episode begins. HDMI prompt release remains
+    /// independently gated by USB command admission and display health.
     #[cfg(feature = "kernel")]
     pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
         let invalidated = self.pending_cyw43_bootstrap_hdmi_milestones.len()
@@ -7617,6 +7746,7 @@ where
             self.post_prompt_local_seat_attach_attempts = 0;
             self.post_prompt_local_seat_attach_active_usb_traced = false;
             self.post_prompt_local_seat_attach_exhausted_traced = false;
+            self.usb_console_startup_feedback.begin(self.now_ms);
             self.post_prompt_local_seat_attach_not_before_ms = self
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
@@ -7633,6 +7763,7 @@ where
             if !self.post_prompt_local_seat_attach_pending {
                 return;
             }
+            self.maybe_emit_usb_console_startup_feedback();
             let usb_runtime_active = self.post_prompt_local_seat_attach_usb_runtime_active();
             let first_attempt_due = self.post_prompt_local_seat_attach_attempts == 0
                 && self.now_ms >= self.post_prompt_local_seat_attach_not_before_ms;
@@ -7694,9 +7825,67 @@ where
             self.post_prompt_local_seat_attach_idle_turns = 0;
             self.arm_post_prompt_local_seat_once();
             self.keep_post_prompt_local_seat_attach_pending_until_ready();
+            self.maybe_emit_usb_console_startup_feedback();
         }
         #[cfg(not(all(feature = "kernel", feature = "usb")))]
         let _ = physical_input_active;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn maybe_emit_usb_console_startup_feedback(&mut self) {
+        if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            return;
+        }
+        let command_ready = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.usb_keyboard_command_ready_latched());
+        let frontier = crate::local_seat::linked_local_seat_usb_frontier_label();
+        let Some(feedback) =
+            self.usb_console_startup_feedback
+                .observe(self.now_ms, frontier, command_ready)
+        else {
+            return;
+        };
+
+        let mut line = HeaplessString::<192>::new();
+        match feedback {
+            UsbConsoleStartupFeedbackEvent::Progress { stage, elapsed_ms } => {
+                let _ = write!(
+                    line,
+                    "[drivers] USB console starting stage={} elapsed_ms={} action=wait",
+                    stage.label(),
+                    elapsed_ms,
+                );
+            }
+            UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms,
+                enumeration_ms,
+                command_ms,
+                total_ms,
+            } => {
+                let _ = write!(
+                    line,
+                    "[drivers] USB console ready controller_ms={} enumeration_ms={} command_ms={} total_ms={}",
+                    controller_ms,
+                    enumeration_ms,
+                    command_ms,
+                    total_ms,
+                );
+            }
+        }
+        let _ = self.queue_usb_console_startup_feedback_line(line.as_str());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn queue_usb_console_startup_feedback_line(&mut self, line: &str) -> bool {
+        crate::log_buffer::append_log_line(line);
+        let queued =
+            self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, line);
+        if let Some(runtime) = self.local_seat.as_mut() {
+            let _ = runtime.mirror_high_impact_line(line);
+        }
+        queued
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -25133,8 +25322,7 @@ mod tests {
             pump.local_seat
                 .as_mut()
                 .unwrap()
-                .publish_preterminal_linked_hdmi_root_prompt_for_test(CONSOLE_PROMPT);
-
+                .withhold_linked_hdmi_prompt_for_test(CONSOLE_PROMPT);
             assert!(!pump
                 .local_seat
                 .as_ref()
@@ -25164,8 +25352,8 @@ mod tests {
                     .iter()
                     .filter(|line| line.as_str() == CONSOLE_PROMPT)
                     .count(),
-                1,
-                "the root prompt is display feedback and must precede WiFi terminal state",
+                0,
+                "HDMI must not advertise an interactive prompt before USB command readiness",
             );
             assert!(pump
                 .local_seat
@@ -25173,14 +25361,14 @@ mod tests {
                 .unwrap()
                 .mirrored_lines_snapshot()
                 .iter()
-                .any(|line| line.as_str() == "USB console starting..."));
+                .any(|line| line.as_str() == "USB controller starting..."));
             assert!(
                 !crate::local_seat::local_seat_keyboard_bytes_enter_parser_state(
                     true,
                     pump.local_seat.as_ref().unwrap().root_console_ready(),
                     false,
                 ),
-                "the same preterminal prompt state must retain closed USB parser ingress",
+                "the same preterminal startup state must retain closed USB parser ingress",
             );
             assert!(!pump
                 .local_seat
@@ -25456,6 +25644,102 @@ mod tests {
                 "serial-safe-active-usb-progress"
             ))
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_console_startup_feedback_reports_stage_changes_heartbeat_and_timing() {
+        let mut feedback = UsbConsoleStartupFeedback::default();
+        feedback.begin(100);
+        assert_eq!(
+            feedback.observe(100, "usb-runtime-not-started", false),
+            None,
+        );
+        assert_eq!(
+            feedback.observe(2_100, "usb-runtime-descriptor-replay-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::Controller,
+                elapsed_ms: 2_000,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_200, "usb-xhci-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::KeyboardEnumeration,
+                elapsed_ms: 2_100,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_300, "usb-keyboard-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::FirstReport,
+                elapsed_ms: 2_200,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_400, "usb-keyboard-ready", true),
+            Some(UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms: 2_100,
+                enumeration_ms: 100,
+                command_ms: 100,
+                total_ms: 2_300,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(4_400, "usb-keyboard-ready", true),
+            None,
+            "the terminal timing record is emitted once",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_console_startup_feedback_uses_bounded_linked_serial_projection() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::log_buffer::clear_for_test();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let line = "[drivers] USB console starting stage=controller elapsed_ms=2000 action=wait";
+
+        assert!(pump.queue_usb_console_startup_feedback_line(line));
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::HighImpactLine,
+        );
+        assert_eq!(pump.pending_console_output[0].text.as_str(), line);
+        let retained = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 4>();
+        assert!(retained.iter().any(|entry| entry.as_str() == line));
+
+        let mut transcript = Vec::new();
+        for _ in 0..4 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript
+                .windows(line.len())
+                .any(|window| window == line.as_bytes())
+            {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.contains(line), "{rendered}");
+        assert!(pump.pending_console_output.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -41198,8 +41482,8 @@ mod tests {
             },
         );
 
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();

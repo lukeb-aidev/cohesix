@@ -6727,6 +6727,18 @@ Deliverables:
 
 **Status:** Reopened — the prior bounded DHCP, USB/local-seat, QEMU compatibility, and production wired/GENET evidence remains accepted. Milestone 26d Wi-Fi boot investigation exposed the original pre-existing 26b defect: `m26b-wifi-driver-task` and `m26b-sdio-host-driver-task-graduation` used poll/yield service and consumable scheduling edges instead of the durable-condition CYW43/SDIO DPC boundary required by their original root-no-wait contract. The reciprocal generated IRQ/notification topology, bounded pointer-free DPC event ring, isolated-runtime IRQ/DPC service, Linux-aligned enable/ALP timing, durable sequence-last RX queue state, one-parent bounded RX batch handoff, post-prompt persistent bootstrap supervision, deterministic descriptor/controller coverage, and whole-action pair-restart cuts have since landed under `m26b-wifi-sdio-notification-dpc-closure`. The current source repair completes that contract across the full post-release lifetime: persistent op11, the separate finite urgent-op7 lease, and the event-sequence-bound DPC lease route from current durable conditions rather than snapshot novelty. Deterministic private phases continue to bounded quiescence even when a snapshot is equal; an exact child, credit, queue, or peer wait blocks immediately even when newly observed. Production DPC uses that event lease before Gate 8 as well as after it. Root masks only the self-demand of an exact issued persistent op11 whose stable HAL condition is `Waiting`, while independent committed DPC/RX/terminal work remains schedulable. Notifications are coalescing prompts only; immutable transaction identity and committed shared state carry authority and history. A sequence-last SDIO command is never discarded after its prompt: a missing or competing intake seal reaches the typed zero-I/O owner terminal. The 2026-08-01 exact-image repeatability run exposed a separate `m26b-net-control-priority` lifetime-ordering regression: TxToken consumption promoted a requestless op7 while an exact NetData op8 owned HAL, and unconditional copied-RX-first service could starve that op7 into `issued-owner-unknown`. The repaired EventPump keeps submission queue-only, preserves every exact active op7 through its terminal, then lets a committed copied/DPC/runtime RX level preempt promotion of a fresh or requestless op7. The 2026-08-04 exact image then proved that the runtime terminalized the host M4 Function-2 write but root incorrectly retained it behind a second, requestless `tx-drain` wait for a future SDPCM `tx_max` observation. `tx_max` is the runtime's admission window, not acknowledgement of a completed packet. The source repair therefore makes the joined Function-2 terminal the root release authority, continues the ordered EAPOL/key cursor directly, and leaves all subsequent SDPCM sequence/window admission solely inside the runtime. A full aggregate advances one eligible TX head to restore the reserved paired-response slot, and every successor remains queued for a later coordinator turn; if the runtime window is exhausted, that exact promoted op7 remains in `WAIT_CREDIT` rather than being withheld by a second root credit mirror. Fresh exact-image hardware proof remains pending. Milestone 26b remains reopened until the exact-image 10/10 cold plus 10/10 warm Wi-Fi run proves DHCP, raw TCP/`cohsh`, ordered RX, clean DPC counters, and unchanged operator-input gates. This scope adds no operator protocol, namespace, system authority, production-Wi-Fi parity claim, or unrelated 26d system-model change.
 
+Fresh Wi-Fi-selected Pi use also exposed a bounded defect in the retained
+USB/local-seat proof. Held arrow reports had no counter-scaled repeat contract;
+the HDMI prompt could advertise interactivity before current USB command
+admission; recovery could leave prompt/readiness-banner state needing explicit
+revocation and current-lifetime re-release; and queued prompt, input-row, and
+viewport work could be acknowledged by an older display completion or restart
+a full redraw during rapid history navigation. The
+`m26b-usb-hdmi-local-seat-liveness` repair reopens only this operator-surface
+proof. It changes no parser command, `ACK`/`ERR`/`END` grammar, Secure9P or REST
+schema, physical owner, driver ABI, network scheduling authority, retry path,
+or Wi-Fi lifecycle.
+
 The 2026-08-06 exact `5b57ebcdcf73` boot reached firmware/control readiness and
 the pre-Join drain, then allocated request 64 without publishing its
 sequence-last command. That is the observed first break. Comparison with the
@@ -6941,6 +6953,38 @@ Move USB/xHCI/HID and CYW43/SDIO Wi-Fi onto dedicated, HAL-admitted driver-task 
 
 ### Task Breakdown
 ```
+Title/ID: m26b-usb-hdmi-local-seat-liveness
+Milestone: Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency / reopened USB/local-seat and HDMI liveness defect
+Goal: Restore truthful and fluid physical Pi local-seat behavior during selected-network startup without changing console grammar, device authority, or Wi-Fi progress.
+Inputs: apps/pi4-driver-runtime/src/lib.rs, apps/root-task/src/{local_seat.rs,event/mod.rs}, scripts/pi4_trace_normalize.py, tests/test_pi4_{trace_normalize,serial_reboot}.py, scripts/ci/check_driver_test_coverage.py, docs/{DRIVERS,HARDWARE_BRINGUP,TEST_PLAN,USERLAND_AND_CLI}.md, current Wi-Fi-selected Pi USB/HDMI evidence.
+Changes:
+  - apps/pi4-driver-runtime/src/lib.rs — repeat only held arrow usages from the exported virtual counter and selected timer frequency, preserve make/release edges for every ordinary key, and render bounded one-row HDMI scroll steps without report-count timing or a second input/display owner.
+  - apps/root-task/src/local_seat.rs — revoke stale prompt and console-ready presentation across attach/recovery boundaries, re-release the interactive HDMI prompt after current USB command admission and display health, re-admit the ready banner after current USB command admission, retain the canonical prompt/input row until its matching display completion, preserve FIFO output and the prompt backspace floor, and chase completed viewport state through bounded receipts.
+  - apps/root-task/src/event/mod.rs — project passive bounded USB controller, keyboard-enumeration, and first-report startup feedback while preserving `Dispatch -> Display -> Serial` priority and granting no USB or HDMI scheduling authority.
+  - scripts/pi4_trace_normalize.py + focused Python fixtures — compatibility-review the unchanged normalizer contract, preserve the existing machine-consumed `usb-console-command-ready` token, align the summary fixture with already-emitted passive DPC timing defaults, and keep display projection non-authorizing; no parser behavior changes are required.
+  - focused Rust tests + scripts/ci/check_driver_test_coverage.py + docs — cover readiness revocation/re-release and bounded startup feedback, map the new USB/HDMI/event/local-seat invariants to production-feature tests, and describe the as-built local-seat behavior.
+  - complete host-tool compatibility review — verify `coh`, `cohsh`, `hive-gateway`, SwarmUI, `tools/cohesix-py`, and the performance benchmark scripts require no implementation, fixture, schema, or workload change because the repair alters only physical local-seat projection and preserves authenticated console, Secure9P, REST, and benchmark semantics.
+Commands:
+  - scripts/ci/test_plan_run.sh --list
+  - cargo fmt --all -- --check
+  - cargo test -p pi4-driver-runtime --lib usb_keyboard -- --test-threads=1
+  - cargo test -p pi4-driver-runtime --lib hdmi_runtime -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib local_seat::tests -- --test-threads=1
+  - cargo test -p root-task --no-default-features --features driver-tests-pi4 --lib event::tests -- --test-threads=1
+  - python3 -m pytest tests/test_pi4_trace_normalize.py tests/test_pi4_serial_reboot.py -k 'usb or hdmi or local_seat'
+  - python3 scripts/ci/check_driver_test_coverage.py
+  - scripts/ci/check_test_plan.sh
+  - scripts/check-generated.sh
+  - cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+  - SEL4_BUILD_DIR=seL4/build_UBOOT cargo check -p root-task --target aarch64-unknown-none --no-default-features --features release-pi4
+Checks:
+  - Ordinary keys emit once per make/release edge; only held arrows repeat, after a 300 ms initial delay and at 50 ms intervals scaled from `CNTVCT_EL0` and `TIMER_CLOCK_HZ`, and arrow escape bytes never enter the command parser.
+  - Serial remains usable during USB startup; HDMI shows bounded passive startup feedback but no interactive prompt until current USB command readiness and display health both hold. The console-ready banner is re-admitted canonically only after current USB command readiness and becomes visible only through healthy display service. Attach/recovery revokes stale first-report, command, prompt, and ready-banner presentation, and only current-lifetime proof re-releases them.
+  - An older HDMI completion cannot acknowledge a newer canonical input row or viewport request; FIFO output remains ordered, backspace cannot erase the prompt prefix, and rapid arrows advance one completed viewport row per bounded display turn without stale tails, full-screen blink, or unbounded queue growth.
+  - USB remains the sole xHCI/HID owner and HDMI remains child-only. No ABI, parser, `ACK`/`ERR`/`END`, network, REST, `cohsh`, or benchmark semantic changes occur.
+  - The exact rebuilt image preserves Wi-Fi first-pair progress and proves same-boot USB first-byte/first-printable-byte input, visible HDMI echo, prompt and ready-banner revocation/re-release, arrow history, and bounded display completion under selected-network load.
+Deliverables: Focused source/tests/docs repair, warning-free Pi target builds, exact rebuilt image and independent COHESIX media readback, and fresh same-boot USB keyboard/HDMI functional proof.
+
 Title/ID: m26b-usb-driver-task
 Goal: Move Pi 4 xHCI/HID keyboard service behind the realtime USB driver-task contract.
 Inputs: apps/root-task/src/local_seat.rs, apps/pi4-driver-runtime/src/lib.rs, crates/pi4-driver-abi/src/lib.rs, apps/root-task/src/event/*, scripts/pi4_trace_normalize.py, tests/test_pi4_trace_normalize.py, docs/DRIVERS.md.

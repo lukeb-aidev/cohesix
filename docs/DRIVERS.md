@@ -923,6 +923,34 @@ PCIe, USB, DMA, IRQ, or Pi timer behavior.
   typing proof; `usb status` reports `physical_input_proven=no` until a
   linked-runtime HID byte also reaches parser ingress. Either signal alone is
   diagnostic only.
+- Ordinary keys emit once per make/release edge. Up, down, left, and right are
+  the only held keys with repeat: the isolated runtime uses the exported
+  virtual counter and selected timer frequency for a 300 ms initial delay and
+  50 ms repeat interval. A report count or CPU-speed spin is not a repeat clock.
+- On physical Pi, serial remains usable while USB starts, but HDMI withholds
+  the interactive `cohesix>` prompt until USB command admission and display
+  retry health are both ready. HDMI can first show `USB controller starting...`;
+  the EventPump projects stage transitions and an unchanged-stage heartbeat at
+  a bounded two-second cadence from the existing retained frontier. The
+  one-shot `USB console ready` record reports observed controller, enumeration,
+  command, and total milliseconds without granting any USB scheduling
+  authority. It samples the same command-readiness transition and may be
+  logged or mirrored after the local seat has already released the prompt;
+  record/prompt ordering is not a readiness gate.
+- Keep the canonical prompt/input row dirty until its matching display
+  completion. An older completion cannot acknowledge a newer row, older FIFO
+  output stays before the row, and later FIFO output stays after it. Backspace
+  cannot erase bytes at or before the prompt floor. If USB command readiness is
+  invalidated, HDMI retracts the prompt and stale console-ready banner without
+  discarding the typed suffix, then re-releases them only after fresh command
+  readiness; a stale retraction receipt cannot clear that restored row. Once a
+  snapshot establishes the physical
+  viewport, held arrows chase the requested offset with bounded one-row CSI
+  `S`/`T` steps instead of restarting a full redraw.
+- This local-seat behavior adds no console command or grammar, changes no
+  driver-task ABI, and transfers no authority: HAL admission is unchanged, USB
+  remains the sole xHCI/HID owner, and HDMI remains the sole framebuffer
+  renderer.
 - A successful keyboard-endpoint doorbell proves submission, not completion.
   Before any keyboard transfer event or first valid report, the runtime binds
   one liveness watch to the exact active slot, endpoint, report slot, TRB, and
@@ -2951,12 +2979,15 @@ generation and XID.
   Pre-terminal HDMI text reports startup/diagnostic availability only. The
   linked display schedules its canonical attach snapshot once, immediately at
   successful attach and before queued incremental startup text can drain.
-  Once the root console is ready and the display retry state is healthy, HDMI
-  publishes the independent `cohesix>` prompt without waiting for Wi-Fi
-  terminal state or USB command admission. When USB is not yet admitted, the
-  display first shows `USB console starting...`; the visible prompt is display
-  feedback and does not grant parser ingress. The final console-Ready banner
-  still requires the terminal Wi-Fi cut plus USB command readiness. Admitted
+  Once the root console, USB command admission, and display retry state are all
+  ready, HDMI publishes the interactive `cohesix>` prompt without waiting for
+  Wi-Fi terminal state. Before USB admission, the display shows bounded
+  controller, keyboard-enumeration, and first-report startup feedback instead;
+  no visible prompt is published and parser ingress remains closed. The passive
+  `USB console ready` timing record may follow prompt release from that same
+  readiness transition; it is not an additional release condition. The final
+  console-Ready banner still requires the terminal Wi-Fi cut plus USB command
+  readiness. Admitted
   pre-terminal USB bytes update the live row, so Wi-Fi startup, quarantine, or
   terminal failure never makes a working keyboard blind. Later Wi-Fi
   milestones are inserted above that open command row with the exact prompt,

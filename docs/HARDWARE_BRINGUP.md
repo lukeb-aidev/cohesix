@@ -465,6 +465,34 @@ USB-keyboard `ping` must still return. If any tail is absent, stop sending input
 and preserve the sample. A merged or overlapped serial transcript is not
 acceptance evidence.
 
+The first serial `cohesix>` prompt is not permission to type on the USB local
+seat. HDMI can first show `USB controller starting...` and bounded
+`stage=controller|keyboard-enumeration|first-report` feedback while its
+interactive prompt remains withheld. A stage change is shown immediately; an
+unchanged stage is repeated at most once every two seconds. The terminal
+`USB console ready` line reports observed controller, enumeration, command, and
+total milliseconds. It is a passive EventPump observation of the same
+command-readiness transition and may appear after the local seat has released
+the prompt, so do not require either record/prompt ordering. Require instead
+that prompt release itself follows USB command readiness and healthy display
+retry state. These records observe the existing retained USB frontier and do
+not add a poll, retry, wake, completion, command, ABI field, or hardware owner.
+
+After the HDMI prompt appears, verify that every typed character reaches the
+canonical command row, backspace stops at the prompt prefix, and held up/down
+arrows advance scrollback smoothly one completed viewport row at a time.
+Queue/submission counters alone do not satisfy this check; preserve the matching
+completed `hdmi-text` receipt evidence. If USB command readiness is invalidated
+during the sample, the HDMI prompt and stale console-ready banner must retract
+without losing the typed suffix. The prompt returns only after fresh readiness
+and display health; the banner is canonically re-admitted after fresh readiness
+and becomes visible through that healthy display service. Do not require a
+fault injection merely to exercise this branch on otherwise healthy hardware.
+
+This behavior retains the existing console grammar and fixed driver-task ABI.
+HAL still admits resources, the isolated USB runtime remains the sole xHCI/HID
+owner, and the isolated HDMI runtime remains the sole framebuffer renderer.
+
 `usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
 `continuation=pending|terminal` state, cached runtime contract, verdict, and
 terminal `OK` below the 2,048-byte serial bound. It does not prepend the verbose
@@ -2997,14 +3025,16 @@ and power/reset evidence alongside the serial and pcap files.
 
 Serial remains the recovery authority. HDMI is an independent display sink;
 USB keyboard readiness requires isolated-runtime command and first-report
-proof. A prompt displayed on HDMI does not prove keyboard input, and a USB
-descriptor does not prove command readiness. `Ready to use` requires DHCP bound
-plus TCP-listener readiness but does not prove the stronger end-to-end
-`tcp_ready` predicate. Once the root console and display retry state are ready,
-HDMI must show the independent `cohesix>` prompt even while Wi-Fi is still
-stabilizing or USB command input is not yet admitted. In the latter case it
-first shows `USB console starting...`; parser ingress remains closed until the
-separate USB proof. Durable HDMI work receives its bounded Display phase
+proof. A USB descriptor does not prove command readiness. `Ready to use`
+requires DHCP bound plus TCP-listener readiness but does not prove the stronger
+end-to-end `tcp_ready` predicate. HDMI may first show
+`USB controller starting...` plus bounded stage feedback, but the interactive
+`cohesix>` prompt is released only after the root console, USB command admission,
+and display retry state are all ready; it remains independent of Wi-Fi
+stabilization. The passive `USB console ready` timing record may be emitted by
+a later EventPump observation of that same readiness transition, so its position
+relative to prompt release is not an acceptance predicate. Durable HDMI work
+receives its bounded Display phase
 without requiring a CYW43 rotation token. A completed CYW43 operator rotation
 admits exactly one Display operation before the same durable Wi-Fi identity
 resumes, and every Display operation grants one later Network turn after the

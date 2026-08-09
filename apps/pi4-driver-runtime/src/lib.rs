@@ -833,6 +833,8 @@ const USB_KEYBOARD_BYTE_QUEUE_BYTES: usize = 64;
 const USB_HID_CONTROL_GET_REPORT_COOLDOWN_POLLS: u8 = 7;
 const USB_HID_LED_SYNC_IDLE_POLLS: u8 = 8;
 const USB_KEYBOARD_UNMATCHED_RECOVERY_EVENTS_PER_POLL: u8 = 16;
+const USB_KEYBOARD_ARROW_REPEAT_INITIAL_MS: u64 = 300;
+const USB_KEYBOARD_ARROW_REPEAT_INTERVAL_MS: u64 = 50;
 const USB_HID_USAGE_SCROLL_LOCK: u8 = 0x47;
 const USB_HID_USAGE_RIGHT_ARROW: u8 = 0x4f;
 const USB_HID_USAGE_LEFT_ARROW: u8 = 0x50;
@@ -2438,6 +2440,9 @@ struct UsbRuntimeState {
     hub_port_status_sample: UsbHubPortStatusSample,
     hub_child_address_failure_seen: bool,
     last_keys: [u8; 6],
+    keyboard_repeat_usage: u8,
+    keyboard_repeat_anchor_ticks: u64,
+    keyboard_repeat_delay_cycles: u64,
     caps_lock_on: bool,
     num_lock_on: bool,
     scroll_lock_on: bool,
@@ -2529,6 +2534,9 @@ impl UsbRuntimeState {
             hub_port_status_sample: UsbHubPortStatusSample::empty(),
             hub_child_address_failure_seen: false,
             last_keys: [0; 6],
+            keyboard_repeat_usage: 0,
+            keyboard_repeat_anchor_ticks: 0,
+            keyboard_repeat_delay_cycles: 0,
             caps_lock_on: false,
             num_lock_on: false,
             scroll_lock_on: false,
@@ -42459,6 +42467,9 @@ fn usb_reset_keyboard_interrupt_queue(state: &mut UsbRuntimeState) {
     state.keyboard_endpoint_reset_required = false;
     state.keyboard_control_poll_disabled = false;
     state.keyboard_control_poll_cooldown = 0;
+    state.keyboard_repeat_usage = 0;
+    state.keyboard_repeat_anchor_ticks = 0;
+    state.keyboard_repeat_delay_cycles = 0;
     state.keyboard_led_report = usb_keyboard_led_bitmap(state);
     state.keyboard_led_sync_pending = false;
     state.keyboard_led_sync_cooldown = 0;
@@ -42759,6 +42770,16 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
             }
             if bytes >= USB_KEYBOARD_OUTPUT_LIMIT || state.keyboard_byte_queue_len != 0 {
                 break;
+            }
+        }
+        if !recovery_aux && !recovery_attempted {
+            let queued_repeat = usb_keyboard_queue_due_repeat_at(
+                state,
+                runtime_timer_counter_ticks(),
+                runtime_timer_freq_hz(),
+            );
+            if queued_repeat != 0 {
+                bytes = bytes.saturating_add(usb_keyboard_drain_byte_queue(state, bytes));
             }
         }
         if bytes == 0
@@ -43308,6 +43329,20 @@ fn usb_keyboard_queue_report_bytes(
     state: &mut UsbRuntimeState,
     report: [u8; USB_BOOT_REPORT_BYTES],
 ) -> usize {
+    usb_keyboard_queue_report_bytes_at(
+        state,
+        report,
+        runtime_timer_counter_ticks(),
+        runtime_timer_freq_hz(),
+    )
+}
+
+fn usb_keyboard_queue_report_bytes_at(
+    state: &mut UsbRuntimeState,
+    report: [u8; USB_BOOT_REPORT_BYTES],
+    now_ticks: u64,
+    timer_freq_hz: u64,
+) -> usize {
     let mut accepted = 0usize;
     let mut seen = [0u8; 6];
     let mut seen_len = 0usize;
@@ -43327,6 +43362,14 @@ fn usb_keyboard_queue_report_bytes(
         }
         if let Some(sequence) = usb_hid_usage_to_sequence(code) {
             accepted = accepted.saturating_add(usb_keyboard_byte_queue_push_slice(state, sequence));
+            if usb_hid_usage_is_arrow(code) {
+                state.keyboard_repeat_usage = code;
+                state.keyboard_repeat_anchor_ticks = now_ticks;
+                state.keyboard_repeat_delay_cycles = runtime_millis_to_cycles_at_hz(
+                    USB_KEYBOARD_ARROW_REPEAT_INITIAL_MS,
+                    timer_freq_hz,
+                );
+            }
             if usb_keyboard_byte_queue_free(state) == 0 {
                 break 'keys;
             }
@@ -43344,8 +43387,53 @@ fn usb_keyboard_queue_report_bytes(
         }
         accepted = accepted.saturating_add(1);
     }
+    if state.keyboard_repeat_usage != 0 && !report[2..].contains(&state.keyboard_repeat_usage) {
+        state.keyboard_repeat_usage = 0;
+        state.keyboard_repeat_anchor_ticks = 0;
+        state.keyboard_repeat_delay_cycles = 0;
+    }
     state.last_keys.copy_from_slice(&report[2..8]);
     accepted
+}
+
+fn usb_keyboard_queue_due_repeat_at(
+    state: &mut UsbRuntimeState,
+    now_ticks: u64,
+    timer_freq_hz: u64,
+) -> usize {
+    let usage = state.keyboard_repeat_usage;
+    if usage == 0
+        || !state.last_keys.contains(&usage)
+        || state.keyboard_repeat_delay_cycles == 0
+        || !runtime_counter_deadline_expired(
+            state.keyboard_repeat_anchor_ticks,
+            state.keyboard_repeat_delay_cycles,
+            now_ticks,
+        )
+    {
+        return 0;
+    }
+    let Some(sequence) = usb_hid_usage_to_sequence(usage) else {
+        return 0;
+    };
+    if usb_keyboard_byte_queue_free(state) < sequence.len() {
+        return 0;
+    }
+    let accepted = usb_keyboard_byte_queue_push_slice(state, sequence);
+    state.keyboard_repeat_anchor_ticks = now_ticks;
+    state.keyboard_repeat_delay_cycles =
+        runtime_millis_to_cycles_at_hz(USB_KEYBOARD_ARROW_REPEAT_INTERVAL_MS, timer_freq_hz);
+    accepted
+}
+
+const fn usb_hid_usage_is_arrow(code: u8) -> bool {
+    matches!(
+        code,
+        USB_HID_USAGE_UP_ARROW
+            | USB_HID_USAGE_DOWN_ARROW
+            | USB_HID_USAGE_LEFT_ARROW
+            | USB_HID_USAGE_RIGHT_ARROW
+    )
 }
 
 fn usb_keyboard_report_is_idle(report: &[u8; USB_BOOT_REPORT_BYTES]) -> bool {
@@ -43386,6 +43474,11 @@ fn usb_keyboard_consume_attach_settle_report(
         return false;
     }
     state.last_keys.copy_from_slice(&decoded.report[2..8]);
+    if usb_keyboard_report_is_idle(&decoded.report) {
+        state.keyboard_repeat_usage = 0;
+        state.keyboard_repeat_anchor_ticks = 0;
+        state.keyboard_repeat_delay_cycles = 0;
+    }
     if usb_keyboard_attach_idle_baseline(state, payload, decoded) {
         state.keyboard_attach_awaiting_idle = false;
     }
@@ -44027,6 +44120,8 @@ impl HdmiRenderState {
             b'K' if self.csi_param(0).unwrap_or(0) == 1 => self.clear_current_row_to_cursor(),
             b'K' if self.csi_param(0).unwrap_or(0) == 2 => self.clear_current_row(),
             b'K' => self.clear_current_row_from_cursor(),
+            b'S' => self.scroll_viewport_up(self.csi_count_or_one()),
+            b'T' => self.scroll_viewport_down(self.csi_count_or_one()),
             b'm' => {}
             _ => {}
         }
@@ -44172,6 +44267,76 @@ impl HdmiRenderState {
         );
         self.row = self.rows.saturating_sub(scroll_rows);
         self.col = 0;
+    }
+
+    fn scroll_viewport_up(&mut self, rows: usize) {
+        let saved_row = self.row;
+        let saved_col = self.col;
+        if rows >= self.rows {
+            self.clear_text_area();
+        } else {
+            self.scroll_up_text_rows(rows);
+        }
+        self.row = saved_row.min(self.rows.saturating_sub(1));
+        self.col = saved_col.min(self.cols);
+    }
+
+    fn scroll_viewport_down(&mut self, rows: usize) {
+        if rows >= self.rows {
+            self.clear_text_area();
+            return;
+        }
+        let scroll_rows = rows.min(self.rows.saturating_sub(1)).max(1);
+        let scroll_pixels = scroll_rows.saturating_mul(CHAR_HEIGHT);
+        let Some(bytes_per_pixel) = self.bytes_per_pixel() else {
+            self.clear_text_area();
+            return;
+        };
+        let text_height = self.rows.saturating_mul(CHAR_HEIGHT).min(self.height);
+        if text_height <= scroll_pixels || self.pitch == 0 || self.width == 0 {
+            self.clear_text_area();
+            return;
+        }
+        let Some(row_bytes) = self.width.checked_mul(bytes_per_pixel) else {
+            self.clear_text_area();
+            return;
+        };
+        if row_bytes == 0 || row_bytes > self.pitch {
+            self.clear_text_area();
+            return;
+        }
+        let copy_rows = text_height.saturating_sub(scroll_pixels);
+        let mut y = copy_rows;
+        while y != 0 {
+            y = y.saturating_sub(1);
+            let Some(dst_off) = self.framebuffer_offset(
+                self.safe_x,
+                self.safe_y + y + scroll_pixels,
+                bytes_per_pixel,
+            ) else {
+                continue;
+            };
+            let Some(src_off) =
+                self.framebuffer_offset(self.safe_x, self.safe_y + y, bytes_per_pixel)
+            else {
+                continue;
+            };
+            let Some(dst_end) = dst_off.checked_add(row_bytes) else {
+                continue;
+            };
+            let Some(src_end) = src_off.checked_add(row_bytes) else {
+                continue;
+            };
+            if dst_end > self.framebuffer_len || src_end > self.framebuffer_len {
+                continue;
+            }
+            copy_framebuffer_bytes(
+                self.framebuffer + dst_off,
+                self.framebuffer + src_off,
+                row_bytes,
+            );
+        }
+        self.fill_rect(0, 0, self.width, scroll_pixels, HDMI_BG_COLOR);
     }
 
     fn clear_text_area(&mut self) {
@@ -103642,6 +103807,70 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_held_arrow_repeat_is_separate_from_report_edges() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut state = UsbRuntimeState::new();
+        let down = [0, 0, USB_HID_USAGE_DOWN_ARROW, 0, 0, 0, 0, 0];
+        let release = [0; USB_BOOT_REPORT_BYTES];
+        let timer_hz = 1_000;
+
+        assert_eq!(
+            usb_keyboard_queue_report_bytes_at(&mut state, down, 1_000, timer_hz),
+            3
+        );
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), 3);
+        assert_eq!(
+            usb_keyboard_queue_report_bytes_at(&mut state, down, 1_299, timer_hz),
+            0
+        );
+        assert_eq!(
+            usb_keyboard_queue_due_repeat_at(&mut state, 1_299, timer_hz),
+            0
+        );
+        assert_eq!(
+            usb_keyboard_queue_report_bytes_at(&mut state, down, 1_300, timer_hz),
+            0
+        );
+        assert_eq!(
+            usb_keyboard_queue_due_repeat_at(&mut state, 1_300, timer_hz),
+            3
+        );
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), 3);
+        assert_eq!(
+            usb_keyboard_queue_due_repeat_at(&mut state, 1_349, timer_hz),
+            0
+        );
+        assert_eq!(
+            usb_keyboard_queue_due_repeat_at(&mut state, 1_350, timer_hz),
+            3
+        );
+        assert_eq!(usb_keyboard_drain_byte_queue(&mut state, 0), 3);
+        assert_eq!(
+            &read_frame_prefix::<3>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 3,
+                flags: 0,
+            }),
+            b"\x1b[B"
+        );
+
+        assert_eq!(
+            usb_keyboard_queue_report_bytes_at(&mut state, release, 1_351, timer_hz),
+            0
+        );
+        assert_eq!(state.keyboard_repeat_usage, 0);
+        assert_eq!(
+            usb_keyboard_queue_due_repeat_at(&mut state, 2_000, timer_hz),
+            0
+        );
+        assert_eq!(
+            usb_keyboard_queue_report_bytes_at(&mut state, down, 1_352, timer_hz),
+            3
+        );
+    }
+
+    #[test]
     fn usb_hub_power_settle_uses_descriptor_power_good_delay() {
         assert_eq!(USB_MSEC_SPINS, USB_CONTROL_TRANSFER_SPINS / 100);
         assert_eq!(USB_HUB_PORT_POWER_SETTLE_SPINS, USB_MSEC_SPINS * 100);
@@ -109734,6 +109963,74 @@ mod tests {
     }
 
     #[test]
+    fn usb_keyboard_steady_poll_emits_due_arrow_repeat_without_new_report() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        init_runtime_for_test(HOT_PATH_USB_KEYBOARD, ROLE_USB);
+        USB_RUNTIME_FLAGS.fetch_or(
+            ENGINE_STATE_INITIALIZED | ENGINE_STATE_HW_READY,
+            Ordering::AcqRel,
+        );
+        let timer_hz = runtime_timer_freq_hz();
+        let repeat_anchor_ticks = 1_000;
+        let repeat_delay_cycles =
+            runtime_millis_to_cycles_at_hz(USB_KEYBOARD_ARROW_REPEAT_INITIAL_MS, timer_hz);
+        USB_RUNTIME_STATE.with_mut(|state| {
+            state.initialized = true;
+            state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
+            state.keyboard_slot = 1;
+            state.keyboard_endpoint_id = 3;
+            state.keyboard_reports_queued = USB_KEYBOARD_ACTIVE_INTERRUPT_QUEUE_DEPTH as u8;
+            state.keyboard_report_in_use[0] = true;
+            state.keyboard_report_trb_indices[0] = 0;
+            state.keyboard_transfer_generation = 1;
+            state.keyboard_transfer_events = 1;
+            state.keyboard_valid_report_events = 1;
+            state.keyboard_attach_awaiting_idle = false;
+            state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_IDLE;
+            state.last_keys = [USB_HID_USAGE_DOWN_ARROW, 0, 0, 0, 0, 0];
+            state.keyboard_repeat_usage = USB_HID_USAGE_DOWN_ARROW;
+            state.keyboard_repeat_anchor_ticks = repeat_anchor_ticks;
+            state.keyboard_repeat_delay_cycles = repeat_delay_cycles;
+        });
+        let due_ticks = repeat_anchor_ticks.wrapping_add(repeat_delay_cycles);
+        TEST_RUNTIME_TIMER_COUNTER_TICKS.store(due_ticks, Ordering::Release);
+        let poll = DriverTaskCommandRecord {
+            sequence: 98,
+            opcode: OPCODE_SERVICE,
+            flags: 0,
+            arg0: HOT_PATH_USB_KEYBOARD,
+            arg1: ROLE_USB,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+
+        assert_eq!(
+            service_usb_keyboard(poll),
+            DriverTaskCompletionRecord::keyboard_input_ready(98, 3),
+        );
+        assert_eq!(
+            &read_frame_prefix::<3>(DriverFrameDescriptor {
+                offset: DRIVER_TASK_RING_FRAME_OFFSET as u32,
+                len: 3,
+                flags: 0,
+            }),
+            b"\x1b[B",
+        );
+        USB_RUNTIME_STATE.with_ref(|state| {
+            assert_eq!(state.keyboard_transfer_events, 1);
+            assert_eq!(state.keyboard_repeat_usage, USB_HID_USAGE_DOWN_ARROW);
+            assert_eq!(state.keyboard_repeat_anchor_ticks, due_ticks);
+            assert_eq!(
+                state.keyboard_repeat_delay_cycles,
+                runtime_millis_to_cycles_at_hz(USB_KEYBOARD_ARROW_REPEAT_INTERVAL_MS, timer_hz,)
+            );
+        });
+    }
+
+    #[test]
     fn usb_keyboard_poll_reports_steady_idle_without_recovery_failure() {
         let _guard = test_guard();
         reset_runtime_for_test();
@@ -111717,6 +112014,89 @@ mod tests {
         assert_eq!(bottom_after, blank);
         assert_eq!(state.row, 1);
         assert_eq!(state.col, 0);
+    }
+
+    #[test]
+    fn hdmi_runtime_csi_scroll_steps_preserve_cursor_and_dirty_one_edge_row() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 64,
+            height: (CHAR_HEIGHT * 3) as u32,
+            pitch: 64 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+        assert_eq!(state.rows, 2);
+        state.clear_text_area();
+        state.put_str("a\nb");
+        let a = test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0);
+        let blank = {
+            state.clear_current_row();
+            test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0)
+        };
+        state.clear_text_area();
+        state.row = 0;
+        state.col = 0;
+        state.put_str("a\nb");
+        let saved_row = state.row;
+        let saved_col = state.col;
+
+        state.put_str("\x1b[1T");
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0), blank);
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0), a);
+        assert_eq!(state.row, saved_row);
+        assert_eq!(state.col, saved_col);
+
+        state.put_str("\x1b[1S");
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0), a);
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0), blank);
+        assert_eq!(state.row, saved_row);
+        assert_eq!(state.col, saved_col);
+    }
+
+    #[test]
+    fn hdmi_runtime_csi_scroll_full_viewport_or_more_clears_and_preserves_cursor() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let mut descriptor = descriptor_for(HOT_PATH_HDMI_TEXT, ROLE_DISPLAY);
+        descriptor.flags |= DRIVER_RUNTIME_INIT_FLAG_FRAMEBUFFER;
+        descriptor.framebuffer = DriverRuntimeFramebufferDescriptor {
+            vaddr: DRIVER_RUNTIME_FRAMEBUFFER_VADDR,
+            paddr: 0x3000_0000,
+            width: 64,
+            height: (CHAR_HEIGHT * 3) as u32,
+            pitch: 64 * 4,
+            format: DRIVER_RUNTIME_FRAMEBUFFER_FORMAT_XRGB8888,
+        };
+        let mut state = HdmiRenderState::from_descriptor(&descriptor);
+        assert_eq!(state.rows, 2);
+        state.clear_text_area();
+        let blank = test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0);
+
+        state.put_str("a\nb");
+        let saved_row = state.row;
+        let saved_col = state.col;
+        state.put_str("\x1b[2T");
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0), blank);
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0), blank);
+        assert_eq!(state.row, saved_row);
+        assert_eq!(state.col, saved_col);
+
+        state.row = 0;
+        state.col = 0;
+        state.put_str("a\nb");
+        let saved_row = state.row;
+        let saved_col = state.col;
+        state.put_str("\x1b[99S");
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 0, 0), blank);
+        assert_eq!(test_hdmi_cell_digest(&descriptor.framebuffer, 1, 0), blank);
+        assert_eq!(state.row, saved_row);
+        assert_eq!(state.col, saved_col);
     }
 
     #[test]
