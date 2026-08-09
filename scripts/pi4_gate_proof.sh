@@ -41,7 +41,6 @@ DEFAULT_COMMANDS=(
     "nettest"
     "netstats"
     "usb status"
-    "usb probe-kbd"
     "usb diag"
     "usb status"
     "netstats"
@@ -103,9 +102,8 @@ Options:
   --no-capture               Do not open serial; normalize the existing log
   --normalize-only           Skip build, flash, and capture; normalize only
   --no-default-commands      Do not send the default proof commands
-  --probe-usb-keyboard       Append an extra live USB keyboard probe. The
-                             default proof already probes once so command/event
-                             ring gates are exercised.
+  --probe-usb-keyboard       Explicitly append one active USB keyboard probe.
+                             Passive default diagnostics never probe hardware.
   --command <line>           Append a console command to send during capture
   --expect <KEY=VALUE>       Require a gate summary value from the normalizer.
                              Examples: USB_GATE=3, WIFI_BLOCKER=ht-clock-timeout
@@ -115,8 +113,8 @@ Options:
                              Example: USB_BLOCKER=cmd-poll-only-timeout.
   --allow-summary-only       Do not require USB/WiFi evidence gates. This is
                              for exploratory summaries only, not proof output.
-  --require-usb-ready        Require USB gate 10, USB_BLOCKER=none, and the
-                             linked old-good USB replay contract.
+  --require-usb-ready        Require USB startup gate 10, a fresh post-diag
+                             key-path proof, and the old-good replay contract.
   --require-wifi-ready       Require WiFi gate 10, DHCP, nettest, authenticated
                              TCP bytes, healthy DPC, ordered Gate 7a-7e proof,
                              and the linked old-good CYW43 replay contract.
@@ -138,7 +136,6 @@ Default proof commands:
   nettest
   netstats
   usb status
-  usb probe-kbd
   usb diag
   usb status
   netstats
@@ -552,6 +549,9 @@ run_normalizer() {
         args+=("--expect" "USB_COMMAND_READY=yes")
         args+=("--expect" "USB_FIRST_REPORT_READY=yes")
         args+=("--expect" "USB_BUSY_AFTER_READY=no")
+        args+=("--expect" "USB_GATE_SCOPE=startup")
+        args+=("--expect" "USB_CURRENT_LIVENESS=pass")
+        args+=("--expect" "USB_PHYSICAL_INPUT_PROOF=yes")
         args+=("--expect" "USB_OLDGOOD_REPLAY=yes")
         args+=("--expect" "USB_OLDGOOD_MISSING=none")
     fi
@@ -651,6 +651,8 @@ run_normalizer() {
         args+=("--expect" "USB_POST_FIRST_BYTE_BLOCKER=none")
         args+=("--expect" "USB_BURST_PROOF=yes")
         args+=("--expect" "USB_BURST_DROPS=0")
+        args+=("--expect" "USB_CURRENT_LIVENESS=pass")
+        args+=("--expect" "USB_PHYSICAL_INPUT_PROOF=yes")
         args+=("--expect" "HDMI_RESPONSIVE_PROOF=yes")
     fi
     for ((index = 0; index < ${#EXPECTATIONS[@]}; index++)); do

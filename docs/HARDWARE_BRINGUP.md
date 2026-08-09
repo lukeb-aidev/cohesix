@@ -412,7 +412,7 @@ netstats
 nettest
 wifi diag
 usb diag
-usb probe-kbd
+usb status
 smp
 ```
 
@@ -458,19 +458,33 @@ each with one typed `pi4-wifi-driver-task-runtime-required` terminal before a
 debug handle, retained snapshot, or physical operation can be reached. Any
 `ERR`, truncated terminal, or missing terminal remains a diagnostic failure.
 
-`usb diag` returns the compact cached ten-gate report; use `usb status` only
-when the additional counter detail is needed. A complete response includes
-Gate 10, `OK USB`, and the prompt, after which both a serial `ping` and a
-USB-keyboard `ping` must still return. If any tail is absent, stop sending input
-and preserve the sample. A merged or overlapped serial transcript is not
-acceptance evidence.
+`usb diag` returns the compact cached ten-gate report and arms a passive
+post-command liveness baseline. Type a real key on the attached USB keyboard,
+then run `usb status`; `diag_liveness ... status=pass` requires positive linked
+HID, parser-accepted, parser-drained, and echoed byte deltas with no new drop.
+Gate 10 is explicitly startup-scoped and unchanged cumulative counters do not
+prove the keyboard is still live. The status response also reports the exact
+USB driver request as `active`, `outstanding`, and `active_no_progress`; any
+`usb-retained-request-no-terminal` verdict invalidates current local-seat proof
+even when cached Gate 10 is present. It separately distinguishes HDMI queue
+pressure from a completed `hdmi-text` driver receipt. A complete
+diagnostic response includes Gate 10, `OK USB`, and the prompt, after which both
+a serial `ping` and a USB-keyboard `ping` must still return. If any tail is
+absent, stop sending input and preserve the sample. A merged or overlapped
+serial transcript is not acceptance evidence.
 
 `usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
 `continuation=pending|terminal` state, cached runtime contract, verdict, and
 terminal `OK` below the 2,048-byte serial bound. It does not prepend the verbose
 `usb status` dump. A pending command-owned cursor continues by one operation on
 each later `LocalSeat` turn and restores the prior polling policy at its finite
-terminal bound.
+terminal bound. It is active recovery triage, not part of the default passive
+proof sequence. Use `--active-usb-probe` with the serial reboot helper or
+`--probe-usb-keyboard` with the gate-proof helper only when that mutation is
+explicitly intended.
+`probe_result=attached` means the live retained slice completed. A cached
+keyboard-ready latch with a still-pending request instead reports
+`probe_result=keyboard-unavailable continuation=pending`.
 
 The command effects are intentionally distinct. `wifi diag`, `usb diag`,
 `netstats`, and `smp` read retained state and must not submit a device

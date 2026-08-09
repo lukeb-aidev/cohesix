@@ -2442,17 +2442,38 @@ issue one immutable linked-runtime request or poll one exact completion per
 outer turn, including one outer turn for each explicit `usb probe-kbd` attempt.
 It must prove probe policy restoration, immutable command fingerprints, and a
 complete compact probe result/continuation/contract/verdict/`OK` response below
-the 2,048-byte serial bound. Target-shaped coverage must distinguish a terminal
+the 2,048-byte serial bound. A live completed slice is required for
+`probe_result=attached`; cached keyboard readiness with `Pending` must remain
+`keyboard-unavailable continuation=pending`. Ordinary retained keyboard polls
+must fail closed at their finite protocol-attempt bound, invalidate stale
+command readiness, and record no-reply recovery rather than accumulating one
+permanently active submitted/completed gap. Target-shaped coverage must distinguish a terminal
 slice from a bounded command-owned continuation, advance that continuation by
 one operation per later `LocalSeat` turn, and restore the prior polling policy.
 The real linked-serial path must also prove that the passive compact `usb diag`
 performs no USB poll, emits Gates 1 through 10, preserves `OK USB` and the
 prompt within the three-record protocol-tail reserve, retires the physical
-response fence, and then accepts fresh commands from both serial and buffered
-USB input. Saturation coverage must prove ordinary response-body lines cannot
-consume those tail slots even while response ordering is active.
+response fence, arms a passive post-command liveness baseline, and then accepts
+fresh commands from both serial and buffered USB input. A later `usb status`
+may report that sentinel as passed only from positive linked-runtime HID,
+parser-accepted, parser-drained, and echoed deltas with zero new drops. Cached
+Gate 10 and unchanged cumulative byte counters remain startup evidence only.
+The normalizer must classify an active outstanding USB request with retained
+no-progress resumes as `usb-retained-request-no-terminal`, including legacy
+status lines that omit the explicit active fields. The default hardware helpers must not issue
+`usb probe-kbd`; active probe coverage remains an explicit opt-in. Saturation
+coverage must prove ordinary response-body lines cannot consume those tail
+slots even while response ordering is active. USB status coverage must also
+prove that `runtime_skipped` is input-first scheduling telemetry rather than a
+post-first-byte fault.
 Display coverage must prove an attach miss is retained and that attach and frame
-submission cannot share an outer turn. The current synchronous PCIe HAL
+submission cannot share an outer turn. Passive status must distinguish queued
+display bytes from a completed isolated-driver receipt and must not claim HDMI
+ready while a turn is outstanding, no-reply debt is active, or the snapshot is
+stale after retry exhaustion. SMP rate coverage must attribute keyboard polls,
+bytes, drops, and no-replies only to the manifest-selected USB core and HDMI
+bytes/mirror drops only to the manifest-selected HDMI core; the combined
+local-seat snapshot must not duplicate both devices' rates on both cores. The current synchronous PCIe HAL
 prerequisite runs before EventPump construction as local bookkeeping and
 authority setup only; tests and target traces must show that a missing proof
 leaves the retained USB cursor blocked rather than bypassing HAL or constructing
@@ -3788,7 +3809,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`; DHCP-bound evidence is address proof only, while acceptance still requires listener/command evidence (`netstatus ... tcp_ready=yes`, authenticated `cohsh`, or successful `nettest`).
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
-    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, and the single interrupt-IN lane stably armed as `queued_reports=1`; any larger active depth is an invariant failure. Hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, and visible HDMI echo remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply/runtime-skipped pressure during typing, arrow-history, and lock-key bursts.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, and the single interrupt-IN lane stably armed as `queued_reports=1`; any larger active depth is an invariant failure. Hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing

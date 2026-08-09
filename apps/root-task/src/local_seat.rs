@@ -1635,7 +1635,7 @@ pub struct LocalSeatStatus {
 /// Result of one bounded physical keyboard probe.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalSeatKeyboardProbeResult {
-    /// A backend keyboard was attached during the probe.
+    /// A backend keyboard completed a live service turn during the probe.
     Attached,
     /// A platform backend exists, but no keyboard became usable.
     KeyboardUnavailable,
@@ -1661,6 +1661,21 @@ impl LocalSeatKeyboardProbeResult {
             Self::DeferredUntilRootConsole => "deferred-until-root-console",
             Self::BackendUnavailable => "backend-unavailable",
         }
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "usb"))]
+const fn local_seat_keyboard_probe_result(
+    outcome: LocalSeatServiceTurn,
+    keyboard_attached: bool,
+    controller_attached: bool,
+) -> LocalSeatKeyboardProbeResult {
+    if matches!(outcome, LocalSeatServiceTurn::Complete) && keyboard_attached {
+        LocalSeatKeyboardProbeResult::Attached
+    } else if controller_attached {
+        LocalSeatKeyboardProbeResult::KeyboardUnavailable
+    } else {
+        LocalSeatKeyboardProbeResult::BackendUnavailable
     }
 }
 
@@ -3849,15 +3864,6 @@ impl LocalSeatRuntime {
                 self.backend_keyboard_poll_deferred_logged = false;
                 return LocalSeatKeyboardProbeResult::DeferredUntilRootConsole;
             }
-            if LINKED_LOCAL_SEAT_USB_KEYBOARD_READY.load(Ordering::Acquire) {
-                if self.keyboard_probe_cursor.active {
-                    let _ = self.keyboard_probe_cursor.finish();
-                }
-                self.backend_keyboard_polling_enabled = true;
-                self.clear_keyboard_poll_no_reply_backoff();
-                let _ = self.poll_backend_keyboard();
-                return LocalSeatKeyboardProbeResult::Attached;
-            }
             self.keyboard_probe_cursor.begin(
                 self.backend_keyboard_polling_enabled,
                 latest_usb_enumeration_progress_token(),
@@ -3865,15 +3871,11 @@ impl LocalSeatRuntime {
             self.backend_keyboard_polling_enabled = true;
             self.clear_keyboard_poll_no_reply_backoff();
             let turn = self.service_backend_keyboard_turn();
-            if local_seat_driver_runtime_keyboard_attached() {
-                return LocalSeatKeyboardProbeResult::Attached;
-            }
-            let _ = turn;
-            return if local_seat_usb_controller_runtime_attached() {
-                LocalSeatKeyboardProbeResult::KeyboardUnavailable
-            } else {
-                LocalSeatKeyboardProbeResult::BackendUnavailable
-            };
+            return local_seat_keyboard_probe_result(
+                turn,
+                local_seat_driver_runtime_keyboard_attached(),
+                local_seat_usb_controller_runtime_attached(),
+            );
         }
         #[cfg(not(all(
             feature = "kernel",
@@ -4543,7 +4545,9 @@ impl LocalSeatRuntime {
         if !self.keyboard_probe_cursor.active {
             return;
         }
-        if local_seat_driver_runtime_keyboard_attached() {
+        if matches!(outcome, LocalSeatServiceTurn::Complete)
+            && local_seat_driver_runtime_keyboard_attached()
+        {
             let _ = self.keyboard_probe_cursor.finish();
             self.backend_keyboard_polling_enabled = true;
             return;
@@ -11530,6 +11534,32 @@ mod tests {
         cursor.begin(false, None);
         assert!(!cursor.finish());
         assert!(!cursor.active);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn keyboard_probe_requires_a_live_completed_service_turn() {
+        assert_eq!(
+            local_seat_keyboard_probe_result(LocalSeatServiceTurn::Complete, true, true),
+            LocalSeatKeyboardProbeResult::Attached,
+        );
+        assert_eq!(
+            local_seat_keyboard_probe_result(LocalSeatServiceTurn::Pending, true, true),
+            LocalSeatKeyboardProbeResult::KeyboardUnavailable,
+            "cached attachment must not turn a pending retained request into live proof",
+        );
+        assert_eq!(
+            local_seat_keyboard_probe_result(
+                LocalSeatServiceTurn::Failed("no-terminal"),
+                true,
+                true,
+            ),
+            LocalSeatKeyboardProbeResult::KeyboardUnavailable,
+        );
+        assert_eq!(
+            local_seat_keyboard_probe_result(LocalSeatServiceTurn::Pending, false, false),
+            LocalSeatKeyboardProbeResult::BackendUnavailable,
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

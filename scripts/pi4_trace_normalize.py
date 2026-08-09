@@ -767,6 +767,11 @@ class GateSummary:
     wifi_exact: str = "none"
     wifi_phase: str = "none"
     wifi_blocker_line: int = 0
+    wifi_diag_detail: str = "unknown"
+    wifi_diag_scope: str = "unknown"
+    wifi_diag_cause: str = "none"
+    wifi_diag_trigger: str = "none"
+    wifi_diag_retained: str = "none"
     serial_clean: bool = True
     boot_halted: bool = False
     timer_irq27_seen: bool = False
@@ -968,6 +973,10 @@ class GateSummary:
     hdmi_display_coalesced: int = 0
     hdmi_display_backpressure_bytes: int = 0
     hdmi_display_superseded_bytes: int = 0
+    hdmi_status_state: str = "unknown"
+    hdmi_status_blocker: str = "not-run"
+    hdmi_status_receipt: str = "none"
+    hdmi_driver_outstanding: int = 0
     usb_keyboard_no_replies: int = 0
     usb_keyboard_poll_cooldown: int = 0
     usb_keyboard_cooldown_skips: int = 0
@@ -983,7 +992,20 @@ class GateSummary:
     usb_runtime_recovery_stage: str = "unknown"
     usb_runtime_recovery_reason: str = "unknown"
     usb_runtime_command_completion_blocked: int = 0
+    usb_runtime_driver_active: str = "unknown"
+    usb_runtime_driver_outstanding: int = 0
+    usb_runtime_driver_active_no_progress: int = 0
+    usb_runtime_driver_same_request: int = 0
+    usb_runtime_driver_keep_active: int = 0
+    usb_runtime_driver_aborts: int = 0
     usb_event_loop_runtime_skipped: int = 0
+    usb_diag_liveness_generation: int = 0
+    usb_diag_liveness_status: str = "not-run"
+    usb_diag_liveness_backend_delta: int = 0
+    usb_diag_liveness_accepted_delta: int = 0
+    usb_diag_liveness_drained_delta: int = 0
+    usb_diag_liveness_echoed_delta: int = 0
+    usb_diag_liveness_drop_delta: int = 0
     usb_post_first_byte_blocker: str = "none"
     usb_startup_blocker_seen: bool = False
     usb_active_blocker_seen: bool = False
@@ -1058,6 +1080,11 @@ class GateSummary:
             "WIFI_EXACT": self.wifi_exact,
             "WIFI_PHASE": self.wifi_phase,
             "WIFI_BLOCKER_LINE": self.wifi_blocker_line,
+            "WIFI_DIAG_DETAIL": self.wifi_diag_detail,
+            "WIFI_DIAG_SCOPE": self.wifi_diag_scope,
+            "WIFI_DIAG_CAUSE": self.wifi_diag_cause,
+            "WIFI_DIAG_TRIGGER": self.wifi_diag_trigger,
+            "WIFI_DIAG_RETAINED": self.wifi_diag_retained,
             "SERIAL_CLEAN": "yes" if self.serial_clean else "no",
             "BOOT_HALTED": "yes" if self.boot_halted else "no",
             "TIMER_IRQ27_SEEN": "yes" if self.timer_irq27_seen else "no",
@@ -1389,6 +1416,10 @@ class GateSummary:
                 self.hdmi_display_backpressure_bytes
             ),
             "HDMI_DISPLAY_SUPERSEDED_BYTES": self.hdmi_display_superseded_bytes,
+            "HDMI_STATUS_STATE": self.hdmi_status_state,
+            "HDMI_STATUS_BLOCKER": self.hdmi_status_blocker,
+            "HDMI_STATUS_RECEIPT": self.hdmi_status_receipt,
+            "HDMI_DRIVER_OUTSTANDING": self.hdmi_driver_outstanding,
             "USB_KEYBOARD_NO_REPLIES": self.usb_keyboard_no_replies,
             "USB_KEYBOARD_POLL_COOLDOWN": self.usb_keyboard_poll_cooldown,
             "USB_KEYBOARD_COOLDOWN_SKIPS": self.usb_keyboard_cooldown_skips,
@@ -1410,7 +1441,44 @@ class GateSummary:
             "USB_RUNTIME_COMMAND_COMPLETION_BLOCKED": (
                 self.usb_runtime_command_completion_blocked
             ),
+            "USB_RUNTIME_DRIVER_ACTIVE": self.usb_runtime_driver_active,
+            "USB_RUNTIME_DRIVER_OUTSTANDING": self.usb_runtime_driver_outstanding,
+            "USB_RUNTIME_DRIVER_ACTIVE_NO_PROGRESS": (
+                self.usb_runtime_driver_active_no_progress
+            ),
+            "USB_RUNTIME_DRIVER_SAME_REQUEST": self.usb_runtime_driver_same_request,
+            "USB_RUNTIME_DRIVER_KEEP_ACTIVE": self.usb_runtime_driver_keep_active,
+            "USB_RUNTIME_DRIVER_ABORTS": self.usb_runtime_driver_aborts,
             "USB_EVENT_LOOP_RUNTIME_SKIPPED": self.usb_event_loop_runtime_skipped,
+            "USB_DIAG_LIVENESS_GENERATION": self.usb_diag_liveness_generation,
+            "USB_DIAG_LIVENESS_STATUS": self.usb_diag_liveness_status,
+            "USB_DIAG_LIVENESS_BACKEND_DELTA": self.usb_diag_liveness_backend_delta,
+            "USB_DIAG_LIVENESS_ACCEPTED_DELTA": self.usb_diag_liveness_accepted_delta,
+            "USB_DIAG_LIVENESS_DRAINED_DELTA": self.usb_diag_liveness_drained_delta,
+            "USB_DIAG_LIVENESS_ECHOED_DELTA": self.usb_diag_liveness_echoed_delta,
+            "USB_DIAG_LIVENESS_DROP_DELTA": self.usb_diag_liveness_drop_delta,
+            "USB_GATE_SCOPE": "startup",
+            "USB_CURRENT_LIVENESS": (
+                "pass"
+                if self.usb_diag_liveness_status == "pass"
+                else "pending"
+                if self.usb_diag_liveness_status in {"armed", "pending"}
+                else "unproven"
+            ),
+            "USB_CURRENT_LIVENESS_REASON": (
+                "fresh-key-path-complete"
+                if self.usb_diag_liveness_status == "pass"
+                else self.usb_post_first_byte_blocker
+                if self.usb_post_first_byte_blocker != "none"
+                else "awaiting-fresh-key"
+                if self.usb_diag_liveness_status in {"armed", "pending"}
+                else "not-armed"
+                if self.usb_diag_liveness_status == "not-armed"
+                else "diagnostic-not-run"
+            ),
+            "USB_PHYSICAL_INPUT_PROOF": (
+                "yes" if self.usb_diag_liveness_status == "pass" else "no"
+            ),
             "USB_POST_FIRST_BYTE_BLOCKER": self.usb_post_first_byte_blocker,
             "USB_STARTUP_BLOCKER_SEEN": (
                 "yes" if self.usb_startup_blocker_seen else "no"
@@ -3122,6 +3190,7 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
     )
     if not any(
         event.raw.lower().startswith("wifi: gate 8 subgate=")
+        or event.raw.lower().startswith("wifi: diag_complete ")
         or event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
         or event.raw.startswith(
             (
@@ -4204,6 +4273,79 @@ def summarize_wifi_gate8_proof(events: Iterable[TraceEvent]) -> WifiGate8Proof:
         latest_blocker=latest_farthest.blocker,
         latest_line=latest_farthest.line,
         latest_attempt=latest_farthest.attempt,
+    )
+
+
+def refine_wifi_gate8_from_diag_complete(
+    events: Iterable[TraceEvent], proof: WifiGate8Proof
+) -> WifiGate8Proof:
+    """Use the reserved causal summary when verbose Gate 8 rows were clipped."""
+
+    summary = next(
+        (
+            event
+            for event in reversed(list(events))
+            if event.raw.lower().startswith("wifi: diag_complete ")
+            and field_lower(event, "causal") == "yes"
+        ),
+        None,
+    )
+    if summary is None or proof.blocker not in {"telemetry-truncated", "none"}:
+        return proof
+    frontier = field_lower(summary, "frontier")
+    status = field_lower(summary, "status")
+    blocker = normalize_wifi_exact(summary.fields.get("blocker", "none"))
+    if frontier == "complete" and status == "pass" and blocker == "none":
+        return replace(
+            proof,
+            complete=True,
+            seen=">".join(WIFI_GATE8_SUBGATES),
+            last=WIFI_GATE8_SUBGATES[-1],
+            missing="none",
+            status="pass",
+            blocker="none",
+            line=summary.line,
+        )
+    if frontier not in WIFI_GATE8_SUBGATES or status not in {"pending", "fail"}:
+        return proof
+    if blocker == "none":
+        return proof
+    passed_count = WIFI_GATE8_SUBGATES.index(frontier)
+    seen_tokens = WIFI_GATE8_SUBGATES[:passed_count]
+    return replace(
+        proof,
+        complete=False,
+        seen=">".join(seen_tokens) if seen_tokens else "none",
+        last=seen_tokens[-1] if seen_tokens else "none",
+        missing=frontier,
+        status=status,
+        blocker=blocker,
+        line=summary.line,
+    )
+
+
+def summarize_wifi_diag_complete(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, str, str, str]:
+    """Return the latest reserved WiFi diagnostic completeness record."""
+
+    summary = next(
+        (
+            event
+            for event in reversed(list(events))
+            if event.raw.lower().startswith("wifi: diag_complete ")
+            and field_lower(event, "causal") == "yes"
+        ),
+        None,
+    )
+    if summary is None:
+        return "unknown", "unknown", "none", "none", "none"
+    return (
+        field_lower(summary, "detail") or "unknown",
+        field_lower(summary, "scope") or "unknown",
+        normalize_wifi_exact(summary.fields.get("cause", "none")),
+        normalize_wifi_exact(summary.fields.get("trigger", "none")),
+        field_lower(summary, "retained") or "none",
     )
 
 
@@ -10477,6 +10619,12 @@ class UsbRuntimeQueueSummary:
     recovery_stage: str = "unknown"
     recovery_reason: str = "unknown"
     command_completion_blocked: int = 0
+    driver_active: str = "unknown"
+    driver_outstanding: int = 0
+    driver_active_no_progress: int = 0
+    driver_same_request: int = 0
+    driver_keep_active: int = 0
+    driver_aborts: int = 0
     runtime_skipped: int = 0
     startup_blocker_seen: bool = False
     active_blocker_seen: bool = False
@@ -10614,6 +10762,10 @@ def usb_runtime_active_blocker_seen(raw: str, fields: Mapping[str, str]) -> bool
         "keyboard-first-byte",
         "first-console-byte",
         "awaiting-physical-key",
+        # Older images labeled the intentional input-first EventPump turn as
+        # a sustained USB fault. The counter remains useful scheduling
+        # telemetry, but it is not a transport or liveness blocker.
+        "usb-post-first-byte-runtime-skipped",
     }:
         blocker = "none"
     if blocker != "none":
@@ -10687,6 +10839,7 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
     summary = UsbRuntimeQueueSummary()
     values = summary.__dict__.copy()
     command_ready_seen = False
+    retained_no_terminal_active = False
     for event in events:
         raw = event.raw.lower()
         fields = event.fields
@@ -10788,11 +10941,68 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             blocked = parse_hex_int(fields.get("command_completion_blocked"))
             if blocked is not None:
                 values["command_completion_blocked"] = blocked
+        if (
+            raw.startswith("usb: stall_counter")
+            and field_lower(event, "domain") == "usb-runtime"
+        ):
+            submitted = parse_hex_int(fields.get("submitted"))
+            completed = parse_hex_int(fields.get("completed"))
+            outstanding = parse_hex_int(fields.get("outstanding"))
+            if outstanding is None and submitted is not None and completed is not None:
+                outstanding = max(0, submitted - completed)
+            if outstanding is not None:
+                values["driver_outstanding"] = outstanding
+            active = field_lower(event, "active")
+            keep_active = parse_hex_int(fields.get("keep_active"))
+            if active:
+                values["driver_active"] = active
+            elif outstanding and keep_active:
+                # Legacy status lines omitted the active bit. One unfinished
+                # request plus retained timeout resumes is sufficient to
+                # identify the exact still-owned request.
+                values["driver_active"] = "yes"
+            active_no_progress = parse_hex_int(fields.get("active_no_progress"))
+            if active_no_progress is not None:
+                values["driver_active_no_progress"] = active_no_progress
+            elif outstanding and keep_active:
+                values["driver_active_no_progress"] = keep_active
+            same_request = parse_hex_int(fields.get("same"))
+            if same_request is not None:
+                values["driver_same_request"] = same_request
+            if keep_active is not None:
+                values["driver_keep_active"] = keep_active
+            aborts = parse_hex_int(fields.get("aborts"))
+            if aborts is not None:
+                values["driver_aborts"] = aborts
+            retained_no_terminal = (
+                values["driver_active"] == "yes"
+                and values["driver_outstanding"] > 0
+                and values["driver_active_no_progress"] > 0
+            )
+            if retained_no_terminal:
+                retained_no_terminal_active = True
+                values["active_blocker_seen"] = command_ready_seen
+                values["startup_blocker_seen"] = not command_ready_seen
+                values["recovery_state"] = "degraded-active"
+                values["local_seat_reason"] = "usb-retained-request-no-terminal"
+                values["busy_after_ready"] = command_ready_seen
+            elif values["driver_active"] == "no" and values["driver_outstanding"] == 0:
+                retained_no_terminal_active = False
         if raw.startswith("usb: event_loop") or raw.startswith("usb: sustained_input"):
             runtime_skipped = parse_hex_int(fields.get("runtime_skipped"))
             if runtime_skipped is not None:
                 values["runtime_skipped"] = runtime_skipped
-    if values["recovery_state"] == "unknown" and values["active_blocker_seen"]:
+        elif raw.startswith("[smp] activity local-seat-turns"):
+            runtime_skipped = parse_hex_int(fields.get("skipped"))
+            if runtime_skipped is not None:
+                values["runtime_skipped"] = runtime_skipped
+    if retained_no_terminal_active:
+        values["active_blocker_seen"] = True
+        values["recovered_from_blocker"] = False
+        values["recovery_state"] = "degraded-active"
+        values["local_seat_reason"] = "usb-retained-request-no-terminal"
+        values["busy_after_ready"] = command_ready_seen
+    elif values["recovery_state"] == "unknown" and values["active_blocker_seen"]:
         values["recovery_state"] = "degraded-active"
         values["local_seat_reason"] = values["report_status"]
     if values["recovery_state"] == "unknown":
@@ -10943,6 +11153,68 @@ def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSum
                 if parsed is not None:
                     values[out_key] = parsed
     return OutputPressureSummary(**values)
+
+
+def summarize_hdmi_command_status(
+    events: Iterable[TraceEvent],
+) -> tuple[str, str, str, int]:
+    """Return the latest passive HDMI command verdict and completion receipt."""
+
+    state = "unknown"
+    blocker = "not-run"
+    receipt = "none"
+    outstanding = 0
+    for event in events:
+        raw = event.raw.lower()
+        if raw.startswith("hdmi: status "):
+            state = field_lower(event, "state") or "unknown"
+            blocker = field_lower(event, "blocker") or "unknown"
+            receipt = field_lower(event, "receipt") or "none"
+        elif raw.startswith("hdmi: driver "):
+            outstanding = parse_hex_int(event.fields.get("outstanding")) or 0
+    return state, blocker, receipt, outstanding
+
+
+def summarize_usb_diag_liveness(
+    events: Iterable[TraceEvent],
+) -> tuple[int, str, int, int, int, int, int]:
+    """Return the latest passive post-diagnostic physical-input observation."""
+
+    generation = 0
+    status = "not-run"
+    backend_delta = 0
+    accepted_delta = 0
+    drained_delta = 0
+    echoed_delta = 0
+    drop_delta = 0
+    for event in events:
+        raw = event.raw.lower()
+        if not (
+            raw.startswith("usb: diag_liveness ")
+            or raw.startswith("[smp] activity local-seat-liveness ")
+        ):
+            continue
+        generation = parse_hex_int(event.fields.get("generation")) or 0
+        status = field_lower(event, "status") or "unknown"
+        flow_delta = event.fields.get("flow_delta", "").split("/")
+        if len(flow_delta) == 4:
+            flow = [parse_hex_int(value) or 0 for value in flow_delta]
+            backend_delta, accepted_delta, drained_delta, echoed_delta = flow
+        else:
+            backend_delta = parse_hex_int(event.fields.get("backend_delta")) or 0
+            accepted_delta = parse_hex_int(event.fields.get("accepted_delta")) or 0
+            drained_delta = parse_hex_int(event.fields.get("drained_delta")) or 0
+            echoed_delta = parse_hex_int(event.fields.get("echoed_delta")) or 0
+        drop_delta = parse_hex_int(event.fields.get("drop_delta")) or 0
+    return (
+        generation,
+        status,
+        backend_delta,
+        accepted_delta,
+        drained_delta,
+        echoed_delta,
+        drop_delta,
+    )
 
 
 def summarize_driver_task_counters(
@@ -12962,7 +13234,6 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
     first_byte_seen = False
     last_local_seat: tuple[int, int, int, int, int, int] | None = None
     saw_keyboard_no_reply = False
-    sustained_progress_seen = False
     blocker = "none"
     for event in events:
         raw = event.raw.lower()
@@ -12975,6 +13246,29 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
         if raw.startswith("usb: recovery_request"):
             if field_lower(event, "action") == "no-reply":
                 blocker = "usb-post-first-byte-recovery-request-no-reply"
+            continue
+        if (
+            raw.startswith("usb: stall_counter")
+            and field_lower(event, "domain") == "usb-runtime"
+        ):
+            submitted = parse_hex_int(event.fields.get("submitted"))
+            completed = parse_hex_int(event.fields.get("completed"))
+            outstanding = parse_hex_int(event.fields.get("outstanding"))
+            if outstanding is None and submitted is not None and completed is not None:
+                outstanding = max(0, submitted - completed)
+            active = field_lower(event, "active")
+            active_no_progress = parse_hex_int(event.fields.get("active_no_progress"))
+            keep_active = parse_hex_int(event.fields.get("keep_active"))
+            active_or_legacy = active == "yes" or (
+                not active and (outstanding or 0) > 0 and (keep_active or 0) > 0
+            )
+            no_progress = (active_no_progress or 0) > 0 or (keep_active or 0) > 0
+            if (outstanding or 0) > 0 and active_or_legacy and no_progress:
+                blocker = "usb-retained-request-no-terminal"
+                # A later cumulative SMP sample may include bytes that arrived
+                # before this stall record. Rebase here so only post-stall
+                # end-to-end growth can clear the blocker.
+                last_local_seat = None
             continue
         if (
             "driver_task_ring_call_abort" in raw
@@ -12994,7 +13288,6 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                 continue
         if raw.startswith("usb: sustained_input"):
             if sustained_input_progress_proof(raw, event.fields):
-                sustained_progress_seen = True
                 blocker = "none"
                 no_reply_streak = parse_hex_int(event.fields.get("no_reply_streak")) or 0
                 if no_reply_streak == 0:
@@ -13034,11 +13327,6 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             ):
                 blocker = "usb-post-first-byte-queue-collapse-risk"
                 continue
-        if raw.startswith("usb: event_loop"):
-            runtime_skipped = parse_hex_int(event.fields.get("runtime_skipped")) or 0
-            if runtime_skipped > 0 and not sustained_progress_seen:
-                saw_keyboard_no_reply = True
-
         if raw.startswith("[smp] activity local-seat "):
             fields = event.fields
             backend_polls = parse_hex_int(fields.get("backend_polls"))
@@ -13066,10 +13354,12 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
                     blocker = "usb-post-first-byte-no-progress"
                 last_local_seat = snapshot
                 if (
-                    blocker != "usb-post-first-byte-no-progress"
-                    and snapshot[2] > 0
-                    and snapshot[3] >= snapshot[2]
-                    and snapshot[4] >= snapshot[2]
+                    previous_local_seat is not None
+                    and snapshot[1] > previous_local_seat[1]
+                    and snapshot[2] > previous_local_seat[2]
+                    and snapshot[3] > previous_local_seat[3]
+                    and snapshot[4] > previous_local_seat[4]
+                    and snapshot[5] == previous_local_seat[5]
                 ):
                     blocker = "none"
                     saw_keyboard_no_reply = False
@@ -14375,7 +14665,16 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         for event in events
         if not event.raw.startswith("CYW43_BUS_EPISODE ")
     ]
-    wifi_gate8 = summarize_wifi_gate8_proof(event_list)
+    wifi_gate8 = refine_wifi_gate8_from_diag_complete(
+        event_list, summarize_wifi_gate8_proof(event_list)
+    )
+    (
+        wifi_diag_detail,
+        wifi_diag_scope,
+        wifi_diag_cause,
+        wifi_diag_trigger,
+        wifi_diag_retained,
+    ) = summarize_wifi_diag_complete(event_list)
     cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(event_list)
     gate8_protocol_seen = any(
         event.raw.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
@@ -14793,8 +15092,29 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         driver_task_counter_summary=driver_task_counter_summary,
     )
     output_pressure_summary = summarize_output_pressure(event_list)
+    (
+        hdmi_status_state,
+        hdmi_status_blocker,
+        hdmi_status_receipt,
+        hdmi_driver_outstanding,
+    ) = summarize_hdmi_command_status(event_list)
+    hdmi_responsive_proof = hdmi_responsive_proof or (
+        hdmi_status_state == "ready"
+        and hdmi_status_blocker == "none"
+        and hdmi_status_receipt == "driver-task-completion"
+        and hdmi_driver_outstanding == 0
+    )
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
+    (
+        usb_diag_liveness_generation,
+        usb_diag_liveness_status,
+        usb_diag_liveness_backend_delta,
+        usb_diag_liveness_accepted_delta,
+        usb_diag_liveness_drained_delta,
+        usb_diag_liveness_echoed_delta,
+        usb_diag_liveness_drop_delta,
+    ) = summarize_usb_diag_liveness(event_list)
     usb_post_first_byte_blocker = summarize_usb_post_first_byte_blocker(event_list)
     usb_gate, usb_blocker, usb_runtime_queue_summary = refine_usb_gate_for_runtime_truth(
         usb_gate,
@@ -15287,6 +15607,11 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_exact=wifi_exact,
         wifi_phase=wifi_phase,
         wifi_blocker_line=wifi_blocker_line,
+        wifi_diag_detail=wifi_diag_detail,
+        wifi_diag_scope=wifi_diag_scope,
+        wifi_diag_cause=wifi_diag_cause,
+        wifi_diag_trigger=wifi_diag_trigger,
+        wifi_diag_retained=wifi_diag_retained,
         serial_clean=serial_clean(event_list),
         boot_halted=boot_halted,
         timer_irq27_seen=timer_irq27_seen,
@@ -15550,6 +15875,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         hdmi_display_superseded_bytes=(
             output_pressure_summary.hdmi_superseded_bytes
         ),
+        hdmi_status_state=hdmi_status_state,
+        hdmi_status_blocker=hdmi_status_blocker,
+        hdmi_status_receipt=hdmi_status_receipt,
+        hdmi_driver_outstanding=hdmi_driver_outstanding,
         usb_keyboard_no_replies=usb_keyboard_pressure_summary.no_replies,
         usb_keyboard_poll_cooldown=usb_keyboard_pressure_summary.poll_cooldown,
         usb_keyboard_cooldown_skips=usb_keyboard_pressure_summary.cooldown_skips,
@@ -15577,7 +15906,22 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         usb_runtime_command_completion_blocked=(
             usb_runtime_queue_summary.command_completion_blocked
         ),
+        usb_runtime_driver_active=usb_runtime_queue_summary.driver_active,
+        usb_runtime_driver_outstanding=usb_runtime_queue_summary.driver_outstanding,
+        usb_runtime_driver_active_no_progress=(
+            usb_runtime_queue_summary.driver_active_no_progress
+        ),
+        usb_runtime_driver_same_request=usb_runtime_queue_summary.driver_same_request,
+        usb_runtime_driver_keep_active=usb_runtime_queue_summary.driver_keep_active,
+        usb_runtime_driver_aborts=usb_runtime_queue_summary.driver_aborts,
         usb_event_loop_runtime_skipped=usb_runtime_queue_summary.runtime_skipped,
+        usb_diag_liveness_generation=usb_diag_liveness_generation,
+        usb_diag_liveness_status=usb_diag_liveness_status,
+        usb_diag_liveness_backend_delta=usb_diag_liveness_backend_delta,
+        usb_diag_liveness_accepted_delta=usb_diag_liveness_accepted_delta,
+        usb_diag_liveness_drained_delta=usb_diag_liveness_drained_delta,
+        usb_diag_liveness_echoed_delta=usb_diag_liveness_echoed_delta,
+        usb_diag_liveness_drop_delta=usb_diag_liveness_drop_delta,
         usb_post_first_byte_blocker=usb_post_first_byte_blocker,
         usb_startup_blocker_seen=usb_runtime_queue_summary.startup_blocker_seen,
         usb_active_blocker_seen=usb_runtime_queue_summary.active_blocker_seen,

@@ -82,7 +82,11 @@ runbooks. The `serial_rx_drop` and `serial_rx_backpressure` values in this
 report describe the root serial queue only. A zero value does not claim that
 the isolated serial runtime queue or the mini-UART hardware FIFO could not
 have overrun; paced serial acceptance still requires a complete command and
-response transcript.
+response transcript. Per-core rates follow the manifest assignment of the
+specific driver: `seatPoll_s`, `kbdB_s`, `seat_drop_s`, and
+`seat_no_reply_s` belong only to the USB core, while `hdmiB_s` and
+`hdmi_drop_s` belong only to the HDMI core. HDMI mirror-queue drops are not USB
+keyboard drops, and neither driver's rate is duplicated onto the other's core.
 
 `test` is present in the shared parser but the target root console directs the
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
@@ -92,6 +96,18 @@ The advertised Wi-Fi inventory is passive: `wifi help`, `wifi dump-state`, and
 `wifi diag`. Legacy `wifi probe-ht`, `wifi load-fw`, and `wifi retry` spellings
 remain recognized only to return one typed linked-runtime ownership refusal;
 they do not invoke a debug callback, snapshot traversal, or physical operation.
+The Pi USB inventory separates passive inspection from active operations:
+`usb status`, `usb dump-state`, and `usb diag` are passive, while
+`usb enable-kbd` and `usb probe-kbd` may change polling or advance one retained
+probe slice. `usb diag` arms a post-command liveness observation without polling
+the device. Its ten-gate result is startup history, not current keyboard proof.
+After a real USB key is typed, `usb status` reports a one-shot pass only when
+the linked HID byte, parser acceptance, parser drain, and echo counters all
+advance with no new drop. `usb probe-kbd` reports `attached` only after its live
+retained service turn completes; a cached ready latch with a pending request is
+`keyboard-unavailable continuation=pending`. The same passive status also
+reports HDMI queue state separately from the isolated display driver's
+completion receipt.
 
 After `nettest` admission, allow its bounded 15-second window to finish and
 query `netstats`. The authoritative line is

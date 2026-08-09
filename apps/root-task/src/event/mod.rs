@@ -1646,13 +1646,13 @@ struct SmpActivitySnapshot {
 struct SmpLocalSeatActivitySnapshot {
     backend_poll_calls: u64,
     drained_bytes: u64,
-    echoed_bytes: u64,
     dropped_bytes: u64,
     mirrored_line_drops: u64,
     budget_overruns: u64,
     no_replies: u64,
     display_no_reply_frames: u64,
     display_backpressure_bytes: u64,
+    display_tx_bytes: u64,
 }
 
 #[cfg(feature = "net-console")]
@@ -1687,7 +1687,8 @@ impl SmpActivityRates {
         window_ms: u64,
         include_authority: bool,
         include_serial: bool,
-        include_local_seat: bool,
+        include_usb: bool,
+        include_hdmi: bool,
         include_net: bool,
     ) -> Self {
         let mut rates = Self::default();
@@ -1740,7 +1741,7 @@ impl SmpActivityRates {
                 window_ms,
             );
         }
-        if include_local_seat {
+        if include_usb {
             let previous_local = previous.local_seat.unwrap_or_default();
             let current_local = current.local_seat.unwrap_or_default();
             rates.seat_poll_per_s = rate_per_second(
@@ -1755,21 +1756,10 @@ impl SmpActivityRates {
                     .saturating_sub(previous_local.drained_bytes),
                 window_ms,
             );
-            rates.display_bytes_per_s = rate_per_second(
-                current_local
-                    .echoed_bytes
-                    .saturating_sub(previous_local.echoed_bytes),
-                window_ms,
-            );
             rates.seat_drop_per_s = rate_per_second(
                 current_local
                     .dropped_bytes
                     .saturating_sub(previous_local.dropped_bytes)
-                    .saturating_add(
-                        current_local
-                            .mirrored_line_drops
-                            .saturating_sub(previous_local.mirrored_line_drops),
-                    )
                     .saturating_add(
                         current_local
                             .budget_overruns
@@ -1783,10 +1773,26 @@ impl SmpActivityRates {
                     .saturating_sub(previous_local.no_replies),
                 window_ms,
             );
+            rates.drop_per_s = rates.drop_per_s.saturating_add(rates.seat_drop_per_s);
+        }
+        if include_hdmi {
+            let previous_local = previous.local_seat.unwrap_or_default();
+            let current_local = current.local_seat.unwrap_or_default();
+            rates.display_bytes_per_s = rate_per_second(
+                current_local
+                    .display_tx_bytes
+                    .saturating_sub(previous_local.display_tx_bytes),
+                window_ms,
+            );
             rates.hdmi_drop_per_s = rate_per_second(
                 current_local
-                    .display_no_reply_frames
-                    .saturating_sub(previous_local.display_no_reply_frames)
+                    .mirrored_line_drops
+                    .saturating_sub(previous_local.mirrored_line_drops)
+                    .saturating_add(
+                        current_local
+                            .display_no_reply_frames
+                            .saturating_sub(previous_local.display_no_reply_frames),
+                    )
                     .saturating_add(
                         current_local
                             .display_backpressure_bytes
@@ -1794,10 +1800,7 @@ impl SmpActivityRates {
                     ),
                 window_ms,
             );
-            rates.drop_per_s = rates
-                .drop_per_s
-                .saturating_add(rates.seat_drop_per_s)
-                .saturating_add(rates.hdmi_drop_per_s);
+            rates.drop_per_s = rates.drop_per_s.saturating_add(rates.hdmi_drop_per_s);
         }
         if include_net {
             #[cfg(feature = "net-console")]
@@ -2852,6 +2855,18 @@ where
     reboot_ack_drain_observed: bool,
     #[cfg(feature = "kernel")]
     pending_usb_debug_hdmi_frontier: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_generation: u32,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_baseline_backend_bytes: Option<u64>,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_baseline_accepted_bytes: Option<u64>,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_baseline_drained_bytes: Option<u64>,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_baseline_echoed_bytes: Option<u64>,
+    #[cfg(feature = "kernel")]
+    usb_diag_liveness_baseline_dropped_bytes: Option<u64>,
     local_seat_hdmi_serial_deferrals: u8,
     local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
@@ -3449,6 +3464,18 @@ where
             reboot_ack_drain_observed: false,
             #[cfg(feature = "kernel")]
             pending_usb_debug_hdmi_frontier: None,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_generation: 0,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_baseline_backend_bytes: None,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_baseline_accepted_bytes: None,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_baseline_drained_bytes: None,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_baseline_echoed_bytes: None,
+            #[cfg(feature = "kernel")]
+            usb_diag_liveness_baseline_dropped_bytes: None,
             local_seat_hdmi_serial_deferrals: 0,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
@@ -8062,7 +8089,7 @@ where
         if !self.usb_debug_commands_enabled() || self.last_input_source == ConsoleInputSource::Net {
             return;
         }
-        let line = "  usb <help|status|dump-state|diag|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)";
+        let line = "  usb <help|status|dump-state|diag> - Passive USB diagnostics; usb help lists active operations";
         if serial_only {
             self.emit_serial_line(line);
         } else {
@@ -8076,7 +8103,7 @@ where
             return;
         }
         self.emit_serial_line_atomic(
-            "  usb <help|status|dump-state|diag|enable-kbd|probe-kbd> - USB local-seat diagnostics (serial/local only)",
+            "  usb <help|status|dump-state|diag> - Passive USB diagnostics; usb help lists active operations",
         );
     }
 
@@ -8273,19 +8300,27 @@ where
     }
 
     fn smp_activity_snapshot(&self) -> SmpActivitySnapshot {
+        #[cfg(feature = "kernel")]
+        let hdmi_tx_bytes = crate::hal::driver_task::driver_task_counter_snapshot(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        )
+        .map(|counters| counters.tx_bytes)
+        .unwrap_or(0);
+        #[cfg(not(feature = "kernel"))]
+        let hdmi_tx_bytes = 0;
         let local_seat = self.local_seat.as_ref().map(|runtime| {
             let trace = runtime.keyboard_trace();
             let display = runtime.display_trace();
             SmpLocalSeatActivitySnapshot {
                 backend_poll_calls: trace.backend_poll_calls,
                 drained_bytes: trace.drained_bytes,
-                echoed_bytes: trace.echoed_bytes,
                 dropped_bytes: trace.dropped_bytes,
                 mirrored_line_drops: runtime.dropped_mirrored_lines(),
                 budget_overruns: trace.driver_task_budget_overruns,
                 no_replies: trace.driver_task_no_replies,
                 display_no_reply_frames: display.no_reply_frames,
                 display_backpressure_bytes: display.backpressure_bytes,
+                display_tx_bytes: hdmi_tx_bytes,
             }
         });
         #[cfg(feature = "net-console")]
@@ -8364,6 +8399,22 @@ where
             Self::yes_no(linked_first_byte),
         ));
         self.emit_console_line(line.as_str());
+        #[cfg(feature = "kernel")]
+        {
+            let (liveness, backend, accepted, drained, echoed, dropped) =
+                self.usb_diag_liveness_snapshot(trace);
+            let liveness_line = format_message(format_args!(
+                "[smp] activity local-seat-liveness generation={} status={} proof=one-shot flow_delta={}/{}/{}/{} drop_delta={}",
+                self.usb_diag_liveness_generation,
+                liveness,
+                backend,
+                accepted,
+                drained,
+                echoed,
+                dropped,
+            ));
+            self.emit_console_line(liveness_line.as_str());
+        }
         let input = format_message(format_args!(
             "[smp] activity local-seat-input backend_polls={} backend_bytes={} queued={} arming={} accepted={} drained={} echoed={} drop={} no_reply={} cooldown={} cooldown_skips={} hdmi_drop={}",
             trace.backend_poll_calls,
@@ -8454,11 +8505,12 @@ where
             let tasks = Self::format_smp_activity_core_assignments(&policy, core);
             let authority = policy.authority_core == Some(core);
             let serial = policy.drivers.serial == Some(core);
-            let local_seat = Self::smp_activity_driver_assigned(
+            let usb = Self::smp_activity_driver_assigned(
                 crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
                 policy.drivers.usb_local_seat,
                 core,
-            ) || Self::smp_activity_driver_assigned(
+            );
+            let hdmi = Self::smp_activity_driver_assigned(
                 crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
                 policy.drivers.hdmi_text,
                 core,
@@ -8489,7 +8541,7 @@ where
                 core,
             );
             let rates = SmpActivityRates::from_snapshots(
-                previous, current, window_ms, authority, serial, local_seat, net,
+                previous, current, window_ms, authority, serial, usb, hdmi, net,
             );
             let line = format_message(format_args!(
                 "[smp] activity core c={} tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seat_drop_s={} seat_no_reply_s={} hdmi_drop_s={} net_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
@@ -8679,6 +8731,7 @@ where
             window_ms,
             true,
             true,
+            current.local_seat.is_some(),
             current.local_seat.is_some(),
             true,
         );
@@ -9498,17 +9551,17 @@ where
             self.emit_console_line("USB local-seat debug commands:");
             self.emit_console_line("  usb help        - Show USB local-seat debug command help");
             self.emit_console_line(
-                "  usb status      - Show local-seat runtime attach, polling, and contract trace",
+                "  usb status      - [passive] Show local-seat runtime, liveness, and contract trace",
             );
-            self.emit_console_line("  usb dump-state  - Alias for usb status");
+            self.emit_console_line("  usb dump-state  - [passive] Alias for usb status");
             self.emit_console_line(
-                "  usb diag        - Show passive linked-runtime gates without live xHCI probing",
-            );
-            self.emit_console_line(
-                "  usb enable-kbd  - Arm runtime USB keyboard probing after boot",
+                "  usb diag        - [passive] Show cached gates and arm a real-input postcheck",
             );
             self.emit_console_line(
-                "  usb probe-kbd   - Run one bounded keyboard probe slice with contract trace",
+                "  usb enable-kbd  - [active] Enable runtime USB keyboard polling after boot",
+            );
+            self.emit_console_line(
+                "  usb probe-kbd   - [active] Run one bounded keyboard probe slice",
             );
             self.metrics.accepted_commands = self.metrics.accepted_commands.saturating_add(1);
             self.emit_ack_ok(
@@ -9526,6 +9579,7 @@ where
             UsbDebugCommand::Help => {}
             UsbDebugCommand::Status | UsbDebugCommand::DumpState => {
                 self.with_local_seat_mirror_suppressed(|this| {
+                    this.emit_usb_diag_liveness_status();
                     let (backend_attached, polling_enabled) = {
                         let local_seat = match this.local_seat.as_mut() {
                             Some(local_seat) => local_seat,
@@ -9543,11 +9597,13 @@ where
                         )
                     };
                     this.emit_usb_status(backend_attached, polling_enabled, None);
+                    this.emit_hdmi_completion_status(subcommand);
                 });
                 self.mirror_usb_debug_hdmi_frontier(subcommand);
             }
             UsbDebugCommand::Diag => {
                 self.with_local_seat_mirror_suppressed(|this| {
+                    this.emit_usb_diag_liveness_status();
                     let (backend_attached, polling_enabled) = {
                         let local_seat = match this.local_seat.as_mut() {
                             Some(local_seat) => local_seat,
@@ -9578,6 +9634,8 @@ where
                         "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status",
                     );
                     this.emit_usb_startup_blackbox(backend_attached, polling_enabled);
+                    this.emit_hdmi_completion_status("usb-diag");
+                    this.arm_usb_diag_liveness_postcheck();
                 });
                 self.mirror_usb_debug_hdmi_frontier("diag");
             }
@@ -9638,14 +9696,178 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn emit_usb_diag_liveness_status(&mut self) {
+        let trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.keyboard_trace())
+            .unwrap_or_default();
+        let (status, backend_delta, accepted_delta, drained_delta, echoed_delta, dropped_delta) =
+            self.usb_diag_liveness_snapshot(trace);
+        let next_action = if status == "pass" {
+            "none"
+        } else if status == "pending" {
+            "type-any-key-then-run-usb-status"
+        } else {
+            "run-usb-diag"
+        };
+        let line = format_message(format_args!(
+            "usb: diag_liveness generation={} status={} proof=one-shot flow_delta={}/{}/{}/{} drop_delta={} source=linked-runtime-hid next_action={}",
+            self.usb_diag_liveness_generation,
+            status,
+            backend_delta,
+            accepted_delta,
+            drained_delta,
+            echoed_delta,
+            dropped_delta,
+            next_action,
+        ));
+        self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_diag_liveness_snapshot(
+        &self,
+        trace: crate::local_seat::LocalSeatKeyboardTrace,
+    ) -> (&'static str, u64, u64, u64, u64, u64) {
+        let baselines = (
+            self.usb_diag_liveness_baseline_backend_bytes,
+            self.usb_diag_liveness_baseline_accepted_bytes,
+            self.usb_diag_liveness_baseline_drained_bytes,
+            self.usb_diag_liveness_baseline_echoed_bytes,
+            self.usb_diag_liveness_baseline_dropped_bytes,
+        );
+        let (
+            Some(backend_baseline),
+            Some(accepted_baseline),
+            Some(drained_baseline),
+            Some(echoed_baseline),
+            Some(dropped_baseline),
+        ) = baselines
+        else {
+            return ("not-armed", 0, 0, 0, 0, 0);
+        };
+        let backend_delta = trace.backend_read_bytes.saturating_sub(backend_baseline);
+        let accepted_delta = trace.accepted_bytes.saturating_sub(accepted_baseline);
+        let drained_delta = trace.drained_bytes.saturating_sub(drained_baseline);
+        let echoed_delta = trace.echoed_bytes.saturating_sub(echoed_baseline);
+        let dropped_delta = trace.dropped_bytes.saturating_sub(dropped_baseline);
+        let status = if backend_delta != 0
+            && accepted_delta != 0
+            && drained_delta != 0
+            && echoed_delta != 0
+            && dropped_delta == 0
+        {
+            "pass"
+        } else {
+            "pending"
+        };
+        (
+            status,
+            backend_delta,
+            accepted_delta,
+            drained_delta,
+            echoed_delta,
+            dropped_delta,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn arm_usb_diag_liveness_postcheck(&mut self) {
+        let trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.keyboard_trace())
+            .unwrap_or_default();
+        self.usb_diag_liveness_generation = self.usb_diag_liveness_generation.wrapping_add(1);
+        self.usb_diag_liveness_baseline_backend_bytes = Some(trace.backend_read_bytes);
+        self.usb_diag_liveness_baseline_accepted_bytes = Some(trace.accepted_bytes);
+        self.usb_diag_liveness_baseline_drained_bytes = Some(trace.drained_bytes);
+        self.usb_diag_liveness_baseline_echoed_bytes = Some(trace.echoed_bytes);
+        self.usb_diag_liveness_baseline_dropped_bytes = Some(trace.dropped_bytes);
+        let line = format_message(format_args!(
+            "usb: diag_liveness generation={} status=armed proof=one-shot baseline={}/{}/{}/{}/{} source=passive-observer next_action=type-any-key-then-run-usb-status",
+            self.usb_diag_liveness_generation,
+            trace.backend_read_bytes,
+            trace.accepted_bytes,
+            trace.drained_bytes,
+            trace.echoed_bytes,
+            trace.dropped_bytes,
+        ));
+        self.emit_console_line(line.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_hdmi_completion_status(&mut self, source: &str) {
+        let trace = self
+            .local_seat
+            .as_ref()
+            .map(|local_seat| local_seat.display_trace())
+            .unwrap_or_default();
+        let counters = crate::hal::driver_task::driver_task_counter_snapshot(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        );
+        let submitted = counters.map_or(0, |snapshot| snapshot.submitted_turns);
+        let completed = counters.map_or(0, |snapshot| snapshot.completed_turns);
+        let outstanding = submitted.saturating_sub(completed);
+        let (state, blocker, receipt, next_action) = if trace.stale_after_retry_exhaustion {
+            (
+                "degraded",
+                "snapshot-stale-after-retry-exhaustion",
+                "none",
+                "inspect-hdmi-driver-receipt",
+            )
+        } else if trace.redraw_no_reply_streak != 0 {
+            (
+                "degraded",
+                "redraw-no-reply-streak",
+                "none",
+                "inspect-hdmi-driver-receipt",
+            )
+        } else if outstanding != 0 {
+            (
+                "busy",
+                "driver-task-turn-outstanding",
+                "pending",
+                "rerun-hdmi-status",
+            )
+        } else if completed != 0 {
+            ("ready", "none", "driver-task-completion", "none")
+        } else {
+            (
+                "unproven",
+                "completion-receipt-missing",
+                "none",
+                "wait-for-first-display-completion",
+            )
+        };
+        let status = format_message(format_args!(
+            "hdmi: status mode=passive source={source} state={state} blocker={blocker} receipt={receipt} next_action={next_action}"
+        ));
+        self.emit_console_line(status.as_str());
+        let driver = format_message(format_args!(
+            "hdmi: driver contract={} counters={} submitted={} completed={} outstanding={} no_reply_streak={} cooldown={} stale={}",
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT.name,
+            if counters.is_some() { "present" } else { "absent" },
+            submitted,
+            completed,
+            outstanding,
+            trace.redraw_no_reply_streak,
+            trace.no_reply_cooldown_turns,
+            Self::yes_no(trace.stale_after_retry_exhaustion),
+        ));
+        self.emit_console_line(driver.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
     fn mirror_usb_debug_hdmi_frontier(&mut self, subcommand: &str) {
         let line = if subcommand == "diag" {
             format_message(format_args!(
-                "[drivers] USB diag complete: compact gate report on serial; HDMI preserved"
+                "[drivers] USB diag complete: passive gate report on serial; usb status reports display receipt"
             ))
         } else {
             format_message(format_args!(
-                "[drivers] USB {} complete: full diagnostics on serial; HDMI preserved",
+                "[drivers] USB {} complete: diagnostics and display receipt on serial",
                 subcommand
             ))
         };
@@ -9793,8 +10015,13 @@ where
         };
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let exact_issue = None;
-        let (verdict, focus) =
-            Self::usb_capture_verdict(backend_attached, polling_enabled, exact_issue);
+        let (verdict, focus) = Self::usb_probe_capture_verdict(
+            backend_attached,
+            polling_enabled,
+            probe_result,
+            continuation_pending,
+            exact_issue,
+        );
         let verdict_line = format_message(format_args!("usb: verdict={verdict} focus={focus}"));
         self.emit_console_line(verdict_line.as_str());
     }
@@ -9932,7 +10159,21 @@ where
             transfer_events,
             report_status,
             local_trace.driver_task_no_replies,
-            self.metrics.local_seat_runtime_skipped_turns,
+            crate::hal::driver_task::driver_task_ring_command_active(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            ),
+            crate::hal::driver_task::driver_task_counter_snapshot(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            )
+            .map(|counters| {
+                counters
+                    .submitted_turns
+                    .saturating_sub(counters.completed_turns)
+            })
+            .unwrap_or(0),
+            crate::hal::driver_task::driver_task_ring_active_timeout_resumes(
+                crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+            ),
         );
         let usb_burst = local_seat_usb_burst_proof(
             local_trace.accepted_bytes,
@@ -10172,7 +10413,7 @@ where
             ));
             self.emit_console_line(runtime_detail_line.as_str());
             let acceptance_line = format_message(format_args!(
-                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} command_ready={} usable={} physical_input_proven={} prompt_polling={} input_observation={} death_proof=no note=physical_input_requires_linked_runtime_byte_and_parser_ingress",
+                "usb: acceptance xhci={} hid_keyboard={} first_report={} first_byte={} command_ready={} usable={} physical_input_proven={} prompt_polling={} input_observation={}",
                 Self::yes_no(proof_gate >= 3),
                 Self::yes_no(keyboard_ready),
                 Self::yes_no(first_report),
@@ -10184,6 +10425,9 @@ where
                 input_observation,
             ));
             self.emit_console_line(acceptance_line.as_str());
+            self.emit_console_line(
+                "usb: acceptance_proof death_proof=no requirement=linked-runtime-byte+parser-ingress+post-diag-liveness",
+            );
             let runtime_contract = format_message(format_args!(
                 "usb: runtime_contract current={} expected={} blocker={} proof_gate={} target_gate=10 detail=0x{:04x} result=0x{:08x}",
                 Self::usb_runtime_step_label(proof_gate),
@@ -10335,9 +10579,18 @@ where
             self.emit_console_line(line.as_str());
             return;
         };
+        let active = crate::hal::driver_task::driver_task_ring_command_active(contract);
+        let outstanding = counters
+            .submitted_turns
+            .saturating_sub(counters.completed_turns);
+        let active_no_progress =
+            crate::hal::driver_task::driver_task_ring_active_timeout_resumes(contract);
         let line = format_message(format_args!(
-            "usb: stall_counter domain={domain} contract={} submitted={} completed={} busy={} same={} timeouts={} keep_active={} aborts={} fault={} budget={} rx={}/{} tx={}/{}",
+            "usb: stall_counter domain={domain} contract={} active={} outstanding={} active_no_progress={} submitted={} completed={} busy={} same={} timeouts={} keep_active={} aborts={} fault={} budget={} rx={}/{} tx={}/{}",
             contract.name,
+            Self::yes_no(active),
+            outstanding,
+            active_no_progress,
             counters.submitted_turns,
             counters.completed_turns,
             counters.busy_conflicts,
@@ -10381,6 +10634,23 @@ where
             None if !backend_attached => ("backend-not-attached", "probe-controller"),
             None if polling_enabled => ("probe-in-progress", "poll-keyboard"),
             None => ("no-controller-edge-yet", "probe-keyboard"),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_probe_capture_verdict(
+        backend_attached: bool,
+        polling_enabled: bool,
+        probe_result: &str,
+        continuation_pending: bool,
+        exact_issue: Option<&'static str>,
+    ) -> (&'static str, &'static str) {
+        if continuation_pending {
+            ("probe-pending", "retained-request")
+        } else if probe_result != "attached" {
+            Self::usb_capture_verdict(backend_attached, polling_enabled, None)
+        } else {
+            Self::usb_capture_verdict(backend_attached, polling_enabled, exact_issue)
         }
     }
 
@@ -12696,7 +12966,9 @@ where
         transfer_events: u32,
         report_status: u32,
         no_replies: u64,
-        runtime_skipped: u64,
+        retained_active: bool,
+        retained_outstanding: u64,
+        retained_no_progress: usize,
     ) -> &'static str {
         if !queue_valid {
             "queue-telemetry-unavailable"
@@ -12712,14 +12984,14 @@ where
             == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER as u32
         {
             "usb-post-first-byte-unmatched-transfer"
+        } else if retained_active && retained_outstanding != 0 && retained_no_progress != 0 {
+            "usb-retained-request-no-terminal"
         } else if queued_reports == 0 {
             "usb-post-first-byte-queue-empty"
         } else if queued_reports <= 8 && transfer_events >= 32 {
             "usb-post-first-byte-queue-collapse-risk"
         } else if no_replies != 0 {
             "usb-post-first-byte-no-reply"
-        } else if runtime_skipped != 0 {
-            "usb-post-first-byte-runtime-skipped"
         } else {
             "none"
         }
@@ -13219,7 +13491,7 @@ where
                         == pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_USB_HID_INTERRUPT_QUEUE_READY
                 });
             let evidence = format_message(format_args!(
-                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint={} first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private source=linked-runtime-result",
+                "usb: evidence xhci queue_result={} transfer_ring_queued={} doorbell={} preserved_events={} transfer_events={} endpoint={} source=linked-runtime-result",
                 if queue_result { "yes" } else { "no" },
                 queued_reports,
                 Self::yes_no(doorbell_pending),
@@ -13232,6 +13504,9 @@ where
                 },
             ));
             self.emit_console_line(evidence.as_str());
+            self.emit_console_line(
+                "usb: evidence xhci_config first_report_policy=deep-queue-rering-doorbell cerr=3 max_packet=runtime-private interval=runtime-private",
+            );
             let boundary = format_message(format_args!(
                 "usb: evidence boundary console_client=event-pump hal=admission-descriptor-diagnostics-only linked_runtime_owner=usb-local-seat failure_domain={} proof_gate={} target_gate=10 proof_effect={}",
                 active_blocker,
@@ -14719,6 +14994,7 @@ where
         if !Self::wifi_command_supports_driver_task_snapshot(command) {
             return false;
         }
+        let output_backpressure_before = self.metrics.physical_console_output_backpressure;
         let live_net_frontier = self.wifi_live_net_frontier();
         let gate8 = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
         let priority_episode =
@@ -14866,12 +15142,12 @@ where
             self.emit_console_line(detail.as_str());
         } else if self.network_service_quarantined {
             let detail = format_message(format_args!(
-                "wifi: driver-task replay failure detail=network-quarantined source={source}"
+                "wifi: driver-task snapshot state=network-quarantined source={source}"
             ));
             self.emit_console_line(detail.as_str());
         } else {
             let detail = format_message(format_args!(
-                "wifi: driver-task replay failure detail=net-state-unavailable source={source}"
+                "wifi: driver-task snapshot state=net-state-unavailable source={source}"
             ));
             self.emit_console_line(detail.as_str());
         }
@@ -15011,6 +15287,14 @@ where
             self.emit_console_line(recovery_line.as_str());
         }
         if Self::wifi_command_accepts_driver_task_snapshot_success(command) {
+            if matches!(command, WifiDebugCommand::Diag) {
+                self.emit_wifi_diag_complete(
+                    gate8,
+                    retained_gate8,
+                    deferred_recovery,
+                    output_backpressure_before,
+                );
+            }
             let completion_source = if live_net_supersedes_runtime {
                 "live-net-status"
             } else {
@@ -15033,6 +15317,61 @@ where
             self.emit_wifi_driver_task_runtime_required_unavailable(subcommand, profile);
         }
         true
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_diag_complete(
+        &mut self,
+        current: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+        retained: Option<crate::drivers::driver_task_net::Cyw43Gate8Diagnostic>,
+        recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
+        output_backpressure_before: u64,
+    ) {
+        let current_frontier = current
+            .subgates
+            .iter()
+            .find(|subgate| {
+                subgate.status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+            })
+            .copied();
+        let retained_present = retained.is_some();
+        let retained_frontier = retained.and_then(|snapshot| {
+            snapshot
+                .subgates
+                .iter()
+                .find(|subgate| {
+                    subgate.status != crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass
+                })
+                .copied()
+        });
+        let (frontier, status, blocker) = current_frontier
+            .map_or(("complete", "pass", "none"), |frontier| {
+                (frontier.token, frontier.status.as_str(), frontier.blocker)
+            });
+        let (retained_frontier, retained_status, retained_blocker) = retained_frontier.map_or(
+            if retained_present {
+                ("complete", "pass", "none")
+            } else {
+                ("none", "none", "none")
+            },
+            |frontier| (frontier.token, frontier.status.as_str(), frontier.blocker),
+        );
+        let detail_complete =
+            self.metrics.physical_console_output_backpressure == output_backpressure_before;
+        let line = format_message(format_args!(
+            "wifi: diag_complete causal=yes detail={} scope={} frontier={} status={} blocker={} retained={}/{}/{} cause={} trigger={}",
+            Self::yes_no(detail_complete),
+            if recovery.is_some() { "scrubbed" } else { "current" },
+            frontier,
+            status,
+            blocker,
+            retained_frontier,
+            retained_status,
+            retained_blocker,
+            recovery.map_or("none", |diagnostic| diagnostic.cause),
+            recovery.map_or("none", |diagnostic| diagnostic.scheduler.cause),
+        ));
+        self.emit_terminal_console_line(line.as_str());
     }
 
     #[cfg(feature = "kernel")]
@@ -28252,6 +28591,49 @@ mod tests {
         assert!(rendered.contains("cpu_pct=unavailable"), "{rendered}");
     }
 
+    #[test]
+    fn smp_activity_attributes_usb_and_hdmi_rates_to_their_own_driver_cores() {
+        let previous = SmpActivitySnapshot {
+            now_ms: 1_000,
+            local_seat: Some(SmpLocalSeatActivitySnapshot {
+                backend_poll_calls: 100,
+                drained_bytes: 1,
+                display_tx_bytes: 900,
+                ..SmpLocalSeatActivitySnapshot::default()
+            }),
+            ..SmpActivitySnapshot::default()
+        };
+        let current = SmpActivitySnapshot {
+            now_ms: 2_000,
+            local_seat: Some(SmpLocalSeatActivitySnapshot {
+                backend_poll_calls: 200,
+                drained_bytes: 12,
+                mirrored_line_drops: 30,
+                display_tx_bytes: 1_000,
+                ..SmpLocalSeatActivitySnapshot::default()
+            }),
+            ..SmpActivitySnapshot::default()
+        };
+
+        let usb = SmpActivityRates::from_snapshots(
+            previous, current, 1_000, false, false, true, false, false,
+        );
+        assert_eq!(usb.seat_poll_per_s, 100);
+        assert_eq!(usb.keyboard_bytes_per_s, 11);
+        assert_eq!(usb.seat_drop_per_s, 0);
+        assert_eq!(usb.hdmi_drop_per_s, 0);
+        assert_eq!(usb.display_bytes_per_s, 0);
+
+        let hdmi = SmpActivityRates::from_snapshots(
+            previous, current, 1_000, false, false, false, true, false,
+        );
+        assert_eq!(hdmi.seat_poll_per_s, 0);
+        assert_eq!(hdmi.keyboard_bytes_per_s, 0);
+        assert_eq!(hdmi.seat_drop_per_s, 0);
+        assert_eq!(hdmi.hdmi_drop_per_s, 30);
+        assert_eq!(hdmi.display_bytes_per_s, 100);
+    }
+
     #[cfg(feature = "net-console")]
     #[test]
     fn smp_activity_includes_net_telemetry_when_attached() {
@@ -33912,24 +34294,40 @@ mod tests {
             "endpoint-armed-no-idle-report"
         );
         assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 6, 6, 97),
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 4, 255, 6, 6, false, 0, 0
+            ),
             "usb-post-first-byte-queue-collapse-risk"
         );
         assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 8, 255, 6, 0, 0),
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 8, 255, 6, 0, false, 0, 0
+            ),
             "usb-post-first-byte-queue-collapse-risk"
         );
         assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 9, 255, 6, 0, 0),
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 9, 255, 6, 0, false, 0, 0
+            ),
             "none"
         );
         assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 9, 0, 0),
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 4, 255, 9, 0, false, 0, 0
+            ),
             "usb-post-first-byte-queue-collapse"
         );
         assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(true, 4, 255, 11, 0, 0),
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 4, 255, 11, 0, false, 0, 0
+            ),
             "usb-post-first-byte-recovery-failed"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, 9, 1, 6, 0, true, 1, 127
+            ),
+            "usb-retained-request-no-terminal"
         );
         assert!(!KernelConsoleTestPump::usb_runtime_detail_has_queue_result(
             pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_XHCI_READY
@@ -38949,7 +39347,7 @@ mod tests {
             .expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: driver-task replay failure detail=network-quarantined source=debug-handle-unavailable"
+                "wifi: driver-task snapshot state=network-quarantined source=debug-handle-unavailable"
             ),
             "{rendered}"
         );
@@ -40302,7 +40700,7 @@ mod tests {
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
         assert!(
             rendered.contains(
-                "wifi: driver-task replay failure detail=net-state-unavailable source=debug-handle-unavailable"
+                "wifi: driver-task snapshot state=net-state-unavailable source=debug-handle-unavailable"
             ),
             "{rendered}"
         );
@@ -40350,8 +40748,8 @@ mod tests {
             },
         );
 
-        let driver = LoopbackSerial::<4096>::new();
-        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -40362,7 +40760,7 @@ mod tests {
 
         pump.serial_mut().driver_mut().push_rx(b"wifi diag\n");
         let mut transcript = Vec::new();
-        for _ in 0..256 {
+        for _ in 0..128 {
             pump.poll();
             transcript.extend(pump.serial_mut().driver_mut().drain_tx());
         }
@@ -41632,8 +42030,8 @@ mod tests {
     #[cfg(feature = "kernel")]
     #[test]
     fn serial_usb_dump_state_reports_lexical_subcommand() {
-        let driver = LoopbackSerial::<2048>::new();
-        let serial = SerialPort::<_, 512, 2048, DEFAULT_LINE_CAPACITY>::new(driver);
+        let driver = LoopbackSerial::<8192>::new();
+        let serial = SerialPort::<_, 512, 8192, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
         let ipc = NullIpc;
         let mut store: TicketTable<4> = TicketTable::new();
@@ -41650,7 +42048,7 @@ mod tests {
             .with_test_pi4_debug_commands();
 
         pump.serial_mut().driver_mut().push_rx(b"usb dump-state\n");
-        for _ in 0..4 {
+        for _ in 0..128 {
             pump.poll();
         }
 
@@ -41696,7 +42094,6 @@ mod tests {
 
         pump.serial_mut().driver_mut().push_rx(b"usb diag\n");
         pump.poll();
-
         assert_eq!(
             pump.local_seat
                 .as_ref()
@@ -41704,8 +42101,11 @@ mod tests {
                 .keyboard_trace()
                 .backend_poll_calls,
             backend_poll_calls_before,
-            "passive diagnostics must not poll an enabled USB runtime"
+            "the usb diag command turn must not poll an enabled USB runtime"
         );
+        for _ in 0..127 {
+            pump.poll();
+        }
 
         let transcript: Vec<u8> = pump
             .serial_mut()
@@ -41727,6 +42127,18 @@ mod tests {
             rendered.contains(
                 "usb: diag action=probe-skipped reason=linked-runtime-only use=usb-status"
             ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: diag_liveness generation=0 status=not-armed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("usb: diag_liveness generation=1 status=armed"),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains("hdmi: status mode=passive source=usb-diag"),
             "{rendered}"
         );
         assert!(!rendered.contains("action=diag-before-probe"), "{rendered}");
@@ -41755,14 +42167,13 @@ mod tests {
         let mirrored = local_seat.mirrored_lines_snapshot();
         assert_eq!(mirrored.len(), 1, "{mirrored:?}");
         assert!(
-            mirrored[0].contains("USB diag complete: compact gate report on serial"),
+            mirrored[0].contains("USB diag complete: passive gate report on serial"),
             "{mirrored:?}"
         );
         assert_eq!(local_seat.dropped_mirrored_lines(), 0);
-        assert_eq!(
-            local_seat.keyboard_trace().backend_poll_calls,
-            0,
-            "passive diagnostics must not poll the USB runtime"
+        assert!(
+            local_seat.keyboard_trace().backend_poll_calls > backend_poll_calls_before,
+            "ordinary later EventPump turns continue steady keyboard service"
         );
         assert!(
             rendered
@@ -41773,6 +42184,49 @@ mod tests {
             "compact diagnostic body must fit before the protocol-tail reserve: {rendered}"
         );
         assert!(rendered.contains("cohesix> "), "{rendered}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_diag_liveness_requires_fresh_end_to_end_input_without_drops() {
+        let driver = LoopbackSerial::<1024>::new();
+        let serial = SerialPort::<_, 1024, 1024, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let mut store: TicketTable<4> = TicketTable::new();
+        store.register(Role::Queen, "ticket").unwrap();
+        let mut audit = AuditLog::new();
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_test_pi4_debug_commands();
+        pump.usb_diag_liveness_baseline_backend_bytes = Some(10);
+        pump.usb_diag_liveness_baseline_accepted_bytes = Some(9);
+        pump.usb_diag_liveness_baseline_drained_bytes = Some(8);
+        pump.usb_diag_liveness_baseline_echoed_bytes = Some(7);
+        pump.usb_diag_liveness_baseline_dropped_bytes = Some(1);
+
+        let complete = crate::local_seat::LocalSeatKeyboardTrace {
+            backend_read_bytes: 11,
+            accepted_bytes: 10,
+            drained_bytes: 9,
+            echoed_bytes: 8,
+            dropped_bytes: 1,
+            ..crate::local_seat::LocalSeatKeyboardTrace::default()
+        };
+        assert_eq!(
+            pump.usb_diag_liveness_snapshot(complete),
+            ("pass", 1, 1, 1, 1, 0)
+        );
+
+        let parser_stalled = crate::local_seat::LocalSeatKeyboardTrace {
+            echoed_bytes: 7,
+            ..complete
+        };
+        assert_eq!(pump.usb_diag_liveness_snapshot(parser_stalled).0, "pending");
+        let dropped = crate::local_seat::LocalSeatKeyboardTrace {
+            dropped_bytes: 2,
+            ..complete
+        };
+        assert_eq!(pump.usb_diag_liveness_snapshot(dropped).0, "pending");
     }
 
     #[cfg(feature = "kernel")]
@@ -42988,6 +43442,31 @@ mod tests {
         assert_eq!(
             KernelConsoleTestPump::usb_capture_verdict(true, true, Some("usbcmd-run-store-wedged"),),
             ("run-transition-edge", "usbcmd-run")
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_probe_verdict_cannot_promote_cached_ready_while_request_is_pending() {
+        assert_eq!(
+            KernelConsoleTestPump::usb_probe_capture_verdict(
+                true,
+                true,
+                "keyboard-unavailable",
+                true,
+                Some("command-input-ready"),
+            ),
+            ("probe-pending", "retained-request"),
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_probe_capture_verdict(
+                true,
+                true,
+                "attached",
+                false,
+                Some("command-input-ready"),
+            ),
+            ("acceptance-complete", "command-input-ready"),
         );
     }
 

@@ -789,7 +789,7 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
         "netstats",
         "wifi diag",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.drains[0] == (
@@ -925,7 +925,7 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
         "netstats",
         "wifi diag",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.dhcp_result_timeout_s is not None
@@ -1022,7 +1022,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "netstats",
         "wifi diag",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
@@ -1033,7 +1033,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         "netstats-final",
         "wifi diag",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert (
@@ -1091,7 +1091,7 @@ def test_diagnostics_accept_interleaved_result_marker() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert (
@@ -1128,11 +1128,47 @@ def test_diagnostics_accept_prompt_tail_after_result() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.diagnostic_deadlines == [None, None, None, None, None, None]
     assert controller.reads == []
+
+
+def test_diagnostics_run_active_usb_probe_only_when_requested() -> None:
+    """The potentially mutating keyboard probe is an explicit opt-in."""
+
+    controller = FakeController(
+        [
+            b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            b"OK NETSTATS\ncohesix>",
+            NETTEST_STARTED,
+            NETTEST_RESULT,
+            NETSTATS_TERMINAL_PASS,
+            b"OK USB\ncohesix>",
+            b"OK USB\ncohesix>",
+            b"OK SMP\ncohesix>",
+            b"OK USB\ncohesix>",
+        ]
+    )
+
+    diagnostics_ok = pi4_serial_reboot.run_diagnostics(
+        controller,
+        "genet",
+        prompt_ready=True,
+        active_usb_probe=True,
+    )
+
+    assert diagnostics_ok
+    assert controller.sent == [
+        "netstats",
+        "nettest",
+        "netstats",
+        "usb diag",
+        "usb status",
+        "smp activity",
+        "usb probe-kbd",
+    ]
 
 
 def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
@@ -1166,7 +1202,7 @@ def test_diagnostics_accept_command_ready_seen_during_settle_drain() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.reads == []
@@ -1199,7 +1235,7 @@ def test_diagnostics_do_not_wait_for_consumed_prompt_after_ok() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.reads == []
@@ -1240,7 +1276,7 @@ def test_diagnostics_reject_gate_eight_keyboard_markers_as_command_ready() -> No
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert any(
@@ -1276,7 +1312,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.diagnostic_barriers == [
@@ -1284,7 +1320,7 @@ def test_diagnostics_barrier_replaces_prompt_wait_after_result() -> None:
         "nettest",
         "netstats-final",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.reads == []
@@ -1312,7 +1348,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.drains == [
@@ -1327,7 +1363,7 @@ def test_diagnostics_continue_when_command_ready_never_arrives() -> None:
         for note in controller.notes
     )
     assert any(
-        "diagnostics serial_only_usb_unscored command='usb probe-kbd'" in note
+        "diagnostics serial_only_usb_unscored command='usb status'" in note
         for note in controller.notes
     )
 
@@ -1479,7 +1515,7 @@ def test_diagnostics_capture_final_netstats_after_nettest_error() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert controller.diagnostic_barriers[:3] == [
@@ -1556,7 +1592,7 @@ def test_diagnostics_reject_netstats_run_generation_mismatch() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert (
@@ -1676,7 +1712,7 @@ def test_diagnostics_continue_after_generation_tagged_nettest_failure() -> None:
         "nettest",
         "netstats",
         "usb diag",
-        "usb probe-kbd",
+        "usb status",
         "smp activity",
     ]
     assert (

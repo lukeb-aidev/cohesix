@@ -1332,6 +1332,11 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_EXACT": "cyw43-ht-clock-timeout-before-function2",
         "WIFI_PHASE": "cyw43-load-firmware-fail",
         "WIFI_BLOCKER_LINE": 8,
+        "WIFI_DIAG_DETAIL": "unknown",
+        "WIFI_DIAG_SCOPE": "unknown",
+        "WIFI_DIAG_CAUSE": "none",
+        "WIFI_DIAG_TRIGGER": "none",
+        "WIFI_DIAG_RETAINED": "none",
         "SERIAL_CLEAN": "yes",
         "BOOT_HALTED": "no",
         "TIMER_IRQ27_SEEN": "no",
@@ -1531,6 +1536,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "HDMI_DISPLAY_COALESCED": 0,
         "HDMI_DISPLAY_BACKPRESSURE_BYTES": 0,
         "HDMI_DISPLAY_SUPERSEDED_BYTES": 0,
+        "HDMI_STATUS_STATE": "unknown",
+        "HDMI_STATUS_BLOCKER": "not-run",
+        "HDMI_STATUS_RECEIPT": "none",
+        "HDMI_DRIVER_OUTSTANDING": 0,
         "USB_KEYBOARD_NO_REPLIES": 0,
         "USB_KEYBOARD_POLL_COOLDOWN": 0,
         "USB_KEYBOARD_COOLDOWN_SKIPS": 0,
@@ -1546,7 +1555,24 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "USB_RUNTIME_RECOVERY_STAGE": "unknown",
         "USB_RUNTIME_RECOVERY_REASON": "unknown",
         "USB_RUNTIME_COMMAND_COMPLETION_BLOCKED": 0,
+        "USB_RUNTIME_DRIVER_ACTIVE": "unknown",
+        "USB_RUNTIME_DRIVER_OUTSTANDING": 0,
+        "USB_RUNTIME_DRIVER_ACTIVE_NO_PROGRESS": 0,
+        "USB_RUNTIME_DRIVER_SAME_REQUEST": 0,
+        "USB_RUNTIME_DRIVER_KEEP_ACTIVE": 0,
+        "USB_RUNTIME_DRIVER_ABORTS": 0,
         "USB_EVENT_LOOP_RUNTIME_SKIPPED": 0,
+        "USB_DIAG_LIVENESS_GENERATION": 0,
+        "USB_DIAG_LIVENESS_STATUS": "not-run",
+        "USB_DIAG_LIVENESS_BACKEND_DELTA": 0,
+        "USB_DIAG_LIVENESS_ACCEPTED_DELTA": 0,
+        "USB_DIAG_LIVENESS_DRAINED_DELTA": 0,
+        "USB_DIAG_LIVENESS_ECHOED_DELTA": 0,
+        "USB_DIAG_LIVENESS_DROP_DELTA": 0,
+        "USB_GATE_SCOPE": "startup",
+        "USB_CURRENT_LIVENESS": "unproven",
+        "USB_CURRENT_LIVENESS_REASON": "diagnostic-not-run",
+        "USB_PHYSICAL_INPUT_PROOF": "no",
         "USB_POST_FIRST_BYTE_BLOCKER": "none",
         "USB_STARTUP_BLOCKER_SEEN": "no",
         "USB_ACTIVE_BLOCKER_SEEN": "no",
@@ -9427,6 +9453,49 @@ def test_gate_summary_reports_post_first_byte_unmatched_transfer() -> None:
         record["USB_POST_FIRST_BYTE_BLOCKER"]
         == "usb-post-first-byte-unmatched-transfer"
     )
+
+
+def test_gate_summary_rejects_latched_ready_for_retained_usb_request() -> None:
+    """A startup Gate 10 cannot hide one live request with no terminal receipt."""
+
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready "
+            "source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
+            "[local-seat] runtime keyboard first-byte "
+            "source=linked-runtime-hid read=1 ascii=0x75",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "command_ready=yes proof_gate=10 target_gate=10 next=none blocker=none",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "backend_polls=23896 backend_bytes=1 queued=0 arming=1 accepted=1 "
+            "drained=1 echoed=1 dropped=0 no_reply=0 cooldown=0 cooldown_skips=0",
+            "usb: stall_counter domain=usb-runtime contract=usb-local-seat "
+            "submitted=10669 completed=10668 busy=0 same=92438 timeouts=3546 "
+            "keep_active=3546 aborts=0 fault=0 budget=0 rx=12/12 tx=0/0",
+            "[smp] activity local-seat runtime=present attached=yes "
+            "backend_polls=165948 backend_bytes=12 queued=0 arming=1 accepted=12 "
+            "drained=12 echoed=12 dropped=0 no_reply=0 cooldown=0 cooldown_skips=0",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_GATE_SCOPE"] == "startup"
+    assert record["USB_RUNTIME_DRIVER_ACTIVE"] == "yes"
+    assert record["USB_RUNTIME_DRIVER_OUTSTANDING"] == 1
+    assert record["USB_RUNTIME_DRIVER_ACTIVE_NO_PROGRESS"] == 3546
+    assert record["USB_RUNTIME_DRIVER_SAME_REQUEST"] == 92438
+    assert record["USB_RUNTIME_DRIVER_KEEP_ACTIVE"] == 3546
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "usb-retained-request-no-terminal"
+    assert record["USB_CURRENT_LIVENESS"] == "unproven"
+    assert record["USB_CURRENT_LIVENESS_REASON"] == "usb-retained-request-no-terminal"
+    assert record["USB_PHYSICAL_INPUT_PROOF"] == "no"
+    assert record["USB_ACTIVE_BLOCKER_SEEN"] == "yes"
+    assert record["USB_RECOVERED_FROM_BLOCKER"] == "no"
+    assert record["USB_RECOVERY_STATE"] == "degraded-active"
+    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-retained-request-no-terminal"
 
 
 def test_gate_summary_reports_post_first_byte_queue_collapse() -> None:
@@ -17571,3 +17640,143 @@ def test_exact_gate8_transaction_cannot_clear_forbidden_outer_retry() -> None:
     )
     assert record["CYW43_BOOTSTRAP_SUPERVISOR_READY"] == "no"
     assert record["WIFI_BLOCKER"] == "supervisor-outer-backoff-forbidden"
+
+
+def test_wifi_diag_complete_recovers_clipped_gate8_cause_and_scope() -> None:
+    """The reserved terminal row keeps current and retained recovery truth."""
+
+    lines = [
+        (
+            f"wifi: gate 8 subgate={subgate} status={status} "
+            "pair_epoch=1 generation=1 "
+            f"blocker={blocker}"
+        )
+        for subgate, status, blocker in [
+            ("8a-pair-generation", "fail", "pair-recovery-required"),
+            ("8b-control-program", "pending", "8a-pair-generation"),
+            ("8c-join-terminal", "pending", "8b-control-program"),
+            ("8d-association-link", "pending", "8c-join-terminal"),
+            ("8e-bssid-refresh", "pending", "8d-association-link"),
+            ("8f-eapol-keys", "pending", "8e-bssid-refresh"),
+            ("8g-post-key-maintenance", "pending", "8f-eapol-keys"),
+        ]
+    ]
+    lines.append(
+        "wifi: diag_complete causal=yes detail=no scope=scrubbed "
+        "frontier=8a-pair-generation status=fail "
+        "blocker=pair-recovery-required "
+        "retained=8c-join-terminal/pending/join-owner-active "
+        "cause=issued-owner-unknown trigger=rx-queue-poison"
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
+    assert record["WIFI_GATE8_STATUS"] == "fail"
+    assert record["WIFI_GATE8_BLOCKER"] == "pair-recovery-required"
+    assert record["WIFI_DIAG_DETAIL"] == "no"
+    assert record["WIFI_DIAG_SCOPE"] == "scrubbed"
+    assert record["WIFI_DIAG_CAUSE"] == "issued-owner-unknown"
+    assert record["WIFI_DIAG_TRIGGER"] == "rx-queue-poison"
+    assert (
+        record["WIFI_DIAG_RETAINED"]
+        == "8c-join-terminal/pending/join-owner-active"
+    )
+
+
+def test_hdmi_passive_status_requires_driver_completion_receipt() -> None:
+    """Queued display work becomes responsive only after a driver receipt."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "hdmi: status mode=passive source=usb-status state=ready "
+                "blocker=none receipt=driver-task-completion next_action=none",
+                "hdmi: driver contract=hdmi-text counters=present submitted=6 "
+                "completed=6 outstanding=0 no_reply_streak=0 cooldown=0 stale=no",
+            ]
+        )
+    ).to_record()
+
+    assert record["HDMI_STATUS_STATE"] == "ready"
+    assert record["HDMI_STATUS_BLOCKER"] == "none"
+    assert record["HDMI_STATUS_RECEIPT"] == "driver-task-completion"
+    assert record["HDMI_DRIVER_OUTSTANDING"] == 0
+    assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_usb_diag_liveness_reports_real_post_command_input_delta() -> None:
+    """USB diagnostic liveness is based on linked-runtime HID byte deltas."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "usb: diag_liveness generation=4 status=pass "
+                "proof=one-shot flow_delta=1/1/1/1 drop_delta=0 "
+                "source=linked-runtime-hid next_action=none"
+            ]
+        )
+    ).to_record()
+
+    assert record["USB_DIAG_LIVENESS_GENERATION"] == 4
+    assert record["USB_DIAG_LIVENESS_STATUS"] == "pass"
+    assert record["USB_DIAG_LIVENESS_BACKEND_DELTA"] == 1
+    assert record["USB_DIAG_LIVENESS_ACCEPTED_DELTA"] == 1
+    assert record["USB_DIAG_LIVENESS_DRAINED_DELTA"] == 1
+    assert record["USB_DIAG_LIVENESS_ECHOED_DELTA"] == 1
+    assert record["USB_DIAG_LIVENESS_DROP_DELTA"] == 0
+    assert record["USB_GATE_SCOPE"] == "startup"
+    assert record["USB_CURRENT_LIVENESS"] == "pass"
+    assert record["USB_CURRENT_LIVENESS_REASON"] == "fresh-key-path-complete"
+    assert record["USB_PHYSICAL_INPUT_PROOF"] == "yes"
+
+
+def test_usb_startup_byte_does_not_prove_current_keyboard_liveness() -> None:
+    """Latched startup counters cannot hide a later keyboard-input death."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "[local-seat] usb keyboard command-ready "
+                "source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
+                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+                "first_byte_source=linked-runtime-hid command_ready=yes "
+                "proof_gate=10 blocker=none",
+                "[smp] activity local-seat-input backend_polls=23896 "
+                "backend_bytes=1 queued=0 arming=0 accepted=1 drained=1 "
+                "echoed=1 drop=0 no_reply=0 cooldown=0 cooldown_skips=0",
+            ]
+        )
+    ).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_GATE_SCOPE"] == "startup"
+    assert record["USB_CURRENT_LIVENESS"] == "unproven"
+    assert record["USB_CURRENT_LIVENESS_REASON"] == "diagnostic-not-run"
+    assert record["USB_PHYSICAL_INPUT_PROOF"] == "no"
+
+
+def test_usb_runtime_skip_after_first_byte_is_scheduler_telemetry() -> None:
+    """Input-first runtime skips must not downgrade a working USB keyboard."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+                "first_byte_source=linked-runtime-hid proof_gate=10 blocker=none",
+                "[local-seat] usb keyboard command-ready "
+                "action=enable-command-input clean_polls=2 no_reply=0 "
+                "recovery_pending=no",
+                "[smp] activity local-seat-turns output_polls=0 hdmi_pump=6 "
+                "net_mirror=0 net_suppressed=0 priority=1 skipped=1 "
+                "serial_yield=1 post_runtime=0",
+            ]
+        )
+    ).to_record()
+
+    assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 1
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_ACTIVE_BLOCKER_SEEN"] == "no"
+    assert record["USB_BUSY_AFTER_READY"] == "no"

@@ -2425,6 +2425,11 @@ const DRIVER_TASK_USB_BOOTSTRAP_ENUM_RING_ATTEMPTS: usize = DRIVER_TASK_BOOTSTRA
 const DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 3;
 const DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize =
     DRIVER_TASK_USB_ENUM_STATUS_TIMEOUT_KEEP_ACTIVE_LIMIT;
+// A retained steady keyboard poll is a bounded protocol turn, not a lease on
+// the child forever. If its immutable request never publishes a terminal
+// completion, close it so local-seat can record the no-reply and recover on a
+// later outer event turn.
+const DRIVER_TASK_USB_STEADY_POLL_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 128;
 const DRIVER_TASK_USB_HID_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 128;
 const DRIVER_TASK_USB_ENUM_ROOT_RESET_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 4096;
 const DRIVER_TASK_USB_ENUM_ADDRESS_TIMEOUT_KEEP_ACTIVE_LIMIT: usize = 32;
@@ -7403,6 +7408,20 @@ pub(crate) fn driver_task_ring_command_active(contract: DriverTaskContract) -> b
         return false;
     };
     slot.active.load(Ordering::Acquire) != 0
+}
+
+/// Return the no-progress resume count for the contract's exact active ring
+/// request. Zero means either no request is active or the current request has
+/// not yet missed a completion fence.
+#[cfg(feature = "kernel")]
+pub(crate) fn driver_task_ring_active_timeout_resumes(contract: DriverTaskContract) -> usize {
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return 0;
+    };
+    if slot.active.load(Ordering::Acquire) == 0 {
+        return 0;
+    }
+    slot.timeout_resumes.load(Ordering::Acquire)
 }
 
 #[cfg(feature = "kernel")]
@@ -16961,7 +16980,21 @@ fn driver_task_ring_timeout_keep_active_limit(
     mode: DriverTaskRingCommandMode,
 ) -> usize {
     if mode == DriverTaskRingCommandMode::RetainedTurn {
-        if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+            && command.aux0 == DRIVER_RUNTIME_USB_ENUMERATE_AUX
+        {
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+            && command.aux0 == DRIVER_RUNTIME_LOCAL_SEAT_INIT_AUX
+        {
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT
+        } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb)
+            && command.aux0 == DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX
+        {
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT
+        } else if matches!(contract.kind, DriverTaskKind::LocalSeatUsb) && command.aux0 == 0 {
+            DRIVER_TASK_USB_STEADY_POLL_TIMEOUT_KEEP_ACTIVE_LIMIT
+        } else if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
             && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE != 0
         {
             // Completion-poll count is only the timerless host fallback. Pi
@@ -31821,6 +31854,66 @@ mod tests {
             command,
             DriverTaskRingCommandMode::NonBlocking
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn retained_usb_keyboard_poll_fails_closed_at_its_protocol_bound() {
+        let mut command = DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            DriverTaskHotPath::UsbKeyboard,
+            DriverTaskBudgetGrant::from_contract(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+            DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: 0,
+            },
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn,
+            ),
+            DRIVER_TASK_USB_STEADY_POLL_TIMEOUT_KEEP_ACTIVE_LIMIT,
+        );
+
+        let slot = DriverTaskCommandSlot::new();
+        slot.timeout_resumes.store(
+            DRIVER_TASK_USB_STEADY_POLL_TIMEOUT_KEEP_ACTIVE_LIMIT - 1,
+            Ordering::Release,
+        );
+        assert_eq!(
+            driver_task_ring_timeout_keep_decision(
+                &slot,
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn,
+                23,
+                false,
+            ),
+            (false, DRIVER_TASK_USB_STEADY_POLL_TIMEOUT_KEEP_ACTIVE_LIMIT,),
+            "a retained USB poll without a terminal completion cannot live forever",
+        );
+
+        command.aux0 = DRIVER_RUNTIME_USB_ENUMERATE_AUX;
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn,
+            ),
+            DRIVER_TASK_USB_ENUM_TIMEOUT_KEEP_ACTIVE_LIMIT,
+        );
+        command.aux0 = DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX;
+        assert_eq!(
+            driver_task_ring_timeout_keep_active_limit(
+                USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
+                command,
+                DriverTaskRingCommandMode::RetainedTurn,
+            ),
+            DRIVER_TASK_USB_RECOVERY_TIMEOUT_KEEP_ACTIVE_LIMIT,
+        );
     }
 
     #[cfg(feature = "kernel")]

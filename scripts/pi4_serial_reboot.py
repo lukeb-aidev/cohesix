@@ -59,6 +59,7 @@ DIAGNOSTIC_RESULT_MARKERS: dict[str, tuple[bytes, bytes]] = {
     "netstats": (b"OK NETSTATS", b"ERR NETSTATS"),
     "nettest": (b"OK NETTEST", b"ERR NETTEST"),
     "wifi diag": (b"OK WIFI", b"ERR WIFI"),
+    "usb status": (b"OK USB", b"ERR USB"),
     "usb diag": (b"OK USB", b"ERR USB"),
     "usb probe-kbd": (b"OK USB", b"ERR USB"),
     "smp activity": (b"OK SMP", b"ERR SMP"),
@@ -450,7 +451,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--diagnostics",
         action="store_true",
-        help="Run the required boot diagnostic commands after the root prompt returns.",
+        help="Run passive boot diagnostic commands after the root prompt returns.",
+    )
+    parser.add_argument(
+        "--active-usb-probe",
+        action="store_true",
+        help="Append one explicit active usb probe-kbd operation to diagnostics.",
     )
     return parser.parse_args()
 
@@ -1306,8 +1312,9 @@ def run_diagnostics(
     boot_snapshot: bytes = b"",
     wifi_supervisor_timeout_s: float = WIFI_SUPERVISOR_TERMINAL_TIMEOUT_S,
     wifi_dhcp_timeout_s: float = WIFI_DHCP_TERMINAL_TIMEOUT_S,
+    active_usb_probe: bool = False,
 ) -> bool:
-    """Run every diagnostic and return whether all terminal results passed."""
+    """Run passive diagnostics and any explicitly requested active USB probe."""
 
     usb_scored = True
     failures: list[str] = []
@@ -1403,10 +1410,12 @@ def run_diagnostics(
     commands.extend(
         [
             ("usb diag", "usb diag"),
-            ("usb probe-kbd", "usb probe-kbd"),
+            ("usb status", "usb status"),
             ("smp activity", "smp activity"),
         ]
     )
+    if active_usb_probe:
+        commands.append(("usb probe-kbd", "usb probe-kbd"))
     for command, label in commands:
         if command.startswith("usb ") and not usb_scored:
             controller.note(
@@ -1617,6 +1626,7 @@ def run() -> int:
             prompt_ready=True,
             boot_snapshot=build_snapshot + root_snapshot,
             wifi_supervisor_timeout_s=args.boot_timeout_s,
+            active_usb_probe=getattr(args, "active_usb_probe", False),
         ):
             controller.note("complete result=diagnostic-failure exit=1")
             return 1

@@ -214,6 +214,9 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "dedicated=7 compatibility=0 active_net=cyw43",
         "SERIAL_ECHO p95_us=800 max_gap_us=1200",
         "USB_BURST bytes=256 drops=0 max_latency_us=900",
+        "usb: diag_liveness generation=1 status=pass proof=one-shot "
+        "flow_delta=4/4/4/4 drop_delta=0 source=linked-runtime-hid "
+        "next_action=none",
         "HDMI_RESPONSIVE max_gap_ms=9 mirrored_bytes=256",
     ]
 
@@ -329,7 +332,7 @@ def _oldgood_usb_replay_lines() -> list[str]:
 def _oldgood_wifi_replay_lines() -> list[str]:
     return [
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin backoff_ms=0 "
-        "next_attempt_ms=100 serial=ready local_seat=ready recovery=full "
+        "next_attempt_ms=100 serial=ready local_seat=enabled recovery=full "
         "console_seq=1 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "SDIO_DRIVER_TASK_REPLAY_STATUS stage=engine-init blocker=ready detail=0x5500",
         "wifi: cyw43-transport-ready owner=linked-runtime",
@@ -382,7 +385,7 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS status=secure "
         "associated=yes link_up=yes eapol_rx=2",
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=stabilizing backoff_ms=0 "
-        "next_attempt_ms=150 serial=ready local_seat=ready recovery=full "
+        "next_attempt_ms=150 serial=ready local_seat=enabled recovery=full "
         "console_seq=2 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "wifi: gate 8 subgate=8a-pair-generation status=pass "
         "pair_epoch=1 generation=9 blocker=none",
@@ -401,7 +404,7 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "wifi: gate 8 subgate=8h-data-admission status=pass "
         "pair_epoch=1 generation=9 blocker=none",
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=ready backoff_ms=0 "
-        "next_attempt_ms=200 serial=ready local_seat=ready recovery=full "
+        "next_attempt_ms=200 serial=ready local_seat=enabled recovery=full "
         "console_seq=3 telemetry_sinks=serial+qlog+hdmi prompt_refresh=yes",
         "[dhcp] start ready interface=wifi",
         "[dhcp] lease bound ip=192.168.10.50/24 gateway=192.168.10.1 "
@@ -476,6 +479,18 @@ def test_gate_proof_runs_smp_activity_for_post_prompt_driver_proof() -> None:
     assert '"smp activity"' in source
     assert source.index('"smp activity"') < source.index('"wifi diag"')
     assert source.rindex('"netstats"') < source.rindex('"smp activity"')
+
+
+def test_gate_proof_defaults_to_passive_usb_diagnostics() -> None:
+    """The default evidence lane must not execute an active keyboard probe."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+    defaults = source.split("DEFAULT_COMMANDS=(", 1)[1].split(")", 1)[0]
+
+    assert '"usb diag"' in defaults
+    assert defaults.count('"usb status"') == 2
+    assert '"usb probe-kbd"' not in defaults
+    assert "--probe-usb-keyboard" in source
 
 
 def test_gate_proof_refuses_existing_capture_log(tmp_path: pathlib.Path) -> None:
