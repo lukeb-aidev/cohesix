@@ -9,12 +9,9 @@
       src="docs/COHESIX_LOGO.png"
       alt="Cohesix"
       width="720"
-      style="display: block; width: 100%; height: auto; transform: translateY(-20%);"
     />
   </div>
 </div>
-
-# Cohesix
 
 Cohesix is a research operating system for edge AI, built around a simple idea:
 an AI fleet should have air-traffic control, not a pile of tools holding
