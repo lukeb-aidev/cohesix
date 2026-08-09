@@ -4,7 +4,7 @@
 <!-- Author: Lukas Bower -->
 
 <div align="center">
-  <div style="width: 720px; max-width: 100%; aspect-ratio: 5 / 2; overflow: hidden;">
+  <div style="width: 720px; max-width: 100%;">
     <img
       src="docs/COHESIX_LOGO.png"
       alt="Cohesix"
