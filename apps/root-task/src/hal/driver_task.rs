@@ -3799,6 +3799,9 @@ impl DriverTaskRingView {
             )?,
             flags: self
                 .read_u32(base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, flags))?,
+            recovery_source_line: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, recovery_source_line),
+            )?,
             commit_sequence: self.read_u32(
                 base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, commit_sequence),
             )?,
@@ -4269,6 +4272,7 @@ pub(crate) struct Cyw43FirstRecoverySchedulerSnapshot {
     pub(crate) child_bus_episode_observed: bool,
     pub(crate) child_bus_parent_sequence: u32,
     pub(crate) child_bus_parent_op: u16,
+    pub(crate) runtime_recovery_source_line: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -4295,6 +4299,7 @@ struct Cyw43FirstRecoverySchedulerState {
     child_bus_episode_observed: AtomicU32,
     child_bus_parent_sequence: AtomicU32,
     child_bus_parent_op: AtomicU32,
+    runtime_recovery_source_line: AtomicU32,
 }
 
 #[cfg(feature = "kernel")]
@@ -4321,6 +4326,7 @@ impl Cyw43FirstRecoverySchedulerState {
             child_bus_episode_observed: AtomicU32::new(0),
             child_bus_parent_sequence: AtomicU32::new(0),
             child_bus_parent_op: AtomicU32::new(0),
+            runtime_recovery_source_line: AtomicU32::new(0),
         }
     }
 }
@@ -5000,8 +5006,18 @@ fn record_first_cyw43_sdio_pair_restart_cause(cause: Cyw43SdioPairRestartCause) 
 
 #[cfg(feature = "kernel")]
 fn latch_cyw43_sdio_pair_restart_request(cause: Cyw43SdioPairRestartCause) {
+    latch_cyw43_sdio_pair_restart_request_with_runtime_source(cause, 0);
+}
+
+#[cfg(feature = "kernel")]
+fn latch_cyw43_sdio_pair_restart_request_with_runtime_source(
+    cause: Cyw43SdioPairRestartCause,
+    runtime_recovery_source_line: u32,
+) {
     record_first_cyw43_sdio_pair_restart_cause(cause);
-    capture_first_cyw43_recovery_scheduler_snapshot();
+    capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
+        runtime_recovery_source_line,
+    );
     clear_cyw43_sdio_cold_bootstrap_epoch_token();
     if CYW43_SDIO_PAIR_RESTART_IN_PROGRESS.load(Ordering::Acquire) != 0 {
         CYW43_SDIO_PAIR_RESTART_SUPERSEDED.store(1, Ordering::Release);
@@ -5045,8 +5061,19 @@ fn latch_cyw43_sdio_pair_restart_from_rx_queue_samples(
     ) {
         return false;
     }
+    let runtime_recovery_source_line = queue_state
+        .and_then(DriverRuntimeCyw43RxQueueState::recovery_source_line)
+        .unwrap_or(0);
+    // Preserve the queue's immutable runtime source before the existing lease
+    // poison takes its own no-argument first-snapshot path.
+    capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
+        runtime_recovery_source_line,
+    );
     poison_cyw43_sdio_network_priority_lease_if_owned();
-    latch_cyw43_sdio_pair_restart_request(Cyw43SdioPairRestartCause::RxQueuePoison);
+    latch_cyw43_sdio_pair_restart_request_with_runtime_source(
+        Cyw43SdioPairRestartCause::RxQueuePoison,
+        runtime_recovery_source_line,
+    );
     true
 }
 
@@ -10361,6 +10388,13 @@ pub(crate) fn cyw43_sdio_network_priority_lease_snapshot() -> Cyw43SdioNetworkPr
 
 #[cfg(feature = "kernel")]
 pub(crate) fn capture_first_cyw43_recovery_scheduler_snapshot() {
+    capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(0);
+}
+
+#[cfg(feature = "kernel")]
+fn capture_first_cyw43_recovery_scheduler_snapshot_with_runtime_source(
+    runtime_recovery_source_line: u32,
+) {
     let empty_version = CYW43_FIRST_RECOVERY_SCHEDULER.state.load(Ordering::Acquire);
     if empty_version & 3 != 0
         || CYW43_FIRST_RECOVERY_SCHEDULER
@@ -10477,6 +10511,9 @@ pub(crate) fn capture_first_cyw43_recovery_scheduler_snapshot() {
     CYW43_FIRST_RECOVERY_SCHEDULER
         .child_bus_parent_op
         .store(u32::from(child_bus_parent_op), Ordering::Relaxed);
+    CYW43_FIRST_RECOVERY_SCHEDULER
+        .runtime_recovery_source_line
+        .store(runtime_recovery_source_line, Ordering::Relaxed);
     // Sequence-last publication: readers cannot observe a partial tuple.
     CYW43_FIRST_RECOVERY_SCHEDULER
         .state
@@ -10566,6 +10603,9 @@ pub(crate) fn first_cyw43_recovery_scheduler_snapshot(
         child_bus_parent_op: CYW43_FIRST_RECOVERY_SCHEDULER
             .child_bus_parent_op
             .load(Ordering::Relaxed) as u16,
+        runtime_recovery_source_line: CYW43_FIRST_RECOVERY_SCHEDULER
+            .runtime_recovery_source_line
+            .load(Ordering::Relaxed),
     };
     (CYW43_FIRST_RECOVERY_SCHEDULER.state.load(Ordering::Acquire) == committed_version)
         .then_some(snapshot)
@@ -27919,6 +27959,7 @@ mod tests {
         let poisoned = DriverRuntimeCyw43RxQueueState {
             generation,
             flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            recovery_source_line: 39_579,
             commit_sequence: 99,
             ..DriverRuntimeCyw43RxQueueState::empty()
         };
@@ -27969,6 +28010,12 @@ mod tests {
             Some(owner),
             true,
         ));
+        let first = first_cyw43_recovery_scheduler_snapshot()
+            .expect("queue poison retains one passive first-source snapshot");
+        assert_eq!(
+            first.runtime_recovery_source_line,
+            poisoned.recovery_source_line,
+        );
         assert!(cyw43_sdio_pair_restart_required());
         assert!(cyw43_sdio_pair_restart_required());
         assert_eq!(test_root_grant_action_counts(), grant_counts_before);

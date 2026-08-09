@@ -1411,6 +1411,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE": "unknown",
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": "0x0000",
+        "WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE": 0,
         "WIFI_CAUSAL_FRONTIER": "none",
         "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
@@ -2467,7 +2468,8 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "wifi: deferred_recovery scheduler_edge publication_latched=yes "
         "signal_returned=yes parent_deadline_expired=yes "
         "child_terminal=no child_wait_receipt=no child_bus_episode=no "
-        "bus_parent=0/0x0000 evidence=exact-only",
+        "bus_parent=0/0x0000 rsl=39579 "
+        "evidence=exact-only",
         "wifi: deferred_recovery scheduler scope=first-pre-fence "
         "outer=closing/8/0x03 root=malformed command_sequence=65 "
         "doorbell_issued=no",
@@ -2506,6 +2508,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert events[5].fields["child_wait_receipt"] == "no"
     assert events[5].fields["child_bus_episode"] == "no"
     assert events[5].fields["bus_parent"] == "0/0x0000"
+    assert events[5].fields["rsl"] == "39579"
     assert events[5].fields["evidence"] == "exact-only"
     assert events[8].fields["command_sequence"] == "64"
     assert events[8].fields["doorbell_issued"] == "yes"
@@ -2547,6 +2550,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE"] == "no"
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE"] == 0
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP"] == "0x0000"
+    assert record["WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE"] == 39579
     assert record["WIFI_CAUSAL_FRONTIER"] == "root-signal-returned"
     for key in (
         "WIFI_GATE",

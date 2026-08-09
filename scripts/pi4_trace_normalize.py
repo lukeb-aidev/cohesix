@@ -719,6 +719,7 @@ class WifiPriorityEpisodeSummary:
     scheduler_child_bus_episode: str = "unknown"
     scheduler_bus_parent_sequence: int = 0
     scheduler_bus_parent_op: int = 0
+    scheduler_runtime_recovery_source_line: int = 0
     causal_frontier: str = "none"
 
 
@@ -846,6 +847,7 @@ class GateSummary:
     wifi_deferred_recovery_scheduler_child_bus_episode: str = "unknown"
     wifi_deferred_recovery_scheduler_bus_parent_sequence: int = 0
     wifi_deferred_recovery_scheduler_bus_parent_op: int = 0
+    wifi_deferred_recovery_runtime_source_line: int = 0
     wifi_causal_frontier: str = "none"
     wifi_rx_irq_preserve_count: int = 0
     wifi_rx_irq_preserve_reason: str = "none"
@@ -1190,6 +1192,9 @@ class GateSummary:
             ),
             "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": (
                 f"0x{self.wifi_deferred_recovery_scheduler_bus_parent_op:04x}"
+            ),
+            "WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE": (
+                self.wifi_deferred_recovery_runtime_source_line
             ),
             "WIFI_CAUSAL_FRONTIER": self.wifi_causal_frontier,
             "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
@@ -10159,6 +10164,9 @@ def summarize_wifi_priority_episode(
             bus_parent_op = (
                 parse_hex_int(bus_parent[1]) if len(bus_parent) == 2 else None
             )
+            runtime_recovery_source_line = parse_hex_int(
+                fields.get("rsl", "0")
+            )
             exact_facts = (
                 publication_latched,
                 signal_returned,
@@ -10178,6 +10186,8 @@ def summarize_wifi_priority_episode(
                 or not 0 <= bus_parent_sequence <= U32_MAX
                 or bus_parent_op is None
                 or not 0 <= bus_parent_op <= U16_MAX
+                or runtime_recovery_source_line is None
+                or not 0 <= runtime_recovery_source_line <= U32_MAX
                 or (signal_returned == "yes" and publication_latched != "yes")
                 or (
                     "yes"
@@ -10209,6 +10219,9 @@ def summarize_wifi_priority_episode(
                 scheduler_child_bus_episode=child_bus_episode,
                 scheduler_bus_parent_sequence=bus_parent_sequence,
                 scheduler_bus_parent_op=bus_parent_op,
+                scheduler_runtime_recovery_source_line=(
+                    runtime_recovery_source_line
+                ),
             )
             continue
         if not raw.startswith(
@@ -15409,6 +15422,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         ),
         wifi_deferred_recovery_scheduler_bus_parent_op=(
             wifi_priority_episode.scheduler_bus_parent_op
+        ),
+        wifi_deferred_recovery_runtime_source_line=(
+            wifi_priority_episode.scheduler_runtime_recovery_source_line
         ),
         wifi_causal_frontier=wifi_priority_episode.causal_frontier,
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,

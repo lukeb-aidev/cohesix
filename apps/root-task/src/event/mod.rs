@@ -14231,7 +14231,7 @@ where
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         let scheduler = recovery.scheduler;
         format_message(format_args!(
-            "wifi: deferred_recovery scheduler_edge publication_latched={} signal_returned={} parent_deadline_expired={} child_terminal={} child_wait_receipt={} child_bus_episode={} bus_parent={}/0x{:04x} evidence=exact-only",
+            "wifi: deferred_recovery scheduler_edge publication_latched={} signal_returned={} parent_deadline_expired={} child_terminal={} child_wait_receipt={} child_bus_episode={} bus_parent={}/0x{:04x} rsl={} evidence=exact-only",
             Self::yes_no(scheduler.root_doorbell_issued),
             Self::yes_no(scheduler.root_signal_returned),
             Self::yes_no(scheduler.root_parent_deadline_expired),
@@ -14240,6 +14240,7 @@ where
             Self::yes_no(scheduler.child_bus_episode_observed),
             scheduler.child_bus_parent_sequence,
             scheduler.child_bus_parent_op,
+            scheduler.runtime_recovery_source_line,
         ))
     }
 
@@ -26058,6 +26059,7 @@ mod tests {
                 child_bus_episode_observed: true,
                 child_bus_parent_sequence: u32::MAX,
                 child_bus_parent_op: 11,
+                runtime_recovery_source_line: 39_579,
             },
         };
         let owner = crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic {
@@ -26324,7 +26326,7 @@ mod tests {
         assert!(lines[11].contains(
             "publication_latched=yes signal_returned=yes parent_deadline_expired=yes child_terminal=yes child_wait_receipt=yes child_bus_episode=yes"
         ));
-        assert!(lines[11].ends_with("bus_parent=4294967295/0x000b evidence=exact-only"));
+        assert!(lines[11].ends_with("bus_parent=4294967295/0x000b rsl=39579 evidence=exact-only"));
         assert!(lines[12].contains("active=yes generation=1"));
         assert!(lines[12].contains("cmd=0x0000001a id=37"));
         assert!(lines[14].contains("code=5 code_name=fault"));

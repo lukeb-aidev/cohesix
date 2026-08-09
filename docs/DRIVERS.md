@@ -1357,7 +1357,7 @@ wifi: diag recorder=startup-blackbox mode=passive source=<source> state_scope=<c
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
-wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
+wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> rsl=<n> evidence=exact-only
 wifi: root grant state=<state> active=<yes|no> phase=<phase> mask=0x<mask> request=<n> generation=<n> command_sequence=<n> sequence_published=<yes|no> doorbell_issued=<yes|no>
 wifi: root grant_ids notify_bound=<yes|no> producer=<n> shared=<n> consumed=<n> exact=<yes|no|not-published>
 ```
@@ -2969,7 +2969,7 @@ generation and XID.
   ```text
   wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
   wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
-  wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
+  wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> rsl=<n> evidence=exact-only
   ```
 
   `refinement=pair-placeholder` means no exact descriptor/ticket evidence,
@@ -2987,7 +2987,11 @@ generation and XID.
   `child_terminal`, `child_wait_receipt`, and `child_bus_episode` fields use
   only same-request stable completion, full wait-receipt identity, or a
   sequence-last bus-episode record; `bus_parent` exposes that episode's parent
-  sequence and operation. Best-effort progress markers do not contribute to
+  sequence and operation. Compact serial field `rsl` carries the immutable
+  exact-image source line copied from the generation-matched poisoned RX queue
+  at the first HAL recovery latch. It is passive, remains zero for non-queue
+  causes, and cannot change DPC, queue, scheduler, or recovery authority.
+  Best-effort progress markers do not contribute to
   this line. A `no` value means only that the named exact proof was absent at
   capture; it neither proves the boundary did not occur nor localizes the
   failure. `evidence=exact-only` distinguishes this retained causal tuple from

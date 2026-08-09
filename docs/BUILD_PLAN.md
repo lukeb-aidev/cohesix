@@ -6803,6 +6803,18 @@ root prompt are now independent durable levels; final Wi-Fi/console Ready and
 USB parser ingress retain their separate proofs. Fresh exact-image Pi Gate 8,
 DHCP, TCP-quality, recovery, and HDMI evidence remain pending.
 
+The exact `325756c800b0` boot then crossed the repaired bootstrap
+`txglomalign` parent and the complete control program before retaining Join
+request 64 without a terminal. Its immutable root evidence proves
+`recovery_required` preceded the generation-matched RX queue poison, but does
+not retain which existing runtime call made that first transition or the
+matching bus episode's child/exit tuple. The bounded evidence-only follow-up
+therefore adds one sequence-last `runtime_recovery_source_line` to the existing
+RX queue record and copies it into the already-passive first-pre-fence
+diagnostic. This field adds no wake, poll, owner, scheduler phase, recovery
+predicate, or fallback; one rebuilt exact image must supply the missing
+hardware fact before any behavioral correction is considered.
+
 **Why now (operator continuity):**  
 Milestone 26b depends on completed 26a driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
 

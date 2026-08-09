@@ -499,7 +499,7 @@ snapshot also emits:
 ```text
 wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
-wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
+wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> rsl=<n> evidence=exact-only
 ```
 
 HAL captures that scheduler record sequence-last immediately before the first
@@ -534,7 +534,10 @@ lifetime condition. `child_terminal`, `child_wait_receipt`, and
 `child_bus_episode` are separate same-request downstream evidence from a stable
 completion, full wait-receipt identity, or sequence-last bus-episode record;
 `bus_parent` reports that episode's parent sequence and operation. No progress
-marker contributes to this record. A `no` value means only that the named exact
+marker contributes to this record. Compact serial field `rsl` is copied
+from the generation-matched poisoned RX queue record and names the exact
+`apps/pi4-driver-runtime/src/lib.rs` call site in the reported image commit; it
+is passive evidence and zero for non-queue recovery causes. A `no` value means only that the named exact
 proof was absent at capture, not that the edge did not happen or that the fault
 has been localized. `evidence=exact-only` separates this immutable frontier
 from derived gates, breadcrumbs, and post-recovery progress. On the non-MCS Pi

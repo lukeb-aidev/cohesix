@@ -599,11 +599,11 @@ pub const DRIVER_RUNTIME_RING_PROGRESS_OFFSET: u16 = 128;
 /// part of the address. No shared physical page aliases the two records.
 pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET: u16 = 192;
 /// Bytes in one sequence-last CYW43 private-RX queue-state record.
-pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES: u16 = 24;
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES: u16 = 28;
 /// Magic value for a committed CYW43 private-RX queue-state record.
 pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC: u32 = 0x4359_5153;
 /// Layout version for [`DriverRuntimeCyw43RxQueueState`].
-pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION: u16 = 1;
+pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION: u16 = 2;
 /// Queue-state flag: this CYW43 generation is poisoned and cannot serve RX.
 pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED: u32 = 1 << 0;
 /// Fixed offset of the SDIO owner's physical WiFi lifetime record.
@@ -1919,6 +1919,12 @@ pub struct DriverRuntimeCyw43RxQueueState {
     pub queue_capacity: u16,
     /// Queue condition flags, including poison containment.
     pub flags: u32,
+    /// Exact source line in `apps/pi4-driver-runtime/src/lib.rs` that first
+    /// changed `recovery_required` from false to true for this generation.
+    ///
+    /// This is passive exact-image evidence only. It cannot authorize work or
+    /// recovery, and must remain zero for a healthy queue state.
+    pub recovery_source_line: u32,
     /// Nonzero monotonically increasing commit sequence, written last.
     pub commit_sequence: u32,
 }
@@ -1935,6 +1941,7 @@ impl DriverRuntimeCyw43RxQueueState {
             queue_depth: 0,
             queue_capacity: DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16,
             flags: 0,
+            recovery_source_line: 0,
             commit_sequence: 0,
         }
     }
@@ -1950,6 +1957,7 @@ impl DriverRuntimeCyw43RxQueueState {
             queue_depth: 0,
             queue_capacity: 0,
             flags: 0,
+            recovery_source_line: 0,
             commit_sequence: 0,
         }
     }
@@ -1964,6 +1972,7 @@ impl DriverRuntimeCyw43RxQueueState {
             && self.queue_depth == 0
             && self.queue_capacity == 0
             && self.flags == 0
+            && self.recovery_source_line == 0
             && self.commit_sequence == 0
     }
 
@@ -1976,8 +1985,13 @@ impl DriverRuntimeCyw43RxQueueState {
             && self.queue_capacity == DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16
             && self.queue_depth <= self.queue_capacity
             && self.flags & !DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED == 0
+            && (self.flags & DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED != 0)
+                == (self.recovery_source_line != 0)
             && (self.generation != 0
-                || (self.queue_depth == 0 && self.flags == 0 && self.commit_sequence == 0))
+                || (self.queue_depth == 0
+                    && self.flags == 0
+                    && self.recovery_source_line == 0
+                    && self.commit_sequence == 0))
     }
 
     /// Whether this is either the canonical empty state or one committed level.
@@ -1998,6 +2012,16 @@ impl DriverRuntimeCyw43RxQueueState {
     #[must_use]
     pub const fn poisoned(self) -> bool {
         self.committed() && self.flags & DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED != 0
+    }
+
+    /// Return the immutable first runtime recovery source for a poisoned level.
+    #[must_use]
+    pub const fn recovery_source_line(self) -> Option<u32> {
+        if self.poisoned() && self.recovery_source_line != 0 {
+            Some(self.recovery_source_line)
+        } else {
+            None
+        }
     }
 
     /// Whether root must service the durable RX condition without another wake.
@@ -2828,7 +2852,10 @@ const _: () = {
         DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET + DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES
             <= DRIVER_RUNTIME_RING_FRAME_OFFSET
     );
-    assert!(core::mem::size_of::<DriverRuntimeCyw43RxQueueState>() == 24);
+    assert!(
+        core::mem::size_of::<DriverRuntimeCyw43RxQueueState>()
+            == DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_BYTES as usize
+    );
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxQueueState>() == 4);
     assert!(core::mem::size_of::<DriverRuntimeCyw43RxBatchEntry>() == 8);
     assert!(core::mem::align_of::<DriverRuntimeCyw43RxBatchEntry>() == 4);
@@ -5571,12 +5598,20 @@ mod tests {
 
         let poisoned = DriverRuntimeCyw43RxQueueState {
             flags: DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            recovery_source_line: 39_579,
             commit_sequence: 10,
             ..committed
         };
         assert!(poisoned.valid());
         assert!(poisoned.poisoned());
+        assert_eq!(poisoned.recovery_source_line(), Some(39_579));
         assert!(!poisoned.work_visible());
+
+        let missing_source = DriverRuntimeCyw43RxQueueState {
+            recovery_source_line: 0,
+            ..poisoned
+        };
+        assert!(!missing_source.body_valid());
 
         let overflow = DriverRuntimeCyw43RxQueueState {
             queue_depth: DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16 + 1,

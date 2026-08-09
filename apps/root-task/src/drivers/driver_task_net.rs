@@ -1432,6 +1432,7 @@ pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub child_bus_episode_observed: bool,
     pub child_bus_parent_sequence: u32,
     pub child_bus_parent_op: u16,
+    pub runtime_recovery_source_line: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -1461,6 +1462,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
                 child_bus_episode_observed: snapshot.child_bus_episode_observed,
                 child_bus_parent_sequence: snapshot.child_bus_parent_sequence,
                 child_bus_parent_op: snapshot.child_bus_parent_op,
+                runtime_recovery_source_line: snapshot.runtime_recovery_source_line,
             };
         }
         Self {
@@ -1485,6 +1487,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             child_bus_episode_observed: false,
             child_bus_parent_sequence: 0,
             child_bus_parent_op: 0,
+            runtime_recovery_source_line: 0,
         }
     }
 
@@ -1512,6 +1515,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             child_bus_episode_observed: false,
             child_bus_parent_sequence: 0,
             child_bus_parent_op: 0,
+            runtime_recovery_source_line: 0,
         }
     }
 }
@@ -38566,6 +38570,7 @@ mod tests {
                 queue_depth: 0,
                 queue_capacity: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16,
                 flags: 0,
+                recovery_source_line: 0,
                 commit_sequence: 1,
             };
             let queue_offset =
@@ -49296,6 +49301,7 @@ mod tests {
         let poisoned_queue = pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
             generation,
             flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            recovery_source_line: 39_579,
             commit_sequence: 99,
             ..pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty()
         };

@@ -765,6 +765,11 @@ prove all of the following:
   outer-lease-poison/sticky-restart seam through refinement, reject
   `scope=unavailable` as causal proof, preserve the first-writer recovery source
   as `WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE`, and distinguish
+  the passive generation-matched runtime call site as
+  `WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE`. A queue-poison test must prove
+  the value is nonzero, survives pair scrub in the first-pre-fence snapshot,
+  and cannot create a wake, grant, scheduler phase, or recovery predicate;
+  non-queue causes retain zero. Coverage must also distinguish
   the root command sequence from the doorbell-issued fact. The retained summary
   must preserve the exact bounded grammar
   `wifi: deferred_recovery retained=yes refinement=<...>

@@ -4455,6 +4455,7 @@ struct Cyw43RuntimeState {
     control_exchange: Cyw43ControlExchangeCursor,
     prompt_poll: Cyw43PromptPollCursor,
     recovery_required: bool,
+    recovery_source_line: u32,
     transport_detail: u16,
     card_init_phase: u8,
     card_init_cmd_retry_count: u8,
@@ -4624,6 +4625,7 @@ impl Cyw43RuntimeState {
             control_exchange: Cyw43ControlExchangeCursor::idle(),
             prompt_poll: Cyw43PromptPollCursor::idle(),
             recovery_required: false,
+            recovery_source_line: 0,
             transport_detail: DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_START,
             card_init_phase: CYW43_CARD_INIT_PHASE_HOST_CONFIG,
             card_init_cmd_retry_count: 0,
@@ -4731,6 +4733,7 @@ impl Cyw43RuntimeState {
         self.dpc_sequence_errors = 0;
         self.dpc_terminal_cause = Cyw43DpcTerminalCause::empty();
         self.recovery_required = false;
+        self.recovery_source_line = 0;
         self.rx_irq_preserve_count = 0;
         self.rx_irq_last_preserve_reason = CYW43_RX_IRQ_PRESERVE_NONE;
         self.rx_irq_last_preserve_int_status = 0;
@@ -10204,10 +10207,20 @@ const fn cyw43_dpc_activation_failure_result(completion: DriverTaskCompletionRec
     }
 }
 
+/// Publish one immutable exact-image source location on the first transition.
+///
+/// `line!()` is evaluated at the call site. The value is diagnostic only and
+/// cannot change queue, DPC, scheduler, or recovery authority.
+macro_rules! cyw43_poison_rx_queue_state {
+    ($state:expr) => {
+        cyw43_poison_rx_queue_state_from($state, line!())
+    };
+}
+
 fn cyw43_mark_issued_unknown(state: &mut Cyw43RuntimeState) {
     state.sdpcm_tx_write_ambiguous = true;
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.initialized = false;
     state.transport_ready = false;
     state.firmware_released = false;
@@ -13661,7 +13674,7 @@ fn cyw43_dpc_record_terminal_cause_once(
     cyw43_record_last_fault_with_result(cause.detail, cause.result);
     cyw43_record_last_fault_frame(cause.frame);
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
     CYW43_DPC_DEFERRED.store(true, Ordering::Release);
 }
@@ -21734,7 +21747,7 @@ fn cyw43_control_exchange_owner_mismatch(
     // restart. RejectedCommand is deliberately non-terminal for root's op11
     // logical lease; the typed result identifies the ownership invariant.
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
     CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     publish_runtime_progress(
@@ -21887,7 +21900,7 @@ fn cyw43_control_exchange_timeout_completion(
         // relabel that state as pre-issue NOT_READY: root may retry NOT_READY in
         // the same generation. Fence the pair and report a post-TX timeout.
         state.invalidate_steady_data_plane();
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
         CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     }
@@ -21997,7 +22010,7 @@ fn cyw43_control_exchange_submit_once(
 ) -> Cyw43ControlTxTurn {
     if !CYW43_CONTROL_REQUEST.restore(cursor.payload_offset, cursor.payload_len) {
         state.invalidate_steady_data_plane();
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         return Cyw43ControlTxTurn::Ambiguous {
             result: CYW43_DESCRIPTOR_INVALID_PAYLOAD,
         };
@@ -22088,7 +22101,7 @@ fn cyw43_control_exchange_dpc_probe_turn(
         .map(|(_, completion)| cyw43_dpc_activation_failure_result(completion))
         .unwrap_or(cursor.generation);
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.reset_control_exchange();
     RuntimeCommandTurn::Complete(DriverTaskCompletionRecord::fault_with_result(
         sequence,
@@ -22273,7 +22286,7 @@ fn cyw43_control_exchange_unbound_reply_timeout_completion(
     // authorize either completion or a same-generation retry. Retire this
     // logical exchange and let the canonical pair supervisor restart it.
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
     CYW43_DPC_DEFERRED.store(true, Ordering::Release);
     publish_runtime_progress(
@@ -22720,7 +22733,7 @@ fn cyw43_prompt_poll_poison_generation(
     };
     state.prompt_poll.reset();
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.initialized = false;
     state.transport_ready = false;
     state.firmware_released = false;
@@ -22962,7 +22975,7 @@ fn cyw43_publish_rx_batch_record(
     );
 
     if !cyw43_publish_rx_queue_state(state) {
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         return None;
     }
     state.rx_frames = state.rx_frames.saturating_add(count as u32);
@@ -22976,7 +22989,7 @@ fn cyw43_publish_rx_batch_record(
         entries,
     );
     if !staged.body_valid() {
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         return None;
     }
     cyw43_write_rx_batch_body(staged);
@@ -22986,7 +22999,7 @@ fn cyw43_publish_rx_batch_record(
         usize::from(DRIVER_RUNTIME_CYW43_RX_BATCH_RECORD_BYTES),
     );
     if !write_runtime_payload_commit_u32_physical(commit_offset, parent_sequence) {
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         return None;
     }
     driver_task_shared_store_barrier();
@@ -26435,7 +26448,7 @@ fn cyw43_fence_preissue_status_clear_generation(state: &mut Cyw43RuntimeState) {
     // readiness fact and let the paired-runtime supervisor perform the sole
     // cold recovery lane after the exact child terminal has reached its parent.
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.initialized = false;
     state.transport_ready = false;
     state.firmware_released = false;
@@ -26894,7 +26907,7 @@ fn cyw43_sdio_child_reap_stable_completion(
 
 fn cyw43_quarantine_reaped_child_state(state: &mut Cyw43RuntimeState, expected_sequence: u32) {
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     if state.dpc_cursor.child.expected_sequence == expected_sequence {
         state.dpc_cursor.child = Cyw43DpcChild::empty();
     }
@@ -31328,7 +31341,7 @@ fn cyw43_reject_stale_sdio_f1_enable(sequence: u32, state: &mut Cyw43RuntimeStat
         ^ state.f1_enable.generation.rotate_left(11)
         ^ state.dpc_shared_epoch.rotate_left(17);
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.f1_enable.poisoned = true;
     #[cfg(target_os = "none")]
     {
@@ -31351,7 +31364,7 @@ fn cyw43_fail_sdio_f1_enable(state: &mut Cyw43RuntimeState, result: u32) -> u16 
     state.f1_enable.failure_result = result;
     state.f1_enable.failure_frame = failure_frame;
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     FAULT_CYW43_TRANSPORT_F1_ENABLE
 }
 
@@ -31454,7 +31467,7 @@ fn cyw43_reject_stale_card_lane(sequence: u32, state: &mut Cyw43RuntimeState) ->
     state.card_lane.poisoned = true;
     state.invalidate_card_adoption_facts();
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     #[cfg(target_os = "none")]
     {
         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
@@ -31480,7 +31493,7 @@ fn cyw43_fail_card_lane(state: &mut Cyw43RuntimeState, detail: u16) -> u16 {
     state.card_lane.poisoned = true;
     state.invalidate_card_adoption_facts();
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     detail
 }
 
@@ -31747,7 +31760,7 @@ fn cyw43_reject_stale_backplane_attach(sequence: u32, state: &mut Cyw43RuntimeSt
         ^ state.backplane_attach.generation
         ^ state.dpc_shared_epoch;
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.backplane_attach.poisoned = true;
     #[cfg(target_os = "none")]
     {
@@ -31886,7 +31899,7 @@ fn cyw43_backplane_transport_init_step(
                     state.backplane_window_valid = false;
                     state.backplane_attach.poisoned = true;
                     state.invalidate_steady_data_plane();
-                    cyw43_poison_rx_queue_state(state);
+                    cyw43_poison_rx_queue_state!(state);
                     #[cfg(target_os = "none")]
                     {
                         CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
@@ -31996,7 +32009,7 @@ fn cyw43_reject_stale_firmware_prep(sequence: u32, state: &mut Cyw43RuntimeState
         ^ state.firmware_prep.generation.rotate_left(13)
         ^ state.dpc_shared_epoch.rotate_left(19);
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.firmware_prep.poisoned = true;
     cyw43_invalidate_firmware_live_contract(state);
     #[cfg(target_os = "none")]
@@ -32031,7 +32044,7 @@ fn cyw43_fail_firmware_prep(state: &mut Cyw43RuntimeState, detail: u16) -> u16 {
     state.firmware_prep.failure_result = cyw43_take_last_fault_result();
     state.firmware_prep.failure_frame = cyw43_take_last_fault_frame();
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     cyw43_invalidate_firmware_live_contract(state);
     detail
 }
@@ -33678,7 +33691,7 @@ fn cyw43_release_fail_closed(state: &mut Cyw43RuntimeState) -> bool {
         // sequence, or ring contents would mix two dongle executions. Only an
         // explicit engine-init/generation-reset may reopen this service.
         state.invalidate_steady_data_plane();
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         state.transport_ready = false;
         state.firmware_released = false;
     }
@@ -33717,7 +33730,7 @@ fn cyw43_reject_stale_release(
         ^ state.release.reset_vector.rotate_left(23)
         ^ reset_vector.rotate_left(29);
     state.invalidate_steady_data_plane();
-    cyw43_poison_rx_queue_state(state);
+    cyw43_poison_rx_queue_state!(state);
     state.transport_ready = false;
     state.firmware_released = false;
     #[cfg(target_os = "none")]
@@ -35537,7 +35550,7 @@ fn cyw43_linked_f2_tx_prepare_turn(
         _ => {
             cyw43_f2_tx_prepare_reset(state);
             state.invalidate_steady_data_plane();
-            cyw43_poison_rx_queue_state(state);
+            cyw43_poison_rx_queue_state!(state);
             cyw43_record_last_fault(FAULT_CYW43_TRANSPORT_BUS_LINK);
             return false;
         }
@@ -35555,7 +35568,7 @@ fn cyw43_linked_f2_tx_prepare_turn(
         }
         Cyw43RetainedCmd52WriteOutcome::Failed => {
             state.invalidate_steady_data_plane();
-            cyw43_poison_rx_queue_state(state);
+            cyw43_poison_rx_queue_state!(state);
             false
         }
     }
@@ -38167,7 +38180,7 @@ fn cyw43_sample_rx_source_snapshot(
                 (u32::from(SDIO_INTERRUPT_ENABLE_MASK) << 8) | u32::from(value),
             );
             state.invalidate_steady_data_plane();
-            cyw43_poison_rx_queue_state(state);
+            cyw43_poison_rx_queue_state!(state);
             state.firmware_released = false;
             state.dpc_link_ready = false;
             return None;
@@ -39483,6 +39496,10 @@ fn cyw43_write_rx_queue_state_body(record: DriverRuntimeCyw43RxQueueState) {
         base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, flags),
         record.flags,
     );
+    write_ring_u32(
+        base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, recovery_source_line),
+        record.recovery_source_line,
+    );
 }
 
 /// Publish the private RX FIFO's durable level with the commit sequence last.
@@ -39534,6 +39551,7 @@ fn cyw43_publish_rx_queue_state(state: &mut Cyw43RuntimeState) -> bool {
         queue_depth: u16::from(state.rx_queue_count),
         queue_capacity: CYW43_RX_QUEUE_CAP as u16,
         flags,
+        recovery_source_line: state.recovery_source_line,
         commit_sequence: next_commit,
     };
     if !record.body_valid() {
@@ -39564,12 +39582,13 @@ fn cyw43_publish_rx_queue_state(state: &mut Cyw43RuntimeState) -> bool {
 /// committed in the durable queue record. A notification merely prompts that
 /// recheck. Publication failure leaves the commit word cleared and forces the
 /// sole paired-runtime restart lane; it never creates a fallback service path.
-fn cyw43_poison_rx_queue_state(state: &mut Cyw43RuntimeState) {
+fn cyw43_poison_rx_queue_state_from(state: &mut Cyw43RuntimeState, source_line: u32) {
     let transitioned = !state.recovery_required;
     state.recovery_required = true;
     if !transitioned {
         return;
     }
+    state.recovery_source_line = source_line;
 
     if cyw43_publish_rx_queue_state(state) {
         if state.dpc_shared_epoch != 0 {
@@ -39617,7 +39636,7 @@ fn cyw43_rx_queue_push_from_runtime(
         cyw43_dpc_record_completed_frame(state);
     }
     if !cyw43_publish_rx_queue_state(state) {
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
         cyw43_record_rx_queue_push_failure(state, packet_len, flags);
         return false;
     }
@@ -39824,7 +39843,7 @@ fn cyw43_rx_queue_remove_index(state: &mut Cyw43RuntimeState, logical_index: usi
     let count_before = state.rx_queue_count;
     cyw43_rx_queue_remove_index_unpublished(state, logical_index);
     if state.rx_queue_count != count_before && !cyw43_publish_rx_queue_state(state) {
-        cyw43_poison_rx_queue_state(state);
+        cyw43_poison_rx_queue_state!(state);
     }
 }
 
@@ -57580,6 +57599,9 @@ mod tests {
             ),
             flags: read_runtime_payload_u32_for_test(
                 base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, flags),
+            ),
+            recovery_source_line: read_runtime_payload_u32_for_test(
+                base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, recovery_source_line),
             ),
             commit_sequence: read_runtime_payload_u32_for_test(
                 base + core::mem::offset_of!(DriverRuntimeCyw43RxQueueState, commit_sequence),
@@ -81330,7 +81352,7 @@ mod tests {
         .commit();
         assert!(old_batch.valid_for_queue_state(visible));
 
-        cyw43_poison_rx_queue_state(&mut state);
+        cyw43_poison_rx_queue_state!(&mut state);
 
         let poisoned = DriverRuntimeCyw43RxQueueState::stable_snapshot(
             read_cyw43_rx_queue_state_for_test(),
@@ -81339,12 +81361,19 @@ mod tests {
         .expect("poison is one stable sequence-last queue publication");
         assert!(state.recovery_required);
         assert!(poisoned.poisoned());
+        assert_eq!(
+            poisoned.recovery_source_line(),
+            Some(state.recovery_source_line),
+        );
+        assert_ne!(poisoned.recovery_source_line, 0);
         assert_eq!(poisoned.queue_depth, 1);
         assert_eq!(poisoned.commit_sequence, visible.commit_sequence + 1);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
         assert!(!old_batch.valid_for_queue_state(poisoned));
 
-        cyw43_poison_rx_queue_state(&mut state);
+        let first_source_line = state.recovery_source_line;
+        cyw43_poison_rx_queue_state!(&mut state);
+        assert_eq!(state.recovery_source_line, first_source_line);
         assert_eq!(state.rx_queue_state_commit, poisoned.commit_sequence);
         assert_eq!(TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire), 1);
     }
