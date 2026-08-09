@@ -1592,10 +1592,20 @@ latch recovery; aggregate DPC client-sample staleness with a healthy ring must
 remain diagnostic only. Repeated reads of the accepted poison must be
 idempotent, and pair scrub must clear the old queue record before a replacement
 owner becomes active.
-A complete TCP command, actual physical response/buffered input, hard turn cap,
-and fresh-parent time cap must retain unfinished Wi-Fi work behind a fence and
-prove `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded
-turn before Network re-admission. The 25-ms time cap must not interrupt an exact
+A hard turn cap, fresh-parent time cap, actual physical response, or buffered
+physical input must retain unfinished Wi-Fi work behind a fence and prove
+`Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded turn
+before Network re-admission. A complete command belonging to the exact active
+authenticated CYW43 connection must instead end the current Network quantum and
+use the next separate hardware-free `Dispatch` turn when no prior response
+cursor is active or completed on that turn and no physical input/response is
+pending. Dispatch must still consume newly arrived serial or local-seat input
+first. Passive USB service debt may be deferred only through that command and
+its existing bounded response cursor; after any exact retained parent receives
+its current already-admitted turn, cursor completion must force one ordinary
+USB/operator rotation before a second buffered command. Unauthenticated,
+wrong-connection, GENET, and physical-input cases must retain the full fence.
+The 25-ms time cap must not interrupt an exact
 already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
 the hard ordinary-EventPump turn cap may yield root admission only with the same
 identity retained. A consumed terminal that sequence-publishes one immutable
@@ -1607,7 +1617,8 @@ TX, wrong-generation rejection, and prove the continuation grants neither a
 second operation nor generic host-EAPOL authority. Generic bulk TX remains
 fresh-parent work. That fairness cap is not the persistent parent's
 192-operation budget and cannot become a runtime progress clock. A
-queued USB report and a buffered complete network command must not be bypassed.
+queued USB report containing actual input and a buffered complete network
+command must not be bypassed.
 GENET must neither sample nor retain the CYW43 queue/batch snapshot and must
 leave its own operator-fence state untouched. CYW43 diagnostics must report
 stable queue commit/depth, batch parent/count/remaining, and hint observations
@@ -2034,7 +2045,10 @@ This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
 must release to `Serial` and `LocalSeat`. A complete buffered TCP command and a
-pending physical response must also exit immediately. Tests must prove idle,
+pending physical response must also exit immediately. The exact authenticated
+command may choose the next hardware-free `Dispatch` turn before passive USB
+service debt, but an active response cursor blocks the next command and its
+completion restores the ordinary USB/operator rotation. Tests must prove idle,
 stale-epoch, poisoned, overrun, acknowledgement-failed, and inconsistent CYW43
 DPC work plus GENET do not enter the quantum. GENET must retain its ordinary
 single-Network-turn rotation and all CYW43 quantum counters must remain zero.

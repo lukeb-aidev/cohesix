@@ -487,6 +487,38 @@ impl LinkedPhysicalOperatorWork {
         matches!(self, Self::Input)
     }
 }
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_runtime_buffered_cyw43_command_dispatch_allowed(
+    cyw43_lane_selected: bool,
+    buffered_console_line: bool,
+    active_conn_id: Option<u64>,
+    authenticated_conn_id: Option<u64>,
+    response_flush_blocks_dispatch: bool,
+    physical_response_pending: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+) -> bool {
+    if !cyw43_lane_selected
+        || !buffered_console_line
+        || response_flush_blocks_dispatch
+        || physical_response_pending
+        || physical_operator_work.retains_network_fence_after_dispatch()
+    {
+        return false;
+    }
+    match (active_conn_id, authenticated_conn_id) {
+        (Some(active), Some(authenticated)) => active == authenticated,
+        _ => false,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_runtime_finished_response_cursor_requires_operator_rotation(
+    response_flush_finished_this_turn: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+) -> bool {
+    response_flush_finished_this_turn && physical_operator_work.needs_operator_rotation()
+}
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
@@ -4350,10 +4382,19 @@ where
                 if cyw43_lane_selected {
                     self.consume_linked_runtime_cyw43_rx_admission();
                 }
+                #[cfg(feature = "net-console")]
+                let pending_net_flush_active_before_poll = self.pending_net_flush.active();
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
+                    let response_flush_finished_this_turn =
+                        pending_net_flush_active_before_poll && !self.pending_net_flush.active();
                     self.refresh_linked_runtime_cyw43_durable_resume();
+                    let finished_response_cursor_requires_operator_rotation =
+                        linked_runtime_finished_response_cursor_requires_operator_rotation(
+                            response_flush_finished_this_turn,
+                            self.linked_physical_operator_work(),
+                        );
                     if !cyw43_lane_selected {
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_started_ms = None;
@@ -4374,6 +4415,8 @@ where
                             .net
                             .as_ref()
                             .is_some_and(|net| net.buffered_console_lines_pending());
+                        let dispatchable_buffered_console_line =
+                            buffered_console_line && !self.pending_net_flush.active();
                         let physical_response_pending = self.physical_console_response_pending();
                         let decision = match drain_before {
                             Cyw43NetworkDrainOwner::Closing(drain_before) => {
@@ -4381,7 +4424,7 @@ where
                                 cyw43_closing_drain_decision(
                                     drain_before,
                                     drain_after,
-                                    buffered_console_line,
+                                    dispatchable_buffered_console_line,
                                     physical_response_pending,
                                     self.linked_runtime_network_consecutive_turns,
                                     elapsed_us,
@@ -4393,7 +4436,7 @@ where
                                 cyw43_boundary_drain_decision(
                                     drain_before,
                                     drain_after,
-                                    buffered_console_line,
+                                    dispatchable_buffered_console_line,
                                     physical_response_pending,
                                     self.linked_runtime_network_consecutive_turns,
                                     elapsed_us,
@@ -4401,6 +4444,17 @@ where
                             }
                         };
                         if decision == Cyw43RetainedDrainDecision::Continue {
+                            if finished_response_cursor_requires_operator_rotation {
+                                // The exact retained parent has received this
+                                // turn and remains authoritative. Preserve it
+                                // across the existing operator checkpoint so
+                                // cursor completion cannot be hidden by a
+                                // continuously runnable owner.
+                                self.require_linked_runtime_cyw43_operator_rotation();
+                                self.linked_runtime_service_phase =
+                                    LinkedRuntimeServicePhase::Serial;
+                                return;
+                            }
                             // Keep the exact retained parent and priority lease
                             // open while running one bounded physical-console
                             // checkpoint only when its independent VCNT cadence
@@ -4418,6 +4472,7 @@ where
                             .metrics
                             .net_cyw43_service_max_elapsed_us
                             .max(elapsed_us);
+                        let mut dispatch_directly = false;
                         match decision {
                             Cyw43RetainedDrainDecision::Complete => {
                                 self.metrics.net_cyw43_service_terminal_exits = self
@@ -4430,7 +4485,13 @@ where
                                     .metrics
                                     .net_cyw43_service_dispatch_exits
                                     .saturating_add(1);
-                                self.require_linked_runtime_cyw43_operator_rotation();
+                                dispatch_directly = self
+                                    .linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+                                        response_flush_finished_this_turn,
+                                    );
+                                if !dispatch_directly {
+                                    self.require_linked_runtime_cyw43_operator_rotation();
+                                }
                             }
                             Cyw43RetainedDrainDecision::Physical => {
                                 self.metrics.net_cyw43_service_physical_exits = self
@@ -4458,6 +4519,21 @@ where
                         self.linked_runtime_network_quantum_started_ms = None;
                         self.linked_runtime_network_quantum_started_ticks = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
+                        self.linked_runtime_service_phase = if dispatch_directly {
+                            LinkedRuntimeServicePhase::Dispatch
+                        } else {
+                            LinkedRuntimeServicePhase::Serial
+                        };
+                        return;
+                    }
+                    if finished_response_cursor_requires_operator_rotation {
+                        // A completed response cursor is the bounded handoff
+                        // point for physical-operator service even when the
+                        // successor command is not complete yet. Retain the
+                        // exact quantum and lease across the existing operator
+                        // rotation; this is neither a terminal nor permission
+                        // to admit a fresh NIC parent first.
+                        self.require_linked_runtime_cyw43_operator_rotation();
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
@@ -4484,15 +4560,25 @@ where
                             self.linked_runtime_network_followup_phase();
                         return;
                     }
-                    if buffered_console_line {
+                    if buffered_console_line && !self.pending_net_flush.active() {
                         // A complete command is root-owned work now. End the
-                        // retained NIC burst and run the fixed physical
-                        // operator rotation before dispatching it. No further
-                        // CYW43/SDIO operation may be admitted first.
+                        // retained NIC burst before dispatching it. An exact
+                        // authenticated CYW43 command may use the existing
+                        // hardware-free Dispatch turn directly when no actual
+                        // physical input or response tail is pending. Passive
+                        // USB service debt is deferred only through the
+                        // existing bounded response-flush cursor. Every other
+                        // command retains the full physical-operator rotation.
                         self.finish_linked_runtime_network_quantum(false, true, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.require_linked_runtime_cyw43_operator_rotation();
-                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        if self.linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+                            response_flush_finished_this_turn,
+                        ) {
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                        } else {
+                            self.require_linked_runtime_cyw43_operator_rotation();
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        }
                         return;
                     }
                     let service_due = cyw43_network_service_due(routed_service_due, resume);
@@ -4808,6 +4894,38 @@ where
     fn linked_runtime_cyw43_lane_selected(&self) -> bool {
         self.net.as_ref().is_some_and(|net| {
             net.driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        })
+    }
+
+    /// Route one complete, current authenticated Wi-Fi command to the existing
+    /// hardware-free Dispatch phase without first spending a passive USB
+    /// service-debt turn.
+    ///
+    /// Dispatch remains a separate outer turn and still checks serial and
+    /// local-seat input before the buffered network line. Actual physical
+    /// input and response tails therefore retain immediate priority. The
+    /// response subsequently advances only through the existing bounded
+    /// `PendingNetFlush` cursor, after which ordinary Serial/LocalSeat service
+    /// resumes.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+        &self,
+        response_flush_finished_this_turn: bool,
+    ) -> bool {
+        let response_flush_active = self.pending_net_flush.active();
+        let physical_response_pending = self.physical_console_response_pending();
+        let physical_operator_work = self.linked_physical_operator_work();
+        self.net.as_ref().is_some_and(|net| {
+            linked_runtime_buffered_cyw43_command_dispatch_allowed(
+                net.driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                net.buffered_console_lines_pending(),
+                net.active_console_conn_id(),
+                net.authenticated_console_conn_id(),
+                response_flush_finished_this_turn || response_flush_active,
+                physical_response_pending,
+                physical_operator_work,
+            )
         })
     }
 
@@ -32189,6 +32307,103 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn authenticated_cyw43_direct_dispatch_rejects_every_foreign_authority() {
+        let allowed =
+            |cyw43, active, authenticated, cursor_blocks_dispatch, response_pending, work| {
+                linked_runtime_buffered_cyw43_command_dispatch_allowed(
+                    cyw43,
+                    true,
+                    active,
+                    authenticated,
+                    cursor_blocks_dispatch,
+                    response_pending,
+                    work,
+                )
+            };
+        assert!(allowed(
+            true,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::UsbServiceDebt,
+        ));
+        assert!(!allowed(
+            false,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(!allowed(
+            true,
+            Some(17),
+            Some(18),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(!allowed(
+            true,
+            None,
+            None,
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        for (cursor_blocks_dispatch, response_pending, work) in [
+            (true, false, LinkedPhysicalOperatorWork::Idle),
+            (false, true, LinkedPhysicalOperatorWork::Idle),
+            (false, false, LinkedPhysicalOperatorWork::Input),
+        ] {
+            assert!(!allowed(
+                true,
+                Some(17),
+                Some(17),
+                cursor_blocks_dispatch,
+                response_pending,
+                work,
+            ));
+        }
+        assert!(!linked_runtime_buffered_cyw43_command_dispatch_allowed(
+            true,
+            false,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            ),
+            "cursor completion must hand passive USB debt its bounded rotation even without a successor line"
+        );
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::Input,
+            )
+        );
+        assert!(
+            !linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::Idle,
+            )
+        );
+        assert!(
+            !linked_runtime_finished_response_cursor_requires_operator_rotation(
+                false,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            )
+        );
+    }
+
     #[test]
     fn usb_physical_input_proof_requires_linked_byte_and_parser_ingress() {
         assert!(!usb_physical_input_proven(false, false));
@@ -34935,6 +35150,245 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_authenticated_command_dispatches_before_passive_usb_debt() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 17)).is_ok());
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            assert!(pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(false));
+
+            pump.local_seat_chunk_input_pending = true;
+            assert!(
+                !pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(false),
+                "actual physical input must retain the operator rotation"
+            );
+            pump.local_seat_chunk_input_pending = false;
+            assert!(
+                !pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(true),
+                "a completed response cursor must hand passive USB debt its bounded turn"
+            );
+
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "the exact authenticated command must use the next hardware-free Dispatch turn"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 0);
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+
+            pump.poll();
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "the existing response cursor must receive the next bounded Network turn"
+            );
+            assert!(pump.pending_net_flush.active());
+        }
+
+        assert_eq!(net.polls, 1);
+        assert_eq!(net.tcp_flushes, 0);
+        assert!(net.lines.is_empty());
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_finished_response_cursor_services_usb_before_next_command() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(6, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        net.tcp_flush_activity_remaining = 1;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 17)).is_ok());
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(17),
+                remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+            };
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll();
+            assert!(pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "an active response cursor must finish before the next buffered command"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 0);
+
+            pump.poll();
+            assert!(!pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "cursor completion must hand passive USB debt the ordinary rotation before another command"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(pump.metrics.accepted_commands, 0);
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+        }
+
+        assert_eq!(net.tcp_flushes, 2);
+        assert!(net.lines.is_empty());
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_cursor_completion_rotates_without_successor_command() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        net.tcp_flush_activity_remaining = 1;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(17),
+                remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+            };
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll();
+            assert!(pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+
+            pump.poll();
+            assert!(!pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "cursor completion must rotate passive USB debt even before a successor line exists"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(pump.metrics.accepted_commands, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_terminal_exits, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_dispatch_exits, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turn_cap_exits, 0);
+        }
+
+        assert_eq!(net.tcp_flushes, 2);
+        assert!(net.lines.is_empty());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_network_quantum_has_virtual_counter_deadline() {
         struct LinkedRuntimeTestReset;
 
@@ -36910,6 +37364,13 @@ mod tests {
             Cyw43RetainedDrainDecision::Continue,
             "an ABI-invisible Prepared parent must keep its bounded Network slice",
         );
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            ),
+            "a cursor completed during the retained turn must schedule the existing operator rotation without retiring its parent",
+        );
         assert_eq!(
             cyw43_closing_drain_decision(prepared, issued, false, false, 2, 200),
             Cyw43RetainedDrainDecision::Continue,
@@ -37008,6 +37469,11 @@ mod tests {
             cyw43_boundary_drain_decision(issued, Inactive, false, false, 3, 300),
             Cyw43RetainedDrainDecision::Complete,
             "only disappearance after the exact owner turn is terminal"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(issued, issued, true, false, 3, 300),
+            Cyw43RetainedDrainDecision::Dispatch,
+            "a complete buffered command must end the exact boundary-parent slice"
         );
         assert_eq!(
             cyw43_boundary_drain_decision(

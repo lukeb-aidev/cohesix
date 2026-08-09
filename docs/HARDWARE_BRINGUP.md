@@ -2615,11 +2615,22 @@ lease, and resets only after `Dispatch` before resuming the same quantum.
 Operation count alone never triggers this checkpoint. A fresh committed CYW43
 queue transition remains visible without rewriting any already-scheduled
 console phase; an optional notification only prompts the condition check. A
-complete TCP command or pending actual physical response/buffered input is
-likewise an immediate typed exit into a fairness fence. That fence preserves
-unfinished Wi-Fi work but requires `Serial`,
-optional `LocalSeat`, and `Dispatch` to receive one bounded turn before Network
-resumes. If Dispatch queues HDMI echo while a partial command retains that
+complete TCP command is likewise an immediate typed Network-quantum exit. If it
+belongs to the exact active authenticated CYW43 connection, no prior response
+cursor is active or completed on that turn, and no physical response or actual
+serial/local-seat input is pending, the next separate outer turn is the
+existing hardware-free `Dispatch` phase. Passive USB first-report or
+command-ready service debt alone does not delay that command. Dispatch still
+checks physical input first, and the response uses only the existing bounded
+connection-owned flush cursor. While that cursor is active a second buffered
+command remains queued; when it finishes, any exact retained parent first
+receives its current already-admitted turn, then passive USB debt receives the
+ordinary `Serial -> LocalSeat -> Dispatch` handoff before that next command.
+Unauthenticated, stale-connection, GENET, physical-input, and response-tail
+cases retain the full fairness fence. That fence preserves unfinished Wi-Fi
+work but requires `Serial`, optional `LocalSeat`, and `Dispatch` to receive one
+bounded turn before Network resumes. If Dispatch queues HDMI echo while a
+partial command retains that
 fence, one Display turn runs before the next Serial turn unless a reboot
 acknowledgement or physical response tail already owns Serial. The echo remains
 pending in that case. Display does not close, replace, or service the retained

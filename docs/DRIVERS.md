@@ -3339,6 +3339,15 @@ generation and XID.
   owner. Only durable state retains service; observing or consuming a
   notification changes nothing. A changed physical lifetime, pair/generation,
   quarantine, reboot, or non-Wi-Fi selection invalidates cached observations.
+  A second selected-CYW43 routing exception applies only after a complete
+  command belongs to the exact active authenticated TCP connection. If no
+  physical response or actual serial/local-seat input is pending and no prior
+  connection-owned response cursor is active or completed on that Network
+  turn, the Network quantum ends and the next separate outer turn is the
+  existing hardware-free `Dispatch` phase.
+  Passive USB first-report or command-ready service debt alone does not insert
+  a complete operator rotation before that command. Dispatch still checks
+  serial and local-seat input first, so input arriving at the boundary wins.
   `Serial`
   queues at most one pending output record and admits one TX-first serial-ring
   turn. `LocalSeat` then performs one retained USB keyboard turn, so a newly
@@ -3352,7 +3361,12 @@ generation and XID.
   then leaves any received command buffered for a later `Dispatch` phase. A
   second buffered network command remains behind the active response cursor, so
   NIC work, response flushing, and command dispatch never share one outer turn.
-  GENET and idle CYW43 service retain the ordinary phase rotation.
+  When that cursor finishes, any exact retained parent first receives its
+  current already-admitted turn; passive USB debt then forces the ordinary
+  `Serial -> LocalSeat -> Dispatch` handoff before another buffered command.
+  Continuous TCP therefore cannot starve USB housekeeping. GENET,
+  unauthenticated or stale connections, physical input/response tails, and idle
+  CYW43 service retain the ordinary phase rotation.
 
   A selected CYW43 path may retain `Network` for an exact current DPC/RX/TX
   continuation, stable nonempty committed RX queue/batch state, a non-empty
@@ -3379,9 +3393,10 @@ generation and XID.
   contract check occurs before status inspection, so no WiFi-shaped label can
   open this lane for GENET. An authenticated but idle socket is not a weighting
   reason. A complete TCP command retained by the ingest queue ends the current
-  Network burst so the ordinary physical-operator rotation reaches `Dispatch`
-  before another NIC operation. Raw or partial traffic cannot retain Network
-  indefinitely. The sole contiguous continuation quantum is
+  Network burst. The exact authenticated exception above may route directly to
+  the next separate `Dispatch` turn; every other case uses the ordinary
+  physical-operator rotation before Dispatch. Raw or partial traffic cannot
+  retain Network indefinitely. The sole contiguous continuation quantum is
   bounded by the compiler-declared CYW43 `max_ops_per_turn` service limit
   (currently 192 separately opened Network turns). A 25-ms seL4
   virtual-counter cap separately fences admission of a fresh physical parent.
@@ -3399,11 +3414,11 @@ generation and XID.
   time cap is checked before admission, so an elapsed idle or between-parent
   quantum admits no new NIC/SDIO parent. An exact already-`Prepared` or
   already-`Issued` parent is not split by that elapsed-time check and continues
-  toward its typed terminal. Reaching the hard turn bound, a
-  complete TCP command, or pending actual physical response/buffered input
-  retains unfinished
-  Wi-Fi service behind an operator fence and returns to `Serial`, optional
-  `LocalSeat`, and `Dispatch` before another quantum. Reboot or quarantine
+  toward its typed terminal. Reaching the hard turn bound or pending actual
+  physical response/buffered input retains unfinished Wi-Fi service behind an
+  operator fence and returns to `Serial`, optional `LocalSeat`, and `Dispatch`
+  before another quantum. A complete TCP command instead follows the exact
+  authenticated routing rule above. Reboot or quarantine
   instead invalidates the Wi-Fi-only scheduler state. At
   `Network` entry, quarantine or an already-owned physical response skips NIC
   inspection and service, opens no CYW43 quantum, and returns directly to

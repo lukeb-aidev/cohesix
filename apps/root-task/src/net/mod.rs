@@ -1366,9 +1366,13 @@ pub trait NetPoller {
     ///
     /// This predicate is deliberately separate from socket service state:
     /// once ingest has retained a complete command, the linked-runtime
-    /// scheduler must leave a CYW43 Network burst and route through the fixed
-    /// physical-operator phases to Dispatch before admitting another NIC
-    /// operation.
+    /// scheduler must leave a CYW43 Network burst before Dispatch. The exact
+    /// active authenticated CYW43 connection may use the next existing
+    /// hardware-free Dispatch turn directly when no actual physical input,
+    /// response tail, or prior response cursor is pending or completed on that
+    /// Network turn. Every other case retains the fixed physical-operator
+    /// phases, and no Dispatch shares the NIC operation that buffered its
+    /// command.
     fn buffered_console_lines_pending(&self) -> bool {
         self.ingest_snapshot().queued != 0
     }
