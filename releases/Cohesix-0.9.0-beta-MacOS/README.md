@@ -4,7 +4,7 @@
 <!-- Author: Lukas Bower -->
 <table width="100%" cellpadding="0" cellspacing="0">
   <tr>
-    <td align="center" bgcolor="#333333">
+    <td align="center">
       <img
         src="ui/swarmui/assets/icons/cohesix-header.svg"
         alt="Cohesix"

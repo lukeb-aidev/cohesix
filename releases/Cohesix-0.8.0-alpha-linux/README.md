@@ -1,10 +1,10 @@
-<!-- Copyright © 2025 Lukas Bower -->
+<!-- Copyright © 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Provide a high-level overview of Cohesix architecture and workspace layout. -->
 <!-- Author: Lukas Bower -->
 <table width="100%" cellpadding="0" cellspacing="0">
   <tr>
-    <td align="center" bgcolor="#333333">
+    <td align="center">
       <img
         src="ui/swarmui/assets/icons/cohesix-header.svg"
         alt="Cohesix"

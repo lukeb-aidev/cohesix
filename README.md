@@ -3,17 +3,16 @@
 <!-- Purpose: Introduce Cohesix, explain its AI-hive design, and direct readers to verified usage and documentation. -->
 <!-- Author: Lukas Bower -->
 
-<table width="100%" cellpadding="0" cellspacing="0">
-  <tr>
-    <td align="center" bgcolor="#333333">
-      <img
-        src="docs/COHESIX_LOGO.png"
-        alt="Cohesix"
-        width="720"
-      />
-    </td>
-  </tr>
-</table>
+<div align="center">
+  <div style="width: 720px; max-width: 100%; aspect-ratio: 5 / 2; overflow: hidden;">
+    <img
+      src="docs/COHESIX_LOGO.png"
+      alt="Cohesix"
+      width="720"
+      style="display: block; width: 100%; height: auto; transform: translateY(-20%);"
+    />
+  </div>
+</div>
 
 # Cohesix
 
