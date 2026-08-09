@@ -1296,6 +1296,27 @@ Exactly one fresh child ticket is allowed only for a telemetry-bound
 `CONTAINED` entry-inhibit fault that proves no command issue; the second such
 failure and every command-or-later, owner-poisoned, malformed, timed-out, or
 issued-unknown cut must fence the pair without advancing the event.
+Accepted-normal-child continuation coverage, jointly required by
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`, must prove the correction compositionally. The
+production case drives one real matching normal exact `SteadyLease` terminal
+through acceptance, proves the old global child is released, publishes exactly
+one successor in the same admitted CYW43 call, and returns at that successor's
+external wait without physically issuing it. In the same focused coverage, a
+separate constructed production-private state proves cached `FifoWindow` is the
+sole bounded deterministic `AdvanceState` transform allowed between two exact
+children and that it routes to one successor submission. This composition must
+not be reported as an artificially forced physical path through `FifoWindow`.
+The old terminal mailbox must be stable-read into its immutable accepted CYW43
+trace entry before coherent successor staging reuses that sequential mailbox.
+Counterexamples prove no same-call successor for a contained-preissue `FAULT`
+retry, malformed or mismatched terminal, issued-unknown state,
+`OrdinaryContinuation`, `RxQuantumBoundary`, `RxQueueWait`, `RecoverySettle`,
+`CompleteEvent`, `DeferredOwner`, or another external wait; no invocation may
+loop into a second successor. The tests also prove unchanged event identity and
+physical generation, one global/physical child at a time, later SDIO-only issue,
+and zero new EventPump admission, poll, signal, priority, recovery, or GENET
+behavior.
 These explicitly scoped descriptors cover bootstrap/control/host-EAPOL and
 Join-specific protocol fences; they must not authorize fresh steady NetData
 work. A post-release DPC producer level retains only its exact event-sequence
@@ -2127,7 +2148,9 @@ The focused acceptance tests
 `idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child`,
 `production_masked_control_uses_exact_owner_activation_before_tx`,
 `production_join_final_fence_runs_canonical_dpc_then_issues_exactly_once`,
-`dpc_cursor_routes_exactly_one_child_action_per_turn`,
+`dpc_cursor_routes_by_exact_owner_state`,
+`production_dpc_normal_exact_completion_publishes_one_successor_before_return`,
+`production_dpc_normal_exact_continuation_preserves_rxbound_queue_and_settle_stops`,
 `sdio_external_dma_joins_irq158_and_irq116_once`,
 `cyw43_rx_queue_state_commit_is_sequence_last_and_stable`,
 `cyw43_rx_batch_parent_commits_eight_frames_once`,

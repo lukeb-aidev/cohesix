@@ -749,6 +749,24 @@ counterfactual admits one minimal correction. Otherwise the current repair
 sequence stops; historical `494e9cb0e9ad` remains a negative ordering control,
 not a transport implementation to merge or restore.
 
+For the production DPC event lease, acceptance of a matching normal exact
+`SteadyLease` child terminal is not an unconditional yield. Under
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`, that same already-admitted CYW43 runtime call may
+release the completed global child, execute one bounded deterministic private
+`FifoWindow` `AdvanceState` transition, and publish at most one successor child
+before returning at the successor's external wait. The release precedes the new
+claim, and publication does not issue hardware: SDIO remains the sole physical
+issuer on a later owner turn. The old terminal mailbox is stable-read into the
+immutable accepted CYW43 trace entry before coherent successor staging reuses
+that sequential mailbox. Contained-preissue `FAULT` retry,
+`OrdinaryContinuation`, `RxQuantumBoundary`, `RxQueueWait`, `RecoverySettle`,
+`CompleteEvent`, `DeferredOwner`, and every other external-child, credit, peer,
+or recovery wait remain later-turn. This narrow continuation adds no poll,
+notification, priority lease, EventPump admission, topology, or new authority,
+and malformed, stale, mismatched, issued-unknown, or fault-terminal state keeps
+the existing fail-closed path.
+
 For active op11, the same stable batch is nonterminal; root commits the exact
 64-byte cache-line-disjoint ACK at shared
 offset 49,280 only after delivery, and CYW43 preserves parent and batch until

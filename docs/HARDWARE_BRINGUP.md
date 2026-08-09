@@ -2544,6 +2544,26 @@ retain only their explicit protocol bounds and cannot become periodic receive
 polling. The request-bound sealed M2/M4/group-key finite parent is an explicit
 host-EAPOL bound; EAPOL-Start and other control remain ordinary.
 
+The bounded accepted-child continuation jointly scoped by
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority` applies only after CYW43 has accepted a normal exact
+`SteadyLease` DPC child terminal. In that already-admitted runtime call, CYW43
+releases the old global child, runs one bounded deterministic private
+`FifoWindow` `AdvanceState` transition, and may publish at most one successor
+child before returning at that successor's external wait. SDIO issues the
+successor only on its later owner turn, so the rule preserves one physical child
+at a time and does not widen the EventPump physical-operation budget. The old
+terminal mailbox is stable-read into its immutable accepted CYW43 trace entry
+before coherent successor staging reuses that sequential mailbox. The
+contained-preissue
+`FAULT` retry, `OrdinaryContinuation`, `RxQuantumBoundary`, `RxQueueWait`,
+`RecoverySettle`, `CompleteEvent`, `DeferredOwner`, and every other external,
+credit, peer, or recovery wait remain later-turn work; malformed or uncertain
+identity continues to fail closed. When checking the passive per-child timing
+trace, this correction targets acceptance-to-next-publication delay. It does
+not reclassify physical-terminal-to-acceptance wake latency or create a poll,
+notification, priority lease, retry, recovery, or second-issuer path.
+
 An active DPC cursor or SDIO child does not block memory-only publication of
 already-completed private RX frames. CYW43 may commit one current-generation
 batch of one through eight frames without touching Function 1, Function 2, the

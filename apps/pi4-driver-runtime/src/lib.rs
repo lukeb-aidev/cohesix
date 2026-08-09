@@ -3802,6 +3802,20 @@ const fn cyw43_dpc_turn_route(cursor: &Cyw43DpcCursor) -> Cyw43DpcTurnRoute {
     }
 }
 
+const fn cyw43_dpc_normal_exact_continuation_stops(action: Cyw43DpcAction) -> bool {
+    matches!(
+        action,
+        Cyw43DpcAction::None
+            | Cyw43DpcAction::RxQuantumBoundary
+            | Cyw43DpcAction::RxQueueWait
+            | Cyw43DpcAction::RecoverySettle
+    )
+}
+
+const fn cyw43_dpc_normal_exact_private_step(action: Cyw43DpcAction) -> bool {
+    matches!(action, Cyw43DpcAction::FifoWindow)
+}
+
 const CYW43_DPC_TERMINAL_RESULT_FRAME_DECODE: u32 = 0x4450_0003;
 const CYW43_DPC_TERMINAL_RESULT_RECOVERY_DRAIN: u32 = 0x4450_0004;
 const CYW43_DPC_TERMINAL_RESULT_RECOVERY_DEADLINE: u32 = 0x4450_0005;
@@ -15580,22 +15594,24 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                 return false;
             }
 
-            if cursor.child.issued_unknown {
-                state.dpc_cursor = cursor;
-                cyw43_dpc_quarantine_transport(
-                    state,
-                    cursor.event_sequence,
-                    cursor.child.command_result,
-                );
-                cyw43_mark_issued_unknown(state);
-                return false;
-            }
+            let mut continue_normal_exact = false;
+            'normal_exact_continuation: loop {
+                if cursor.child.issued_unknown {
+                    state.dpc_cursor = cursor;
+                    cyw43_dpc_quarantine_transport(
+                        state,
+                        cursor.event_sequence,
+                        cursor.child.command_result,
+                    );
+                    cyw43_mark_issued_unknown(state);
+                    return false;
+                }
 
-            if cursor.child.active {
-                if cursor.child.mode == Cyw43DpcChildMode::OrdinaryContinuation
-                    && cursor.child.continuation_grant_required
-                {
-                    match cyw43_dpc_child_grant_once(&mut cursor) {
+                if cursor.child.active {
+                    if cursor.child.mode == Cyw43DpcChildMode::OrdinaryContinuation
+                        && cursor.child.continuation_grant_required
+                    {
+                        match cyw43_dpc_child_grant_once(&mut cursor) {
                         Cyw43DpcChildGrant::LateCompletion(completion) => {
                             match cyw43_dpc_child_accept_exact(&mut cursor, completion) {
                                 Cyw43DpcChildPoll::Exact(completion) => {
@@ -15609,6 +15625,9 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                                     if state.recovery_required {
                                         return false;
                                     }
+                                    // Ordinary continuation-grant mode retains
+                                    // its existing later-turn cadence. The
+                                    // production event lease never selects it.
                                     should_defer_local = true;
                                     return true;
                                 }
@@ -15668,16 +15687,17 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                             );
                             return false;
                         }
+                        }
                     }
-                }
-                let previous_service_slice = cursor.child.service_progress_slice;
-                let child_poll = cyw43_dpc_child_poll_once(&mut cursor);
-                cyw43_dpc_record_owner_progress(
-                    state,
-                    previous_service_slice,
-                    cursor.child.service_progress_slice,
-                );
-                match child_poll {
+                    let completed_child_mode = cursor.child.mode;
+                    let previous_service_slice = cursor.child.service_progress_slice;
+                    let child_poll = cyw43_dpc_child_poll_once(&mut cursor);
+                    cyw43_dpc_record_owner_progress(
+                        state,
+                        previous_service_slice,
+                        cursor.child.service_progress_slice,
+                    );
+                    match child_poll {
                     Cyw43DpcChildPoll::Pending => {
                         state.dpc_cursor = cursor;
                         should_defer_local = true;
@@ -15705,38 +15725,85 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                         cyw43_mark_issued_unknown(state);
                         return false;
                     }
-                    Cyw43DpcChildPoll::Exact(completion) => {
-                        state.dpc_child_timing = cursor.child_timing;
-                        let _terminal =
-                            cyw43_dpc_apply_exact_completion(state, &mut cursor, completion);
-                        state.dpc_cursor = cursor;
-                        if state.recovery_required {
-                            return false;
+                        Cyw43DpcChildPoll::Exact(completion) => {
+                            state.dpc_child_timing = cursor.child_timing;
+                            let terminal =
+                                cyw43_dpc_apply_exact_completion(state, &mut cursor, completion);
+                            state.dpc_cursor = cursor;
+                            if state.recovery_required {
+                                return false;
+                            }
+                            if completion.code == COMPLETION_FAULT {
+                                // A contained pre-issue fault retains its exact
+                                // action for the sole retry on a later owner turn.
+                                // Every other fault is fenced by recovery above.
+                                should_defer_local = true;
+                                return true;
+                            }
+                            if terminal
+                                || completed_child_mode != Cyw43DpcChildMode::SteadyLease
+                            {
+                                // Event completion and the frozen ordinary
+                                // child cadence remain later outer turns.
+                                should_defer_local = true;
+                                return true;
+                            }
+                            // Completion consumption released the exact leased
+                            // child. Continue only until one successor publish
+                            // or another existing external wait.
+                            continue_normal_exact = true;
+                            continue 'normal_exact_continuation;
                         }
-                        // The exact child-completion poll is this turn's sole
-                        // cross-runtime operation. Even when it made the DPC
-                        // action terminal, retain the cursor and defer event
-                        // advance/owner rearm to a later CompleteEvent turn.
+                    }
+                } else if cursor.io_phase == Cyw43DpcIoPhase::Idle {
+                    if continue_normal_exact
+                        && cyw43_dpc_normal_exact_continuation_stops(cursor.action)
+                    {
+                        // RXBOUND admits one exact foreground opportunity,
+                        // queue pressure waits for root capacity, and recovery
+                        // settle waits for its counter deadline. None is a
+                        // deterministic child-to-child transition.
+                        state.dpc_cursor = cursor;
+                        should_defer_local = cursor.action != Cyw43DpcAction::RxQueueWait;
+                        return true;
+                    }
+                    if continue_normal_exact
+                        && !cyw43_dpc_normal_exact_private_step(cursor.action)
+                    {
+                        // FifoWindow is the sole cached, childless transform
+                        // needed between two exact physical children. Any
+                        // other private action keeps the existing later-turn
+                        // cadence.
+                        state.dpc_cursor = cursor;
                         should_defer_local = true;
                         return true;
                     }
-                }
-            } else if cursor.io_phase == Cyw43DpcIoPhase::Idle {
-                let terminal = cyw43_dpc_finish_action(state, &mut cursor, 0);
-                if state.recovery_required {
-                    state.dpc_cursor = cursor;
-                    return false;
-                }
-                if !terminal {
-                    state.dpc_cursor = cursor;
-                    // Queue pressure is a durable software level, not private
-                    // maximum-priority work. Park until a queue-only op8/op10
-                    // pop crosses the exact next-read capacity boundary.
-                    should_defer_local = cursor.action != Cyw43DpcAction::RxQueueWait;
-                    return true;
-                }
-            } else {
-                // The committed DPC event is durable authority from the first
+                    let terminal = cyw43_dpc_finish_action(state, &mut cursor, 0);
+                    if state.recovery_required {
+                        state.dpc_cursor = cursor;
+                        return false;
+                    }
+                    if continue_normal_exact {
+                        state.dpc_cursor = cursor;
+                        if terminal {
+                            should_defer_local = true;
+                            return true;
+                        }
+                        // The one allowed cached FifoWindow transform has now
+                        // staged Firstread/Remainder. Loop once to publish that
+                        // successor and return at its external wait.
+                        continue 'normal_exact_continuation;
+                    }
+                    if !terminal {
+                        state.dpc_cursor = cursor;
+                        // Queue pressure is a durable software level, not private
+                        // maximum-priority work. Park until a queue-only op8/op10
+                        // pop crosses the exact next-read capacity boundary.
+                        should_defer_local = cursor.action != Cyw43DpcAction::RxQueueWait;
+                        return true;
+                    }
+                } else {
+                    // The committed DPC event is durable authority from the first
                 // post-release CARD_INT, not only after Gate 8. Bind every
                 // production DPC child to that exact event lifetime so boot,
                 // association, and steady RX use one transaction path with no
@@ -15786,7 +15853,10 @@ fn cyw43_runtime_service_dpc_event() -> bool {
                         );
                         return false;
                     }
+                    }
                 }
+
+                break 'normal_exact_continuation;
             }
 
             state.dpc_cursor = cursor;
@@ -67427,7 +67497,7 @@ mod tests {
     }
 
     #[test]
-    fn dpc_cursor_routes_exactly_one_child_action_per_turn() {
+    fn dpc_cursor_routes_by_exact_owner_state() {
         let mut cursor = Cyw43DpcCursor::empty();
         assert_eq!(
             cyw43_dpc_turn_route(&cursor),
@@ -93377,7 +93447,7 @@ mod tests {
         } else {
             runtime_ring_read_command_stable(&owner_ring).map_or(0, |command| command.sequence)
         };
-        let mut active_child = None;
+        let mut active_child: Option<DriverTaskCommandRecord> = None;
         let mut active_descriptor = DriverRuntimeSdioCommandDescriptor::empty();
         let mut active_mode = Cyw43DpcChildMode::OrdinaryContinuation;
         let mut active_owner_started = false;
@@ -93403,7 +93473,13 @@ mod tests {
             assert!(cyw43_runtime_service_dpc_event());
             dpc_turns = dpc_turns.saturating_add(1);
             if owner_completion_published {
-                assert!(!CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+                let completed_sequence = active_child.map_or(0, |command| command.sequence);
+                let next_sequence =
+                    CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.child.expected_sequence);
+                assert!(
+                    next_sequence == 0 || next_sequence != completed_sequence,
+                    "the accepted child must release before any same-call successor",
+                );
                 active_child = None;
                 active_owner_started = false;
                 last_grant_id = 0;
@@ -97048,6 +97124,95 @@ mod tests {
             assert!(state.rx_service_quiescent);
             assert!(!state.recovery_required);
         });
+    }
+
+    #[test]
+    fn production_dpc_normal_exact_completion_publishes_one_successor_before_return() {
+        let _guard = test_guard();
+
+        // A cached Function-1 window leaves FifoWindow as the sole childless
+        // transform between the AckStatus child and the next Function-2 read.
+        let mut private_state = Cyw43RuntimeState::new();
+        private_state.backplane_window = CYW43_CHIPCOMMON_BASE & BACKPLANE_WINDOW_MASK;
+        private_state.backplane_window_valid = true;
+        let mut private_cursor = Cyw43DpcCursor {
+            event_sequence: 1,
+            action: Cyw43DpcAction::FifoWindow,
+            io_kind: Cyw43DpcIoKind::WindowOnly,
+            io_phase: Cyw43DpcIoPhase::Idle,
+            ..Cyw43DpcCursor::empty()
+        };
+        assert!(cyw43_dpc_normal_exact_private_step(private_cursor.action));
+        assert!(!cyw43_dpc_finish_action(
+            &mut private_state,
+            &mut private_cursor,
+            0,
+        ));
+        assert_eq!(private_cursor.action, Cyw43DpcAction::Firstread);
+        assert_eq!(private_cursor.io_phase, Cyw43DpcIoPhase::Transfer);
+        assert_eq!(
+            cyw43_dpc_turn_route(&private_cursor),
+            Cyw43DpcTurnRoute::SubmitChild,
+        );
+        assert!(!cyw43_dpc_normal_exact_private_step(private_cursor.action));
+
+        let generation = 0x4359_d2a0;
+        let event_sequence = initialize_production_dpc_source_event(generation, 0);
+        assert_eq!(event_sequence, 1);
+        assert!(cyw43_runtime_service_dpc_event());
+        let first_command = CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_cursor.child.command);
+        assert_eq!(
+            CYW43_RUNTIME_STATE.with_ref(|state| state.dpc_owner_children),
+            1,
+        );
+
+        let first = drive_production_dpc_child_to_owner_completion(
+            generation,
+            ProductionDpcOwnerOutcome::Success,
+        );
+        assert_eq!(first.command, first_command);
+        let (cursor, owner_children) =
+            CYW43_RUNTIME_STATE.with_ref(|state| (state.dpc_cursor, state.dpc_owner_children));
+        assert_eq!(cursor.event_sequence, event_sequence);
+        assert!(cursor.child.active);
+        assert_eq!(cursor.child.mode, Cyw43DpcChildMode::SteadyLease);
+        assert_ne!(cursor.child.expected_sequence, first.command.sequence);
+        assert_eq!(owner_children, 2, "one same-call successor is published");
+        assert!(CYW43_SDIO_CHILD_ACTIVE.load(Ordering::Acquire));
+        let owner_ring =
+            RuntimeRingWindow::sdio_owner().expect("generated descriptor binds SDIO owner");
+        assert_eq!(
+            runtime_ring_read_command_stable(&owner_ring)
+                .expect("same-call successor command")
+                .sequence,
+            cursor.child.expected_sequence,
+        );
+        assert!(
+            read_runtime_continuation_grant_at(DRIVER_TASK_SDIO_BUS_RING_VADDR).is_none(),
+            "the SteadyLease successor needs no ordinary continuation grant",
+        );
+    }
+
+    #[test]
+    fn production_dpc_normal_exact_continuation_preserves_rxbound_queue_and_settle_stops() {
+        for action in [
+            Cyw43DpcAction::None,
+            Cyw43DpcAction::RxQuantumBoundary,
+            Cyw43DpcAction::RxQueueWait,
+            Cyw43DpcAction::RecoverySettle,
+        ] {
+            assert!(
+                cyw43_dpc_normal_exact_continuation_stops(action),
+                "{action:?} must remain a later-turn boundary",
+            );
+            assert!(!cyw43_dpc_normal_exact_private_step(action));
+        }
+        assert!(!cyw43_dpc_normal_exact_continuation_stops(
+            Cyw43DpcAction::FifoWindow,
+        ));
+        assert!(cyw43_dpc_normal_exact_private_step(
+            Cyw43DpcAction::FifoWindow,
+        ));
     }
 
     #[test]
