@@ -1195,7 +1195,10 @@ HAL routes it into the existing sole pair-recovery supervisor only after the
 queue generation matches the stable active SDIO DPC-owner epoch and both
 linked restart contexts exist. Do not infer this condition from aggregate DPC
 `poisoned=yes`: a stale client sample with `ring_poisoned=no` has no recovery
-authority.
+authority, but it is not current acceptance proof and requires the advertised
+bounded diagnostic rerun. The gate normalizer binds live-ring truth only to the exact
+adjacent accounting/scope/truth triplet for the same ring generation; missing,
+reordered, mismatched, or live-poison truth remains fail-closed.
 
 For one immutable op8 parent, CYW43 writes the 128-byte
 `DriverRuntimeCyw43RxBatchRecord` at shared offset 36,864 and one through eight
@@ -2784,9 +2787,12 @@ The USB keyboard runtime keeps one interrupt-IN transfer active for the whole
 endpoint lifetime and rearms one successor after each completion.
 `queued_reports=1` is therefore the healthy armed state before and after the
 first HID report; larger values are an invariant failure, not throughput
-headroom. Gate 10 may show command readiness without a keypress, but live
-local-seat acceptance still requires the same linked-runtime HID byte at parser
-ingress, `physical_input_proven=yes`, and HDMI echo from a printable key.
+headroom. HID setup requests an unchanged boot report every one second on that
+same endpoint lifetime, allowing an idle keyboard to establish the decoded
+all-zero attach baseline without an operator keypress. Gate 10 may therefore
+show command readiness without a keypress, but live local-seat acceptance still
+requires the same linked-runtime HID byte at parser ingress,
+`physical_input_proven=yes`, and HDMI echo from a printable key.
 Before the first transfer event or valid report, a successful doorbell arms an
 exact slot/endpoint/report-slot/TRB/generation liveness watch for five seconds
 using the selected virtual counter, with a bounded 4,096-poll fallback only
@@ -3058,6 +3064,9 @@ Network priority at the bus boundary. Under load, preserve serial and
 local-seat command liveness before nonessential mirroring or redraws.
 After attach or endpoint recovery, decoded held-key/modifier traffic is health
 telemetry only until a decoded all-zero release establishes a fresh baseline.
+The one-second HID idle interval supplies that baseline during ordinary idle;
+the existing five-second exact-transfer watchdog still fails a keyboard closed
+when no completion arrives.
 The runtime reports first-report pending during that guard, and root invalidates
 stale first-report, first-byte, parser, and HDMI command-ready latches while
 keeping the endpoint and ordinary serial/HDMI service available. A pending

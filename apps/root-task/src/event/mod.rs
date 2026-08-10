@@ -19656,7 +19656,6 @@ where
             && snapshot.event_attempts != 0
             && snapshot.event_attempts == snapshot.published
             && snapshot.published == snapshot.consumed
-            && snapshot.rearms >= snapshot.event_attempts
             && snapshot.overruns == 0
             && snapshot.epoch_errors == 0
             && snapshot.sequence_errors == 0
@@ -44313,7 +44312,9 @@ mod tests {
             event_attempts: 4,
             published: 4,
             consumed: 4,
-            rearms: 4,
+            // Rearms count client signal attempts, not ring events. The
+            // authoritative final rearm proof is the live unmasked state.
+            rearms: 3,
             overruns: 0,
             epoch_errors: 0,
             sequence_errors: 0,

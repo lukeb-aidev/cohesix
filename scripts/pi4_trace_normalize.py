@@ -96,6 +96,23 @@ CYW43_SDIO_DPC_RE = re.compile(
     r"poisoned=(?P<poisoned>yes|no)"
     r"(?: masked=(?P<masked>yes|no))?$"
 )
+CYW43_SDIO_DPC_SCOPE_LINE = (
+    "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events "
+    "poisoned=aggregate-client-or-ring source=card-int-or-source-probe "
+    "physical_card_irq=not-exported"
+)
+CYW43_SDIO_DPC_TRUTH_RE = re.compile(
+    r"^CYW43_SDIO_DPC_TRUTH "
+    r"generation=(?P<generation>[0-9]+) "
+    r"owner_active=(?P<owner_active>yes|no) "
+    r"ring_poisoned=(?P<ring_poisoned>yes|no) "
+    r"client_sample_stale=(?P<client_sample_stale>yes|no) "
+    r"ring_consumer=(?P<ring_consumer>[0-9]+) "
+    r"sample_consumer=(?P<sample_consumer>[0-9]+) "
+    r"sample_reason=(?P<sample_reason>[a-z0-9-]+) "
+    r"authority=(?P<authority>[a-z0-9-]+) "
+    r"action=(?P<action>[a-z0-9-]+)$"
+)
 CYW43_BUS_EPISODE_RE = re.compile(
     r"^CYW43_BUS_EPISODE "
     r"p=(?P<publication_sequence>[0-9a-f]{8}) "
@@ -715,6 +732,10 @@ class WifiDpcProof:
     ack_failures: int = 0
     owner_active: str = "unknown"
     poisoned: str = "unknown"
+    ring_poisoned: str = "unknown"
+    client_sample_stale: str = "unknown"
+    truth_authority: str = "unknown"
+    truth_line: int = 0
     masked: str = "unknown"
     line: int = 0
 
@@ -959,6 +980,10 @@ class GateSummary:
     wifi_dpc_ack_failures: int = 0
     wifi_dpc_owner_active: str = "unknown"
     wifi_dpc_poisoned: str = "unknown"
+    wifi_dpc_ring_poisoned: str = "unknown"
+    wifi_dpc_client_sample_stale: str = "unknown"
+    wifi_dpc_truth_authority: str = "unknown"
+    wifi_dpc_truth_line: int = 0
     wifi_dpc_masked: str = "unknown"
     wifi_dpc_line: int = 0
     wifi_dpc_child_timing_status: str = "UNKNOWN"
@@ -1354,6 +1379,12 @@ class GateSummary:
             "WIFI_DPC_ACK_FAILURES": self.wifi_dpc_ack_failures,
             "WIFI_DPC_OWNER_ACTIVE": self.wifi_dpc_owner_active,
             "WIFI_DPC_POISONED": self.wifi_dpc_poisoned,
+            "WIFI_DPC_RING_POISONED": self.wifi_dpc_ring_poisoned,
+            "WIFI_DPC_CLIENT_SAMPLE_STALE": (
+                self.wifi_dpc_client_sample_stale
+            ),
+            "WIFI_DPC_TRUTH_AUTHORITY": self.wifi_dpc_truth_authority,
+            "WIFI_DPC_TRUTH_LINE": self.wifi_dpc_truth_line,
             "WIFI_DPC_MASKED": self.wifi_dpc_masked,
             "WIFI_DPC_LINE": self.wifi_dpc_line,
             "WIFI_DPC_CHILD_TIMING_STATUS": self.wifi_dpc_child_timing_status,
@@ -11653,7 +11684,12 @@ def summarize_net_state(events: Iterable[TraceEvent]) -> tuple[str, str, str, bo
             ("netstats:", "netstatus:", "[smp] activity net")
         ):
             continue
-        active = event.fields.get("active", active)
+        selected_active = event.fields.get("active")
+        if selected_active in {"wifi", "wired", "none"}:
+            # `netstats: cyw43_priority_lease ... active=yes|no` describes
+            # only the bounded lease. It must not replace the selected
+            # network carried by the canonical netstats/activity record.
+            active = selected_active
         addr_src = event.fields.get("addr_src", event.fields.get("src", addr_src))
         dhcp = event.fields.get("dhcp", dhcp)
         tcp_ready_field = field_lower(event, "tcp_ready")
@@ -14106,9 +14142,19 @@ def wifi_tcp_ready_step(event: TraceEvent) -> bool:
 
 
 def wifi_dpc_healthy_step(event: TraceEvent) -> bool:
-    """Return true for a complete healthy DPC sample after TCP proof."""
+    """Return true for the terminal record of a healthy DPC truth triplet."""
 
-    return summarize_wifi_dpc_proof([event]).proof
+    match = CYW43_SDIO_DPC_TRUTH_RE.fullmatch(event.raw)
+    return bool(
+        match is not None
+        and match.group("owner_active") == "yes"
+        and match.group("ring_poisoned") == "no"
+        and match.group("client_sample_stale") == "no"
+        and match.group("ring_consumer") == match.group("sample_consumer")
+        and match.group("sample_reason") == "current"
+        and match.group("authority") == "live-ring"
+        and match.group("action") == "none"
+    )
 
 
 def wifi_forbidden_shortcut(event: TraceEvent) -> bool:
@@ -14292,7 +14338,7 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
     """Validate the reopened 26b CYW43 host-EAPOL old-good replay profile."""
 
     event_list = list(events)
-    return ordered_sequence_result(
+    result = ordered_sequence_result(
         event_list,
         ordered_events=current_cyw43_supervisor_attempt_events(event_list),
         required_any=[
@@ -14374,6 +14420,9 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("dpc-healthy-after-tcp", wifi_dpc_healthy_step),
         ],
     )
+    if result.replay and not summarize_wifi_dpc_proof(event_list).proof:
+        return SequenceResult(False, result.last, "dpc-healthy-after-tcp")
+    return result
 
 
 def summarize_timer_backend(events: Iterable[TraceEvent]) -> tuple[str, int, str, bool]:
@@ -14721,11 +14770,93 @@ def summarize_cyw43_dpc_child_timing(
     )
 
 
+def apply_wifi_dpc_truth(
+    proof: WifiDpcProof, event: TraceEvent
+) -> tuple[WifiDpcProof, str | None]:
+    """Bind one live-ring truth line to its exact accounting sample."""
+
+    fields = event.fields
+    ring_poisoned = field_lower(event, "ring_poisoned")
+    client_sample_stale = field_lower(event, "client_sample_stale")
+    truth_authority = field_lower(event, "authority")
+    updated = replace(
+        proof,
+        ring_poisoned=ring_poisoned,
+        client_sample_stale=client_sample_stale,
+        truth_authority=truth_authority,
+        truth_line=event.line,
+    )
+
+    generation = parse_hex_int(fields.get("generation"))
+    if generation != proof.generation:
+        return updated, "truth-generation-mismatch"
+    if truth_authority != "live-ring":
+        return updated, "truth-authority-invalid"
+
+    truth_owner_active = field_lower(event, "owner_active")
+    if truth_owner_active not in {"yes", "no"}:
+        return updated, "truth-owner-unproven"
+    if truth_owner_active != proof.owner_active:
+        return updated, "truth-owner-mismatch"
+    if ring_poisoned not in {"yes", "no"} or client_sample_stale not in {
+        "yes",
+        "no",
+    }:
+        return updated, "truth-poison-state-unproven"
+
+    ring_consumer = parse_hex_int(fields.get("ring_consumer"))
+    sample_consumer = parse_hex_int(fields.get("sample_consumer"))
+    if ring_consumer is None or sample_consumer is None:
+        return updated, "truth-consumer-unproven"
+    if ring_consumer != proof.consumed:
+        return updated, "truth-consumer-mismatch"
+    if sample_consumer > ring_consumer:
+        return updated, "truth-sample-consumer-ahead"
+    if (client_sample_stale == "yes") != (sample_consumer != ring_consumer):
+        return updated, "truth-stale-state-mismatch"
+
+    if ring_poisoned == "yes":
+        expected_reason, expected_action = "ring-poisoned", "restart-pair"
+    elif client_sample_stale == "yes":
+        expected_reason, expected_action = (
+            "ring-consumer-mismatch",
+            "rerun-proof",
+        )
+    elif truth_owner_active == "no":
+        expected_reason, expected_action = "owner-inactive", "activate-owner"
+    elif proof.masked == "yes":
+        expected_reason, expected_action = (
+            "owner-rearm-pending",
+            "service-sdio-owner",
+        )
+    else:
+        expected_reason, expected_action = "current", "none"
+    if field_lower(event, "sample_reason") != expected_reason:
+        return updated, "truth-reason-mismatch"
+    if field_lower(event, "action") != expected_action:
+        return updated, "truth-action-mismatch"
+
+    aggregate_poisoned = (
+        ring_poisoned == "yes"
+        or client_sample_stale == "yes"
+        or proof.epoch_errors != 0
+    )
+    if (proof.poisoned == "yes") != aggregate_poisoned:
+        return updated, "truth-aggregate-mismatch"
+    return updated, None
+
+
 def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
     """Return the strongest fail-closed reason for one exact DPC proof line."""
 
-    if proof.poisoned == "yes":
+    if proof.generation == 0:
+        return "generation-zero"
+    if proof.ring_poisoned == "yes" or (
+        proof.ring_poisoned == "unknown" and proof.poisoned == "yes"
+    ):
         return "poisoned"
+    if proof.client_sample_stale == "yes":
+        return "client-sample-stale"
     if proof.overruns != 0:
         return "overrun"
     if proof.epoch_errors != 0:
@@ -14746,8 +14877,8 @@ def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
         return "consume-publish-mismatch"
     if proof.masked == "yes":
         return "masked"
-    if proof.masked != "unknown" and proof.rearms < proof.captures:
-        return "unrearmed"
+    if proof.masked != "no":
+        return "masked-unproven"
     return None
 
 
@@ -14766,10 +14897,67 @@ def summarize_wifi_dpc_proof(
         if expected_generation is not None
         else current_cyw43_supervisor_attempt_events(events)
     )
+    pending: WifiDpcProof | None = None
+    pending_scope_line = 0
+    orphan_scope_seen = False
+    orphan_truth_generations: set[int] = set()
+
+    def record_sample(
+        sample: WifiDpcProof, truth_failure: str | None = None
+    ) -> None:
+        nonlocal current_generation, first_failure, latest
+        if sample.generation != current_generation:
+            current_generation = sample.generation
+            first_failure = None
+        latest = sample
+        failure = truth_failure or wifi_dpc_failure_reason(sample)
+        if failure is not None and first_failure is None:
+            first_failure = failure
+
     for event in attempt_events:
         match = CYW43_SDIO_DPC_RE.fullmatch(event.raw)
         if match is None:
+            if pending is None:
+                if event.raw == CYW43_SDIO_DPC_SCOPE_LINE:
+                    orphan_scope_seen = True
+                elif event.raw.startswith("CYW43_SDIO_DPC_TRUTH "):
+                    truth_generation = parse_hex_int(
+                        event.fields.get("generation")
+                    )
+                    if truth_generation is None:
+                        orphan_scope_seen = True
+                    else:
+                        orphan_truth_generations.add(truth_generation)
+                continue
+            if (
+                event.raw == CYW43_SDIO_DPC_SCOPE_LINE
+                and event.line == pending.line + 1
+            ):
+                pending_scope_line = event.line
+                continue
+            if event.raw.startswith("CYW43_SDIO_DPC_TRUTH "):
+                if (
+                    pending_scope_line != pending.line + 1
+                    or event.line != pending_scope_line + 1
+                    or CYW43_SDIO_DPC_TRUTH_RE.fullmatch(event.raw) is None
+                ):
+                    record_sample(pending, "truth-sequence-mismatch")
+                else:
+                    pending, truth_failure = apply_wifi_dpc_truth(
+                        pending, event
+                    )
+                    record_sample(pending, truth_failure)
+                pending = None
+                pending_scope_line = 0
+                continue
+            record_sample(pending, "truth-sequence-mismatch")
+            pending = None
+            pending_scope_line = 0
             continue
+        if pending is not None:
+            record_sample(pending, "truth-sequence-mismatch")
+            pending = None
+            pending_scope_line = 0
         values = {
             key: int(match.group(key))
             for key in (
@@ -14794,10 +14982,7 @@ def summarize_wifi_dpc_proof(
                 line=event.line,
             )
             continue
-        if values["generation"] != current_generation:
-            current_generation = values["generation"]
-            first_failure = None
-        latest = WifiDpcProof(
+        pending = WifiDpcProof(
             generation=values["generation"],
             captures=values["captures"],
             published=values["published"],
@@ -14812,11 +14997,15 @@ def summarize_wifi_dpc_proof(
             masked=match.group("masked") or "unknown",
             line=event.line,
         )
-        failure = wifi_dpc_failure_reason(latest)
-        if failure is not None and first_failure is None:
-            first_failure = failure
+    if pending is not None:
+        record_sample(pending, "truth-sequence-mismatch")
     if latest is None:
         return latest_mismatch or WifiDpcProof()
+    if (
+        orphan_scope_seen
+        or orphan_truth_generations
+    ) and first_failure is None:
+        first_failure = "truth-sequence-mismatch"
     if first_failure is not None:
         return replace(latest, proof=False, reason=first_failure)
     return replace(latest, proof=True, reason="none")
@@ -16242,6 +16431,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_dpc_ack_failures=wifi_dpc.ack_failures,
         wifi_dpc_owner_active=wifi_dpc.owner_active,
         wifi_dpc_poisoned=wifi_dpc.poisoned,
+        wifi_dpc_ring_poisoned=wifi_dpc.ring_poisoned,
+        wifi_dpc_client_sample_stale=wifi_dpc.client_sample_stale,
+        wifi_dpc_truth_authority=wifi_dpc.truth_authority,
+        wifi_dpc_truth_line=wifi_dpc.truth_line,
         wifi_dpc_masked=wifi_dpc.masked,
         wifi_dpc_line=wifi_dpc.line,
         wifi_dpc_child_timing_status=dpc_child_timing.status,

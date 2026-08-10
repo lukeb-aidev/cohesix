@@ -1250,7 +1250,11 @@ const XHCI_SETUP_SET_REPORT: u8 = 9;
 const XHCI_SETUP_SET_IDLE: u8 = 10;
 const XHCI_SETUP_SET_PROTOCOL: u8 = 11;
 const XHCI_SETUP_SET_INTERFACE: u8 = 11;
-const USB_HID_BOOT_IDLE_DURATION: u8 = 0;
+// HID SET_IDLE encodes duration in four-millisecond units. Request one
+// unchanged boot report per second so an idle keyboard can establish the
+// attach baseline without waiting for a key transition. The exact first
+// interrupt-IN transfer keeps its separate five-second failure deadline.
+const USB_HID_BOOT_IDLE_DURATION: u8 = 250;
 const USB_DESCRIPTOR_DEVICE: u8 = 1;
 const USB_DESCRIPTOR_CONFIGURATION: u8 = 2;
 const USB_DESCRIPTOR_INTERFACE: u8 = 4;
@@ -109456,7 +109460,7 @@ mod tests {
     }
 
     #[test]
-    fn usb_hid_set_idle_matches_uboot_polling_mode() {
+    fn usb_keyboard_hid_set_idle_requests_bounded_startup_report() {
         assert_eq!(
             usb_hid_set_idle_setup(2),
             [
@@ -109470,7 +109474,9 @@ mod tests {
                 0
             ]
         );
-        assert_eq!(USB_HID_BOOT_IDLE_DURATION, 0);
+        assert_eq!(USB_HID_BOOT_IDLE_DURATION, 250);
+        assert_eq!(u64::from(USB_HID_BOOT_IDLE_DURATION) * 4, 1_000);
+        assert!(u64::from(USB_HID_BOOT_IDLE_DURATION) * 4 < USB_KEYBOARD_FIRST_TRANSFER_TIMEOUT_MS);
     }
 
     #[test]

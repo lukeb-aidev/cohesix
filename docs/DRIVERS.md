@@ -632,6 +632,10 @@ reusable ownership pattern.
   explicit failed recovery, no-reply, queue collapse, or dropped-byte evidence.
 - A keyboard probe may report attachment only from its live `Complete`
   terminal. Cached attachment cannot promote `Pending` or `Failed` to success.
+- Program HID `SET_IDLE` with a one-second interval on the existing endpoint
+  lifetime. This gives an unchanged keyboard a bounded way to publish the
+  all-zero attach baseline before the separate five-second exact-transfer
+  watchdog; it does not add a polling path, retry owner, or second transfer.
 - A passive liveness sentinel passes only when the linked runtime, parser
   ingress, parser drain, and echo counters advance without a dropped-byte
   increase. A latched startup gate or unchanged cumulative counter is not

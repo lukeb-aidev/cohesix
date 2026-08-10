@@ -14,6 +14,18 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT_PATH = REPO_ROOT / "scripts" / "pi4_gate_proof.sh"
 
 
+def _is_wifi_dpc_proof_line(line: str) -> bool:
+    """Return whether a line belongs to the exact DPC proof triplet."""
+
+    return line.startswith(
+        (
+            "CYW43_SDIO_DPC ",
+            "CYW43_SDIO_DPC_SCOPE ",
+            "CYW43_SDIO_DPC_TRUTH ",
+        )
+    )
+
+
 def _driver_task_owner_state_lines() -> list[str]:
     return [
         "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
@@ -176,7 +188,13 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
         "CYW43_SDIO_DPC generation=7 captures=4 published=4 consumed=4 "
         "rearms=4 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 owner_active=yes poisoned=no",
+        "ack_failures=0 owner_active=yes poisoned=no masked=no",
+        "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events "
+        "poisoned=aggregate-client-or-ring source=card-int-or-source-probe "
+        "physical_card_irq=not-exported",
+        "CYW43_SDIO_DPC_TRUTH generation=7 owner_active=yes ring_poisoned=no "
+        "client_sample_stale=no ring_consumer=4 sample_consumer=4 "
+        "sample_reason=current authority=live-ring action=none",
         "DRIVER_TASK_DEFAULT requested=dedicated required=yes live_hot_paths=yes",
         "DRIVER_TASK_SELECTED profile=pi4-hardware selection=wifi "
         "active_net=cyw43 required_roles=0x3f required_hot_paths=0x7f "
@@ -425,6 +443,12 @@ def _oldgood_wifi_replay_lines() -> list[str]:
         "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
         "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 owner_active=yes poisoned=no masked=no",
+        "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events "
+        "poisoned=aggregate-client-or-ring source=card-int-or-source-probe "
+        "physical_card_irq=not-exported",
+        "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes ring_poisoned=no "
+        "client_sample_stale=no ring_consumer=6 sample_consumer=6 "
+        "sample_reason=current authority=live-ring action=none",
     ]
 
 
@@ -1498,7 +1522,7 @@ def test_gate_proof_rejects_wifi_ready_without_dpc_proof(
             *_strong_driver_task_proof_lines(),
             *_oldgood_wifi_replay_lines(),
         ]
-        if not line.startswith("CYW43_SDIO_DPC ")
+        if not _is_wifi_dpc_proof_line(line)
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1539,12 +1563,23 @@ def test_gate_proof_rejects_wifi_ready_with_zero_dpc_activity(
             *_strong_driver_task_proof_lines(),
             *_oldgood_wifi_replay_lines(),
         ]
-        if not line.startswith("CYW43_SDIO_DPC ")
+        if not _is_wifi_dpc_proof_line(line)
     ]
     lines.append(
         "CYW43_SDIO_DPC generation=9 captures=0 published=0 consumed=0 "
         "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
         "ack_failures=0 owner_active=yes poisoned=no masked=no"
+    )
+    lines.extend(
+        [
+            "CYW43_SDIO_DPC_SCOPE captures=event-attempts published=ring-events "
+            "poisoned=aggregate-client-or-ring source=card-int-or-source-probe "
+            "physical_card_irq=not-exported",
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=0 "
+            "sample_consumer=0 sample_reason=current authority=live-ring "
+            "action=none",
+        ]
     )
     log_path = tmp_path / "pi4-serial.log"
     log_path.write_text("\n".join(lines), encoding="utf-8")

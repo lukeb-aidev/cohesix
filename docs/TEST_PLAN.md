@@ -2572,8 +2572,11 @@ compile the separate runtime package for host and `aarch64-unknown-none`.
 USB runtime coverage must prove that the one-deep first interrupt-IN transfer
 arms a five-second virtual-counter liveness deadline only after its successful
 doorbell and binds that deadline to the exact slot, endpoint, report slot, TRB,
-and transfer generation. Polling the same identity must not refresh the
-deadline. Before expiry the result remains first-report pending; exact expiry
+and transfer generation. HID setup must encode a one-second idle interval in
+four-millisecond units, strictly inside that deadline, so an unchanged keyboard
+can complete the existing interrupt-IN request without a key transition.
+Polling the same identity must not refresh the deadline. Before expiry the
+result remains first-report pending; exact expiry
 with no transfer event, valid report, preserved event, or pending doorbell must
 fail the stalled attach closed with `FULL_QUEUE_NO_EVENT`, clear the endpoint
 identity, and retain one terminal recovery failure. Coverage must separately
@@ -3301,7 +3304,15 @@ value cannot be normalized away as a successful transport wake. The
 accounting `poisoned` value is the
 fail-closed aggregate of a live poisoned ring, a stale client sample, and
 client epoch errors; the truth line distinguishes those causes without
-weakening old-capture parsing.
+weakening old-capture parsing. The normalizer accepts that distinction only for
+an exact adjacent accounting/scope/truth triplet in one ring generation and
+exports `WIFI_DPC_RING_POISONED`, `WIFI_DPC_CLIENT_SAMPLE_STALE`,
+`WIFI_DPC_TRUTH_AUTHORITY`, and `WIFI_DPC_TRUTH_LINE`; malformed, reordered,
+mismatched, or live-poison truth fails closed. A clean live ring with
+`client_sample_stale=yes` proves that recovery is unnecessary but remains
+acceptance-red with `client-sample-stale` until a current bounded rerun. `rearms` remains telemetry: the
+authoritative final rearm condition is `masked=no`, not equality between event
+attempts and client-signal attempts.
 
 The same `netstats` snapshot must include complete maximum-width
 `wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n>
@@ -4041,7 +4052,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       degrade with `required=yes action=serial-shell`; that keeps the UART root
       shell reachable but does not satisfy HDMI/USB acceptance.
   - `netstats` must report:
-    - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`.
+    - `mode=<off|static|dhcp> policy=<wired|wifi|auto> active=<iface> standby=<iface|none> addr_src=<source> ip=<ipv4> gateway=<ipv4> dhcp=<phase>`; the normalizer exposes the selected state as `NET_ACTIVE`, `NET_ADDR_SRC`, and `NET_DHCP`, and separately exposes command/listener proof as `NET_TCP_READY` and `NETTEST_PROOF`. Component-local booleans such as `netstats: cyw43_priority_lease ... active=yes|no` cannot overwrite the selected interface.
     - exactly one complete `nettest: generation=<connection> run_generation=<run> enabled=<bool> running=<bool> verdict=<none|running|pass|peer-assisted-pass|fail> tx_ok=<bool|na> udp_echo_ok=<bool|na> tcp_ok=<bool|na> console_ok=<bool|na> peer_assisted_ok=<bool|na>` status line. `OK NETTEST detail=started run_generation=<run>` admits one immutable run; only a terminal line for the same positive run generation is proof. An internal-only asynchronous log, an incomplete or truncated line, or a prior connection/run-generation verdict is not terminal proof; backend and target strings remain on the separate `nettargets:` line.
     - `tx_submit=<count> tx_complete=<count> tx_free=<count> tx_in_flight=<count> tx_double_submit=<count> tx_zero_len_attempt=<count> arp_rx=<count> arp_tx=<count>`; on CYW43, `tx_complete` is the root release count from exact joined Function-2 terminals. `tx_submit > tx_complete` means an outstanding root TX owner, not a missing firmware-credit acknowledgement.
     - `wifi_assoc=<0|1> wifi_link=<0|1> eapol_rx=<count> eapol_start=<count> eapol_secure=<0|1>`

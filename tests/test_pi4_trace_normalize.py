@@ -43,6 +43,25 @@ JOIN_COMPLETE_HOST_EAPOL = (
 )
 
 
+def healthy_wifi_dpc_triplet(
+    *, generation: int = 9, captures: int = 6, rearms: int | None = None
+) -> list[str]:
+    """Return one canonical healthy accounting/scope/live-truth sample."""
+
+    rearm_count = captures if rearms is None else rearms
+    return [
+        f"CYW43_SDIO_DPC generation={generation} captures={captures} "
+        f"published={captures} consumed={captures} rearms={rearm_count} "
+        "overruns=0 epoch_errors=0 sequence_errors=0 ack_failures=0 "
+        "owner_active=yes poisoned=no masked=no",
+        normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+        f"CYW43_SDIO_DPC_TRUTH generation={generation} owner_active=yes "
+        "ring_poisoned=no client_sample_stale=no "
+        f"ring_consumer={captures} sample_consumer={captures} "
+        "sample_reason=current authority=live-ring action=none",
+    ]
+
+
 def descriptor_seal_suffix(hot_path: str) -> str:
     """Return current runtime descriptor seal proof fields for a hot path."""
 
@@ -316,9 +335,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
         "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
-        "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
-        "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 owner_active=yes poisoned=no masked=no",
+        *healthy_wifi_dpc_triplet(),
     ])
 
 
@@ -478,9 +495,7 @@ def oldgood_wifi_resource_replay_lines() -> list[str]:
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
         "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
-        "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
-        "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 owner_active=yes poisoned=no masked=no",
+        *healthy_wifi_dpc_triplet(),
     ])
 
 
@@ -605,9 +620,7 @@ def pi4_hardware_wifi_gate7_to_10_capture_lines() -> list[str]:
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=0 eapol_secure=1",
         "netstatus: generation=9 ip=192.168.86.154 gateway=192.168.86.1 "
         "src=dhcp-lease dhcp=bound tcp_ready=yes",
-        "CYW43_SDIO_DPC generation=9 captures=16 published=16 consumed=16 "
-        "rearms=16 overruns=0 epoch_errors=0 sequence_errors=0 "
-        "ack_failures=0 owner_active=yes poisoned=no masked=no",
+        *healthy_wifi_dpc_triplet(captures=16),
     ]
 
 
@@ -1607,6 +1620,10 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DPC_ACK_FAILURES": 0,
         "WIFI_DPC_OWNER_ACTIVE": "unknown",
         "WIFI_DPC_POISONED": "unknown",
+        "WIFI_DPC_RING_POISONED": "unknown",
+        "WIFI_DPC_CLIENT_SAMPLE_STALE": "unknown",
+        "WIFI_DPC_TRUTH_AUTHORITY": "unknown",
+        "WIFI_DPC_TRUTH_LINE": 0,
         "WIFI_DPC_MASKED": "unknown",
         "WIFI_DPC_LINE": 0,
         "WIFI_DPC_CHILD_TIMING_STATUS": "UNKNOWN",
@@ -2001,6 +2018,24 @@ def test_gate_summary_tracks_netstatus_tcp_ready_proof() -> None:
     assert record["NET_DHCP"] == "bound"
     assert record["NET_TCP_READY"] == "yes"
     assert record["NETTEST_PROOF"] == "no"
+
+
+def test_gate_summary_keeps_selected_network_after_priority_lease_state() -> None:
+    events = normalizer.parse_events(
+        [
+            "netstats: generation=1 mode=dhcp policy=wifi active=wifi "
+            "standby=none addr_src=dhcp-lease ip=192.168.86.154 "
+            "gateway=192.168.86.1 dhcp=bound",
+            "netstats: cyw43_priority_lease state=inactive pair_epoch=0 "
+            "mask=0x00 active=no close_pending=no",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["NET_ACTIVE"] == "wifi"
+    assert record["NET_ADDR_SRC"] == "dhcp-lease"
+    assert record["NET_DHCP"] == "bound"
 
 
 def test_gate_summary_late_tcp_not_ready_clears_current_tcp_state() -> None:
@@ -9044,13 +9079,7 @@ def test_gate_summary_tracks_usb_runtime_gate_contract() -> None:
 
 
 def test_gate_summary_accepts_exact_healthy_wifi_dpc_proof() -> None:
-    events = normalizer.parse_events(
-        [
-            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
-            "rearms=6 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 owner_active=yes poisoned=no",
-        ]
-    )
+    events = normalizer.parse_events(healthy_wifi_dpc_triplet())
 
     record = normalizer.summarize_gates(events).to_record()
 
@@ -9063,7 +9092,290 @@ def test_gate_summary_accepts_exact_healthy_wifi_dpc_proof() -> None:
     assert record["WIFI_DPC_REARMS"] == 6
     assert record["WIFI_DPC_OWNER_ACTIVE"] == "yes"
     assert record["WIFI_DPC_POISONED"] == "no"
+    assert record["WIFI_DPC_RING_POISONED"] == "no"
+    assert record["WIFI_DPC_CLIENT_SAMPLE_STALE"] == "no"
+    assert record["WIFI_DPC_TRUTH_AUTHORITY"] == "live-ring"
+    assert record["WIFI_DPC_MASKED"] == "no"
+
+
+def test_gate_summary_rejects_wifi_dpc_accounting_without_truth_triplet() -> None:
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([healthy_wifi_dpc_triplet()[0]])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+    assert record["WIFI_DPC_GENERATION"] == 9
+    assert record["WIFI_DPC_CAPTURES"] == 6
+    assert record["WIFI_DPC_TRUTH_LINE"] == 0
+
+
+def test_gate_summary_rejects_malformed_wifi_dpc_scope() -> None:
+    triplet = healthy_wifi_dpc_triplet()
+    triplet[1] = (
+        "CYW43_SDIO_DPC_SCOPE captures=event-attempts "
+        "published=ring-events poisoned=aggregate-client-or-ring "
+        "source=card-int-or-source-probe"
+    )
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(triplet)
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+    assert record["WIFI_DPC_GENERATION"] == 9
+    assert record["WIFI_DPC_TRUTH_LINE"] == 0
+
+
+@pytest.mark.parametrize(
+    "truth",
+    [
+        (
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=current authority=live-ring "
+            "action=none extra=yes"
+        ),
+        (
+            "CYW43_SDIO_DPC_TRUTH owner_active=yes generation=9 "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=current authority=live-ring "
+            "action=none"
+        ),
+        (
+            "CYW43_SDIO_DPC_TRUTH generation=0x9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=current authority=live-ring "
+            "action=none"
+        ),
+    ],
+)
+def test_gate_summary_requires_exact_wifi_dpc_truth_grammar(truth: str) -> None:
+    accounting, scope, _ = healthy_wifi_dpc_triplet()
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([accounting, scope, truth])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+    assert record["WIFI_DPC_GENERATION"] == 9
+    assert record["WIFI_DPC_TRUTH_LINE"] == 0
+
+
+def test_gate_summary_requires_authoritative_unmasked_wifi_dpc_state() -> None:
+    accounting, scope, truth = healthy_wifi_dpc_triplet()
+    accounting = accounting.removesuffix(" masked=no")
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([accounting, scope, truth])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "masked-unproven"
     assert record["WIFI_DPC_MASKED"] == "unknown"
+
+
+def test_gate_summary_rejects_zero_wifi_dpc_generation() -> None:
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(healthy_wifi_dpc_triplet(generation=0))
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "generation-zero"
+    assert record["WIFI_DPC_GENERATION"] == 0
+
+
+def test_gate_summary_rejects_stale_client_sample_with_clean_live_ring() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 owner_active=yes poisoned=yes masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=yes ring_consumer=6 "
+            "sample_consumer=5 sample_reason=ring-consumer-mismatch "
+            "authority=live-ring action=rerun-proof",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "client-sample-stale"
+    assert record["WIFI_DPC_POISONED"] == "yes"
+    assert record["WIFI_DPC_RING_POISONED"] == "no"
+    assert record["WIFI_DPC_CLIENT_SAMPLE_STALE"] == "yes"
+    assert record["WIFI_DPC_TRUTH_AUTHORITY"] == "live-ring"
+    assert record["WIFI_DPC_TRUTH_LINE"] == 3
+    assert record["WIFI_DPC_REARMS"] == 5
+
+
+@pytest.mark.parametrize(
+    ("truth", "reason"),
+    [
+        (
+            "generation=10 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=6 sample_consumer=5 "
+            "sample_reason=ring-consumer-mismatch authority=live-ring "
+            "action=rerun-proof",
+            "truth-generation-mismatch",
+        ),
+        (
+            "generation=9 owner_active=no ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=6 sample_consumer=5 "
+            "sample_reason=ring-consumer-mismatch authority=live-ring "
+            "action=rerun-proof",
+            "truth-owner-mismatch",
+        ),
+        (
+            "generation=9 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=5 sample_consumer=5 "
+            "sample_reason=ring-consumer-mismatch authority=live-ring "
+            "action=rerun-proof",
+            "truth-consumer-mismatch",
+        ),
+        (
+            "generation=9 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=6 sample_consumer=5 "
+            "sample_reason=ring-consumer-mismatch authority=cached-client "
+            "action=rerun-proof",
+            "truth-authority-invalid",
+        ),
+        (
+            "generation=9 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=6 sample_consumer=5 "
+            "sample_reason=current authority=live-ring action=rerun-proof",
+            "truth-reason-mismatch",
+        ),
+        (
+            "generation=9 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=yes ring_consumer=6 sample_consumer=5 "
+            "sample_reason=ring-consumer-mismatch authority=live-ring "
+            "action=none",
+            "truth-action-mismatch",
+        ),
+        (
+            "generation=9 owner_active=yes ring_poisoned=no "
+            "client_sample_stale=no ring_consumer=6 sample_consumer=5 "
+            "sample_reason=current authority=live-ring action=none",
+            "truth-stale-state-mismatch",
+        ),
+    ],
+)
+def test_gate_summary_rejects_mismatched_wifi_dpc_truth(
+    truth: str, reason: str
+) -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 owner_active=yes poisoned=yes masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            f"CYW43_SDIO_DPC_TRUTH {truth}",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == reason
+
+
+def test_gate_summary_rejects_live_ring_poison_truth() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 owner_active=yes poisoned=yes masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=yes client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=ring-poisoned "
+            "authority=live-ring action=restart-pair",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "poisoned"
+    assert record["WIFI_DPC_RING_POISONED"] == "yes"
+
+
+def test_gate_summary_rejects_unpaired_wifi_dpc_truth() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 owner_active=yes poisoned=yes masked=no",
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=yes ring_consumer=6 "
+            "sample_consumer=5 sample_reason=ring-consumer-mismatch "
+            "authority=live-ring action=rerun-proof",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+
+
+def test_gate_summary_rejects_orphan_live_poison_after_healthy_truth() -> None:
+    events = normalizer.parse_events(
+        [
+            "CYW43_SDIO_DPC generation=9 captures=6 published=6 consumed=6 "
+            "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
+            "ack_failures=0 owner_active=yes poisoned=no masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=current authority=live-ring "
+            "action=none",
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=yes client_sample_stale=no ring_consumer=6 "
+            "sample_consumer=6 sample_reason=ring-poisoned "
+            "authority=live-ring action=restart-pair",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+    assert record["WIFI_DPC_RING_POISONED"] == "no"
+
+
+def test_gate_summary_rejects_cross_generation_orphan_dpc_truth() -> None:
+    events = normalizer.parse_events(
+        [
+            *healthy_wifi_dpc_triplet(generation=9),
+            "CYW43_SDIO_DPC_TRUTH generation=10 owner_active=yes "
+            "ring_poisoned=yes client_sample_stale=no ring_consumer=7 "
+            "sample_consumer=7 sample_reason=ring-poisoned "
+            "authority=live-ring action=restart-pair",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+    assert record["WIFI_DPC_GENERATION"] == 9
+    assert record["WIFI_DPC_RING_POISONED"] == "no"
+
+
+def test_gate_summary_treats_rearm_count_as_unmasked_telemetry() -> None:
+    events = normalizer.parse_events(healthy_wifi_dpc_triplet(rearms=5))
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_REASON"] == "none"
+    assert record["WIFI_DPC_REARMS"] == 5
 
 
 def test_gate_summary_rejects_legacy_dpc_line_without_owner_active_proof() -> None:
@@ -9080,7 +9392,7 @@ def test_gate_summary_rejects_legacy_dpc_line_without_owner_active_proof() -> No
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["WIFI_DPC_PROOF"] == "no"
-    assert record["WIFI_DPC_REASON"] == "owner-active-unproven"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
     assert record["WIFI_DPC_OWNER_ACTIVE"] == "unknown"
 
 
@@ -9090,6 +9402,11 @@ def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
             "CYW43_SDIO_DPC generation=10 captures=0 published=0 consumed=0 "
             "rearms=0 overruns=0 epoch_errors=0 sequence_errors=0 "
             "ack_failures=0 owner_active=yes poisoned=no masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            "CYW43_SDIO_DPC_TRUTH generation=10 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=0 "
+            "sample_consumer=0 sample_reason=current authority=live-ring "
+            "action=none",
         ]
     )
 
@@ -9125,7 +9442,6 @@ def test_gate_summary_rejects_exact_zero_activity_wifi_dpc_proof() -> None:
         ({"published": 5}, "capture-publish-mismatch"),
         ({"consumed": 5}, "consume-publish-mismatch"),
         ({"masked": "yes"}, "masked"),
-        ({"masked": "no", "rearms": 5}, "unrearmed"),
     ],
 )
 def test_gate_summary_rejects_invalid_wifi_dpc_proof(
@@ -9143,9 +9459,24 @@ def test_gate_summary_rejects_invalid_wifi_dpc_proof(
         "ack_failures": 0,
         "owner_active": "yes",
         "poisoned": "no",
+        "masked": "no",
     }
     values.update(fields)
-    masked = f" masked={values['masked']}" if "masked" in values else ""
+    if values["epoch_errors"] != 0:
+        values["poisoned"] = "yes"
+    ring_poisoned = (
+        "yes"
+        if values["poisoned"] == "yes" and values["epoch_errors"] == 0
+        else "no"
+    )
+    if ring_poisoned == "yes":
+        sample_reason, action = "ring-poisoned", "restart-pair"
+    elif values["owner_active"] == "no":
+        sample_reason, action = "owner-inactive", "activate-owner"
+    elif values["masked"] == "yes":
+        sample_reason, action = "owner-rearm-pending", "service-sdio-owner"
+    else:
+        sample_reason, action = "current", "none"
     events = normalizer.parse_events(
         [
             "CYW43_SDIO_DPC "
@@ -9156,7 +9487,15 @@ def test_gate_summary_rejects_invalid_wifi_dpc_proof(
             f"sequence_errors={values['sequence_errors']} "
             f"ack_failures={values['ack_failures']} "
             f"owner_active={values['owner_active']} "
-            f"poisoned={values['poisoned']}{masked}",
+            f"poisoned={values['poisoned']} masked={values['masked']}",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            f"CYW43_SDIO_DPC_TRUTH generation={values['generation']} "
+            f"owner_active={values['owner_active']} "
+            f"ring_poisoned={ring_poisoned} client_sample_stale=no "
+            f"ring_consumer={values['consumed']} "
+            f"sample_consumer={values['consumed']} "
+            f"sample_reason={sample_reason} authority=live-ring "
+            f"action={action}",
         ]
     )
 
@@ -9229,9 +9568,12 @@ def test_wifi_dpc_proof_retains_failure_within_latest_generation() -> None:
             "CYW43_SDIO_DPC generation=9 captures=6 published=5 consumed=5 "
             "rearms=5 overruns=0 epoch_errors=0 sequence_errors=0 "
             "ack_failures=0 owner_active=yes poisoned=no masked=no",
-            "CYW43_SDIO_DPC generation=9 captures=8 published=8 consumed=8 "
-            "rearms=8 overruns=0 epoch_errors=0 sequence_errors=0 "
-            "ack_failures=0 owner_active=yes poisoned=no masked=no",
+            normalizer.CYW43_SDIO_DPC_SCOPE_LINE,
+            "CYW43_SDIO_DPC_TRUTH generation=9 owner_active=yes "
+            "ring_poisoned=no client_sample_stale=no ring_consumer=5 "
+            "sample_consumer=5 sample_reason=current authority=live-ring "
+            "action=none",
+            *healthy_wifi_dpc_triplet(captures=8),
         ]
     )
 
@@ -14794,13 +15136,9 @@ def wifi_generation_gate10_lines(
             "[cohsh-net][auth] auth OK, session established "
             f"(generation={auth_generation if auth_generation is not None else generation} "
             "conn_id=1)",
-            "CYW43_SDIO_DPC "
-            f"generation={resolved_dpc_generation} "
-            "captures=6 published=6 consumed=6 rearms=6 overruns=0 "
-            "epoch_errors=0 sequence_errors=0 ack_failures=0 "
-            "owner_active=yes poisoned=no masked=no",
         ]
     )
+    lines.extend(healthy_wifi_dpc_triplet(generation=resolved_dpc_generation))
     return lines
 
 
