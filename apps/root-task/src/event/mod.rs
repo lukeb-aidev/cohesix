@@ -10232,7 +10232,10 @@ where
         );
         let submitted = counters.map_or(0, |snapshot| snapshot.submitted_turns);
         let completed = counters.map_or(0, |snapshot| snapshot.completed_turns);
-        let outstanding = submitted.saturating_sub(completed);
+        let active = crate::hal::driver_task::driver_task_ring_command_active(
+            crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT,
+        );
+        let outstanding = Self::hdmi_current_outstanding(active, submitted, completed);
         let (state, blocker, receipt, next_action) = if trace.stale_after_retry_exhaustion {
             (
                 "degraded",
@@ -10269,9 +10272,10 @@ where
         ));
         self.emit_console_line(status.as_str());
         let driver = format_message(format_args!(
-            "hdmi: driver contract={} counters={} submitted={} completed={} outstanding={} no_reply_streak={} cooldown={} stale={}",
+            "hdmi: driver contract={} counters={} active={} submitted={} completed={} outstanding={} no_reply_streak={} cooldown={} stale={}",
             crate::hal::driver_task::HDMI_TEXT_DRIVER_TASK_CONTRACT.name,
             if counters.is_some() { "present" } else { "absent" },
+            Self::yes_no(active),
             submitted,
             completed,
             outstanding,
@@ -10280,6 +10284,15 @@ where
             Self::yes_no(trace.stale_after_retry_exhaustion),
         ));
         self.emit_console_line(driver.as_str());
+    }
+
+    #[cfg(feature = "kernel")]
+    const fn hdmi_current_outstanding(active: bool, _submitted: u64, _completed: u64) -> u64 {
+        if active {
+            1
+        } else {
+            0
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -10586,9 +10599,8 @@ where
             queue_valid,
             linked_first_byte_accepted,
             queued_reports,
-            transfer_events,
             report_status,
-            local_trace.driver_task_no_replies,
+            local_trace.driver_task_no_reply_streak,
             crate::hal::driver_task::driver_task_ring_command_active(
                 crate::hal::driver_task::USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT,
             ),
@@ -13394,9 +13406,8 @@ where
         queue_valid: bool,
         linked_first_byte_accepted: bool,
         queued_reports: u32,
-        transfer_events: u32,
         report_status: u32,
-        no_replies: u64,
+        no_reply_streak: u64,
         retained_active: bool,
         retained_outstanding: u64,
         retained_no_progress: usize,
@@ -13421,9 +13432,9 @@ where
             "usb-post-first-byte-unmatched-transfer"
         } else if queued_reports == 0 {
             "usb-post-first-byte-queue-empty"
-        } else if queued_reports <= 8 && transfer_events >= 32 {
+        } else if queued_reports > 1 {
             "usb-post-first-byte-queue-collapse-risk"
-        } else if no_replies != 0 {
+        } else if no_reply_streak != 0 {
             "usb-post-first-byte-no-reply"
         } else {
             "none"
@@ -35576,49 +35587,49 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, false, 4, 255, 6, 6, false, 0, 0
+                true, false, 1, 6, 6, false, 0, 0
             ),
             "usb-physical-input-unproven"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, false, 4, 255, 11, 0, false, 0, 0
+                true, false, 1, 11, 0, false, 0, 0
             ),
             "usb-physical-input-unproven"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, true, 4, 255, 6, 6, false, 0, 0
-            ),
-            "usb-post-first-byte-queue-collapse-risk"
-        );
-        assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, true, 8, 255, 6, 0, false, 0, 0
-            ),
-            "usb-post-first-byte-queue-collapse-risk"
-        );
-        assert_eq!(
-            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, true, 9, 255, 6, 0, false, 0, 0
+                true, true, 1, 6, 0, false, 0, 0
             ),
             "none"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, true, 4, 255, 9, 0, false, 0, 0
+                true, true, 2, 6, 0, false, 0, 0
+            ),
+            "usb-post-first-byte-queue-collapse-risk"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, true, 1, 6, 1, false, 0, 0
+            ),
+            "usb-post-first-byte-no-reply"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, true, 1, 9, 0, false, 0, 0
             ),
             "usb-post-first-byte-queue-collapse"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, true, 4, 255, 11, 0, false, 0, 0
+                true, true, 1, 11, 0, false, 0, 0
             ),
             "usb-post-first-byte-recovery-failed"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, false, 9, 1, 6, 0, true, 1, 127
+                true, false, 1, 6, 0, true, 1, 127
             ),
             "usb-retained-request-no-terminal"
         );
@@ -35636,6 +35647,26 @@ mod tests {
         );
         assert!(
             !KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 10)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn hdmi_completion_status_uses_current_active_request_not_cumulative_gap() {
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_current_outstanding(false, 104, 103),
+            0,
+            "an inactive driver has no current request even when cumulative timeout counters differ",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_current_outstanding(true, 104, 103),
+            1,
+            "the exact active request remains visible",
+        );
+        assert_eq!(
+            KernelConsoleTestPump::hdmi_current_outstanding(true, 104, 100),
+            1,
+            "one-slot active authority cannot inherit historical submitted/completed debt",
         );
     }
 

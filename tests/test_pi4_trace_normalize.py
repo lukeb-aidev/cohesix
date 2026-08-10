@@ -143,6 +143,9 @@ def oldgood_usb_replay_lines() -> list[str]:
         "len=8 keys=0x17 transfer_event=yes",
         "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no "
         "clean_polls=2 no_reply=0 recovery_pending=no",
+        "usb: runtime_queue queue_valid=yes queued_reports=1 "
+        "doorbell_pending=no preserved_events=0 transfer_events=1 "
+        "report_status=produced-byte",
         "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
         "read=1 ascii=0x74 key=0x17",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
@@ -2648,7 +2651,7 @@ def test_gate_summary_clears_recovery_request_after_sustained_input() -> None:
             "echoed=10 detail=0x0501 result=0x00000220 queued_reports=1 "
             "report_status=none report_status_code=0",
             "usb: sustained_input queue_valid=yes detail=0x0501 "
-            "result=0x64000020 queued_reports=32 transfer_events=100 "
+            "result=0x64000020 queued_reports=1 transfer_events=100 "
             "report_status=none accepted=14 drained=14 echoed=14 "
             "no_reply=27 no_reply_streak=0 recovery_aux_requests=1 "
             "recovery_aux_pending=no blocker=none",
@@ -2993,7 +2996,7 @@ def test_gate_summary_accepts_sustained_input_usb_burst_field() -> None:
 
     events = normalizer.parse_events(
         [
-            "usb: sustained_input queued_reports=24 transfer_events=128 "
+            "usb: sustained_input queued_reports=1 transfer_events=128 "
             "report_status=produced-byte accepted=512 drained=512 echoed=512 "
             "no_reply=0 runtime_skipped=8 blocker=none usb_burst=yes drops=0",
         ]
@@ -3004,7 +3007,7 @@ def test_gate_summary_accepts_sustained_input_usb_burst_field() -> None:
     assert record["USB_BURST_PROOF"] == "yes"
     assert record["USB_BURST_DROPS"] == 0
     assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
-    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 24
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 1
     assert record["USB_RUNTIME_REPORT_STATUS"] == "produced-byte"
     assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 8
 
@@ -5130,7 +5133,7 @@ def test_gate_summary_labels_idle_hid_report_as_awaiting_physical_key() -> None:
     events = normalizer.parse_events(
         [
             "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000480 "
-            "queued_reports=128 doorbell_pending=no preserved_events=0 "
+            "queued_reports=1 doorbell_pending=no preserved_events=0 "
             "transfer_events=1 report_status=idle-report",
             "usb: acceptance xhci=yes hid_keyboard=yes first_report=yes "
             "first_byte=no usable=no prompt_polling=yes "
@@ -9806,9 +9809,9 @@ def test_gate_summary_tracks_usb_startup_churn_without_marking_recovered() -> No
 def test_gate_summary_names_usb_hid_interrupt_no_completion() -> None:
     events = normalizer.parse_events(
         [
-            "usb: runtime_queue queue_valid=yes queued_reports=32 "
+            "usb: runtime_queue queue_valid=yes queued_reports=1 "
             "doorbell_pending=no preserved_events=0 transfer_events=0 "
-            "report_status=none",
+            "report_status=none pre_first_report_no_completion=yes debt=yes",
         ]
     )
 
@@ -9825,9 +9828,9 @@ def test_gate_summary_downgrades_command_ready_hid_no_completion() -> None:
         [
             "[local-seat] usb keyboard command-ready action=enable-command-input "
             "clean_polls=2 no_reply=0 recovery_pending=no",
-            "usb: runtime_queue queue_valid=yes queued_reports=32 "
+            "usb: runtime_queue queue_valid=yes queued_reports=1 "
             "doorbell_pending=no preserved_events=0 transfer_events=0 "
-            "report_status=decoded-empty",
+            "report_status=decoded-empty pre_first_report_no_completion=yes debt=yes",
         ]
     )
 
@@ -9841,13 +9844,102 @@ def test_gate_summary_downgrades_command_ready_hid_no_completion() -> None:
     assert record["USB_BUSY_AFTER_READY"] == "yes"
 
 
+def test_gate_summary_rejects_non_one_deep_queue_before_first_byte() -> None:
+    """Command readiness cannot authorize an invalid interrupt-IN depth."""
+
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes queued_reports=2 "
+            "doorbell_pending=no preserved_events=0 transfer_events=1 "
+            "report_status=idle-report",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "command_ready=yes proof_gate=10 target_gate=10 blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 2
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-queue-depth-invalid"
+    assert record["USB_COMMAND_READY"] == "no"
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_BUSY_AFTER_READY"] == "yes"
+
+
+def test_gate_summary_keeps_invalid_queue_depth_after_later_first_byte() -> None:
+    """A later byte cannot clear an invalid depth without a one-deep receipt."""
+
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready action=enable-command-input "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_queue queue_valid=yes queued_reports=2 "
+            "doorbell_pending=no preserved_events=0 transfer_events=1 "
+            "report_status=idle-report",
+            "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+            "read=1 ascii=0x61",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "first_byte_source=linked-runtime-hid command_ready=yes "
+            "proof_gate=10 target_gate=10 blocker=none",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 2
+    assert record["USB_ACTIVE_BLOCKER_SEEN"] == "yes"
+    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-queue-depth-invalid"
+    assert record["USB_BUSY_AFTER_READY"] == "yes"
+
+
+def test_boot_evidence_requires_current_one_deep_usb_queue() -> None:
+    """Gate 10 text alone cannot replace the current one-deep queue receipt."""
+
+    ready_lines = [
+        "[local-seat] usb keyboard command-ready action=enable-command-input "
+        "clean_polls=2 no_reply=0 recovery_pending=no",
+        "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
+        "read=1 ascii=0x61",
+        "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+        "first_byte_source=linked-runtime-hid command_ready=yes "
+        "proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+    missing_record = normalizer.summarize_gates(
+        normalizer.parse_events(ready_lines)
+    ).to_record()
+    assert "local-seat-usb-one-deep-proof-missing" in (
+        normalizer.boot_evidence_blockers(missing_record)
+    )
+
+    current_record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            ready_lines
+            + [
+                "usb: runtime_queue queue_valid=yes queued_reports=1 "
+                "doorbell_pending=no preserved_events=0 transfer_events=2 "
+                "report_status=idle-report"
+            ]
+        )
+    ).to_record()
+    assert "local-seat-usb-one-deep-proof-missing" not in (
+        normalizer.boot_evidence_blockers(current_record)
+    )
+
+
 def test_gate_summary_keeps_late_command_ready_bad_after_hid_no_completion() -> None:
     events = normalizer.parse_events(
         [
             "usb: recovery_request action=no-reply aux0=0x00000003 no_reply=128 "
             "streak=128 cooldown=2 recovery_aux_requests=2 recovery_aux_pending=yes "
             "queue_empty=yes accepted=0 drained=0 echoed=0 detail=0x0501 "
-            "result=0x00000020 queued_reports=32 report_status=none "
+            "result=0x00000020 queued_reports=1 report_status=none "
             "report_status_code=0 stale_runtime_queue=no full_idle_queue=yes "
             "pre_first_report_no_completion=yes debt=yes",
             "[local-seat] usb keyboard command-ready action=enable-command-input "
@@ -9874,10 +9966,10 @@ def test_gate_summary_treats_post_ready_cumulative_usb_counters_as_historical() 
             "reason=keyboard-poll-cooldown action=log-recovery-deferred",
             "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
             "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000420 "
-            "queued_reports=32 doorbell_pending=no preserved_events=0 "
+            "queued_reports=1 doorbell_pending=no preserved_events=0 "
             "transfer_events=1 report_status=idle-report",
             "usb: sustained_input queue_valid=yes detail=0x0501 result=0x01000420 "
-            "queued_reports=32 transfer_events=1 report_status=idle-report "
+            "queued_reports=1 transfer_events=1 report_status=idle-report "
             "arming=0 accepted=0 drained=0 echoed=0 no_reply=889 no_reply_streak=0 "
             "recovery_aux_requests=0 recovery_aux_pending=no runtime_skipped=902 "
             "blocker=none usb_burst=no drops=0",
@@ -9941,7 +10033,7 @@ def test_gate_summary_treats_missing_usb_recovery_diag_as_telemetry_for_idle_rep
         [
             "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no",
             "usb: runtime_queue queue_valid=yes detail=0x0501 result=0x01000420 "
-            "queued_reports=32 doorbell_pending=no preserved_events=0 "
+            "queued_reports=1 doorbell_pending=no preserved_events=0 "
             "transfer_events=1 report_status=idle-report",
             "usb: runtime_recovery diag_valid=no recoveries=0 failures=0 "
             "queue_collapse=0 stage=none stage_code=0 reason=none reason_code=0 "
@@ -9986,12 +10078,12 @@ def test_gate_summary_keeps_missing_usb_recovery_diag_degraded_for_recovery_faul
     record = normalizer.summarize_gates(events).to_record()
     blockers = normalizer.boot_evidence_blockers(record)
 
-    assert record["USB_GATE"] == 10
-    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-queue-depth-invalid"
     assert record["USB_RUNTIME_RECOVERY_DIAG_VALID"] == "no"
-    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
-    assert record["USB_LOCAL_SEAT_REASON"] == "usb-runtime-diag-invalid"
-    assert "local-seat-usb-degraded" in blockers
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-queue-depth-invalid"
+    assert "local-seat-usb-gate-incomplete" in blockers
 
 
 def test_gate_summary_marks_usb_degraded_after_post_ready_blocker() -> None:
@@ -10010,14 +10102,14 @@ def test_gate_summary_marks_usb_degraded_after_post_ready_blocker() -> None:
     record = normalizer.summarize_gates(events).to_record()
     blockers = normalizer.boot_evidence_blockers(record)
 
-    assert record["USB_GATE"] == 10
-    assert record["USB_BLOCKER"] == "none"
+    assert record["USB_GATE"] == 8
+    assert record["USB_BLOCKER"] == "usb-hid-interrupt-queue-depth-invalid"
     assert record["USB_STARTUP_BLOCKER_SEEN"] == "no"
     assert record["USB_ACTIVE_BLOCKER_SEEN"] == "yes"
     assert record["USB_RECOVERED_FROM_BLOCKER"] == "yes"
-    assert record["USB_LOCAL_SEAT_STATE"] == "degraded"
-    assert record["USB_LOCAL_SEAT_REASON"] == "usb-post-ready-busy"
-    assert "local-seat-usb-degraded" in blockers
+    assert record["USB_LOCAL_SEAT_STATE"] == "blocked"
+    assert record["USB_LOCAL_SEAT_REASON"] == "usb-hid-interrupt-queue-depth-invalid"
+    assert "local-seat-usb-gate-incomplete" in blockers
     assert "local-seat-usb-active-blocker" in blockers
 
 
@@ -10080,7 +10172,7 @@ def test_gate_summary_treats_sustained_input_as_post_busy_progress() -> None:
             "[local-seat] usb keyboard command-deferred "
             "reason=keyboard-poll-no-reply action=log-recovery-deferred",
             "usb: sustained_input queue_valid=yes detail=0x0501 "
-            "result=0x64000020 queued_reports=32 transfer_events=100 "
+            "result=0x64000020 queued_reports=1 transfer_events=100 "
             "report_status=none accepted=14 drained=14 echoed=14 "
             "no_reply=27 no_reply_streak=0 recovery_aux_requests=1 "
             "recovery_aux_pending=no blocker=none usb_burst=yes drops=0",
@@ -10316,10 +10408,10 @@ def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
             "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
             "[local-seat] runtime keyboard first-byte source=linked-runtime-hid "
             "read=1 ascii=0x61",
-            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "usb: runtime_queue queue_valid=yes queued_reports=2 "
             "doorbell_pending=no preserved_events=0 transfer_events=255 "
             "report_status=produced-byte",
-            "usb: sustained_verdict blocker=usb-physical-input-unproven "
+            "usb: sustained_verdict blocker=usb-post-first-byte-queue-collapse-risk "
             "usb_burst=no drops=0",
             "usb: event_loop keyboard_priority=97 runtime_skipped=97 "
             "serial_dispatch_yielded=308 post_runtime_keyboard=211 "
@@ -10333,7 +10425,7 @@ def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
         record["USB_POST_FIRST_BYTE_BLOCKER"]
         == "usb-post-first-byte-queue-collapse-risk"
     )
-    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 4
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 2
     assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 255
     assert record["USB_RUNTIME_REPORT_STATUS"] == "produced-byte"
     assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
@@ -10347,9 +10439,9 @@ def test_gate_summary_does_not_infer_first_byte_from_usb_gate10() -> None:
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
             "first_byte_source=none proof_gate=10 target_gate=10 "
             "next=command-input-ready blocker=none",
-            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "usb: runtime_queue queue_valid=yes queued_reports=1 "
             "doorbell_pending=no preserved_events=0 transfer_events=255 "
-            "report_status=produced-byte",
+            "report_status=idle-report",
         ]
     )
 
@@ -10364,21 +10456,48 @@ def test_gate_summary_does_not_infer_first_byte_from_usb_gate10() -> None:
 def test_gate_summary_uses_linked_runtime_first_byte_for_post_input_health() -> None:
     events = normalizer.parse_events(
         [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
             "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
             "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
             "next=command-input-ready blocker=none",
-            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "usb: runtime_queue queue_valid=yes queued_reports=1 "
             "doorbell_pending=no preserved_events=0 transfer_events=255 "
-            "report_status=produced-byte",
+            "report_status=idle-report",
         ]
     )
 
     record = normalizer.summarize_gates(events).to_record()
 
-    assert (
-        record["USB_POST_FIRST_BYTE_BLOCKER"]
-        == "usb-post-first-byte-queue-collapse-risk"
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+
+
+def test_gate_summary_uses_current_active_no_progress_not_cumulative_keep_active() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "first_byte_source=linked-runtime-hid command_ready=yes "
+            "proof_gate=10 target_gate=10 blocker=none",
+            "usb: stall_counter domain=usb-runtime contract=usb-local-seat "
+            "active=yes outstanding=11 active_no_progress=0 submitted=81843 "
+            "completed=81832 busy=0 same=658976 timeouts=2148 "
+            "keep_active=2143 aborts=5 fault=0 budget=0 rx=9/9 tx=0/0",
+            "usb: runtime_queue queue_valid=yes queued_reports=1 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=idle-report",
+        ]
     )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_RUNTIME_DRIVER_ACTIVE"] == "yes"
+    assert record["USB_RUNTIME_DRIVER_ACTIVE_NO_PROGRESS"] == 0
+    assert record["USB_RUNTIME_DRIVER_KEEP_ACTIVE"] == 2143
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
 
 
 def test_gate_summary_prefers_sustained_input_blocker() -> None:
@@ -19706,8 +19825,9 @@ def test_hdmi_passive_status_requires_driver_completion_receipt() -> None:
             [
                 "hdmi: status mode=passive source=usb-status state=ready "
                 "blocker=none receipt=driver-task-completion next_action=none",
-                "hdmi: driver contract=hdmi-text counters=present submitted=6 "
-                "completed=6 outstanding=0 no_reply_streak=0 cooldown=0 stale=no",
+                "hdmi: driver contract=hdmi-text counters=present active=no "
+                "submitted=104 completed=103 outstanding=0 no_reply_streak=0 "
+                "cooldown=0 stale=no",
             ]
         )
     ).to_record()
@@ -19717,6 +19837,52 @@ def test_hdmi_passive_status_requires_driver_completion_receipt() -> None:
     assert record["HDMI_STATUS_RECEIPT"] == "driver-task-completion"
     assert record["HDMI_DRIVER_OUTSTANDING"] == 0
     assert record["HDMI_RESPONSIVE_PROOF"] == "yes"
+
+
+def test_hdmi_passive_status_rejects_missing_or_inconsistent_driver_receipt() -> None:
+    """Passive ready text cannot replace one exact current driver receipt."""
+
+    status = (
+        "hdmi: status mode=passive source=usb-status state=ready "
+        "blocker=none receipt=driver-task-completion next_action=none"
+    )
+    invalid_driver_rows = (
+        None,
+        "hdmi: driver contract=hdmi-text counters=present active=yes "
+        "submitted=104 completed=103 outstanding=0 no_reply_streak=0 "
+        "cooldown=0 stale=no",
+        "hdmi: driver contract=hdmi-text counters=absent active=no "
+        "submitted=0 completed=0 outstanding=0 no_reply_streak=0 "
+        "cooldown=0 stale=no",
+        "hdmi: driver contract=hdmi-text counters=present active=no "
+        "submitted=104 completed=103 outstanding=0 no_reply_streak=1 "
+        "cooldown=0 stale=no",
+        "hdmi: driver contract=hdmi-text counters=present active=no "
+        "submitted=104 completed=103 outstanding=0 no_reply_streak=0 "
+        "cooldown=0 stale=yes",
+    )
+
+    for driver_row in invalid_driver_rows:
+        lines = [status]
+        if driver_row is not None:
+            lines.append(driver_row)
+        record = normalizer.summarize_gates(
+            normalizer.parse_events(lines)
+        ).to_record()
+        assert record["HDMI_RESPONSIVE_PROOF"] == "no"
+
+    spliced_record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [
+                status,
+                "this raw serial line is deliberately unclassified",
+                "hdmi: driver contract=hdmi-text counters=present active=no "
+                "submitted=104 completed=103 outstanding=0 no_reply_streak=0 "
+                "cooldown=0 stale=no",
+            ]
+        )
+    ).to_record()
+    assert spliced_record["HDMI_RESPONSIVE_PROOF"] == "no"
 
 
 def test_usb_diag_liveness_reports_real_post_command_input_delta() -> None:

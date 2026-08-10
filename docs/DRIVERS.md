@@ -613,6 +613,11 @@ reusable ownership pattern.
   completion. None implies the next.
 - Keep exactly one production keyboard interrupt-IN transfer active. Ring
   capacity is storage capacity, not permission for multiple active transfers.
+- Interpret sustained queue diagnostics against that invariant: zero entries
+  is empty, one is healthy, and more than one is a queue-depth fault. A large
+  cumulative transfer count cannot turn the healthy one-deep state into a
+  collapse warning. Use the current no-reply streak for liveness; retain the
+  cumulative no-reply total as telemetry only.
 - After attach or recovery, require a decoded all-zero idle report before
   accepting make transitions; do not turn a held key into a synthetic command.
 - Emit every ordinary key once per make/release edge. Only held arrow usages
@@ -677,6 +682,12 @@ reusable ownership pattern.
 - Distinguish queue acceptance from completed rendering. A ready receipt needs
   a completed display-runtime turn with no outstanding submission or exhausted
   retry; mirroring or queueing a line is insufficient.
+- Bind current outstanding status to the display driver's active request. An
+  inactive historical submitted/completed counter gap remains cumulative
+  timeout telemetry and cannot fabricate live display work. Passive acceptance
+  requires the adjacent current `hdmi: driver` record with present counters,
+  no active request, at least one completion, no no-reply streak, and no stale
+  snapshot.
 - Once a snapshot establishes the viewport, held arrows chase the requested
   history offset by one completed CSI `S`/`T` row per bounded display turn.
   A scroll count at least as large as the viewport clears the text area while

@@ -2841,7 +2841,18 @@ The USB keyboard runtime keeps one interrupt-IN transfer active for the whole
 endpoint lifetime and rearms one successor after each completion.
 `queued_reports=1` is therefore the healthy armed state before and after the
 first HID report; larger values are an invariant failure, not throughput
-headroom. HID setup requests an unchanged boot report every one second on that
+headroom. Passive sustained-input diagnostics apply that exact invariant:
+zero is empty, one is healthy, and more than one is queue-depth risk regardless
+of the cumulative transfer-event count. They use the current consecutive
+no-reply streak rather than historical no-reply totals. Formal hardware
+acceptance fails closed unless a current record proves both `queue_valid=yes`
+and `queued_reports=1`; a missing record is not a one-deep receipt. HDMI status likewise
+uses current driver-task active authority; an inactive historical
+submitted/completed counter gap is retained as telemetry, not misreported as a
+live outstanding display turn. A passive HDMI-ready verdict is acceptance-valid
+only with its adjacent current driver record proving present counters, inactive
+authority, at least one completion, zero outstanding work, no current no-reply
+streak, and no stale snapshot. HID setup requests an unchanged boot report every one second on that
 same endpoint lifetime, allowing an idle keyboard to establish the decoded
 all-zero attach baseline without an operator keypress. Gate 10 may therefore
 show command readiness without a keypress, but live local-seat acceptance still

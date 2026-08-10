@@ -2126,6 +2126,8 @@ def classify_domain(line: str) -> str | None:
         )
     ):
         return "usb"
+    if line.startswith("hdmi:") or line.startswith("HDMI:"):
+        return "driver"
     if line == "halting...":
         return "kernel"
     if line.startswith("Kernel entry via Interrupt"):
@@ -11269,6 +11271,9 @@ class UsbRuntimeQueueSummary:
     """Latest USB runtime queue and sustained-input counters."""
 
     queued_reports: int = 0
+    queue_observed: bool = False
+    queue_observed_after_ready: bool = False
+    no_completion_debt: bool = False
     transfer_events: int = 0
     report_status: str = "unknown"
     queue_valid: str = "unknown"
@@ -11312,7 +11317,7 @@ def update_usb_keyboard_pressure_field(
 
 
 def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
-    """Return true for a full HID interrupt queue that has produced no events."""
+    """Return true for an armed HID queue with explicit no-completion debt."""
 
     queued_reports = parse_hex_int(fields.get("queued_reports"))
     transfer_events = parse_hex_int(fields.get("transfer_events"))
@@ -11320,20 +11325,30 @@ def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
         fields.get("doorbell_pending") or fields.get("doorbell") or ""
     ).lower()
     report_status = fields.get("report_status", "none").lower().replace("_", "-")
-    full_idle_queue = fields.get("full_idle_queue", "").lower() in {"1", "true", "yes"}
+    full_idle_queue = fields.get("full_idle_queue", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     pre_first_report_no_completion = fields.get(
         "pre_first_report_no_completion", ""
     ).lower() in {"1", "true", "yes"}
+    no_completion_debt = fields.get("debt", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     if (
         queued_reports is not None
-        and queued_reports >= 32
-        and pre_first_report_no_completion
+        and queued_reports == 1
+        and (pre_first_report_no_completion or no_completion_debt)
         and doorbell_pending in {"", "0", "false", "no"}
     ):
         return True
     return (
         queued_reports is not None
-        and queued_reports >= 32
+        and queued_reports == 1
+        and full_idle_queue
         and (transfer_events == 0 or (transfer_events is None and full_idle_queue))
         and doorbell_pending in {"", "0", "false", "no"}
         and report_status in {"none", "idle", "idle-report", "decoded-empty"}
@@ -11347,10 +11362,13 @@ def usb_runtime_hid_interrupt_no_completion(
 
     return (
         not runtime.first_byte_ready
-        and runtime.queued_reports >= 32
+        and runtime.queue_observed
+        and runtime.queued_reports == 1
+        and runtime.no_completion_debt
         and runtime.transfer_events == 0
         and runtime.doorbell_pending in {"unknown", "", "0", "false", "no"}
-        and runtime.report_status in {"unknown", "none", "idle", "idle-report", "decoded-empty"}
+        and runtime.report_status
+        in {"unknown", "none", "idle", "idle-report", "decoded-empty"}
     )
 
 
@@ -11361,6 +11379,25 @@ def refine_usb_gate_for_runtime_truth(
 ) -> tuple[int, str, UsbRuntimeQueueSummary]:
     """Downgrade impossible USB-ready combinations to the current blocker."""
 
+    if (
+        runtime.command_ready
+        and runtime.queue_observed_after_ready
+        and runtime.queued_reports != 1
+    ):
+        active_after_ready = runtime.command_ready or runtime.active_blocker_seen
+        refined_runtime = replace(
+            runtime,
+            command_ready=(
+                runtime.command_ready if runtime.first_byte_ready else False
+            ),
+            active_blocker_seen=active_after_ready,
+            recovery_state="degraded-active" if active_after_ready else runtime.recovery_state,
+            local_seat_reason="usb-hid-interrupt-queue-depth-invalid",
+            busy_after_ready=active_after_ready or runtime.busy_after_ready,
+        )
+        if runtime.first_byte_ready:
+            return usb_gate, usb_blocker, refined_runtime
+        return 8, "usb-hid-interrupt-queue-depth-invalid", refined_runtime
     if usb_runtime_hid_interrupt_no_completion(runtime):
         active_after_ready = runtime.command_ready or runtime.active_blocker_seen
         refined_runtime = replace(
@@ -11567,6 +11604,14 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             queued_reports = parse_hex_int(fields.get("queued_reports"))
             if queued_reports is not None:
                 values["queued_reports"] = queued_reports
+                values["queue_observed"] = True
+                values["queue_observed_after_ready"] = command_ready_seen
+                values["no_completion_debt"] = (
+                    field_lower(event, "pre_first_report_no_completion")
+                    in {"1", "true", "yes"}
+                    or field_lower(event, "debt") in {"1", "true", "yes"}
+                    or field_lower(event, "full_idle_queue") in {"1", "true", "yes"}
+                )
             transfer_events = parse_hex_int(fields.get("transfer_events"))
             if transfer_events is not None:
                 values["transfer_events"] = transfer_events
@@ -11695,6 +11740,8 @@ def usb_local_seat_state_from_runtime(
         return "degraded", "usb-first-report-missing", runtime.command_ready or busy_after_ready
     if not runtime.command_ready:
         return "degraded", "usb-command-ready-missing", busy_after_ready
+    if runtime.local_seat_reason == "usb-hid-interrupt-queue-depth-invalid":
+        return "degraded", runtime.local_seat_reason, True
     if post_first_byte_blocker != "none":
         return "degraded", post_first_byte_blocker, runtime.command_ready or busy_after_ready
     if runtime.busy_after_ready:
@@ -11819,22 +11866,73 @@ def summarize_output_pressure(events: Iterable[TraceEvent]) -> OutputPressureSum
 
 def summarize_hdmi_command_status(
     events: Iterable[TraceEvent],
-) -> tuple[str, str, str, int]:
+) -> tuple[str, str, str, int, bool]:
     """Return the latest passive HDMI command verdict and completion receipt."""
 
+    event_list = list(events)
     state = "unknown"
     blocker = "not-run"
     receipt = "none"
     outstanding = 0
-    for event in events:
+    latest_status_index: int | None = None
+    for index, event in enumerate(event_list):
         raw = event.raw.lower()
         if raw.startswith("hdmi: status "):
             state = field_lower(event, "state") or "unknown"
             blocker = field_lower(event, "blocker") or "unknown"
             receipt = field_lower(event, "receipt") or "none"
-        elif raw.startswith("hdmi: driver "):
-            outstanding = parse_hex_int(event.fields.get("outstanding")) or 0
-    return state, blocker, receipt, outstanding
+            latest_status_index = index
+
+    driver_current = False
+    if (
+        latest_status_index is not None
+        and latest_status_index + 1 < len(event_list)
+        and event_list[latest_status_index + 1].line
+        == event_list[latest_status_index].line + 1
+    ):
+        driver = event_list[latest_status_index + 1]
+        driver_match = re.fullmatch(
+            r"hdmi: driver contract=hdmi-text counters=present "
+            r"active=(yes|no) submitted=(\d+) completed=(\d+) "
+            r"outstanding=(\d+) no_reply_streak=(\d+) cooldown=(\d+) "
+            r"stale=(yes|no)",
+            driver.raw.lower(),
+        )
+        if driver_match is not None:
+            (
+                active,
+                submitted_raw,
+                completed_raw,
+                outstanding_raw,
+                streak_raw,
+                cooldown_raw,
+                stale,
+            ) = driver_match.groups()
+            submitted = int(submitted_raw, 10)
+            completed = int(completed_raw, 10)
+            parsed_outstanding = int(outstanding_raw, 10)
+            no_reply_streak = int(streak_raw, 10)
+            cooldown = int(cooldown_raw, 10)
+            outstanding = parsed_outstanding or 0
+            driver_current = (
+                active == "no"
+                and completed > 0
+                and submitted >= completed
+                and parsed_outstanding == 0
+                and no_reply_streak == 0
+                and stale == "no"
+                and all(
+                    value <= 0xFFFF_FFFF_FFFF_FFFF
+                    for value in (
+                        submitted,
+                        completed,
+                        parsed_outstanding,
+                        no_reply_streak,
+                        cooldown,
+                    )
+                )
+            )
+    return state, blocker, receipt, outstanding, driver_current
 
 
 def summarize_usb_diag_liveness(
@@ -12865,6 +12963,9 @@ def sustained_input_progress_proof(raw: str, fields: dict[str, str]) -> bool:
     if fields.get("queue_valid", "").lower() == "no":
         return False
     if fields.get("recovery_aux_pending", "").lower() == "yes":
+        return False
+    queued_reports = parse_hex_int(fields.get("queued_reports"))
+    if queued_reports != 1:
         return False
     blocker = fields.get("blocker", "none").lower().replace("_", "-")
     if blocker and blocker != "none":
@@ -13937,7 +14038,11 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             active_or_legacy = active == "yes" or (
                 not active and (outstanding or 0) > 0 and (keep_active or 0) > 0
             )
-            no_progress = (active_no_progress or 0) > 0 or (keep_active or 0) > 0
+            no_progress = (
+                (active_no_progress or 0) > 0
+                if active_no_progress is not None
+                else (keep_active or 0) > 0
+            )
             if (outstanding or 0) > 0 and active_or_legacy and no_progress:
                 blocker = "usb-retained-request-no-terminal"
                 # A later cumulative SMP sample may include bytes that arrived
@@ -13978,6 +14083,13 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             ):
                 blocker = "usb-post-first-byte-recovery-pending-no-diag"
                 continue
+        if raw.startswith("usb: sustained_verdict"):
+            sustained_blocker = normalize_usb_blocker(
+                event.fields.get("blocker", "none")
+            )
+            if sustained_blocker != "none":
+                blocker = sustained_blocker
+            continue
         if report_status == "queue-collapse" or "queue-collapse" in raw:
             blocker = "usb-post-first-byte-queue-collapse"
             continue
@@ -13993,13 +14105,10 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
             continue
         if raw.startswith("usb: stall_telemetry") or raw.startswith("usb: runtime_queue"):
             queued_reports = parse_hex_int(event.fields.get("queued_reports"))
-            transfer_events = parse_hex_int(event.fields.get("transfer_events"))
-            if (
-                queued_reports is not None
-                and transfer_events is not None
-                and queued_reports <= 4
-                and transfer_events >= 32
-            ):
+            if queued_reports == 0:
+                blocker = "usb-post-first-byte-queue-empty"
+                continue
+            if queued_reports is not None and queued_reports > 1:
                 blocker = "usb-post-first-byte-queue-collapse-risk"
                 continue
         if raw.startswith("[smp] activity local-seat "):
@@ -16609,12 +16718,14 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         hdmi_status_blocker,
         hdmi_status_receipt,
         hdmi_driver_outstanding,
+        hdmi_driver_current,
     ) = summarize_hdmi_command_status(event_list)
     hdmi_responsive_proof = hdmi_responsive_proof or (
         hdmi_status_state == "ready"
         and hdmi_status_blocker == "none"
         and hdmi_status_receipt == "driver-task-completion"
         and hdmi_driver_outstanding == 0
+        and hdmi_driver_current
     )
     usb_keyboard_pressure_summary = summarize_usb_keyboard_pressure(event_list)
     usb_runtime_queue_summary = summarize_usb_runtime_queue(event_list)
@@ -18791,6 +18902,12 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
         blockers.append("local-seat-usb-command-ready-missing")
     if record.get("USB_FIRST_REPORT_READY") != "yes":
         blockers.append("local-seat-usb-first-report-missing")
+    if (
+        record.get("USB_RUNTIME_QUEUE_VALID") != "yes"
+        or (parse_hex_int(str(record.get("USB_RUNTIME_QUEUED_REPORTS", "0"))) or 0)
+        != 1
+    ):
+        blockers.append("local-seat-usb-one-deep-proof-missing")
     if record.get("USB_FIRST_BYTE_READY") != "yes":
         blockers.append("local-seat-usb-first-byte-missing")
     if record.get("USB_LOCAL_SEAT_STATE") != "ready":
