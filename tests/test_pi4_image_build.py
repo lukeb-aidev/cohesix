@@ -34,6 +34,14 @@ PI4_WIFI_BUNDLE_PATH = (
 )
 
 
+def test_pi4_image_build_uses_square_logo_source() -> None:
+    """The Pi 4 splash conversion must use the square Cohesix logo asset."""
+
+    source = SCRIPT_PATH.read_text(encoding="utf-8")
+
+    assert 'COHESIX_LOGO_SOURCE="${ROOT_DIR}/docs/COHESIX_LOGO_SQ.png"' in source
+
+
 def test_pi4_image_build_respects_cargo_target_dir_for_root_task() -> None:
     """The flashed root-task must come from the same target dir Cargo built."""
 
