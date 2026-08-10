@@ -108610,6 +108610,8 @@ mod tests {
 
     #[test]
     fn usb_enumeration_fault_marks_deep_cold_retry_window() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -109580,6 +109582,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_repeated_recovery_failures_force_reenumeration() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -109630,6 +109634,8 @@ mod tests {
 
     #[test]
     fn usb_keyboard_recovery_aux_hard_limit_forces_reenumeration() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.initialized = true;

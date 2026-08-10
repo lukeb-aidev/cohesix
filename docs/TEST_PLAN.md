@@ -4046,7 +4046,11 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     descriptor identity, USB-to-PCIe link epoch/token, controller lifetime,
     publication sequence, packed root/hub/child/IN-endpoint topology, and exact
     input generation; its final word repeats the publication sequence only
-    after the body. Two cache-invalidated reads must be identical. Normal
+    after the body. Partial prefixes must remain runtime-private and leave the
+    shared record zero; only the complete first-byte terminal may publish once.
+    Fault, recovery, or reordered evidence must clear or preserve zero rather
+    than interleave shared-ring work with enumeration. Two cache-invalidated
+    reads must be identical. Normal
     endpoint rearm preserves the receipt, endpoint recovery revokes it, a new
     controller lifecycle rebinds it, and candidate retries may retain only the
     exact proven prefix. Torn commit, invalid order, poison, partial identity,

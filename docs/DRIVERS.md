@@ -635,8 +635,11 @@ reusable ownership pattern.
   the sealed USB-to-PCIe link epoch/token, one nonzero controller lifetime, the
   packed endpoint topology, and the exact first-byte input generation. Publish
   the body with a nonzero monotonic sequence and repeat that sequence in the
-  final word only after the body is visible. Root accepts only two identical,
-  complete samples. A torn commit, skipped/reordered prefix, mixed candidate,
+  final word only after the body is visible. Keep every partial prefix
+  runtime-private and publish the shared record once only when the first-byte
+  step completes the exact mask; enumeration faults and endpoint recovery
+  clear any older shared terminal. Root accepts only two identical, complete
+  samples. A torn commit, skipped/reordered prefix, mixed candidate,
   stale identity, or poisoned record fails closed.
 - Preserve the receipt across the normal rearm of the same interrupt-IN
   endpoint. A new controller lifetime rebinds every identity, while endpoint

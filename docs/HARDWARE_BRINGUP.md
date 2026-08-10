@@ -491,7 +491,10 @@ USB-to-PCIe link to one controller lifetime, then advance in exact order through
 xHCI ready, command event, root reset, hub address/configuration/context,
 hub-port power/status/readiness, child probe, HID endpoint, interrupt-IN, first
 report, and first byte. Root must stable-double-read one identical committed
-record. A skipped/reordered step, path/candidate stitch, stale identity, torn
+record. Partial steps remain runtime-private and produce no shared-ring writes
+or barriers between physical enumeration transfers; the runtime publishes the
+record once only after the complete first-byte step. A skipped/reordered step,
+path/candidate stitch, stale identity, torn
 commit, or poisoned record is not `USB_OLDGOOD_REPLAY` proof. Normal endpoint
 rearm preserves the same receipt; endpoint recovery revokes it and a new
 controller lifecycle rebinds it.
