@@ -123,6 +123,56 @@ CYW43_BUS_EPISODE_RE = re.compile(
     r"(?P<exit_result>[0-9a-f]{8}) "
     r"fl=(?P<flags>[0-9a-f]{8})$"
 )
+CYW43_DPC_CHILD_TIMING_RE = re.compile(
+    r"^CYW43_DPC_CHILD_TIMING "
+    r"v=(?P<version>[0-9]+) "
+    r"pe=(?P<physical_epoch>[0-9a-f]{8}) "
+    r"e=(?P<event_sequence>[0-9a-f]{8}) "
+    r"src=(?P<source_cntvct>[0-9a-f]{8}) "
+    r"q=(?P<queue_cntvct>[0-9a-f]{8}) "
+    r"qc=(?P<queue_commit_sequence>[0-9a-f]{8}) "
+    r"len=(?P<data_len>[0-9]+) "
+    r"n=(?P<count>[0-9]+) "
+    r"fl=(?P<flags>[0-9a-f]{8}) "
+    r"s2q=(?P<source_to_queue_us>[0-9]+) "
+    r"max=(?P<max_source_to_queue_us>[0-9]+) "
+    r"ovf=(?P<overflow_count>[0-9]+) "
+    r"unk=(?P<unknown_count>[0-9]+) "
+    r"tail_us=(?P<tail_us>[0-9]+)$"
+)
+CYW43_DPC_CHILD_TIMING_ENTRY_RE = re.compile(
+    r"^CYW43_DPC_CHILD_TIMING_ENTRY "
+    r"i=(?P<index>[0-9]+) "
+    r"seq=(?P<child_sequence>[0-9a-f]{8}) "
+    r"a=(?P<action>[0-9a-f]{2}) "
+    r"k=(?P<io_kind>[0-9a-f]{2}) "
+    r"ph=(?P<io_phase>[0-9a-f]{2}) "
+    r"eng=(?P<engine>[0-9a-f]{2}) "
+    r"vf=(?P<valid_flags>[0-9a-f]{2}) "
+    r"ts=(?P<publish_cntvct>[0-9a-f]{8})/"
+    r"(?P<intake_cntvct>[0-9a-f]{8})/"
+    r"(?P<issue_cntvct>[0-9a-f]{8})/"
+    r"(?P<terminal_cntvct>[0-9a-f]{8})/"
+    r"(?P<accept_cntvct>[0-9a-f]{8}) "
+    r"pre_us=(?P<pre_us>[0-9]+) "
+    r"p2n_us=(?P<publish_to_intake_us>[0-9]+) "
+    r"n2i_us=(?P<intake_to_issue_us>[0-9]+) "
+    r"i2t_us=(?P<issue_to_terminal_us>[0-9]+) "
+    r"t2a_us=(?P<terminal_to_accept_us>[0-9]+)$"
+)
+CYW43_DPC_CHILD_TIMING_VERSION = 1
+CYW43_DPC_CHILD_TIMING_ENTRY_CAP = 16
+CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE = 1 << 0
+CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW = 1 << 1
+CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN = 1 << 2
+CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH = 1 << 3
+CYW43_DPC_CHILD_TIMING_FLAG_MASK = (
+    CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE
+    | CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW
+    | CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN
+    | CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH
+)
+CYW43_DPC_CHILD_TIMING_VALID_FLAGS_ALL = 0x1F
 CYW43_BOOTSTRAP_SUPERVISOR_BASE_RE = re.compile(
     r"^CYW43_BOOTSTRAP_SUPERVISOR "
     r"attempt=(?P<attempt>[0-9]+) "
@@ -670,6 +720,37 @@ class WifiDpcProof:
 
 
 @dataclass(frozen=True)
+class Cyw43DpcChildTimingSummary:
+    """Latest passive, sequence-last CYW43 DPC child timing trace."""
+
+    status: str = "UNKNOWN"
+    reason: str = "missing"
+    version: int | str = "UNKNOWN"
+    physical_epoch: int | str = "UNKNOWN"
+    event_sequence: int | str = "UNKNOWN"
+    source_cntvct: str = "UNKNOWN"
+    queue_cntvct: str = "UNKNOWN"
+    queue_commit_sequence: int | str = "UNKNOWN"
+    data_len: int | str = "UNKNOWN"
+    count: int | str = "UNKNOWN"
+    observed_entries: int = 0
+    flags: str = "UNKNOWN"
+    s2q_us: int | str = "UNKNOWN"
+    max_us: int | str = "UNKNOWN"
+    source_to_publish_us: int | str = "UNKNOWN"
+    publish_to_intake_us: int | str = "UNKNOWN"
+    intake_to_issue_us: int | str = "UNKNOWN"
+    issue_to_terminal_us: int | str = "UNKNOWN"
+    terminal_to_accept_us: int | str = "UNKNOWN"
+    between_child_us: int | str = "UNKNOWN"
+    dominant_seam: str = "UNKNOWN"
+    overflow_count: int | str = "UNKNOWN"
+    unknown_count: int | str = "UNKNOWN"
+    tail_us: int | str = "UNKNOWN"
+    line: int = 0
+
+
+@dataclass(frozen=True)
 class Cyw43BootstrapSupervisorProof:
     """Validated terminal state for the single production CYW43 attempt."""
 
@@ -719,6 +800,7 @@ class WifiPriorityEpisodeSummary:
     scheduler_child_bus_episode: str = "unknown"
     scheduler_bus_parent_sequence: int = 0
     scheduler_bus_parent_op: int = 0
+    scheduler_runtime_recovery_source_line: int = 0
     causal_frontier: str = "none"
 
 
@@ -851,6 +933,7 @@ class GateSummary:
     wifi_deferred_recovery_scheduler_child_bus_episode: str = "unknown"
     wifi_deferred_recovery_scheduler_bus_parent_sequence: int = 0
     wifi_deferred_recovery_scheduler_bus_parent_op: int = 0
+    wifi_deferred_recovery_runtime_source_line: int = 0
     wifi_causal_frontier: str = "none"
     wifi_rx_irq_preserve_count: int = 0
     wifi_rx_irq_preserve_reason: str = "none"
@@ -878,6 +961,31 @@ class GateSummary:
     wifi_dpc_poisoned: str = "unknown"
     wifi_dpc_masked: str = "unknown"
     wifi_dpc_line: int = 0
+    wifi_dpc_child_timing_status: str = "UNKNOWN"
+    wifi_dpc_child_timing_reason: str = "missing"
+    wifi_dpc_child_timing_version: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_physical_epoch: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_event_sequence: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_source_cntvct: str = "UNKNOWN"
+    wifi_dpc_child_timing_queue_cntvct: str = "UNKNOWN"
+    wifi_dpc_child_timing_queue_commit_sequence: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_data_len: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_count: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_observed_entries: int = 0
+    wifi_dpc_child_timing_flags: str = "UNKNOWN"
+    wifi_dpc_child_timing_s2q_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_max_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_source_to_publish_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_publish_to_intake_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_intake_to_issue_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_issue_to_terminal_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_terminal_to_accept_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_between_child_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_dominant_seam: str = "UNKNOWN"
+    wifi_dpc_child_timing_overflow_count: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_unknown_count: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_tail_us: int | str = "UNKNOWN"
+    wifi_dpc_child_timing_line: int = 0
     cyw43_bootstrap_supervisor_seen: bool = False
     cyw43_bootstrap_supervisor_max_attempt: int = 0
     cyw43_bootstrap_supervisor_transient_retries: int = 0
@@ -1218,6 +1326,9 @@ class GateSummary:
             "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": (
                 f"0x{self.wifi_deferred_recovery_scheduler_bus_parent_op:04x}"
             ),
+            "WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE": (
+                self.wifi_deferred_recovery_runtime_source_line
+            ),
             "WIFI_CAUSAL_FRONTIER": self.wifi_causal_frontier,
             "WIFI_RX_IRQ_PRESERVE_COUNT": self.wifi_rx_irq_preserve_count,
             "WIFI_RX_IRQ_PRESERVE_REASON": self.wifi_rx_irq_preserve_reason,
@@ -1245,6 +1356,65 @@ class GateSummary:
             "WIFI_DPC_POISONED": self.wifi_dpc_poisoned,
             "WIFI_DPC_MASKED": self.wifi_dpc_masked,
             "WIFI_DPC_LINE": self.wifi_dpc_line,
+            "WIFI_DPC_CHILD_TIMING_STATUS": self.wifi_dpc_child_timing_status,
+            "WIFI_DPC_CHILD_TIMING_REASON": self.wifi_dpc_child_timing_reason,
+            "WIFI_DPC_CHILD_TIMING_VERSION": self.wifi_dpc_child_timing_version,
+            "WIFI_DPC_CHILD_TIMING_PHYSICAL_EPOCH": (
+                self.wifi_dpc_child_timing_physical_epoch
+            ),
+            "WIFI_DPC_CHILD_TIMING_EVENT_SEQUENCE": (
+                self.wifi_dpc_child_timing_event_sequence
+            ),
+            "WIFI_DPC_CHILD_TIMING_SOURCE_CNTVCT": (
+                self.wifi_dpc_child_timing_source_cntvct
+            ),
+            "WIFI_DPC_CHILD_TIMING_QUEUE_CNTVCT": (
+                self.wifi_dpc_child_timing_queue_cntvct
+            ),
+            "WIFI_DPC_CHILD_TIMING_QUEUE_COMMIT_SEQUENCE": (
+                self.wifi_dpc_child_timing_queue_commit_sequence
+            ),
+            "WIFI_DPC_CHILD_TIMING_DATA_LEN": (
+                self.wifi_dpc_child_timing_data_len
+            ),
+            "WIFI_DPC_CHILD_TIMING_COUNT": self.wifi_dpc_child_timing_count,
+            "WIFI_DPC_CHILD_TIMING_OBSERVED_ENTRIES": (
+                self.wifi_dpc_child_timing_observed_entries
+            ),
+            "WIFI_DPC_CHILD_TIMING_FLAGS": self.wifi_dpc_child_timing_flags,
+            "WIFI_DPC_CHILD_TIMING_S2Q_US": self.wifi_dpc_child_timing_s2q_us,
+            "WIFI_DPC_CHILD_TIMING_MAX_US": self.wifi_dpc_child_timing_max_us,
+            "WIFI_DPC_CHILD_TIMING_SOURCE_TO_PUBLISH_US": (
+                self.wifi_dpc_child_timing_source_to_publish_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_PUBLISH_TO_INTAKE_US": (
+                self.wifi_dpc_child_timing_publish_to_intake_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_INTAKE_TO_ISSUE_US": (
+                self.wifi_dpc_child_timing_intake_to_issue_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_ISSUE_TO_TERMINAL_US": (
+                self.wifi_dpc_child_timing_issue_to_terminal_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_TERMINAL_TO_ACCEPT_US": (
+                self.wifi_dpc_child_timing_terminal_to_accept_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_BETWEEN_CHILD_US": (
+                self.wifi_dpc_child_timing_between_child_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_DOMINANT_SEAM": (
+                self.wifi_dpc_child_timing_dominant_seam
+            ),
+            "WIFI_DPC_CHILD_TIMING_OVERFLOW_COUNT": (
+                self.wifi_dpc_child_timing_overflow_count
+            ),
+            "WIFI_DPC_CHILD_TIMING_UNKNOWN_COUNT": (
+                self.wifi_dpc_child_timing_unknown_count
+            ),
+            "WIFI_DPC_CHILD_TIMING_TAIL_US": (
+                self.wifi_dpc_child_timing_tail_us
+            ),
+            "WIFI_DPC_CHILD_TIMING_LINE": self.wifi_dpc_child_timing_line,
             "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": (
                 "yes" if self.cyw43_bootstrap_supervisor_seen else "no"
             ),
@@ -1644,6 +1814,32 @@ def parse_cyw43_bus_episode(raw: str) -> dict[str, str] | None:
     }
 
 
+def parse_cyw43_dpc_child_timing(raw: str) -> dict[str, str] | None:
+    """Parse one bounded, diagnostic-only DPC child timing header."""
+
+    match = CYW43_DPC_CHILD_TIMING_RE.fullmatch(raw)
+    if match is None:
+        return None
+    return {
+        "diagnostic": "cyw43-dpc-child-timing",
+        "diagnostic_schema": "compact-v1",
+        **match.groupdict(),
+    }
+
+
+def parse_cyw43_dpc_child_timing_entry(raw: str) -> dict[str, str] | None:
+    """Parse one bounded DPC child timing entry."""
+
+    match = CYW43_DPC_CHILD_TIMING_ENTRY_RE.fullmatch(raw)
+    if match is None:
+        return None
+    return {
+        "diagnostic": "cyw43-dpc-child-timing-entry",
+        "diagnostic_schema": "compact-v1",
+        **match.groupdict(),
+    }
+
+
 def startup_diag_gate(raw: str, domain: str) -> int | None:
     """Return the gate number from a startup black-box diagnostic line."""
 
@@ -2031,13 +2227,25 @@ def parse_line(line: str, line_number: int) -> TraceEvent | None:
     source = classify_source(line, domain)
     fields = parse_fields(line)
     bus_episode = parse_cyw43_bus_episode(line)
+    child_timing = parse_cyw43_dpc_child_timing(line)
+    child_timing_entry = parse_cyw43_dpc_child_timing_entry(line)
     if bus_episode is not None:
         fields = {**fields, **bus_episode}
+    elif child_timing is not None:
+        fields = {**fields, **child_timing}
+    elif child_timing_entry is not None:
+        fields = {**fields, **child_timing_entry}
     stage = choose_stage(fields)
     message = extract_message(line, domain, source)
     if bus_episode is not None:
         stage = "cyw43-bus-episode"
         message = "bus-episode diagnostic=passive"
+    elif child_timing is not None:
+        stage = "cyw43-dpc-child-timing"
+        message = "dpc-child-timing diagnostic=passive"
+    elif child_timing_entry is not None:
+        stage = "cyw43-dpc-child-timing-entry"
+        message = "dpc-child-timing-entry diagnostic=passive"
     elif line.startswith("wifi: priority_episode scope=current "):
         stage = "priority-episode"
     elif line.startswith(
@@ -10301,6 +10509,9 @@ def summarize_wifi_priority_episode(
             bus_parent_op = (
                 parse_hex_int(bus_parent[1]) if len(bus_parent) == 2 else None
             )
+            runtime_recovery_source_line = parse_hex_int(
+                fields.get("rsl", "0")
+            )
             exact_facts = (
                 publication_latched,
                 signal_returned,
@@ -10320,6 +10531,8 @@ def summarize_wifi_priority_episode(
                 or not 0 <= bus_parent_sequence <= U32_MAX
                 or bus_parent_op is None
                 or not 0 <= bus_parent_op <= U16_MAX
+                or runtime_recovery_source_line is None
+                or not 0 <= runtime_recovery_source_line <= U32_MAX
                 or (signal_returned == "yes" and publication_latched != "yes")
                 or (
                     "yes"
@@ -10351,6 +10564,9 @@ def summarize_wifi_priority_episode(
                 scheduler_child_bus_episode=child_bus_episode,
                 scheduler_bus_parent_sequence=bus_parent_sequence,
                 scheduler_bus_parent_op=bus_parent_op,
+                scheduler_runtime_recovery_source_line=(
+                    runtime_recovery_source_line
+                ),
             )
             continue
         if not raw.startswith(
@@ -14250,6 +14466,261 @@ def summarize_sdio_irq158_inband_proof(events: Iterable[TraceEvent]) -> bool:
     )
 
 
+def summarize_cyw43_dpc_child_timing(
+    events: Iterable[TraceEvent],
+) -> Cyw43DpcChildTimingSummary:
+    """Summarize the latest passive DPC child trace without gate authority."""
+
+    event_list = list(events)
+    header_position: int | None = None
+    for position, event in enumerate(event_list):
+        if event.raw.startswith("CYW43_DPC_CHILD_TIMING "):
+            header_position = position
+    if header_position is None:
+        return Cyw43DpcChildTimingSummary()
+
+    header_event = event_list[header_position]
+    header = CYW43_DPC_CHILD_TIMING_RE.fullmatch(header_event.raw)
+    if header is None:
+        return Cyw43DpcChildTimingSummary(
+            reason="malformed-header",
+            line=header_event.line,
+        )
+
+    entry_events = [
+        event
+        for event in event_list[header_position + 1 :]
+        if event.raw.startswith("CYW43_DPC_CHILD_TIMING_ENTRY ")
+    ]
+    entry_matches = [
+        CYW43_DPC_CHILD_TIMING_ENTRY_RE.fullmatch(event.raw)
+        for event in entry_events
+    ]
+    values = {
+        name: int(header.group(name), 16 if name in {
+            "physical_epoch",
+            "event_sequence",
+            "source_cntvct",
+            "queue_cntvct",
+            "queue_commit_sequence",
+            "flags",
+        } else 10)
+        for name in (
+            "version",
+            "physical_epoch",
+            "event_sequence",
+            "source_cntvct",
+            "queue_cntvct",
+            "queue_commit_sequence",
+            "data_len",
+            "count",
+            "flags",
+            "source_to_queue_us",
+            "max_source_to_queue_us",
+            "overflow_count",
+            "unknown_count",
+            "tail_us",
+        )
+    }
+
+    summary = Cyw43DpcChildTimingSummary(
+        reason="unvalidated",
+        version=values["version"],
+        physical_epoch=values["physical_epoch"],
+        event_sequence=values["event_sequence"],
+        source_cntvct=f"0x{values['source_cntvct']:08x}",
+        queue_cntvct=f"0x{values['queue_cntvct']:08x}",
+        queue_commit_sequence=values["queue_commit_sequence"],
+        data_len=values["data_len"],
+        count=values["count"],
+        observed_entries=len(entry_events),
+        flags=f"0x{values['flags']:08x}",
+        overflow_count=values["overflow_count"],
+        unknown_count=values["unknown_count"],
+        line=header_event.line,
+    )
+
+    reason: str | None = None
+    source_to_publish_us = 0
+    publish_to_intake_us = 0
+    intake_to_issue_us = 0
+    issue_to_terminal_us = 0
+    terminal_to_accept_us = 0
+    between_child_us = 0
+    dominant_seam = "UNKNOWN"
+    if any(match is None for match in entry_matches):
+        reason = "malformed-entry"
+    elif values["version"] != CYW43_DPC_CHILD_TIMING_VERSION:
+        reason = "version-mismatch"
+    elif values["data_len"] == 0:
+        reason = "data-length-missing"
+    elif not 0 < values["count"] <= CYW43_DPC_CHILD_TIMING_ENTRY_CAP:
+        reason = "count-invalid"
+    elif len(entry_matches) != values["count"]:
+        reason = "entry-count-mismatch"
+    elif values["flags"] & ~CYW43_DPC_CHILD_TIMING_FLAG_MASK:
+        reason = "flag-mismatch"
+    elif values["flags"] & CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE == 0:
+        reason = "incomplete"
+    elif (
+        values["flags"]
+        & (
+            CYW43_DPC_CHILD_TIMING_FLAG_OVERFLOW
+            | CYW43_DPC_CHILD_TIMING_FLAG_UNKNOWN
+            | CYW43_DPC_CHILD_TIMING_FLAG_MAILBOX_MISMATCH
+        )
+        or values["overflow_count"] != 0
+        or values["unknown_count"] != 0
+    ):
+        reason = "inexact"
+    elif values["physical_epoch"] == 0:
+        reason = "physical-epoch-missing"
+    elif values["event_sequence"] == 0:
+        reason = "event-sequence-missing"
+    elif values["queue_commit_sequence"] == 0:
+        reason = "queue-commit-missing"
+    elif values["max_source_to_queue_us"] != values["source_to_queue_us"]:
+        reason = "maximum-mismatch"
+    else:
+        parsed_entries = [
+            match for match in entry_matches if match is not None
+        ]
+        indexes = [int(match.group("index")) for match in parsed_entries]
+        if indexes != list(range(values["count"])):
+            reason = "entry-index-mismatch"
+        else:
+            child_sequences: set[int] = set()
+            for match in parsed_entries:
+                child_sequence = int(match.group("child_sequence"), 16)
+                valid_flags = int(match.group("valid_flags"), 16)
+                action = int(match.group("action"), 16)
+                io_kind = int(match.group("io_kind"), 16)
+                io_phase = int(match.group("io_phase"), 16)
+                engine = int(match.group("engine"), 16)
+                if child_sequence == 0 or child_sequence in child_sequences:
+                    reason = "child-sequence-mismatch"
+                    break
+                if valid_flags != CYW43_DPC_CHILD_TIMING_VALID_FLAGS_ALL:
+                    reason = "entry-incomplete"
+                    break
+                if (
+                    not 1 <= action <= 19
+                    or not 1 <= io_kind <= 6
+                    or not 1 <= io_phase <= 4
+                    or engine not in {1, 2, 3}
+                ):
+                    reason = "entry-type-mismatch"
+                    break
+                child_sequences.add(child_sequence)
+
+            if reason is None:
+                previous_cntvct = values["source_cntvct"]
+                total_ticks = (
+                    values["queue_cntvct"] - values["source_cntvct"]
+                ) & 0xFFFF_FFFF
+                stage_ticks = {
+                    "cyw43-source-to-publish": 0,
+                    "cyw43-to-sdio-intake": 0,
+                    "sdio-intake-to-issue": 0,
+                    "sdio-physical": 0,
+                    "sdio-completion-to-cyw43-accept": 0,
+                    "cyw43-between-child": 0,
+                    "cyw43-accept-to-queue": 0,
+                }
+                tick_sum = 0
+                for position, match in enumerate(parsed_entries):
+                    timestamps = [
+                        int(match.group(name), 16)
+                        for name in (
+                            "publish_cntvct",
+                            "intake_cntvct",
+                            "issue_cntvct",
+                            "terminal_cntvct",
+                            "accept_cntvct",
+                        )
+                    ]
+                    deltas = []
+                    stage_start = previous_cntvct
+                    for timestamp in timestamps:
+                        deltas.append((timestamp - stage_start) & 0xFFFF_FFFF)
+                        stage_start = timestamp
+                    previous_cntvct = timestamps[-1]
+                    if any(delta > total_ticks for delta in deltas):
+                        reason = "wrap-ambiguous"
+                        break
+                    pre_key = (
+                        "cyw43-source-to-publish"
+                        if position == 0
+                        else "cyw43-between-child"
+                    )
+                    for key, delta in zip(
+                        (
+                            pre_key,
+                            "cyw43-to-sdio-intake",
+                            "sdio-intake-to-issue",
+                            "sdio-physical",
+                            "sdio-completion-to-cyw43-accept",
+                        ),
+                        deltas,
+                        strict=True,
+                    ):
+                        stage_ticks[key] += delta
+                        tick_sum += delta
+                    pre_us = int(match.group("pre_us"))
+                    if position == 0:
+                        source_to_publish_us = pre_us
+                    else:
+                        between_child_us += pre_us
+                    publish_to_intake_us += int(
+                        match.group("publish_to_intake_us")
+                    )
+                    intake_to_issue_us += int(match.group("intake_to_issue_us"))
+                    issue_to_terminal_us += int(
+                        match.group("issue_to_terminal_us")
+                    )
+                    terminal_to_accept_us += int(
+                        match.group("terminal_to_accept_us")
+                    )
+                tail_ticks = (
+                    values["queue_cntvct"] - previous_cntvct
+                ) & 0xFFFF_FFFF
+                if reason is None:
+                    if (
+                        total_ticks >= (0xFFFF << 11)
+                        or tail_ticks > total_ticks
+                        or tick_sum + tail_ticks != total_ticks
+                    ):
+                        reason = "wrap-ambiguous"
+                    else:
+                        stage_ticks["cyw43-accept-to-queue"] = tail_ticks
+                        largest = max(stage_ticks.values())
+                        winners = [
+                            name
+                            for name, ticks in stage_ticks.items()
+                            if ticks == largest
+                        ]
+                        if len(winners) == 1:
+                            dominant_seam = winners[0]
+
+    if reason is not None:
+        return replace(summary, reason=reason)
+    return replace(
+        summary,
+        status="complete",
+        reason="none",
+        s2q_us=values["source_to_queue_us"],
+        max_us=values["max_source_to_queue_us"],
+        source_to_publish_us=source_to_publish_us,
+        publish_to_intake_us=publish_to_intake_us,
+        intake_to_issue_us=intake_to_issue_us,
+        issue_to_terminal_us=issue_to_terminal_us,
+        terminal_to_accept_us=terminal_to_accept_us,
+        between_child_us=between_child_us,
+        dominant_seam=dominant_seam,
+        tail_us=values["tail_us"],
+    )
+
+
 def wifi_dpc_failure_reason(proof: WifiDpcProof) -> str | None:
     """Return the strongest fail-closed reason for one exact DPC proof line."""
 
@@ -14660,10 +15131,18 @@ def summarize_cyw43_bootstrap_supervisor(
 def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     """Build the current USB/WiFi hardware proof gate summary."""
 
+    source_event_list = list(events)
+    dpc_child_timing = summarize_cyw43_dpc_child_timing(source_event_list)
     event_list = [
         event
-        for event in events
-        if not event.raw.startswith("CYW43_BUS_EPISODE ")
+        for event in source_event_list
+        if not event.raw.startswith(
+            (
+                "CYW43_BUS_EPISODE ",
+                "CYW43_DPC_CHILD_TIMING ",
+                "CYW43_DPC_CHILD_TIMING_ENTRY ",
+            )
+        )
     ]
     wifi_gate8 = refine_wifi_gate8_from_diag_complete(
         event_list, summarize_wifi_gate8_proof(event_list)
@@ -15735,6 +16214,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_deferred_recovery_scheduler_bus_parent_op=(
             wifi_priority_episode.scheduler_bus_parent_op
         ),
+        wifi_deferred_recovery_runtime_source_line=(
+            wifi_priority_episode.scheduler_runtime_recovery_source_line
+        ),
         wifi_causal_frontier=wifi_priority_episode.causal_frontier,
         wifi_rx_irq_preserve_count=wifi_rx_irq_preserve_count,
         wifi_rx_irq_preserve_reason=wifi_rx_irq_preserve_reason,
@@ -15762,6 +16244,51 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_dpc_poisoned=wifi_dpc.poisoned,
         wifi_dpc_masked=wifi_dpc.masked,
         wifi_dpc_line=wifi_dpc.line,
+        wifi_dpc_child_timing_status=dpc_child_timing.status,
+        wifi_dpc_child_timing_reason=dpc_child_timing.reason,
+        wifi_dpc_child_timing_version=dpc_child_timing.version,
+        wifi_dpc_child_timing_physical_epoch=dpc_child_timing.physical_epoch,
+        wifi_dpc_child_timing_event_sequence=dpc_child_timing.event_sequence,
+        wifi_dpc_child_timing_source_cntvct=dpc_child_timing.source_cntvct,
+        wifi_dpc_child_timing_queue_cntvct=dpc_child_timing.queue_cntvct,
+        wifi_dpc_child_timing_queue_commit_sequence=(
+            dpc_child_timing.queue_commit_sequence
+        ),
+        wifi_dpc_child_timing_data_len=dpc_child_timing.data_len,
+        wifi_dpc_child_timing_count=dpc_child_timing.count,
+        wifi_dpc_child_timing_observed_entries=(
+            dpc_child_timing.observed_entries
+        ),
+        wifi_dpc_child_timing_flags=dpc_child_timing.flags,
+        wifi_dpc_child_timing_s2q_us=dpc_child_timing.s2q_us,
+        wifi_dpc_child_timing_max_us=dpc_child_timing.max_us,
+        wifi_dpc_child_timing_source_to_publish_us=(
+            dpc_child_timing.source_to_publish_us
+        ),
+        wifi_dpc_child_timing_publish_to_intake_us=(
+            dpc_child_timing.publish_to_intake_us
+        ),
+        wifi_dpc_child_timing_intake_to_issue_us=(
+            dpc_child_timing.intake_to_issue_us
+        ),
+        wifi_dpc_child_timing_issue_to_terminal_us=(
+            dpc_child_timing.issue_to_terminal_us
+        ),
+        wifi_dpc_child_timing_terminal_to_accept_us=(
+            dpc_child_timing.terminal_to_accept_us
+        ),
+        wifi_dpc_child_timing_between_child_us=(
+            dpc_child_timing.between_child_us
+        ),
+        wifi_dpc_child_timing_dominant_seam=(
+            dpc_child_timing.dominant_seam
+        ),
+        wifi_dpc_child_timing_overflow_count=(
+            dpc_child_timing.overflow_count
+        ),
+        wifi_dpc_child_timing_unknown_count=dpc_child_timing.unknown_count,
+        wifi_dpc_child_timing_tail_us=dpc_child_timing.tail_us,
+        wifi_dpc_child_timing_line=dpc_child_timing.line,
         cyw43_bootstrap_supervisor_seen=cyw43_bootstrap_supervisor.seen,
         cyw43_bootstrap_supervisor_max_attempt=(
             cyw43_bootstrap_supervisor.max_attempt

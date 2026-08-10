@@ -1432,6 +1432,7 @@ pub(crate) struct Cyw43DeferredRecoverySchedulerDiagnostic {
     pub child_bus_episode_observed: bool,
     pub child_bus_parent_sequence: u32,
     pub child_bus_parent_op: u16,
+    pub runtime_recovery_source_line: u32,
 }
 
 #[cfg(feature = "kernel")]
@@ -1461,6 +1462,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
                 child_bus_episode_observed: snapshot.child_bus_episode_observed,
                 child_bus_parent_sequence: snapshot.child_bus_parent_sequence,
                 child_bus_parent_op: snapshot.child_bus_parent_op,
+                runtime_recovery_source_line: snapshot.runtime_recovery_source_line,
             };
         }
         Self {
@@ -1485,6 +1487,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             child_bus_episode_observed: false,
             child_bus_parent_sequence: 0,
             child_bus_parent_op: 0,
+            runtime_recovery_source_line: 0,
         }
     }
 
@@ -1512,6 +1515,7 @@ impl Cyw43DeferredRecoverySchedulerDiagnostic {
             child_bus_episode_observed: false,
             child_bus_parent_sequence: 0,
             child_bus_parent_op: 0,
+            runtime_recovery_source_line: 0,
         }
     }
 }
@@ -5327,9 +5331,29 @@ pub(crate) fn cyw43_bus_episode_diagnostic(
     crate::hal::driver_task::driver_task_cyw43_bus_episode_snapshot()
 }
 
+/// Return the latest stable, read-only CYW43 DPC child timing trace.
+///
+/// The timing record is passive evidence only. It cannot admit linked work,
+/// signal either runtime, or authorize scheduling, retry, or recovery.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_dpc_child_timing_diagnostic(
+) -> Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE.lock() {
+        return Some(snapshot);
+    }
+    crate::hal::driver_task::driver_task_cyw43_dpc_child_timing_snapshot()
+}
+
 #[cfg(all(feature = "kernel", test))]
 static CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE: Mutex<
     Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
+> = Mutex::new(None);
+
+#[cfg(all(feature = "kernel", test))]
+static CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE: Mutex<
+    Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord>,
 > = Mutex::new(None);
 
 #[cfg(all(feature = "kernel", test))]
@@ -7514,6 +7538,13 @@ pub(crate) fn set_cyw43_bus_episode_diagnostic_test_override(
     snapshot: Option<pi4_driver_abi::DriverRuntimeCyw43BusEpisodeRecord>,
 ) {
     *CYW43_BUS_EPISODE_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
+}
+
+#[cfg(all(feature = "kernel", test))]
+pub(crate) fn set_cyw43_dpc_child_timing_diagnostic_test_override(
+    snapshot: Option<pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord>,
+) {
+    *CYW43_DPC_CHILD_TIMING_DIAGNOSTIC_TEST_OVERRIDE.lock() = snapshot;
 }
 
 #[cfg(all(feature = "kernel", test))]
@@ -21141,6 +21172,13 @@ fn cyw43_counter_freq_hz() -> Option<u64> {
     None
 }
 
+/// Return the fixed virtual-counter frequency used to render passive DPC child timing.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_dpc_child_timing_counter_freq_hz() -> Option<u64> {
+    cyw43_counter_freq_hz()
+}
+
 #[cfg(feature = "kernel")]
 fn cyw43_tx_phase_elapsed_us(
     start_ticks: Option<u64>,
@@ -21152,6 +21190,33 @@ fn cyw43_tx_phase_elapsed_us(
         return None;
     }
     let elapsed_us = u128::from(end_ticks.wrapping_sub(start_ticks))
+        .saturating_mul(1_000_000)
+        .saturating_div(u128::from(freq_hz));
+    Some(elapsed_us.min(u128::from(u64::MAX)) as u64)
+}
+
+/// Convert the passive CNTVCT-low interval carried by one exact copied RX.
+///
+/// The Pi timer runs at 54 MHz, so the low word wraps after about 79.5 seconds.
+/// This modulo interval is diagnostic only and is never scheduling authority.
+#[cfg(feature = "kernel")]
+fn cyw43_rx_mod32_interval_us(
+    start_cntvct_lo: Option<u32>,
+    end_cntvct_lo: Option<u32>,
+    freq_hz: Option<u64>,
+) -> Option<u64> {
+    let start_cntvct_lo = start_cntvct_lo?;
+    let end_cntvct_lo = end_cntvct_lo?;
+    cyw43_rx_ticks_to_us(end_cntvct_lo.wrapping_sub(start_cntvct_lo), freq_hz)
+}
+
+#[cfg(feature = "kernel")]
+fn cyw43_rx_ticks_to_us(elapsed_ticks: u32, freq_hz: Option<u64>) -> Option<u64> {
+    let freq_hz = freq_hz?;
+    if freq_hz == 0 {
+        return None;
+    }
+    let elapsed_us = u128::from(elapsed_ticks)
         .saturating_mul(1_000_000)
         .saturating_div(u128::from(freq_hz));
     Some(elapsed_us.min(u128::from(u64::MAX)) as u64)
@@ -21171,8 +21236,24 @@ fn cyw43_tx_phase_clock() -> (Option<u64>, Option<u64>) {
 }
 
 #[cfg(feature = "kernel")]
-fn record_cyw43_tx_phase_accepted(generation: u32) {
-    CYW43_TX_PHASE_TRACKER.lock().record_accepted(generation);
+fn record_cyw43_tx_phase_accepted(
+    generation: u32,
+    source_cntvct_lo: Option<u32>,
+    first_data_stage_deltas_q11: Option<u32>,
+    root_copy_cntvct_lo: Option<u32>,
+    accepted_ticks: Option<u64>,
+) {
+    let freq_hz = cyw43_counter_freq_hz();
+    let mut tracker = CYW43_TX_PHASE_TRACKER.lock();
+    tracker.record_accepted(generation);
+    tracker.record_rx_pipeline_mod32(
+        generation,
+        source_cntvct_lo,
+        first_data_stage_deltas_q11,
+        root_copy_cntvct_lo,
+        accepted_ticks,
+        freq_hz,
+    );
 }
 
 #[cfg(feature = "kernel")]
@@ -24420,6 +24501,12 @@ fn runtime_mac(hot_path: DriverTaskHotPath) -> Option<EthernetAddress> {
 pub struct DriverTaskNetRxToken {
     len: usize,
     buffer: [u8; MAX_FRAME_LEN],
+    /// Passive low CNTVCT word from an exact CYW43 batch-v3 DPC episode.
+    source_cntvct_lo: Option<u32>,
+    /// Passive q11 phase split for the exact batch's first data entry only.
+    first_data_stage_deltas_q11: Option<u32>,
+    /// Root CNTVCT-low sampled after the exact stable frame copy.
+    root_copy_cntvct_lo: Option<u32>,
 }
 
 #[cfg(feature = "kernel")]
@@ -24693,6 +24780,17 @@ impl Cyw43TxPhaseMetricDiagnostic {
     }
 }
 
+/// Correlated decomposition of the slowest exact copied-RX response sample.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Cyw43RxSplitTupleDiagnostic {
+    pub total_us: u64,
+    pub source_to_queue_us: u64,
+    pub queue_to_precommit_us: u64,
+    pub precommit_to_root_us: u64,
+    pub root_to_accepted_us: u64,
+}
+
 /// Passive end-to-end timing for the single CYW43 Ethernet TX owner.
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -24705,6 +24803,22 @@ pub(crate) struct Cyw43TxPhaseDiagnostic {
     pub accepted_to_issue: Cyw43TxPhaseMetricDiagnostic,
     pub issued_to_terminal: Cyw43TxPhaseMetricDiagnostic,
     pub terminal_to_next_issue: Cyw43TxPhaseMetricDiagnostic,
+    /// DPC-admission to exact copied-response acceptance, modulo CNTVCT low.
+    pub rx_source_to_accepted_mod32: Cyw43TxPhaseMetricDiagnostic,
+    /// DPC admission to durable private-queue commit for the first data entry.
+    pub rx_source_to_queue_q11: Cyw43TxPhaseMetricDiagnostic,
+    /// Durable private-queue commit to final batch precommit staging.
+    pub rx_queue_to_precommit_q11: Cyw43TxPhaseMetricDiagnostic,
+    /// Precommit-to-root residual, including bounded Q11 floor remainders.
+    pub rx_precommit_to_root_q11: Cyw43TxPhaseMetricDiagnostic,
+    /// Stable root frame copy to copied-response acceptance.
+    pub rx_root_to_accepted_mod32: Cyw43TxPhaseMetricDiagnostic,
+    /// First-data phase words containing at least one saturated q11 delta.
+    pub rx_split_saturated: u32,
+    /// First-data phase words inconsistent with the exact total interval.
+    pub rx_split_invalid: u32,
+    /// Same-sample split for the largest accepted source-to-response interval.
+    pub rx_slowest_split: Cyw43RxSplitTupleDiagnostic,
 }
 
 #[cfg(feature = "kernel")]
@@ -24747,6 +24861,45 @@ impl Cyw43TxPhaseTracker {
                     last_us: 0,
                     max_us: 0,
                 },
+                rx_source_to_accepted_mod32: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                rx_source_to_queue_q11: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                rx_queue_to_precommit_q11: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                rx_precommit_to_root_q11: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                rx_root_to_accepted_mod32: Cyw43TxPhaseMetricDiagnostic {
+                    samples: 0,
+                    total_us: 0,
+                    last_us: 0,
+                    max_us: 0,
+                },
+                rx_split_saturated: 0,
+                rx_split_invalid: 0,
+                rx_slowest_split: Cyw43RxSplitTupleDiagnostic {
+                    total_us: 0,
+                    source_to_queue_us: 0,
+                    queue_to_precommit_us: 0,
+                    precommit_to_root_us: 0,
+                    root_to_accepted_us: 0,
+                },
             },
             current_ticket: 0,
             issue_recorded: false,
@@ -24771,6 +24924,118 @@ impl Cyw43TxPhaseTracker {
     fn record_accepted(&mut self, generation: u32) {
         self.ensure_generation(generation);
         self.diagnostic.accepted = self.diagnostic.accepted.saturating_add(1);
+    }
+
+    fn record_rx_pipeline_mod32(
+        &mut self,
+        generation: u32,
+        source_cntvct_lo: Option<u32>,
+        first_data_stage_deltas_q11: Option<u32>,
+        root_copy_cntvct_lo: Option<u32>,
+        accepted_ticks: Option<u64>,
+        freq_hz: Option<u64>,
+    ) {
+        self.ensure_generation(generation);
+        let (Some(source_cntvct_lo), Some(accepted_cntvct_lo)) =
+            (source_cntvct_lo, accepted_ticks.map(|ticks| ticks as u32))
+        else {
+            return;
+        };
+        let total_ticks = accepted_cntvct_lo.wrapping_sub(source_cntvct_lo);
+        let Some(total_us) = cyw43_rx_ticks_to_us(total_ticks, freq_hz) else {
+            return;
+        };
+        cyw43_tx_phase_record_metric(&mut self.diagnostic.rx_source_to_accepted_mod32, total_us);
+
+        let (Some(stage_deltas), Some(root_copy_cntvct_lo)) =
+            (first_data_stage_deltas_q11, root_copy_cntvct_lo)
+        else {
+            return;
+        };
+        let source_to_queue_units =
+            pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_source_to_queue(stage_deltas);
+        let queue_to_precommit_units =
+            pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_queue_to_precommit(
+                stage_deltas,
+            );
+        if source_to_queue_units
+            == pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+            || queue_to_precommit_units
+                == pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED
+        {
+            self.diagnostic.rx_split_saturated =
+                self.diagnostic.rx_split_saturated.saturating_add(1);
+            return;
+        }
+        let source_to_queue_ticks = u32::from(source_to_queue_units)
+            << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT;
+        let queue_to_precommit_ticks = u32::from(queue_to_precommit_units)
+            << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT;
+        let Some(precommit_ticks) = source_to_queue_ticks.checked_add(queue_to_precommit_ticks)
+        else {
+            self.diagnostic.rx_split_invalid = self.diagnostic.rx_split_invalid.saturating_add(1);
+            return;
+        };
+        let source_to_root_ticks = root_copy_cntvct_lo.wrapping_sub(source_cntvct_lo);
+        let Some(precommit_to_root_ticks) = source_to_root_ticks.checked_sub(precommit_ticks)
+        else {
+            self.diagnostic.rx_split_invalid = self.diagnostic.rx_split_invalid.saturating_add(1);
+            return;
+        };
+        let root_to_accepted_ticks = accepted_cntvct_lo.wrapping_sub(root_copy_cntvct_lo);
+        let Some(recomposed_total_ticks) = precommit_ticks
+            .checked_add(precommit_to_root_ticks)
+            .and_then(|ticks| ticks.checked_add(root_to_accepted_ticks))
+        else {
+            self.diagnostic.rx_split_invalid = self.diagnostic.rx_split_invalid.saturating_add(1);
+            return;
+        };
+        if recomposed_total_ticks != total_ticks {
+            self.diagnostic.rx_split_invalid = self.diagnostic.rx_split_invalid.saturating_add(1);
+            return;
+        }
+        let Some(source_to_queue_us) = cyw43_rx_ticks_to_us(source_to_queue_ticks, freq_hz) else {
+            return;
+        };
+        let Some(queue_to_precommit_us) = cyw43_rx_ticks_to_us(queue_to_precommit_ticks, freq_hz)
+        else {
+            return;
+        };
+        let Some(precommit_to_root_us) = cyw43_rx_ticks_to_us(precommit_to_root_ticks, freq_hz)
+        else {
+            return;
+        };
+        let Some(root_to_accepted_us) = cyw43_rx_ticks_to_us(root_to_accepted_ticks, freq_hz)
+        else {
+            return;
+        };
+        cyw43_tx_phase_record_metric(
+            &mut self.diagnostic.rx_source_to_queue_q11,
+            source_to_queue_us,
+        );
+        cyw43_tx_phase_record_metric(
+            &mut self.diagnostic.rx_queue_to_precommit_q11,
+            queue_to_precommit_us,
+        );
+        cyw43_tx_phase_record_metric(
+            &mut self.diagnostic.rx_precommit_to_root_q11,
+            precommit_to_root_us,
+        );
+        cyw43_tx_phase_record_metric(
+            &mut self.diagnostic.rx_root_to_accepted_mod32,
+            root_to_accepted_us,
+        );
+        if self.diagnostic.rx_source_to_queue_q11.samples == 1
+            || total_us > self.diagnostic.rx_slowest_split.total_us
+        {
+            self.diagnostic.rx_slowest_split = Cyw43RxSplitTupleDiagnostic {
+                total_us,
+                source_to_queue_us,
+                queue_to_precommit_us,
+                precommit_to_root_us,
+                root_to_accepted_us,
+            };
+        }
     }
 
     fn record_promoted(&mut self, generation: u32, ticket: u64) {
@@ -24958,6 +25223,12 @@ struct Cyw43DataTxQueueReservation {
     generation: u32,
     reservation_epoch: u32,
     copied_rx_capacity: bool,
+    /// Passive modulo-32 DPC source tick carried by the exact copied RX.
+    source_cntvct_lo: Option<u32>,
+    /// Passive q11 phase split carried only by the exact first data entry.
+    first_data_stage_deltas_q11: Option<u32>,
+    /// Passive root-copy tick carried only by the exact first data entry.
+    root_copy_cntvct_lo: Option<u32>,
 }
 
 /// Capacity provenance carried separately from one bounded TX reservation.
@@ -26378,19 +26649,34 @@ fn preserve_cyw43_rx_batch_completion(
     };
 
     let mut index = 0usize;
+    let mut first_data_pending = true;
     while index < usize::from(batch.count) {
         let mut buffer = [0u8; MAX_FRAME_LEN];
-        let Some(entry) = crate::hal::driver_task::copy_driver_task_cyw43_rx_batch_frame(
-            batch,
-            index,
-            &mut buffer,
-        ) else {
+        let Some((entry, stable_stage_deltas_q11)) =
+            crate::hal::driver_task::copy_driver_task_cyw43_rx_batch_frame(
+                batch,
+                index,
+                &mut buffer,
+            )
+        else {
             crate::hal::driver_task::request_cyw43_sdio_pair_restart();
             return Some(false);
         };
+        let is_first_data = first_data_pending
+            && entry.flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+                == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA;
+        if is_first_data {
+            first_data_pending = false;
+        }
         let token = DriverTaskNetRxToken {
             len: usize::from(entry.len),
             buffer,
+            source_cntvct_lo: Some(batch.source_cntvct_lo[index]),
+            first_data_stage_deltas_q11: is_first_data.then_some(stable_stage_deltas_q11),
+            root_copy_cntvct_lo: is_first_data
+                .then(cyw43_counter_ticks)
+                .flatten()
+                .map(|ticks| ticks as u32),
         };
         let _disposition = preserve_cyw43_rx_batch_entry(contract, completion, entry.flags, token);
         index = index.saturating_add(1);
@@ -26628,6 +26914,9 @@ fn reserve_cyw43_data_tx_queue_slot(
         generation,
         reservation_epoch: queue.reservation_epoch,
         copied_rx_capacity,
+        source_cntvct_lo: None,
+        first_data_stage_deltas_q11: None,
+        root_copy_cntvct_lo: None,
     };
     drop(queue);
     record_cyw43_stale_data_tx_purge(purged);
@@ -26816,6 +27105,7 @@ fn enqueue_reserved_cyw43_data_tx(
         release_cyw43_data_tx_queue_slot(reservation);
         return false;
     };
+    let accepted_ticks = queued.accepted_ticks;
     let mut queue = CYW43_DATA_TX_QUEUE.lock();
     let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
     let reservation_current = reservation.generation == generation
@@ -26849,7 +27139,28 @@ fn enqueue_reserved_cyw43_data_tx(
     queue.high_water = queue.high_water.max(queue.len() as u32);
     drop(queue);
     record_cyw43_stale_data_tx_purge(purged);
-    record_cyw43_tx_phase_accepted(generation);
+    let source_cntvct_lo = if paired_rx {
+        reservation.source_cntvct_lo
+    } else {
+        None
+    };
+    let first_data_stage_deltas_q11 = if paired_rx {
+        reservation.first_data_stage_deltas_q11
+    } else {
+        None
+    };
+    let root_copy_cntvct_lo = if paired_rx {
+        reservation.root_copy_cntvct_lo
+    } else {
+        None
+    };
+    record_cyw43_tx_phase_accepted(
+        generation,
+        source_cntvct_lo,
+        first_data_stage_deltas_q11,
+        root_copy_cntvct_lo,
+        accepted_ticks,
+    );
     true
 }
 
@@ -26874,6 +27185,7 @@ fn enqueue_unreserved_cyw43_data_tx(
     else {
         return false;
     };
+    let accepted_ticks = queued.accepted_ticks;
     let mut queue = CYW43_DATA_TX_QUEUE.lock();
     let purged = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation);
     // `force_urgent` affects FIFO ordering only. Every unpaired producer,
@@ -26892,7 +27204,7 @@ fn enqueue_unreserved_cyw43_data_tx(
     queue.high_water = queue.high_water.max(queue.len() as u32);
     drop(queue);
     record_cyw43_stale_data_tx_purge(purged);
-    record_cyw43_tx_phase_accepted(generation);
+    record_cyw43_tx_phase_accepted(generation, None, None, None, accepted_ticks);
     true
 }
 
@@ -29104,7 +29416,13 @@ fn driver_task_rx_token_from_completion(
     let len = bytes.len().min(MAX_FRAME_LEN);
     let mut buffer = [0u8; MAX_FRAME_LEN];
     buffer[..len].copy_from_slice(&bytes[..len]);
-    Some(DriverTaskNetRxToken { len, buffer })
+    Some(DriverTaskNetRxToken {
+        len,
+        buffer,
+        source_cntvct_lo: None,
+        first_data_stage_deltas_q11: None,
+        root_copy_cntvct_lo: None,
+    })
 }
 
 #[cfg(feature = "kernel")]
@@ -29235,7 +29553,7 @@ macro_rules! driver_task_nic {
                 _timestamp: Instant,
             ) -> Option<(Self::RxToken<'_>, Self::TxToken<'_>)> {
                 #[cfg(feature = "kernel")]
-                let cyw43_queue_reservation =
+                let mut cyw43_queue_reservation =
                     if matches!(DriverTaskHotPath::$hot_path, DriverTaskHotPath::Cyw43Wifi) {
                         match reserve_cyw43_data_tx_queue_slot($contract, true) {
                             Some(reservation) => Some(reservation),
@@ -29254,6 +29572,12 @@ macro_rules! driver_task_nic {
                         return None;
                     }
                 };
+                #[cfg(feature = "kernel")]
+                if let Some(reservation) = cyw43_queue_reservation.as_mut() {
+                    reservation.source_cntvct_lo = rx.source_cntvct_lo;
+                    reservation.first_data_stage_deltas_q11 = rx.first_data_stage_deltas_q11;
+                    reservation.root_copy_cntvct_lo = rx.root_copy_cntvct_lo;
+                }
                 record_driver_task_arp_rx(DriverTaskHotPath::$hot_path, &rx.buffer[..rx.len]);
                 $rx_frames.fetch_add(1, Ordering::AcqRel);
                 NET_DIAG.record_rx_frame_to_stack();
@@ -31283,6 +31607,8 @@ mod tests {
         let local_port = COHSH_TCP_PORT;
         let remote_port = 49_152;
         mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(0, Ordering::Release);
 
         fn fill_ordinary_tx_capacity() {
             for marker in 0..CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) {
@@ -31300,6 +31626,46 @@ mod tests {
                 CYW43_DATA_TX_QUEUE_CAP.saturating_sub(1) as u32,
             );
         }
+
+        let stale_response = test_cyw43_tcp_segment_token(
+            local_mac,
+            remote_mac,
+            local_ip,
+            remote_ip,
+            local_port,
+            remote_port,
+            2_000,
+            Some(1_007),
+            TcpControl::None,
+            &[],
+        );
+        let mut stale_exact =
+            reserve_cyw43_data_tx_queue_slot(CYW43_WIFI_DRIVER_TASK_CONTRACT, true)
+                .expect("one copied-RX reservation");
+        stale_exact.source_cntvct_lo = Some(0x4359_2000);
+        stale_exact.first_data_stage_deltas_q11 = Some(1 | (2 << 16));
+        stale_exact.root_copy_cntvct_lo = Some(0x4359_2100);
+        {
+            let mut queue = CYW43_DATA_TX_QUEUE.lock();
+            let _ = sync_cyw43_data_tx_queue_generation_locked(&mut queue, generation + 1);
+        }
+        CYW43_TEST_COUNTER_TICKS.store(0x4359_2100, Ordering::Release);
+        assert!(!enqueue_reserved_cyw43_data_tx(
+            stale_exact,
+            Cyw43ReservedTxCapacityProvenance::ExactPairedRx,
+            &stale_response.buffer[..stale_response.len],
+        ));
+        assert_eq!(
+            cyw43_tx_phase_diagnostic()
+                .rx_source_to_accepted_mod32
+                .samples,
+            0,
+            "a stale exact reservation cannot publish passive timing evidence",
+        );
+        assert_eq!(
+            cyw43_tx_phase_diagnostic().rx_source_to_queue_q11.samples,
+            0,
+        );
 
         fill_ordinary_tx_capacity();
         let arp_drops_before = cyw43_data_tx_queue_diagnostic().drops;
@@ -31332,7 +31698,7 @@ mod tests {
         fill_ordinary_tx_capacity();
         let wrong_tuple_drops_before = cyw43_data_tx_queue_diagnostic().drops;
 
-        let inbound_tcp = test_cyw43_tcp_segment_token(
+        let mut inbound_tcp = test_cyw43_tcp_segment_token(
             remote_mac,
             local_mac,
             remote_ip,
@@ -31344,6 +31710,9 @@ mod tests {
             TcpControl::Psh,
             b"request",
         );
+        inbound_tcp.source_cntvct_lo = Some(11);
+        inbound_tcp.first_data_stage_deltas_q11 = Some(1 | (2 << 16));
+        inbound_tcp.root_copy_cntvct_lo = Some(7_168);
         let inbound_tcp_len = inbound_tcp.len;
         let inbound_tcp_frame = inbound_tcp.buffer;
         assert!(store_cyw43_pending_rx_token(
@@ -31380,11 +31749,22 @@ mod tests {
             wrong_tuple_diagnostic.drops,
             wrong_tuple_drops_before.saturating_add(1),
         );
+        assert_eq!(
+            cyw43_tx_phase_diagnostic()
+                .rx_source_to_accepted_mod32
+                .samples,
+            0,
+            "nonmatching or rejected paired capacity cannot record timing evidence",
+        );
+        assert_eq!(
+            cyw43_tx_phase_diagnostic().rx_source_to_queue_q11.samples,
+            0,
+        );
 
         CYW43_DATA_TX_QUEUE.lock().clear();
         fill_ordinary_tx_capacity();
 
-        let exact_inbound_tcp = test_cyw43_tcp_segment_token(
+        let mut exact_inbound_tcp = test_cyw43_tcp_segment_token(
             remote_mac,
             local_mac,
             remote_ip,
@@ -31396,6 +31776,9 @@ mod tests {
             TcpControl::Psh,
             b"request",
         );
+        exact_inbound_tcp.source_cntvct_lo = Some(0);
+        exact_inbound_tcp.first_data_stage_deltas_q11 = Some(1 | (2 << 16));
+        exact_inbound_tcp.root_copy_cntvct_lo = Some(7_168);
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             exact_inbound_tcp,
@@ -31415,6 +31798,7 @@ mod tests {
             TcpControl::None,
             &[],
         );
+        CYW43_TEST_COUNTER_TICKS.store(8_192, Ordering::Release);
         exact_direct_tx.consume(exact_outbound_tcp.len, |frame| {
             frame.copy_from_slice(&exact_outbound_tcp.buffer[..exact_outbound_tcp.len]);
         });
@@ -31429,6 +31813,27 @@ mod tests {
             .pop_next()
             .expect("exact direct reverse TCP response remains admitted");
         assert!(queued_tcp.urgent);
+        let phase = cyw43_tx_phase_diagnostic();
+        assert_eq!(phase.rx_source_to_accepted_mod32.samples, 1);
+        assert_eq!(phase.rx_source_to_accepted_mod32.last_us, 8_192);
+        assert_eq!(phase.rx_source_to_queue_q11.samples, 1);
+        assert_eq!(phase.rx_source_to_queue_q11.last_us, 2_048);
+        assert_eq!(phase.rx_queue_to_precommit_q11.samples, 1);
+        assert_eq!(phase.rx_queue_to_precommit_q11.last_us, 4_096);
+        assert_eq!(phase.rx_precommit_to_root_q11.samples, 1);
+        assert_eq!(phase.rx_precommit_to_root_q11.last_us, 1_024);
+        assert_eq!(phase.rx_root_to_accepted_mod32.samples, 1);
+        assert_eq!(phase.rx_root_to_accepted_mod32.last_us, 1_024);
+        assert_eq!(
+            phase.rx_slowest_split,
+            Cyw43RxSplitTupleDiagnostic {
+                total_us: 8_192,
+                source_to_queue_us: 2_048,
+                queue_to_precommit_us: 4_096,
+                precommit_to_root_us: 1_024,
+                root_to_accepted_us: 1_024,
+            },
+        );
         assert_eq!(cyw43_data_tx_queue_diagnostic().reserved, 0);
 
         reset_cyw43_status_flags();
@@ -31479,10 +31884,12 @@ mod tests {
         let remote_port = 49_152;
         let remote_isn = 1_000u32;
         mark_cyw43_gate8_ready_for_test(generation);
+        CYW43_TEST_COUNTER_FREQ_HZ.store(1_000_000, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(0, Ordering::Release);
         CYW43_ASSIGNED_IPV4_BE.store(u32::from_be_bytes(local_ip.octets()), Ordering::Release);
 
         let mut device = Cyw43DriverTaskDevice::default();
-        let routed_ingress = test_cyw43_tcp_segment_token(
+        let mut routed_ingress = test_cyw43_tcp_segment_token(
             remote_mac,
             local_mac,
             remote_ip,
@@ -31494,6 +31901,9 @@ mod tests {
             TcpControl::Psh,
             b"rx",
         );
+        routed_ingress.source_cntvct_lo = Some(0xffff_f000);
+        routed_ingress.first_data_stage_deltas_q11 = Some(2 | (3 << 16));
+        routed_ingress.root_copy_cntvct_lo = Some(0x2000);
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
             routed_ingress,
@@ -31516,6 +31926,7 @@ mod tests {
             TcpControl::Psh,
             b"piggyback",
         );
+        CYW43_TEST_COUNTER_TICKS.store(0x3000, Ordering::Release);
         device
             .transmit(Instant::from_millis(0))
             .expect("the exact routed reply may use the transferred permit")
@@ -31527,6 +31938,13 @@ mod tests {
             .pop_next()
             .expect("the exact routed reply is retained");
         assert!(routed.urgent);
+        let phase = cyw43_tx_phase_diagnostic();
+        assert_eq!(phase.rx_source_to_accepted_mod32.samples, 1);
+        assert_eq!(phase.rx_source_to_accepted_mod32.last_us, 16_384);
+        assert_eq!(phase.rx_source_to_queue_q11.last_us, 4_096);
+        assert_eq!(phase.rx_queue_to_precommit_q11.last_us, 6_144);
+        assert_eq!(phase.rx_precommit_to_root_q11.last_us, 2_048);
+        assert_eq!(phase.rx_root_to_accepted_mod32.last_us, 4_096);
         device.end_smoltcp_rx_transaction();
         assert_eq!(cyw43_data_tx_queue_diagnostic().reserved, 0);
 
@@ -31732,6 +32150,13 @@ mod tests {
         assert!(
             Cyw43SteadyTxLifetime::capture(generation).is_some_and(Cyw43SteadyTxLifetime::current),
             "paired and standalone frames share the exact current steady lifetime",
+        );
+        assert_eq!(
+            cyw43_tx_phase_diagnostic()
+                .rx_source_to_accepted_mod32
+                .samples,
+            1,
+            "the transferred exact RX source records once; later unbound RX and standalone TX do not",
         );
 
         reset_cyw43_status_flags();
@@ -38258,6 +38683,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: frame_len,
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         EthernetRepr {
             src_addr: src_mac,
@@ -38333,6 +38761,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: payload.len(),
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         token.buffer[..payload.len()].copy_from_slice(payload);
         token
@@ -38354,6 +38785,9 @@ mod tests {
         DriverTaskNetRxToken {
             len: CYW43_BCDC_HEADER_BYTES + body.len(),
             buffer: payload,
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         }
     }
 
@@ -38566,6 +39000,7 @@ mod tests {
                 queue_depth: 0,
                 queue_capacity: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_CAP as u16,
                 flags: 0,
+                recovery_source_line: 0,
                 commit_sequence: 1,
             };
             let queue_offset =
@@ -38610,6 +39045,18 @@ mod tests {
                 }
             }
 
+            let mut source_cntvct_lo = [0; DRIVER_RUNTIME_CYW43_RX_BATCH_ENTRY_CAP];
+            for (index, source) in source_cntvct_lo.iter_mut().take(frames.len()).enumerate() {
+                *source = 0x4359_0000 + index as u32;
+            }
+            let first_data_stage_deltas_q11 = frames
+                .iter()
+                .any(|(_, flags)| {
+                    flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK
+                        == DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+                })
+                .then_some(0x4359_7a05)
+                .unwrap_or(0);
             let batch = pi4_driver_abi::DriverRuntimeCyw43RxBatchRecord::staged(
                 parent_sequence,
                 generation,
@@ -38617,6 +39064,8 @@ mod tests {
                 frames.len() as u16,
                 queue_state.queue_depth,
                 entries,
+                source_cntvct_lo,
+                first_data_stage_deltas_q11,
             )
             .commit();
             assert!(batch.valid_for_parent_and_queue_state(parent_sequence, queue_state));
@@ -42351,7 +42800,13 @@ mod tests {
         buffer[10..12].copy_from_slice(&7u16.to_le_bytes());
         buffer[12..16].copy_from_slice(&0u32.to_le_bytes());
         buffer[16..20].copy_from_slice(&0x1122_3344u32.to_le_bytes());
-        let token = DriverTaskNetRxToken { len: 20, buffer };
+        let token = DriverTaskNetRxToken {
+            len: 20,
+            buffer,
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
+        };
 
         let reply = cyw43_control_reply_from_token(&token).expect("CDC header must decode");
 
@@ -42369,7 +42824,13 @@ mod tests {
         buffer[4..8].copy_from_slice(&1u32.to_le_bytes());
         buffer[10..12].copy_from_slice(&40320u16.to_le_bytes());
         buffer[12..16].copy_from_slice(&0xffff_ffffu32.to_le_bytes());
-        let token = DriverTaskNetRxToken { len: 17, buffer };
+        let token = DriverTaskNetRxToken {
+            len: 17,
+            buffer,
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
+        };
 
         assert!(cyw43_control_reply_from_token(&token).is_none());
     }
@@ -42380,7 +42841,13 @@ mod tests {
         buffer[0..4].copy_from_slice(&[0x4c, 0x00, 0xb3, 0xff]);
         buffer[4..8].copy_from_slice(&[0x39, 0x00, 0x00, 0x0c]);
         buffer[12..16].copy_from_slice(&0xffff_fff2u32.to_le_bytes());
-        let token = DriverTaskNetRxToken { len: 16, buffer };
+        let token = DriverTaskNetRxToken {
+            len: 16,
+            buffer,
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
+        };
 
         assert!(cyw43_control_reply_from_token(&token).is_none());
     }
@@ -46511,6 +46978,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: event_frame.len(),
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
 
@@ -46626,6 +47096,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: event_frame.len(),
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
 
@@ -46699,6 +47172,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: event_frame.len(),
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
 
@@ -46824,6 +47300,9 @@ mod tests {
         let mut token = DriverTaskNetRxToken {
             len: event_frame.len(),
             buffer: [0; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
         token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
 
@@ -46980,6 +47459,9 @@ mod tests {
             let mut token = DriverTaskNetRxToken {
                 len: event_frame.len(),
                 buffer: [0; MAX_FRAME_LEN],
+                source_cntvct_lo: None,
+                first_data_stage_deltas_q11: None,
+                root_copy_cntvct_lo: None,
             };
             token.buffer[..event_frame.len()].copy_from_slice(&event_frame);
             assert!(cyw43_capture_event_frame_from_token(
@@ -49296,6 +49778,7 @@ mod tests {
         let poisoned_queue = pi4_driver_abi::DriverRuntimeCyw43RxQueueState {
             generation,
             flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED,
+            recovery_source_line: 39_579,
             commit_sequence: 99,
             ..pi4_driver_abi::DriverRuntimeCyw43RxQueueState::empty()
         };
@@ -55207,11 +55690,17 @@ mod tests {
             assert!(store_genet_pending_rx_token(DriverTaskNetRxToken {
                 len: 1,
                 buffer,
+                source_cntvct_lo: None,
+                first_data_stage_deltas_q11: None,
+                root_copy_cntvct_lo: None,
             }));
         }
         let overflow = DriverTaskNetRxToken {
             len: 1,
             buffer: [0xff; MAX_FRAME_LEN],
+            source_cntvct_lo: None,
+            first_data_stage_deltas_q11: None,
+            root_copy_cntvct_lo: None,
         };
 
         assert!(!store_genet_pending_rx_token(overflow));
@@ -55488,20 +55977,25 @@ mod tests {
         reset_cyw43_status_flags();
         CYW43_CONNECTION_EPOCH.store(91, Ordering::Release);
         CYW43_HOST_EAPOL_REQUIRED.store(1, Ordering::Release);
+        CYW43_TEST_COUNTER_TICKS.store(0x4359_1000, Ordering::Release);
         let generation = cyw43_sdio_dpc_expected_generation().expect("generated CYW43/SDIO link");
         let mut ring_page = [0u8; crate::hal::driver_task::DRIVER_TASK_RING_PAGE_BYTES];
         let mut ring = test_publish_cyw43_ring(&mut ring_page);
         let mut shared = TestCyw43RxBatchPages::new();
+        let event = [0x42, 0x43, 0x4d, 0x00];
         let frame = test_cyw43_tcp_frame();
         let completion = shared.publish(
             &mut ring,
             0x9101,
             generation,
-            &[(
-                &frame,
-                DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
-                    | (3u16 << pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT),
-            )],
+            &[
+                (&event, DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT),
+                (
+                    &frame,
+                    DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA
+                        | (3u16 << pi4_driver_abi::DRIVER_RUNTIME_CYW43_FRAME_FLAG_CREDIT_SHIFT),
+                ),
+            ],
         );
 
         assert_eq!(
@@ -55512,6 +56006,14 @@ mod tests {
             !crate::hal::driver_task::cyw43_sdio_pair_restart_required(),
             "ordinary data in a valid batch is not pre-secure transport corruption",
         );
+        let (event_flags, held_event) =
+            take_cyw43_pending_rx_token().expect("preceding batch event remains root-held");
+        assert_eq!(
+            event_flags & DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_MASK,
+            DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_EVENT,
+        );
+        assert_eq!(held_event.first_data_stage_deltas_q11, None);
+        assert_eq!(held_event.root_copy_cntvct_lo, None);
         let (flags, held) =
             take_cyw43_pending_rx_token().expect("ordinary batch data remains root-held");
         assert_eq!(
@@ -55519,6 +56021,21 @@ mod tests {
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
         );
         assert_eq!(&held.buffer[..held.len], &frame);
+        assert_eq!(
+            held.source_cntvct_lo,
+            Some(0x4359_0001),
+            "root stable copy selects the first data source after a preceding event",
+        );
+        assert_eq!(
+            held.first_data_stage_deltas_q11,
+            Some(0x4359_7a05),
+            "root stable copy preserves the immutable first-data phase word",
+        );
+        assert_eq!(
+            held.root_copy_cntvct_lo,
+            Some(0x4359_1000),
+            "root samples the stable-copy boundary only for that first data entry",
+        );
 
         reset_cyw43_status_flags();
     }
@@ -56221,6 +56738,129 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn cyw43_rx_pipeline_mod32_accepts_zero_and_low_word_wrap() {
+        assert_eq!(
+            cyw43_rx_mod32_interval_us(Some(0), Some(54_000), Some(54_000_000)),
+            Some(1_000),
+            "a populated batch-v3 timestamp word of zero remains valid",
+        );
+        assert_eq!(
+            cyw43_rx_mod32_interval_us(Some(0xffff_fff0), Some(0x20), Some(1_000_000),),
+            Some(48),
+            "the passive metric uses wrapping low-word subtraction",
+        );
+        assert_eq!(
+            cyw43_rx_mod32_interval_us(None, Some(1), Some(1_000_000)),
+            None,
+        );
+        assert_eq!(cyw43_rx_mod32_interval_us(Some(1), Some(2), Some(0)), None,);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_rx_pipeline_split_is_correlated_and_fails_closed() {
+        let freq_hz = Some(1_000_000);
+
+        let mut missing = Cyw43TxPhaseTracker::new();
+        missing.record_rx_pipeline_mod32(7, Some(0), None, None, Some(200), freq_hz);
+        assert_eq!(missing.diagnostic.rx_source_to_accepted_mod32.samples, 1);
+        assert_eq!(missing.diagnostic.rx_source_to_queue_q11.samples, 0);
+        assert_eq!(missing.diagnostic.rx_split_saturated, 0);
+        assert_eq!(missing.diagnostic.rx_split_invalid, 0);
+
+        let saturated_word = pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SATURATED,
+            1,
+        );
+        let mut saturated = Cyw43TxPhaseTracker::new();
+        saturated.record_rx_pipeline_mod32(
+            7,
+            Some(0),
+            Some(saturated_word),
+            Some(100),
+            Some(200),
+            freq_hz,
+        );
+        assert_eq!(saturated.diagnostic.rx_source_to_accepted_mod32.samples, 1);
+        assert_eq!(saturated.diagnostic.rx_source_to_queue_q11.samples, 0);
+        assert_eq!(saturated.diagnostic.rx_split_saturated, 1);
+        assert_eq!(saturated.diagnostic.rx_split_invalid, 0);
+
+        let mut invalid = Cyw43TxPhaseTracker::new();
+        invalid.record_rx_pipeline_mod32(
+            7,
+            Some(0),
+            Some(pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(4, 4)),
+            Some(1_000),
+            Some(20_000),
+            freq_hz,
+        );
+        assert_eq!(invalid.diagnostic.rx_source_to_accepted_mod32.samples, 1);
+        assert_eq!(invalid.diagnostic.rx_source_to_queue_q11.samples, 0);
+        assert_eq!(invalid.diagnostic.rx_split_saturated, 0);
+        assert_eq!(invalid.diagnostic.rx_split_invalid, 1);
+
+        let mut raw_zero = Cyw43TxPhaseTracker::new();
+        raw_zero.record_rx_pipeline_mod32(
+            7,
+            Some(0xffff_fff0),
+            Some(0),
+            Some(0x10),
+            Some(0x20),
+            freq_hz,
+        );
+        assert_eq!(raw_zero.diagnostic.rx_source_to_accepted_mod32.last_us, 48);
+        assert_eq!(raw_zero.diagnostic.rx_source_to_queue_q11.samples, 1);
+        assert_eq!(raw_zero.diagnostic.rx_source_to_queue_q11.last_us, 0);
+        assert_eq!(raw_zero.diagnostic.rx_queue_to_precommit_q11.samples, 1);
+        assert_eq!(raw_zero.diagnostic.rx_queue_to_precommit_q11.last_us, 0);
+        assert_eq!(raw_zero.diagnostic.rx_precommit_to_root_q11.last_us, 32);
+        assert_eq!(raw_zero.diagnostic.rx_root_to_accepted_mod32.last_us, 16);
+        assert_eq!(raw_zero.diagnostic.rx_split_saturated, 0);
+        assert_eq!(raw_zero.diagnostic.rx_split_invalid, 0);
+
+        let mut correlated = Cyw43TxPhaseTracker::new();
+        correlated.record_rx_pipeline_mod32(
+            7,
+            Some(0),
+            Some(pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(2, 1)),
+            Some(7_000),
+            Some(10_000),
+            freq_hz,
+        );
+        correlated.record_rx_pipeline_mod32(
+            7,
+            Some(0),
+            Some(pi4_driver_abi::driver_runtime_cyw43_rx_stage_deltas_q11_pack(1, 2)),
+            Some(10_000),
+            Some(12_000),
+            freq_hz,
+        );
+        assert_eq!(correlated.diagnostic.rx_source_to_queue_q11.max_us, 4_096);
+        assert_eq!(
+            correlated.diagnostic.rx_queue_to_precommit_q11.max_us,
+            4_096
+        );
+        assert_eq!(correlated.diagnostic.rx_precommit_to_root_q11.max_us, 3_856);
+        assert_eq!(
+            correlated.diagnostic.rx_root_to_accepted_mod32.max_us,
+            3_000
+        );
+        assert_eq!(
+            correlated.diagnostic.rx_slowest_split,
+            Cyw43RxSplitTupleDiagnostic {
+                total_us: 12_000,
+                source_to_queue_us: 2_048,
+                queue_to_precommit_us: 4_096,
+                precommit_to_root_us: 3_856,
+                root_to_accepted_us: 2_000,
+            },
+            "the slow tuple must remain one sample rather than stage-wise maxima",
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn cyw43_tx_phase_tracker_resets_all_state_at_generation_boundary() {
         let mut tracker = Cyw43TxPhaseTracker::new();
         let freq_hz = Some(1_000_000);
@@ -56228,6 +56868,27 @@ mod tests {
         tracker.record_accepted(7);
         tracker.record_promoted(7, 11);
         tracker.record_terminal(7, 11, Some(100), Some(400), freq_hz);
+        tracker.record_rx_pipeline_mod32(
+            7,
+            Some(0),
+            Some(1 | (2 << 16)),
+            Some(7_168),
+            Some(8_192),
+            freq_hz,
+        );
+        assert_eq!(tracker.diagnostic.rx_source_to_accepted_mod32.samples, 1,);
+        assert_eq!(
+            tracker.diagnostic.rx_source_to_accepted_mod32.last_us,
+            8_192
+        );
+        assert_eq!(tracker.diagnostic.rx_source_to_queue_q11.samples, 1);
+        assert_eq!(tracker.diagnostic.rx_source_to_queue_q11.last_us, 2_048);
+        assert_eq!(tracker.diagnostic.rx_queue_to_precommit_q11.samples, 1);
+        assert_eq!(tracker.diagnostic.rx_queue_to_precommit_q11.last_us, 4_096);
+        assert_eq!(tracker.diagnostic.rx_precommit_to_root_q11.samples, 1);
+        assert_eq!(tracker.diagnostic.rx_precommit_to_root_q11.last_us, 1_024);
+        assert_eq!(tracker.diagnostic.rx_root_to_accepted_mod32.samples, 1);
+        assert_eq!(tracker.diagnostic.rx_root_to_accepted_mod32.last_us, 1_024);
         tracker.record_accepted(8);
         tracker.record_promoted(8, 21);
 
@@ -56239,6 +56900,13 @@ mod tests {
         assert_eq!(tracker.diagnostic.accepted_to_issue.samples, 0);
         assert_eq!(tracker.diagnostic.issued_to_terminal.samples, 0);
         assert_eq!(tracker.diagnostic.terminal_to_next_issue.samples, 0);
+        assert_eq!(tracker.diagnostic.rx_source_to_accepted_mod32.samples, 0,);
+        assert_eq!(tracker.diagnostic.rx_source_to_queue_q11.samples, 0);
+        assert_eq!(tracker.diagnostic.rx_queue_to_precommit_q11.samples, 0);
+        assert_eq!(tracker.diagnostic.rx_precommit_to_root_q11.samples, 0);
+        assert_eq!(tracker.diagnostic.rx_root_to_accepted_mod32.samples, 0);
+        assert_eq!(tracker.diagnostic.rx_split_saturated, 0);
+        assert_eq!(tracker.diagnostic.rx_split_invalid, 0);
         assert_eq!(tracker.current_ticket, 21);
         assert!(!tracker.next_issue_pending);
     }
@@ -57060,7 +57728,13 @@ mod tests {
         buffer[..4].copy_from_slice(b"dhcP");
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            DriverTaskNetRxToken { len: 4, buffer },
+            DriverTaskNetRxToken {
+                len: 4,
+                buffer,
+                source_cntvct_lo: None,
+                first_data_stage_deltas_q11: None,
+                root_copy_cntvct_lo: None,
+            },
         ));
         assert!(queue_cyw43_arp_frame([0u8; 42]));
 
@@ -57111,7 +57785,13 @@ mod tests {
         buffer[..7].copy_from_slice(b"tcp-ack");
         assert!(store_cyw43_pending_rx_token(
             DRIVER_RUNTIME_CYW43_FRAME_FLAG_CHANNEL_DATA,
-            DriverTaskNetRxToken { len: 7, buffer },
+            DriverTaskNetRxToken {
+                len: 7,
+                buffer,
+                source_cntvct_lo: None,
+                first_data_stage_deltas_q11: None,
+                root_copy_cntvct_lo: None,
+            },
         ));
         assert!(submit_cyw43_driver_task_eth_frame(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,

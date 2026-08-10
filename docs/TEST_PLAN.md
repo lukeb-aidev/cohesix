@@ -765,6 +765,11 @@ prove all of the following:
   outer-lease-poison/sticky-restart seam through refinement, reject
   `scope=unavailable` as causal proof, preserve the first-writer recovery source
   as `WIFI_DEFERRED_RECOVERY_SCHEDULER_CAUSE`, and distinguish
+  the passive generation-matched runtime call site as
+  `WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE`. A queue-poison test must prove
+  the value is nonzero, survives pair scrub in the first-pre-fence snapshot,
+  and cannot create a wake, grant, scheduler phase, or recovery predicate;
+  non-queue causes retain zero. Coverage must also distinguish
   the root command sequence from the doorbell-issued fact. The retained summary
   must preserve the exact bounded grammar
   `wifi: deferred_recovery retained=yes refinement=<...>
@@ -1247,12 +1252,36 @@ The producer clears `commit_sequence`, writes and cleans the complete 24-byte
 queue body, executes the barrier, and commits a new nonzero sequence last at
 local-ring offset 192. It then builds the real 128-byte batch record at shared
 offset 36864 with one through eight entries pointing to the fixed 1,536-byte
-payload slots beginning at 36992, commits the repeated parent sequence at byte
-124 last, and only then signals root. One parent terminal with detail `0x5803`
-and `result=count` publishes that batch. Root must double-sample the queue and
-batch headers, validate generation, queue commit, parent, count, remaining,
-entry bounds, and slot bounds, copy every frame, and revalidate the unchanged
-header after the copy. It must prove an association event and a data frame are
+payload slots beginning at 36992. Layout version 3 must retain the complete
+128-byte size, keep the eight 8-byte entries unchanged, publish eight parallel
+`u32` DPC-admission low-CNTVCT words as `source_cntvct_lo: [u32; 8]` at bytes
+88-119, publish `first_data_stage_deltas_q11` at bytes 120-123, commit the
+repeated parent sequence at byte 124 last, and only then signal root. The low
+`u16` must be the Q11 floor from the first populated `CHANNEL_DATA` entry's
+source to its successful sequence-last private-queue commit; the high `u16`
+must be that queue commit to the final precommit evidence-word sample. Values
+`0x0000..=0xfffe` are valid, including raw zero; `0xffff` is
+saturated/UNKNOWN. An EVENT before DATA must not take ownership of the word,
+and the runtime must write zero when no DATA entry exists. The passive word is
+excluded from body validity and authority identity. Every unused entry/source
+pair must remain zero. Every prior or otherwise wrong-version, torn, or
+source-only-changed authority sample must fail closed. Two otherwise exact
+stable samples that differ only in the packed timing word must remain
+behaviorally accepted, return `0xffff/0xffff` timing (UNKNOWN), and request no
+recovery. One parent terminal with detail `0x5803` and
+`result=count` publishes that batch. Root must double-sample the queue and batch
+headers, validate generation, queue commit, parent, count, remaining, entry
+bounds, slot bounds, and source stability, copy every frame, and reject any
+authority-bearing header change on post-copy revalidation. A post-copy change
+confined to `first_data_stage_deltas_q11` must preserve the payload and exact
+ACK while degrading the timing halves to `0xffff/0xffff` (UNKNOWN). Runtime
+queue tests must prove source and post-commit admission provenance follow
+logical removal/reordering, that
+admission is stamped only after successful queue-state commit and before wake,
+and that the freed physical slot is cleared. Q11 tests must cover floor, raw
+zero, modulo-low-word wrap, exact `0xfffe`, saturation, placeholder-body then
+evidence-word then sequence-last commit ordering, and a production value. It
+must prove an association event and a data frame are
 delivered in order, stale work cannot mutate a replacement generation, and
 malformed, torn, or issued-unknown completion state poisons without replay. A
 zero-status `SOURCE_PENDING` event is consumed and rearmed through the ordinary
@@ -1267,6 +1296,27 @@ Exactly one fresh child ticket is allowed only for a telemetry-bound
 `CONTAINED` entry-inhibit fault that proves no command issue; the second such
 failure and every command-or-later, owner-poisoned, malformed, timed-out, or
 issued-unknown cut must fence the pair without advancing the event.
+Accepted-normal-child continuation coverage, jointly required by
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`, must prove the correction compositionally. The
+production case drives one real matching normal exact `SteadyLease` terminal
+through acceptance, proves the old global child is released, publishes exactly
+one successor in the same admitted CYW43 call, and returns at that successor's
+external wait without physically issuing it. In the same focused coverage, a
+separate constructed production-private state proves cached `FifoWindow` is the
+sole bounded deterministic `AdvanceState` transform allowed between two exact
+children and that it routes to one successor submission. This composition must
+not be reported as an artificially forced physical path through `FifoWindow`.
+The old terminal mailbox must be stable-read into its immutable accepted CYW43
+trace entry before coherent successor staging reuses that sequential mailbox.
+Counterexamples prove no same-call successor for a contained-preissue `FAULT`
+retry, malformed or mismatched terminal, issued-unknown state,
+`OrdinaryContinuation`, `RxQuantumBoundary`, `RxQueueWait`, `RecoverySettle`,
+`CompleteEvent`, `DeferredOwner`, or another external wait; no invocation may
+loop into a second successor. The tests also prove unchanged event identity and
+physical generation, one global/physical child at a time, later SDIO-only issue,
+and zero new EventPump admission, poll, signal, priority, recovery, or GENET
+behavior.
 These explicitly scoped descriptors cover bootstrap/control/host-EAPOL and
 Join-specific protocol fences; they must not authorize fresh steady NetData
 work. A post-release DPC producer level retains only its exact event-sequence
@@ -1563,10 +1613,20 @@ latch recovery; aggregate DPC client-sample staleness with a healthy ring must
 remain diagnostic only. Repeated reads of the accepted poison must be
 idempotent, and pair scrub must clear the old queue record before a replacement
 owner becomes active.
-A complete TCP command, actual physical response/buffered input, hard turn cap,
-and fresh-parent time cap must retain unfinished Wi-Fi work behind a fence and
-prove `Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded
-turn before Network re-admission. The 25-ms time cap must not interrupt an exact
+A hard turn cap, fresh-parent time cap, actual physical response, or buffered
+physical input must retain unfinished Wi-Fi work behind a fence and prove
+`Serial`, optional `LocalSeat`, and `Dispatch` each receive their bounded turn
+before Network re-admission. A complete command belonging to the exact active
+authenticated CYW43 connection must instead end the current Network quantum and
+use the next separate hardware-free `Dispatch` turn when no prior response
+cursor is active or completed on that turn and no physical input/response is
+pending. Dispatch must still consume newly arrived serial or local-seat input
+first. Passive USB service debt may be deferred only through that command and
+its existing bounded response cursor; after any exact retained parent receives
+its current already-admitted turn, cursor completion must force one ordinary
+USB/operator rotation before a second buffered command. Unauthenticated,
+wrong-connection, GENET, and physical-input cases must retain the full fence.
+The 25-ms time cap must not interrupt an exact
 already-`Prepared` or already-`Issued` parent; physical/dispatch pressure and
 the hard ordinary-EventPump turn cap may yield root admission only with the same
 identity retained. A consumed terminal that sequence-publishes one immutable
@@ -1578,7 +1638,8 @@ TX, wrong-generation rejection, and prove the continuation grants neither a
 second operation nor generic host-EAPOL authority. Generic bulk TX remains
 fresh-parent work. That fairness cap is not the persistent parent's
 192-operation budget and cannot become a runtime progress clock. A
-queued USB report and a buffered complete network command must not be bypassed.
+queued USB report containing actual input and a buffered complete network
+command must not be bypassed.
 GENET must neither sample nor retain the CYW43 queue/batch snapshot and must
 leave its own operator-fence state untouched. CYW43 diagnostics must report
 stable queue commit/depth, batch parent/count/remaining, and hint observations
@@ -2005,7 +2066,10 @@ This bounded service is available before TCP authentication so raw DPC and
 retained owner work cannot be starved while establishing a connection. Every
 turn must still admit no more than one CYW43 physical operation, and either cap
 must release to `Serial` and `LocalSeat`. A complete buffered TCP command and a
-pending physical response must also exit immediately. Tests must prove idle,
+pending physical response must also exit immediately. The exact authenticated
+command may choose the next hardware-free `Dispatch` turn before passive USB
+service debt, but an active response cursor blocks the next command and its
+completion restores the ordinary USB/operator rotation. Tests must prove idle,
 stale-epoch, poisoned, overrun, acknowledgement-failed, and inconsistent CYW43
 DPC work plus GENET do not enter the quantum. GENET must retain its ordinary
 single-Network-turn rotation and all CYW43 quantum counters must remain zero.
@@ -2084,7 +2148,9 @@ The focused acceptance tests
 `idle_prewait_reenters_only_for_a_fresh_one_way_sdio_child`,
 `production_masked_control_uses_exact_owner_activation_before_tx`,
 `production_join_final_fence_runs_canonical_dpc_then_issues_exactly_once`,
-`dpc_cursor_routes_exactly_one_child_action_per_turn`,
+`dpc_cursor_routes_by_exact_owner_state`,
+`production_dpc_normal_exact_completion_publishes_one_successor_before_return`,
+`production_dpc_normal_exact_continuation_preserves_rxbound_queue_and_settle_stops`,
 `sdio_external_dma_joins_irq158_and_irq116_once`,
 `cyw43_rx_queue_state_commit_is_sequence_last_and_stable`,
 `cyw43_rx_batch_parent_commits_eight_frames_once`,
@@ -3243,12 +3309,106 @@ successor_issues=<n>` and
 `wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<...> t2n=<...>`
 records, followed by
 `wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<...>` and
+the passive `rx2a_mod32=n/last/max/avg` DPC-admission-to-TX-acceptance metric,
+plus
+`wifi_tx_phase_rxsplit_q11a gen=<n> us=n/last/max/avg
+s2q=<...> q2p=<...>` and
+`wifi_tx_phase_rxsplit_q11b gen=<n>
+p2r=<...> r2a=<...> sat=<n> inv=<n>
+slow=<total>/<s2q>/<q2p>/<p2r>/<r2a>`,
+then
 `wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n>
 stale_purged=<n>`; `wifi diag` must emit equivalent `wifi: tx_phase*` and
 `wifi: tx_queue` records. Focused tests must prove generation reset, ticket
 deduplication, same-turn issue/terminal ordering with `i2t=0`, later terminal
 sampling, terminal-to-successor timing, saturating counters, bounded formatting,
 FIFO HWM/drop/stale-purge accounting, and no GENET output or scheduling change.
+For these metrics, coverage must prove that accepted batch-v3 source and stage
+provenance survives
+both direct and transferred exact copied-RX response paths and records once only
+after successful paired-TX admission; ordinary TX, nonmatching/stale RX,
+failed admission, and legacy records must produce zero samples. It must also
+prove that raw zero is present evidence rather than absence, low-word wrap uses
+wrapping subtraction, `0xffff` is saturated/UNKNOWN, the immutable packed word
+is excluded from behavioral stable-sample identity, a timing-only mismatch
+degrades to `0xffff/0xffff` without rejection or recovery, the first DATA entry
+is selected after any preceding EVENT, and root's private stable-copy word stays
+attached to that same entry. Valid samples must partition source-to-acceptance
+into `s2q`, `q2p`, `p2r`, and `r2a`; the Q11 source stages are independent
+floors in 2^11 ticks (about 37.9 us per unit). `p2r` is the exact
+source-to-root-copy interval minus those two floors, so it includes their
+combined quantization remainder of less than 4,096 ticks (about 75.9 us at
+54 MHz) as well as actual precommit-to-root delay. Every split field's leading
+`n` must remain visible coverage but may legitimately be below `rx2a_mod32 n`,
+because only the first DATA entry in each batch carries packed stage evidence.
+Each missing, saturated, or invalid sample is individually UNKNOWN. Coverage
+is decision-complete for the bottleneck only when the valid same-sample
+`slow.total` equals `rx2a_mod32.max`; if `slow.total` is smaller, the worst
+sample remains UNKNOWN. `slow` must retain all five values from that one sample
+so independent maxima can never be mistaken for one episode. Source measures
+runtime DPC-event admission, not radio reception or
+physical IRQ arrival; the first stage ends only after the durable queue-state
+commit, while the second ends at the final precommit evidence-word sample
+before body clean/barrier and sequence-last parent commit.
+No passive timing value may feed a
+wake, queue, scheduling, issue, retry, deadline, or recovery predicate. This
+passive proof field is scoped to reopened Milestone 26b task
+`m26b-wifi-join-owner-forensic-decision`, within
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`.
+
+The J4 per-child extension must additionally prove the physical two-region
+layout and sequential writer handoff. `DriverRuntimeSdioChildTimingMailbox` is
+exactly one 64-byte cache line at SDIO owner-ring offset 1,920; tests must show
+that owner fault telemetry ends at 1,912, the clock snapshot starts at 1,984,
+and the shared payload starts at 4,096. CYW43 stages the immutable child
+sequence, descriptor fingerprint, physical epoch, DPC event, typed action/I/O
+phase/engine, publication flag, and publication CNTVCT before sequence-last
+command handoff. SDIO must validate and preserve that body, add intake,
+issue, and terminal flags and CNTVCT words, and commit the matching child
+sequence last before the normal completion publication. CYW43 must accept only two identical committed
+samples and add its acceptance timestamp without mutating the mailbox. Root is
+read-only. Tests must reject a concurrent or late CYW43 mailbox mutation and
+any SDIO mutation of the staged identity. Neither side may confuse numeric
+offset 1,920 with the parent descriptor on CYW43's physically distinct local
+ring.
+
+Capability/layout tests must prove the reciprocal bus link exports only the
+SDIO owner ring and eight payload pages covering offsets 4,096-36,863. It must
+not export CYW43-private RX-batch pages to SDIO.
+`DriverRuntimeCyw43DpcChildTimingRecord` begins exactly at shared offset 49,472,
+after the 128-byte bus-episode record at 49,344, is exactly 512 bytes, retains
+at most sixteen 28-byte child entries, and ends at 49,984 before the
+RX-batch-region end at 53,248. Compile-time and ABI tests must prove 64-byte
+record alignment, fixed bounds, no overlap with the RX-batch ACK or bus-episode
+records, CYW43 as sole trace writer, root as stable read-only consumer, and no
+SDIO mapping. Each entry must preserve the same child sequence and typed
+metadata with publication, SDIO-intake, issue, terminal, and CYW43-acceptance low CNTVCT
+words.
+
+Sequence-last tests must reject torn publication, wrong version, stale physical
+epoch, wrong DPC event, child/fingerprint/typed-metadata mismatch, overflow,
+and wrap-ambiguous deltas without rejecting or delaying the underlying packet.
+Healthy coverage must carry exact source, child publication, SDIO intake,
+physical issue,
+joined physical terminal, CYW43 acceptance, between-child, and queue-commit
+evidence from the same DPC episode and preserve the current
+`s2q/q2p/p2r/r2a` result. Decision tests must classify a dominant
+source-to-first-publication interval as CYW43's local pre-child DPC path,
+publication-to-intake as the reciprocal CYW43-to-SDIO handoff/admission seam,
+intake-to-issue as SDIO preissue, issue-to-terminal as the selected SDHCI/PIO-or-DMA
+engine. Terminal-to-acceptance must classify the final mailbox publication plus
+normal completion handoff and CYW43 acceptance, while only between-child or
+final-acceptance-to-queue may classify CYW43 local continuation. Missing,
+invalid, non-worst, or mixed samples
+remain UNKNOWN. Every timing field and classification must be data-only:
+mutation or absence must leave notifications, runnable decisions, command
+publication, physical issue count, retry/rearm/deadline/recovery state, queue
+delivery, and scheduler choice identical. Hardware may admit one minimal
+correction only after repeated valid same-seam dominance and a direct
+production-code counterfactual. Otherwise stop; historical `494e9cb0e9ad` is
+not eligible for merge or restoration because its fresh raw-TCP p95 was about
+1.5 seconds with retransmission and first-ACK delay.
 Hardware analysis must use high `a2i` for acceptance/FIFO/owner wait through
 first issue, high `i2t` for issued runtime/SDIO service including runtime
 `WAIT_CREDIT`, and high `t2n` for the post-terminal EventPump handoff only when
@@ -3815,10 +3975,16 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       parser ingress on the live prompt row, boot/progress messages refreshing
       at the documented 5-10 s cadence, and new output scrolling the isolated
       HDMI viewport like a serial terminal without full-screen blink. As soon
-      as root-console and display-retry readiness hold, the independent
-      `cohesix>` prompt must be visible before Wi-Fi terminal state and before
-      USB command admission; `USB console starting...` must explain the latter,
-      while parser ingress and the final Ready banner remain false. On a
+      as root-console and display-retry readiness hold, HDMI must keep the
+      interactive `cohesix>` prompt withheld until USB command admission while
+      showing `USB controller starting...` plus bounded stage feedback. A stage
+      change appears immediately and an unchanged stage no more than once every
+      two seconds. `USB console ready` reports the observed stage timings, but
+      it is a passive EventPump record and may follow local-seat prompt release
+      from the same command-readiness transition; the test must not require
+      either record/prompt ordering. Prompt release itself still requires USB
+      command readiness plus display health. Parser ingress and the final Ready
+      banner remain false until their independent gates hold. On a
       pre-terminal or failed Wi-Fi episode, admitted USB characters must still
       update that visible input row. A partial line must schedule
       `Dispatch -> Display -> Serial` before any Network turn while retaining
@@ -3835,11 +4001,21 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       interactive-console readiness. The first attached viewport snapshot is
       one-shot, and asynchronous driver milestones arriving during a partial
       command must use the bounded row-preserving update and restore the exact
-      prompt, typed bytes, backspace floor, and cursor. USB up/down arrow escape
-      sequences navigate the bounded root-owned HDMI history and trigger
-      cursor-home redraws from canonical scrollback; redraws must use the
-      framebuffer-derived safe-area row count even when the payload spans
-      multiple bounded HDMI service turns. Each rendered row must use
+      prompt, typed bytes, backspace floor, and cursor. The canonical input row
+      remains dirty until the matching generation receipt completes; an older
+      completion cannot acknowledge newer input. Older FIFO output stays before
+      the row and later FIFO output stays after it; reserved high-impact status,
+      the closed command row, and its response retain their order under
+      pressure. Readiness invalidation retracts the prompt and stale
+      console-ready banner without losing the typed suffix, and a stale
+      retraction receipt cannot acknowledge the row restored by fresh
+      readiness. Held USB up/down arrows use a 300 ms initial
+      and 50 ms repeat deadline from the virtual counter. Once a canonical
+      viewport is materialized, each repeat advances it by one bounded CSI
+      `S`/`T` row;
+      a full redraw is reserved for initial or recovery materialization and must
+      use the framebuffer-derived safe-area row count even when the payload
+      spans multiple bounded HDMI service turns. Each rendered row must use
       clear-to-end-of-line and the final chunk must use clear-to-end so
       framebuffer-derived wide modes cannot retain stale text on the right or
       below the viewport. Redraws must leave the cursor at the real end of the
@@ -3851,10 +4027,14 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       rather than replaying raw payload tails; a capture with repeated
       `hdmi-text` no-reply growth, saturated `pending_bytes`, or
       jumbled/repeated screen content is not HDMI acceptance even if USB reaches
-      Gate 10. Stage 01 driver coverage guards the cadence constants, serial
-      runtime ring RX/TX turns, HDMI prompt/input/history/no-reply behavior, and
+      Gate 10. Stage 01 driver coverage guards held-arrow timing and steady-poll
+      emission, one-row HDMI scroll rendering, canonical input-row receipt and
+      FIFO ordering, command-readiness invalidation/re-release, prompt and
+      ready-banner readiness, startup-feedback cadence/timing, serial runtime
+      ring RX/TX turns, and
       Wi-Fi progress suppression during USB boot activity and after USB
-      first-byte proof. Pi 4 manifest-default boots must use
+      first-byte proof. These checks introduce no console command, driver-task
+      ABI field, or USB/HDMI authority change. Pi 4 manifest-default boots must use
       `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
       `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing
       declared devices fail visibly. Runtime backend attach failures may

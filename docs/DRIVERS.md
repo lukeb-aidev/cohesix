@@ -615,6 +615,11 @@ reusable ownership pattern.
   capacity is storage capacity, not permission for multiple active transfers.
 - After attach or recovery, require a decoded all-zero idle report before
   accepting make transitions; do not turn a held key into a synthetic command.
+- Emit every ordinary key once per make/release edge. Only held arrow usages
+  repeat: use the exported virtual counter and selected `TIMER_CLOCK_HZ` for a
+  300 ms initial deadline and 50 ms interval. Evaluate a due repeat from the
+  existing steady keyboard turn even when no new HID report arrives; report
+  count is not elapsed time and must not become the repeat clock.
 - Represent retained work as typed `Pending`, `Complete`, or `Failed`.
 - Give enumeration and recovery finite attempt and elapsed-time bounds.
 - Expose active, outstanding, and active-without-progress state separately;
@@ -631,6 +636,21 @@ reusable ownership pattern.
   ingress, parser drain, and echo counters advance without a dropped-byte
   increase. A latched startup gate or unchanged cumulative counter is not
   current physical-input proof.
+- Withhold the interactive HDMI prompt until current USB command admission and
+  display retry health both hold. Before that boundary, project bounded
+  controller, keyboard-enumeration, and first-report feedback through the
+  existing EventPump output path. Emit stage changes immediately and an
+  unchanged-stage heartbeat no more often than every two seconds. The passive
+  `USB console ready` timing record may follow prompt release and grants no
+  scheduling authority.
+- Keep the canonical prompt/input row dirty until its matching generation
+  receipt completes. Older FIFO output stays before that row, later output
+  stays after it, and backspace cannot erase bytes at or before the prompt
+  floor. An older display completion cannot acknowledge newer input.
+- If USB command readiness is invalidated, retract the prompt and stale
+  console-ready banner without discarding the typed suffix. Re-admit them only
+  from fresh readiness; a stale retraction receipt cannot clear the restored
+  row.
 
 ### 7.3 HDMI pattern
 
@@ -640,8 +660,16 @@ reusable ownership pattern.
 - Distinguish queue acceptance from completed rendering. A ready receipt needs
   a completed display-runtime turn with no outstanding submission or exhausted
   retry; mirroring or queueing a line is insufficient.
+- Once a snapshot establishes the viewport, held arrows chase the requested
+  history offset by one completed CSI `S`/`T` row per bounded display turn.
+  A scroll count at least as large as the viewport clears the text area while
+  preserving the cursor. Reserve full redraw for initial materialization or
+  recovery; do not restart it for every repeat or grow an unbounded queue.
 - Allow display mirroring and redraw to degrade before serial or keyboard
   command liveness.
+- These local-seat rules change no console grammar, driver-task ABI, physical
+  owner, poller, retry path, or scheduling authority. USB remains the sole
+  xHCI/HID owner and HDMI remains the child-only framebuffer renderer.
 
 ### 7.4 Network-device pattern
 

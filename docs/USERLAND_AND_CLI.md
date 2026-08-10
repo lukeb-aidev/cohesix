@@ -122,6 +122,22 @@ the compatibility `backend` field is an alias of `active_driver`. In Pi Wi-Fi
 mode, for example, `profile_backend=bcmgenet-v5` and
 `active_driver=backend=cyw43` is the truthful combination.
 
+On the physical Pi local seat, serial may show `cohesix>` while USB is still
+starting, but HDMI does not show the interactive prompt until USB command input
+is admitted and the display path is healthy. `USB controller starting...` is
+followed by bounded controller, keyboard-enumeration, or first-report feedback;
+an unchanged stage appears at most once every two seconds. `USB console ready`
+reports the observed stage timings, but it is a passive EventPump record and may
+appear after the local seat has already released the prompt from that same
+readiness transition. Its relative ordering does not gate the prompt. Once
+visible, typed USB bytes update one canonical command row, backspace cannot
+erase the prompt prefix, and held up/down arrows use counter-paced repeat plus
+completed one-row viewport steps. If command readiness is invalidated, HDMI
+retracts the prompt and stale console-ready banner while preserving the typed
+suffix, and restores them only after fresh readiness. This changes no command
+grammar, driver-task ABI, or
+USB/HDMI authority.
+
 ### Shared console line protocol
 
 The TCP console and physical console use the same bounded parser and response

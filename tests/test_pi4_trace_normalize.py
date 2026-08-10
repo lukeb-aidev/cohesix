@@ -774,6 +774,171 @@ def test_compact_cyw43_bus_episode_is_anchored_and_passive() -> None:
         assert malformed_record[key] == empty[key]
 
 
+def dpc_child_timing_lines() -> list[str]:
+    return [
+        (
+            "CYW43_DPC_CHILD_TIMING v=1 pe=00000005 e=0000001d "
+            "src=000003e8 q=00000578 qc=00000007 len=128 n=2 "
+            "fl=00000001 s2q=0 max=0 ovf=0 unk=0 tail_us=60"
+        ),
+        (
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=0 seq=00000029 a=01 k=02 "
+            "ph=03 eng=01 vf=1f "
+            "ts=0000044c/00000460/0000047e/000004b0/000004c4 "
+            "pre_us=100 p2n_us=20 n2i_us=30 i2t_us=50 t2a_us=20"
+        ),
+        (
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=1 seq=0000002a a=04 k=05 "
+            "ph=04 eng=02 vf=1f "
+            "ts=000004e2/000004ec/00000500/00000528/0000053c "
+            "pre_us=30 p2n_us=10 n2i_us=20 i2t_us=40 t2a_us=20"
+        ),
+    ]
+
+
+def test_cyw43_dpc_child_timing_is_anchored_typed_and_passive() -> None:
+    lines = dpc_child_timing_lines()
+    header = normalizer.parse_cyw43_dpc_child_timing(lines[0])
+    first = normalizer.parse_cyw43_dpc_child_timing_entry(lines[1])
+    assert header is not None
+    assert header["diagnostic"] == "cyw43-dpc-child-timing"
+    assert header["physical_epoch"] == "00000005"
+    assert header["source_cntvct"] == "000003e8"
+    assert header["source_to_queue_us"] == "0"
+    assert first is not None
+    assert first["diagnostic"] == "cyw43-dpc-child-timing-entry"
+    assert first["intake_cntvct"] == "00000460"
+    assert first["publish_to_intake_us"] == "20"
+    assert first["intake_to_issue_us"] == "30"
+    assert normalizer.parse_cyw43_dpc_child_timing(f"{lines[0]} trailing=yes") is None
+    assert (
+        normalizer.parse_cyw43_dpc_child_timing_entry(f"{lines[1]} trailing=yes")
+        is None
+    )
+
+    events = normalizer.parse_events(lines)
+    assert [event.stage for event in events] == [
+        "cyw43-dpc-child-timing",
+        "cyw43-dpc-child-timing-entry",
+        "cyw43-dpc-child-timing-entry",
+    ]
+    timing = normalizer.summarize_cyw43_dpc_child_timing(events)
+    assert timing.status == "complete"
+    assert timing.reason == "none"
+    assert timing.version == 1
+    assert timing.physical_epoch == 5
+    assert timing.event_sequence == 29
+    assert timing.source_cntvct == "0x000003e8"
+    assert timing.queue_cntvct == "0x00000578"
+    assert timing.queue_commit_sequence == 7
+    assert timing.data_len == 128
+    assert timing.count == 2
+    assert timing.observed_entries == 2
+    assert timing.flags == "0x00000001"
+    assert timing.s2q_us == 0
+    assert timing.max_us == 0
+    assert timing.source_to_publish_us == 100
+    assert timing.publish_to_intake_us == 30
+    assert timing.intake_to_issue_us == 50
+    assert timing.issue_to_terminal_us == 90
+    assert timing.terminal_to_accept_us == 40
+    assert timing.between_child_us == 30
+    assert timing.dominant_seam == "cyw43-source-to-publish"
+    assert timing.tail_us == 60
+
+    record = normalizer.summarize_gates(events).to_record()
+    empty = normalizer.summarize_gates([]).to_record()
+    assert record["WIFI_DPC_CHILD_TIMING_STATUS"] == "complete"
+    assert record["WIFI_DPC_CHILD_TIMING_S2Q_US"] == 0
+    assert record["WIFI_DPC_CHILD_TIMING_MAX_US"] == 0
+    assert record["WIFI_DPC_CHILD_TIMING_SOURCE_TO_PUBLISH_US"] == 100
+    assert record["WIFI_DPC_CHILD_TIMING_PUBLISH_TO_INTAKE_US"] == 30
+    assert record["WIFI_DPC_CHILD_TIMING_INTAKE_TO_ISSUE_US"] == 50
+    assert record["WIFI_DPC_CHILD_TIMING_ISSUE_TO_TERMINAL_US"] == 90
+    assert record["WIFI_DPC_CHILD_TIMING_TERMINAL_TO_ACCEPT_US"] == 40
+    assert record["WIFI_DPC_CHILD_TIMING_BETWEEN_CHILD_US"] == 30
+    assert (
+        record["WIFI_DPC_CHILD_TIMING_DOMINANT_SEAM"]
+        == "cyw43-source-to-publish"
+    )
+    for key in (
+        "WIFI_GATE",
+        "WIFI_BLOCKER",
+        "WIFI_DPC_PROOF",
+        "WIFI_DPC_REASON",
+        "WIFI_GATE8_COMPLETE",
+    ):
+        assert record[key] == empty[key]
+
+
+def test_cyw43_dpc_child_timing_inexact_missing_or_mismatched_is_unknown() -> None:
+    lines = dpc_child_timing_lines()
+    variants = [
+        [
+            lines[0].replace("fl=00000001", "fl=00000003").replace(
+                "ovf=0", "ovf=1"
+            ),
+            *lines[1:],
+        ],
+        lines[:2],
+        [lines[0], lines[1], lines[2].replace("i=1", "i=0")],
+        [lines[0], lines[1].replace("vf=1f", "vf=0f"), lines[2]],
+        [lines[0].replace("max=0", "max=1"), *lines[1:]],
+        [lines[0], lines[1].replace("k=02", "k=07"), lines[2]],
+        [
+            lines[0],
+            lines[1].replace("0000044c/", "8000044c/"),
+            lines[2],
+        ],
+    ]
+    expected_reasons = (
+        "inexact",
+        "entry-count-mismatch",
+        "entry-index-mismatch",
+        "entry-incomplete",
+        "maximum-mismatch",
+        "entry-type-mismatch",
+        "wrap-ambiguous",
+    )
+    for variant, expected_reason in zip(variants, expected_reasons, strict=True):
+        events = normalizer.parse_events(variant)
+        timing = normalizer.summarize_cyw43_dpc_child_timing(events)
+        assert timing.status == "UNKNOWN"
+        assert timing.reason == expected_reason
+        assert timing.s2q_us == "UNKNOWN"
+        assert timing.max_us == "UNKNOWN"
+        assert timing.source_to_publish_us == "UNKNOWN"
+        assert timing.publish_to_intake_us == "UNKNOWN"
+        assert timing.intake_to_issue_us == "UNKNOWN"
+        assert timing.issue_to_terminal_us == "UNKNOWN"
+        assert timing.terminal_to_accept_us == "UNKNOWN"
+        assert timing.between_child_us == "UNKNOWN"
+        assert timing.dominant_seam == "UNKNOWN"
+        assert timing.tail_us == "UNKNOWN"
+        record = normalizer.summarize_gates(events).to_record()
+        assert record["WIFI_DPC_CHILD_TIMING_STATUS"] == "UNKNOWN"
+        assert record["WIFI_DPC_CHILD_TIMING_S2Q_US"] == "UNKNOWN"
+        assert record["WIFI_DPC_CHILD_TIMING_MAX_US"] == "UNKNOWN"
+        assert (
+            record["WIFI_DPC_CHILD_TIMING_SOURCE_TO_PUBLISH_US"] == "UNKNOWN"
+        )
+        assert (
+            record["WIFI_DPC_CHILD_TIMING_PUBLISH_TO_INTAKE_US"] == "UNKNOWN"
+        )
+        assert (
+            record["WIFI_DPC_CHILD_TIMING_INTAKE_TO_ISSUE_US"] == "UNKNOWN"
+        )
+        assert (
+            record["WIFI_DPC_CHILD_TIMING_ISSUE_TO_TERMINAL_US"] == "UNKNOWN"
+        )
+        assert (
+            record["WIFI_DPC_CHILD_TIMING_TERMINAL_TO_ACCEPT_US"] == "UNKNOWN"
+        )
+        assert record["WIFI_DPC_CHILD_TIMING_BETWEEN_CHILD_US"] == "UNKNOWN"
+        assert record["WIFI_DPC_CHILD_TIMING_DOMINANT_SEAM"] == "UNKNOWN"
+        assert record["WIFI_DPC_CHILD_TIMING_TAIL_US"] == "UNKNOWN"
+
+
 def test_host_annotation_tail_cannot_replay_target_gate_or_boot_evidence() -> None:
     lines = [
         "U-Boot 2026.01",
@@ -1416,6 +1581,7 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE": "unknown",
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE": 0,
         "WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP": "0x0000",
+        "WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE": 0,
         "WIFI_CAUSAL_FRONTIER": "none",
         "WIFI_RX_IRQ_PRESERVE_COUNT": 0,
         "WIFI_RX_IRQ_PRESERVE_REASON": "none",
@@ -1443,6 +1609,31 @@ def test_gate_summary_tracks_usb_command_ring_and_wifi_ht_blockers() -> None:
         "WIFI_DPC_POISONED": "unknown",
         "WIFI_DPC_MASKED": "unknown",
         "WIFI_DPC_LINE": 0,
+        "WIFI_DPC_CHILD_TIMING_STATUS": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_REASON": "missing",
+        "WIFI_DPC_CHILD_TIMING_VERSION": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_PHYSICAL_EPOCH": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_EVENT_SEQUENCE": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_SOURCE_CNTVCT": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_QUEUE_CNTVCT": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_QUEUE_COMMIT_SEQUENCE": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_DATA_LEN": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_COUNT": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_OBSERVED_ENTRIES": 0,
+        "WIFI_DPC_CHILD_TIMING_FLAGS": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_S2Q_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_MAX_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_SOURCE_TO_PUBLISH_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_PUBLISH_TO_INTAKE_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_INTAKE_TO_ISSUE_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_ISSUE_TO_TERMINAL_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_TERMINAL_TO_ACCEPT_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_BETWEEN_CHILD_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_DOMINANT_SEAM": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_OVERFLOW_COUNT": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_UNKNOWN_COUNT": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_TAIL_US": "UNKNOWN",
+        "WIFI_DPC_CHILD_TIMING_LINE": 0,
         "CYW43_BOOTSTRAP_SUPERVISOR_SEEN": "no",
         "CYW43_BOOTSTRAP_SUPERVISOR_MAX_ATTEMPT": 0,
         "CYW43_BOOTSTRAP_SUPERVISOR_TRANSIENT_RETRIES": 0,
@@ -2493,7 +2684,8 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
         "wifi: deferred_recovery scheduler_edge publication_latched=yes "
         "signal_returned=yes parent_deadline_expired=yes "
         "child_terminal=no child_wait_receipt=no child_bus_episode=no "
-        "bus_parent=0/0x0000 evidence=exact-only",
+        "bus_parent=0/0x0000 rsl=39579 "
+        "evidence=exact-only",
         "wifi: deferred_recovery scheduler scope=first-pre-fence "
         "outer=closing/8/0x03 root=malformed command_sequence=65 "
         "doorbell_issued=no",
@@ -2532,6 +2724,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert events[5].fields["child_wait_receipt"] == "no"
     assert events[5].fields["child_bus_episode"] == "no"
     assert events[5].fields["bus_parent"] == "0/0x0000"
+    assert events[5].fields["rsl"] == "39579"
     assert events[5].fields["evidence"] == "exact-only"
     assert events[8].fields["command_sequence"] == "64"
     assert events[8].fields["doorbell_issued"] == "yes"
@@ -2573,6 +2766,7 @@ def test_gate_summary_surfaces_priority_episode_and_first_recovery_scheduler() -
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_CHILD_BUS_EPISODE"] == "no"
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_SEQUENCE"] == 0
     assert record["WIFI_DEFERRED_RECOVERY_SCHEDULER_BUS_PARENT_OP"] == "0x0000"
+    assert record["WIFI_DEFERRED_RECOVERY_RUNTIME_SOURCE_LINE"] == 39579
     assert record["WIFI_CAUSAL_FRONTIER"] == "root-signal-returned"
     for key in (
         "WIFI_GATE",

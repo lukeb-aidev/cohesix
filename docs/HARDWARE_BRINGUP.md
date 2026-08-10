@@ -473,6 +473,34 @@ a serial `ping` and a USB-keyboard `ping` must still return. If any tail is
 absent, stop sending input and preserve the sample. A merged or overlapped
 serial transcript is not acceptance evidence.
 
+The first serial `cohesix>` prompt is not permission to type on the USB local
+seat. HDMI can first show `USB controller starting...` and bounded
+`stage=controller|keyboard-enumeration|first-report` feedback while its
+interactive prompt remains withheld. A stage change is shown immediately; an
+unchanged stage is repeated at most once every two seconds. The terminal
+`USB console ready` line reports observed controller, enumeration, command, and
+total milliseconds. It is a passive EventPump observation of the same
+command-readiness transition and may appear after the local seat has released
+the prompt, so do not require either record/prompt ordering. Require instead
+that prompt release itself follows USB command readiness and healthy display
+retry state. These records observe the existing retained USB frontier and do
+not add a poll, retry, wake, completion, command, ABI field, or hardware owner.
+
+After the HDMI prompt appears, verify that every typed character reaches the
+canonical command row, backspace stops at the prompt prefix, and held up/down
+arrows advance scrollback smoothly one completed viewport row at a time.
+Queue/submission counters alone do not satisfy this check; preserve the matching
+completed `hdmi-text` receipt evidence. If USB command readiness is invalidated
+during the sample, the HDMI prompt and stale console-ready banner must retract
+without losing the typed suffix. The prompt returns only after fresh readiness
+and display health; the banner is canonically re-admitted after fresh readiness
+and becomes visible through that healthy display service. Do not require a
+fault injection merely to exercise this branch on otherwise healthy hardware.
+
+This behavior retains the existing console grammar and fixed driver-task ABI.
+HAL still admits resources, the isolated USB runtime remains the sole xHCI/HID
+owner, and the isolated HDMI runtime remains the sole framebuffer renderer.
+
 `usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
 `continuation=pending|terminal` state, cached runtime contract, verdict, and
 terminal `OK` below the 2,048-byte serial bound. It does not prepend the verbose
@@ -513,7 +541,7 @@ snapshot also emits:
 ```text
 wifi: deferred_recovery retained=yes refinement=<pair-placeholder|owner-context|exact-owner> logical_terminal_observed=<yes|no> cause=<cause> subphase=<subphase> gate=<n> current=<yes|no> live_generation=<n>
 wifi: deferred_recovery scheduler scope=<first-pre-fence|unavailable> cause=<unavailable|root-request|persistent-parent-stable-invalid|runtime-progress|rx-queue-poison|recovery-continuation> outer=<phase>/<pair_epoch>/0x<mask> root=<active>/<phase>/0x<mask>/<request>/<generation> command_sequence=<n>
-wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> evidence=exact-only
+wifi: deferred_recovery scheduler_edge publication_latched=<yes|no> signal_returned=<yes|no> parent_deadline_expired=<yes|no> child_terminal=<yes|no> child_wait_receipt=<yes|no> child_bus_episode=<yes|no> bus_parent=<seq>/0x<op> rsl=<n> evidence=exact-only
 ```
 
 HAL captures that scheduler record sequence-last immediately before the first
@@ -548,7 +576,10 @@ lifetime condition. `child_terminal`, `child_wait_receipt`, and
 `child_bus_episode` are separate same-request downstream evidence from a stable
 completion, full wait-receipt identity, or sequence-last bus-episode record;
 `bus_parent` reports that episode's parent sequence and operation. No progress
-marker contributes to this record. A `no` value means only that the named exact
+marker contributes to this record. Compact serial field `rsl` is copied
+from the generation-matched poisoned RX queue record and names the exact
+`apps/pi4-driver-runtime/src/lib.rs` call site in the reported image commit; it
+is passive evidence and zero for non-queue recovery causes. A `no` value means only that the named exact
 proof was absent at capture, not that the edge did not happen or that the fault
 has been localized. `evidence=exact-only` separates this immutable frontier
 from derived gates, breadcrumbs, and post-recovery progress. On the non-MCS Pi
@@ -1173,7 +1204,91 @@ the payload/body, then commits the matching parent sequence at byte 124 last.
 The single parent completion uses detail `0x5803`, `result=count`, and the batch
 header frame reference. Root validates generation, queue commit, parent
 sequence, count, remaining depth, and every entry bound; after copying all
-frames it re-reads the header and rejects any change.
+frames it re-reads the header and rejects any authority-bearing change. A
+change confined to the passive packed timing word preserves the copied payload
+and exact ACK while degrading both timing halves to `0xffff` (UNKNOWN).
+
+RX-batch layout version 3 preserves the fixed 128-byte record. Bytes 88-119
+hold `source_cntvct_lo: [u32; 8]`, captured at exact runtime DPC-event
+admission. Bytes 120-123 hold one sequence-covered
+`first_data_stage_deltas_q11`, and the sequence-last parent commit remains at
+byte 124. The word belongs to the first populated `CHANNEL_DATA` entry: low
+`u16` is source to successful durable private-queue commit and high `u16` is
+that queue commit to the final precommit evidence-word sample. Each is a floor
+in 2^11-CNTVCT-tick units (about 37.9 us); `0x0000..=0xfffe` are valid,
+including raw zero, while `0xffff` is saturated/UNKNOWN. An event-only batch
+is written with zero by the runtime, but the passive word is not a batch-validity
+or authority predicate. Stable sampling compares the authority fields with that
+word zeroed. A timing-only mismatch preserves the exact batch and degrades both
+halves to `0xffff` (saturated/UNKNOWN); it cannot reject traffic or request
+recovery. Root rejects wrong-version or authority-unstable records, retains
+source/stage provenance plus a private stable-copy low word through the exact
+copied-RX reservation, and records timing only after successful paired response
+admission. These fields create no wake, poll, scheduling, issue, deadline,
+retry, or recovery authority. Source timestamps runtime DPC-event admission,
+not radio reception or physical IRQ arrival, so it cannot by itself prove
+over-the-air or interrupt latency. This evidence-only extension is authorized
+by reopened Milestone 26b task
+`m26b-wifi-join-owner-forensic-decision`, within
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority`.
+
+For J4 owner-seam diagnosis, bind every conclusion to exact image
+`aabb9b39ecc4` and its same-boot serial/pcap proof. That image crossed
+first-pair Gate 8 and DHCP with no live-ring poison, RX-queue poison, runtime
+`recovery_required`, sticky root pair restart, or priority-lease poison. Its
+stale compatibility client snapshot did not poison or govern the healthy live
+owner, but raw TCP remained outside acceptance. Its valid
+worst same-sample split was 33.841 ms total: 27.154 ms source-to-queue
+(80.2%), 5.309 ms queue-to-precommit, 1.228 ms precommit-to-root-copy, and
+0.148 ms root-copy-to-paired-response acceptance. Record the classification as
+J4: J1/J2/J3 association ownership is complete and the unresolved causal edge
+lies inside source admission to durable private-RX queue commit.
+
+The next diagnostic image must preserve the two-region ownership boundary.
+`DriverRuntimeSdioChildTimingMailbox` occupies owner-ring offset 1,920 (bytes
+1,920-1,983), between the owner fault record ending at 1,912 and the passive
+clock snapshot beginning at 1,984. CYW43 first stages the exact child sequence,
+descriptor fingerprint, physical epoch, DPC event, typed action/I/O
+phase/engine, and publication CNTVCT before the ordinary command handoff. SDIO
+validates and preserves that body, records exact owner intake, physical issue,
+and joined-terminal CNTVCT, then commits the child sequence last before the
+ordinary completion.
+CYW43 stable-reads only that exact commit through the mapped SDIO-owner ring and
+adds the completion-acceptance CNTVCT; root reads only the joined CYW43 trace
+and never writes either record.
+The staged CYW43 writer and final SDIO commit writer are sequential and must not
+mutate each other's fields after handoff. The same numeric offset is CYW43's
+parent descriptor only on CYW43's physically distinct local ring; a trace that
+samples the wrong base or role is invalid. SDIO maps only its owner ring plus
+shared offsets 4,096-36,863 and
+must not access CYW43's private RX-batch region. CYW43 writes the bounded joined
+512-byte `DriverRuntimeCyw43DpcChildTimingRecord` beginning at shared offset
+49,472, after the bus-episode record at 49,344-49,471. Its sixteen 28-byte
+entries plus fixed header end at 49,984, before the private region ends at
+53,248. Root may read it, but SDIO may not.
+
+Use only exact physical-epoch, DPC-event, child-sequence,
+descriptor-fingerprint, typed action/I/O phase/engine, and
+sequence-last-publication matches from the same slow sample. Compare
+source-to-first-child publication, publication-to-SDIO intake,
+SDIO-intake-to-issue, issue-to-joined terminal,
+terminal-to-CYW43 acceptance, between-child acceptance-to-
+publication, and final acceptance to queue commit. If the first dominates
+repeatedly, inspect CYW43's local pre-child path. If publication-to-intake
+dominates, inspect only the reciprocal CYW43-to-SDIO handoff/admission seam;
+if intake-to-issue dominates, inspect only SDIO's preissue service. If physical
+service dominates, inspect only the selected SDIO/SDHCI child engine. If
+terminal-to-acceptance dominates, inspect final mailbox publication, normal
+completion handoff, and CYW43 acceptance together; only between-child or final
+acceptance-to-queue dominance selects CYW43 local continuation.
+Missing, torn, stale, overflowed, wrap-ambiguous, cross-identity, or non-worst evidence is UNKNOWN
+and authorizes no repair. The mailbox and trace are passive: their absence or
+content must never change work admission, notification, wake, issue, retry,
+rearm, deadline, recovery, retention, or scheduling. If no repeated dominant
+seam and direct code counterfactual emerge, stop the current repair sequence.
+Do not restore or merge historical `494e9cb0e9ad`; its fresh control reproduced
+first-ACK delay, retransmission, and about 1.5-second raw-TCP p95.
 
 An active persistent op11 uses that same record as nonterminal sideband state
 for preceding EVENT/DATA. Root performs the same stable copy and post-copy
@@ -2471,6 +2586,26 @@ retain only their explicit protocol bounds and cannot become periodic receive
 polling. The request-bound sealed M2/M4/group-key finite parent is an explicit
 host-EAPOL bound; EAPOL-Start and other control remain ordinary.
 
+The bounded accepted-child continuation jointly scoped by
+`m26b-wifi-sdio-notification-dpc-closure` and
+`m26b-net-control-priority` applies only after CYW43 has accepted a normal exact
+`SteadyLease` DPC child terminal. In that already-admitted runtime call, CYW43
+releases the old global child, runs one bounded deterministic private
+`FifoWindow` `AdvanceState` transition, and may publish at most one successor
+child before returning at that successor's external wait. SDIO issues the
+successor only on its later owner turn, so the rule preserves one physical child
+at a time and does not widen the EventPump physical-operation budget. The old
+terminal mailbox is stable-read into its immutable accepted CYW43 trace entry
+before coherent successor staging reuses that sequential mailbox. The
+contained-preissue
+`FAULT` retry, `OrdinaryContinuation`, `RxQuantumBoundary`, `RxQueueWait`,
+`RecoverySettle`, `CompleteEvent`, `DeferredOwner`, and every other external,
+credit, peer, or recovery wait remain later-turn work; malformed or uncertain
+identity continues to fail closed. When checking the passive per-child timing
+trace, this correction targets acceptance-to-next-publication delay. It does
+not reclassify physical-terminal-to-acceptance wake latency or create a poll,
+notification, priority lease, retry, recovery, or second-issuer path.
+
 An active DPC cursor or SDIO child does not block memory-only publication of
 already-completed private RX frames. CYW43 may commit one current-generation
 batch of one through eight frames without touching Function 1, Function 2, the
@@ -2533,23 +2668,49 @@ owner quanta issued. `done` counts completed DPC-admitted frames. `fdpc` and
 amplification; they neither prove live packet service nor change owner
 admission.
 
-Record the four additive Wi-Fi TX lines from both `netstats` and
+Record the seven additive Wi-Fi TX lines from both `netstats` and
 `wifi diag`:
 
 ```text
 netstats: wifi_tx_phase_counts gen=<n> accepted=<n> issued=<n> terminals=<n> successor_issues=<n>
 netstats: wifi_tx_phase gen=<n> us=n/last/max/avg a2i=<n>/<last>/<max>/<avg> t2n=<n>/<last>/<max>/<avg>
 netstats: wifi_tx_phase_i2t gen=<n> us=n/last/max/avg i2t=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rx2a_mod32 gen=<n> us=n/last/max/avg rx2a_mod32=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rxsplit_q11a gen=<n> us=n/last/max/avg s2q=<n>/<last>/<max>/<avg> q2p=<n>/<last>/<max>/<avg>
+netstats: wifi_tx_phase_rxsplit_q11b gen=<n> p2r=<n>/<last>/<max>/<avg> r2a=<n>/<last>/<max>/<avg> sat=<n> inv=<n> slow=<total>/<s2q>/<q2p>/<p2r>/<r2a>
 netstats: wifi_tx_queue gen=<n> depth=<n> reserved=<n> hwm=<n> drops=<n> stale_purged=<n>
 ```
 
 `wifi diag` uses the equivalent `wifi: tx_phase_counts` and
-`wifi: tx_phase`, `wifi: tx_phase_i2t`, and `wifi: tx_queue` prefixes. The
-tracker resets on logical connection generation, deduplicates immutable
+`wifi: tx_phase`, `wifi: tx_phase_i2t`, `wifi: tx_phase_rx2a_mod32`,
+`wifi: tx_phase_rxsplit_q11a`, `wifi: tx_phase_rxsplit_q11b`, and
+`wifi: tx_queue` prefixes. The tracker
+resets on logical connection generation,
+deduplicates immutable
 tickets, and scales from the generated virtual-counter frequency. `a2i` is
 TxToken acceptance, including FIFO and owner-lane wait, to first observed op7
 issue. Runtime `WAIT_CREDIT` begins after that issue and is included in `i2t`,
-which ends at the joined Function-2 terminal. `successor_issues` and `t2n`
+which ends at the joined Function-2 terminal. `rx2a_mod32` is the wrapping
+CNTVCT-low interval from exact runtime DPC-event admission to successful paired
+copied-RX response acceptance. It is passive evidence, not radio/IRQ timing or
+scheduling authority. Batch-v3 carries the first `CHANNEL_DATA` entry's two
+Q11 floors: source to successful durable private-queue commit (`s2q`) and that
+commit to the final precommit evidence-word sample (`q2p`). The root-private
+stable-copy low word derives precommit to stable root copy (`p2r`) and root
+copy to successful paired response acceptance (`r2a`). Because the first two
+stages are independently floored, `p2r` is the exact source-to-copy residual
+after subtracting them and includes less than 4,096 ticks of combined
+quantization remainder (about 75.9 us at 54 MHz). Each Q11 unit is about
+37.9 us; raw zero through `0xfffe` is valid and `0xffff` is
+saturated/UNKNOWN. Every leading `n` remains useful coverage but may be lower
+than `rx2a_mod32 n`, because only the first DATA entry in each batch carries
+packed stage evidence. Each missing, saturated, or invalid sample is
+individually UNKNOWN. Classify the worst latency sample only when valid
+`slow.total == rx2a_mod32.max`; if `slow.total` is smaller, the bottleneck
+sample is UNKNOWN. `slow` is one same-sample `total/s2q/q2p/p2r/r2a` tuple,
+not independent stage maxima. These values split the endpoint interval without
+creating scheduling, wake, retry, deadline, or recovery authority.
+`successor_issues` and `t2n`
 measure that terminal to the next actual op7 issue, not acceptance of a new
 TxToken or an earlier local FIFO-head promotion. The interval includes time
 with no queued successor, including later TxToken arrival. High `a2i` and
@@ -2573,11 +2734,22 @@ lease, and resets only after `Dispatch` before resuming the same quantum.
 Operation count alone never triggers this checkpoint. A fresh committed CYW43
 queue transition remains visible without rewriting any already-scheduled
 console phase; an optional notification only prompts the condition check. A
-complete TCP command or pending actual physical response/buffered input is
-likewise an immediate typed exit into a fairness fence. That fence preserves
-unfinished Wi-Fi work but requires `Serial`,
-optional `LocalSeat`, and `Dispatch` to receive one bounded turn before Network
-resumes. If Dispatch queues HDMI echo while a partial command retains that
+complete TCP command is likewise an immediate typed Network-quantum exit. If it
+belongs to the exact active authenticated CYW43 connection, no prior response
+cursor is active or completed on that turn, and no physical response or actual
+serial/local-seat input is pending, the next separate outer turn is the
+existing hardware-free `Dispatch` phase. Passive USB first-report or
+command-ready service debt alone does not delay that command. Dispatch still
+checks physical input first, and the response uses only the existing bounded
+connection-owned flush cursor. While that cursor is active a second buffered
+command remains queued; when it finishes, any exact retained parent first
+receives its current already-admitted turn, then passive USB debt receives the
+ordinary `Serial -> LocalSeat -> Dispatch` handoff before that next command.
+Unauthenticated, stale-connection, GENET, physical-input, and response-tail
+cases retain the full fairness fence. That fence preserves unfinished Wi-Fi
+work but requires `Serial`, optional `LocalSeat`, and `Dispatch` to receive one
+bounded turn before Network resumes. If Dispatch queues HDMI echo while a
+partial command retains that
 fence, one Display turn runs before the next Serial turn unless a reboot
 acknowledgement or physical response tail already owns Serial. The echo remains
 pending in that case. Display does not close, replace, or service the retained
@@ -2867,14 +3039,16 @@ and power/reset evidence alongside the serial and pcap files.
 
 Serial remains the recovery authority. HDMI is an independent display sink;
 USB keyboard readiness requires isolated-runtime command and first-report
-proof. A prompt displayed on HDMI does not prove keyboard input, and a USB
-descriptor does not prove command readiness. `Ready to use` requires DHCP bound
-plus TCP-listener readiness but does not prove the stronger end-to-end
-`tcp_ready` predicate. Once the root console and display retry state are ready,
-HDMI must show the independent `cohesix>` prompt even while Wi-Fi is still
-stabilizing or USB command input is not yet admitted. In the latter case it
-first shows `USB console starting...`; parser ingress remains closed until the
-separate USB proof. Durable HDMI work receives its bounded Display phase
+proof. A USB descriptor does not prove command readiness. `Ready to use`
+requires DHCP bound plus TCP-listener readiness but does not prove the stronger
+end-to-end `tcp_ready` predicate. HDMI may first show
+`USB controller starting...` plus bounded stage feedback, but the interactive
+`cohesix>` prompt is released only after the root console, USB command admission,
+and display retry state are all ready; it remains independent of Wi-Fi
+stabilization. The passive `USB console ready` timing record may be emitted by
+a later EventPump observation of that same readiness transition, so its position
+relative to prompt release is not an acceptance predicate. Durable HDMI work
+receives its bounded Display phase
 without requiring a CYW43 rotation token. A completed CYW43 operator rotation
 admits exactly one Display operation before the same durable Wi-Fi identity
 resumes, and every Display operation grants one later Network turn after the

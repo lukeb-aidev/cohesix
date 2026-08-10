@@ -238,11 +238,20 @@ fn format_cyw43_tx_phase_diagnostics(
     HeaplessString<DEFAULT_LINE_CAPACITY>,
     HeaplessString<DEFAULT_LINE_CAPACITY>,
     HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
+    HeaplessString<DEFAULT_LINE_CAPACITY>,
 ) {
     let bounded_us = |value: u64| value.min(u64::from(u32::MAX));
     let accepted_to_issue = diagnostic.accepted_to_issue;
     let issued_to_terminal = diagnostic.issued_to_terminal;
     let terminal_to_next_issue = diagnostic.terminal_to_next_issue;
+    let rx_source_to_accepted_mod32 = diagnostic.rx_source_to_accepted_mod32;
+    let rx_source_to_queue_q11 = diagnostic.rx_source_to_queue_q11;
+    let rx_queue_to_precommit_q11 = diagnostic.rx_queue_to_precommit_q11;
+    let rx_precommit_to_root_q11 = diagnostic.rx_precommit_to_root_q11;
+    let rx_root_to_accepted_mod32 = diagnostic.rx_root_to_accepted_mod32;
+    let slow = diagnostic.rx_slowest_split;
     let counts = format_message(format_args!(
         "{}: {}_counts gen={} accepted={} issued={} terminals={} successor_issues={}",
         namespace,
@@ -277,7 +286,59 @@ fn format_cyw43_tx_phase_diagnostics(
         bounded_us(issued_to_terminal.max_us),
         bounded_us(issued_to_terminal.average_us()),
     ));
-    (counts, timing, issued_timing)
+    let rx_source_timing = format_message(format_args!(
+        "{}: {}_rx2a_mod32 gen={} us=n/last/max/avg rx2a_mod32={}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        rx_source_to_accepted_mod32.samples,
+        bounded_us(rx_source_to_accepted_mod32.last_us),
+        bounded_us(rx_source_to_accepted_mod32.max_us),
+        bounded_us(rx_source_to_accepted_mod32.average_us()),
+    ));
+    let rx_split_runtime_timing = format_message(format_args!(
+        "{}: {}_rxsplit_q11a gen={} us=n/last/max/avg s2q={}/{}/{}/{} q2p={}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        rx_source_to_queue_q11.samples,
+        bounded_us(rx_source_to_queue_q11.last_us),
+        bounded_us(rx_source_to_queue_q11.max_us),
+        bounded_us(rx_source_to_queue_q11.average_us()),
+        rx_queue_to_precommit_q11.samples,
+        bounded_us(rx_queue_to_precommit_q11.last_us),
+        bounded_us(rx_queue_to_precommit_q11.max_us),
+        bounded_us(rx_queue_to_precommit_q11.average_us()),
+    ));
+    let rx_split_root_timing = format_message(format_args!(
+        "{}: {}_rxsplit_q11b gen={} p2r={}/{}/{}/{} r2a={}/{}/{}/{} sat={} inv={} slow={}/{}/{}/{}/{}",
+        namespace,
+        metric_name,
+        diagnostic.generation,
+        rx_precommit_to_root_q11.samples,
+        bounded_us(rx_precommit_to_root_q11.last_us),
+        bounded_us(rx_precommit_to_root_q11.max_us),
+        bounded_us(rx_precommit_to_root_q11.average_us()),
+        rx_root_to_accepted_mod32.samples,
+        bounded_us(rx_root_to_accepted_mod32.last_us),
+        bounded_us(rx_root_to_accepted_mod32.max_us),
+        bounded_us(rx_root_to_accepted_mod32.average_us()),
+        diagnostic.rx_split_saturated,
+        diagnostic.rx_split_invalid,
+        bounded_us(slow.total_us),
+        bounded_us(slow.source_to_queue_us),
+        bounded_us(slow.queue_to_precommit_us),
+        bounded_us(slow.precommit_to_root_us),
+        bounded_us(slow.root_to_accepted_us),
+    ));
+    (
+        counts,
+        timing,
+        issued_timing,
+        rx_source_timing,
+        rx_split_runtime_timing,
+        rx_split_root_timing,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -426,6 +487,38 @@ impl LinkedPhysicalOperatorWork {
         matches!(self, Self::Input)
     }
 }
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_runtime_buffered_cyw43_command_dispatch_allowed(
+    cyw43_lane_selected: bool,
+    buffered_console_line: bool,
+    active_conn_id: Option<u64>,
+    authenticated_conn_id: Option<u64>,
+    response_flush_blocks_dispatch: bool,
+    physical_response_pending: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+) -> bool {
+    if !cyw43_lane_selected
+        || !buffered_console_line
+        || response_flush_blocks_dispatch
+        || physical_response_pending
+        || physical_operator_work.retains_network_fence_after_dispatch()
+    {
+        return false;
+    }
+    match (active_conn_id, authenticated_conn_id) {
+        (Some(active), Some(authenticated)) => active == authenticated,
+        _ => false,
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const fn linked_runtime_finished_response_cursor_requires_operator_rotation(
+    response_flush_finished_this_turn: bool,
+    physical_operator_work: LinkedPhysicalOperatorWork,
+) -> bool {
+    response_flush_finished_this_turn && physical_operator_work.needs_operator_rotation()
+}
 #[cfg(feature = "net-console")]
 const NET_DIAG_RATE_KINDS: usize = 1;
 #[cfg(feature = "net-console")]
@@ -519,6 +612,128 @@ const POST_PROMPT_LOCAL_SEAT_ATTACH_EXHAUSTED_ATTEMPTS: u16 = 32;
 // Serial/scripted activity must not permanently starve the one-shot owner-state
 // replay needed for driver-task acceptance.
 const POST_PROMPT_LOCAL_SEAT_ATTACH_FORCE_BLOCKED_TURNS: u16 = 4;
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+const USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS: u64 = 2_000;
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbConsoleStartupStage {
+    Controller,
+    KeyboardEnumeration,
+    FirstReport,
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+impl UsbConsoleStartupStage {
+    fn from_frontier(frontier: &str) -> Self {
+        match frontier {
+            "usb-keyboard-ready" => Self::FirstReport,
+            "usb-keyboard-enumeration-pending" | "usb-xhci-ready" => Self::KeyboardEnumeration,
+            _ => Self::Controller,
+        }
+    }
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Controller => "controller",
+            Self::KeyboardEnumeration => "keyboard-enumeration",
+            Self::FirstReport => "first-report",
+        }
+    }
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum UsbConsoleStartupFeedbackEvent {
+    Progress {
+        stage: UsbConsoleStartupStage,
+        elapsed_ms: u64,
+    },
+    Ready {
+        controller_ms: u64,
+        enumeration_ms: u64,
+        command_ms: u64,
+        total_ms: u64,
+    },
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct UsbConsoleStartupFeedback {
+    started_ms: Option<u64>,
+    controller_ready_ms: Option<u64>,
+    keyboard_ready_ms: Option<u64>,
+    last_feedback_ms: Option<u64>,
+    last_stage: Option<UsbConsoleStartupStage>,
+    ready_logged: bool,
+}
+
+#[cfg(any(test, all(feature = "kernel", feature = "usb")))]
+impl UsbConsoleStartupFeedback {
+    fn begin(&mut self, now_ms: u64) {
+        if self.started_ms.is_some() {
+            return;
+        }
+        self.started_ms = Some(now_ms);
+        self.last_feedback_ms = Some(now_ms);
+        self.last_stage = Some(UsbConsoleStartupStage::Controller);
+    }
+
+    fn observe(
+        &mut self,
+        now_ms: u64,
+        frontier: &'static str,
+        command_ready: bool,
+    ) -> Option<UsbConsoleStartupFeedbackEvent> {
+        self.begin(now_ms);
+        let started_ms = self.started_ms.unwrap_or(now_ms);
+        let stage = if command_ready {
+            UsbConsoleStartupStage::FirstReport
+        } else {
+            UsbConsoleStartupStage::from_frontier(frontier)
+        };
+
+        if !matches!(stage, UsbConsoleStartupStage::Controller)
+            && self.controller_ready_ms.is_none()
+        {
+            self.controller_ready_ms = Some(now_ms);
+        }
+        if matches!(stage, UsbConsoleStartupStage::FirstReport) && self.keyboard_ready_ms.is_none()
+        {
+            self.keyboard_ready_ms = Some(now_ms);
+        }
+
+        if command_ready {
+            if self.ready_logged {
+                return None;
+            }
+            self.ready_logged = true;
+            let controller_ready_ms = self.controller_ready_ms.unwrap_or(now_ms);
+            let keyboard_ready_ms = self.keyboard_ready_ms.unwrap_or(now_ms);
+            return Some(UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms: controller_ready_ms.saturating_sub(started_ms),
+                enumeration_ms: keyboard_ready_ms.saturating_sub(controller_ready_ms),
+                command_ms: now_ms.saturating_sub(keyboard_ready_ms),
+                total_ms: now_ms.saturating_sub(started_ms),
+            });
+        }
+
+        let stage_changed = self.last_stage != Some(stage);
+        let heartbeat_due = self.last_feedback_ms.is_none_or(|last_ms| {
+            now_ms.saturating_sub(last_ms) >= USB_CONSOLE_STARTUP_FEEDBACK_INTERVAL_MS
+        });
+        if !stage_changed && !heartbeat_due {
+            return None;
+        }
+        self.last_stage = Some(stage);
+        self.last_feedback_ms = Some(now_ms);
+        Some(UsbConsoleStartupFeedbackEvent::Progress {
+            stage,
+            elapsed_ms: now_ms.saturating_sub(started_ms),
+        })
+    }
+}
 
 const fn local_seat_usb_burst_proof(
     accepted_bytes: u64,
@@ -2895,6 +3110,8 @@ where
     post_prompt_local_seat_attach_active_usb_traced: bool,
     #[cfg(all(feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_exhausted_traced: bool,
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    usb_console_startup_feedback: UsbConsoleStartupFeedback,
     #[cfg(all(test, feature = "kernel", feature = "usb"))]
     post_prompt_local_seat_attach_usb_active_override: Option<bool>,
     last_smp_activity_snapshot: Option<SmpActivitySnapshot>,
@@ -3504,6 +3721,8 @@ where
             post_prompt_local_seat_attach_active_usb_traced: false,
             #[cfg(all(feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_exhausted_traced: false,
+            #[cfg(all(feature = "kernel", feature = "usb"))]
+            usb_console_startup_feedback: UsbConsoleStartupFeedback::default(),
             #[cfg(all(test, feature = "kernel", feature = "usb"))]
             post_prompt_local_seat_attach_usb_active_override: None,
             last_smp_activity_snapshot: None,
@@ -4316,10 +4535,19 @@ where
                 if cyw43_lane_selected {
                     self.consume_linked_runtime_cyw43_rx_admission();
                 }
+                #[cfg(feature = "net-console")]
+                let pending_net_flush_active_before_poll = self.pending_net_flush.active();
                 self.poll_runtime(true, false, true);
                 #[cfg(feature = "net-console")]
                 {
+                    let response_flush_finished_this_turn =
+                        pending_net_flush_active_before_poll && !self.pending_net_flush.active();
                     self.refresh_linked_runtime_cyw43_durable_resume();
+                    let finished_response_cursor_requires_operator_rotation =
+                        linked_runtime_finished_response_cursor_requires_operator_rotation(
+                            response_flush_finished_this_turn,
+                            self.linked_physical_operator_work(),
+                        );
                     if !cyw43_lane_selected {
                         self.linked_runtime_network_consecutive_turns = 0;
                         self.linked_runtime_network_quantum_started_ms = None;
@@ -4340,6 +4568,8 @@ where
                             .net
                             .as_ref()
                             .is_some_and(|net| net.buffered_console_lines_pending());
+                        let dispatchable_buffered_console_line =
+                            buffered_console_line && !self.pending_net_flush.active();
                         let physical_response_pending = self.physical_console_response_pending();
                         let decision = match drain_before {
                             Cyw43NetworkDrainOwner::Closing(drain_before) => {
@@ -4347,7 +4577,7 @@ where
                                 cyw43_closing_drain_decision(
                                     drain_before,
                                     drain_after,
-                                    buffered_console_line,
+                                    dispatchable_buffered_console_line,
                                     physical_response_pending,
                                     self.linked_runtime_network_consecutive_turns,
                                     elapsed_us,
@@ -4359,7 +4589,7 @@ where
                                 cyw43_boundary_drain_decision(
                                     drain_before,
                                     drain_after,
-                                    buffered_console_line,
+                                    dispatchable_buffered_console_line,
                                     physical_response_pending,
                                     self.linked_runtime_network_consecutive_turns,
                                     elapsed_us,
@@ -4367,6 +4597,17 @@ where
                             }
                         };
                         if decision == Cyw43RetainedDrainDecision::Continue {
+                            if finished_response_cursor_requires_operator_rotation {
+                                // The exact retained parent has received this
+                                // turn and remains authoritative. Preserve it
+                                // across the existing operator checkpoint so
+                                // cursor completion cannot be hidden by a
+                                // continuously runnable owner.
+                                self.require_linked_runtime_cyw43_operator_rotation();
+                                self.linked_runtime_service_phase =
+                                    LinkedRuntimeServicePhase::Serial;
+                                return;
+                            }
                             // Keep the exact retained parent and priority lease
                             // open while running one bounded physical-console
                             // checkpoint only when its independent VCNT cadence
@@ -4384,6 +4625,7 @@ where
                             .metrics
                             .net_cyw43_service_max_elapsed_us
                             .max(elapsed_us);
+                        let mut dispatch_directly = false;
                         match decision {
                             Cyw43RetainedDrainDecision::Complete => {
                                 self.metrics.net_cyw43_service_terminal_exits = self
@@ -4396,7 +4638,13 @@ where
                                     .metrics
                                     .net_cyw43_service_dispatch_exits
                                     .saturating_add(1);
-                                self.require_linked_runtime_cyw43_operator_rotation();
+                                dispatch_directly = self
+                                    .linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+                                        response_flush_finished_this_turn,
+                                    );
+                                if !dispatch_directly {
+                                    self.require_linked_runtime_cyw43_operator_rotation();
+                                }
                             }
                             Cyw43RetainedDrainDecision::Physical => {
                                 self.metrics.net_cyw43_service_physical_exits = self
@@ -4424,6 +4672,21 @@ where
                         self.linked_runtime_network_quantum_started_ms = None;
                         self.linked_runtime_network_quantum_started_ticks = 0;
                         self.clear_linked_runtime_network_operator_checkpoint_clock();
+                        self.linked_runtime_service_phase = if dispatch_directly {
+                            LinkedRuntimeServicePhase::Dispatch
+                        } else {
+                            LinkedRuntimeServicePhase::Serial
+                        };
+                        return;
+                    }
+                    if finished_response_cursor_requires_operator_rotation {
+                        // A completed response cursor is the bounded handoff
+                        // point for physical-operator service even when the
+                        // successor command is not complete yet. Retain the
+                        // exact quantum and lease across the existing operator
+                        // rotation; this is neither a terminal nor permission
+                        // to admit a fresh NIC parent first.
+                        self.require_linked_runtime_cyw43_operator_rotation();
                         self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
                         return;
                     }
@@ -4450,15 +4713,25 @@ where
                             self.linked_runtime_network_followup_phase();
                         return;
                     }
-                    if buffered_console_line {
+                    if buffered_console_line && !self.pending_net_flush.active() {
                         // A complete command is root-owned work now. End the
-                        // retained NIC burst and run the fixed physical
-                        // operator rotation before dispatching it. No further
-                        // CYW43/SDIO operation may be admitted first.
+                        // retained NIC burst before dispatching it. An exact
+                        // authenticated CYW43 command may use the existing
+                        // hardware-free Dispatch turn directly when no actual
+                        // physical input or response tail is pending. Passive
+                        // USB service debt is deferred only through the
+                        // existing bounded response-flush cursor. Every other
+                        // command retains the full physical-operator rotation.
                         self.finish_linked_runtime_network_quantum(false, true, elapsed_us);
                         self.linked_runtime_network_consecutive_turns = 0;
-                        self.require_linked_runtime_cyw43_operator_rotation();
-                        self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        if self.linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+                            response_flush_finished_this_turn,
+                        ) {
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+                        } else {
+                            self.require_linked_runtime_cyw43_operator_rotation();
+                            self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
+                        }
                         return;
                     }
                     let service_due = cyw43_network_service_due(routed_service_due, resume);
@@ -4508,6 +4781,8 @@ where
                 // with the USB poll that delivered it.
                 self.poll_local_seat_backend_for_ingress();
                 self.poll_runtime(true, false, false);
+                #[cfg(feature = "usb")]
+                self.maybe_emit_usb_console_startup_feedback();
                 self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
             }
             LinkedRuntimeServicePhase::Display => {
@@ -4774,6 +5049,38 @@ where
     fn linked_runtime_cyw43_lane_selected(&self) -> bool {
         self.net.as_ref().is_some_and(|net| {
             net.driver_task_contract() == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT
+        })
+    }
+
+    /// Route one complete, current authenticated Wi-Fi command to the existing
+    /// hardware-free Dispatch phase without first spending a passive USB
+    /// service-debt turn.
+    ///
+    /// Dispatch remains a separate outer turn and still checks serial and
+    /// local-seat input before the buffered network line. Actual physical
+    /// input and response tails therefore retain immediate priority. The
+    /// response subsequently advances only through the existing bounded
+    /// `PendingNetFlush` cursor, after which ordinary Serial/LocalSeat service
+    /// resumes.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn linked_runtime_buffered_cyw43_command_can_dispatch_directly(
+        &self,
+        response_flush_finished_this_turn: bool,
+    ) -> bool {
+        let response_flush_active = self.pending_net_flush.active();
+        let physical_response_pending = self.physical_console_response_pending();
+        let physical_operator_work = self.linked_physical_operator_work();
+        self.net.as_ref().is_some_and(|net| {
+            linked_runtime_buffered_cyw43_command_dispatch_allowed(
+                net.driver_task_contract()
+                    == crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT,
+                net.buffered_console_lines_pending(),
+                net.active_console_conn_id(),
+                net.authenticated_console_conn_id(),
+                response_flush_finished_this_turn || response_flush_active,
+                physical_response_pending,
+                physical_operator_work,
+            )
         })
     }
 
@@ -5858,8 +6165,9 @@ where
 
     /// Keep only the final HDMI ready banner behind the Wi-Fi terminal.
     ///
-    /// The serial/HDMI prompt and buffered USB command fence remain active
-    /// before the single-attempt bootstrap episode begins.
+    /// The serial prompt and buffered USB command fence remain active before
+    /// the single-attempt bootstrap episode begins. HDMI prompt release remains
+    /// independently gated by USB command admission and display health.
     #[cfg(feature = "kernel")]
     pub fn defer_local_seat_hdmi_ready_until_cyw43_terminal(&mut self) {
         let invalidated = self.pending_cyw43_bootstrap_hdmi_milestones.len()
@@ -7465,6 +7773,7 @@ where
             self.post_prompt_local_seat_attach_attempts = 0;
             self.post_prompt_local_seat_attach_active_usb_traced = false;
             self.post_prompt_local_seat_attach_exhausted_traced = false;
+            self.usb_console_startup_feedback.begin(self.now_ms);
             self.post_prompt_local_seat_attach_not_before_ms = self
                 .now_ms
                 .saturating_add(POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS);
@@ -7481,6 +7790,7 @@ where
             if !self.post_prompt_local_seat_attach_pending {
                 return;
             }
+            self.maybe_emit_usb_console_startup_feedback();
             let usb_runtime_active = self.post_prompt_local_seat_attach_usb_runtime_active();
             let first_attempt_due = self.post_prompt_local_seat_attach_attempts == 0
                 && self.now_ms >= self.post_prompt_local_seat_attach_not_before_ms;
@@ -7542,9 +7852,67 @@ where
             self.post_prompt_local_seat_attach_idle_turns = 0;
             self.arm_post_prompt_local_seat_once();
             self.keep_post_prompt_local_seat_attach_pending_until_ready();
+            self.maybe_emit_usb_console_startup_feedback();
         }
         #[cfg(not(all(feature = "kernel", feature = "usb")))]
         let _ = physical_input_active;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn maybe_emit_usb_console_startup_feedback(&mut self) {
+        if !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active() {
+            return;
+        }
+        let command_ready = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.usb_keyboard_command_ready_latched());
+        let frontier = crate::local_seat::linked_local_seat_usb_frontier_label();
+        let Some(feedback) =
+            self.usb_console_startup_feedback
+                .observe(self.now_ms, frontier, command_ready)
+        else {
+            return;
+        };
+
+        let mut line = HeaplessString::<192>::new();
+        match feedback {
+            UsbConsoleStartupFeedbackEvent::Progress { stage, elapsed_ms } => {
+                let _ = write!(
+                    line,
+                    "[drivers] USB console starting stage={} elapsed_ms={} action=wait",
+                    stage.label(),
+                    elapsed_ms,
+                );
+            }
+            UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms,
+                enumeration_ms,
+                command_ms,
+                total_ms,
+            } => {
+                let _ = write!(
+                    line,
+                    "[drivers] USB console ready controller_ms={} enumeration_ms={} command_ms={} total_ms={}",
+                    controller_ms,
+                    enumeration_ms,
+                    command_ms,
+                    total_ms,
+                );
+            }
+        }
+        let _ = self.queue_usb_console_startup_feedback_line(line.as_str());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn queue_usb_console_startup_feedback_line(&mut self, line: &str) -> bool {
+        crate::log_buffer::append_log_line(line);
+        let queued =
+            self.queue_physical_console_output(PendingConsoleOutputKind::HighImpactLine, line);
+        if let Some(runtime) = self.local_seat.as_mut() {
+            let _ = runtime.mirror_high_impact_line(line);
+        }
+        queued
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -13402,7 +13770,7 @@ where
                 "device-addressed",
             );
             self.emit_usb_gate_line(
-                6,
+                4,
                 "device-addressed",
                 Self::usb_startup_gate_status(6, proof_gate, failing_gate),
                 format_args!(
@@ -14506,7 +14874,7 @@ where
     ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
         let scheduler = recovery.scheduler;
         format_message(format_args!(
-            "wifi: deferred_recovery scheduler_edge publication_latched={} signal_returned={} parent_deadline_expired={} child_terminal={} child_wait_receipt={} child_bus_episode={} bus_parent={}/0x{:04x} evidence=exact-only",
+            "wifi: deferred_recovery scheduler_edge publication_latched={} signal_returned={} parent_deadline_expired={} child_terminal={} child_wait_receipt={} child_bus_episode={} bus_parent={}/0x{:04x} rsl={} evidence=exact-only",
             Self::yes_no(scheduler.root_doorbell_issued),
             Self::yes_no(scheduler.root_signal_returned),
             Self::yes_no(scheduler.root_parent_deadline_expired),
@@ -14515,6 +14883,7 @@ where
             Self::yes_no(scheduler.child_bus_episode_observed),
             scheduler.child_bus_parent_sequence,
             scheduler.child_bus_parent_op,
+            scheduler.runtime_recovery_source_line,
         ))
     }
 
@@ -15211,12 +15580,18 @@ where
         ] {
             self.emit_console_line(detail.as_str());
         }
-        let (tx_phase_counts, tx_phase_timing, tx_phase_issued_timing) =
-            format_cyw43_tx_phase_diagnostics(
-                "wifi",
-                "tx_phase",
-                crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic(),
-            );
+        let (
+            tx_phase_counts,
+            tx_phase_timing,
+            tx_phase_issued_timing,
+            tx_phase_rx_source_timing,
+            tx_phase_rx_split_runtime_timing,
+            tx_phase_rx_split_root_timing,
+        ) = format_cyw43_tx_phase_diagnostics(
+            "wifi",
+            "tx_phase",
+            crate::drivers::driver_task_net::cyw43_tx_phase_diagnostic(),
+        );
         let tx_queue = format_cyw43_data_tx_queue_diagnostic(
             "wifi",
             "tx_queue",
@@ -15225,6 +15600,9 @@ where
         self.emit_console_line(tx_phase_counts.as_str());
         self.emit_console_line(tx_phase_timing.as_str());
         self.emit_console_line(tx_phase_issued_timing.as_str());
+        self.emit_console_line(tx_phase_rx_source_timing.as_str());
+        self.emit_console_line(tx_phase_rx_split_runtime_timing.as_str());
+        self.emit_console_line(tx_phase_rx_split_root_timing.as_str());
         self.emit_console_line(tx_queue.as_str());
         let retained_gate8_line = Self::wifi_diag_retained_gate8_line(retained_gate8);
         self.emit_console_line(retained_gate8_line.as_str());
@@ -15764,6 +16142,146 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_ticks_to_us(ticks: u32, frequency_hz: u64) -> u64 {
+        let micros = u128::from(ticks)
+            .saturating_mul(1_000_000)
+            .saturating_div(u128::from(frequency_hz));
+        micros.min(u128::from(u64::MAX)) as u64
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_interval_us(
+        start_cntvct_lo: u32,
+        end_cntvct_lo: u32,
+        frequency_hz: u64,
+    ) -> u64 {
+        Self::wifi_cyw43_dpc_child_timing_ticks_to_us(
+            end_cntvct_lo.wrapping_sub(start_cntvct_lo),
+            frequency_hz,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_q11_us(delta_q11: u16, frequency_hz: u64) -> u64 {
+        Self::wifi_cyw43_dpc_child_timing_ticks_to_us(
+            u32::from(delta_q11) << pi4_driver_abi::DRIVER_RUNTIME_CYW43_RX_STAGE_DELTA_Q11_SHIFT,
+            frequency_hz,
+        )
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_header_line(
+        snapshot: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord,
+        frequency_hz: u64,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, core::fmt::Error> {
+        let last_index = usize::from(snapshot.child_count).saturating_sub(1);
+        let last_accepted = snapshot
+            .entries
+            .get(last_index)
+            .ok_or(core::fmt::Error)?
+            .accepted_cntvct_lo;
+        let source_to_queue_us = Self::wifi_cyw43_dpc_child_timing_q11_us(
+            snapshot.selected_source_to_queue_q11,
+            frequency_hz,
+        );
+        let overall_max_us = Self::wifi_cyw43_dpc_child_timing_q11_us(
+            snapshot.overall_max_source_to_queue_q11,
+            frequency_hz,
+        );
+        let tail_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            last_accepted,
+            snapshot.queue_commit_cntvct_lo,
+            frequency_hz,
+        );
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "CYW43_DPC_CHILD_TIMING v={} pe={:08x} e={:08x} src={:08x} q={:08x} qc={:08x} len={} n={} fl={:08x} s2q={} max={} ovf={} unk={} tail_us={}",
+                snapshot.version,
+                snapshot.physical_epoch,
+                snapshot.event_sequence,
+                snapshot.source_cntvct_lo,
+                snapshot.queue_commit_cntvct_lo,
+                snapshot.queue_commit_sequence,
+                snapshot.data_len,
+                snapshot.child_count,
+                snapshot.flags,
+                source_to_queue_us,
+                overall_max_us,
+                snapshot.overflow_samples,
+                snapshot.unknown_samples,
+                tail_us,
+            ),
+        )?;
+        Ok(line)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_cyw43_dpc_child_timing_entry_line(
+        snapshot: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord,
+        index: usize,
+        frequency_hz: u64,
+    ) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, core::fmt::Error> {
+        let entry = *snapshot.entries.get(index).ok_or(core::fmt::Error)?;
+        let previous_accepted = if index == 0 {
+            snapshot.source_cntvct_lo
+        } else {
+            snapshot.entries[index - 1].accepted_cntvct_lo
+        };
+        let pre_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            previous_accepted,
+            entry.published_cntvct_lo,
+            frequency_hz,
+        );
+        let publish_to_intake_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.published_cntvct_lo,
+            entry.intake_cntvct_lo,
+            frequency_hz,
+        );
+        let intake_to_issue_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.intake_cntvct_lo,
+            entry.issued_cntvct_lo,
+            frequency_hz,
+        );
+        let issue_to_terminal_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.issued_cntvct_lo,
+            entry.terminal_cntvct_lo,
+            frequency_hz,
+        );
+        let terminal_to_accept_us = Self::wifi_cyw43_dpc_child_timing_interval_us(
+            entry.terminal_cntvct_lo,
+            entry.accepted_cntvct_lo,
+            frequency_hz,
+        );
+        let mut line = HeaplessString::new();
+        FmtWrite::write_fmt(
+            &mut line,
+            format_args!(
+                "CYW43_DPC_CHILD_TIMING_ENTRY i={} seq={:08x} a={:02x} k={:02x} ph={:02x} eng={:02x} vf={:02x} ts={:08x}/{:08x}/{:08x}/{:08x}/{:08x} pre_us={} p2n_us={} n2i_us={} i2t_us={} t2a_us={}",
+                index,
+                entry.child_sequence,
+                entry.action(),
+                entry.io_kind(),
+                entry.io_phase(),
+                entry.engine(),
+                entry.flags(),
+                entry.published_cntvct_lo,
+                entry.intake_cntvct_lo,
+                entry.issued_cntvct_lo,
+                entry.terminal_cntvct_lo,
+                entry.accepted_cntvct_lo,
+                pre_us,
+                publish_to_intake_us,
+                intake_to_issue_us,
+                issue_to_terminal_us,
+                terminal_to_accept_us,
+            ),
+        )?;
+        Ok(line)
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
         if let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() {
             let cause = crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(
@@ -15786,6 +16304,28 @@ where
             match Self::wifi_cyw43_bus_episode_line(episode) {
                 Ok(line) => self.emit_console_line(line.as_str()),
                 Err(_) => self.emit_console_line("CYW43_BUS_EPISODE format=overflow"),
+            }
+        }
+        if let Some(timing) = crate::drivers::driver_task_net::cyw43_dpc_child_timing_diagnostic() {
+            let Some(frequency_hz) =
+                crate::drivers::driver_task_net::cyw43_dpc_child_timing_counter_freq_hz()
+            else {
+                self.emit_console_line("CYW43_DPC_CHILD_TIMING format=counter-unavailable");
+                return;
+            };
+            match Self::wifi_cyw43_dpc_child_timing_header_line(timing, frequency_hz) {
+                Ok(line) => self.emit_console_line(line.as_str()),
+                Err(_) => self.emit_console_line("CYW43_DPC_CHILD_TIMING format=overflow"),
+            }
+            let mut index = 0usize;
+            while index < usize::from(timing.child_count) {
+                match Self::wifi_cyw43_dpc_child_timing_entry_line(timing, index, frequency_hz) {
+                    Ok(line) => self.emit_console_line(line.as_str()),
+                    Err(_) => {
+                        self.emit_console_line("CYW43_DPC_CHILD_TIMING_ENTRY format=overflow")
+                    }
+                }
+                index = index.saturating_add(1);
             }
         }
     }
@@ -20903,6 +21443,9 @@ where
                             line_cyw43_tx_phase_counts,
                             line_cyw43_tx_phase,
                             line_cyw43_tx_phase_i2t,
+                            line_cyw43_tx_phase_rx2a_mod32,
+                            line_cyw43_tx_phase_rxsplit_q11a,
+                            line_cyw43_tx_phase_rxsplit_q11b,
                         ) = format_cyw43_tx_phase_diagnostics(
                             "netstats",
                             "wifi_tx_phase",
@@ -21116,6 +21659,9 @@ where
                                 self.emit_console_line(line_cyw43_tx_phase_counts.as_str());
                                 self.emit_console_line(line_cyw43_tx_phase.as_str());
                                 self.emit_console_line(line_cyw43_tx_phase_i2t.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_rx2a_mod32.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_rxsplit_q11a.as_str());
+                                self.emit_console_line(line_cyw43_tx_phase_rxsplit_q11b.as_str());
                                 self.emit_console_line(line_cyw43_tx_queue.as_str());
                             }
                             self.emit_console_line(line_wifi.as_str());
@@ -23194,7 +23740,14 @@ mod tests {
             last_us: u64::MAX,
             max_us: u64::MAX,
         };
-        let (counts, timing, issued_timing) = format_cyw43_tx_phase_diagnostics(
+        let (
+            counts,
+            timing,
+            issued_timing,
+            rx_source_timing,
+            rx_split_runtime_timing,
+            rx_split_root_timing,
+        ) = format_cyw43_tx_phase_diagnostics(
             "netstats",
             "wifi_tx_phase",
             crate::drivers::driver_task_net::Cyw43TxPhaseDiagnostic {
@@ -23206,6 +23759,20 @@ mod tests {
                 accepted_to_issue: metric,
                 issued_to_terminal: metric,
                 terminal_to_next_issue: metric,
+                rx_source_to_accepted_mod32: metric,
+                rx_source_to_queue_q11: metric,
+                rx_queue_to_precommit_q11: metric,
+                rx_precommit_to_root_q11: metric,
+                rx_root_to_accepted_mod32: metric,
+                rx_split_saturated: u32::MAX,
+                rx_split_invalid: u32::MAX,
+                rx_slowest_split: crate::drivers::driver_task_net::Cyw43RxSplitTupleDiagnostic {
+                    total_us: u64::MAX,
+                    source_to_queue_us: u64::MAX,
+                    queue_to_precommit_us: u64::MAX,
+                    precommit_to_root_us: u64::MAX,
+                    root_to_accepted_us: u64::MAX,
+                },
             },
         );
 
@@ -23226,6 +23793,30 @@ mod tests {
         assert_eq!(
             issued_timing.as_str(),
             "netstats: wifi_tx_phase_i2t gen=4294967295 us=n/last/max/avg i2t=4294967295/4294967295/4294967295/4294967295"
+        );
+        assert!(
+            !rx_source_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{rx_source_timing}"
+        );
+        assert_eq!(
+            rx_source_timing.as_str(),
+            "netstats: wifi_tx_phase_rx2a_mod32 gen=4294967295 us=n/last/max/avg rx2a_mod32=4294967295/4294967295/4294967295/4294967295"
+        );
+        assert!(
+            !rx_split_runtime_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{rx_split_runtime_timing}"
+        );
+        assert_eq!(
+            rx_split_runtime_timing.as_str(),
+            "netstats: wifi_tx_phase_rxsplit_q11a gen=4294967295 us=n/last/max/avg s2q=4294967295/4294967295/4294967295/4294967295 q2p=4294967295/4294967295/4294967295/4294967295"
+        );
+        assert!(
+            !rx_split_root_timing.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{rx_split_root_timing}"
+        );
+        assert_eq!(
+            rx_split_root_timing.as_str(),
+            "netstats: wifi_tx_phase_rxsplit_q11b gen=4294967295 p2r=4294967295/4294967295/4294967295/4294967295 r2a=4294967295/4294967295/4294967295/4294967295 sat=4294967295 inv=4294967295 slow=4294967295/4294967295/4294967295/4294967295/4294967295"
         );
         let queue = format_cyw43_data_tx_queue_diagnostic(
             "netstats",
@@ -25070,8 +25661,7 @@ mod tests {
             pump.local_seat
                 .as_mut()
                 .unwrap()
-                .publish_preterminal_linked_hdmi_root_prompt_for_test(CONSOLE_PROMPT);
-
+                .withhold_linked_hdmi_prompt_for_test(CONSOLE_PROMPT);
             assert!(!pump
                 .local_seat
                 .as_ref()
@@ -25101,8 +25691,8 @@ mod tests {
                     .iter()
                     .filter(|line| line.as_str() == CONSOLE_PROMPT)
                     .count(),
-                1,
-                "the root prompt is display feedback and must precede WiFi terminal state",
+                0,
+                "HDMI must not advertise an interactive prompt before USB command readiness",
             );
             assert!(pump
                 .local_seat
@@ -25110,14 +25700,14 @@ mod tests {
                 .unwrap()
                 .mirrored_lines_snapshot()
                 .iter()
-                .any(|line| line.as_str() == "USB console starting..."));
+                .any(|line| line.as_str() == "USB controller starting..."));
             assert!(
                 !crate::local_seat::local_seat_keyboard_bytes_enter_parser_state(
                     true,
                     pump.local_seat.as_ref().unwrap().root_console_ready(),
                     false,
                 ),
-                "the same preterminal prompt state must retain closed USB parser ingress",
+                "the same preterminal startup state must retain closed USB parser ingress",
             );
             assert!(!pump
                 .local_seat
@@ -25393,6 +25983,102 @@ mod tests {
                 "serial-safe-active-usb-progress"
             ))
         );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_console_startup_feedback_reports_stage_changes_heartbeat_and_timing() {
+        let mut feedback = UsbConsoleStartupFeedback::default();
+        feedback.begin(100);
+        assert_eq!(
+            feedback.observe(100, "usb-runtime-not-started", false),
+            None,
+        );
+        assert_eq!(
+            feedback.observe(2_100, "usb-runtime-descriptor-replay-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::Controller,
+                elapsed_ms: 2_000,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_200, "usb-xhci-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::KeyboardEnumeration,
+                elapsed_ms: 2_100,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_300, "usb-keyboard-ready", false),
+            Some(UsbConsoleStartupFeedbackEvent::Progress {
+                stage: UsbConsoleStartupStage::FirstReport,
+                elapsed_ms: 2_200,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(2_400, "usb-keyboard-ready", true),
+            Some(UsbConsoleStartupFeedbackEvent::Ready {
+                controller_ms: 2_100,
+                enumeration_ms: 100,
+                command_ms: 100,
+                total_ms: 2_300,
+            }),
+        );
+        assert_eq!(
+            feedback.observe(4_400, "usb-keyboard-ready", true),
+            None,
+            "the terminal timing record is emitted once",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
+    fn usb_console_startup_feedback_uses_bounded_linked_serial_projection() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::log_buffer::clear_for_test();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let line = "[drivers] USB console starting stage=controller elapsed_ms=2000 action=wait";
+
+        assert!(pump.queue_usb_console_startup_feedback_line(line));
+        assert!(crate::serial::test_take_linked_runtime_only_tx().is_empty());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::HighImpactLine,
+        );
+        assert_eq!(pump.pending_console_output[0].text.as_str(), line);
+        let retained = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 4>();
+        assert!(retained.iter().any(|entry| entry.as_str() == line));
+
+        let mut transcript = Vec::new();
+        for _ in 0..4 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript
+                .windows(line.len())
+                .any(|window| window == line.as_bytes())
+            {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        assert!(rendered.contains(line), "{rendered}");
+        assert!(pump.pending_console_output.is_empty());
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -26397,6 +27083,7 @@ mod tests {
                 child_bus_episode_observed: true,
                 child_bus_parent_sequence: u32::MAX,
                 child_bus_parent_op: 11,
+                runtime_recovery_source_line: 39_579,
             },
         };
         let owner = crate::drivers::driver_task_net::Cyw43LogicalControlOwnerDiagnostic {
@@ -26663,7 +27350,7 @@ mod tests {
         assert!(lines[11].contains(
             "publication_latched=yes signal_returned=yes parent_deadline_expired=yes child_terminal=yes child_wait_receipt=yes child_bus_episode=yes"
         ));
-        assert!(lines[11].ends_with("bus_parent=4294967295/0x000b evidence=exact-only"));
+        assert!(lines[11].ends_with("bus_parent=4294967295/0x000b rsl=39579 evidence=exact-only"));
         assert!(lines[12].contains("active=yes generation=1"));
         assert!(lines[12].contains("cmd=0x0000001a id=37"));
         assert!(lines[14].contains("code=5 code_name=fault"));
@@ -27240,6 +27927,70 @@ mod tests {
     }
 
     #[cfg(feature = "kernel")]
+    fn committed_cyw43_dpc_child_timing_diagnostic_for_test(
+    ) -> pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord {
+        let mut entries = [pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::empty();
+            pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP];
+        let valid_flags = pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_PUBLISHED
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_INTAKE
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ISSUED
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_TERMINAL
+            | pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_ENTRY_FLAG_ACCEPTED;
+        entries[0] = pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 41,
+            meta: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                1,
+                2,
+                3,
+                1,
+                valid_flags,
+            ),
+            published_cntvct_lo: 1_100,
+            intake_cntvct_lo: 1_120,
+            issued_cntvct_lo: 1_150,
+            terminal_cntvct_lo: 1_200,
+            accepted_cntvct_lo: 1_220,
+        };
+        entries[1] = pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry {
+            child_sequence: 42,
+            meta: pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingEntry::pack_meta(
+                4,
+                5,
+                4,
+                2,
+                valid_flags,
+            ),
+            published_cntvct_lo: 1_250,
+            intake_cntvct_lo: 1_260,
+            issued_cntvct_lo: 1_280,
+            terminal_cntvct_lo: 1_320,
+            accepted_cntvct_lo: 1_340,
+        };
+        let publication_sequence = 13;
+        pi4_driver_abi::DriverRuntimeCyw43DpcChildTimingRecord {
+            magic: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC,
+            version: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION,
+            len: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+            publication_sequence,
+            physical_epoch: 5,
+            event_sequence: 29,
+            source_cntvct_lo: 1_000,
+            queue_commit_cntvct_lo: 1_400,
+            queue_commit_sequence: 7,
+            data_len: 128,
+            child_count: 2,
+            flags: pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE,
+            selected_source_to_queue_q11: 0,
+            overall_max_source_to_queue_q11: 0,
+            overflow_samples: 0,
+            unknown_samples: 0,
+            reserved: [0; 8],
+            entries,
+            committed_publication_sequence: publication_sequence,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     #[test]
     fn wifi_cyw43_bus_episode_line_is_complete_and_bounded() {
         let record = committed_cyw43_bus_episode_diagnostic_for_test();
@@ -27258,6 +28009,39 @@ mod tests {
             line.contains("hw=0003/0003 d=ffffffff o8=ffffffff r=ffffffff t=ffffffff q=0000001f")
         );
         assert!(line.ends_with("er=4/ffff/ffffffff fl=0000003f"), "{line}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_cyw43_dpc_child_timing_lines_are_complete_bounded_and_ordered() {
+        let record = committed_cyw43_dpc_child_timing_diagnostic_for_test();
+        assert!(record.committed());
+        let header =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_header_line(record, 1_000_000)
+                .expect("bounded timing header must fit");
+        let first =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_entry_line(record, 0, 1_000_000)
+                .expect("bounded first timing entry must fit");
+        let second =
+            KernelConsoleTestPump::wifi_cyw43_dpc_child_timing_entry_line(record, 1, 1_000_000)
+                .expect("bounded second timing entry must fit");
+
+        for line in [&header, &first, &second] {
+            assert!(line.len() < DEFAULT_LINE_CAPACITY, "{line}");
+            assert!(!line.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{line}");
+        }
+        assert_eq!(
+            header.as_str(),
+            "CYW43_DPC_CHILD_TIMING v=1 pe=00000005 e=0000001d src=000003e8 q=00000578 qc=00000007 len=128 n=2 fl=00000001 s2q=0 max=0 ovf=0 unk=0 tail_us=60"
+        );
+        assert_eq!(
+            first.as_str(),
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=0 seq=00000029 a=01 k=02 ph=03 eng=01 vf=1f ts=0000044c/00000460/0000047e/000004b0/000004c4 pre_us=100 p2n_us=20 n2i_us=30 i2t_us=50 t2a_us=20"
+        );
+        assert_eq!(
+            second.as_str(),
+            "CYW43_DPC_CHILD_TIMING_ENTRY i=1 seq=0000002a a=04 k=05 ph=04 eng=02 vf=1f ts=000004e2/000004ec/00000500/00000528/0000053c pre_us=30 p2n_us=10 n2i_us=20 i2t_us=40 t2a_us=20"
+        );
     }
 
     #[cfg(feature = "kernel")]
@@ -32448,6 +33232,103 @@ mod tests {
         );
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn authenticated_cyw43_direct_dispatch_rejects_every_foreign_authority() {
+        let allowed =
+            |cyw43, active, authenticated, cursor_blocks_dispatch, response_pending, work| {
+                linked_runtime_buffered_cyw43_command_dispatch_allowed(
+                    cyw43,
+                    true,
+                    active,
+                    authenticated,
+                    cursor_blocks_dispatch,
+                    response_pending,
+                    work,
+                )
+            };
+        assert!(allowed(
+            true,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::UsbServiceDebt,
+        ));
+        assert!(!allowed(
+            false,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(!allowed(
+            true,
+            Some(17),
+            Some(18),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(!allowed(
+            true,
+            None,
+            None,
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        for (cursor_blocks_dispatch, response_pending, work) in [
+            (true, false, LinkedPhysicalOperatorWork::Idle),
+            (false, true, LinkedPhysicalOperatorWork::Idle),
+            (false, false, LinkedPhysicalOperatorWork::Input),
+        ] {
+            assert!(!allowed(
+                true,
+                Some(17),
+                Some(17),
+                cursor_blocks_dispatch,
+                response_pending,
+                work,
+            ));
+        }
+        assert!(!linked_runtime_buffered_cyw43_command_dispatch_allowed(
+            true,
+            false,
+            Some(17),
+            Some(17),
+            false,
+            false,
+            LinkedPhysicalOperatorWork::Idle,
+        ));
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            ),
+            "cursor completion must hand passive USB debt its bounded rotation even without a successor line"
+        );
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::Input,
+            )
+        );
+        assert!(
+            !linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::Idle,
+            )
+        );
+        assert!(
+            !linked_runtime_finished_response_cursor_requires_operator_rotation(
+                false,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            )
+        );
+    }
+
     #[test]
     fn usb_physical_input_proof_requires_linked_byte_and_parser_ingress() {
         assert!(!usb_physical_input_proven(false, false));
@@ -35210,6 +36091,245 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
+    fn linked_cyw43_authenticated_command_dispatches_before_passive_usb_debt() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 17)).is_ok());
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            assert!(pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(false));
+
+            pump.local_seat_chunk_input_pending = true;
+            assert!(
+                !pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(false),
+                "actual physical input must retain the operator rotation"
+            );
+            pump.local_seat_chunk_input_pending = false;
+            assert!(
+                !pump.linked_runtime_buffered_cyw43_command_can_dispatch_directly(true),
+                "a completed response cursor must hand passive USB debt its bounded turn"
+            );
+
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch,
+                "the exact authenticated command must use the next hardware-free Dispatch turn"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 0);
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_none());
+
+            pump.poll();
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "the existing response cursor must receive the next bounded Network turn"
+            );
+            assert!(pump.pending_net_flush.active());
+        }
+
+        assert_eq!(net.polls, 1);
+        assert_eq!(net.tcp_flushes, 0);
+        assert!(net.lines.is_empty());
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_finished_response_cursor_services_usb_before_next_command() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(6, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        net.tcp_flush_activity_remaining = 1;
+        let mut line = HeaplessString::new();
+        assert!(line.push_str("ping").is_ok());
+        assert!(net.lines.push(ConsoleLine::new(line, 17)).is_ok());
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 192,
+            buffer_lines: 64,
+        });
+        local_seat.mark_root_console_ready();
+
+        {
+            let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+                .with_network(&mut net)
+                .with_local_seat(&mut local_seat);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(17),
+                remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+            };
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll();
+            assert!(pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network,
+                "an active response cursor must finish before the next buffered command"
+            );
+            assert_eq!(pump.metrics.accepted_commands, 0);
+
+            pump.poll();
+            assert!(!pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "cursor completion must hand passive USB debt the ordinary rotation before another command"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(pump.metrics.accepted_commands, 0);
+
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::LocalSeat
+            );
+            pump.poll();
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Dispatch
+            );
+            pump.poll();
+            assert_eq!(pump.metrics.accepted_commands, 1);
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+        }
+
+        assert_eq!(net.tcp_flushes, 2);
+        assert!(net.lines.is_empty());
+        assert!(net
+            .sent
+            .iter()
+            .any(|line| line.as_str().starts_with("OK PING")));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn linked_cyw43_cursor_completion_rotates_without_successor_command() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        let _progress_guard = wifi_driver_task_progress_test_guard();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::CYW43_WIFI_DRIVER_TASK_CONTRACT;
+        net.active_conn_id = Some(17);
+        net.authenticated_conn_id = Some(17);
+        net.console_service_pending = true;
+        net.tcp_flush_activity_remaining = 1;
+
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.linked_local_seat_usb_service_pending_test_override = Some(true);
+            pump.pending_net_flush = PendingNetFlush {
+                conn_id: Some(17),
+                remaining_turns: NET_POST_DISPATCH_FLUSH_POLLS,
+            };
+            pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Network;
+
+            pump.poll();
+            assert!(pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Network
+            );
+
+            pump.poll();
+            assert!(!pump.pending_net_flush.active());
+            assert_eq!(
+                pump.linked_runtime_service_phase,
+                LinkedRuntimeServicePhase::Serial,
+                "cursor completion must rotate passive USB debt even before a successor line exists"
+            );
+            assert!(pump
+                .linked_runtime_cyw43_operator_rotation_pending
+                .is_some());
+            assert_eq!(pump.metrics.accepted_commands, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_terminal_exits, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_dispatch_exits, 0);
+            assert_eq!(pump.metrics.net_cyw43_service_turn_cap_exits, 0);
+        }
+
+        assert_eq!(net.tcp_flushes, 2);
+        assert!(net.lines.is_empty());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
     fn linked_cyw43_network_quantum_has_virtual_counter_deadline() {
         struct LinkedRuntimeTestReset;
 
@@ -37185,6 +38305,13 @@ mod tests {
             Cyw43RetainedDrainDecision::Continue,
             "an ABI-invisible Prepared parent must keep its bounded Network slice",
         );
+        assert!(
+            linked_runtime_finished_response_cursor_requires_operator_rotation(
+                true,
+                LinkedPhysicalOperatorWork::UsbServiceDebt,
+            ),
+            "a cursor completed during the retained turn must schedule the existing operator rotation without retiring its parent",
+        );
         assert_eq!(
             cyw43_closing_drain_decision(prepared, issued, false, false, 2, 200),
             Cyw43RetainedDrainDecision::Continue,
@@ -37283,6 +38410,11 @@ mod tests {
             cyw43_boundary_drain_decision(issued, Inactive, false, false, 3, 300),
             Cyw43RetainedDrainDecision::Complete,
             "only disappearance after the exact owner turn is terminal"
+        );
+        assert_eq!(
+            cyw43_boundary_drain_decision(issued, issued, true, false, 3, 300),
+            Cyw43RetainedDrainDecision::Dispatch,
+            "a complete buffered command must end the exact boundary-parent slice"
         );
         assert_eq!(
             cyw43_boundary_drain_decision(
