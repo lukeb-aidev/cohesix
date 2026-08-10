@@ -636,17 +636,30 @@ reusable ownership pattern.
   lifetime. This gives an unchanged keyboard a bounded way to publish the
   all-zero attach baseline before the separate five-second exact-transfer
   watchdog; it does not add a polling path, retry owner, or second transfer.
+- Keep `USB_RESET_DONE` inside the existing bounded extended controller-init
+  and reset timeout class. It is the transition into the following run-stage
+  setup, not permission to fall back to the generic three-resume allowance or
+  to create a new retry lifetime.
 - A passive liveness sentinel passes only when the linked runtime, parser
   ingress, parser drain, and echo counters advance without a dropped-byte
   increase. A latched startup gate or unchanged cumulative counter is not
   current physical-input proof.
+- Before a current linked-runtime HID byte is accepted, report
+  `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
+  readiness alone must never be relabelled as first-byte evidence and cannot
+  produce a `usb-post-first-byte-*` blocker.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the
   existing EventPump output path. Emit stage changes immediately and an
-  unchanged-stage heartbeat no more often than every two seconds. The passive
-  `USB console ready` timing record may follow prompt release and grants no
-  scheduling authority.
+  unchanged-stage heartbeat no more often than every two seconds. Retain the
+  bounded canonical `[local-seat] usb keyboard command-ready
+  action=enable-command-input ...` receipt exactly once in `queen.log`; its
+  counter detail remains log-only. EventPump is the sole serial projector and
+  emits that canonical receipt exactly once immediately before the passive
+  `[drivers] USB console ready` timing record through the existing HighImpact
+  output path. The pair may follow prompt release and grants no scheduling
+  authority.
 - Keep the canonical prompt/input row dirty until its matching generation
   receipt completes. Older FIFO output stays before that row, later output
   stays after it, and backspace cannot erase bytes at or before the prompt
@@ -704,6 +717,17 @@ transport:
   and consumer receipt are distinct states.
 - IRQ/DPC work is condition-driven and bounded. Empty polling must not become
   the transport clock.
+- Current DPC-client accounting lives in one cache-isolated, exact 128-byte
+  `DriverRuntimeCyw43DpcClientRecord` at shared offset 49,984
+  (`[49,984, 50,112)`). CYW43 is its sole writer and publishes at the existing
+  initialization, quiescent owner-rearm, and terminal-fault checkpoints by
+  committing a nonzero publication sequence in the final word after the body.
+  Root reads it only between two identical stable live-SDIO-ring snapshots and
+  requires the record's physical epoch and consumer sequence to match that
+  ring. A torn, raced, or stale sample is rerun-required evidence, not
+  admission, notification, wake, issue, retry, rearm, recovery, deadline,
+  scheduling, or physical-owner authority. The older additive v11 completion
+  trace remains historical/compatibility input, not current client truth.
 - A physical or logical generation change invalidates stale work; it does not
   authorize relabelling or replay under the new generation.
 - Recovery reuses the same ownership path after containment. It does not
@@ -756,6 +780,15 @@ diagnostic summary should retain detail-complete state, current versus scrubbed
 scope, current and retained frontier, recovery cause, and first scheduler
 trigger. This terminal summary is evidence presentation only; it must not
 service, retry, or recover the driver.
+
+One current Wi-Fi diagnostic transaction begins with nonzero
+`wifi: diag_begin id=<id> pair_epoch=<pair> generation=<gen>
+snapshot=current`. Its compact retained Gate 7 row carries the same `id`,
+`pair`, and `gen`; `src=sm` names current retained host-EAPOL state-machine
+proof, never generic Gate 8 inference. Every intervening Gate 8 row carries the
+same pair and generation; and the closing `wifi: diag_complete id=<id> ... pair=<pair>
+gen=<gen> snapshot=current` repeats the complete identity. Standalone, prior,
+reordered, scrubbed, malformed, or cross-identity rows are not current proof.
 
 ### 8.2 Passive versus active commands
 

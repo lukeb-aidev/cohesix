@@ -2532,6 +2532,17 @@ coverage must prove ordinary response-body lines cannot consume those tail
 slots even while response ordering is active. USB status coverage must also
 prove that `runtime_skipped` is input-first scheduling telemetry rather than a
 post-first-byte fault.
+Controller-init coverage must prove `USB_RESET_DONE` remains in the existing
+bounded extended controller-reset timeout class through the following run-stage
+setup, rather than reverting to the generic three-resume allowance. It must not
+add a timeout class, retry, wake, owner, or unbounded lifetime. Command-readiness
+coverage must retain the canonical `[local-seat] usb keyboard command-ready
+action=enable-command-input ...` receipt exactly once in `queen.log`, keep its
+verbose counter detail log-only, and prove EventPump projects the canonical
+receipt exactly once on serial immediately before `[drivers] USB console ready`.
+With no current accepted linked-runtime HID byte, the runtime and normalizer
+must report `usb-physical-input-unproven`; Gate 10 or `first_byte=no` must never
+seed first-byte evidence or a `usb-post-first-byte-*` blocker.
 Display coverage must prove an attach miss is retained and that attach and frame
 submission cannot share an outer turn. Passive status must distinguish queued
 display bytes from a completed isolated-driver receipt and must not claim HDMI
@@ -3292,12 +3303,20 @@ Valid/empty/unmasked without owner-active state must fail closed. The scope line
 client_sample_stale=yes|no ring_consumer=<n> sample_consumer=<n>
 sample_reason=<reason> authority=live-ring action=<action>` plus
 `CYW43_SDIO_DPC_REARM generation=<n> counter=client-signal-attempts count=<n>
-owner_irq=masked|unmasked action=<action>`. The additive v11 client trace keeps
-the scope and rearm lines byte-stable, revises the accounting/truth lines with
-the explicit activation state, and appends
+owner_irq=masked|unmasked action=<action>`. Current client truth comes from the
+cache-isolated 128-byte sequence-last `DriverRuntimeCyw43DpcClientRecord` at
+shared offset 49,984, accepted only when its exact physical epoch and live
+consumer match identical stable owner-ring reads before and after it. That
+record keeps the scope and rearm lines byte-stable, revises the accounting/truth
+lines with the explicit activation state, and supplies the cause counters from
+the existing initialization, quiescent owner-rearm, and terminal-fault
+publication checkpoints. A transient raced or stale record is rerun-required
+and acceptance-red, never recovery or owner authority. The record supplies
 `CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n>
 other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n>
-fown=<n>`. All five lines must remain complete at maximum counter widths. The
+fown=<n>`. The additive v11 completion trace retains those fields only for
+historical/compatibility decoding and cannot satisfy current proof. All five
+lines must remain complete at maximum counter widths. The
 same `wifi diag` lifetime must report `sdio_deadline_hints=<count>` from the
 fault-only arm relay; ordinary accepted traffic requires zero and a nonzero
 value cannot be normalized away as a successful transport wake. The
@@ -3397,6 +3416,17 @@ SDIO mapping. Each entry must preserve the same child sequence and typed
 metadata with publication, SDIO-intake, issue, terminal, and CYW43-acceptance low CNTVCT
 words.
 
+The following `DriverRuntimeCyw43DpcClientRecord` begins exactly at offset
+49,984, is exactly 128 bytes and 64-byte aligned, and ends at 50,112 without
+overlapping the 53,248-byte CYW43-private region. ABI/runtime/HAL tests must
+prove CYW43-only body-before-sequence-last publication at existing
+initialization, quiescent owner-rearm, and terminal-fault checkpoints, stable
+root double-read without a write or child turn, and rejection of zero, torn,
+wrong-version, wrong-size, reserved-nonzero, wrong-physical-epoch, stale live
+consumer, or changed surrounding-ring state. Diagnostic construction must use
+the order `live ring -> client record -> live ring`; transient staleness is
+rerun-required and acceptance-red, not recovery, scheduling, or owner authority.
+
 Sequence-last tests must reject torn publication, wrong version, stale physical
 epoch, wrong DPC event, child/fingerprint/typed-metadata mismatch, overflow,
 and wrap-ambiguous deltas without rejecting or delaying the underlying packet.
@@ -3428,10 +3458,16 @@ evidence, `t2n` includes ordinary idle time and later TxToken arrival.
 `successor_issues` counts only a later actual op7 issue, not TxToken admission,
 an earlier local promotion, or general smoltcp delay.
 
-`wifi diag` emits the proof only after a stable valid read of the admitted SDIO
-owner ring and a current v11 CYW43 client-counter sample for that same physical
-bus-link epoch. The v11 layout preserves the complete v10 prefix for
-old-capture parsing.
+`wifi diag` emits the proof only after identical stable reads of the admitted
+SDIO owner ring surround one stable valid read of the current 128-byte CYW43
+DPC-client record for that exact physical bus-link epoch and live consumer.
+The normalizer binds that record only within the exact production command
+window `wifi: debug subcommand=diag action=begin` -> adjacent
+accounting/scope/truth triplet -> matching `wifi: diag_begin`. A missing,
+malformed, clipped, or cross-command sample is acceptance-red and requires a
+bounded rerun; no prior command's healthy triplet may be reused.
+The v11 completion layout preserves the complete v10 prefix for old-capture
+parsing only; neither version supplies current client truth.
 `rearms` counts generation-scoped owner-rearm signal attempts, not separately
 delivered wakes or hardware re-enables; the older
 source-asserted-empty episode counter cannot satisfy Gate 10. Acceptance also
@@ -3942,7 +3978,18 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     `WIFI_GATE7_COMPLETE=yes`, `WIFI_GATE7_SEEN=7a>7b>7c>7d>7e`,
     `WIFI_GATE7_LAST=7e`, and `WIFI_GATE7_MISSING=none`; the latest
     `WIFI_SUBGATE=7e` alone cannot hide a missing or reordered join,
-    association, M1, M2/M3/M4/PTK/GTK, or secure-release step. USB ready proof
+    association, M1, M2/M3/M4/PTK/GTK, or secure-release step. Retained Gate 7
+    and current Gate 8 rows are accepted only from one bracketed `wifi diag`
+    transaction: nonzero `diag_begin id=<id>` and matching
+    `diag_complete id=<id>` must carry the same pair and generation, the compact
+    Gate 7 row must carry that `id`/pair/generation, and every intervening Gate 8
+    row must carry the same pair/generation. Standalone, prior, reordered,
+    malformed, scrubbed, clipped-without-an-exact-current-terminal, or
+    cross-identity rows fail closed. Its `src=sm` means current retained
+    host-EAPOL state-machine proof, not generic Gate 8 inference. If the outer
+    `wifi: debug subcommand=diag action=complete` row is present, it must follow
+    the matching `diag_complete`; a capture clipped after that inner terminal
+    need not invent the missing outer row. USB ready proof
     also requires `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`,
     `USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no` so parser
     admission cannot hide missing first-report or post-ready busy evidence. A
@@ -3993,7 +4040,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       two seconds. `USB console ready` reports the observed stage timings, but
       it is a passive EventPump record and may follow local-seat prompt release
       from the same command-readiness transition; the test must not require
-      either record/prompt ordering. Prompt release itself still requires USB
+      either record/prompt ordering. The canonical command-ready receipt must
+      nevertheless appear exactly once on serial immediately before
+      `[drivers] USB console ready`, while remaining exactly once in `queen.log`
+      without a pre-cutover raw-UART copy. Prompt release itself still requires USB
       command readiness plus display health. Parser ingress and the final Ready
       banner remain false until their independent gates hold. On a
       pre-terminal or failed Wi-Fi episode, admitted USB characters must still

@@ -733,6 +733,10 @@ impl UsbConsoleStartupFeedback {
             elapsed_ms: now_ms.saturating_sub(started_ms),
         })
     }
+
+    fn defer_ready_projection(&mut self) {
+        self.ready_logged = false;
+    }
 }
 
 const fn local_seat_usb_burst_proof(
@@ -2995,6 +2999,8 @@ where
     #[cfg(feature = "kernel")]
     wifi_debug: Option<&'a mut dyn WifiDebugOps>,
     #[cfg(feature = "kernel")]
+    wifi_diag_snapshot_sequence: u64,
+    #[cfg(feature = "kernel")]
     cyw43_bootstrap_operator_turn_active: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
@@ -3609,6 +3615,8 @@ where
             console_context: None,
             #[cfg(feature = "kernel")]
             wifi_debug: None,
+            #[cfg(feature = "kernel")]
+            wifi_diag_snapshot_sequence: 0,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_operator_turn_active: false,
             #[cfg(feature = "kernel")]
@@ -7899,9 +7907,56 @@ where
                     command_ms,
                     total_ms,
                 );
+                let command_ready_line = self
+                    .local_seat
+                    .as_ref()
+                    .and_then(|runtime| runtime.usb_keyboard_command_ready_receipt_line());
+                let projected = command_ready_line.is_some_and(|command_ready_line| {
+                    self.queue_usb_console_ready_projection_pair(
+                        command_ready_line.as_str(),
+                        line.as_str(),
+                    )
+                });
+                if !projected {
+                    self.usb_console_startup_feedback.defer_ready_projection();
+                }
+                return;
             }
         }
         let _ = self.queue_usb_console_startup_feedback_line(line.as_str());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    fn queue_usb_console_ready_projection_pair(
+        &mut self,
+        command_ready_line: &str,
+        ready_line: &str,
+    ) -> bool {
+        let capacity = CONSOLE_OUTPUT_BACKLOG_LINES
+            .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE);
+        if self.pending_console_output.len() > capacity.saturating_sub(2)
+            || PendingConsoleOutput::try_from_str(
+                PendingConsoleOutputKind::HighImpactLine,
+                command_ready_line,
+            )
+            .is_none()
+            || PendingConsoleOutput::try_from_str(
+                PendingConsoleOutputKind::HighImpactLine,
+                ready_line,
+            )
+            .is_none()
+        {
+            return false;
+        }
+        if !self.queue_physical_console_output(
+            PendingConsoleOutputKind::HighImpactLine,
+            command_ready_line,
+        ) {
+            return false;
+        }
+        let ready_queued = self.queue_usb_console_startup_feedback_line(ready_line);
+        debug_assert!(ready_queued, "preflight reserved both USB projection slots");
+        ready_queued
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -10521,8 +10576,15 @@ where
             Self::yes_no(self.serial.interactive_input_active()),
         ));
         self.emit_console_line(stall_input_line.as_str());
+        #[cfg(all(feature = "usb", target_arch = "aarch64", target_os = "none"))]
+        let linked_first_byte_accepted =
+            crate::local_seat::linked_local_seat_usb_first_byte_ready()
+                && local_trace.accepted_bytes != 0;
+        #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
+        let linked_first_byte_accepted = false;
         let sustained_blocker = Self::usb_runtime_sustained_input_blocker(
             queue_valid,
+            linked_first_byte_accepted,
             queued_reports,
             transfer_events,
             report_status,
@@ -13330,6 +13392,7 @@ where
     #[cfg(feature = "kernel")]
     const fn usb_runtime_sustained_input_blocker(
         queue_valid: bool,
+        linked_first_byte_accepted: bool,
         queued_reports: u32,
         transfer_events: u32,
         report_status: u32,
@@ -13340,6 +13403,10 @@ where
     ) -> &'static str {
         if !queue_valid {
             "queue-telemetry-unavailable"
+        } else if retained_active && retained_outstanding != 0 && retained_no_progress != 0 {
+            "usb-retained-request-no-terminal"
+        } else if !linked_first_byte_accepted {
+            "usb-physical-input-unproven"
         } else if report_status
             == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_RECOVERY_FAILED as u32
         {
@@ -13352,8 +13419,6 @@ where
             == pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER as u32
         {
             "usb-post-first-byte-unmatched-transfer"
-        } else if retained_active && retained_outstanding != 0 && retained_no_progress != 0 {
-            "usb-retained-request-no-terminal"
         } else if queued_reports == 0 {
             "usb-post-first-byte-queue-empty"
         } else if queued_reports <= 8 && transfer_events >= 32 {
@@ -15353,6 +15418,62 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_gate7_retained_line(
+        snapshot_sequence: u64,
+        diagnostic: crate::drivers::driver_task_net::Cyw43Gate7Diagnostic,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: gate7_retained id={} src=sm status=pass h=7a>7b>7c>7d>7e pair={} gen={} assoc={} link={} eapol={} data={} m1={} m2={} m3={} m4={} ptk={} gtk={} keys={} secure={} snapshot=current",
+            snapshot_sequence,
+            diagnostic.pair_scrub_epoch,
+            diagnostic.generation,
+            Self::yes_no(diagnostic.associated),
+            Self::yes_no(diagnostic.link_up),
+            Self::yes_no(diagnostic.eapol_seen),
+            Self::yes_no(diagnostic.data_seen),
+            Self::yes_no(diagnostic.m1_seen),
+            Self::yes_no(diagnostic.m2_seen),
+            Self::yes_no(diagnostic.m3_seen),
+            Self::yes_no(diagnostic.m4_seen),
+            Self::yes_no(diagnostic.ptk_seen),
+            Self::yes_no(diagnostic.gtk_seen),
+            Self::yes_no(diagnostic.keys_ready),
+            Self::yes_no(diagnostic.secure),
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_wifi_diag_essential_proof(
+        &mut self,
+        snapshot_sequence: u64,
+        gate7: Option<crate::drivers::driver_task_net::Cyw43Gate7Diagnostic>,
+        gate8: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
+    ) {
+        let begin = format_message(format_args!(
+            "wifi: diag_begin id={} pair_epoch={} generation={} snapshot=current",
+            snapshot_sequence, gate8.pair_scrub_epoch, gate8.generation,
+        ));
+        self.emit_console_line(begin.as_str());
+        if let Some(gate7) = gate7.filter(|gate7| {
+            gate7.generation == gate8.generation && gate7.pair_scrub_epoch == gate8.pair_scrub_epoch
+        }) {
+            let line = Self::wifi_diag_gate7_retained_line(snapshot_sequence, gate7);
+            self.emit_console_line(line.as_str());
+        }
+        for subgate in gate8.subgates {
+            let line = format_message(format_args!(
+                "wifi: gate 8 subgate={} status={} pair_epoch={} generation={} blocker={}",
+                subgate.token,
+                subgate.status.as_str(),
+                gate8.pair_scrub_epoch,
+                gate8.generation,
+                subgate.blocker,
+            ));
+            self.emit_console_line(line.as_str());
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_driver_task_runtime_snapshot_if_present(
         &mut self,
         command: WifiDebugCommand,
@@ -15366,13 +15487,11 @@ where
         let output_backpressure_before = self.metrics.physical_console_output_backpressure;
         let live_net_frontier = self.wifi_live_net_frontier();
         let gate8 = crate::drivers::driver_task_net::cyw43_gate8_diagnostic();
+        let gate7 = crate::drivers::driver_task_net::cyw43_gate7_diagnostic();
         let priority_episode =
             crate::hal::driver_task::cyw43_sdio_network_priority_lease_snapshot();
-        self.emit_console_line(Self::wifi_diag_priority_episode_line(priority_episode).as_str());
         let (priority_episode_counts, priority_episode_faults) =
             Self::wifi_diag_priority_episode_count_lines(priority_episode);
-        self.emit_console_line(priority_episode_counts.as_str());
-        self.emit_console_line(priority_episode_faults.as_str());
         let pair_recovery_active = crate::drivers::driver_task_net::cyw43_recovery_required();
         let gate8_frontier = gate8
             .subgates
@@ -15460,6 +15579,17 @@ where
         {
             return false;
         }
+
+        if matches!(command, WifiDebugCommand::Diag) {
+            self.wifi_diag_snapshot_sequence = self.wifi_diag_snapshot_sequence.wrapping_add(1);
+            if self.wifi_diag_snapshot_sequence == 0 {
+                self.wifi_diag_snapshot_sequence = 1;
+            }
+            self.emit_wifi_diag_essential_proof(self.wifi_diag_snapshot_sequence, gate7, gate8);
+        }
+        self.emit_console_line(Self::wifi_diag_priority_episode_line(priority_episode).as_str());
+        self.emit_console_line(priority_episode_counts.as_str());
+        self.emit_console_line(priority_episode_faults.as_str());
 
         if let Some(failure) = bootstrap_failure {
             let detail = format_message(format_args!(
@@ -15646,6 +15776,7 @@ where
             bootstrap_failure,
             deferred_recovery,
             evidence_source,
+            !matches!(command, WifiDebugCommand::Diag),
         );
         // The blackbox record above already emits the causal fault, immutable
         // request, owner telemetry, and next action. Do not duplicate that
@@ -15667,6 +15798,7 @@ where
         if Self::wifi_command_accepts_driver_task_snapshot_success(command) {
             if matches!(command, WifiDebugCommand::Diag) {
                 self.emit_wifi_diag_complete(
+                    self.wifi_diag_snapshot_sequence,
                     gate8,
                     retained_gate8,
                     deferred_recovery,
@@ -15698,8 +15830,46 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    fn wifi_diag_context_line(
+        snapshot_sequence: u64,
+        retained_frontier: &str,
+        retained_status: &str,
+        retained_blocker: &str,
+        cause: &str,
+        trigger: &str,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: diag_context id={} retained={}/{}/{} cause={} trigger={}",
+            snapshot_sequence, retained_frontier, retained_status, retained_blocker, cause, trigger,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_diag_complete_line(
+        snapshot_sequence: u64,
+        detail_complete: bool,
+        pair_scrub_epoch: u64,
+        generation: u32,
+        frontier: &str,
+        status: &str,
+        blocker: &str,
+    ) -> HeaplessString<DEFAULT_LINE_CAPACITY> {
+        format_message(format_args!(
+            "wifi: diag_complete id={} causal=yes detail={} scope=current snapshot=current pair={} gen={} front={} status={} block={}",
+            snapshot_sequence,
+            Self::yes_no(detail_complete),
+            pair_scrub_epoch,
+            generation,
+            frontier,
+            status,
+            blocker,
+        ))
+    }
+
+    #[cfg(feature = "kernel")]
     fn emit_wifi_diag_complete(
         &mut self,
+        snapshot_sequence: u64,
         current: crate::drivers::driver_task_net::Cyw43Gate8Diagnostic,
         retained: Option<crate::drivers::driver_task_net::Cyw43Gate8Diagnostic>,
         recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
@@ -15734,21 +15904,27 @@ where
             },
             |frontier| (frontier.token, frontier.status.as_str(), frontier.blocker),
         );
-        let detail_complete =
-            self.metrics.physical_console_output_backpressure == output_backpressure_before;
-        let line = format_message(format_args!(
-            "wifi: diag_complete causal=yes detail={} scope={} frontier={} status={} blocker={} retained={}/{}/{} cause={} trigger={}",
-            Self::yes_no(detail_complete),
-            if recovery.is_some() { "scrubbed" } else { "current" },
-            frontier,
-            status,
-            blocker,
+        let context = Self::wifi_diag_context_line(
+            snapshot_sequence,
             retained_frontier,
             retained_status,
             retained_blocker,
             recovery.map_or("none", |diagnostic| diagnostic.cause),
             recovery.map_or("none", |diagnostic| diagnostic.scheduler.cause),
-        ));
+        );
+        let context_complete = !context.ends_with(DIAGNOSTIC_TRUNCATION_MARKER);
+        self.emit_console_line(context.as_str());
+        let detail_complete = context_complete
+            && self.metrics.physical_console_output_backpressure == output_backpressure_before;
+        let line = Self::wifi_diag_complete_line(
+            snapshot_sequence,
+            detail_complete,
+            current.pair_scrub_epoch,
+            current.generation,
+            frontier,
+            status,
+            blocker,
+        );
         self.emit_terminal_console_line(line.as_str());
     }
 
@@ -16283,10 +16459,9 @@ where
 
     #[cfg(feature = "kernel")]
     fn emit_wifi_sdio_dpc_diagnostic(&mut self) {
-        if let Some(snapshot) = crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic() {
-            let cause = crate::drivers::driver_task_net::cyw43_sdio_dpc_cause_diagnostic(
-                snapshot.generation,
-            );
+        if let Some((snapshot, cause)) =
+            crate::drivers::driver_task_net::cyw43_sdio_dpc_diagnostic_pair()
+        {
             let accounting = Self::wifi_sdio_dpc_accounting_line(snapshot);
             let scope = Self::wifi_sdio_dpc_scope_line();
             let truth = Self::wifi_sdio_dpc_truth_line(snapshot);
@@ -16929,6 +17104,7 @@ where
             None,
             deferred_recovery,
             "snapshot",
+            true,
         );
     }
 
@@ -16940,6 +17116,7 @@ where
         bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
         deferred_recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
         source: &str,
+        emit_gate8_subgates: bool,
     ) {
         let sdio_runtime_status =
             crate::drivers::driver_task_net::latest_sdio_runtime_replay_status();
@@ -16953,6 +17130,7 @@ where
             bootstrap_failure,
             deferred_recovery,
             source,
+            emit_gate8_subgates,
         );
     }
 
@@ -16968,6 +17146,7 @@ where
         bootstrap_failure: Option<crate::hal::driver_task::DriverTaskBootstrapFailure>,
         deferred_recovery: Option<crate::drivers::driver_task_net::Cyw43DeferredRecoveryDiagnostic>,
         source: &str,
+        emit_gate8_subgates: bool,
     ) {
         let live_net_frontier = self.wifi_live_net_frontier();
         let current_generation = crate::drivers::driver_task_net::cyw43_connection_generation();
@@ -17769,16 +17948,18 @@ where
             ),
             "dhcp-bound",
         );
-        for subgate in gate8.subgates {
-            let line = format_message(format_args!(
-                "wifi: gate 8 subgate={} status={} pair_epoch={} generation={} blocker={}",
-                subgate.token,
-                subgate.status.as_str(),
-                gate8.pair_scrub_epoch,
-                gate8.generation,
-                subgate.blocker,
-            ));
-            self.emit_console_line(line.as_str());
+        if emit_gate8_subgates {
+            for subgate in gate8.subgates {
+                let line = format_message(format_args!(
+                    "wifi: gate 8 subgate={} status={} pair_epoch={} generation={} blocker={}",
+                    subgate.token,
+                    subgate.status.as_str(),
+                    gate8.pair_scrub_epoch,
+                    gate8.generation,
+                    subgate.blocker,
+                ));
+                self.emit_console_line(line.as_str());
+            }
         }
         self.emit_wifi_gate_line(
             9,
@@ -24077,6 +24258,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
@@ -26082,6 +26264,87 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
+    fn usb_console_ready_projects_canonical_receipt_once_and_first() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::log_buffer::clear_for_test();
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let receipt = "[local-seat] usb keyboard command-ready action=enable-command-input source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no";
+        let ready = "[drivers] USB console ready controller_ms=2100 enumeration_ms=100 command_ms=100 total_ms=2300";
+
+        crate::log_buffer::append_log_line(receipt);
+        assert!(matches!(
+            pump.usb_console_startup_feedback
+                .observe(2_400, "usb-keyboard-ready", true),
+            Some(UsbConsoleStartupFeedbackEvent::Ready { .. })
+        ));
+        assert!(pump.queue_usb_console_ready_projection_pair(receipt, ready));
+        assert_eq!(pump.pending_console_output.len(), 2);
+        assert_eq!(pump.pending_console_output[0].text.as_str(), receipt);
+        assert_eq!(pump.pending_console_output[1].text.as_str(), ready);
+        assert_eq!(
+            pump.usb_console_startup_feedback
+                .observe(4_400, "usb-keyboard-ready", true),
+            None,
+            "the canonical receipt and timing terminal are one projection pair",
+        );
+
+        let retained = crate::log_buffer::snapshot_lines::<DEFAULT_LINE_CAPACITY, 8>();
+        assert_eq!(
+            retained
+                .iter()
+                .filter(|entry| entry.as_str() == receipt)
+                .count(),
+            1,
+            "EventPump must not duplicate the canonical queen.log receipt",
+        );
+        assert_eq!(
+            retained
+                .iter()
+                .filter(|entry| entry.as_str() == ready)
+                .count(),
+            1,
+        );
+
+        let mut transcript = Vec::new();
+        for _ in 0..8 {
+            pump.poll_cyw43_bootstrap_supervisor_event_turn();
+            transcript.extend(crate::serial::test_take_linked_runtime_only_tx());
+            if transcript
+                .windows(ready.len())
+                .any(|window| window == ready.as_bytes())
+            {
+                break;
+            }
+        }
+        let rendered = String::from_utf8(transcript).expect("linked serial output must be utf8");
+        let receipt_at = rendered
+            .find(receipt)
+            .expect("canonical receipt must reach serial");
+        let ready_at = rendered
+            .find(ready)
+            .expect("timing terminal must reach serial");
+        assert!(receipt_at < ready_at, "{rendered}");
+        assert_eq!(rendered.matches(receipt).count(), 1, "{rendered}");
+        assert_eq!(rendered.matches(ready).count(), 1, "{rendered}");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "usb"))]
+    #[test]
     fn post_prompt_local_seat_attach_keeps_retry_until_usb_command_ready() {
         assert_eq!(
             post_prompt_local_seat_attach_probe_retry_policy(true, true, true, false, false),
@@ -26980,6 +27243,140 @@ mod tests {
     #[cfg(feature = "kernel")]
     type KernelConsoleTestPump =
         EventPump<'static, LoopbackSerial<32>, TestTimer, NullIpc, TicketTable<4>, 32, 32, 32>;
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_authority_lines_fit_the_untruncated_console_budget() {
+        let budget = DEFAULT_LINE_CAPACITY
+            .saturating_sub(DIAGNOSTIC_TRUNCATION_MARKER.len())
+            .saturating_sub(1);
+        let gate7 = KernelConsoleTestPump::wifi_diag_gate7_retained_line(
+            u64::MAX,
+            crate::drivers::driver_task_net::Cyw43Gate7Diagnostic {
+                pair_scrub_epoch: u64::MAX,
+                generation: u32::MAX,
+                associated: true,
+                link_up: true,
+                eapol_seen: true,
+                data_seen: true,
+                m1_seen: true,
+                m2_seen: true,
+                m3_seen: true,
+                m4_seen: true,
+                ptk_seen: true,
+                gtk_seen: true,
+                keys_ready: true,
+                secure: true,
+            },
+        );
+        assert!(gate7.len() <= budget, "{gate7}");
+        assert!(!gate7.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{gate7}");
+        assert!(gate7.ends_with("snapshot=current"), "{gate7}");
+
+        let terminal = KernelConsoleTestPump::wifi_diag_complete_line(
+            u64::MAX,
+            false,
+            u64::MAX,
+            u32::MAX,
+            "8g-post-key-maintenance",
+            "pending",
+            "requestless-net-data-root-work-conflict",
+        );
+        assert!(terminal.len() <= budget, "{terminal}");
+        assert!(
+            !terminal.contains(DIAGNOSTIC_TRUNCATION_MARKER),
+            "{terminal}"
+        );
+        assert!(
+            terminal.ends_with("block=requestless-net-data-root-work-conflict"),
+            "{terminal}"
+        );
+
+        let context = KernelConsoleTestPump::wifi_diag_context_line(
+            u64::MAX,
+            "8g-post-key-maintenance",
+            "pending",
+            "requestless-net-data-root-work-conflict",
+            "issued-owner-unknown",
+            "rx-queue-poison",
+        );
+        assert!(context.len() <= budget, "{context}");
+        assert!(!context.contains(DIAGNOSTIC_TRUNCATION_MARKER), "{context}");
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_diag_essential_proof_is_contiguous_and_identity_bound() {
+        let driver = LoopbackSerial::<32768>::new();
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: 10,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let _ = pump.serial_mut().driver_mut().drain_tx();
+        let snapshot_sequence = 17;
+        let pair_scrub_epoch = 23;
+        let generation = 29;
+        let gate7 = crate::drivers::driver_task_net::Cyw43Gate7Diagnostic {
+            pair_scrub_epoch,
+            generation,
+            associated: true,
+            link_up: true,
+            eapol_seen: true,
+            data_seen: true,
+            m1_seen: true,
+            m2_seen: true,
+            m3_seen: true,
+            m4_seen: true,
+            ptk_seen: true,
+            gtk_seen: true,
+            keys_ready: true,
+            secure: true,
+        };
+        let gate8 = crate::drivers::driver_task_net::Cyw43Gate8Diagnostic {
+            pair_scrub_epoch,
+            generation,
+            subgates: crate::drivers::driver_task_net::CYW43_GATE8_SUBGATE_TOKENS.map(|token| {
+                crate::drivers::driver_task_net::Cyw43Gate8SubgateDiagnostic {
+                    token,
+                    status: crate::drivers::driver_task_net::Cyw43Gate8SubgateStatus::Pass,
+                    blocker: "none",
+                }
+            }),
+            current_work_pending: false,
+        };
+
+        pump.emit_wifi_diag_essential_proof(snapshot_sequence, Some(gate7), gate8);
+
+        let transcript = String::from_utf8(pump.serial_mut().driver_mut().drain_tx().to_vec())
+            .expect("WiFi diagnostic authority rows are UTF-8");
+        let rows = transcript.lines().collect::<Vec<_>>();
+        assert_eq!(rows.len(), 10, "{transcript}");
+        assert_eq!(
+            rows[0],
+            "wifi: diag_begin id=17 pair_epoch=23 generation=29 snapshot=current",
+        );
+        assert!(
+            rows[1].starts_with("wifi: gate7_retained id=17 src=sm status=pass "),
+            "{}",
+            rows[1],
+        );
+        assert!(rows[1].contains("pair=23 gen=29"), "{}", rows[1],);
+        for (row, token) in rows[2..]
+            .iter()
+            .zip(crate::drivers::driver_task_net::CYW43_GATE8_SUBGATE_TOKENS)
+        {
+            assert!(
+                row.starts_with(format!("wifi: gate 8 subgate={token} status=pass").as_str()),
+                "{row}",
+            );
+            assert!(row.contains("pair_epoch=23 generation=29"), "{row}");
+        }
+    }
 
     #[cfg(feature = "kernel")]
     #[test]
@@ -28313,6 +28710,7 @@ mod tests {
                 None,
                 Some(recovery),
                 "linked-runtime-test",
+                true,
             );
             let transcript = pump.serial_mut().driver_mut().drain_tx();
             String::from_utf8(transcript.to_vec()).expect("serial output must be utf8")
@@ -34493,6 +34891,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
@@ -34560,6 +34959,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
@@ -34626,6 +35026,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
@@ -35175,37 +35576,49 @@ mod tests {
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 4, 255, 6, 6, false, 0, 0
+                true, false, 4, 255, 6, 6, false, 0, 0
+            ),
+            "usb-physical-input-unproven"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, false, 4, 255, 11, 0, false, 0, 0
+            ),
+            "usb-physical-input-unproven"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
+                true, true, 4, 255, 6, 6, false, 0, 0
             ),
             "usb-post-first-byte-queue-collapse-risk"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 8, 255, 6, 0, false, 0, 0
+                true, true, 8, 255, 6, 0, false, 0, 0
             ),
             "usb-post-first-byte-queue-collapse-risk"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 9, 255, 6, 0, false, 0, 0
+                true, true, 9, 255, 6, 0, false, 0, 0
             ),
             "none"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 4, 255, 9, 0, false, 0, 0
+                true, true, 4, 255, 9, 0, false, 0, 0
             ),
             "usb-post-first-byte-queue-collapse"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 4, 255, 11, 0, false, 0, 0
+                true, true, 4, 255, 11, 0, false, 0, 0
             ),
             "usb-post-first-byte-recovery-failed"
         );
         assert_eq!(
             KernelConsoleTestPump::usb_runtime_sustained_input_blocker(
-                true, 9, 1, 6, 0, true, 1, 127
+                true, false, 9, 1, 6, 0, true, 1, 127
             ),
             "usb-retained-request-no-terminal"
         );
@@ -41948,6 +42361,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");
@@ -41985,6 +42399,7 @@ mod tests {
             None,
             None,
             "linked-runtime-test",
+            true,
         );
         let transcript = pump.serial_mut().driver_mut().drain_tx();
         let rendered = String::from_utf8(transcript.to_vec()).expect("serial output must be utf8");

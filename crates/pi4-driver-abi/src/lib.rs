@@ -1688,6 +1688,21 @@ pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP: usize = 16;
 pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_MAGIC: u32 = 0x4359_4454;
 /// Layout version for [`DriverRuntimeCyw43DpcChildTimingRecord`].
 pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_VERSION: u16 = 1;
+/// Fixed offset of the current CYW43 DPC-client diagnostic.
+///
+/// This cache-isolated record follows the selected DPC-child timing trace in
+/// the otherwise-unused tail of the CYW43 RX shared region.
+pub const DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET: u16 =
+    DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET + DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES;
+/// Exact bytes in one current CYW43 DPC-client diagnostic.
+pub const DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES: u16 = 128;
+/// Exact 32-bit words in one current CYW43 DPC-client diagnostic.
+pub const DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS: usize =
+    DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES as usize / core::mem::size_of::<u32>();
+/// Magic value for [`DriverRuntimeCyw43DpcClientRecord`].
+pub const DRIVER_RUNTIME_CYW43_DPC_CLIENT_MAGIC: u32 = 0x4359_4443;
+/// Layout version for [`DriverRuntimeCyw43DpcClientRecord`].
+pub const DRIVER_RUNTIME_CYW43_DPC_CLIENT_VERSION: u16 = 1;
 /// The selected DATA event reached a complete, exact queue commit.
 pub const DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_FLAG_COMPLETE: u32 = 1 << 0;
 /// More exact children were observed than the bounded trace can retain.
@@ -1922,11 +1937,15 @@ const _: () = {
     );
     assert!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET.is_multiple_of(64));
     assert!(DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES == 512);
+    assert!(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET.is_multiple_of(64));
+    assert!(DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES == 128);
     assert!(core::mem::size_of::<DriverRuntimeSdioChildTimingMailbox>() == 64);
     assert!(core::mem::align_of::<DriverRuntimeSdioChildTimingMailbox>() == 64);
     assert!(core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingEntry>() == 28);
     assert!(core::mem::size_of::<DriverRuntimeCyw43DpcChildTimingRecord>() == 512);
     assert!(core::mem::align_of::<DriverRuntimeCyw43DpcChildTimingRecord>() == 64);
+    assert!(core::mem::size_of::<DriverRuntimeCyw43DpcClientRecord>() == 128);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43DpcClientRecord>() == 64);
     assert!(
         DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET as u32
             + DRIVER_RUNTIME_CYW43_BUS_EPISODE_BYTES as u32
@@ -1935,6 +1954,11 @@ const _: () = {
     assert!(
         DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET as u32
             + DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES as u32
+            == DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET as u32
+    );
+    assert!(
+        DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET as u32
+            + DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES as u32
             <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET as u32
     );
     assert!(
@@ -3010,6 +3034,235 @@ impl DriverRuntimeCyw43DpcChildTimingRecord {
     }
 }
 
+/// Passive, current CYW43 DPC-client accounting for one physical epoch.
+///
+/// The isolated CYW43 runtime is the sole writer. It clears
+/// `committed_publication_sequence`, writes the body, cleans the two dedicated
+/// cache lines, and repeats the publication identity in the final
+/// `committed_publication_sequence` word. Root may stable-read the record for
+/// diagnostics only; it never grants admission, wake, scheduling, retry,
+/// recovery, or physical-owner authority.
+#[repr(C, align(64))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeCyw43DpcClientRecord {
+    /// Fixed [`DRIVER_RUNTIME_CYW43_DPC_CLIENT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_CYW43_DPC_CLIENT_VERSION`].
+    pub version: u16,
+    /// Exact record size in bytes.
+    pub len: u16,
+    /// Nonzero publication identity committed in the final word.
+    pub publication_sequence: u32,
+    /// Exact nonzero SDIO physical-owner epoch.
+    pub physical_epoch: u32,
+    /// Exact wrapping live-ring consumer sequence durably accepted by CYW43.
+    pub consumer_sequence: u32,
+    /// Generation-bound SDIO-owner rearm publication attempts.
+    pub rearms: u32,
+    /// DPC event epoch mismatches observed by CYW43.
+    pub epoch_errors: u32,
+    /// DPC event sequence faults observed by CYW43.
+    pub sequence_errors: u32,
+    /// Initial DPC source samples classified in this epoch.
+    pub source_samples: u32,
+    /// Samples carrying a frame indication.
+    pub source_frame: u32,
+    /// Samples carrying a host-mailbox indication.
+    pub source_hostmail: u32,
+    /// Samples carrying a flow-control change.
+    pub source_fc_change: u32,
+    /// Samples carrying flow-control state.
+    pub source_fc_state: u32,
+    /// Samples carrying CHIPACTIVE.
+    pub source_chipactive: u32,
+    /// Samples carrying another nonzero source.
+    pub source_other: u32,
+    /// Samples with no source bits set.
+    pub source_spurious: u32,
+    /// Event-associated CYW43 DPC service turns.
+    pub turns: u32,
+    /// Exact SDIO-owner children published for DPC service.
+    pub owner_children: u32,
+    /// Exact SDIO-owner turns attributed to DPC service.
+    pub owner_turns: u32,
+    /// Root-visible frames completed during DPC service.
+    pub frames_completed: u32,
+    /// CYW43 DPC turns attributed to completed frames.
+    pub frame_turns: u32,
+    /// SDIO-owner turns attributed to completed frames.
+    pub frame_owner_turns: u32,
+    /// Must remain zero so future layouts fail closed.
+    pub reserved: [u8; 36],
+    /// Sequence-last commit; exactly repeats `publication_sequence`.
+    pub committed_publication_sequence: u32,
+}
+
+impl DriverRuntimeCyw43DpcClientRecord {
+    /// Canonical uncommitted empty diagnostic.
+    #[must_use]
+    pub const fn empty() -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_CYW43_DPC_CLIENT_MAGIC,
+            version: DRIVER_RUNTIME_CYW43_DPC_CLIENT_VERSION,
+            len: DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES,
+            publication_sequence: 0,
+            physical_epoch: 0,
+            consumer_sequence: 0,
+            rearms: 0,
+            epoch_errors: 0,
+            sequence_errors: 0,
+            source_samples: 0,
+            source_frame: 0,
+            source_hostmail: 0,
+            source_fc_change: 0,
+            source_fc_state: 0,
+            source_chipactive: 0,
+            source_other: 0,
+            source_spurious: 0,
+            turns: 0,
+            owner_children: 0,
+            owner_turns: 0,
+            frames_completed: 0,
+            frame_turns: 0,
+            frame_owner_turns: 0,
+            reserved: [0; 36],
+            committed_publication_sequence: 0,
+        }
+    }
+
+    /// Encode the fixed shared-memory representation as little-endian words.
+    #[must_use]
+    pub const fn to_le_words(self) -> [u32; DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS] {
+        let mut words = [0; DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS];
+        words[0] = self.magic;
+        words[1] = self.version as u32 | ((self.len as u32) << 16);
+        words[2] = self.publication_sequence;
+        words[3] = self.physical_epoch;
+        words[4] = self.consumer_sequence;
+        words[5] = self.rearms;
+        words[6] = self.epoch_errors;
+        words[7] = self.sequence_errors;
+        words[8] = self.source_samples;
+        words[9] = self.source_frame;
+        words[10] = self.source_hostmail;
+        words[11] = self.source_fc_change;
+        words[12] = self.source_fc_state;
+        words[13] = self.source_chipactive;
+        words[14] = self.source_other;
+        words[15] = self.source_spurious;
+        words[16] = self.turns;
+        words[17] = self.owner_children;
+        words[18] = self.owner_turns;
+        words[19] = self.frames_completed;
+        words[20] = self.frame_turns;
+        words[21] = self.frame_owner_turns;
+        let mut index = 0usize;
+        while index < self.reserved.len() / core::mem::size_of::<u32>() {
+            let byte = index * core::mem::size_of::<u32>();
+            words[22 + index] = u32::from_le_bytes([
+                self.reserved[byte],
+                self.reserved[byte + 1],
+                self.reserved[byte + 2],
+                self.reserved[byte + 3],
+            ]);
+            index += 1;
+        }
+        words[31] = self.committed_publication_sequence;
+        words
+    }
+
+    /// Decode the fixed little-endian shared-memory word representation.
+    #[must_use]
+    pub const fn from_le_words(words: [u32; DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS]) -> Self {
+        let mut reserved = [0; 36];
+        let mut index = 0usize;
+        while index < reserved.len() / core::mem::size_of::<u32>() {
+            let bytes = words[22 + index].to_le_bytes();
+            let byte = index * core::mem::size_of::<u32>();
+            reserved[byte] = bytes[0];
+            reserved[byte + 1] = bytes[1];
+            reserved[byte + 2] = bytes[2];
+            reserved[byte + 3] = bytes[3];
+            index += 1;
+        }
+        Self {
+            magic: words[0],
+            version: words[1] as u16,
+            len: (words[1] >> 16) as u16,
+            publication_sequence: words[2],
+            physical_epoch: words[3],
+            consumer_sequence: words[4],
+            rearms: words[5],
+            epoch_errors: words[6],
+            sequence_errors: words[7],
+            source_samples: words[8],
+            source_frame: words[9],
+            source_hostmail: words[10],
+            source_fc_change: words[11],
+            source_fc_state: words[12],
+            source_chipactive: words[13],
+            source_other: words[14],
+            source_spurious: words[15],
+            turns: words[16],
+            owner_children: words[17],
+            owner_turns: words[18],
+            frames_completed: words[19],
+            frame_turns: words[20],
+            frame_owner_turns: words[21],
+            reserved,
+            committed_publication_sequence: words[31],
+        }
+    }
+
+    /// Whether every passive body field is internally consistent.
+    #[must_use]
+    pub const fn body_valid(self) -> bool {
+        if self.magic != DRIVER_RUNTIME_CYW43_DPC_CLIENT_MAGIC
+            || self.version != DRIVER_RUNTIME_CYW43_DPC_CLIENT_VERSION
+            || self.len != DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES
+            || self.publication_sequence == 0
+            || self.physical_epoch == 0
+        {
+            return false;
+        }
+        let mut index = 0usize;
+        while index < self.reserved.len() {
+            if self.reserved[index] != 0 {
+                return false;
+            }
+            index += 1;
+        }
+        true
+    }
+
+    /// Return this valid staged body with its publication sequence committed.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_publication_sequence = self.publication_sequence;
+        }
+        self
+    }
+
+    /// Whether this is one complete, sequence-last committed publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed_publication_sequence == self.publication_sequence
+    }
+
+    /// Accept two identical, valid samples as one stable client diagnostic.
+    ///
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first == second && first.valid() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
 /// Immutable identity which opens one bounded CYW43 bus-service episode.
 ///
 /// This is a construction helper rather than a shared-memory record. The
@@ -3453,6 +3706,14 @@ const _: () = {
     assert!(
         core::mem::offset_of!(
             DriverRuntimeCyw43BusEpisodeRecord,
+            committed_publication_sequence
+        ) == 124
+    );
+    assert!(core::mem::size_of::<DriverRuntimeCyw43DpcClientRecord>() == 128);
+    assert!(core::mem::align_of::<DriverRuntimeCyw43DpcClientRecord>() == 64);
+    assert!(
+        core::mem::offset_of!(
+            DriverRuntimeCyw43DpcClientRecord,
             committed_publication_sequence
         ) == 124
     );
@@ -6698,6 +6959,76 @@ mod tests {
             trace.committed(),
             "inexact timing remains a committed passive UNKNOWN record",
         );
+    }
+
+    #[test]
+    fn cyw43_dpc_client_layout_is_bounded_and_sequence_last() {
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET,
+            DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET
+                + DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
+        );
+        assert_eq!(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET, 49_984);
+        assert_eq!(DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES, 128);
+        assert_eq!(
+            DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET + DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES,
+            50_112,
+        );
+        assert!(
+            DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET + DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES
+                <= DRIVER_RUNTIME_CYW43_RX_BATCH_END_OFFSET,
+        );
+        assert_eq!(
+            core::mem::size_of::<DriverRuntimeCyw43DpcClientRecord>(),
+            128,
+        );
+        assert_eq!(
+            core::mem::align_of::<DriverRuntimeCyw43DpcClientRecord>(),
+            64,
+        );
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeCyw43DpcClientRecord,
+                committed_publication_sequence
+            ),
+            124,
+        );
+
+        let staged = DriverRuntimeCyw43DpcClientRecord {
+            publication_sequence: 7,
+            physical_epoch: 0x4359_1001,
+            consumer_sequence: 23,
+            rearms: 5,
+            source_samples: 23,
+            source_frame: 19,
+            source_hostmail: 4,
+            turns: 41,
+            owner_children: 37,
+            owner_turns: 44,
+            frames_completed: 19,
+            frame_turns: 35,
+            frame_owner_turns: 39,
+            ..DriverRuntimeCyw43DpcClientRecord::empty()
+        };
+        assert!(staged.body_valid());
+        assert!(!staged.valid());
+        let committed = staged.commit();
+        assert!(committed.valid());
+        assert_eq!(
+            DriverRuntimeCyw43DpcClientRecord::from_le_words(committed.to_le_words()),
+            committed,
+        );
+        assert_eq!(
+            DriverRuntimeCyw43DpcClientRecord::stable_snapshot(committed, committed),
+            Some(committed),
+        );
+        assert_eq!(
+            DriverRuntimeCyw43DpcClientRecord::stable_snapshot(staged, committed),
+            None,
+        );
+        let mut reserved = committed;
+        reserved.reserved[0] = 1;
+        assert!(!reserved.valid());
     }
 
     #[test]

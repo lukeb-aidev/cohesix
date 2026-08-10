@@ -9,6 +9,7 @@ import io
 import json
 import pathlib
 import sys
+from collections.abc import Callable
 
 import pytest
 
@@ -9128,6 +9129,134 @@ def test_gate_summary_rejects_malformed_wifi_dpc_scope() -> None:
     assert record["WIFI_DPC_TRUTH_LINE"] == 0
 
 
+def test_gate_summary_rejects_latest_malformed_wifi_dpc_accounting() -> None:
+    """A malformed latest accounting row revokes an older healthy triplet."""
+
+    lines = [
+        *healthy_wifi_dpc_triplet(),
+        "CYW43_SDIO_DPC generation=9 captures=7 published=7",
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "malformed-line"
+    assert record["WIFI_DPC_LINE"] == len(lines)
+
+
+def test_gate_summary_rejects_latest_orphan_malformed_wifi_dpc_scope() -> None:
+    """A malformed latest scope row revokes an older healthy triplet."""
+
+    lines = [
+        *healthy_wifi_dpc_triplet(),
+        "CYW43_SDIO_DPC_SCOPE captures=event-attempts truncated=yes",
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "truth-sequence-mismatch"
+
+
+@pytest.mark.parametrize(
+    ("reserved", "reason"),
+    [
+        ("CYW43_SDIO_DPC", "malformed-line"),
+        ("CYW43_SDIO_DPC_SCOPE", "truth-sequence-mismatch"),
+        ("CYW43_SDIO_DPC_TRUTH", "truth-sequence-mismatch"),
+    ],
+)
+def test_bare_reserved_wifi_dpc_row_revokes_older_triplet(
+    reserved: str,
+    reason: str,
+) -> None:
+    """A token-only capture fragment is a malformed latest DPC record."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([*healthy_wifi_dpc_triplet(), reserved])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == reason
+
+
+def test_later_healthy_wifi_dpc_triplet_supersedes_transient_stale_sample() -> None:
+    """The prescribed bounded rerun can replace a stale quiescence sample."""
+
+    stale = healthy_wifi_dpc_triplet()
+    stale[0] = stale[0].replace("poisoned=no", "poisoned=yes")
+    stale[2] = (
+        stale[2]
+        .replace("client_sample_stale=no", "client_sample_stale=yes")
+        .replace("sample_consumer=6", "sample_consumer=5")
+        .replace("sample_reason=current", "sample_reason=ring-consumer-mismatch")
+        .replace("action=none", "action=rerun-proof")
+    )
+    stale_record = normalizer.summarize_gates(
+        normalizer.parse_events(stale)
+    ).to_record()
+    rerun_record = normalizer.summarize_gates(
+        normalizer.parse_events([*stale, *healthy_wifi_dpc_triplet()])
+    ).to_record()
+
+    assert stale_record["WIFI_DPC_PROOF"] == "no"
+    assert stale_record["WIFI_DPC_REASON"] == "client-sample-stale"
+    assert rerun_record["WIFI_DPC_PROOF"] == "yes"
+    assert rerun_record["WIFI_DPC_REASON"] == "none"
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [
+        "CYW43_SDIO_DPC generation=9 captures=7 published=7",
+        "CYW43_SDIO_DPC_SCOPE",
+        "CYW43_SDIO_DPC_TRUTH",
+    ],
+)
+def test_later_healthy_wifi_dpc_triplet_supersedes_transient_structure_failure(
+    transient: str,
+) -> None:
+    """A complete later triplet clears earlier incomplete sample structure."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([transient, *healthy_wifi_dpc_triplet()])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_REASON"] == "none"
+
+
+def test_wifi_dpc_counter_fault_remains_sticky_within_generation() -> None:
+    """A later sample cannot erase a cumulative same-generation HW fault."""
+
+    faulty = healthy_wifi_dpc_triplet()
+    faulty[0] = faulty[0].replace("overruns=0", "overruns=1")
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([*faulty, *healthy_wifi_dpc_triplet()])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "overrun"
+
+
+def test_gate_summary_rejects_wifi_dpc_u32_overflow() -> None:
+    """Every live-ring accounting field is bounded by its u32 ABI type."""
+
+    accounting, scope, truth = healthy_wifi_dpc_triplet()
+    accounting = accounting.replace("captures=6", "captures=4294967296")
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([accounting, scope, truth])
+    ).to_record()
+
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "numeric-field-invalid"
+
+
 @pytest.mark.parametrize(
     "truth",
     [
@@ -9516,7 +9645,7 @@ def test_wifi_dpc_proof_requires_exact_complete_line() -> None:
     record = normalizer.summarize_gates(events).to_record()
 
     assert record["WIFI_DPC_PROOF"] == "no"
-    assert record["WIFI_DPC_REASON"] == "missing"
+    assert record["WIFI_DPC_REASON"] == "malformed-line"
 
 
 def test_wifi_dpc_proof_does_not_promote_rejected_supervisor_retry() -> None:
@@ -9560,8 +9689,8 @@ def test_wifi_dpc_proof_does_not_promote_rejected_supervisor_retry() -> None:
     assert record["WIFI_DPC_REASON"] == "gate8-ready-missing"
 
 
-def test_wifi_dpc_proof_retains_failure_within_latest_generation() -> None:
-    """A later clean sample cannot erase an error in the same generation."""
+def test_wifi_dpc_proof_rerun_can_close_transient_counter_skew() -> None:
+    """A later quiescent sample may close an earlier in-flight count skew."""
 
     events = normalizer.parse_events(
         [
@@ -9579,8 +9708,8 @@ def test_wifi_dpc_proof_retains_failure_within_latest_generation() -> None:
 
     record = normalizer.summarize_gates(events).to_record()
 
-    assert record["WIFI_DPC_PROOF"] == "no"
-    assert record["WIFI_DPC_REASON"] == "capture-publish-mismatch"
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_REASON"] == "none"
     assert record["WIFI_DPC_CAPTURES"] == 8
 
 
@@ -10190,6 +10319,8 @@ def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
             "usb: runtime_queue queue_valid=yes queued_reports=4 "
             "doorbell_pending=no preserved_events=0 transfer_events=255 "
             "report_status=produced-byte",
+            "usb: sustained_verdict blocker=usb-physical-input-unproven "
+            "usb_burst=no drops=0",
             "usb: event_loop keyboard_priority=97 runtime_skipped=97 "
             "serial_dispatch_yielded=308 post_runtime_keyboard=211 "
             "output_keyboard_polls=435 hdmi_pump=308",
@@ -10206,6 +10337,48 @@ def test_gate_summary_reports_post_first_byte_queue_collapse_risk() -> None:
     assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 255
     assert record["USB_RUNTIME_REPORT_STATUS"] == "produced-byte"
     assert record["USB_EVENT_LOOP_RUNTIME_SKIPPED"] == 97
+
+
+def test_gate_summary_does_not_infer_first_byte_from_usb_gate10() -> None:
+    events = normalizer.parse_events(
+        [
+            "[local-seat] usb keyboard command-ready source=linked-runtime-hid "
+            "clean_polls=2 no_reply=0 recovery_pending=no",
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=no "
+            "first_byte_source=none proof_gate=10 target_gate=10 "
+            "next=command-input-ready blocker=none",
+            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=produced-byte",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_GATE"] == 10
+    assert record["USB_FIRST_BYTE_READY"] == "no"
+    assert record["USB_POST_FIRST_BYTE_BLOCKER"] == "none"
+    assert record["USB_LOCAL_SEAT_STATE"] == "ready"
+
+
+def test_gate_summary_uses_linked_runtime_first_byte_for_post_input_health() -> None:
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
+            "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 "
+            "next=command-input-ready blocker=none",
+            "usb: runtime_queue queue_valid=yes queued_reports=4 "
+            "doorbell_pending=no preserved_events=0 transfer_events=255 "
+            "report_status=produced-byte",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert (
+        record["USB_POST_FIRST_BYTE_BLOCKER"]
+        == "usb-post-first-byte-queue-collapse-risk"
+    )
 
 
 def test_gate_summary_prefers_sustained_input_blocker() -> None:
@@ -14502,7 +14675,7 @@ def test_gate_summary_tracks_wifi_dhcp_and_nettest_success() -> None:
     record = gates.to_record()
 
     assert gates.wifi_gate == 9
-    assert gates.wifi_blocker == "tcp-auth-proof-missing"
+    assert gates.wifi_blocker == "wifi-gate7-7a-missing"
     assert record["NET_TCP_READY"] == "no"
     assert record["NETTEST_PROOF"] == "yes"
     assert record["COHSH_TCP_AUTH_PROOF"] == "no"
@@ -14927,6 +15100,28 @@ def test_gate7_ordered_proof_fails_closed_at_every_host_eapol_cut(
     assert record["WIFI_GATE7_SEEN"] == seen
     assert record["WIFI_GATE7_LAST"] == last
     assert record["WIFI_GATE7_MISSING"] == missing
+    assert record["WIFI_GATE"] == 9
+
+
+def test_wifi_gate10_is_revoked_when_gate7_proof_is_forbidden() -> None:
+    """Canonical WiFi Gate 10 cannot survive an incomplete Gate 7 proof."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        "wifi: evidence root_pointer=yes source=forbidden-shortcut",
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_MISSING"] == "forbidden-shortcut"
+    assert record["WIFI_GATE"] == 9
+    assert (
+        record["WIFI_BLOCKER"]
+        == "wifi-gate7-forbidden-shortcut-missing"
+    )
 
 
 def test_gate7_ordered_proof_rejects_reordered_handshake_steps() -> None:
@@ -14993,6 +15188,969 @@ def test_boot_acceptance_requires_complete_ordered_wifi_gate7_proof() -> None:
     assert "wifi-gate7-7d-missing" in blockers
 
 
+def test_retained_gate7_requires_one_exact_current_diag_transaction() -> None:
+    """Retained Gate 7 and all Gate 8 rows bind one id, pair, and generation."""
+
+    snapshot_sequence = 17
+    pair_epoch = 23
+    generation = 29
+    lines = [
+        wifi_diag_begin_line(snapshot_sequence, pair_epoch, generation),
+        wifi_gate7_retained_line(snapshot_sequence, pair_epoch, generation),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=pair_epoch,
+                generation=generation,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(snapshot_sequence, pair_epoch, generation),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert gate7.complete
+    assert gate7.retained_current
+    assert gate7.snapshot_sequence == snapshot_sequence
+    assert gate7.pair_epoch == pair_epoch
+    assert gate7.generation == generation
+    assert gate8.complete
+    assert gate8.pair_epoch == pair_epoch
+    assert gate8.generation == generation
+
+
+def test_retained_gate7_accepts_exact_clipped_gate8_tail_recovery() -> None:
+    """An exact detail=no terminal may recover a contiguous same-id tail cut."""
+
+    snapshot_sequence = 17
+    pair_epoch = 23
+    generation = 29
+    lines = [
+        wifi_diag_begin_line(snapshot_sequence, pair_epoch, generation),
+        wifi_gate7_retained_line(snapshot_sequence, pair_epoch, generation),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=pair_epoch,
+                generation=generation,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES[:-1]
+        ],
+        wifi_diag_complete_line(
+            snapshot_sequence,
+            pair_epoch,
+            generation,
+            detail="no",
+        ),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert gate7.complete
+    assert gate7.retained_current
+    assert gate7.snapshot_sequence == snapshot_sequence
+    assert gate8.complete
+    assert gate8.pair_epoch == pair_epoch
+    assert gate8.generation == generation
+
+
+@pytest.mark.parametrize(
+    "trailing_kind",
+    [
+        "valid-begin",
+        "malformed-begin",
+        "bare-begin",
+        "retained",
+        "bare-retained",
+        "context",
+        "bare-context",
+    ],
+)
+def test_newer_incomplete_wifi_diag_revokes_older_current_snapshot(
+    trailing_kind: str,
+) -> None:
+    """A captured prefix of a newer diagnostic cannot retain an old pass."""
+
+    trailing = {
+        "valid-begin": wifi_diag_begin_line(18, 31, 37),
+        "malformed-begin": "wifi: diag_begin id=truncated",
+        "bare-begin": "wifi: diag_begin",
+        "retained": wifi_gate7_retained_line(18, 31, 37),
+        "bare-retained": "wifi: gate7_retained",
+        "context": (
+            "wifi: diag_context id=18 retained=none cause=none trigger=none"
+        ),
+        "bare-context": "wifi: diag_context",
+    }[trailing_kind]
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 23, 29),
+        trailing,
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate7.complete
+    assert gate7.missing == "retained-diag-incomplete"
+    assert not gate8.complete
+    assert gate8.blocker == "diag-transaction-incomplete"
+
+
+def test_newer_partial_gate8_is_not_overwritten_by_older_diag_pass() -> None:
+    """A later Gate 8 frontier remains authoritative over an old terminal."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 23, 29),
+        wifi_gate8_subgate_line(
+            "8a-pair-generation",
+            pair_epoch=31,
+            generation=37,
+        ),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate8.complete
+    assert gate8.pair_epoch == 31
+    assert gate8.generation == 37
+    assert gate8.blocker == "telemetry-truncated"
+
+
+def test_gate8_recovery_after_diag_terminal_revokes_older_pass() -> None:
+    """A later recovery boundary cannot be erased by an old diag summary."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        wifi_diag_begin_line(17, 1, 9),
+        wifi_gate7_retained_line(17, 1, 9),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=1,
+                generation=9,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 1, 9),
+        (
+            "CYW43_GATE8_RECOVERY attempt=1 generation=9 "
+            "blocker=carrier-lost deadline_ms=250 action=pair-restart"
+        ),
+    ]
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "gate8-recovery"
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "CYW43_GATE8_RECOVERY",
+        "CYW43_GATE8_READY_RETRACTED",
+        "CYW43_GATE8_READY_TRANSACTION",
+        "CYW43_GATE8_SNAPSHOT_COMMIT",
+        "CYW43_GATE8_COMMIT",
+        "CYW43_RUNTIME_RECOVERY",
+        "CYW43_BOOTSTRAP_SUPERVISOR",
+    ],
+)
+def test_bare_gate8_authority_boundary_revokes_older_pass(
+    boundary: str,
+) -> None:
+    """Every reserved Gate 8 lifecycle token fails closed when truncated."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(
+            [*oldgood_wifi_resource_replay_lines(), boundary]
+        )
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+
+
+def test_bare_gate8_subgate_fails_inside_current_diag_transaction() -> None:
+    """A malformed subgate is red when bracketed as current diagnostic truth."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        "wifi: gate 8 subgate",
+        wifi_diag_complete_line(17, 23, 29),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate7.complete
+    assert not gate8.complete
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        (
+            "CYW43_GATE8_RECOVERY attempt=1 generation=29 "
+            "blocker=carrier-lost deadline_ms=250 action=pair-restart"
+        ),
+        "CYW43_GATE8_READY_RETRACTED",
+        "CYW43_GATE8_READY_TRANSACTION",
+        "CYW43_GATE8_SNAPSHOT_COMMIT",
+        "CYW43_GATE8_COMMIT",
+        "CYW43_RUNTIME_RECOVERY",
+        "CYW43_BOOTSTRAP_SUPERVISOR",
+    ],
+)
+def test_gate8_lifecycle_boundary_inside_diag_window_revokes_pass(
+    boundary: str,
+) -> None:
+    """A lifecycle edge cannot be hidden behind the old terminal summary."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        boundary,
+        wifi_diag_complete_line(17, 23, 29),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+
+    assert not gate8.complete
+    assert gate8.blocker == "diag-transaction-boundary"
+    assert not gate7.complete
+
+
+def test_additional_gate8_row_inside_diag_window_revokes_pass() -> None:
+    """A second snapshot frontier cannot splice into an old terminal."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_gate8_subgate_line(
+            "8a-pair-generation",
+            pair_epoch=31,
+            generation=37,
+        ),
+        wifi_diag_complete_line(17, 23, 29),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate8.complete
+    assert gate8.blocker == "diag-transaction-boundary"
+
+
+def test_different_gate8_frontier_after_clipped_prefix_revokes_recovery() -> None:
+    """A second 8a cannot masquerade as the clipped 8h tail of an old pair."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES[:-1]
+        ],
+        wifi_gate8_subgate_line(
+            "8a-pair-generation",
+            pair_epoch=31,
+            generation=37,
+        ),
+        wifi_diag_complete_line(17, 23, 29, detail="no"),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate7.complete
+    assert not gate8.complete
+    assert gate8.blocker == "diag-transaction-boundary"
+
+
+def test_retained_gate7_identity_cannot_splice_into_newer_gate8() -> None:
+    """Gate 10 binds retained host-EAPOL truth to the exact Gate 8 pair."""
+
+    old_pair_epoch = 2
+    old_generation = 3
+    current_pair_epoch = 4
+    current_generation = 5
+    lines = oldgood_wifi_resource_replay_lines()
+    stabilizing = next(
+        index
+        for index, line in enumerate(lines)
+        if line.startswith("CYW43_BOOTSTRAP_SUPERVISOR")
+        and "status=stabilizing" in line
+    )
+    old_snapshot = [
+        wifi_diag_begin_line(17, old_pair_epoch, old_generation),
+        wifi_gate7_retained_line(17, old_pair_epoch, old_generation),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=old_pair_epoch,
+                generation=old_generation,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, old_pair_epoch, old_generation),
+    ]
+    lines[stabilizing:stabilizing] = old_snapshot
+    lines = [
+        line.replace("pair_epoch=1 generation=9", "pair_epoch=4 generation=5")
+        for line in lines
+    ]
+    lines.extend(wifi_generation_gate10_lines(current_generation))
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_PAIR_EPOCH"] == current_pair_epoch
+    assert record["WIFI_GATE8_GENERATION"] == current_generation
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE7_MISSING"] == "retained-generation-mismatch"
+    assert record["WIFI_GATE"] == 9
+
+
+def test_latest_complete_wifi_diag_supersedes_older_snapshot() -> None:
+    """A fully terminated newer transaction replaces an earlier pass."""
+
+    lines: list[str] = []
+    for snapshot_sequence, pair_epoch, generation in (
+        (17, 23, 29),
+        (18, 31, 37),
+    ):
+        lines.extend(
+            [
+                wifi_diag_begin_line(
+                    snapshot_sequence,
+                    pair_epoch,
+                    generation,
+                ),
+                wifi_gate7_retained_line(
+                    snapshot_sequence,
+                    pair_epoch,
+                    generation,
+                ),
+                *[
+                    wifi_gate8_subgate_line(
+                        subgate,
+                        pair_epoch=pair_epoch,
+                        generation=generation,
+                    )
+                    for subgate in normalizer.WIFI_GATE8_SUBGATES
+                ],
+                wifi_diag_complete_line(
+                    snapshot_sequence,
+                    pair_epoch,
+                    generation,
+                ),
+            ]
+        )
+    events = normalizer.parse_events(lines)
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert gate7.complete
+    assert gate7.snapshot_sequence == 18
+    assert gate7.pair_epoch == 31
+    assert gate7.generation == 37
+    assert gate8.complete
+    assert gate8.pair_epoch == 31
+    assert gate8.generation == 37
+
+
+@pytest.mark.parametrize(
+    "later_attempt",
+    [
+        (
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=association-supervisor action=ready generation=37 "
+            "ssid_len=7 result=0x00000000"
+        ),
+        (
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m1 action=recv-m1 poll=12 len=121"
+        ),
+    ],
+)
+def test_new_host_eapol_attempt_revokes_retained_gate7(
+    later_attempt: str,
+) -> None:
+    """A new Join or explicit M1 cuts an older retained handshake receipt."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 23, 29),
+        later_attempt,
+    ]
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(lines)
+    )
+
+    assert not gate7.complete
+    assert gate7.missing == "retained-new-attempt"
+
+
+@pytest.mark.parametrize(
+    "later_attempt",
+    [
+        "CYW43_DRIVER_TASK_JOIN_REQUEST",
+        (
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=association-supervisor action=ready generation=oops "
+            "ssid_len=7 result=0x00000000"
+        ),
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",
+    ],
+)
+def test_malformed_attempt_boundary_revokes_retained_gate7(
+    later_attempt: str,
+) -> None:
+    """A truncated current attempt cannot preserve an old retained receipt."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 23, 29),
+        later_attempt,
+    ]
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(lines)
+    )
+
+    assert not gate7.complete
+    assert gate7.missing == "retained-new-attempt-unproven"
+
+
+@pytest.mark.parametrize(
+    "attempt_boundary",
+    [
+        (
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=association-supervisor action=ready generation=37 "
+            "ssid_len=7 result=0x00000000"
+        ),
+        (
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m1 action=recv-m1 poll=12 len=121"
+        ),
+        "CYW43_DRIVER_TASK_JOIN_REQUEST",
+    ],
+)
+def test_attempt_boundary_inside_diag_window_revokes_retained_gate7(
+    attempt_boundary: str,
+) -> None:
+    """A handshake transition during snapshot emission invalidates Gate 7."""
+
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        wifi_gate7_retained_line(17, 23, 29),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=23,
+                generation=29,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        attempt_boundary,
+        wifi_diag_complete_line(17, 23, 29),
+    ]
+
+    events = normalizer.parse_events(lines)
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not gate7.complete
+    assert not gate8.complete
+    assert gate8.blocker == "diag-transaction-boundary"
+
+
+@pytest.mark.parametrize("with_diag", [False, True])
+@pytest.mark.parametrize(
+    "attempt_boundary",
+    [
+        (
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=association-supervisor action=ready generation=37 "
+            "ssid_len=7 result=0x00000000"
+        ),
+        (
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            "path=primary-bsscfg:join action=ready ssid_len=7 "
+            "result=0x00000000"
+        ),
+        "CYW43_DRIVER_TASK_JOIN_REQUEST",
+        (
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m1 action=recv-m1 poll=99 len=121"
+        ),
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",
+    ],
+)
+def test_attempt_after_ready_revokes_gate8_authority(
+    attempt_boundary: str,
+    with_diag: bool,
+) -> None:
+    """A new association attempt cuts the prior Gate 8 Ready generation."""
+
+    lines = oldgood_wifi_resource_replay_lines()
+    if with_diag:
+        lines.extend(
+            [
+                wifi_diag_begin_line(17, 1, 9),
+                wifi_gate7_retained_line(17, 1, 9),
+                *[
+                    wifi_gate8_subgate_line(
+                        subgate,
+                        pair_epoch=1,
+                        generation=9,
+                    )
+                    for subgate in normalizer.WIFI_GATE8_SUBGATES
+                ],
+                wifi_diag_complete_line(17, 1, 9),
+            ]
+        )
+    lines.append(attempt_boundary)
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_BLOCKER"] == "new-association-attempt"
+
+
+def test_post_secure_m1_does_not_revoke_gate8_without_new_join() -> None:
+    """A legal post-secure rekey cuts Gate 7 only, not Gate 8 lifecycle."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        (
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 "
+            "msg=m1 action=post-secure-recv-m1 poll=99 len=121"
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] == 9
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_DPC_PROOF"] == "yes"
+
+
+@pytest.mark.parametrize(
+    ("current_dpc", "reason"),
+    [
+        ([], "missing"),
+        (["CYW43_SDIO_DPC"], "malformed-line"),
+    ],
+)
+def test_current_wifi_diag_does_not_reuse_an_older_dpc_sample(
+    current_dpc: list[str],
+    reason: str,
+) -> None:
+    """The current passive diagnostic owns its exact DPC sample window."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        normalizer.WIFI_DIAG_COMMAND_BEGIN_LINE,
+        *current_dpc,
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=23,
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_GATE7_COMPLETE"] == "yes"
+    assert record["WIFI_GATE8_COMPLETE"] == "yes"
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == reason
+
+
+@pytest.mark.parametrize(
+    "command_begin",
+    [
+        "wifi: debug subcommand=diag",
+        "wifi: debug subcommand=diag action=begin",
+        (
+            "wifi: debug subcommand=diag action=begin "
+            "profile=bounded"
+        ),
+        (
+            "wifi: debug subcommand=diag action=invalid "
+            "profile=bounded mode=one-shot"
+        ),
+    ],
+)
+def test_malformed_current_wifi_diag_command_cannot_reuse_dpc(
+    command_begin: str,
+) -> None:
+    """A clipped reserved command marker cuts older DPC authority."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        command_begin,
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=23,
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
+def test_current_wifi_diag_accepts_only_its_fresh_dpc_triplet() -> None:
+    """A fresh exact triplet closes the latest diagnostic DPC receipt."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        normalizer.WIFI_DIAG_COMMAND_BEGIN_LINE,
+        *healthy_wifi_dpc_triplet(generation=11, captures=8),
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=23,
+        ),
+        (
+            "wifi: debug subcommand=diag action=complete "
+            "profile=bounded mode=one-shot result=ok "
+            "source=linked-runtime-retained-state"
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] == 10
+    assert record["WIFI_DPC_PROOF"] == "yes"
+    assert record["WIFI_DPC_GENERATION"] == 11
+    assert record["WIFI_DPC_CAPTURES"] == 8
+
+
+def test_current_wifi_diag_complete_without_begin_cannot_reuse_dpc() -> None:
+    """A terminal-only captured command cannot borrow an older DPC sample."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=23,
+        ),
+        (
+            "wifi: debug subcommand=diag action=complete "
+            "profile=bounded mode=one-shot result=ok "
+            "source=linked-runtime-retained-state"
+        ),
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
+def test_current_wifi_diag_complete_cannot_stitch_to_prior_command() -> None:
+    """Each retained transaction requires its immediately preceding command begin."""
+
+    command_complete = (
+        "wifi: debug subcommand=diag action=complete "
+        "profile=bounded mode=one-shot result=ok "
+        "source=linked-runtime-retained-state"
+    )
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        normalizer.WIFI_DIAG_COMMAND_BEGIN_LINE,
+        *healthy_wifi_dpc_triplet(generation=11, captures=8),
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=23,
+        ),
+        command_complete,
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=1,
+            generation=9,
+            snapshot_sequence=24,
+        ),
+        command_complete,
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
+@pytest.mark.parametrize("complete_position", [1, -1])
+def test_current_wifi_diag_rejects_complete_before_transaction_terminal(
+    complete_position: int,
+) -> None:
+    """The command completion cannot precede its retained proof terminal."""
+
+    command_complete = (
+        "wifi: debug subcommand=diag action=complete "
+        "profile=bounded mode=one-shot result=ok "
+        "source=linked-runtime-retained-state"
+    )
+    transaction = wifi_current_gate7_diag_lines(
+        pair_epoch=1,
+        generation=9,
+        snapshot_sequence=23,
+    )
+    transaction.insert(complete_position, command_complete)
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        normalizer.WIFI_DIAG_COMMAND_BEGIN_LINE,
+        *healthy_wifi_dpc_triplet(generation=11, captures=8),
+        *transaction,
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_GATE"] < 10
+    assert record["WIFI_DPC_PROOF"] == "no"
+    assert record["WIFI_DPC_REASON"] == "missing"
+
+
+@pytest.mark.parametrize(
+    "later_attempt",
+    [
+        "CYW43_DRIVER_TASK_JOIN_REQUEST",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",
+    ],
+)
+def test_malformed_attempt_boundary_revokes_legacy_gate7(
+    later_attempt: str,
+) -> None:
+    """Legacy ordered proof also fails closed at a malformed new attempt."""
+
+    gate7 = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(
+            [*oldgood_wifi_resource_replay_lines(), later_attempt]
+        )
+    )
+
+    assert not gate7.complete
+    assert gate7.missing == "7a"
+
+
+def test_current_association_supervisor_join_requires_bounded_generation() -> None:
+    """The current production Join grammar carries an exact nonzero u32 epoch."""
+
+    def matches(generation: int) -> bool:
+        event = normalizer.parse_events(
+            [
+                "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+                "path=association-supervisor action=ready "
+                f"generation={generation} ssid_len=7 result=0x00000000"
+            ]
+        )[0]
+        return normalizer.wifi_join_request_step(event)
+
+    assert matches(37)
+    assert not matches(0)
+    assert not matches(normalizer.U32_MAX + 1)
+
+
+def test_retained_gate7_rejects_standalone_or_prior_truncated_row() -> None:
+    """A retained row cannot float into a later diagnostic transaction."""
+
+    standalone = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events([wifi_gate7_retained_line(1, 2, 3)])
+    )
+    assert not standalone.complete
+    assert standalone.missing == "retained-diag-complete"
+
+    lines = [
+        wifi_diag_begin_line(1, 2, 3),
+        wifi_gate7_retained_line(1, 2, 3),
+        wifi_diag_begin_line(2, 2, 3),
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=2, generation=3)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(2, 2, 3),
+    ]
+    proof = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(lines)
+    )
+
+    assert not proof.complete
+    assert proof.missing == "retained-current"
+
+
+def test_legacy_diag_summary_keeps_explicit_gate7_history_compatible() -> None:
+    """A pre-id summary does not suppress canonical transient Gate 7 proof."""
+
+    lines = [
+        *oldgood_wifi_resource_replay_lines(),
+        "wifi: diag_complete causal=yes detail=yes scope=current "
+        "frontier=complete status=pass blocker=none",
+    ]
+
+    proof = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(lines)
+    )
+
+    assert proof.complete
+    assert not proof.retained_current
+    assert proof.seen == "7a>7b>7c>7d>7e"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        ("data=yes", "data=no"),
+        ("eapol=yes", "eapol=no"),
+        ("m3=yes", "m3=no"),
+        ("pair=23", "pair=24"),
+        ("snapshot=current", "snapshot=current extra=yes"),
+    ],
+)
+def test_retained_gate7_full_match_fails_closed(
+    mutation: tuple[str, str],
+) -> None:
+    """Impossible, mismatched, or extended retained grammars cannot pass."""
+
+    retained = wifi_gate7_retained_line(17, 23, 29).replace(*mutation)
+    lines = [
+        wifi_diag_begin_line(17, 23, 29),
+        retained,
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=23, generation=29)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(17, 23, 29),
+    ]
+
+    proof = normalizer.summarize_wifi_gate7_proof(
+        normalizer.parse_events(lines)
+    )
+
+    assert not proof.complete
+    assert proof.missing == "retained-current-invalid"
+
+
 def wifi_gate8_subgate_line(
     subgate: str,
     *,
@@ -15007,6 +16165,52 @@ def wifi_gate8_subgate_line(
         f"wifi: gate 8 subgate={subgate} status={status} "
         f"pair_epoch={pair_epoch} "
         f"generation={generation} blocker={blocker}"
+    )
+
+
+def wifi_diag_begin_line(
+    snapshot_sequence: int, pair_epoch: int, generation: int
+) -> str:
+    """Return one exact current WiFi diagnostic transaction opener."""
+
+    return (
+        f"wifi: diag_begin id={snapshot_sequence} pair_epoch={pair_epoch} "
+        f"generation={generation} snapshot=current"
+    )
+
+
+def wifi_gate7_retained_line(
+    snapshot_sequence: int,
+    pair_epoch: int,
+    generation: int,
+) -> str:
+    """Return one exact compact retained host-EAPOL receipt."""
+
+    return (
+        f"wifi: gate7_retained id={snapshot_sequence} src=sm status=pass "
+        f"h=7a>7b>7c>7d>7e pair={pair_epoch} gen={generation} "
+        "assoc=yes link=yes eapol=yes data=yes m1=yes m2=yes m3=yes "
+        "m4=yes ptk=yes gtk=yes keys=yes secure=yes snapshot=current"
+    )
+
+
+def wifi_diag_complete_line(
+    snapshot_sequence: int,
+    pair_epoch: int,
+    generation: int,
+    *,
+    detail: str = "yes",
+    scope: str = "current",
+    frontier: str = "complete",
+    status: str = "pass",
+    blocker: str = "none",
+) -> str:
+    """Return one exact current WiFi diagnostic terminal summary."""
+
+    return (
+        f"wifi: diag_complete id={snapshot_sequence} causal=yes detail={detail} "
+        f"scope={scope} snapshot=current pair={pair_epoch} gen={generation} "
+        f"front={frontier} status={status} block={blocker}"
     )
 
 
@@ -15070,6 +16274,48 @@ def wifi_gate8_transaction_lines(
             generation=generation,
         ),
         bootstrap_supervisor_line(attempt, "ready", 0, 200, 3),
+    ]
+
+
+def wifi_current_gate7_diag_lines(
+    *,
+    pair_epoch: int,
+    generation: int,
+    snapshot_sequence: int = 1,
+) -> list[str]:
+    """Return one exact retained Gate 7 plus current Gate 8 diagnostic."""
+
+    return [
+        wifi_diag_begin_line(snapshot_sequence, pair_epoch, generation),
+        wifi_gate7_retained_line(snapshot_sequence, pair_epoch, generation),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=pair_epoch,
+                generation=generation,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(snapshot_sequence, pair_epoch, generation),
+    ]
+
+
+def wifi_gate8_with_current_gate7_lines(
+    *,
+    pair_epoch: int,
+    generation: int,
+) -> list[str]:
+    """Return a Ready transaction followed by its current retained proof."""
+
+    return [
+        *wifi_gate8_transaction_lines(
+            pair_epoch=pair_epoch,
+            generation=generation,
+        ),
+        *wifi_current_gate7_diag_lines(
+            pair_epoch=pair_epoch,
+            generation=generation,
+        ),
     ]
 
 
@@ -15252,7 +16498,10 @@ def test_wifi_gate10_requires_post_ready_matching_generation() -> None:
     current = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
                 *wifi_generation_gate10_lines(9),
             ]
         )
@@ -15261,14 +16510,20 @@ def test_wifi_gate10_requires_post_ready_matching_generation() -> None:
         normalizer.parse_events(
             [
                 *wifi_generation_gate10_lines(9),
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
             ]
         )
     ).to_record()
     stale = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
                 *wifi_generation_gate10_lines(8),
             ]
         )
@@ -15290,7 +16545,10 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth() -> None:
     started = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
                 *wifi_generation_gate10_lines(9, selftest_result="started-only"),
             ]
         )
@@ -15298,7 +16556,10 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth() -> None:
     stale_auth = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
                 *wifi_generation_gate10_lines(
                     9,
                     tcp_counters=False,
@@ -15310,7 +16571,10 @@ def test_wifi_gate10_rejects_started_only_nettest_and_stale_auth() -> None:
     independent_dpc_epoch = normalizer.summarize_gates(
         normalizer.parse_events(
             [
-                *wifi_gate8_transaction_lines(generation=9),
+                *wifi_gate8_with_current_gate7_lines(
+                    pair_epoch=1,
+                    generation=9,
+                ),
                 *wifi_generation_gate10_lines(9, dpc_generation=8),
             ]
         )
@@ -15997,7 +17261,7 @@ def test_gate_summary_rejects_condensed_host_eapol_as_oldgood_replay() -> None:
     record = gates.to_record()
 
     assert gates.wifi_gate == 9
-    assert gates.wifi_blocker == "tcp-auth-proof-missing"
+    assert gates.wifi_blocker == "wifi-gate7-7c-missing"
     assert record["WIFI_OLDGOOD_REPLAY"] == "no"
     assert record["WIFI_OLDGOOD_MISSING"] == "host-eapol-m1"
 
@@ -18174,31 +19438,44 @@ def test_exact_gate8_transaction_cannot_clear_forbidden_outer_retry() -> None:
     assert record["WIFI_BLOCKER"] == "supervisor-outer-backoff-forbidden"
 
 
-def test_wifi_diag_complete_recovers_clipped_gate8_cause_and_scope() -> None:
-    """The reserved terminal row keeps current and retained recovery truth."""
+def test_wifi_diag_complete_rejects_scrubbed_gate8_summary() -> None:
+    """A retained or scrubbed summary cannot replace the current snapshot."""
 
     lines = [
-        (
-            f"wifi: gate 8 subgate={subgate} status={status} "
-            "pair_epoch=1 generation=1 "
-            f"blocker={blocker}"
-        )
-        for subgate, status, blocker in [
-            ("8a-pair-generation", "fail", "pair-recovery-required"),
-            ("8b-control-program", "pending", "8a-pair-generation"),
-            ("8c-join-terminal", "pending", "8b-control-program"),
-            ("8d-association-link", "pending", "8c-join-terminal"),
-            ("8e-bssid-refresh", "pending", "8d-association-link"),
-            ("8f-eapol-keys", "pending", "8e-bssid-refresh"),
-            ("8g-post-key-maintenance", "pending", "8f-eapol-keys"),
-        ]
+        wifi_diag_begin_line(7, 1, 1),
+        *[
+            (
+                f"wifi: gate 8 subgate={subgate} status={status} "
+                "pair_epoch=1 generation=1 "
+                f"blocker={blocker}"
+            )
+            for subgate, status, blocker in [
+                ("8a-pair-generation", "fail", "pair-recovery-required"),
+                ("8b-control-program", "pending", "8a-pair-generation"),
+                ("8c-join-terminal", "pending", "8b-control-program"),
+                ("8d-association-link", "pending", "8c-join-terminal"),
+                ("8e-bssid-refresh", "pending", "8d-association-link"),
+                ("8f-eapol-keys", "pending", "8e-bssid-refresh"),
+                ("8g-post-key-maintenance", "pending", "8f-eapol-keys"),
+            ]
+            ],
     ]
     lines.append(
-        "wifi: diag_complete causal=yes detail=no scope=scrubbed "
-        "frontier=8a-pair-generation status=fail "
-        "blocker=pair-recovery-required "
+        "wifi: diag_context id=7 "
         "retained=8c-join-terminal/pending/join-owner-active "
         "cause=issued-owner-unknown trigger=rx-queue-poison"
+    )
+    lines.append(
+        wifi_diag_complete_line(
+            7,
+            1,
+            1,
+            detail="no",
+            scope="scrubbed",
+            frontier="8a-pair-generation",
+            status="fail",
+            blocker="pair-recovery-required",
+        )
     )
 
     record = normalizer.summarize_gates(
@@ -18207,7 +19484,7 @@ def test_wifi_diag_complete_recovers_clipped_gate8_cause_and_scope() -> None:
 
     assert record["WIFI_GATE8_MISSING"] == "8a-pair-generation"
     assert record["WIFI_GATE8_STATUS"] == "fail"
-    assert record["WIFI_GATE8_BLOCKER"] == "pair-recovery-required"
+    assert record["WIFI_GATE8_BLOCKER"] == "diag-summary-not-current"
     assert record["WIFI_DIAG_DETAIL"] == "no"
     assert record["WIFI_DIAG_SCOPE"] == "scrubbed"
     assert record["WIFI_DIAG_CAUSE"] == "issued-owner-unknown"
@@ -18216,6 +19493,209 @@ def test_wifi_diag_complete_recovers_clipped_gate8_cause_and_scope() -> None:
         record["WIFI_DIAG_RETAINED"]
         == "8c-join-terminal/pending/join-owner-active"
     )
+
+
+def test_wifi_diag_complete_recovers_exact_current_clipped_gate8() -> None:
+    """A clipped current snapshot recovers only from its exact terminal id."""
+
+    pair_epoch = 41
+    generation = 43
+    lines = [
+        wifi_diag_begin_line(37, pair_epoch, generation),
+        *[
+            wifi_gate8_subgate_line(
+                subgate,
+                pair_epoch=pair_epoch,
+                generation=generation,
+            )
+            for subgate in normalizer.WIFI_GATE8_SUBGATES[:5]
+        ],
+        wifi_diag_complete_line(
+            37,
+            pair_epoch,
+            generation,
+            detail="no",
+        ),
+    ]
+    events = normalizer.parse_events(lines)
+
+    proof = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert proof.complete
+    assert proof.pair_epoch == pair_epoch
+    assert proof.generation == generation
+    assert proof.line == len(lines)
+
+
+def test_wifi_diag_complete_rejects_mismatched_clipped_gate8_identity() -> None:
+    """A current summary cannot recover rows from another pair or command."""
+
+    lines = [
+        wifi_diag_begin_line(37, 41, 43),
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=41, generation=43)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES[:5]
+        ],
+        wifi_diag_complete_line(38, 41, 43, detail="no"),
+    ]
+    events = normalizer.parse_events(lines)
+
+    proof = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not proof.complete
+    assert proof.blocker == "diag-snapshot-identity-invalid"
+
+
+def test_wifi_diag_complete_revokes_old_gate8_on_latest_invalid_summary() -> None:
+    """A malformed current terminal cannot leave an older Gate 8 accepted."""
+
+    lines = [
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=41, generation=43)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_begin_line(37, 41, 43),
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=41, generation=43)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES[:5]
+        ],
+        wifi_diag_complete_line(
+            37,
+            41,
+            43,
+            detail="no",
+            frontier="complete",
+            status="pending",
+            blocker="none",
+        ),
+    ]
+    events = normalizer.parse_events(lines)
+
+    proof = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+
+    assert not proof.complete
+    assert proof.blocker == "diag-summary-invalid"
+    assert proof.line == len(lines)
+
+
+def test_latest_malformed_wifi_diag_terminal_revokes_prior_snapshot() -> None:
+    """The latest terminal prefix wins even when its causal field is absent."""
+
+    lines = [
+        wifi_diag_begin_line(37, 41, 43),
+        wifi_gate7_retained_line(37, 41, 43),
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=41, generation=43)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        wifi_diag_complete_line(37, 41, 43),
+        "wifi: diag_complete id=37 detail=yes scope=current "
+        "snapshot=current pair=41 gen=43 front=complete status=pass block=none",
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+
+    assert not gate8.complete
+    assert gate8.blocker == "diag-summary-invalid"
+    assert not gate7.complete
+    assert gate7.missing == "retained-diag-begin"
+    assert normalizer.summarize_wifi_diag_complete(events) == (
+        "unknown",
+        "unknown",
+        "none",
+        "none",
+        "none",
+    )
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        lambda line: f"{line} extra=yes",
+        lambda line: line.replace(
+            "causal=yes detail=yes", "detail=yes causal=yes"
+        ),
+        lambda line: line.replace("id=37", "id=0x25"),
+        lambda line: line.replace("id=37", "id=38 id=37"),
+        lambda _line: "wifi: diag_complete",
+    ],
+)
+def test_compact_wifi_diag_terminal_requires_exact_emitted_grammar(
+    mutation: Callable[[str], str],
+) -> None:
+    """Equivalent, extended, duplicate, or truncated terminals have no authority."""
+
+    valid_terminal = wifi_diag_complete_line(37, 41, 43)
+    lines = [
+        wifi_diag_begin_line(37, 41, 43),
+        wifi_gate7_retained_line(37, 41, 43),
+        *[
+            wifi_gate8_subgate_line(subgate, pair_epoch=41, generation=43)
+            for subgate in normalizer.WIFI_GATE8_SUBGATES
+        ],
+        valid_terminal,
+        mutation(valid_terminal),
+    ]
+    events = normalizer.parse_events(lines)
+
+    gate8 = normalizer.refine_wifi_gate8_from_diag_complete(
+        events, normalizer.summarize_wifi_gate8_proof(events)
+    )
+    gate7 = normalizer.summarize_wifi_gate7_proof(events)
+
+    assert not gate8.complete
+    assert gate8.blocker == "diag-summary-invalid"
+    assert not gate7.complete
+    assert gate7.missing == "retained-diag-begin"
+
+
+def test_wifi_diag_context_requires_exact_matching_nonzero_id() -> None:
+    """Non-authoritative context cannot splice into another terminal row."""
+
+    context = (
+        "wifi: diag_context id=37 retained=complete/pass/none "
+        "cause=issued-owner-unknown trigger=rx-queue-poison"
+    )
+    detail, scope, cause, trigger, retained = (
+        normalizer.summarize_wifi_diag_complete(
+            normalizer.parse_events(
+                [context, wifi_diag_complete_line(37, 41, 43)]
+            )
+        )
+    )
+    assert (detail, scope) == ("yes", "current")
+    assert (cause, trigger, retained) == (
+        "issued-owner-unknown",
+        "rx-queue-poison",
+        "complete/pass/none",
+    )
+
+    lines = [
+        context.replace("id=37", "id=36"),
+        wifi_diag_complete_line(37, 41, 43),
+    ]
+
+    detail, scope, cause, trigger, retained = (
+        normalizer.summarize_wifi_diag_complete(
+            normalizer.parse_events(lines)
+        )
+    )
+
+    assert detail == "yes"
+    assert scope == "current"
+    assert cause == "none"
+    assert trigger == "none"
+    assert retained == "none"
 
 
 def test_hdmi_passive_status_requires_driver_completion_receipt() -> None:

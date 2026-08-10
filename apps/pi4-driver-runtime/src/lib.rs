@@ -558,7 +558,8 @@ use pi4_driver_abi::{
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43BusEpisodeStart,
-    DriverRuntimeSdioDeadlineArm,
+    DriverRuntimeCyw43DpcClientRecord, DriverRuntimeSdioDeadlineArm,
+    DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET,
 };
 #[cfg(any(target_os = "none", test))]
 use pi4_driver_abi::{
@@ -4622,6 +4623,7 @@ struct Cyw43RuntimeState {
     dpc_active_sequence: u32,
     dpc_last_consumed_epoch: u32,
     dpc_last_consumed_sequence: u32,
+    dpc_client_publication_sequence: u32,
     dpc_events_consumed: u32,
     dpc_source_samples: u32,
     dpc_source_frame: u32,
@@ -4800,6 +4802,7 @@ impl Cyw43RuntimeState {
             dpc_active_sequence: 0,
             dpc_last_consumed_epoch: 0,
             dpc_last_consumed_sequence: 0,
+            dpc_client_publication_sequence: 0,
             dpc_events_consumed: 0,
             dpc_source_samples: 0,
             dpc_source_frame: 0,
@@ -4858,6 +4861,7 @@ impl Cyw43RuntimeState {
         self.dpc_active_sequence = 0;
         self.dpc_last_consumed_epoch = 0;
         self.dpc_last_consumed_sequence = 0;
+        self.dpc_client_publication_sequence = 0;
         self.dpc_events_consumed = 0;
         self.dpc_source_samples = 0;
         self.dpc_source_frame = 0;
@@ -6299,6 +6303,95 @@ fn cyw43_dpc_frame_source_cntvct_lo(state: &Cyw43RuntimeState) -> u32 {
 #[cfg(not(any(target_os = "none", test)))]
 const fn cyw43_dpc_frame_source_cntvct_lo(_state: &Cyw43RuntimeState) -> u32 {
     0
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_client_record_from_state(
+    state: &mut Cyw43RuntimeState,
+) -> Option<DriverRuntimeCyw43DpcClientRecord> {
+    if state.dpc_shared_epoch == 0 {
+        return None;
+    }
+    state.dpc_client_publication_sequence = state.dpc_client_publication_sequence.wrapping_add(1);
+    if state.dpc_client_publication_sequence == 0 {
+        state.dpc_client_publication_sequence = 1;
+    }
+    Some(DriverRuntimeCyw43DpcClientRecord {
+        publication_sequence: state.dpc_client_publication_sequence,
+        physical_epoch: state.dpc_shared_epoch,
+        consumer_sequence: state.dpc_last_consumed_sequence,
+        rearms: state.dpc_owner_rearms,
+        epoch_errors: state.dpc_epoch_errors,
+        sequence_errors: state.dpc_sequence_errors,
+        source_samples: state.dpc_source_samples,
+        source_frame: state.dpc_source_frame,
+        source_hostmail: state.dpc_source_hostmail,
+        source_fc_change: state.dpc_source_fc_change,
+        source_fc_state: state.dpc_source_fc_state,
+        source_chipactive: state.dpc_source_chipactive,
+        source_other: state.dpc_source_other,
+        source_spurious: state.dpc_source_spurious,
+        turns: state.dpc_turns,
+        owner_children: state.dpc_owner_children,
+        owner_turns: state.dpc_owner_turns,
+        frames_completed: state.dpc_frames_completed,
+        frame_turns: state.dpc_frame_turns,
+        frame_owner_turns: state.dpc_frame_owner_turns,
+        ..DriverRuntimeCyw43DpcClientRecord::empty()
+    })
+}
+
+/// Commit one passive current-accounting record without notification or work
+/// authority. The final word is cleaned only after the complete body.
+#[cfg(any(target_os = "none", test))]
+fn cyw43_dpc_client_write_sequence_last(record: DriverRuntimeCyw43DpcClientRecord) -> bool {
+    if !record.body_valid() {
+        return false;
+    }
+    let base = usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET);
+    let commit_offset = base
+        + core::mem::offset_of!(
+            DriverRuntimeCyw43DpcClientRecord,
+            committed_publication_sequence
+        );
+    if !write_runtime_payload_commit_u32_physical(commit_offset, 0) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(runtime_payload_vaddr_physical(commit_offset), 4);
+    driver_task_shared_store_barrier();
+
+    let words = record.to_le_words();
+    let mut index = 0usize;
+    while index + 1 < words.len() {
+        if !write_runtime_payload_commit_u32_physical(
+            base + index * core::mem::size_of::<u32>(),
+            words[index],
+        ) {
+            return false;
+        }
+        index = index.saturating_add(1);
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(
+        runtime_payload_vaddr_physical(base),
+        core::mem::offset_of!(
+            DriverRuntimeCyw43DpcClientRecord,
+            committed_publication_sequence
+        ),
+    );
+    driver_task_shared_store_barrier();
+    if !write_runtime_payload_commit_u32_physical(commit_offset, record.publication_sequence) {
+        return false;
+    }
+    driver_task_shared_store_barrier();
+    driver_task_shared_clean_range(runtime_payload_vaddr_physical(commit_offset), 4);
+    true
+}
+
+#[cfg(any(target_os = "none", test))]
+fn cyw43_publish_dpc_client_record(state: &mut Cyw43RuntimeState) -> bool {
+    cyw43_dpc_client_record_from_state(state).is_some_and(cyw43_dpc_client_write_sequence_last)
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -14103,6 +14196,8 @@ fn cyw43_runtime_init(
         cyw43_record_last_fault_with_result(FAULT_CYW43_TRANSPORT_BUS_LINK, current_generation);
         return false;
     }
+    #[cfg(any(target_os = "none", test))]
+    let _ = cyw43_publish_dpc_client_record(state);
     CYW43_SDIO_BUS_LINK_SEQ.store(
         cyw43_sdio_bus_link_sequence_seed(current_generation),
         Ordering::Release,
@@ -14678,6 +14773,7 @@ fn cyw43_dpc_record_terminal_cause_once(
     cyw43_poison_rx_queue_state!(state);
     CYW43_SDIO_PAIR_RESTART_REQUIRED.store(true, Ordering::Release);
     CYW43_DPC_DEFERRED.store(true, Ordering::Release);
+    let _ = cyw43_publish_dpc_client_record(state);
 }
 
 #[cfg(any(target_os = "none", test))]
@@ -17099,6 +17195,10 @@ fn cyw43_publish_owner_rearm_doorbell() -> bool {
     });
     if admitted {
         runtime_signal_sdio_owner_doorbell(0);
+        #[cfg(any(target_os = "none", test))]
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            let _ = cyw43_publish_dpc_client_record(state);
+        });
     }
     admitted
 }
@@ -58462,6 +58562,95 @@ mod tests {
             index += 1;
         }
         DriverRuntimeCyw43BusEpisodeRecord::from_le_words(words)
+    }
+
+    fn read_cyw43_dpc_client_record_for_test() -> DriverRuntimeCyw43DpcClientRecord {
+        let base = usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET);
+        let mut words = [0; pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS];
+        let mut index = 0usize;
+        while index < words.len() {
+            words[index] =
+                read_runtime_payload_u32_for_test(base + index * core::mem::size_of::<u32>());
+            index += 1;
+        }
+        DriverRuntimeCyw43DpcClientRecord::from_le_words(words)
+    }
+
+    #[test]
+    fn cyw43_dpc_client_record_is_current_sequence_last_and_passive() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        let root_signals = TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire);
+        let peer_signals = TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire);
+        let mut state = Cyw43RuntimeState::new();
+        state.dpc_shared_epoch = 0x4359_00d1;
+        state.dpc_events_consumed = 2_788;
+        state.dpc_last_consumed_sequence = u32::MAX;
+        state.dpc_owner_rearms = 167;
+        state.dpc_source_samples = 2_788;
+        state.dpc_source_frame = 2_700;
+        state.dpc_source_hostmail = 88;
+        state.dpc_turns = 3_100;
+        state.dpc_owner_children = 2_900;
+        state.dpc_owner_turns = 3_050;
+        state.dpc_frames_completed = 2_700;
+        state.dpc_frame_turns = 3_000;
+        state.dpc_frame_owner_turns = 3_020;
+
+        assert!(cyw43_publish_dpc_client_record(&mut state));
+        let first = read_cyw43_dpc_client_record_for_test();
+        assert!(first.valid());
+        assert_eq!(first.physical_epoch, state.dpc_shared_epoch);
+        assert_eq!(first.consumer_sequence, state.dpc_last_consumed_sequence);
+        assert_eq!(first.rearms, state.dpc_owner_rearms);
+        assert_eq!(
+            first.committed_publication_sequence,
+            first.publication_sequence
+        );
+
+        state.dpc_events_consumed = state.dpc_events_consumed.saturating_add(1);
+        state.dpc_last_consumed_sequence = state.dpc_last_consumed_sequence.wrapping_add(1);
+        assert!(cyw43_publish_dpc_client_record(&mut state));
+        let second = read_cyw43_dpc_client_record_for_test();
+        assert!(second.valid());
+        assert_eq!(first.consumer_sequence, u32::MAX);
+        assert_eq!(second.consumer_sequence, 0);
+        assert_ne!(second.publication_sequence, first.publication_sequence);
+        assert_eq!(
+            TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire),
+            root_signals,
+        );
+        assert_eq!(
+            TEST_CYW43_PEER_WAKE_SIGNALS.load(Ordering::Acquire),
+            peer_signals,
+        );
+    }
+
+    #[test]
+    fn cyw43_owner_rearm_checkpoints_client_record_after_the_existing_hint() {
+        let _guard = test_guard();
+        reset_runtime_for_test();
+        CYW43_RUNTIME_STATE.with_mut(|state| {
+            state.reset();
+            state.dpc_link_ready = true;
+            state.dpc_shared_epoch = 0x4359_00d2;
+            state.dpc_last_consumed_sequence = u32::MAX;
+            state.dpc_events_consumed = 7;
+        });
+        let root_signals = TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire);
+
+        assert!(cyw43_publish_owner_rearm_doorbell());
+        assert_eq!(TEST_SDIO_OWNER_DOORBELL_COUNT.load(Ordering::Acquire), 1);
+        let record = read_cyw43_dpc_client_record_for_test();
+        assert!(record.valid());
+        assert_eq!(record.physical_epoch, 0x4359_00d2);
+        assert_eq!(record.consumer_sequence, u32::MAX);
+        assert_eq!(record.rearms, 1);
+        assert_eq!(
+            TEST_CYW43_ROOT_WAKE_SIGNALS.load(Ordering::Acquire),
+            root_signals,
+            "passive diagnostics must not create root scheduling authority",
+        );
     }
 
     #[test]

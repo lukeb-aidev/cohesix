@@ -584,25 +584,6 @@ static CYW43_SERVICE_LAST_RFRAME: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_SOURCE_FLAGS: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_PRE_SOURCE: AtomicU32 = AtomicU32::new(0);
 static CYW43_SERVICE_LAST_POST_SOURCE: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_GENERATION: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_CONSUMED: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_REARMS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_EPOCH_ERRORS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SEQUENCE_ERRORS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_SAMPLES: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_FRAME: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_HOSTMAIL: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_FC_CHANGE: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_FC_STATE: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_OTHER: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_SOURCE_SPURIOUS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_TURNS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_OWNER_CHILDREN: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_OWNER_TURNS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_FRAMES_COMPLETED: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_FRAME_TURNS: AtomicU32 = AtomicU32::new(0);
-static CYW43_DPC_CLIENT_FRAME_OWNER_TURNS: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_RX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TX: AtomicU32 = AtomicU32::new(0);
 static CYW43_ARP_TARGET_HW_ZEROED: AtomicU32 = AtomicU32::new(0);
@@ -5249,7 +5230,7 @@ struct Cyw43RxIdleTrace {
 #[cfg(feature = "kernel")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 struct Cyw43DpcClientCounters {
-    consumed: u32,
+    consumer_sequence: u32,
     rearms: u32,
     epoch_errors: u32,
     sequence_errors: u32,
@@ -5491,89 +5472,32 @@ fn cyw43_rx_idle_trace(bytes: &[u8]) -> Option<Cyw43RxIdleTrace> {
 }
 
 #[cfg(feature = "kernel")]
-fn reset_cyw43_dpc_client_counters() {
-    CYW43_DPC_CLIENT_CONSUMED.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_REARMS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_EPOCH_ERRORS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FRAME.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_OTHER.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_TURNS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_OWNER_CHILDREN.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_OWNER_TURNS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAME_TURNS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(0, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_GENERATION.store(0, Ordering::Release);
-}
-
-#[cfg(feature = "kernel")]
-fn cache_cyw43_dpc_client_counters(trace: Cyw43RxIdleTrace) {
-    if trace.version != CYW43_RX_IDLE_TRACE_VERSION_V10
-        && trace.version != CYW43_RX_IDLE_TRACE_VERSION
-    {
-        return;
-    }
-    let Some(ring) = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot() else {
-        return;
-    };
-    CYW43_DPC_CLIENT_CONSUMED.store(trace.dpc_events_consumed, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_REARMS.store(trace.dpc_owner_rearms, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_EPOCH_ERRORS.store(trace.dpc_epoch_errors, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(trace.dpc_sequence_errors, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(trace.dpc_source_samples, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FRAME.store(trace.dpc_source_frame, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(trace.dpc_source_hostmail, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(trace.dpc_source_fc_change, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(trace.dpc_source_fc_state, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(trace.dpc_source_chipactive, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_OTHER.store(trace.dpc_source_other, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(trace.dpc_source_spurious, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_TURNS.store(trace.dpc_turns, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_OWNER_CHILDREN.store(trace.dpc_owner_children, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_OWNER_TURNS.store(trace.dpc_owner_turns, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(trace.dpc_frames_completed, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAME_TURNS.store(trace.dpc_frame_turns, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(trace.dpc_frame_owner_turns, Ordering::Relaxed);
-    CYW43_DPC_CLIENT_GENERATION.store(ring.epoch, Ordering::Release);
-}
-
-#[cfg(feature = "kernel")]
-fn cyw43_dpc_client_counters(generation: u32) -> Option<Cyw43DpcClientCounters> {
-    if CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire) != generation {
+fn cyw43_current_dpc_client_counters(generation: u32) -> Option<Cyw43DpcClientCounters> {
+    let record = crate::hal::driver_task::driver_task_cyw43_dpc_client_snapshot()?;
+    if record.physical_epoch != generation {
         return None;
     }
-    let counters = Cyw43DpcClientCounters {
-        consumed: CYW43_DPC_CLIENT_CONSUMED.load(Ordering::Relaxed),
-        rearms: CYW43_DPC_CLIENT_REARMS.load(Ordering::Relaxed),
-        epoch_errors: CYW43_DPC_CLIENT_EPOCH_ERRORS.load(Ordering::Relaxed),
-        sequence_errors: CYW43_DPC_CLIENT_SEQUENCE_ERRORS.load(Ordering::Relaxed),
-        source_samples: CYW43_DPC_CLIENT_SOURCE_SAMPLES.load(Ordering::Relaxed),
-        source_frame: CYW43_DPC_CLIENT_SOURCE_FRAME.load(Ordering::Relaxed),
-        source_hostmail: CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.load(Ordering::Relaxed),
-        source_fc_change: CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.load(Ordering::Relaxed),
-        source_fc_state: CYW43_DPC_CLIENT_SOURCE_FC_STATE.load(Ordering::Relaxed),
-        source_chipactive: CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.load(Ordering::Relaxed),
-        source_other: CYW43_DPC_CLIENT_SOURCE_OTHER.load(Ordering::Relaxed),
-        source_spurious: CYW43_DPC_CLIENT_SOURCE_SPURIOUS.load(Ordering::Relaxed),
-        turns: CYW43_DPC_CLIENT_TURNS.load(Ordering::Relaxed),
-        owner_children: CYW43_DPC_CLIENT_OWNER_CHILDREN.load(Ordering::Relaxed),
-        owner_turns: CYW43_DPC_CLIENT_OWNER_TURNS.load(Ordering::Relaxed),
-        frames_completed: CYW43_DPC_CLIENT_FRAMES_COMPLETED.load(Ordering::Relaxed),
-        frame_turns: CYW43_DPC_CLIENT_FRAME_TURNS.load(Ordering::Relaxed),
-        frame_owner_turns: CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.load(Ordering::Relaxed),
+    let current = Cyw43DpcClientCounters {
+        consumer_sequence: record.consumer_sequence,
+        rearms: record.rearms,
+        epoch_errors: record.epoch_errors,
+        sequence_errors: record.sequence_errors,
+        source_samples: record.source_samples,
+        source_frame: record.source_frame,
+        source_hostmail: record.source_hostmail,
+        source_fc_change: record.source_fc_change,
+        source_fc_state: record.source_fc_state,
+        source_chipactive: record.source_chipactive,
+        source_other: record.source_other,
+        source_spurious: record.source_spurious,
+        turns: record.turns,
+        owner_children: record.owner_children,
+        owner_turns: record.owner_turns,
+        frames_completed: record.frames_completed,
+        frame_turns: record.frame_turns,
+        frame_owner_turns: record.frame_owner_turns,
     };
-    if CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire) == generation {
-        Some(counters)
-    } else {
-        None
-    }
+    Some(current)
 }
 
 #[cfg(feature = "kernel")]
@@ -5600,25 +5524,15 @@ fn cyw43_sdio_dpc_cause_diagnostic_from(
     }
 }
 
-/// Return generation-scoped CYW43 DPC source and turn-amplification telemetry.
-#[cfg(feature = "kernel")]
-#[must_use]
-pub(crate) fn cyw43_sdio_dpc_cause_diagnostic(
-    generation: u32,
-) -> Option<Cyw43SdioDpcCauseDiagnostic> {
-    let client = cyw43_dpc_client_counters(generation)?;
-    Some(cyw43_sdio_dpc_cause_diagnostic_from(generation, client))
-}
-
 #[cfg(feature = "kernel")]
 fn cyw43_sdio_dpc_diagnostic_from(
     ring: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
     client: Cyw43DpcClientCounters,
 ) -> Cyw43SdioDpcDiagnostic {
-    // The live ring consumer is authoritative for the emitted count. Any
-    // mismatch means the completion sample raced the stable ring snapshot and
-    // could also omit later client errors, so the proof must be rerun.
-    let client_consumer_mismatch = client.consumed != ring.consumer;
+    // The live ring consumer is authoritative. A mismatch means the passive
+    // runtime checkpoint is still mid-burst or changed around this snapshot;
+    // fail closed and rerun after the quiescent owner-rearm publication.
+    let client_consumer_mismatch = client.consumer_sequence != ring.consumer;
     let ring_poisoned = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_POISONED != 0;
     let masked = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED != 0;
     let owner_active = ring.flags & DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE != 0;
@@ -5627,7 +5541,7 @@ fn cyw43_sdio_dpc_diagnostic_from(
         event_attempts: ring.producer.saturating_add(ring.overruns),
         published: ring.producer,
         consumed: ring.consumer,
-        sample_consumer: client.consumed,
+        sample_consumer: client.consumer_sequence,
         // This is the CYW43 runtime's generation-bound owner-rearm signal
         // attempt count, not proof that SDIO consumed each signal or re-enabled
         // CARD_INT. Keeping it independent of the consumer index avoids a
@@ -5646,17 +5560,46 @@ fn cyw43_sdio_dpc_diagnostic_from(
     }
 }
 
+#[cfg(feature = "kernel")]
+fn cyw43_sdio_dpc_diagnostic_pair_from(
+    before: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
+    client: Cyw43DpcClientCounters,
+    after: crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot,
+) -> Option<(Cyw43SdioDpcDiagnostic, Cyw43SdioDpcCauseDiagnostic)> {
+    if before != after || before.epoch == 0 {
+        return None;
+    }
+    Some((
+        cyw43_sdio_dpc_diagnostic_from(after, client),
+        cyw43_sdio_dpc_cause_diagnostic_from(after.epoch, client),
+    ))
+}
+
+/// Return one cross-record-atomic DPC accounting/cause snapshot.
+///
+/// Root stable-reads the live owner ring on both sides of the runtime-owned
+/// sequence-last client record and accepts only identical authority snapshots.
+/// The tuple remains passive diagnostic evidence and grants no work authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_sdio_dpc_diagnostic_pair(
+) -> Option<(Cyw43SdioDpcDiagnostic, Option<Cyw43SdioDpcCauseDiagnostic>)> {
+    #[cfg(test)]
+    if let Some(snapshot) = *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock() {
+        return Some((snapshot, None));
+    }
+    let before = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()?;
+    let client = cyw43_current_dpc_client_counters(before.epoch)?;
+    let after = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()?;
+    let (diagnostic, cause) = cyw43_sdio_dpc_diagnostic_pair_from(before, client, after)?;
+    Some((diagnostic, Some(cause)))
+}
+
 /// Return the current isolated SDIO-owner/CYW43-client DPC service proof.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub(crate) fn cyw43_sdio_dpc_diagnostic() -> Option<Cyw43SdioDpcDiagnostic> {
-    #[cfg(test)]
-    if let Some(snapshot) = *CYW43_DPC_DIAGNOSTIC_TEST_OVERRIDE.lock() {
-        return Some(snapshot);
-    }
-    let ring = crate::hal::driver_task::driver_task_sdio_dpc_ring_snapshot()?;
-    let client = cyw43_dpc_client_counters(ring.epoch)?;
-    Some(cyw43_sdio_dpc_diagnostic_from(ring, client))
+    cyw43_sdio_dpc_diagnostic_pair().map(|(diagnostic, _)| diagnostic)
 }
 
 #[cfg(feature = "kernel")]
@@ -7695,7 +7638,6 @@ fn cyw43_completion_rx_idle_trace(
 ) -> Option<Cyw43RxIdleTrace> {
     let bytes = crate::hal::driver_task::driver_task_ring_frame_bytes(contract, completion.frame)?;
     let trace = cyw43_rx_idle_trace(bytes)?;
-    cache_cyw43_dpc_client_counters(trace);
     Some(trace)
 }
 
@@ -10636,6 +10578,28 @@ pub(crate) struct Cyw43AssociationDiagnostic {
     pub retained_tx_committed: bool,
 }
 
+/// Exact current-generation Gate 7 proof retained by the host-EAPOL control
+/// plane after UART cutover. Reading this record is passive and cannot submit,
+/// resume, retry, or complete driver work.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43Gate7Diagnostic {
+    pub pair_scrub_epoch: u64,
+    pub generation: u32,
+    pub associated: bool,
+    pub link_up: bool,
+    pub eapol_seen: bool,
+    pub data_seen: bool,
+    pub m1_seen: bool,
+    pub m2_seen: bool,
+    pub m3_seen: bool,
+    pub m4_seen: bool,
+    pub ptk_seen: bool,
+    pub gtk_seen: bool,
+    pub keys_ready: bool,
+    pub secure: bool,
+}
+
 #[cfg(feature = "kernel")]
 impl Cyw43AssociationDiagnostic {
     #[must_use]
@@ -11387,6 +11351,66 @@ pub(crate) fn cyw43_association_diagnostic() -> Cyw43AssociationDiagnostic {
             && session_retained_finite_tx,
         retained_tx_committed: join.is_some_and(|join| join.tx_committed),
     }
+}
+
+/// Return a same-generation, fail-closed Gate 7 receipt for `wifi diag`.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn cyw43_gate7_diagnostic() -> Option<Cyw43Gate7Diagnostic> {
+    let pair_scrub_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+    let generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    if generation == 0 {
+        return None;
+    }
+    let progress = CYW43_HOST_EAPOL_SESSION
+        .lock()
+        .as_ref()
+        .map(|session| session.progress)?;
+    if progress.connection_epoch != generation {
+        return None;
+    }
+    let m1 = CYW43_HOST_EAPOL_M1.load(Ordering::Acquire);
+    let m2 = CYW43_HOST_EAPOL_M2.load(Ordering::Acquire);
+    let m3 = CYW43_HOST_EAPOL_M3.load(Ordering::Acquire);
+    let m4 = CYW43_HOST_EAPOL_M4.load(Ordering::Acquire);
+    let ptk = CYW43_HOST_EAPOL_PTK.load(Ordering::Acquire);
+    let gtk = CYW43_HOST_EAPOL_GTK.load(Ordering::Acquire);
+    let diagnostic = Cyw43Gate7Diagnostic {
+        pair_scrub_epoch,
+        generation,
+        associated: progress.associated && CYW43_ASSOCIATED.load(Ordering::Acquire) != 0,
+        link_up: progress.link_up && CYW43_LINK_UP.load(Ordering::Acquire) != 0,
+        eapol_seen: progress.polls != 0 && progress.eapol_rx >= 2,
+        data_seen: progress.data_rx != 0,
+        m1_seen: m1 != 0,
+        m2_seen: m2 != 0,
+        m3_seen: m3 != 0,
+        m4_seen: m4 != 0,
+        ptk_seen: ptk != 0,
+        gtk_seen: gtk != 0,
+        keys_ready: progress.secure_keys_ready,
+        secure: CYW43_HOST_EAPOL_SECURE.load(Ordering::Acquire) != 0
+            && cyw43_post_secure_data_rx_admitted(),
+    };
+    core::sync::atomic::fence(Ordering::Acquire);
+    if CYW43_CONNECTION_EPOCH.load(Ordering::Acquire) != generation
+        || CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire) != pair_scrub_epoch
+        || !diagnostic.associated
+        || !diagnostic.link_up
+        || !diagnostic.eapol_seen
+        || !diagnostic.data_seen
+        || !diagnostic.m1_seen
+        || !diagnostic.m2_seen
+        || !diagnostic.m3_seen
+        || !diagnostic.m4_seen
+        || !diagnostic.ptk_seen
+        || !diagnostic.gtk_seen
+        || !diagnostic.keys_ready
+        || !diagnostic.secure
+    {
+        return None;
+    }
+    Some(diagnostic)
 }
 
 #[cfg(feature = "kernel")]
@@ -21594,7 +21618,6 @@ fn fail_closed_cyw43_generation_recovery() {
     CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
     CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
     CYW43_ASSIGNED_IPV4_BE.store(0, Ordering::Release);
-    reset_cyw43_dpc_client_counters();
     CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
     *CYW43_HOST_EAPOL_SESSION.lock() = None;
     CYW43_HOST_EAPOL_PENDING_EVENTS.lock().clear();
@@ -30694,7 +30717,6 @@ mod tests {
         CYW43_SERVICE_LAST_SOURCE_FLAGS.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_PRE_SOURCE.store(0, Ordering::Release);
         CYW43_SERVICE_LAST_POST_SOURCE.store(0, Ordering::Release);
-        reset_cyw43_dpc_client_counters();
         *CYW43_GATE8_DPC_QUIESCENCE_TEST_OVERRIDE.lock() = None;
         CYW43_ANY_FRAME_NEXT_CHANNEL.store(0, Ordering::Release);
         CYW43_SUPERVISOR_RING_TURNS.store(0, Ordering::Release);
@@ -44511,6 +44533,78 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     #[test]
+    fn gate7_diagnostic_requires_one_complete_current_host_eapol_session() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+
+        let pair_scrub_epoch = 23;
+        let generation = 29;
+        CYW43_PAIR_SCRUB_EPOCH.store(pair_scrub_epoch, Ordering::Release);
+        CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        let credentials = crate::net::WifiCredentials::new("cohesix", "passphrase")
+            .expect("valid host-EAPOL credentials");
+        let mut session =
+            Cyw43HostEapolSession::new(credentials).expect("host EAPOL session starts");
+        session.progress.polls = 3;
+        session.progress.eapol_rx = 2;
+        session.progress.data_rx = 1;
+        session.progress.associated = true;
+        session.progress.link_up = true;
+        session.progress.secure_keys_ready = true;
+        *CYW43_HOST_EAPOL_SESSION.lock() = Some(session);
+        CYW43_ASSOCIATED.store(1, Ordering::Release);
+        CYW43_LINK_UP.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M1.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M2.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M3.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_M4.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_PTK.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_GTK.store(1, Ordering::Release);
+        CYW43_HOST_EAPOL_SECURE.store(1, Ordering::Release);
+        CYW43_POST_SECURE_DATA_RX_ADMITTED.store(1, Ordering::Release);
+
+        assert_eq!(
+            cyw43_gate7_diagnostic(),
+            Some(Cyw43Gate7Diagnostic {
+                pair_scrub_epoch,
+                generation,
+                associated: true,
+                link_up: true,
+                eapol_seen: true,
+                data_seen: true,
+                m1_seen: true,
+                m2_seen: true,
+                m3_seen: true,
+                m4_seen: true,
+                ptk_seen: true,
+                gtk_seen: true,
+                keys_ready: true,
+                secure: true,
+            }),
+        );
+
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_mut()
+            .expect("host EAPOL session remains present")
+            .progress
+            .connection_epoch = generation.wrapping_sub(1);
+        assert_eq!(cyw43_gate7_diagnostic(), None);
+
+        CYW43_HOST_EAPOL_SESSION
+            .lock()
+            .as_mut()
+            .expect("host EAPOL session remains present")
+            .progress
+            .connection_epoch = generation;
+        CYW43_HOST_EAPOL_M3.store(0, Ordering::Release);
+        assert_eq!(cyw43_gate7_diagnostic(), None);
+
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
     fn host_eapol_status_throttle_suppresses_poll_only_pending_repeats() {
         let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
         reset_cyw43_status_flags();
@@ -48021,7 +48115,7 @@ mod tests {
                 ack_failures: 1,
             },
             Cyw43DpcClientCounters {
-                consumed: 11,
+                consumer_sequence: 11,
                 rearms: 10,
                 epoch_errors: 3,
                 sequence_errors: 4,
@@ -48053,7 +48147,7 @@ mod tests {
                 ack_failures: 0,
             },
             Cyw43DpcClientCounters {
-                consumed: 12,
+                consumer_sequence: 12,
                 rearms: 13,
                 epoch_errors: 0,
                 sequence_errors: 0,
@@ -48077,7 +48171,7 @@ mod tests {
                 ack_failures: 0,
             },
             Cyw43DpcClientCounters {
-                consumed: 14,
+                consumer_sequence: 14,
                 rearms: 14,
                 epoch_errors: 0,
                 sequence_errors: 0,
@@ -48088,6 +48182,62 @@ mod tests {
         assert!(ring_poisoned.ring_poisoned);
         assert!(!ring_poisoned.client_sample_stale);
         assert!(ring_poisoned.poisoned);
+
+        let stable_ring = crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+            epoch: 10,
+            producer: 19,
+            consumer: 19,
+            front_event_sequence: 0,
+            front_event_flags: 0,
+            flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_OWNER_ACTIVE,
+            overruns: 0,
+            ack_failures: 0,
+        };
+        let stable_client = Cyw43DpcClientCounters {
+            consumer_sequence: 19,
+            rearms: 7,
+            source_samples: 19,
+            ..Cyw43DpcClientCounters::default()
+        };
+        let (stable, cause) =
+            cyw43_sdio_dpc_diagnostic_pair_from(stable_ring, stable_client, stable_ring)
+                .expect("identical authority snapshots must bind the client record");
+        assert!(!stable.client_sample_stale);
+        assert_eq!(cause.generation, stable_ring.epoch);
+        assert_eq!(cause.samples, stable_client.source_samples);
+
+        for changed in [
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                consumer: 20,
+                ..stable_ring
+            },
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                epoch: 11,
+                ..stable_ring
+            },
+            crate::hal::driver_task::DriverTaskSdioDpcRingSnapshot {
+                flags: DRIVER_RUNTIME_DPC_EVENT_RING_FLAG_CARD_IRQ_MASKED,
+                ..stable_ring
+            },
+        ] {
+            assert_eq!(
+                cyw43_sdio_dpc_diagnostic_pair_from(stable_ring, stable_client, changed,),
+                None,
+                "a changing authority record must fail closed",
+            );
+        }
+
+        let (stale, _) = cyw43_sdio_dpc_diagnostic_pair_from(
+            stable_ring,
+            Cyw43DpcClientCounters {
+                consumer_sequence: 18,
+                ..stable_client
+            },
+            stable_ring,
+        )
+        .expect("an atomic but stale client record remains diagnostic evidence");
+        assert!(stale.client_sample_stale);
+        assert!(stale.poisoned);
     }
 
     #[cfg(feature = "kernel")]
@@ -48915,67 +49065,6 @@ mod tests {
                 "{reason} diagnostic must not earn EventPump urgency"
             );
         }
-    }
-
-    #[cfg(feature = "kernel")]
-    #[test]
-    fn dpc_client_counters_require_same_generation_v11_sample() {
-        let _lock = CYW43_STATUS_TEST_LOCK
-            .lock()
-            .expect("cyw43 status test lock");
-        reset_cyw43_status_flags();
-        assert_eq!(cyw43_dpc_client_counters(4), None);
-
-        CYW43_DPC_CLIENT_CONSUMED.store(6, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_REARMS.store(5, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_EPOCH_ERRORS.store(1, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SEQUENCE_ERRORS.store(2, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_SAMPLES.store(13, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_FRAME.store(7, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_HOSTMAIL.store(8, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_FC_CHANGE.store(9, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_FC_STATE.store(10, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_CHIPACTIVE.store(11, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_OTHER.store(12, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_SOURCE_SPURIOUS.store(6, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_FRAMES_COMPLETED.store(3, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_TURNS.store(17, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_OWNER_CHILDREN.store(18, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_OWNER_TURNS.store(19, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_FRAME_TURNS.store(20, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_FRAME_OWNER_TURNS.store(21, Ordering::Relaxed);
-        CYW43_DPC_CLIENT_GENERATION.store(4, Ordering::Release);
-        assert_eq!(
-            cyw43_dpc_client_counters(4),
-            Some(Cyw43DpcClientCounters {
-                consumed: 6,
-                rearms: 5,
-                epoch_errors: 1,
-                sequence_errors: 2,
-                source_samples: 13,
-                source_frame: 7,
-                source_hostmail: 8,
-                source_fc_change: 9,
-                source_fc_state: 10,
-                source_chipactive: 11,
-                source_other: 12,
-                source_spurious: 6,
-                frames_completed: 3,
-                turns: 17,
-                owner_children: 18,
-                owner_turns: 19,
-                frame_turns: 20,
-                frame_owner_turns: 21,
-            })
-        );
-        assert_eq!(cyw43_dpc_client_counters(5), None);
-        reset_cyw43_dpc_client_counters();
-        assert_eq!(CYW43_DPC_CLIENT_GENERATION.load(Ordering::Acquire), 0);
-        assert_eq!(
-            cyw43_dpc_client_counters(0),
-            Some(Cyw43DpcClientCounters::default())
-        );
-        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

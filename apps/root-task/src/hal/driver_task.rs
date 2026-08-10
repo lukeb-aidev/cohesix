@@ -25,7 +25,8 @@ use pi4_driver_abi::{
     DriverRuntimeContinuationGrant, DriverRuntimeCounterSnapshot,
     DriverRuntimeCyw43BusEpisodeRecord, DriverRuntimeCyw43CommandDescriptor,
     DriverRuntimeCyw43DpcChildTimingEntry, DriverRuntimeCyw43DpcChildTimingRecord,
-    DriverRuntimeDpcEventRing, DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
+    DriverRuntimeCyw43DpcClientRecord, DriverRuntimeDpcEventRing,
+    DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
     DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
@@ -41,6 +42,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET, DRIVER_RUNTIME_CYW43_COMMAND_AUX,
     DRIVER_RUNTIME_CYW43_COMMAND_DESCRIPTOR_OFFSET, DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_BYTES,
     DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_ENTRY_CAP, DRIVER_RUNTIME_CYW43_DPC_CHILD_TIMING_OFFSET,
+    DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES, DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET,
     DRIVER_RUNTIME_CYW43_FLAG_STEADY_TX_SERVICE_LEASE, DRIVER_RUNTIME_CYW43_OP_CONTROL_EXCHANGE,
     DRIVER_RUNTIME_CYW43_OP_ETH_TX, DRIVER_RUNTIME_CYW43_PERSISTENT_PARENT_TIMEOUT_US,
     DRIVER_RUNTIME_CYW43_SDIO_CHILD_WORST_CASE_US, DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
@@ -8346,6 +8348,21 @@ fn driver_task_read_cyw43_bus_episode_record(
 }
 
 #[cfg(feature = "kernel")]
+fn driver_task_read_cyw43_dpc_client_record(
+    record_ptr: usize,
+) -> Option<DriverRuntimeCyw43DpcClientRecord> {
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES);
+    let view = DriverTaskSharedRecordView::new(record_ptr, record_bytes)?;
+    let mut words = [0; pi4_driver_abi::DRIVER_RUNTIME_CYW43_DPC_CLIENT_WORDS];
+    let mut index = 0usize;
+    while index < words.len() {
+        words[index] = view.read_u32(index * core::mem::size_of::<u32>())?;
+        index = index.saturating_add(1);
+    }
+    Some(DriverRuntimeCyw43DpcClientRecord::from_le_words(words))
+}
+
+#[cfg(feature = "kernel")]
 fn driver_task_read_cyw43_dpc_child_timing_record(
     record_ptr: usize,
 ) -> Option<DriverRuntimeCyw43DpcChildTimingRecord> {
@@ -8648,6 +8665,54 @@ pub(crate) fn driver_task_cyw43_bus_episode_snapshot() -> Option<DriverRuntimeCy
 {
     let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
     driver_task_cyw43_bus_episode_snapshot_for_slot(slot)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_cyw43_dpc_client_snapshot_for_slot(
+    slot: &DriverTaskCommandSlot,
+) -> Option<DriverRuntimeCyw43DpcClientRecord> {
+    const SNAPSHOT_ATTEMPTS: usize = 3;
+
+    let record_bytes = usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_BYTES);
+    let record_ptr = driver_task_cyw43_rx_batch_contiguous_root_span(
+        slot,
+        usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET),
+        record_bytes,
+    )?;
+    if !record_ptr.is_multiple_of(core::mem::align_of::<DriverRuntimeCyw43DpcClientRecord>()) {
+        return None;
+    }
+
+    let mut attempt = 0usize;
+    while attempt < SNAPSHOT_ATTEMPTS {
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let first = driver_task_read_cyw43_dpc_client_record(record_ptr)?;
+        driver_task_shared_load_barrier();
+        driver_task_ring_invalidate_root_range(record_ptr, record_bytes);
+        let second = driver_task_read_cyw43_dpc_client_record(record_ptr)?;
+        driver_task_counter_add(&slot.counters.cache_invalidate_ops, 2);
+        driver_task_counter_add(
+            &slot.counters.cache_invalidate_bytes,
+            record_bytes.saturating_mul(2),
+        );
+        if let Some(snapshot) = DriverRuntimeCyw43DpcClientRecord::stable_snapshot(first, second) {
+            return Some(snapshot);
+        }
+        attempt = attempt.saturating_add(1);
+    }
+    None
+}
+
+/// Return one stable, passive current CYW43 DPC-client accounting record.
+///
+/// The sequence-last runtime record is the only current source. Root never
+/// writes it or turns its contents into admission, signal, scheduling, retry,
+/// recovery, or physical-owner authority.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_cyw43_dpc_client_snapshot() -> Option<DriverRuntimeCyw43DpcClientRecord> {
+    let slot = driver_task_slot_for_contract(CYW43_WIFI_DRIVER_TASK_CONTRACT)?;
+    driver_task_cyw43_dpc_client_snapshot_for_slot(slot)
 }
 
 #[cfg(feature = "kernel")]
@@ -17547,6 +17612,7 @@ const fn driver_task_ring_usb_enum_controller_reset_phase(phase: u32) -> bool {
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN
+            | DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN
             | DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN
     )
@@ -24990,6 +25056,56 @@ mod tests {
         let words = staged.to_le_words();
         pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
         assert_eq!(driver_task_cyw43_bus_episode_snapshot_for_slot(&slot), None,);
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_dpc_client_reader_is_stable_passive_and_sequence_last() {
+        let slot = DriverTaskCommandSlot::new();
+        let mut pages: [Box<AlignedDriverTaskRing>;
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES] = std::array::from_fn(|_| {
+            Box::new(AlignedDriverTaskRing(
+                [0u32; DRIVER_TASK_RING_PAGE_BYTES / core::mem::size_of::<u32>()],
+            ))
+        });
+        for (index, page) in pages.iter_mut().enumerate() {
+            slot.shared_frame_caps[index].store(index.saturating_add(1), Ordering::Release);
+            slot.shared_frame_root_ptrs[index]
+                .store(page.0.as_mut_ptr() as usize, Ordering::Release);
+        }
+        slot.shared_frame_count.store(
+            DRIVER_RUNTIME_CYW43_RX_BATCH_REQUIRED_SHARED_PAGES,
+            Ordering::Release,
+        );
+
+        let relative = usize::from(DRIVER_RUNTIME_CYW43_DPC_CLIENT_OFFSET)
+            .checked_sub(usize::from(DRIVER_RUNTIME_SHARED_PAYLOAD_OFFSET_BASE))
+            .expect("DPC client record lies in the shared arena");
+        let page_index = relative / DRIVER_TASK_RING_PAGE_BYTES;
+        let page_offset = relative % DRIVER_TASK_RING_PAGE_BYTES;
+        let record = DriverRuntimeCyw43DpcClientRecord {
+            publication_sequence: 23,
+            physical_epoch: 5,
+            consumer_sequence: 2_788,
+            rearms: 167,
+            source_samples: 2_788,
+            turns: 3_100,
+            ..DriverRuntimeCyw43DpcClientRecord::empty()
+        }
+        .commit();
+        let first_word = page_offset / core::mem::size_of::<u32>();
+        let words = record.to_le_words();
+        pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
+        assert_eq!(
+            driver_task_cyw43_dpc_client_snapshot_for_slot(&slot),
+            Some(record),
+        );
+
+        let mut staged = record;
+        staged.committed_publication_sequence = 0;
+        let words = staged.to_le_words();
+        pages[page_index].0[first_word..first_word + words.len()].copy_from_slice(&words);
+        assert_eq!(driver_task_cyw43_dpc_client_snapshot_for_slot(&slot), None);
     }
 
     #[cfg(feature = "kernel")]
@@ -32695,6 +32811,7 @@ mod tests {
             DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_BEGIN,
             DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_WAIT_BEGIN,
             DRIVER_RUNTIME_RING_PROGRESS_USB_CNR_WAIT_BEGIN,
+            DRIVER_RUNTIME_RING_PROGRESS_USB_RESET_DONE,
             DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_BEGIN,
             DRIVER_RUNTIME_RING_PROGRESS_USB_RUN_WAIT_BEGIN,
         ] {

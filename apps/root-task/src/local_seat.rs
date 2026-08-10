@@ -1867,6 +1867,102 @@ pub struct LocalSeatDisplayTrace {
     pub superseded_bytes: u64,
 }
 
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+fn format_usb_keyboard_command_ready_receipt(
+    clean_polls: u8,
+    no_reply_streak: u64,
+    recovery_pending: bool,
+) -> heapless::String<192> {
+    let mut line = heapless::String::<192>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "[local-seat] usb keyboard command-ready action=enable-command-input source=linked-runtime-hid clean_polls={} no_reply={} recovery_pending={}",
+            clean_polls,
+            no_reply_streak,
+            if recovery_pending { "yes" } else { "no" },
+        ),
+    );
+    line
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+fn format_usb_keyboard_command_ready_input_detail(
+    keyboard: LocalSeatKeyboardTrace,
+) -> heapless::String<160> {
+    let mut line = heapless::String::<160>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "usb: command_ready_input source=linked-runtime-hid arming_bytes={} queued={} accepted={}",
+            keyboard.arming_bytes, keyboard.queued_bytes, keyboard.accepted_bytes,
+        ),
+    );
+    line
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+fn format_usb_keyboard_command_ready_delivery_detail(
+    keyboard: LocalSeatKeyboardTrace,
+) -> heapless::String<128> {
+    let mut line = heapless::String::<128>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "usb: command_ready_delivery source=linked-runtime-hid drained={} echoed={}",
+            keyboard.drained_bytes, keyboard.echoed_bytes,
+        ),
+    );
+    line
+}
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )
+))]
+fn format_usb_keyboard_command_ready_display_detail(
+    display: LocalSeatDisplayTrace,
+) -> heapless::String<128> {
+    let mut line = heapless::String::<128>::new();
+    let _ = core::fmt::Write::write_fmt(
+        &mut line,
+        format_args!(
+            "usb: command_ready_display source=linked-runtime-hid hdmi_pending={} hdmi_submitted={}",
+            display.pending_bytes, display.submitted_frames,
+        ),
+    );
+    line
+}
+
 /// Runtime state for local-seat keyboard ingress and mirrored line egress.
 ///
 /// This state is bounded by manifest values (`line_bytes`, `buffer_lines`) and
@@ -2992,29 +3088,21 @@ impl LocalSeatRuntime {
             self.hdmi_keyboard_busy_line_emitted = false;
             let keyboard = self.keyboard_trace();
             let display = self.display_trace();
-            let mut line = heapless::String::<320>::new();
-            let _ = core::fmt::Write::write_fmt(
-                &mut line,
-                format_args!(
-                    "[local-seat] usb keyboard command-ready action=enable-command-input clean_polls={} arming_bytes={} queued={} accepted={} drained={} echoed={} no_reply={} recovery_pending={} hdmi_pending={} hdmi_submitted={}",
-                    self.keyboard_post_first_byte_clean_polls,
-                    keyboard.arming_bytes,
-                    keyboard.queued_bytes,
-                    keyboard.accepted_bytes,
-                    keyboard.drained_bytes,
-                    keyboard.echoed_bytes,
-                    keyboard.driver_task_no_reply_streak,
-                    if keyboard.recovery_aux_pending { "yes" } else { "no" },
-                    display.pending_bytes,
-                    display.submitted_frames,
-                ),
+            let line = format_usb_keyboard_command_ready_receipt(
+                self.keyboard_post_first_byte_clean_polls,
+                keyboard.driver_task_no_reply_streak,
+                keyboard.recovery_aux_pending,
             );
-            let console_seq = boot_log::next_console_event_seq();
-            boot_log::force_uart_line_raw_and_log_without_prompt_refresh(
-                line.as_str(),
-                console_seq,
-            );
-            boot_log::set_serial_prompt_refresh_after_logs(true);
+            // EventPump is the sole serial projector for this receipt. Retain
+            // the source record here without a pre-cutover raw-UART fallback,
+            // or one early transition could appear twice on serial.
+            crate::log_buffer::append_log_line(line.as_str());
+            let input_detail = format_usb_keyboard_command_ready_input_detail(keyboard);
+            crate::log_buffer::append_log_line(input_detail.as_str());
+            let delivery_detail = format_usb_keyboard_command_ready_delivery_detail(keyboard);
+            crate::log_buffer::append_log_line(delivery_detail.as_str());
+            let display_detail = format_usb_keyboard_command_ready_display_detail(display);
+            crate::log_buffer::append_log_line(display_detail.as_str());
         }
         self.emit_linked_hdmi_console_ready_if_due(self.linked_usb_command_input_ready());
     }
@@ -3687,6 +3775,25 @@ impl LocalSeatRuntime {
         self.hdmi_keyboard_command_ready_latched && self.linked_usb_command_input_ready()
     }
 
+    /// Format the bounded canonical receipt for EventPump serial projection.
+    #[cfg(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    ))]
+    #[must_use]
+    pub(crate) fn usb_keyboard_command_ready_receipt_line(&self) -> Option<heapless::String<192>> {
+        if !self.usb_keyboard_command_ready_latched() {
+            return None;
+        }
+        Some(format_usb_keyboard_command_ready_receipt(
+            self.keyboard_post_first_byte_clean_polls,
+            self.keyboard_poll_no_reply_streak,
+            self.keyboard_recovery_aux_pending,
+        ))
+    }
+
     /// Return whether USB keyboard command input has been admitted.
     #[cfg(not(all(
         feature = "kernel",
@@ -3697,6 +3804,20 @@ impl LocalSeatRuntime {
     #[must_use]
     pub const fn usb_keyboard_command_ready_latched(&self) -> bool {
         false
+    }
+
+    /// Host and non-Pi builds have no linked USB command-ready receipt.
+    #[cfg(not(all(
+        feature = "kernel",
+        feature = "usb",
+        target_arch = "aarch64",
+        target_os = "none"
+    )))]
+    #[must_use]
+    pub(crate) const fn usb_keyboard_command_ready_receipt_line(
+        &self,
+    ) -> Option<heapless::String<192>> {
+        None
     }
 
     /// Return whether queued keyboard bytes may enter the console parser.
@@ -11570,6 +11691,53 @@ mod tests {
                 ..endpoint_ready
             },
         ));
+    }
+
+    #[test]
+    fn usb_command_ready_receipt_and_details_fit_bounded_log_records() {
+        let keyboard = LocalSeatKeyboardTrace {
+            queued_bytes: usize::MAX,
+            accepted_bytes: u64::MAX,
+            arming_bytes: u64::MAX,
+            drained_bytes: u64::MAX,
+            echoed_bytes: u64::MAX,
+            driver_task_no_reply_streak: u64::MAX,
+            recovery_aux_pending: true,
+            ..LocalSeatKeyboardTrace::default()
+        };
+        let display = LocalSeatDisplayTrace {
+            pending_bytes: usize::MAX,
+            submitted_frames: u64::MAX,
+            ..LocalSeatDisplayTrace::default()
+        };
+
+        let receipt = format_usb_keyboard_command_ready_receipt(
+            u8::MAX,
+            keyboard.driver_task_no_reply_streak,
+            keyboard.recovery_aux_pending,
+        );
+        let input = format_usb_keyboard_command_ready_input_detail(keyboard);
+        let delivery = format_usb_keyboard_command_ready_delivery_detail(keyboard);
+        let display = format_usb_keyboard_command_ready_display_detail(display);
+
+        assert!(receipt
+            .starts_with("[local-seat] usb keyboard command-ready action=enable-command-input "));
+        assert!(receipt.ends_with("recovery_pending=yes"));
+        assert!(input.ends_with("accepted=18446744073709551615"));
+        assert!(delivery.ends_with("echoed=18446744073709551615"));
+        assert!(display.ends_with("hdmi_submitted=18446744073709551615"));
+        for line in [
+            receipt.as_str(),
+            input.as_str(),
+            delivery.as_str(),
+            display.as_str(),
+        ] {
+            assert!(
+                line.len() <= 160,
+                "ordered log payload is too large: {line}"
+            );
+            assert!(line.len() <= crate::serial::DEFAULT_LINE_CAPACITY);
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "usb"))]

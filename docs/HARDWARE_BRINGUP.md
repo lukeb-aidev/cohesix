@@ -477,11 +477,15 @@ The first serial `cohesix>` prompt is not permission to type on the USB local
 seat. HDMI can first show `USB controller starting...` and bounded
 `stage=controller|keyboard-enumeration|first-report` feedback while its
 interactive prompt remains withheld. A stage change is shown immediately; an
-unchanged stage is repeated at most once every two seconds. The terminal
-`USB console ready` line reports observed controller, enumeration, command, and
-total milliseconds. It is a passive EventPump observation of the same
-command-readiness transition and may appear after the local seat has released
-the prompt, so do not require either record/prompt ordering. Require instead
+unchanged stage is repeated at most once every two seconds. At command
+readiness, local-seat retains the bounded canonical `[local-seat] usb keyboard
+command-ready action=enable-command-input ...` receipt exactly once in
+`queen.log`; its verbose counter detail stays log-only. EventPump is the sole
+serial projector and emits that receipt exactly once immediately before the
+terminal `[drivers] USB console ready` line through the existing HighImpact
+output path. The latter reports observed controller, enumeration, command, and
+total milliseconds. This passive pair may appear after the local seat has
+released the prompt, so do not require receipt/prompt ordering. Require instead
 that prompt release itself follows USB command readiness and healthy display
 retry state. These records observe the existing retained USB frontier and do
 not add a poll, retry, wake, completion, command, ABI field, or hardware owner.
@@ -1271,6 +1275,27 @@ must not access CYW43's private RX-batch region. CYW43 writes the bounded joined
 entries plus fixed header end at 49,984, before the private region ends at
 53,248. Root may read it, but SDIO may not.
 
+The current DPC-client truth is the immediately following cache-isolated
+128-byte `DriverRuntimeCyw43DpcClientRecord` at shared offsets
+49,984-50,111 (`[49,984, 50,112)`). CYW43 is the sole writer. At existing
+initialization, quiescent owner-rearm, and terminal-fault checkpoints it clears
+the final commit, writes and cleans the exact physical epoch, live consumer,
+rearm/error/cause/turn/frame body, then repeats a nonzero publication sequence
+in the final word. Root stable-double-reads that record only inside an unchanged
+live-ring pair (`ring -> record -> ring`) and accepts exact physical-epoch and
+live-consumer matches. Torn, raced, or stale samples are acceptance-red and
+request a bounded rerun; they grant no work, notification, wake, issue, retry,
+rearm, recovery, deadline, scheduling, or physical-owner authority. This is the
+current as-built source under reopened task
+`m26b-wifi-sdio-notification-dpc-closure`; the additive v11 completion trace is
+historical/compatibility evidence only.
+
+A production `wifi diag` binds that DPC authority only inside the exact command
+window `wifi: debug subcommand=diag action=begin` -> adjacent
+accounting/scope/truth triplet -> matching `wifi: diag_begin`. A missing,
+malformed, clipped, or cross-command sample is acceptance-red and requires a
+bounded rerun; an older healthy triplet cannot satisfy the current command.
+
 Use only exact physical-epoch, DPC-event, child-sequence,
 descriptor-fingerprint, typed action/I/O phase/engine, and
 sequence-last-publication matches from the same slow sample. Compare
@@ -1350,6 +1375,28 @@ wifi: gate8 retained_frontier=yes pair_epoch=<p> generation=<n> subgate=<token> 
 wifi: root rx_hint bound=<yes|no> badge=<n> authority=none condition=durable-service-state
 wifi: root rx_hint_counters polls=<n> hits=<n>
 ```
+
+The current Gate 7/Gate 8 proof is one bracketed diagnostic transaction:
+
+```text
+wifi: diag_begin id=<id> pair_epoch=<pair> generation=<gen> snapshot=current
+wifi: gate7_retained id=<id> src=sm status=pass h=7a>7b>7c>7d>7e pair=<pair> gen=<gen> ... snapshot=current
+wifi: gate 8 subgate=<8a..8h> status=<pass|pending|fail> pair_epoch=<pair> generation=<gen> blocker=<reason>
+wifi: diag_complete id=<id> causal=yes detail=<yes|no> scope=current snapshot=current pair=<pair> gen=<gen> front=<frontier> status=<status> block=<reason>
+```
+
+Require a nonzero `id`, exact matching begin/complete `id`, `pair`, and
+`generation`, a full compact Gate 7 receipt, and Gate 8 rows from the same
+pair/generation between them. A clipped Gate 8 detail block may be recovered
+only from its exact current `diag_complete`; standalone, prior, reordered,
+scrubbed, malformed, or cross-identity rows fail closed. The transaction is
+passive and cannot service or recover Wi-Fi. On the compact Gate 7 row,
+`src=sm` means current retained host-EAPOL state-machine proof; it is not a
+Gate 8 inference or permission to reconstruct missing history.
+When the outer `wifi: debug subcommand=diag action=complete` row is present, it
+must follow the matching `diag_complete`; a capture clipped after the inner
+terminal may still use that exact inner terminal without inventing the outer
+row.
 
 The normalizer treats the transition-count and fault records as independent:
 `WIFI_PRIORITY_EPISODE_COUNTS_SCOPE` and
@@ -2651,13 +2698,20 @@ ICMP, TCP, `.coh`, and pressure evidence requires
 zero. A nonzero count is fault containment, not normal traffic progress, even
 if the exact request later terminates.
 
-For the current 252-byte v11 trace, retain the fifth passive `wifi diag` line
-after the byte-stable 196-byte v10 prefix:
+For current images, derive the fifth passive `wifi diag` line from the stable
+128-byte sequence-last DPC-client record at shared offset 49,984, paired with
+unchanged live-ring reads before and after it. The record must match that
+ring's exact physical epoch and live consumer sequence. CYW43 publishes it only
+at the existing initialization, quiescent owner-rearm, and terminal-fault
+checkpoints. A transient stale/raced sample is acceptance-red and requests a
+bounded rerun; it never authorizes recovery or owner work:
 
 ```text
 CYW43_SDIO_DPC_CAUSE samples=<n> frm=<n> hm=<n> fcc=<n> fcs=<n> ca=<n> other=<n> spur=<n> done=<n> dpc=<n> child=<n> owner=<n> fdpc=<n> fown=<n>
 ```
 
+The additive 252-byte v11 completion trace retains the same fields only for
+historical log decoding and compatibility; it is not current client truth.
 One `samples` episode is counted for each exact initial SDIO interrupt-status
 capture before the W1C ownership mask is applied. Cause counters may overlap:
 `frm`, `hm`, `fcc`, `fcs`, and `ca` are FRAME, HOSTMAIL, FC_CHANGE, FC_STATE,
@@ -3074,6 +3128,12 @@ first-report or command-ready proof is service demand only: EventPump grants one
 bounded `LocalSeat` opportunity but must not report physical input, retain the
 post-Dispatch CYW43 operator fence, or block the following Network turn unless
 an actual decoded or buffered byte or physical response exists.
+Until a current linked-runtime HID byte is accepted at parser ingress, the
+truthful diagnostic is `usb-physical-input-unproven`. `proof_gate=10`, command
+readiness, and first-report readiness do not imply a first byte and must not
+produce a `usb-post-first-byte-*` blocker. During controller initialization,
+the existing `USB_RESET_DONE` progress edge stays in the already bounded
+extended controller-reset timeout class; it creates no new retry or lifetime.
 
 Before constructing the EventPump, Pi root completes the current synchronous
 PCIe HAL prerequisite as local bookkeeping and authority setup for the retained
