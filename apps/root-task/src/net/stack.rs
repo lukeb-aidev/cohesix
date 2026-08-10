@@ -96,6 +96,77 @@ const TCP_SERVICE_BYTES_PER_TURN: u32 =
 const MAX_TCP_SMOKE_RECV_CHUNKS_PER_POLL: usize = 2;
 const TCP_SMOKE_RX_BUFFER: usize = 256;
 const TCP_SMOKE_TX_BUFFER: usize = 256;
+
+/// Passive receipt for the exact WiFi DHCP start-to-bound transition.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43OldgoodDhcpReceipt {
+    pub generation: u32,
+    pub transaction_id: u32,
+    pub start_now_ms: u64,
+    pub ip: [u8; 4],
+    pub prefix_len: u8,
+    pub gateway: [u8; 4],
+    pub server_id: [u8; 4],
+    pub lease_seconds: u32,
+    pub bound: bool,
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_OLDGOOD_DHCP_RECEIPT: Mutex<Option<Cyw43OldgoodDhcpReceipt>> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_oldgood_dhcp_receipt() {
+    *CYW43_OLDGOOD_DHCP_RECEIPT.lock() = None;
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_oldgood_dhcp_start(generation: u32, transaction_id: u32, now_ms: u64) {
+    *CYW43_OLDGOOD_DHCP_RECEIPT.lock() = (generation != 0).then_some(Cyw43OldgoodDhcpReceipt {
+        generation,
+        transaction_id,
+        start_now_ms: now_ms,
+        ip: [0; 4],
+        prefix_len: 0,
+        gateway: [0; 4],
+        server_id: [0; 4],
+        lease_seconds: 0,
+        bound: false,
+    });
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_oldgood_dhcp_bound(generation: u32, lease: &DhcpLease) {
+    let mut slot = CYW43_OLDGOOD_DHCP_RECEIPT.lock();
+    let Some(receipt) = slot.as_mut() else {
+        return;
+    };
+    let gateway = lease.gateway.unwrap_or([0; 4]);
+    if generation == 0
+        || receipt.generation != generation
+        || lease.ip == [0; 4]
+        || gateway == [0; 4]
+    {
+        *slot = None;
+        return;
+    }
+    receipt.ip = lease.ip;
+    receipt.prefix_len = lease.prefix_len;
+    receipt.gateway = gateway;
+    receipt.server_id = lease.server_id;
+    receipt.lease_seconds = lease.lease_seconds;
+    receipt.bound = true;
+}
+
+/// Return the current complete WiFi DHCP receipt without mutating the stack.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_oldgood_dhcp_receipt() -> Option<Cyw43OldgoodDhcpReceipt> {
+    let receipt = (*CYW43_OLDGOOD_DHCP_RECEIPT.lock())?;
+    (receipt.bound
+        && receipt.generation != 0
+        && receipt.generation == crate::drivers::driver_task_net::cyw43_connection_generation())
+    .then_some(receipt)
+}
 // Full networking can concurrently own one raw ICMP responder, two console
 // acceptors, DHCP, UDP beacon/echo, inbound/outbound smoke sockets, and the
 // outbound probe.
@@ -4371,6 +4442,10 @@ impl<D: NetDevice> NetStack<D> {
                 client.reset();
             }
             self.dhcp_started = false;
+            #[cfg(feature = "kernel")]
+            if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+                clear_cyw43_oldgood_dhcp_receipt();
+            }
             self.dhcp_restart_after_ms = None;
             if let Some(handle) = self.dhcp_handle {
                 let socket = self.sockets.get_mut::<UdpSocket>(handle);
@@ -5100,6 +5175,14 @@ impl<D: NetDevice> NetStack<D> {
         if dhcp_restart_required_after_mac_sync(self.mode, self.ip, self.dhcp_started) {
             if let Some(client) = self.dhcp.as_mut() {
                 client.start(device_mac.0, now_ms, self.wifi_connection_generation);
+                #[cfg(feature = "kernel")]
+                if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+                    record_cyw43_oldgood_dhcp_start(
+                        self.wifi_connection_generation,
+                        client.transaction_id(),
+                        now_ms,
+                    );
+                }
                 self.dhcp_restart_after_ms = None;
                 info!(
                     "[dhcp] restart reason=hardware-address-sync interface={} mac={} generation={} xid=0x{:08x} now_ms={}",
@@ -5871,6 +5954,14 @@ impl<D: NetDevice> NetStack<D> {
         self.dhcp_started = true;
         self.dhcp_restart_after_ms = None;
         self.wifi_dhcp_eapol_settle_logged = false;
+        #[cfg(feature = "kernel")]
+        if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            record_cyw43_oldgood_dhcp_start(
+                self.wifi_connection_generation,
+                client.transaction_id(),
+                now_ms,
+            );
+        }
         info!(
             "[dhcp] start ready interface={} generation={} xid=0x{:08x} now_ms={}",
             self.device.interface_label(),
@@ -5906,6 +5997,10 @@ impl<D: NetDevice> NetStack<D> {
                     restart_after_ms
                 );
                 self.dhcp_started = false;
+                #[cfg(feature = "kernel")]
+                if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+                    clear_cyw43_oldgood_dhcp_receipt();
+                }
                 self.dhcp_restart_after_ms = Some(restart_after_ms);
                 true
             }
@@ -5914,6 +6009,10 @@ impl<D: NetDevice> NetStack<D> {
 
     fn apply_dhcp_lease(&mut self, lease: DhcpLease, now_ms: u64) {
         self.dhcp_restart_after_ms = None;
+        #[cfg(feature = "kernel")]
+        if D::driver_task_contract() == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+            record_cyw43_oldgood_dhcp_bound(self.wifi_connection_generation, &lease);
+        }
         let ip = Ipv4Address::new(lease.ip[0], lease.ip[1], lease.ip[2], lease.ip[3]);
         let gateway = lease
             .gateway
@@ -9666,6 +9765,50 @@ mod tests {
 
     use super::*;
     use smoltcp::phy::{Loopback, Medium};
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_oldgood_dhcp_receipt_is_exact_generation_bound_and_resettable() {
+        let _guard = NET_STACK_STORAGE_TEST_LOCK.lock();
+        clear_cyw43_oldgood_dhcp_receipt();
+        record_cyw43_oldgood_dhcp_start(7, u32::MAX, u64::MAX);
+        assert_eq!(
+            *CYW43_OLDGOOD_DHCP_RECEIPT.lock(),
+            Some(Cyw43OldgoodDhcpReceipt {
+                generation: 7,
+                transaction_id: u32::MAX,
+                start_now_ms: u64::MAX,
+                ip: [0; 4],
+                prefix_len: 0,
+                gateway: [0; 4],
+                server_id: [0; 4],
+                lease_seconds: 0,
+                bound: false,
+            }),
+        );
+        let lease = DhcpLease {
+            ip: [192, 168, 86, 154],
+            prefix_len: 24,
+            gateway: Some([192, 168, 86, 1]),
+            server_id: [192, 168, 86, 1],
+            lease_seconds: u32::MAX,
+        };
+        record_cyw43_oldgood_dhcp_bound(7, &lease);
+        let receipt = CYW43_OLDGOOD_DHCP_RECEIPT
+            .lock()
+            .expect("matching DHCP generation is retained");
+        assert!(receipt.bound);
+        assert_eq!(receipt.transaction_id, u32::MAX);
+        assert_eq!(receipt.start_now_ms, u64::MAX);
+        assert_eq!(receipt.lease_seconds, u32::MAX);
+
+        record_cyw43_oldgood_dhcp_start(8, 1, 2);
+        record_cyw43_oldgood_dhcp_bound(9, &lease);
+        assert_eq!(*CYW43_OLDGOOD_DHCP_RECEIPT.lock(), None);
+        record_cyw43_oldgood_dhcp_start(0, 1, 2);
+        assert_eq!(*CYW43_OLDGOOD_DHCP_RECEIPT.lock(), None);
+        clear_cyw43_oldgood_dhcp_receipt();
+    }
 
     #[test]
     fn console_tcp_socket_disables_delayed_ack() {

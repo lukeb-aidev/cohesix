@@ -347,6 +347,18 @@ def _oldgood_usb_replay_lines() -> list[str]:
     ]
 
 
+def _retained_usb_oldgood_lines() -> list[str]:
+    return [
+        "USB_OLDGOOD_RETAINED v=1 task=12 token=0xdeadbeef "
+        "link_epoch=7 link_token=0xc001d00d epoch=3 seq=14 "
+        "mask=0x00003fff topology=0x10230581 input_gen=9 commit=14 "
+        "source=linked-runtime-hid",
+        "USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root "
+        "owners=driver-owned+driver-owned descriptors=sealed+sealed "
+        "command_ready=yes proof_gate=14 blocker=none root_pointer=no",
+    ]
+
+
 def _oldgood_wifi_replay_lines() -> list[str]:
     return [
         "CYW43_BOOTSTRAP_SUPERVISOR attempt=1 status=begin backoff_ms=0 "
@@ -1305,6 +1317,89 @@ def test_gate_proof_requires_usb_oldgood_replay_for_ready(
         "\n".join(_strong_driver_task_proof_lines()),
         encoding="utf-8",
     )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-usb-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 2
+    assert "USB_OLDGOOD_REPLAY=no" in result.stdout
+    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+
+
+def test_gate_proof_accepts_identity_bound_usb_oldgood_retained_pair(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The current adjacent runtime receipt closes only the old-good gate."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text(
+        "\n".join(
+                [
+                    *_strong_driver_task_proof_lines(),
+                    *_oldgood_usb_replay_lines()[-4:],
+                    *_retained_usb_oldgood_lines(),
+                ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        [
+            str(SCRIPT_PATH),
+            "--normalize-only",
+            "--require-usb-ready",
+            "--venv",
+            str(venv_dir),
+            "--log",
+            str(log_path),
+        ],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0
+    assert "USB_OLDGOOD_REPLAY=yes" in result.stdout
+    assert "USB_OLDGOOD_MISSING=none" in result.stdout
+
+
+def test_gate_proof_rejects_uncommitted_usb_oldgood_retained_pair(
+    tmp_path: pathlib.Path,
+) -> None:
+    """A torn sequence-last USB receipt cannot satisfy ready acceptance."""
+
+    venv_dir = REPO_ROOT / ".venv"
+    if not (venv_dir / "bin" / "python").is_file():
+        pytest.skip("current Python is not inside a venv-like directory")
+
+    lines = [
+        *_strong_driver_task_proof_lines(),
+        *_oldgood_usb_replay_lines()[-4:],
+        *(
+            line.replace("commit=14", "commit=13")
+            for line in _retained_usb_oldgood_lines()
+        ),
+    ]
+    log_path = tmp_path / "pi4-serial.log"
+    log_path.write_text("\n".join(lines), encoding="utf-8")
 
     result = subprocess.run(
         [

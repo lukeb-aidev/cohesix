@@ -606,6 +606,50 @@ pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_MAGIC: u32 = 0x4359_5153;
 pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_VERSION: u16 = 2;
 /// Queue-state flag: this CYW43 generation is poisoned and cannot serve RX.
 pub const DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_FLAG_POISONED: u32 = 1 << 0;
+/// Fixed offset of the USB runtime's durable old-good replay receipt.
+///
+/// USB owns this range only in its role-local command ring. CYW43 and SDIO use
+/// overlapping numeric offsets in their distinct HAL-mapped ring pages; no
+/// physical command page aliases another runtime's record.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET: u16 = 192;
+/// Bytes in one commit-last USB old-good replay receipt.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES: u16 = 48;
+/// Magic value for a USB old-good replay receipt (`USOG`).
+pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_MAGIC: u32 = 0x5553_4f47;
+/// Layout version for [`DriverRuntimeUsbOldgoodReceipt`].
+pub const DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_VERSION: u16 = 1;
+/// USB old-good step: xHCI reached its runtime-owned ready terminal.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY: u32 = 1 << 0;
+/// USB old-good step: the linked runtime consumed a successful command event.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT: u32 = 1 << 1;
+/// USB old-good step: one live root port completed reset.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET: u32 = 1 << 2;
+/// USB old-good step: the root hub device was addressed.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED: u32 = 1 << 3;
+/// USB old-good step: the hub accepted SET_CONFIGURATION.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONFIGURED: u32 = 1 << 4;
+/// USB old-good step: the hub descriptor and xHCI hub context completed.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONTEXT: u32 = 1 << 5;
+/// USB old-good step: the selected downstream hub port completed power settle.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_POWER: u32 = 1 << 6;
+/// USB old-good step: the selected downstream hub port returned GET_STATUS.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_STATUS: u32 = 1 << 7;
+/// USB old-good step: the selected downstream hub port reached reset-ready.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_READY: u32 = 1 << 8;
+/// USB old-good step: the selected hub child entered its device probe.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CHILD_PROBE: u32 = 1 << 9;
+/// USB old-good step: the selected child exposed a boot-keyboard HID endpoint.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT: u32 = 1 << 10;
+/// USB old-good step: one interrupt-IN transfer was armed for that endpoint.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_INTERRUPT_IN: u32 = 1 << 11;
+/// USB old-good step: the runtime accepted its first provenance-safe HID report.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_REPORT: u32 = 1 << 12;
+/// USB old-good step: the runtime decoded its first linked-runtime HID byte.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE: u32 = 1 << 13;
+/// Exact complete ordered USB old-good step mask.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK: u32 = (1 << 14) - 1;
+/// Sticky receipt bit set when a lifecycle attempts a skipped/reordered step.
+pub const DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER: u32 = 1 << 31;
 /// Fixed offset of the SDIO owner's physical WiFi lifetime record.
 ///
 /// The record occupies the reserved gap immediately after the generic runtime
@@ -3719,6 +3763,175 @@ const _: () = {
     );
 };
 
+/// Passive, identity-bound receipt for one USB hub-keyboard old-good replay.
+///
+/// The isolated USB runtime clears `committed_publication_sequence`, writes the
+/// complete body, executes the shared-ring publication barrier, then repeats
+/// `publication_sequence` in the final aligned word. Readers accept only two
+/// identical valid samples and compare the descriptor and USB-to-PCIe link
+/// identities with the current generated contract. This record never grants a
+/// turn, signals a task, retries hardware, or replaces end-to-end input proof.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverRuntimeUsbOldgoodReceipt {
+    /// Fixed [`DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_MAGIC`] discriminator.
+    pub magic: u32,
+    /// [`DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_VERSION`].
+    pub version: u16,
+    /// Exact record bytes.
+    pub len: u16,
+    /// Generated USB driver-task key.
+    pub task_key: u32,
+    /// Sealed USB runtime descriptor identity token.
+    pub identity_token: u32,
+    /// Generated USB-to-PCIe link epoch.
+    pub link_epoch: u32,
+    /// Sealed USB-to-PCIe link token.
+    pub link_token: u32,
+    /// Nonzero controller/attach lifecycle represented by this receipt.
+    pub lifetime_epoch: u32,
+    /// Nonzero monotonic publication identity within this lifecycle.
+    pub publication_sequence: u32,
+    /// Ordered [`DRIVER_RUNTIME_USB_OLDGOOD_STEP_*`] prefix plus poison bit.
+    pub step_mask: u32,
+    /// Packed root-port, parent-hub, child-slot, and endpoint topology.
+    pub topology: u32,
+    /// Exact interrupt-IN transfer generation that produced the first byte.
+    pub input_generation: u32,
+    /// Sequence-last commit; exactly repeats `publication_sequence`.
+    pub committed_publication_sequence: u32,
+}
+
+impl DriverRuntimeUsbOldgoodReceipt {
+    /// Construct an identity-bound, uncommitted receipt for one new lifecycle.
+    #[must_use]
+    pub const fn new(
+        task_key: u32,
+        identity_token: u32,
+        link_epoch: u32,
+        link_token: u32,
+        lifetime_epoch: u32,
+    ) -> Self {
+        Self {
+            magic: DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_MAGIC,
+            version: DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_VERSION,
+            len: DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES,
+            task_key,
+            identity_token,
+            link_epoch,
+            link_token,
+            lifetime_epoch,
+            publication_sequence: 1,
+            step_mask: 0,
+            topology: 0,
+            input_generation: 0,
+            committed_publication_sequence: 0,
+        }
+    }
+
+    /// Canonical byte-zero record before the USB runtime publishes identity.
+    #[must_use]
+    pub const fn zeroed() -> Self {
+        Self {
+            magic: 0,
+            version: 0,
+            len: 0,
+            task_key: 0,
+            identity_token: 0,
+            link_epoch: 0,
+            link_token: 0,
+            lifetime_epoch: 0,
+            publication_sequence: 0,
+            step_mask: 0,
+            topology: 0,
+            input_generation: 0,
+            committed_publication_sequence: 0,
+        }
+    }
+
+    const fn ordered_prefix_valid(self) -> bool {
+        let steps = self.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK;
+        steps & steps.wrapping_add(1) == 0
+    }
+
+    const fn body_valid(self) -> bool {
+        let known_mask =
+            DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK | DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER;
+        let endpoint_seen = self.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT != 0;
+        let first_byte_seen = self.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE != 0;
+        self.magic == DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_MAGIC
+            && self.version == DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_VERSION
+            && self.len == DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES
+            && self.task_key != 0
+            && self.identity_token != 0
+            && self.link_epoch != 0
+            && self.link_token != 0
+            && self.lifetime_epoch != 0
+            && self.publication_sequence != 0
+            && self.step_mask & !known_mask == 0
+            && self.ordered_prefix_valid()
+            && endpoint_seen == (self.topology != 0)
+            && first_byte_seen == (self.input_generation != 0)
+    }
+
+    /// Return this valid staged body with its publication sequence committed.
+    #[must_use]
+    pub const fn commit(mut self) -> Self {
+        if self.body_valid() {
+            self.committed_publication_sequence = self.publication_sequence;
+        }
+        self
+    }
+
+    /// Whether this is one internally valid, sequence-last publication.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.body_valid() && self.committed_publication_sequence == self.publication_sequence
+    }
+
+    /// Whether this publication retains the complete unpoisoned 14-step replay.
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.valid()
+            && self.step_mask == DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK
+            && self.topology != 0
+            && self.input_generation != 0
+    }
+
+    /// Whether this lifecycle observed a skipped or reordered old-good step.
+    #[must_use]
+    pub const fn poisoned(self) -> bool {
+        self.valid() && self.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER != 0
+    }
+
+    /// Accept two identical, valid samples as one stable passive receipt.
+    ///
+    /// Callers must place their platform load/cache barriers between samples.
+    #[must_use]
+    pub fn stable_snapshot(first: Self, second: Self) -> Option<Self> {
+        if first == second && first.valid() {
+            Some(first)
+        } else {
+            None
+        }
+    }
+}
+
+const _: () = {
+    assert!(
+        DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET + DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES
+            <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+    );
+    assert!(core::mem::size_of::<DriverRuntimeUsbOldgoodReceipt>() == 48);
+    assert!(core::mem::align_of::<DriverRuntimeUsbOldgoodReceipt>() == 4);
+    assert!(
+        core::mem::offset_of!(
+            DriverRuntimeUsbOldgoodReceipt,
+            committed_publication_sequence
+        ) == 44
+    );
+};
+
 /// SDIO-owner identity for complete physical WiFi power lifetimes.
 ///
 /// `begun_epoch` is the sequence-last commit word for a new lifetime. The SDIO
@@ -6293,6 +6506,97 @@ mod tests {
         assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
+    }
+
+    #[test]
+    fn usb_oldgood_receipt_is_fixed_commit_last_identity_bound_and_fail_closed() {
+        assert_eq!(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET, 192);
+        assert_eq!(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES, 48);
+        assert_eq!(core::mem::size_of::<DriverRuntimeUsbOldgoodReceipt>(), 48);
+        assert_eq!(core::mem::align_of::<DriverRuntimeUsbOldgoodReceipt>(), 4);
+        assert_eq!(
+            core::mem::offset_of!(
+                DriverRuntimeUsbOldgoodReceipt,
+                committed_publication_sequence
+            ),
+            44
+        );
+        assert_eq!(DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK, 0x0000_3fff);
+        assert!(
+            DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET + DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES
+                <= DRIVER_RUNTIME_RING_FRAME_OFFSET
+        );
+
+        let staged = DriverRuntimeUsbOldgoodReceipt::new(1, 2, 3, 4, 5);
+        assert!(
+            !staged.valid(),
+            "publication remains uncommitted until the last word"
+        );
+        let begun = staged.commit();
+        assert!(begun.valid());
+        assert!(!begun.complete());
+        assert_eq!(
+            DriverRuntimeUsbOldgoodReceipt::stable_snapshot(begun, begun),
+            Some(begun)
+        );
+
+        let complete = DriverRuntimeUsbOldgoodReceipt {
+            publication_sequence: 14,
+            step_mask: DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK,
+            topology: 0x1132_0381,
+            input_generation: 17,
+            committed_publication_sequence: 0,
+            ..staged
+        }
+        .commit();
+        assert!(complete.valid());
+        assert!(complete.complete());
+
+        assert!(!DriverRuntimeUsbOldgoodReceipt {
+            committed_publication_sequence: 13,
+            ..complete
+        }
+        .valid());
+        assert!(!DriverRuntimeUsbOldgoodReceipt {
+            identity_token: 0,
+            ..complete
+        }
+        .valid());
+        assert!(!DriverRuntimeUsbOldgoodReceipt {
+            step_mask: DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY
+                | DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET,
+            topology: 0,
+            input_generation: 0,
+            committed_publication_sequence: 14,
+            ..complete
+        }
+        .valid());
+        assert!(!DriverRuntimeUsbOldgoodReceipt {
+            topology: 0,
+            ..complete
+        }
+        .valid());
+        assert!(!DriverRuntimeUsbOldgoodReceipt {
+            input_generation: 0,
+            ..complete
+        }
+        .valid());
+
+        let poisoned = DriverRuntimeUsbOldgoodReceipt {
+            step_mask: DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK
+                | DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER,
+            committed_publication_sequence: 0,
+            ..complete
+        }
+        .commit();
+        assert!(poisoned.valid());
+        assert!(poisoned.poisoned());
+        assert!(!poisoned.complete());
+        assert_eq!(
+            DriverRuntimeUsbOldgoodReceipt::stable_snapshot(complete, poisoned),
+            None
+        );
+        assert!(!DriverRuntimeUsbOldgoodReceipt::zeroed().valid());
     }
 
     #[test]

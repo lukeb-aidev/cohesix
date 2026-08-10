@@ -409,12 +409,24 @@ after every command:
 
 ```text
 netstats
+smp activity
 nettest
+netstats
 wifi diag
 usb diag
 usb status
-smp
 ```
+
+That ordering is the Wi-Fi helper path after the settled supervisor and DHCP
+checks: the retained `smp activity` prefix must precede the fresh nettest,
+terminal netstats, TCP, and DPC tail. The GENET path retains its existing
+`netstats`, `nettest`, final `netstats`, USB diagnostics, then `smp activity`
+order. The helper accepts a `cohesix>` prompt split across two bounded reads
+only when the prior read's final bytes and the next read are one physically
+contiguous stream. It carries at most the marker-length-minus-one tail into the
+next prompt wait; unrelated intervening bytes cannot complete the marker. This
+allows a prompt whose leading byte arrived with the guarded `ping` result
+without sending the next diagnostic early.
 
 `OK NETTEST detail=started run_generation=<n>` proves only admission. Wait at
 least 15 seconds, then issue the final `netstats` before continuing. It must
@@ -473,6 +485,33 @@ a serial `ping` and a USB-keyboard `ping` must still return. If any tail is
 absent, stop sending input and preserve the sample. A merged or overlapped
 serial transcript is not acceptance evidence.
 
+The isolated USB runtime also retains one 48-byte, commit-last old-good receipt
+at shared-ring offset 192. It must bind the current USB descriptor and sealed
+USB-to-PCIe link to one controller lifetime, then advance in exact order through
+xHCI ready, command event, root reset, hub address/configuration/context,
+hub-port power/status/readiness, child probe, HID endpoint, interrupt-IN, first
+report, and first byte. Root must stable-double-read one identical committed
+record. A skipped/reordered step, path/candidate stitch, stale identity, torn
+commit, or poisoned record is not `USB_OLDGOOD_REPLAY` proof. Normal endpoint
+rearm preserves the same receipt; endpoint recovery revokes it and a new
+controller lifecycle rebinds it.
+
+`usb status`, `usb dump-state`, and `usb diag` expose that receipt as one
+atomic physically adjacent pair:
+
+```text
+USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
+USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
+```
+
+Require the latest pair with `mask=0x00003fff`, nonzero identity/topology/input
+fields, `seq=commit`, `source=linked-runtime-hid`, USB and PCIe owners both
+`driver-owned`, both descriptors `sealed`, `command_ready=yes`,
+`proof_gate=14`, and `blocker=none`. Missing evidence is truthful `v=1` with
+zero identity/body fields and `source=none`; any gap, truncation, malformed or
+later reserved row, wrong identity, or uncommitted sequence fails closed. Active
+`usb enable-kbd` and `usb probe-kbd` commands emit neither old-good row.
+
 The first serial `cohesix>` prompt is not permission to type on the USB local
 seat. HDMI can first show `USB controller starting...` and bounded
 `stage=controller|keyboard-enumeration|first-report` feedback while its
@@ -490,6 +529,15 @@ that prompt release itself follows USB command readiness and healthy display
 retry state. These records observe the existing retained USB frontier and do
 not add a poll, retry, wake, completion, command, ABI field, or hardware owner.
 
+Endpoint completion is not terminal local-seat readiness until the current
+PCIe and USB descriptor replays and both registered driver-owner states are
+also present. When a report or input byte arrives first, `LocalSeat` keeps the
+single completion and bounded bytes private, leaves attach `Pending`, and
+releases them to the parser exactly once after both proof chains close. An
+already attached controller is not reinitialized merely to wait for that
+proof, an outstanding attach ticket cannot be discarded by a cached-ready
+shortcut, and failed service or recovery clears the deferred endpoint cache.
+
 After the HDMI prompt appears, verify that every typed character reaches the
 canonical command row, backspace stops at the prompt prefix, and held up/down
 arrows advance scrollback smoothly one completed viewport row at a time.
@@ -501,9 +549,11 @@ and display health; the banner is canonically re-admitted after fresh readiness
 and becomes visible through that healthy display service. Do not require a
 fault injection merely to exercise this branch on otherwise healthy hardware.
 
-This behavior retains the existing console grammar and fixed driver-task ABI.
-HAL still admits resources, the isolated USB runtime remains the sole xHCI/HID
-owner, and the isolated HDMI runtime remains the sole framebuffer renderer.
+This behavior retains the existing console grammar and physical authority.
+The additive fixed USB old-good receipt is passive evidence in the existing
+shared driver-task ring. HAL still admits resources, the isolated USB runtime
+remains the sole xHCI/HID owner, and the isolated HDMI runtime remains the sole
+framebuffer renderer.
 
 `usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
 `continuation=pending|terminal` state, cached runtime contract, verdict, and
@@ -661,6 +711,20 @@ It must also report `WIFI_GATE7_COMPLETE=yes`, the exact retained history
 `WIFI_GATE7_MISSING=none`. A latest-frontier `WIFI_SUBGATE=7e` cannot replace
 ordered proof of primary join, association/link, M1, M2/M3/M4 plus PTK/GTK,
 and secure release.
+For reopened 26b acceptance it must additionally report
+`WIFI_OLDGOOD_REPLAY=yes` and `WIFI_OLDGOOD_MISSING=none`. The newest complete
+retained prefix is one 37-line atomic `smp activity` batch: six compact current
+owner rows in serial, USB, HDMI, PCIe, CYW43, SDIO order followed immediately
+by 31 contiguous rows containing BEGIN, firmware/NVRAM/CLM hashes, the exact 26
+SDIO-engine-through-DHCP-bound steps, and a same-identity END. BEGIN requires
+`id=pair_epoch`, `attempt=1`, and `prefix_steps=26`. The normalized
+NVRAM upload length is 1,744 bytes; its hash still covers the immutable
+2,074-byte source artifact. Every row is at most 243 bytes, and the emitter
+reserves 32 further body rows for ordinary SMP output. A newer
+incomplete/malformed reserved record, later Join/Gate 8 lifecycle/recovery
+boundary, wrong owner/link seal, or cross-pair/generation tail revokes the
+older prefix. Netstats, authenticated TCP, terminal nettest, and healthy DPC
+must be fresh rows after END.
 
 ### 7. Prove Raw TCP Before REST
 

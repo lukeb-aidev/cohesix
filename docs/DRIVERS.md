@@ -626,6 +626,23 @@ reusable ownership pattern.
   existing steady keyboard turn even when no new HID report arrives; report
   count is not elapsed time and must not become the repeat clock.
 - Represent retained work as typed `Pending`, `Complete`, or `Failed`.
+- Retain the isolated USB runtime's old-good evidence in one fixed 48-byte,
+  pointer-free `DriverRuntimeUsbOldgoodReceipt` at shared-ring offset 192. The
+  ordered prefix is exactly: xHCI ready, command event, root-port reset, hub
+  addressed, hub configured, hub context ready, hub-port power, hub-port
+  status, hub-port ready, hub-child probe, HID endpoint, interrupt-IN, first
+  report, and first byte. Bind it to the USB task key and descriptor identity,
+  the sealed USB-to-PCIe link epoch/token, one nonzero controller lifetime, the
+  packed endpoint topology, and the exact first-byte input generation. Publish
+  the body with a nonzero monotonic sequence and repeat that sequence in the
+  final word only after the body is visible. Root accepts only two identical,
+  complete samples. A torn commit, skipped/reordered prefix, mixed candidate,
+  stale identity, or poisoned record fails closed.
+- Preserve the receipt across the normal rearm of the same interrupt-IN
+  endpoint. A new controller lifetime rebinds every identity, while endpoint
+  recovery revokes the prior receipt. A root- or hub-port candidate retry may
+  retain only its exact already-proved prefix; it must not stitch topology or
+  input from another path.
 - Give enumeration and recovery finite attempt and elapsed-time bounds.
 - Expose active, outstanding, and active-without-progress state separately;
   cached readiness must not hide a retained request that has stopped making
@@ -653,6 +670,16 @@ reusable ownership pattern.
   `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
   readiness alone must never be relabelled as first-byte evidence and cannot
   produce a `usb-post-first-byte-*` blocker.
+- Do not publish terminal keyboard readiness, or release a pre-proof HID byte
+  into the parser, until both current attach proof chains are complete: the
+  PCIe and USB descriptor replays and their registered driver-owned owner
+  states. If the linked endpoint completes first, retain that one completion
+  and its bounded bytes in the `LocalSeat` runtime, keep attach `Pending`, and
+  release the bytes exactly once after both proof chains become current. Do
+  not reinitialize an already attached controller merely because owner proof
+  is still catching up, and do not let a cached-ready shortcut discard an
+  outstanding retained attach ticket. Clear the cache on failed service or
+  recovery so stale bytes cannot cross lifetimes.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the
@@ -695,9 +722,10 @@ reusable ownership pattern.
   recovery; do not restart it for every repeat or grow an unbounded queue.
 - Allow display mirroring and redraw to degrade before serial or keyboard
   command liveness.
-- These local-seat rules change no console grammar, driver-task ABI, physical
-  owner, poller, retry path, or scheduling authority. USB remains the sole
-  xHCI/HID owner and HDMI remains the child-only framebuffer renderer.
+- These local-seat rules change no console grammar, physical owner, poller,
+  retry path, or scheduling authority. The additive fixed USB old-good receipt
+  is passive evidence in the existing shared driver-task ring. USB remains the
+  sole xHCI/HID owner and HDMI remains the child-only framebuffer renderer.
 
 ### 7.4 Network-device pattern
 
@@ -800,6 +828,57 @@ proof, never generic Gate 8 inference. Every intervening Gate 8 row carries the
 same pair and generation; and the closing `wifi: diag_complete id=<id> ... pair=<pair>
 gen=<gen> snapshot=current` repeats the complete identity. Standalone, prior,
 reordered, scrubbed, malformed, or cross-identity rows are not current proof.
+
+On a physical-console `smp` or `smp activity` request with Wi-Fi selected, a
+complete current old-good receipt is emitted before the ordinary activity
+report as one all-or-nothing 37-line batch. Its first six rows are compact
+current `DRIVER_TASK_OWNER_STATE` records in the exact order
+`serial-console`, `usb-keyboard`, `hdmi-text`, `pcie-root`, `cyw43-wifi`, then
+`sdio-host`; their contracts are respectively `serial`, `usb-local-seat`,
+`hdmi-text`, `pcie-root`, `cyw43455`, and `sdio-host`. Only USB, CYW43, and SDIO
+carry `bus_link_seal=valid`. The following 31 physically contiguous rows are
+one `WIFI_OLDGOOD_RETAINED_BEGIN`, three same-ID firmware/NVRAM/CLM SHA-256
+rows, the exact 26-step SDIO-engine-through-DHCP-bound replay, and one matching
+`WIFI_OLDGOOD_RETAINED_END ... status=complete`. The beginning fixes
+`id=pair_epoch`, `attempt=1`, nonzero pair/generation identity,
+`prefix_steps=26`, and the
+concrete firmware, normalized NVRAM-upload, and CLM lengths; the NVRAM upload
+length is 1,744 bytes, while its SHA-256 still identifies the immutable
+2,074-byte source artifact. Association proof accepts only `assoc`, `link-up`,
+`eapol-m1`, `eapol-m2`, or `eapol-m3`.
+
+Every retained or compact-owner row is at most 243 bytes. The emitter
+preflights the whole batch and reserves 32 body rows for the ordinary `smp`
+activity report within the 69-row body capacity; if identity changes or the
+whole batch does not fit, none of it is emitted. These rows are passive
+historical-prefix evidence, not live traffic evidence. The normalizer accepts
+only the newest exact contiguous transaction, quarantines older complete proof
+after a later malformed/incomplete reserved record, Join, Gate 8 lifecycle, or
+recovery boundary, and requires later same-generation netstats, authenticated
+TCP, terminal nettest, and healthy DPC evidence.
+
+Each passive `usb status`, `usb dump-state`, or `usb diag` response projects
+the USB receipt as exactly two physically adjacent uppercase rows before its
+ordinary detail:
+
+```text
+USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
+USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
+```
+
+The first row is the stable runtime record; absent or rejected evidence is
+projected truthfully as `v=1` with zero identity/body fields and `source=none`.
+The second row is a
+fresh root snapshot in USB-then-PCIe order. Acceptance requires version 1,
+nonzero current identity/link/lifetime/publication/input fields, commit equal
+to publication sequence, exact step mask `0x00003fff`, a valid packed
+root-port/hub/child/IN-endpoint topology, `source=linked-runtime-hid`, both
+owners `driver-owned`, both descriptors `sealed`, `command_ready=yes`,
+`proof_gate=14`, and `blocker=none`. The pair is enqueued atomically with each
+row bounded to 243 bytes. Only the latest exact adjacent pair is proof; a gap,
+clip, malformed current row, later reserved USB old-good row, stale identity,
+or uncommitted receipt revokes an older complete pair. Active `usb enable-kbd`
+and `usb probe-kbd` operations do not project either retained row.
 
 ### 8.2 Passive versus active commands
 

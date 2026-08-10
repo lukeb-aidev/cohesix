@@ -1960,6 +1960,7 @@ impl Cyw43BootstrapSupervisor {
     }
 
     fn fail(&mut self, error: DriverTaskNetError) -> Cyw43BootstrapTurnOutcome {
+        clear_cyw43_oldgood_prefix();
         self.retain_and_revoke_terminal_drain();
         self.pending = None;
         self.wait = None;
@@ -2471,6 +2472,7 @@ impl Cyw43BootstrapSupervisor {
     }
 
     fn route_generation_recovery(&mut self, reason: &'static str) {
+        clear_cyw43_oldgood_prefix();
         let current_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
         let issued_owner = crate::hal::driver_task::active_driver_task_retained_request(
             CYW43_WIFI_DRIVER_TASK_CONTRACT,
@@ -2733,6 +2735,7 @@ impl Cyw43BootstrapSupervisor {
     }
 
     fn arm_generation_recovery(&mut self, reason: &'static str) {
+        clear_cyw43_oldgood_prefix();
         self.initial_physical_lifetime = false;
         self.next_pair_restart_provenance =
             crate::hal::driver_task::Cyw43SdioPairRestartProvenance::Recovery;
@@ -3058,6 +3061,7 @@ impl Cyw43BootstrapSupervisor {
                                 .fail(DriverTaskNetError::RuntimeInit("cyw43-transport-init"));
                         }
                         if completion.detail == DRIVER_RUNTIME_CYW43_TRANSPORT_DETAIL_READY {
+                            let _ = advance_cyw43_oldgood_prefix(2, None, |_| {});
                             self.firmware_phase = Cyw43FirmwarePhase::Prepare;
                         } else if usize::from(attempt).saturating_add(1)
                             >= CYW43_RUNTIME_TRANSPORT_PHASE_ATTEMPTS
@@ -3102,6 +3106,29 @@ impl Cyw43BootstrapSupervisor {
                         self.firmware_phase = Cyw43FirmwarePhase::Release;
                     }
                     Cyw43FirmwarePhase::Release => {
+                        if cyw43_runtime_command_completion_is_progress(
+                            DRIVER_RUNTIME_CYW43_OP_RELEASE,
+                            completion,
+                        ) {
+                            let firmware_len =
+                                self.bundle.map_or(0, |bundle| bundle.firmware.len());
+                            let clm_len = self
+                                .bundle
+                                .and_then(|bundle| bundle.clm_blob)
+                                .map_or(0, <[u8]>::len);
+                            let nvram_len = self.nvram_len;
+                            let release_recorded =
+                                advance_cyw43_oldgood_prefix(3, None, |receipt| {
+                                    receipt.firmware_len = firmware_len;
+                                    receipt.nvram_len = nvram_len;
+                                    receipt.clm_len = clm_len;
+                                });
+                            if release_recorded {
+                                let _ = advance_cyw43_oldgood_prefix(4, None, |_| {});
+                            }
+                        } else {
+                            poison_cyw43_oldgood_prefix();
+                        }
                         self.firmware_phase = Cyw43FirmwarePhase::Complete;
                     }
                     Cyw43FirmwarePhase::Complete => {}
@@ -3448,6 +3475,9 @@ impl Cyw43BootstrapSupervisor {
         }
         match phase {
             Cyw43ControlPhase::UlpSdioCtrl => {
+                let _ = advance_cyw43_oldgood_prefix(8, None, |receipt| {
+                    receipt.ulp_status = "unsupported";
+                });
                 self.control_phase = Cyw43ControlPhase::RxGlom;
                 true
             }
@@ -3538,6 +3568,94 @@ impl Cyw43BootstrapSupervisor {
         Ok(())
     }
 
+    fn control_response_printable_len(completion: DriverTaskCompletionRecord) -> usize {
+        crate::hal::driver_task::driver_task_ring_frame_bytes(
+            CYW43_WIFI_DRIVER_TASK_CONTRACT,
+            completion.frame,
+        )
+        .unwrap_or(&[])
+        .iter()
+        .copied()
+        .take_while(|byte| *byte != 0 && (byte.is_ascii_graphic() || *byte == b' '))
+        .count()
+    }
+
+    fn record_oldgood_control_success(
+        &self,
+        phase: Cyw43ControlPhase,
+        completion: DriverTaskCompletionRecord,
+    ) {
+        match phase {
+            Cyw43ControlPhase::TxGlom => {
+                // A successful op11 control terminal is consumed only after
+                // the linked runtime has completed its mandatory pre-TX FIFO
+                // drain, the immutable TX, and the matching BCDC reply. This
+                // single semantic cut therefore records the three concrete
+                // old-good rows without treating an earlier progress marker as
+                // terminal evidence.
+                if advance_cyw43_oldgood_prefix(5, None, |receipt| {
+                    receipt.txglom_poll = 0;
+                }) && advance_cyw43_oldgood_prefix(6, None, |receipt| {
+                    receipt.txglom_result = completion.result;
+                }) {
+                    let _ = advance_cyw43_oldgood_prefix(7, None, |_| {});
+                }
+            }
+            Cyw43ControlPhase::UlpSdioCtrl => {
+                let _ = advance_cyw43_oldgood_prefix(8, None, |receipt| {
+                    receipt.ulp_status = "ready";
+                });
+            }
+            Cyw43ControlPhase::RxGlom => {
+                let _ = advance_cyw43_oldgood_prefix(9, None, |_| {});
+            }
+            Cyw43ControlPhase::RuntimeMac => {
+                let _ = advance_cyw43_oldgood_prefix(10, None, |_| {});
+            }
+            Cyw43ControlPhase::RevInfo => {
+                let _ = advance_cyw43_oldgood_prefix(11, None, |_| {});
+            }
+            Cyw43ControlPhase::Clm { offset, index } => {
+                let clm_len = self
+                    .bundle
+                    .and_then(|bundle| bundle.clm_blob)
+                    .map_or(0, <[u8]>::len);
+                let chunk_len = clm_len.saturating_sub(offset).min(CYW43_CLM_CHUNK_BYTES);
+                let next_offset = offset.saturating_add(chunk_len);
+                if clm_len != 0 && next_offset == clm_len {
+                    let _ = advance_cyw43_oldgood_prefix(12, None, |receipt| {
+                        receipt.clm_index = index.saturating_add(1);
+                        receipt.clm_offset = next_offset;
+                    });
+                }
+            }
+            Cyw43ControlPhase::FirmwareVersion => {
+                let printable_len = Self::control_response_printable_len(completion);
+                if printable_len == 0 {
+                    poison_cyw43_oldgood_prefix();
+                } else {
+                    let _ = advance_cyw43_oldgood_prefix(13, None, |receipt| {
+                        receipt.firmware_version_len = printable_len;
+                    });
+                }
+            }
+            Cyw43ControlPhase::ClmVersion => {
+                let printable_len = Self::control_response_printable_len(completion);
+                if printable_len == 0 {
+                    poison_cyw43_oldgood_prefix();
+                } else {
+                    let _ = advance_cyw43_oldgood_prefix(14, None, |receipt| {
+                        receipt.clm_version_len = printable_len;
+                    });
+                }
+            }
+            Cyw43ControlPhase::Up => {
+                let _ = advance_cyw43_oldgood_prefix(15, None, |_| {});
+            }
+            _ => {}
+        }
+    }
+
     fn route_pre_join_drain_completion(
         &mut self,
         completion: DriverTaskCompletionRecord,
@@ -3590,6 +3708,7 @@ impl Cyw43BootstrapSupervisor {
         completion: DriverTaskCompletionRecord,
     ) -> Result<(), DriverTaskNetError> {
         self.capture_control_response(phase, completion)?;
+        self.record_oldgood_control_success(phase, completion);
         self.control_phase = match phase {
             Cyw43ControlPhase::TxGlom => Cyw43ControlPhase::UlpSdioCtrl,
             Cyw43ControlPhase::UlpSdioCtrl => Cyw43ControlPhase::RxGlom,
@@ -3986,6 +4105,16 @@ impl Cyw43BootstrapSupervisor {
                         // locally retained association parent that captured
                         // the preceding scrub epoch.
                         publish_cyw43_pair_scrub_complete();
+                        if self.initial_physical_lifetime {
+                            let pair_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+                            begin_cyw43_oldgood_prefix(
+                                CYW43_BOOTSTRAP_ATTEMPTS.load(Ordering::Acquire),
+                                pair_epoch,
+                            );
+                            let _ = advance_cyw43_oldgood_prefix(1, None, |_| {});
+                        } else {
+                            clear_cyw43_oldgood_prefix();
+                        }
                         clear_cyw43_logical_control_owner();
                         self.recovery_action = Some("delegate-and-advance-epoch");
                         self.recovery_cursor = None;
@@ -4635,6 +4764,233 @@ static CYW43_CONTROL_PROGRAM_EPOCH_VALID: AtomicU32 = AtomicU32::new(0);
 // locally retained Join can be retired without replay after the runtime has
 // irreversibly discarded its corresponding op11 state.
 static CYW43_PAIR_SCRUB_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+const CYW43_OLDGOOD_DRIVER_PREFIX_STEPS: u8 = 24;
+
+/// Passive, exact-lifetime receipt for the ordered WiFi old-good prefix.
+///
+/// The receipt is diagnostic only. Every field is copied at an existing
+/// successful consumption boundary; no reader can issue, retry, schedule, or
+/// recover driver work from it.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Cyw43OldgoodPrefixReceipt {
+    pub attempt: u32,
+    pub pair_epoch: u64,
+    pub generation: u32,
+    pub join_generation_started: u32,
+    pub completed_steps: u8,
+    pub firmware_len: usize,
+    pub nvram_len: usize,
+    pub clm_len: usize,
+    pub txglom_poll: usize,
+    pub txglom_result: u32,
+    pub ulp_status: &'static str,
+    pub clm_index: u16,
+    pub clm_offset: usize,
+    pub firmware_version_len: usize,
+    pub clm_version_len: usize,
+    pub join_ssid_len: usize,
+    pub join_result: u32,
+    pub association_event: &'static str,
+    pub association_poll: u32,
+    pub m1_poll: usize,
+    pub m1_len: usize,
+    pub m2_poll: usize,
+    pub m2_len: usize,
+    pub m3_poll: usize,
+    pub m3_len: usize,
+    pub m4_poll: usize,
+    pub m4_len: usize,
+    pub secure_eapol_rx: u32,
+}
+
+#[cfg(feature = "kernel")]
+impl Cyw43OldgoodPrefixReceipt {
+    const fn begin(attempt: u32, pair_epoch: u64) -> Self {
+        Self {
+            attempt,
+            pair_epoch,
+            generation: 0,
+            join_generation_started: 0,
+            completed_steps: 0,
+            firmware_len: 0,
+            nvram_len: 0,
+            clm_len: 0,
+            txglom_poll: 0,
+            txglom_result: 0,
+            ulp_status: "missing",
+            clm_index: 0,
+            clm_offset: 0,
+            firmware_version_len: 0,
+            clm_version_len: 0,
+            join_ssid_len: 0,
+            join_result: 0,
+            association_event: "none",
+            association_poll: 0,
+            m1_poll: 0,
+            m1_len: 0,
+            m2_poll: 0,
+            m2_len: 0,
+            m3_poll: 0,
+            m3_len: 0,
+            m4_poll: 0,
+            m4_len: 0,
+            secure_eapol_rx: 0,
+        }
+    }
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Cyw43OldgoodPrefixState {
+    receipt: Cyw43OldgoodPrefixReceipt,
+    poisoned: bool,
+}
+
+#[cfg(feature = "kernel")]
+static CYW43_OLDGOOD_PREFIX_STATE: Mutex<Option<Cyw43OldgoodPrefixState>> = Mutex::new(None);
+
+#[cfg(feature = "kernel")]
+fn begin_cyw43_oldgood_prefix(attempt: u32, pair_epoch: u64) {
+    *CYW43_OLDGOOD_PREFIX_STATE.lock() = Some(Cyw43OldgoodPrefixState {
+        receipt: Cyw43OldgoodPrefixReceipt::begin(attempt, pair_epoch),
+        poisoned: attempt != 1 || pair_epoch == 0,
+    });
+}
+
+#[cfg(feature = "kernel")]
+fn clear_cyw43_oldgood_prefix() {
+    *CYW43_OLDGOOD_PREFIX_STATE.lock() = None;
+}
+
+#[cfg(feature = "kernel")]
+fn poison_cyw43_oldgood_prefix() {
+    if let Some(state) = CYW43_OLDGOOD_PREFIX_STATE.lock().as_mut() {
+        state.poisoned = true;
+    }
+}
+
+/// Whether an association label is positive proof for old-good step 17.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_oldgood_association_event_valid(event: &str) -> bool {
+    matches!(
+        event,
+        "assoc" | "link-up" | "eapol-m1" | "eapol-m2" | "eapol-m3"
+    )
+}
+
+#[cfg(feature = "kernel")]
+fn record_cyw43_oldgood_association_link(
+    event: &'static str,
+    poll: u32,
+    associated: bool,
+    link_up: bool,
+) -> bool {
+    if !associated || !link_up || !cyw43_oldgood_association_event_valid(event) {
+        return false;
+    }
+    advance_cyw43_oldgood_prefix(17, None, |receipt| {
+        receipt.association_event = event;
+        receipt.association_poll = poll;
+    })
+}
+
+#[cfg(feature = "kernel")]
+fn advance_cyw43_oldgood_prefix<F>(
+    expected_step: u8,
+    bind_generation: Option<u32>,
+    update: F,
+) -> bool
+where
+    F: FnOnce(&mut Cyw43OldgoodPrefixReceipt),
+{
+    let current_attempt = CYW43_BOOTSTRAP_ATTEMPTS.load(Ordering::Acquire);
+    let current_pair_epoch = CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire);
+    let current_generation = CYW43_CONNECTION_EPOCH.load(Ordering::Acquire);
+    let mut slot = CYW43_OLDGOOD_PREFIX_STATE.lock();
+    let Some(state) = slot.as_mut() else {
+        return false;
+    };
+    if state.poisoned {
+        return false;
+    }
+    let generation_valid = match bind_generation {
+        Some(generation) => {
+            generation != 0
+                && generation == current_generation
+                && state.receipt.join_generation_started == generation
+                && (state.receipt.generation == 0 || state.receipt.generation == generation)
+                && expected_step == 16
+        }
+        None => state.receipt.generation == 0 || state.receipt.generation == current_generation,
+    };
+    if state.receipt.attempt != 1
+        || state.receipt.attempt != current_attempt
+        || state.receipt.pair_epoch == 0
+        || state.receipt.pair_epoch != current_pair_epoch
+        || !generation_valid
+    {
+        state.poisoned = true;
+        return false;
+    }
+    if expected_step <= state.receipt.completed_steps {
+        // Repeated success telemetry is common during association maintenance.
+        // It cannot advance or replace the first consumed transition.
+        return false;
+    }
+    if expected_step != state.receipt.completed_steps.saturating_add(1) {
+        state.poisoned = true;
+        return false;
+    }
+    if let Some(generation) = bind_generation {
+        state.receipt.generation = generation;
+    }
+    update(&mut state.receipt);
+    state.receipt.completed_steps = expected_step;
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn note_cyw43_oldgood_join_attempt(generation: u32) {
+    let mut slot = CYW43_OLDGOOD_PREFIX_STATE.lock();
+    let Some(state) = slot.as_mut() else {
+        return;
+    };
+    if state.poisoned
+        || generation == 0
+        || state.receipt.completed_steps != 15
+        || state.receipt.attempt != CYW43_BOOTSTRAP_ATTEMPTS.load(Ordering::Acquire)
+        || state.receipt.pair_epoch != CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire)
+    {
+        state.poisoned = true;
+        return;
+    }
+    if state.receipt.join_generation_started == 0 {
+        state.receipt.join_generation_started = generation;
+    } else {
+        // The retained prefix describes exactly one Join attempt. Even a
+        // repeated submit carrying the same generation is a retry boundary,
+        // not another observation of the first consumed transition.
+        state.poisoned = true;
+    }
+}
+
+/// Return the complete current old-good prefix without consuming it.
+#[cfg(feature = "kernel")]
+pub(crate) fn cyw43_oldgood_prefix_receipt() -> Option<Cyw43OldgoodPrefixReceipt> {
+    let state = (*CYW43_OLDGOOD_PREFIX_STATE.lock())?;
+    let receipt = state.receipt;
+    (!state.poisoned
+        && receipt.attempt == 1
+        && receipt.attempt == CYW43_BOOTSTRAP_ATTEMPTS.load(Ordering::Acquire)
+        && receipt.pair_epoch != 0
+        && receipt.pair_epoch == CYW43_PAIR_SCRUB_EPOCH.load(Ordering::Acquire)
+        && receipt.generation != 0
+        && receipt.generation == CYW43_CONNECTION_EPOCH.load(Ordering::Acquire)
+        && receipt.completed_steps == CYW43_OLDGOOD_DRIVER_PREFIX_STEPS)
+        .then_some(receipt)
+}
 static CYW43_POST_SECURE_DATA_RX_ADMITTED: AtomicU32 = AtomicU32::new(0);
 // Connection generation whose post-association WLC_GET_BSSID action reached a
 // logical terminal and was consumed by the host-EAPOL coordinator. The value
@@ -8127,11 +8483,18 @@ impl Cyw43HostEapolProgress {
 
     fn record_eapol_association_proof(&mut self, label: &'static str, poll: usize) {
         self.associated = true;
+        let association_poll = poll.min(u32::MAX as usize) as u32;
         if self.association_event.is_none() {
             self.association_event = Some(label);
-            self.association_poll = poll.min(u32::MAX as usize) as u32;
+            self.association_poll = association_poll;
         }
         CYW43_ASSOCIATED.store(1, Ordering::Release);
+        let _ = record_cyw43_oldgood_association_link(
+            label,
+            association_poll,
+            self.associated,
+            self.link_up,
+        );
     }
 
     fn record_rx_idle_completion(&mut self, completion: DriverTaskCompletionRecord) {
@@ -8868,6 +9231,7 @@ pub(crate) fn cyw43_deferred_recovery_diagnostic() -> Option<Cyw43DeferredRecove
 
 #[cfg(feature = "kernel")]
 fn latch_cyw43_pair_recovery(generation: u32, cause: Cyw43RecoveryCause) {
+    clear_cyw43_oldgood_prefix();
     let _ = latch_cyw43_deferred_recovery(
         generation,
         cause,
@@ -8891,6 +9255,7 @@ fn take_cyw43_deferred_recovery() -> Option<Cyw43DeferredRecovery> {
 
 #[cfg(feature = "kernel")]
 fn invalidate_cyw43_root_generation_for_recovery(expected_generation: u32) -> Option<u32> {
+    clear_cyw43_oldgood_prefix();
     let next_epoch = expected_generation.wrapping_add(1);
     CYW43_CONNECTION_EPOCH
         .compare_exchange(
@@ -8964,6 +9329,7 @@ fn transition_cyw43_host_eapol_to_reauthentication() {
     {
         return;
     }
+    clear_cyw43_oldgood_prefix();
     let next_epoch = CYW43_CONNECTION_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
@@ -13528,6 +13894,7 @@ impl Cyw43AssociationSupervisor {
                 }
             }
             Cyw43AssociationJoinStep::Rejected => {
+                poison_cyw43_oldgood_prefix();
                 CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
                 CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
                 suspend_cyw43_association_authentication(
@@ -13545,6 +13912,7 @@ impl Cyw43AssociationSupervisor {
                 }
             }
             Cyw43AssociationJoinStep::RecoveryRequired => {
+                clear_cyw43_oldgood_prefix();
                 if runtime_ready(DriverTaskHotPath::Cyw43Wifi)
                     && !crate::hal::driver_task::cyw43_sdio_pair_restart_required()
                     && !crate::hal::driver_task::cyw43_sdio_pair_context_replay_required()
@@ -13637,6 +14005,7 @@ impl Cyw43AssociationSupervisor {
     }
 
     fn schedule_recovery(&mut self, now_ms: u64, invalid_generation: u32, delay_ms: u64) {
+        clear_cyw43_oldgood_prefix();
         clear_cyw43_association_join_diagnostic();
         self.phase = Cyw43AssociationPhase::Recovery {
             invalid_generation,
@@ -13665,6 +14034,19 @@ fn emit_cyw43_join_request_trace(
     result: u32,
 ) {
     use core::fmt::Write;
+
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT
+        && path == "association-supervisor"
+        && action == "ready"
+        && generation != 0
+        && ssid_len != 0
+        && result == 0
+    {
+        let _ = advance_cyw43_oldgood_prefix(16, Some(generation), |receipt| {
+            receipt.join_ssid_len = ssid_len;
+            receipt.join_result = result;
+        });
+    }
 
     let mut line = heapless::String::<192>::new();
     let _ = write!(
@@ -13710,6 +14092,7 @@ fn begin_cyw43_association_retry(
     let next_generation = CYW43_CONNECTION_EPOCH
         .fetch_add(1, Ordering::AcqRel)
         .wrapping_add(1);
+    note_cyw43_oldgood_join_attempt(next_generation);
     invalidate_cyw43_data_handoff();
     clear_cyw43_association_event_arm();
     CYW43_DEFERRED_CARRIER_REAUTH_EPOCH_TOKEN.store(0, Ordering::Release);
@@ -14876,6 +15259,7 @@ fn fence_cyw43_data_plane_for_pending_pair_restart() {
     // the host-EAPOL session lock, so full context recovery cannot run in this
     // stack frame. Close every externally observable data-plane gate now and
     // leave the sticky HAL restart request for the next outer service turn.
+    clear_cyw43_oldgood_prefix();
     CYW43_LINKED_RUNTIME_READY.store(0, Ordering::Release);
     CYW43_CONTROL_PLANE_READY.store(0, Ordering::Release);
     CYW43_ASSOCIATED.store(0, Ordering::Release);
@@ -19122,6 +19506,22 @@ fn emit_cyw43_host_eapol_status(
 ) {
     use core::fmt::Write;
 
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && progress.associated && progress.link_up {
+        if let Some(association_event) = progress.association_event {
+            let _ = record_cyw43_oldgood_association_link(
+                association_event,
+                progress.association_poll,
+                progress.associated,
+                progress.link_up,
+            );
+        }
+        if status == "secure" && progress.eapol_rx >= 2 {
+            let _ = advance_cyw43_oldgood_prefix(24, None, |receipt| {
+                receipt.secure_eapol_rx = progress.eapol_rx;
+            });
+        }
+    }
+
     let reason = if status == "required" {
         cyw43_host_eapol_required_reason(progress)
     } else {
@@ -19776,6 +20176,36 @@ fn emit_cyw43_host_eapol_message(
 ) {
     use core::fmt::Write;
 
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT {
+        match (message, action) {
+            ("m1", "recv-m1") => {
+                let _ = advance_cyw43_oldgood_prefix(18, None, |receipt| {
+                    receipt.m1_poll = poll;
+                    receipt.m1_len = len;
+                });
+            }
+            ("m2", "send-m2") => {
+                let _ = advance_cyw43_oldgood_prefix(19, None, |receipt| {
+                    receipt.m2_poll = poll;
+                    receipt.m2_len = len;
+                });
+            }
+            ("m3", "recv-m3") => {
+                let _ = advance_cyw43_oldgood_prefix(20, None, |receipt| {
+                    receipt.m3_poll = poll;
+                    receipt.m3_len = len;
+                });
+            }
+            ("m4", "send-m4") => {
+                let _ = advance_cyw43_oldgood_prefix(21, None, |receipt| {
+                    receipt.m4_poll = poll;
+                    receipt.m4_len = len;
+                });
+            }
+            _ => {}
+        }
+    }
+
     let mut line = heapless::String::<192>::new();
     let _ = write!(
         line,
@@ -19829,6 +20259,18 @@ fn emit_cyw43_host_eapol_key(
     status: &'static str,
 ) {
     use core::fmt::Write;
+
+    if contract == CYW43_WIFI_DRIVER_TASK_CONTRACT && status == "ready" {
+        match (kind, stage) {
+            ("ptk", "cyw43-host-eapol-ptk") => {
+                let _ = advance_cyw43_oldgood_prefix(22, None, |_| {});
+            }
+            ("gtk", "cyw43-host-eapol-gtk") => {
+                let _ = advance_cyw43_oldgood_prefix(23, None, |_| {});
+            }
+            _ => {}
+        }
+    }
 
     let mut line = heapless::String::<192>::new();
     let _ = write!(
@@ -30662,6 +31104,7 @@ mod tests {
         CYW43_PAIR_CONTEXT_RECOVERY_EPOCH.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_CONTROL_PROGRAM_EPOCH_VALID.store(0, Ordering::Release);
+        clear_cyw43_oldgood_prefix();
         CYW43_PRIMARY_BSSCFG_JOIN_READY.store(0, Ordering::Release);
         CYW43_PRIMARY_BSSCFG_JOIN_EPOCH_TOKEN.store(0, Ordering::Release);
         CYW43_POST_SECURE_DATA_RX_ADMITTED.store(0, Ordering::Release);
@@ -30776,6 +31219,211 @@ mod tests {
         clear_cyw43_active_prompt_poll();
         clear_all_cyw43_terminal_drain_cursors();
         clear_cyw43_association_terminal_drain_receipt();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn seed_cyw43_oldgood_prefix_through_join_for_test(pair_epoch: u64, generation: u32) {
+        CYW43_BOOTSTRAP_ATTEMPTS.store(1, Ordering::Release);
+        CYW43_PAIR_SCRUB_EPOCH.store(pair_epoch, Ordering::Release);
+        CYW43_CONNECTION_EPOCH.store(0, Ordering::Release);
+        begin_cyw43_oldgood_prefix(1, pair_epoch);
+        assert!(advance_cyw43_oldgood_prefix(1, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(2, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(3, None, |receipt| {
+            receipt.firmware_len = 609_309;
+            receipt.nvram_len = 1_744;
+            receipt.clm_len = 2_676;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(4, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(5, None, |receipt| {
+            receipt.txglom_poll = 0;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(6, None, |receipt| {
+            receipt.txglom_result = 1;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(7, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(8, None, |receipt| {
+            receipt.ulp_status = "unsupported";
+        }));
+        assert!(advance_cyw43_oldgood_prefix(9, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(10, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(11, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(12, None, |receipt| {
+            receipt.clm_index = 3;
+            receipt.clm_offset = 2_676;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(13, None, |receipt| {
+            receipt.firmware_version_len = 79;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(14, None, |receipt| {
+            receipt.clm_version_len = 26;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(15, None, |_| {}));
+
+        CYW43_CONNECTION_EPOCH.store(generation, Ordering::Release);
+        note_cyw43_oldgood_join_attempt(generation);
+        assert!(advance_cyw43_oldgood_prefix(
+            16,
+            Some(generation),
+            |receipt| {
+                receipt.join_ssid_len = 8;
+                receipt.join_result = 0;
+            },
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn seed_complete_cyw43_oldgood_prefix_for_test(
+        pair_epoch: u64,
+        generation: u32,
+    ) -> Cyw43OldgoodPrefixReceipt {
+        seed_cyw43_oldgood_prefix_through_join_for_test(pair_epoch, generation);
+        assert!(advance_cyw43_oldgood_prefix(17, None, |receipt| {
+            receipt.association_event = "assoc";
+            receipt.association_poll = 1;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(18, None, |receipt| {
+            receipt.m1_poll = 1;
+            receipt.m1_len = 121;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(19, None, |receipt| {
+            receipt.m2_poll = 1;
+            receipt.m2_len = 177;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(20, None, |receipt| {
+            receipt.m3_poll = 2;
+            receipt.m3_len = 153;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(21, None, |receipt| {
+            receipt.m4_poll = 2;
+            receipt.m4_len = 113;
+        }));
+        assert!(advance_cyw43_oldgood_prefix(22, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(23, None, |_| {}));
+        assert!(advance_cyw43_oldgood_prefix(24, None, |receipt| {
+            receipt.secure_eapol_rx = 2;
+        }));
+        cyw43_oldgood_prefix_receipt().expect("complete exact-generation receipt")
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_oldgood_set_ssid_then_m1_commits_association_before_message() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        seed_cyw43_oldgood_prefix_through_join_for_test(27, 31);
+
+        let mut progress = Cyw43HostEapolProgress {
+            connection_epoch: 31,
+            ..Cyw43HostEapolProgress::default()
+        };
+        progress.record_event_frame(
+            0,
+            CYW43_BRCMF_EVENT_MIN_PACKET_LEN,
+            Cyw43EventFrame {
+                event_type: CYW43_EVENT_SET_SSID,
+                status: CYW43_EVENT_STATUS_SUCCESS,
+                ..Cyw43EventFrame::default()
+            },
+            1,
+            true,
+        );
+        assert!(progress.associated);
+        assert!(progress.link_up);
+        assert_eq!(progress.association_event, None);
+
+        emit_cyw43_host_eapol_status(CYW43_WIFI_DRIVER_TASK_CONTRACT, "event-rx", &progress);
+        let before_m1 = CYW43_OLDGOOD_PREFIX_STATE
+            .lock()
+            .expect("retained Join prefix remains present");
+        assert!(!before_m1.poisoned);
+        assert_eq!(before_m1.receipt.completed_steps, 16);
+        assert_eq!(before_m1.receipt.association_event, "none");
+
+        progress.record_eapol_association_proof("eapol-m1", 3);
+        let association = CYW43_OLDGOOD_PREFIX_STATE
+            .lock()
+            .expect("M1 association proof remains present");
+        assert!(!association.poisoned);
+        assert_eq!(association.receipt.completed_steps, 17);
+        assert_eq!(association.receipt.association_event, "eapol-m1");
+        assert_eq!(association.receipt.association_poll, 3);
+
+        emit_cyw43_host_eapol_message(CYW43_WIFI_DRIVER_TASK_CONTRACT, "m1", "recv-m1", 3, 121);
+        let after_m1 = CYW43_OLDGOOD_PREFIX_STATE
+            .lock()
+            .expect("M1 message proof remains present");
+        assert!(!after_m1.poisoned);
+        assert_eq!(after_m1.receipt.completed_steps, 18);
+        assert_eq!(after_m1.receipt.m1_poll, 3);
+        assert_eq!(after_m1.receipt.m1_len, 121);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_oldgood_prefix_advances_once_in_exact_generation_order() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let receipt = seed_complete_cyw43_oldgood_prefix_for_test(7, 9);
+
+        assert_eq!(receipt.attempt, 1);
+        assert_eq!(receipt.pair_epoch, 7);
+        assert_eq!(receipt.generation, 9);
+        assert_eq!(receipt.join_generation_started, 9);
+        assert_eq!(receipt.completed_steps, CYW43_OLDGOOD_DRIVER_PREFIX_STEPS);
+        assert_eq!(receipt.clm_offset, receipt.clm_len);
+        assert_eq!(receipt.ulp_status, "unsupported");
+        assert!(!advance_cyw43_oldgood_prefix(24, None, |_| {
+            panic!("a duplicate success must not rewrite retained evidence")
+        }));
+        assert_eq!(cyw43_oldgood_prefix_receipt(), Some(receipt));
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_oldgood_prefix_poison_is_sticky_across_skips_and_new_join_attempts() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        CYW43_BOOTSTRAP_ATTEMPTS.store(1, Ordering::Release);
+        CYW43_PAIR_SCRUB_EPOCH.store(11, Ordering::Release);
+        begin_cyw43_oldgood_prefix(1, 11);
+        assert!(advance_cyw43_oldgood_prefix(1, None, |_| {}));
+        assert!(!advance_cyw43_oldgood_prefix(3, None, |_| {}));
+        assert!(!advance_cyw43_oldgood_prefix(2, None, |_| {}));
+        assert_eq!(cyw43_oldgood_prefix_receipt(), None);
+
+        reset_cyw43_status_flags();
+        let _ = seed_complete_cyw43_oldgood_prefix_for_test(12, 21);
+        note_cyw43_oldgood_join_attempt(21);
+        assert_eq!(cyw43_oldgood_prefix_receipt(), None);
+        reset_cyw43_status_flags();
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn cyw43_oldgood_prefix_is_cleared_by_recovery_and_pair_restart_boundaries() {
+        let _guard = CYW43_STATUS_TEST_LOCK.lock().expect("status test lock");
+        reset_cyw43_status_flags();
+        let _ = seed_complete_cyw43_oldgood_prefix_for_test(17, 23);
+        let mut supervisor = Cyw43AssociationSupervisor {
+            generation: 23,
+            retry_level: 0,
+            auth_mode: None,
+            phase: Cyw43AssociationPhase::Connected,
+        };
+        supervisor.schedule_recovery(100, 23, 0);
+        assert_eq!(cyw43_oldgood_prefix_receipt(), None);
+
+        let _ = seed_complete_cyw43_oldgood_prefix_for_test(18, 24);
+        fence_cyw43_data_plane_for_pending_pair_restart();
+        assert_eq!(cyw43_oldgood_prefix_receipt(), None);
+
+        let _ = seed_complete_cyw43_oldgood_prefix_for_test(19, 25);
+        latch_cyw43_pair_recovery(25, Cyw43RecoveryCause::Association);
+        assert_eq!(cyw43_oldgood_prefix_receipt(), None);
+        reset_cyw43_status_flags();
     }
 
     #[cfg(feature = "kernel")]

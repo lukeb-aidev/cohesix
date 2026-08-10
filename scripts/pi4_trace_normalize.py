@@ -59,6 +59,8 @@ TRACE_SEGMENT_RE = re.compile(
     r"|(?<![A-Za-z0-9_.:-])DRIVER_TASK_"
     r"|(?<![A-Za-z0-9_.:-])SCHED_CONTRACT"
     r"|CYW43_"
+    r"|USB_OLDGOOD_"
+    r"|WIFI_OLDGOOD_"
     r"|(?<![A-Za-z0-9_.:-])(?:usb:|USB:|wifi:|WiFi:|WIFI:)"
     r"|(?<![A-Za-z0-9_.:-])(?:OK|ERR) NETTEST"
     r"|(?<![A-Za-z0-9_.:-])(?:nettest:|nettargets:)"
@@ -121,6 +123,35 @@ CYW43_HOST_EAPOL_MESSAGE_RE = re.compile(
     r"poll=(?P<poll>0|[1-9][0-9]*) "
     r"len=(?P<len>0|[1-9][0-9]*)$"
 )
+USB_OLDGOOD_RETAINED_RE = re.compile(
+    r"^USB_OLDGOOD_RETAINED "
+    r"v=(?P<version>0|[1-9][0-9]*) "
+    r"task=(?P<task_key>0|[1-9][0-9]*) "
+    r"token=0x(?P<identity_token>[0-9a-f]{8}) "
+    r"link_epoch=(?P<link_epoch>0|[1-9][0-9]*) "
+    r"link_token=0x(?P<link_token>[0-9a-f]{8}) "
+    r"epoch=(?P<lifetime_epoch>0|[1-9][0-9]*) "
+    r"seq=(?P<publication_sequence>0|[1-9][0-9]*) "
+    r"mask=0x(?P<step_mask>[0-9a-f]{8}) "
+    r"topology=0x(?P<topology>[0-9a-f]{8}) "
+    r"input_gen=(?P<input_generation>0|[1-9][0-9]*) "
+    r"commit=(?P<committed_sequence>0|[1-9][0-9]*) "
+    r"source=(?P<source>linked-runtime-hid|none)$"
+)
+USB_OLDGOOD_CURRENT_RE = re.compile(
+    r"^USB_OLDGOOD_CURRENT "
+    r"contracts=usb-local-seat\+pcie-root "
+    r"owners=(?P<usb_owner>driver-owned|missing)\+"
+    r"(?P<pcie_owner>driver-owned|missing) "
+    r"descriptors=(?P<usb_descriptor>sealed|missing)\+"
+    r"(?P<pcie_descriptor>sealed|missing) "
+    r"command_ready=(?P<command_ready>yes|no) "
+    r"proof_gate=(?P<proof_gate>0|14) "
+    r"blocker=(?P<blocker>none|receipt-missing|usb-owner-missing|"
+    r"pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|"
+    r"command-not-ready) root_pointer=no$"
+)
+USB_OLDGOOD_RETAINED_STEP_MASK = 0x0000_3FFF
 WIFI_GATE7_RETAINED_RE = re.compile(
     r"^wifi: gate7_retained "
     r"id=(?P<snapshot_sequence>[1-9][0-9]*) "
@@ -130,6 +161,41 @@ WIFI_GATE7_RETAINED_RE = re.compile(
     r"assoc=yes link=yes eapol=yes data=yes "
     r"m1=yes m2=yes m3=yes m4=yes ptk=yes gtk=yes "
     r"keys=yes secure=yes snapshot=current$"
+)
+WIFI_OLDGOOD_RETAINED_BEGIN_RE = re.compile(
+    r"^WIFI_OLDGOOD_RETAINED_BEGIN "
+    r"id=(?P<receipt_id>[1-9][0-9]*) "
+    r"attempt=(?P<attempt>[1-9][0-9]*) "
+    r"pair_epoch=(?P<pair_epoch>[1-9][0-9]*) "
+    r"generation=(?P<generation>[1-9][0-9]*) "
+    r"prefix_steps=(?P<prefix_steps>[1-9][0-9]*) "
+    r"fw=(?P<firmware_len>[1-9][0-9]*) "
+    r"nvram=(?P<nvram_len>[1-9][0-9]*) "
+    r"clm=(?P<clm_len>[1-9][0-9]*)$"
+)
+WIFI_OLDGOOD_RETAINED_HASH_RE = re.compile(
+    r"^WIFI_OLDGOOD_RETAINED_HASH "
+    r"id=(?P<receipt_id>[1-9][0-9]*) "
+    r"artifact=(?P<artifact>firmware|nvram|clm) "
+    r"sha256=(?P<sha256>[0-9a-f]{64})$"
+)
+WIFI_OLDGOOD_RETAINED_END_RE = re.compile(
+    r"^WIFI_OLDGOOD_RETAINED_END "
+    r"id=(?P<receipt_id>[1-9][0-9]*) "
+    r"attempt=(?P<attempt>[1-9][0-9]*) "
+    r"pair_epoch=(?P<pair_epoch>[1-9][0-9]*) "
+    r"generation=(?P<generation>[1-9][0-9]*) "
+    r"prefix_steps=(?P<prefix_steps>[1-9][0-9]*) "
+    r"status=complete$"
+)
+WIFI_OLDGOOD_COMPACT_OWNER_RE = re.compile(
+    r"^DRIVER_TASK_OWNER_STATE "
+    r"contract=(?P<contract>[a-z0-9-]+) "
+    r"hot_path=(?P<hot_path>[a-z0-9-]+) "
+    r"owner_state=driver-owned descriptor=present "
+    r"descriptor_version=8 descriptor_seal=valid "
+    r"artifact_hash=nonzero bus_link_seal=(?P<bus_link_seal>valid|none) "
+    r"root_pointer=no$"
 )
 WIFI_DIAG_BEGIN_RE = re.compile(
     r"^wifi: diag_begin "
@@ -718,6 +784,18 @@ class SequenceResult:
     replay: bool
     last: str
     missing: str
+
+
+@dataclass(frozen=True)
+class WifiOldgoodRetainedPrefix:
+    """One atomic current-lifetime WiFi old-good prefix transaction."""
+
+    complete: bool = False
+    begin_line: int = 0
+    end_line: int = 0
+    pair_epoch: int = 0
+    generation: int = 0
+    missing: str = "retained-prefix-missing"
 
 
 @dataclass(frozen=True)
@@ -2109,6 +2187,7 @@ def classify_domain(line: str) -> str | None:
         line.startswith("usb:")
         or line.startswith("USB:")
         or line.startswith("USB_RUNTIME_")
+        or line.startswith("USB_OLDGOOD_")
         or "[local-seat]" in lower
         or (
             "[pi4-platform]" in lower
@@ -2136,6 +2215,7 @@ def classify_domain(line: str) -> str | None:
         line.startswith("wifi:")
         or line.startswith("WiFi:")
         or line.startswith("WIFI:")
+        or line.startswith("WIFI_OLDGOOD_")
         or line.startswith("CYW43_")
         or line.startswith("OK NETTEST")
         or line.startswith("ERR NETTEST")
@@ -13996,6 +14076,122 @@ def usb_runtime_gate10_step(event: TraceEvent) -> bool:
     )
 
 
+def summarize_usb_retained_oldgood_replay(
+    events: list[TraceEvent],
+) -> SequenceResult | None:
+    """Validate the latest adjacent, identity-bound USB runtime receipt pair."""
+
+    reserved = [
+        event for event in events if event.raw.startswith("USB_OLDGOOD_")
+    ]
+    if not reserved:
+        return None
+
+    current_event = reserved[-1]
+    if not has_reserved_record_prefix(current_event.raw, "USB_OLDGOOD_CURRENT"):
+        return SequenceResult(False, "none", "retained-current-missing")
+    current = USB_OLDGOOD_CURRENT_RE.fullmatch(current_event.raw)
+    if current is None:
+        return SequenceResult(False, "none", "retained-current-malformed")
+
+    preceding = [
+        event
+        for event in events
+        if event.line == current_event.line - 1 and event.domain != "console"
+    ]
+    if len(preceding) != 1 or not has_reserved_record_prefix(
+        preceding[0].raw, "USB_OLDGOOD_RETAINED"
+    ):
+        return SequenceResult(False, "none", "retained-pair-nonadjacent")
+    receipt_event = preceding[0]
+    receipt = USB_OLDGOOD_RETAINED_RE.fullmatch(receipt_event.raw)
+    if receipt is None:
+        return SequenceResult(False, "none", "retained-receipt-malformed")
+
+    decimal_fields = (
+        "version",
+        "task_key",
+        "link_epoch",
+        "lifetime_epoch",
+        "publication_sequence",
+        "input_generation",
+        "committed_sequence",
+    )
+    numeric = {
+        name: int(receipt.group(name), 10) for name in decimal_fields
+    }
+    numeric.update(
+        {
+            name: int(receipt.group(name), 16)
+            for name in (
+                "identity_token",
+                "link_token",
+                "step_mask",
+                "topology",
+            )
+        }
+    )
+    if any(value > U32_MAX for value in numeric.values()):
+        return SequenceResult(False, "none", "retained-receipt-numeric-invalid")
+    if numeric["version"] != 1:
+        return SequenceResult(False, "none", "retained-receipt-version")
+    if any(
+        numeric[name] == 0
+        for name in (
+            "task_key",
+            "identity_token",
+            "link_epoch",
+            "link_token",
+            "lifetime_epoch",
+            "publication_sequence",
+            "topology",
+            "input_generation",
+            "committed_sequence",
+        )
+    ):
+        return SequenceResult(False, "none", "retained-receipt-identity")
+    if numeric["step_mask"] != USB_OLDGOOD_RETAINED_STEP_MASK:
+        return SequenceResult(False, "none", "retained-receipt-steps")
+    if numeric["committed_sequence"] != numeric["publication_sequence"]:
+        return SequenceResult(False, "none", "retained-receipt-uncommitted")
+
+    topology = numeric["topology"]
+    root_port = (topology >> 28) & 0x0F
+    hub_slot = (topology >> 20) & 0xFF
+    hub_port = (topology >> 16) & 0x0F
+    child_slot = (topology >> 8) & 0xFF
+    endpoint = topology & 0xFF
+    if (
+        root_port == 0
+        or hub_slot == 0
+        or hub_port == 0
+        or child_slot == 0
+        or endpoint & 0x80 == 0
+        or endpoint & 0x70 != 0
+        or endpoint & 0x0F == 0
+    ):
+        return SequenceResult(False, "none", "retained-receipt-topology")
+    if receipt.group("source") != "linked-runtime-hid":
+        return SequenceResult(False, "none", "retained-receipt-source")
+
+    current_fields = current.groupdict()
+    current_requirements = (
+        ("usb_owner", "driver-owned", "usb-owner-state"),
+        ("pcie_owner", "driver-owned", "pcie-owner-state"),
+        ("usb_descriptor", "sealed", "usb-descriptor-seal"),
+        ("pcie_descriptor", "sealed", "pcie-descriptor-seal"),
+        ("command_ready", "yes", "command-ready"),
+        ("proof_gate", "14", "runtime-gate10"),
+        ("blocker", "none", "runtime-gate10"),
+    )
+    for name, expected, missing in current_requirements:
+        if current_fields[name] != expected:
+            return SequenceResult(False, "first-byte", missing)
+    if any(usb_bootloader_handoff_evidence(event) for event in events):
+        return SequenceResult(False, "none", "forbidden-bootloader-handoff")
+    return SequenceResult(True, "runtime-gate10", "none")
+
+
 def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
     """Return sustained-input blocker after linked first-byte proof."""
 
@@ -14165,8 +14361,12 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
 def summarize_usb_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
     """Validate the reopened 26b USB hub-keyboard old-good replay profile."""
 
+    event_list = list(events)
+    retained = summarize_usb_retained_oldgood_replay(event_list)
+    if retained is not None:
+        return retained
     return ordered_sequence_result(
-        events,
+        event_list,
         required_any=[
             SequenceStep("cold-boot-unseeded", usb_cold_boot_evidence),
             SequenceStep(
@@ -15135,10 +15335,628 @@ def wifi_clm_version_step(event: TraceEvent) -> bool:
     return wifi_text_iovar_step(event, stage="cyw43-control-clm-version", name="clmver")
 
 
+WIFI_OLDGOOD_RETAINED_PREFIX_STEP_COUNT = 26
+WIFI_OLDGOOD_RETAINED_LINE_COUNT = 31
+WIFI_OLDGOOD_RETAINED_OWNER_ORDER = (
+    ("serial-console", "serial", "none"),
+    ("usb-keyboard", "usb-local-seat", "valid"),
+    ("hdmi-text", "hdmi-text", "none"),
+    ("pcie-root", "pcie-root", "none"),
+    ("cyw43-wifi", "cyw43455", "valid"),
+    ("sdio-host", "sdio-host", "valid"),
+)
+WIFI_OLDGOOD_RETAINED_TOKENS = (
+    "WIFI_OLDGOOD_RETAINED_BEGIN",
+    "WIFI_OLDGOOD_RETAINED_HASH",
+    "WIFI_OLDGOOD_RETAINED_END",
+)
+
+
+def wifi_oldgood_prefix_steps() -> list[SequenceStep]:
+    """Return the 26 strict pre-TCP steps in the retained WiFi receipt."""
+
+    return [
+        SequenceStep("sdio-engine-ready", wifi_sdio_engine_ready_step),
+        SequenceStep("cyw43-transport-ready", wifi_cyw43_transport_step),
+        SequenceStep("firmware-ready", wifi_firmware_ready_step),
+        SequenceStep("function2-ready", wifi_function2_ready_step),
+        SequenceStep(
+            "control-txglom-pre-tx-drain-ready",
+            wifi_control_txglom_pre_tx_drain_ready_step,
+        ),
+        SequenceStep(
+            "control-txglom-tx-complete", wifi_control_txglom_tx_complete_step
+        ),
+        SequenceStep("control-txglomalign", wifi_control_txglomalign_step),
+        SequenceStep("control-ulp-sdioctrl", wifi_control_ulp_sdioctrl_step),
+        SequenceStep("control-rxglom", wifi_control_rxglom_step),
+        SequenceStep("control-cur-etheraddr", wifi_control_cur_etheraddr_step),
+        SequenceStep("control-revinfo", wifi_control_revinfo_step),
+        SequenceStep("clm-ready", wifi_clm_ready_step),
+        SequenceStep("firmware-version", wifi_firmware_version_step),
+        SequenceStep("clm-version", wifi_clm_version_step),
+        SequenceStep("control-up", wifi_control_up_step),
+        SequenceStep("join-request", wifi_join_request_step),
+        SequenceStep("association-link", wifi_association_link_step),
+        SequenceStep(
+            "host-eapol-m1", lambda event: wifi_eapol_message_step(event, "m1")
+        ),
+        SequenceStep(
+            "host-eapol-m2", lambda event: wifi_eapol_message_step(event, "m2")
+        ),
+        SequenceStep(
+            "host-eapol-m3", lambda event: wifi_eapol_message_step(event, "m3")
+        ),
+        SequenceStep(
+            "host-eapol-m4", lambda event: wifi_eapol_message_step(event, "m4")
+        ),
+        SequenceStep("ptk-install", lambda event: wifi_key_install_step(event, "ptk")),
+        SequenceStep("gtk-install", lambda event: wifi_key_install_step(event, "gtk")),
+        SequenceStep("secure-release", wifi_secure_release_step),
+        SequenceStep("dhcp-start", wifi_dhcp_start_step),
+        SequenceStep("dhcp-bound", wifi_dhcp_bound_step),
+    ]
+
+
+def wifi_oldgood_tail_steps() -> list[SequenceStep]:
+    """Return the post-receipt live network and DPC acceptance steps."""
+
+    return [
+        SequenceStep("nettest", wifi_nettest_step),
+        SequenceStep("netstats-counters", wifi_netstats_counters_step),
+        SequenceStep("tcp-authenticated", wifi_tcp_authenticated_step),
+        SequenceStep("netstats-bound", wifi_netstats_bound_step),
+        SequenceStep("netstats-secure", wifi_netstats_secure_step),
+        SequenceStep("tcp-ready", wifi_tcp_ready_step),
+        SequenceStep("dpc-healthy-after-tcp", wifi_dpc_healthy_step),
+    ]
+
+
+def wifi_oldgood_line_event(
+    events: list[TraceEvent], line: int
+) -> TraceEvent | None:
+    """Return one unspliced target event from an exact physical UART line."""
+
+    candidates = [
+        event for event in events if event.line == line and event.domain != "console"
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def wifi_oldgood_retained_step_matches(
+    index: int, event: TraceEvent, generation: int
+) -> bool:
+    """Require the exact bounded grammar emitted for one retained prefix step."""
+
+    raw = event.raw
+    fixed = {
+        0: "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init "
+        "blocker=ready detail=0x5500",
+        1: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=net-engine-init status=ready",
+        2: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-firmware status=ready",
+        3: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-function2 status=ready",
+        6: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-txglomalign status=ready",
+        8: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-rxglom status=ready",
+        9: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-mac status=ready",
+        10: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-revinfo status=ready",
+        14: "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-up status=ready",
+        21: "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk "
+        "stage=cyw43-host-eapol-ptk status=ready",
+        22: "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+        "stage=cyw43-host-eapol-gtk status=ready",
+    }
+    if index in fixed:
+        return raw == fixed[index]
+    if index == 4:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            r"stage=cyw43-control-txglomalign event=pre-tx-drain-ready "
+            r"poll=(0|[1-9][0-9]*)",
+            raw,
+        )
+        return match is not None and int(match.group(1), 10) <= U64_MAX
+    if index == 5:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+            r"stage=cyw43-control-txglomalign event=tx-complete "
+            r"result=(0|[1-9][0-9]*)",
+            raw,
+        )
+        return match is not None and int(match.group(1), 10) <= U32_MAX
+    if index == 7:
+        return raw in {
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-control-ulp-sdioctrl "
+            "status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 "
+            "hot_path=cyw43-wifi stage=cyw43-control-ulp-sdioctrl "
+            "status=unsupported",
+        }
+    if index == 11:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_CLM contract=cyw43455 "
+            r"stage=cyw43-control-clmload action=ready "
+            r"index=([1-9][0-9]*) offset=([1-9][0-9]*) "
+            r"len=([1-9][0-9]*) flags=0x0000",
+            raw,
+        )
+        if match is None:
+            return False
+        index_value, offset, length = (int(value, 10) for value in match.groups())
+        return (
+            index_value <= U16_MAX
+            and offset == CYW43_CAPTURE_CLM_LEN
+            and length == CYW43_CAPTURE_CLM_LEN
+        )
+    if index in {12, 13}:
+        stage, name = (
+            ("cyw43-control-firmware-version", "ver")
+            if index == 12
+            else ("cyw43-control-clm-version", "clmver")
+        )
+        match = re.fullmatch(
+            rf"CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
+            rf"stage={stage} name={name} printable_len=([1-9][0-9]*)",
+            raw,
+        )
+        return match is not None and int(match.group(1), 10) <= U32_MAX
+    if index == 15:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+            r"path=association-supervisor action=ready "
+            r"generation=([1-9][0-9]*) ssid_len=([1-9][0-9]*) "
+            r"result=0x([0-9a-f]{8})",
+            raw,
+        )
+        return bool(
+            match is not None
+            and int(match.group(1), 10) == generation
+            and int(match.group(2), 10) <= U32_MAX
+            and int(match.group(3), 16) == 0
+        )
+    if index == 16:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            r"status=required associated=yes link_up=yes "
+            r"assoc_event=(assoc|link-up|eapol-m1|eapol-m2|eapol-m3) "
+            r"assoc_poll=(0|[1-9][0-9]*) eapol_rx=0",
+            raw,
+        )
+        return bool(
+            match is not None and int(match.group(2), 10) <= U32_MAX
+        )
+    if 17 <= index <= 20:
+        match = CYW43_HOST_EAPOL_MESSAGE_RE.fullmatch(raw)
+        expected = (
+            ("m1", "recv-m1"),
+            ("m2", "send-m2"),
+            ("m3", "recv-m3"),
+            ("m4", "send-m4"),
+        )[index - 17]
+        return bool(
+            match is not None
+            and (match.group("message"), match.group("action")) == expected
+            and int(match.group("poll"), 10) <= U64_MAX
+            and 0 < int(match.group("len"), 10) <= U32_MAX
+        )
+    if index == 23:
+        match = re.fullmatch(
+            r"CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+            r"status=secure associated=yes link_up=yes "
+            r"eapol_rx=([1-9][0-9]*)",
+            raw,
+        )
+        return bool(
+            match is not None and 2 <= int(match.group(1), 10) <= U32_MAX
+        )
+    if index == 24:
+        match = re.fullmatch(
+            r"\[dhcp\] start ready interface=wifi "
+            r"generation=([1-9][0-9]*) xid=0x([0-9a-f]{8}) "
+            r"now_ms=(0|[1-9][0-9]*)",
+            raw,
+        )
+        return bool(
+            match is not None
+            and int(match.group(1), 10) == generation
+            and int(match.group(2), 16) != 0
+            and int(match.group(3), 10) <= U64_MAX
+        )
+    if index == 25:
+        match = re.fullmatch(
+            r"\[dhcp\] lease bound generation=([1-9][0-9]*) "
+            r"ip=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/([0-9]+) "
+            r"gateway=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) "
+            r"server=([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) "
+            r"lease_s=([1-9][0-9]*)",
+            raw,
+        )
+        if match is None or int(match.group(1), 10) != generation:
+            return False
+        try:
+            addresses = [
+                tuple(int(octet) for octet in value.split("."))
+                for value in match.group(2, 4, 5)
+            ]
+        except ValueError:
+            return False
+        return (
+            all(len(address) == 4 for address in addresses)
+            and all(0 <= octet <= 255 for address in addresses for octet in address)
+            and addresses[0] != (0, 0, 0, 0)
+            and addresses[1] != (0, 0, 0, 0)
+            and 0 < int(match.group(3), 10) <= 32
+            and int(match.group(6), 10) <= U32_MAX
+        )
+    return False
+
+
+def wifi_oldgood_retained_prefix(
+    events: list[TraceEvent],
+) -> WifiOldgoodRetainedPrefix | None:
+    """Validate the latest atomic retained WiFi old-good prefix transaction."""
+
+    reserved = [
+        event
+        for event in events
+        if event.raw.startswith("WIFI_OLDGOOD_")
+    ]
+    if not reserved:
+        return None
+
+    begin_candidates = [
+        event
+        for event in reserved
+        if has_reserved_record_prefix(event.raw, "WIFI_OLDGOOD_RETAINED_BEGIN")
+    ]
+    if not begin_candidates:
+        return WifiOldgoodRetainedPrefix(missing="retained-prefix-begin")
+    begin_event = begin_candidates[-1]
+    begin_match = WIFI_OLDGOOD_RETAINED_BEGIN_RE.fullmatch(begin_event.raw)
+    if begin_match is None:
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            missing="retained-prefix-begin-malformed",
+        )
+
+    numeric = {
+        name: int(begin_match.group(name), 10)
+        for name in (
+            "receipt_id",
+            "attempt",
+            "pair_epoch",
+            "generation",
+            "prefix_steps",
+            "firmware_len",
+            "nvram_len",
+            "clm_len",
+        )
+    }
+    if (
+        numeric["receipt_id"] > U64_MAX
+        or numeric["attempt"] > U64_MAX
+        or numeric["pair_epoch"] > U64_MAX
+        or numeric["generation"] > U32_MAX
+        or numeric["prefix_steps"] > U32_MAX
+        or numeric["firmware_len"] > U32_MAX
+        or numeric["nvram_len"] > U32_MAX
+        or numeric["clm_len"] > U32_MAX
+    ):
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            missing="retained-prefix-numeric-invalid",
+        )
+    if (
+        numeric["receipt_id"] != numeric["pair_epoch"]
+        or numeric["attempt"] != 1
+        or numeric["prefix_steps"] != WIFI_OLDGOOD_RETAINED_PREFIX_STEP_COUNT
+        or numeric["firmware_len"] != CYW43_CAPTURE_FIRMWARE_LEN
+        or numeric["nvram_len"] != CYW43_CAPTURE_NVRAM_UPLOAD_LEN
+        or numeric["clm_len"] != CYW43_CAPTURE_CLM_LEN
+    ):
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-identity-invalid",
+        )
+
+    owner_start = begin_event.line - len(WIFI_OLDGOOD_RETAINED_OWNER_ORDER)
+    for offset, (hot_path, contract, bus_link_seal) in enumerate(
+        WIFI_OLDGOOD_RETAINED_OWNER_ORDER
+    ):
+        owner_event = wifi_oldgood_line_event(events, owner_start + offset)
+        if owner_event is None:
+            return WifiOldgoodRetainedPrefix(
+                begin_line=begin_event.line,
+                pair_epoch=numeric["pair_epoch"],
+                generation=numeric["generation"],
+                missing=f"retained-prefix-{hot_path}-owner-line",
+            )
+        owner_match = WIFI_OLDGOOD_COMPACT_OWNER_RE.fullmatch(owner_event.raw)
+        if (
+            owner_match is None
+            or owner_match.group("hot_path") != hot_path
+            or owner_match.group("contract") != contract
+            or owner_match.group("bus_link_seal") != bus_link_seal
+        ):
+            return WifiOldgoodRetainedPrefix(
+                begin_line=begin_event.line,
+                pair_epoch=numeric["pair_epoch"],
+                generation=numeric["generation"],
+                missing=f"retained-prefix-{hot_path}-owner-invalid",
+            )
+
+    transaction = [
+        wifi_oldgood_line_event(events, begin_event.line + offset)
+        for offset in range(WIFI_OLDGOOD_RETAINED_LINE_COUNT)
+    ]
+    if any(event is None for event in transaction):
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-not-contiguous",
+        )
+    retained_events = [event for event in transaction if event is not None]
+    if retained_events[0].raw != begin_event.raw:
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-begin-spliced",
+        )
+
+    expected_hashes = (
+        ("firmware", CYW43_CAPTURE_FIRMWARE_SHA256),
+        ("nvram", CYW43_CAPTURE_NVRAM_SHA256),
+        ("clm", CYW43_CAPTURE_CLM_SHA256),
+    )
+    for event, (artifact, expected_hash) in zip(
+        retained_events[1:4], expected_hashes
+    ):
+        match = WIFI_OLDGOOD_RETAINED_HASH_RE.fullmatch(event.raw)
+        if (
+            match is None
+            or int(match.group("receipt_id"), 10) != numeric["receipt_id"]
+            or match.group("artifact") != artifact
+            or match.group("sha256") != expected_hash
+        ):
+            return WifiOldgoodRetainedPrefix(
+                begin_line=begin_event.line,
+                pair_epoch=numeric["pair_epoch"],
+                generation=numeric["generation"],
+                missing=f"retained-prefix-{artifact}-hash",
+            )
+
+    for index, (event, step) in enumerate(
+        zip(retained_events[4:30], wifi_oldgood_prefix_steps())
+    ):
+        if not wifi_oldgood_retained_step_matches(
+            index, event, numeric["generation"]
+        ):
+            return WifiOldgoodRetainedPrefix(
+                begin_line=begin_event.line,
+                pair_epoch=numeric["pair_epoch"],
+                generation=numeric["generation"],
+                missing=step.name,
+            )
+
+    end_event = retained_events[-1]
+    end_match = WIFI_OLDGOOD_RETAINED_END_RE.fullmatch(end_event.raw)
+    if end_match is None:
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-end-malformed",
+        )
+    if any(
+        int(end_match.group(name), 10) != numeric[name]
+        for name in (
+            "receipt_id",
+            "attempt",
+            "pair_epoch",
+            "generation",
+            "prefix_steps",
+        )
+    ):
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            end_line=end_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-end-identity",
+        )
+    if any(event.line > end_event.line for event in reserved):
+        return WifiOldgoodRetainedPrefix(
+            begin_line=begin_event.line,
+            end_line=end_event.line,
+            pair_epoch=numeric["pair_epoch"],
+            generation=numeric["generation"],
+            missing="retained-prefix-trailing-record",
+        )
+    return WifiOldgoodRetainedPrefix(
+        complete=True,
+        begin_line=begin_event.line,
+        end_line=end_event.line,
+        pair_epoch=numeric["pair_epoch"],
+        generation=numeric["generation"],
+        missing="none",
+    )
+
+
+def summarize_wifi_retained_oldgood_replay(
+    events: list[TraceEvent],
+) -> SequenceResult | None:
+    """Validate the retained prefix plus fresh post-TCP current evidence."""
+
+    prefix = wifi_oldgood_retained_prefix(events)
+    if prefix is None:
+        return None
+    if not prefix.complete:
+        return SequenceResult(False, "none", prefix.missing)
+    if any(wifi_forbidden_shortcut(event) for event in events):
+        return SequenceResult(False, "none", "forbidden-wifi-shortcut")
+
+    later_events = [event for event in events if event.line > prefix.end_line]
+    for event in later_events:
+        if wifi_join_request_reserved(event) or wifi_gate8_host_eapol_attempt_boundary(
+            event
+        ):
+            return SequenceResult(False, "dhcp-bound", "retained-prefix-invalidated")
+        if any(
+            has_reserved_record_prefix(event.raw, token)
+            for token in WIFI_GATE8_LIFECYCLE_TOKENS
+        ):
+            return SequenceResult(False, "dhcp-bound", "retained-prefix-invalidated")
+
+    gate8 = summarize_wifi_gate8_proof(wifi_oldgood_authority_events(events))
+    if (
+        not gate8.complete
+        or gate8.pair_epoch != prefix.pair_epoch
+        or gate8.generation != prefix.generation
+    ):
+        return SequenceResult(False, "dhcp-bound", "gate8-identity-current")
+
+    def current_generation(event: TraceEvent) -> bool:
+        value = parse_hex_int(event.fields.get("generation"))
+        return value == prefix.generation
+
+    retained_tail_steps = [
+        SequenceStep("netstats-counters", wifi_netstats_counters_step),
+        SequenceStep(
+            "tcp-authenticated",
+            lambda event: current_generation(event)
+            and wifi_tcp_authenticated_step(event),
+        ),
+        SequenceStep(
+            "netstats-bound",
+            lambda event: current_generation(event)
+            and wifi_netstats_bound_step(event),
+        ),
+        SequenceStep("netstats-secure", wifi_netstats_secure_step),
+        SequenceStep(
+            "tcp-ready",
+            lambda event: current_generation(event) and wifi_tcp_ready_step(event),
+        ),
+        SequenceStep(
+            "nettest",
+            lambda event: current_generation(event) and wifi_nettest_step(event),
+        ),
+        SequenceStep("dpc-healthy-after-tcp", wifi_dpc_healthy_step),
+    ]
+    index = 0
+    last = "dhcp-bound"
+    matched: list[TraceEvent] = []
+    for event in later_events:
+        if index >= len(retained_tail_steps):
+            break
+        step = retained_tail_steps[index]
+        if not step.matcher(event):
+            continue
+        matched.append(event)
+        last = step.name
+        index += 1
+    if index != len(retained_tail_steps):
+        return SequenceResult(False, last, retained_tail_steps[index].name)
+    if matched[1].line != matched[0].line + 1:
+        return SequenceResult(False, "netstats-counters", "netstats-generation-envelope")
+    result = SequenceResult(True, last, "none")
+    if result.replay and not summarize_wifi_dpc_proof(events).proof:
+        return SequenceResult(False, result.last, "dpc-healthy-after-tcp")
+    return result
+
+
+def wifi_oldgood_authority_events(events: list[TraceEvent]) -> list[TraceEvent]:
+    """Keep retained replay rows from masquerading as live lifecycle edges."""
+
+    begin_candidates = [
+        event
+        for event in events
+        if has_reserved_record_prefix(event.raw, "WIFI_OLDGOOD_RETAINED_BEGIN")
+    ]
+    if not begin_candidates:
+        return events
+    begin = begin_candidates[-1]
+    retained_prefix = wifi_oldgood_retained_prefix(events)
+    authority_floor = (
+        begin.line
+        if retained_prefix is not None and not retained_prefix.complete
+        else 0
+    )
+    passive_lines = {begin.line}
+    for offset in range(1, WIFI_OLDGOOD_RETAINED_LINE_COUNT):
+        event = wifi_oldgood_line_event(events, begin.line + offset)
+        if event is None:
+            break
+        if offset <= 3:
+            expected = has_reserved_record_prefix(
+                event.raw, "WIFI_OLDGOOD_RETAINED_HASH"
+            )
+        elif offset == WIFI_OLDGOOD_RETAINED_LINE_COUNT - 1:
+            expected = has_reserved_record_prefix(
+                event.raw, "WIFI_OLDGOOD_RETAINED_END"
+            )
+        else:
+            step_index = offset - 4
+            expected_tokens = (
+                ("SDIO_DRIVER_TASK_REPLAY_STATUS",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("CYW43_DRIVER_TASK_CONTROL_SPLIT",),
+                ("CYW43_DRIVER_TASK_CONTROL_SPLIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("CYW43_DRIVER_TASK_CLM",),
+                ("CYW43_DRIVER_TASK_TEXT_IOVAR",),
+                ("CYW43_DRIVER_TASK_TEXT_IOVAR",),
+                ("DRIVER_TASK_RESOURCE_INIT",),
+                ("CYW43_DRIVER_TASK_JOIN_REQUEST",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_STATUS",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_KEY",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_KEY",),
+                ("CYW43_DRIVER_TASK_HOST_EAPOL_STATUS",),
+                ("[dhcp] start",),
+                ("[dhcp] lease",),
+            )[step_index]
+            expected = any(
+                has_reserved_record_prefix(event.raw, token)
+                for token in expected_tokens
+            )
+        if not expected:
+            break
+        passive_lines.add(event.line)
+    return [
+        event
+        for event in events
+        if event.line >= authority_floor and event.line not in passive_lines
+    ]
+
+
 def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResult:
     """Validate the reopened 26b CYW43 host-EAPOL old-good replay profile."""
 
     event_list = list(events)
+    retained_result = summarize_wifi_retained_oldgood_replay(event_list)
+    if retained_result is not None:
+        return retained_result
     result = ordered_sequence_result(
         event_list,
         ordered_events=current_cyw43_supervisor_attempt_events(event_list),
@@ -15162,64 +15980,7 @@ def summarize_wifi_oldgood_replay(events: Iterable[TraceEvent]) -> SequenceResul
             SequenceStep("firmware-identity", wifi_firmware_identity_step),
         ],
         forbidden=[SequenceStep("wifi-shortcut", wifi_forbidden_shortcut)],
-        steps=[
-            SequenceStep("sdio-engine-ready", wifi_sdio_engine_ready_step),
-            SequenceStep("cyw43-transport-ready", wifi_cyw43_transport_step),
-            SequenceStep("firmware-ready", wifi_firmware_ready_step),
-            SequenceStep("function2-ready", wifi_function2_ready_step),
-            SequenceStep(
-                "control-txglom-pre-tx-drain-ready",
-                wifi_control_txglom_pre_tx_drain_ready_step,
-            ),
-            SequenceStep(
-                "control-txglom-tx-complete", wifi_control_txglom_tx_complete_step
-            ),
-            SequenceStep("control-txglomalign", wifi_control_txglomalign_step),
-            SequenceStep("control-ulp-sdioctrl", wifi_control_ulp_sdioctrl_step),
-            SequenceStep("control-rxglom", wifi_control_rxglom_step),
-            SequenceStep("control-cur-etheraddr", wifi_control_cur_etheraddr_step),
-            SequenceStep("control-revinfo", wifi_control_revinfo_step),
-            SequenceStep("clm-ready", wifi_clm_ready_step),
-            SequenceStep("firmware-version", wifi_firmware_version_step),
-            SequenceStep("clm-version", wifi_clm_version_step),
-            SequenceStep("control-up", wifi_control_up_step),
-            SequenceStep("join-request", wifi_join_request_step),
-            SequenceStep("association-link", wifi_association_link_step),
-            SequenceStep(
-                "host-eapol-m1",
-                lambda event: wifi_eapol_message_step(event, "m1"),
-            ),
-            SequenceStep(
-                "host-eapol-m2",
-                lambda event: wifi_eapol_message_step(event, "m2"),
-            ),
-            SequenceStep(
-                "host-eapol-m3",
-                lambda event: wifi_eapol_message_step(event, "m3"),
-            ),
-            SequenceStep(
-                "host-eapol-m4",
-                lambda event: wifi_eapol_message_step(event, "m4"),
-            ),
-            SequenceStep(
-                "ptk-install",
-                lambda event: wifi_key_install_step(event, "ptk"),
-            ),
-            SequenceStep(
-                "gtk-install",
-                lambda event: wifi_key_install_step(event, "gtk"),
-            ),
-            SequenceStep("secure-release", wifi_secure_release_step),
-            SequenceStep("dhcp-start", wifi_dhcp_start_step),
-            SequenceStep("dhcp-bound", wifi_dhcp_bound_step),
-            SequenceStep("nettest", wifi_nettest_step),
-            SequenceStep("netstats-counters", wifi_netstats_counters_step),
-            SequenceStep("tcp-authenticated", wifi_tcp_authenticated_step),
-            SequenceStep("netstats-bound", wifi_netstats_bound_step),
-            SequenceStep("netstats-secure", wifi_netstats_secure_step),
-            SequenceStep("tcp-ready", wifi_tcp_ready_step),
-            SequenceStep("dpc-healthy-after-tcp", wifi_dpc_healthy_step),
-        ],
+        steps=[*wifi_oldgood_prefix_steps(), *wifi_oldgood_tail_steps()],
     )
     if result.replay and not summarize_wifi_dpc_proof(event_list).proof:
         return SequenceResult(False, result.last, "dpc-healthy-after-tcp")
@@ -16275,8 +17036,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             )
         )
     ]
+    wifi_authority_event_list = wifi_oldgood_authority_events(event_list)
     wifi_gate8 = refine_wifi_gate8_from_diag_complete(
-        event_list, summarize_wifi_gate8_proof(event_list)
+        wifi_authority_event_list,
+        summarize_wifi_gate8_proof(wifi_authority_event_list),
     )
     (
         wifi_diag_detail,
@@ -16284,15 +17047,17 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         wifi_diag_cause,
         wifi_diag_trigger,
         wifi_diag_retained,
-    ) = summarize_wifi_diag_complete(event_list)
-    cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(event_list)
+    ) = summarize_wifi_diag_complete(wifi_authority_event_list)
+    cyw43_bootstrap_supervisor = summarize_cyw43_bootstrap_supervisor(
+        wifi_authority_event_list
+    )
     gate8_protocol_seen = any(
         event.raw.lower().startswith("wifi: gate 8 subgate")
         or any(
             has_reserved_record_prefix(event.raw, token)
             for token in WIFI_GATE8_LIFECYCLE_TOKENS
         )
-        for event in event_list
+        for event in wifi_authority_event_list
     )
     if (
         wifi_gate8.complete
@@ -16316,7 +17081,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
             ready=False,
             blocker="gate8-subgates-incomplete",
         )
-    wifi_gate7 = summarize_wifi_gate7_proof(event_list)
+    wifi_gate7 = summarize_wifi_gate7_proof(wifi_authority_event_list)
     if wifi_gate7.retained_current and (
         not wifi_gate8.complete
         or wifi_gate7.generation != wifi_gate8.generation
@@ -16330,7 +17095,7 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     if wifi_gate8.complete:
         post_ready_event_list = [
             event
-            for event in event_list
+            for event in wifi_authority_event_list
             if event.line > wifi_gate8.ready_line
         ]
         acceptance_event_list = wifi_generation_scoped_events(
@@ -16349,9 +17114,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         acceptance_event_list = []
         wifi_dpc = WifiDpcProof(reason="gate8-ready-missing")
     else:
-        acceptance_event_list = event_list
-        wifi_dpc = summarize_wifi_dpc_proof(event_list)
-    current_diag_dpc = current_wifi_diag_dpc_events(event_list)
+        acceptance_event_list = wifi_authority_event_list
+        wifi_dpc = summarize_wifi_dpc_proof(wifi_authority_event_list)
+    current_diag_dpc = current_wifi_diag_dpc_events(wifi_authority_event_list)
     if current_diag_dpc is not None and wifi_gate8.complete:
         # `wifi diag` samples DPC truth immediately after its production begin
         # marker and before the same command's retained Gate 7/8 transaction.
@@ -16363,10 +17128,10 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     usb_event_ring_alive, usb_psc_drain_count, usb_psc_drain_mask = (
         summarize_usb_event_ring_state(event_list)
     )
-    wifi_gate, wifi_blocker = summarize_wifi_gate(event_list)
+    wifi_gate, wifi_blocker = summarize_wifi_gate(wifi_authority_event_list)
     wifi_oldgood = summarize_wifi_oldgood_replay(event_list)
     wifi_exact, wifi_phase, wifi_blocker_line = summarize_wifi_failure_detail(
-        event_list, wifi_blocker
+        wifi_authority_event_list, wifi_blocker
     )
     if wifi_blocker == "backplane-window" and wifi_exact.startswith(
         "cyw43-backplane-"
@@ -16376,9 +17141,9 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
         # that generic Gate-5 failure.
         wifi_blocker = wifi_exact
     initial_wifi_subgate = summarize_wifi_gate7_subgate_detail(
-        event_list, wifi_gate, wifi_blocker
+        wifi_authority_event_list, wifi_gate, wifi_blocker
     )
-    wifi_dhcp_frontier = summarize_wifi_dhcp_frontier(event_list)
+    wifi_dhcp_frontier = summarize_wifi_dhcp_frontier(wifi_authority_event_list)
     if wifi_dhcp_frontier is not None and (
         wifi_gate >= 9 or initial_wifi_subgate.subgate == "7e"
     ):
@@ -16558,6 +17323,13 @@ def summarize_gates(events: Iterable[TraceEvent]) -> GateSummary:
     wifi_firmware_identity_proof, wifi_firmware_identity_blocker = (
         summarize_wifi_firmware_identity(event_list)
     )
+    retained_wifi_prefix = wifi_oldgood_retained_prefix(event_list)
+    if retained_wifi_prefix is not None and retained_wifi_prefix.complete:
+        # The atomic retained transaction binds the exact lengths and three
+        # canonical hashes without relying on the older over-width aggregate
+        # firmware row surviving linked-serial output.
+        wifi_firmware_identity_proof = True
+        wifi_firmware_identity_blocker = "none"
     wifi_clm_ready_proof = any(wifi_clm_ready_step(event) for event in event_list)
     wifi_firmware_version_proof = any(
         wifi_firmware_version_step(event) for event in event_list

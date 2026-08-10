@@ -330,10 +330,13 @@ class RedactingSerialController:
         timeout_s: float,
         *,
         label: str,
+        stream_prefix: bytes = b"",
     ) -> bytes:
+        """Record serial bytes until a marker appears in the contiguous stream."""
+
         needles = tuple(markers)
         deadline = time.monotonic() + timeout_s
-        seen = bytearray()
+        seen = bytearray(stream_prefix[-TAIL_LIMIT:])
         while time.monotonic() < deadline:
             chunk = self._serial.read(4096)
             if not chunk:
@@ -419,6 +422,7 @@ class RedactingSerialController:
                 (ROOT_PROMPT_FULL,),
                 prompt_timeout_s,
                 label=f"fresh full root prompt before {label}",
+                stream_prefix=ping_snapshot[-(len(ROOT_PROMPT_FULL) - 1) :],
             )
 
 
@@ -1406,14 +1410,21 @@ def run_diagnostics(
             ("netstats", "netstats-final"),
         ]
     if lane == "wifi":
+        # The current old-good prefix is retained by the settled supervisor,
+        # while nettest/TCP/DPC remain fresh tail evidence.  Project the
+        # retained prefix first so the serial transcript preserves that causal
+        # order instead of asking the proof tool to stitch later diagnostics
+        # ahead of earlier live traffic.
+        commands.insert(0, ("smp activity", "smp activity-prefix"))
         commands.append(("wifi diag", "wifi diag"))
     commands.extend(
         [
             ("usb diag", "usb diag"),
             ("usb status", "usb status"),
-            ("smp activity", "smp activity"),
         ]
     )
+    if lane != "wifi":
+        commands.append(("smp activity", "smp activity"))
     if active_usb_probe:
         commands.append(("usb probe-kbd", "usb probe-kbd"))
     for command, label in commands:

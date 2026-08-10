@@ -29,12 +29,12 @@ use pi4_driver_abi::{
     DriverRuntimeFramebufferDescriptor, DriverRuntimeInitDescriptor,
     DriverRuntimePersistentWaitReceipt, DriverRuntimeSdioClockSnapshot,
     DriverRuntimeSdioDeadlineArm, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DriverRuntimeSteadyServiceProgress, DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO,
-    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
+    DriverRuntimeSteadyServiceProgress, DriverRuntimeUsbOldgoodReceipt,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_CYW43_SDIO, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_DPC_EVENT_RING, DRIVER_RUNTIME_BUS_LINK_FLAG_NOTIFICATIONS,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
     DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE, DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES,
     DRIVER_RUNTIME_CONTINUATION_GRANT_MAGIC, DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET,
@@ -442,6 +442,7 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_BYTES, DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_MAGIC,
     DRIVER_RUNTIME_STEADY_SERVICE_PROGRESS_OFFSET, DRIVER_RUNTIME_TASK_KEY_RESTART_FLAG,
     DRIVER_RUNTIME_USB_ENUMERATE_AUX, DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_AUX,
+    DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES, DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET,
     DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT, DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT,
 };
 #[cfg(feature = "kernel")]
@@ -3788,6 +3789,49 @@ impl DriverTaskRingView {
         })
     }
 
+    fn read_usb_oldgood_receipt_sample(&self) -> Option<DriverRuntimeUsbOldgoodReceipt> {
+        let base = usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET);
+        Some(DriverRuntimeUsbOldgoodReceipt {
+            magic: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, magic))?,
+            version: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, version))?,
+            len: self
+                .read_u16(base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, len))?,
+            task_key: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, task_key))?,
+            identity_token: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, identity_token),
+            )?,
+            link_epoch: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, link_epoch),
+            )?,
+            link_token: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, link_token),
+            )?,
+            lifetime_epoch: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, lifetime_epoch),
+            )?,
+            publication_sequence: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, publication_sequence),
+            )?,
+            step_mask: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, step_mask),
+            )?,
+            topology: self
+                .read_u32(base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, topology))?,
+            input_generation: self.read_u32(
+                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, input_generation),
+            )?,
+            committed_publication_sequence: self.read_u32(
+                base + core::mem::offset_of!(
+                    DriverRuntimeUsbOldgoodReceipt,
+                    committed_publication_sequence
+                ),
+            )?,
+        })
+    }
+
     fn read_cyw43_rx_queue_state(&self) -> Option<DriverRuntimeCyw43RxQueueState> {
         let base = usize::from(DRIVER_RUNTIME_CYW43_RX_QUEUE_STATE_OFFSET);
         Some(DriverRuntimeCyw43RxQueueState {
@@ -4056,6 +4100,38 @@ impl DriverTaskRingView {
         }
         true
     }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_usb_oldgood_stable_read_with(
+    mut invalidate: impl FnMut(),
+    mut read: impl FnMut() -> Option<DriverRuntimeUsbOldgoodReceipt>,
+    mut acquire: impl FnMut(),
+) -> Option<DriverRuntimeUsbOldgoodReceipt> {
+    invalidate();
+    let first = read()?;
+    acquire();
+    invalidate();
+    let second = read()?;
+    DriverRuntimeUsbOldgoodReceipt::stable_snapshot(first, second)
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_ring_read_usb_oldgood_receipt(
+    ring_root_ptr: usize,
+) -> Option<DriverRuntimeUsbOldgoodReceipt> {
+    let ring = DriverTaskRingView::new(ring_root_ptr)?;
+    let base = ring_root_ptr.checked_add(usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET))?;
+    driver_task_usb_oldgood_stable_read_with(
+        || {
+            driver_task_ring_invalidate_root_range(
+                base,
+                usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES),
+            );
+        },
+        || ring.read_usb_oldgood_receipt_sample(),
+        driver_task_shared_load_barrier,
+    )
 }
 
 #[cfg(feature = "kernel")]
@@ -12975,6 +13051,216 @@ fn driver_runtime_descriptor_bus_link_seal_label(
     }
 }
 
+/// Maximum payload width retained by the root console without a truncation
+/// marker. Compact owner-state proof must fit this bound as one canonical row.
+#[cfg(feature = "kernel")]
+pub(crate) const DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES: usize = 243;
+
+#[cfg(feature = "kernel")]
+fn compact_driver_task_owner_state_line_for(
+    hot_path: DriverTaskHotPath,
+    present: bool,
+    descriptor_sealed: bool,
+) -> Option<heapless::String<256>> {
+    use core::fmt::Write;
+
+    let contract = hot_path.contract();
+    let mut line = heapless::String::new();
+    write!(
+        line,
+        "DRIVER_TASK_OWNER_STATE contract={} hot_path={} owner_state={} descriptor={} descriptor_version={} descriptor_seal={} artifact_hash={} bus_link_seal={} root_pointer={}",
+        contract.name,
+        hot_path.as_str(),
+        if present { "driver-owned" } else { "missing" },
+        if present { "present" } else { "missing" },
+        DRIVER_RUNTIME_INIT_VERSION,
+        if descriptor_sealed { "valid" } else { "missing" },
+        if descriptor_sealed {
+            "nonzero"
+        } else {
+            "unknown"
+        },
+        driver_runtime_descriptor_bus_link_seal_label(hot_path, descriptor_sealed),
+        if present { "no" } else { "unknown" },
+    )
+    .ok()?;
+    (line.len() <= DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES).then_some(line)
+}
+
+/// Format one current, fail-closed owner-state row for bounded diagnostics.
+///
+/// This is a passive projection of already-published HAL admission state. It
+/// cannot register an owner, seal a descriptor, or resume a driver runtime.
+#[cfg(feature = "kernel")]
+pub(crate) fn compact_driver_task_owner_state_line(
+    hot_path: DriverTaskHotPath,
+) -> Option<heapless::String<256>> {
+    let proof = driver_task_runtime_proof();
+    compact_driver_task_owner_state_line_for(
+        hot_path,
+        proof.owner_state_hot_path_mask & hot_path.owner_state_bit() != 0,
+        driver_runtime_descriptor_seal_registered(hot_path),
+    )
+}
+
+/// Passive current-state projection for the USB old-good replay receipt.
+///
+/// A populated receipt is complete, stable across two cache-invalidated reads,
+/// and bound to the exact current sealed USB descriptor and its USB-to-PCIe
+/// client link. This snapshot never services a ring, signals a runtime, or
+/// mutates owner-state proof.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DriverTaskUsbOldgoodPassiveSnapshot {
+    pub receipt: Option<DriverRuntimeUsbOldgoodReceipt>,
+    pub usb_owner: bool,
+    pub pcie_owner: bool,
+    pub usb_descriptor_sealed: bool,
+    pub pcie_descriptor_sealed: bool,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_current_descriptor_exact(
+    hot_path: DriverTaskHotPath,
+    descriptor: DriverRuntimeInitDescriptor,
+) -> bool {
+    let Some(task_key) = driver_task_contract_key(hot_path.contract()) else {
+        return false;
+    };
+    descriptor.hot_path == hot_path.as_u32()
+        && descriptor.role_bit == hot_path.role_bit() as u32
+        && descriptor.sealed_identity_valid_for_task(task_key as u32)
+        && driver_runtime_descriptor_expected_bus_link_sealed(
+            hot_path,
+            task_key as u32,
+            &descriptor,
+        )
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_current_usb_descriptor_identity(
+    descriptor: DriverRuntimeInitDescriptor,
+) -> Option<(u32, u32, pi4_driver_abi::DriverRuntimeBusLinkDescriptor)> {
+    if !driver_task_current_descriptor_exact(DriverTaskHotPath::UsbKeyboard, descriptor)
+        || descriptor.bus_link_count != 1
+    {
+        return None;
+    }
+    let link = descriptor.bus_links[0];
+    let role_flags =
+        link.flags & (DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER);
+    if link.owner_hot_path != DriverTaskHotPath::PcieRoot.as_u32()
+        || link.channel_id != DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE
+        || role_flags != DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT
+        || link.flags
+            != DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE
+        || !link.sealed_for_client(descriptor.task_key, DriverTaskHotPath::UsbKeyboard.as_u32())
+    {
+        return None;
+    }
+    Some((descriptor.task_key, descriptor.identity_token, link))
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_usb_oldgood_receipt_matches_current(
+    receipt: DriverRuntimeUsbOldgoodReceipt,
+    task_key: u32,
+    identity_token: u32,
+    link: pi4_driver_abi::DriverRuntimeBusLinkDescriptor,
+) -> bool {
+    receipt.complete()
+        && receipt.task_key == task_key
+        && receipt.identity_token == identity_token
+        && receipt.link_epoch == link.epoch
+        && receipt.link_token == link.token
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DriverTaskUsbOldgoodCurrentContext {
+    snapshot: DriverTaskUsbOldgoodPassiveSnapshot,
+    identity: Option<(u32, u32, pi4_driver_abi::DriverRuntimeBusLinkDescriptor)>,
+    ring_root_ptr: usize,
+    root_ring_writers: usize,
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_usb_oldgood_current_context() -> DriverTaskUsbOldgoodCurrentContext {
+    let owner_mask = DRIVER_TASK_OWNER_STATE_HOT_PATH_MASK.load(Ordering::Acquire);
+    let usb_owner = owner_mask & DriverTaskHotPath::UsbKeyboard.owner_state_bit() != 0;
+    let pcie_owner = owner_mask & DriverTaskHotPath::PcieRoot.owner_state_bit() != 0;
+    let usb_identity = retained_driver_runtime_restart_descriptor(DriverTaskHotPath::UsbKeyboard)
+        .and_then(driver_task_current_usb_descriptor_identity);
+    let pcie_descriptor_exact = retained_driver_runtime_restart_descriptor(
+        DriverTaskHotPath::PcieRoot,
+    )
+    .is_some_and(|descriptor| {
+        driver_task_current_descriptor_exact(DriverTaskHotPath::PcieRoot, descriptor)
+    });
+    let usb_descriptor_sealed = usb_identity.is_some()
+        && driver_runtime_descriptor_seal_registered(DriverTaskHotPath::UsbKeyboard);
+    let pcie_descriptor_sealed = pcie_descriptor_exact
+        && driver_runtime_descriptor_seal_registered(DriverTaskHotPath::PcieRoot);
+    let usb_slot = slot_for_task_key(DRIVER_TASK_KEY_USB_LOCAL_SEAT);
+    DriverTaskUsbOldgoodCurrentContext {
+        snapshot: DriverTaskUsbOldgoodPassiveSnapshot {
+            receipt: None,
+            usb_owner,
+            pcie_owner,
+            usb_descriptor_sealed,
+            pcie_descriptor_sealed,
+        },
+        identity: usb_identity,
+        ring_root_ptr: usb_slot.map_or(0, |slot| slot.ring_root_ptr.load(Ordering::Acquire)),
+        root_ring_writers: usb_slot.map_or(usize::MAX, |slot| {
+            slot.root_ring_writers.load(Ordering::Acquire)
+        }),
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn driver_task_usb_oldgood_context_accepts_receipt(
+    before: DriverTaskUsbOldgoodCurrentContext,
+    after: DriverTaskUsbOldgoodCurrentContext,
+    receipt: DriverRuntimeUsbOldgoodReceipt,
+) -> bool {
+    let Some((task_key, identity_token, link)) = before.identity else {
+        return false;
+    };
+    before.root_ring_writers == 0
+        && after.root_ring_writers == 0
+        && before.ring_root_ptr != 0
+        && after.ring_root_ptr == before.ring_root_ptr
+        && after.snapshot == before.snapshot
+        && after.identity == before.identity
+        && driver_task_usb_oldgood_receipt_matches_current(receipt, task_key, identity_token, link)
+}
+
+/// Stable-read the complete, current USB old-good replay receipt.
+#[cfg(feature = "kernel")]
+#[must_use]
+pub(crate) fn driver_task_usb_oldgood_passive_snapshot() -> DriverTaskUsbOldgoodPassiveSnapshot {
+    let before = driver_task_usb_oldgood_current_context();
+    if before.identity.is_none()
+        || !before.snapshot.usb_owner
+        || !before.snapshot.pcie_owner
+        || !before.snapshot.usb_descriptor_sealed
+        || !before.snapshot.pcie_descriptor_sealed
+        || before.ring_root_ptr == 0
+        || before.root_ring_writers != 0
+    {
+        return before.snapshot;
+    }
+    let receipt = driver_task_ring_read_usb_oldgood_receipt(before.ring_root_ptr);
+    let mut after = driver_task_usb_oldgood_current_context();
+    if receipt.is_some_and(|receipt| {
+        driver_task_usb_oldgood_context_accepts_receipt(before, after, receipt)
+    }) {
+        after.snapshot.receipt = receipt;
+    }
+    after.snapshot
+}
+
 /// Build a runtime init command for a Pi 4 hot path.
 #[cfg(feature = "kernel")]
 #[must_use]
@@ -15827,13 +16113,7 @@ fn service_deferred_runtime_init_descriptor_turn(
         completion.code == DriverTaskCompletionCode::Progress.as_u16()
             && completion.result == hot_path.as_u32()
     });
-    let status = if complete {
-        "ready"
-    } else if completion.is_some() {
-        "unexpected-completion"
-    } else {
-        "no-reply"
-    };
+    let status = deferred_runtime_init_descriptor_status(mode, completion, complete);
     emit_driver_task_resource_init_status(
         contract,
         hot_path,
@@ -15862,6 +16142,23 @@ fn service_deferred_runtime_init_descriptor_turn(
     } else {
         emit_deferred_runtime_init_status(contract, hot_path, "pending");
         (DriverTaskDescriptorReplayTurn::Pending, None)
+    }
+}
+
+#[cfg(feature = "kernel")]
+fn deferred_runtime_init_descriptor_status(
+    mode: DriverTaskDescriptorReplayMode,
+    completion: Option<DriverTaskCompletionRecord>,
+    complete: bool,
+) -> &'static str {
+    if complete {
+        "ready"
+    } else if completion.is_some() {
+        "unexpected-completion"
+    } else if mode == DriverTaskDescriptorReplayMode::RetainedTurn {
+        "pending"
+    } else {
+        "no-reply"
     }
 }
 
@@ -22997,6 +23294,287 @@ mod tests {
 
     #[cfg(feature = "kernel")]
     static PERSISTENT_OP11_DEADLINE_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn compact_owner_state_rows_preserve_canonical_contract_within_serial_bound() {
+        for hot_path in PI4_DRIVER_TASK_HOT_PATHS {
+            let present = compact_driver_task_owner_state_line_for(hot_path, true, true)
+                .expect("current owner proof must fit one retained console row");
+            assert!(present.len() <= DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES);
+            assert!(present.starts_with("DRIVER_TASK_OWNER_STATE contract="));
+            assert!(present.contains(hot_path.contract().name));
+            assert!(present.contains(hot_path.as_str()));
+            assert!(present.contains("owner_state=driver-owned"));
+            assert!(present.contains("descriptor=present"));
+            assert!(present.contains("descriptor_seal=valid"));
+            assert!(present.contains("artifact_hash=nonzero"));
+            assert!(present.contains("root_pointer=no"));
+            let expected_bus_link = match hot_path {
+                DriverTaskHotPath::UsbKeyboard
+                | DriverTaskHotPath::Cyw43Wifi
+                | DriverTaskHotPath::SdioHost => "bus_link_seal=valid",
+                _ => "bus_link_seal=none",
+            };
+            assert!(present.contains(expected_bus_link));
+
+            let missing = compact_driver_task_owner_state_line_for(hot_path, false, false)
+                .expect("fail-closed owner row must also fit");
+            assert!(missing.len() <= DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES);
+            assert!(missing.contains("owner_state=missing"));
+            assert!(missing.contains("descriptor=missing"));
+            assert!(missing.contains("descriptor_seal=missing"));
+            assert!(missing.contains("artifact_hash=unknown"));
+            assert!(missing.contains("bus_link_seal=missing"));
+            assert!(missing.contains("root_pointer=unknown"));
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_oldgood_test_descriptor() -> DriverRuntimeInitDescriptor {
+        let hot_path = DriverTaskHotPath::UsbKeyboard;
+        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        descriptor.hot_path = hot_path.as_u32();
+        descriptor.role_bit = hot_path.role_bit() as u32;
+        descriptor.flags = pi4_driver_abi::DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
+            | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY
+            | pi4_driver_abi::DRIVER_RUNTIME_INIT_FLAG_BUS_LINKS;
+        descriptor.shared_page_count = 1;
+        descriptor.shared_pages[0] = pi4_driver_abi::DriverRuntimePageDescriptor::new(0x4000_0000);
+        descriptor.bus_link_count = 1;
+        descriptor.bus_links[0] = pi4_driver_abi::DriverRuntimeBusLinkDescriptor::new(
+            DriverTaskHotPath::PcieRoot.as_u32(),
+            DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_RESOURCE_PAGE_BYTES as u32,
+            DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT | DRIVER_RUNTIME_BUS_LINK_FLAG_POINTER_FREE,
+        );
+        descriptor.with_sealed_identity(DRIVER_TASK_KEY_USB_LOCAL_SEAT as u32, 0x5553_4244)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_oldgood_test_receipt(
+        descriptor: DriverRuntimeInitDescriptor,
+    ) -> DriverRuntimeUsbOldgoodReceipt {
+        let link = descriptor.bus_links[0];
+        let mut receipt = DriverRuntimeUsbOldgoodReceipt::new(
+            descriptor.task_key,
+            descriptor.identity_token,
+            link.epoch,
+            link.token,
+            7,
+        );
+        receipt.publication_sequence = 19;
+        receipt.step_mask = pi4_driver_abi::DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK;
+        receipt.topology = 0x1122_3381;
+        receipt.input_generation = 23;
+        receipt.commit()
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_stable_reader_requires_two_cache_invalidated_identical_samples() {
+        use core::cell::Cell;
+
+        let descriptor = usb_oldgood_test_descriptor();
+        assert!(descriptor.sealed_identity_valid_for_task(DRIVER_TASK_KEY_USB_LOCAL_SEAT as u32));
+        let receipt = usb_oldgood_test_receipt(descriptor);
+        let reads = Cell::new(0usize);
+        let invalidations = Cell::new(0usize);
+        let barriers = Cell::new(0usize);
+        let stable = driver_task_usb_oldgood_stable_read_with(
+            || invalidations.set(invalidations.get().saturating_add(1)),
+            || {
+                reads.set(reads.get().saturating_add(1));
+                Some(receipt)
+            },
+            || barriers.set(barriers.get().saturating_add(1)),
+        );
+        assert_eq!(stable, Some(receipt));
+        assert_eq!(reads.get(), 2);
+        assert_eq!(invalidations.get(), 2);
+        assert_eq!(barriers.get(), 1);
+
+        let sample = Cell::new(0usize);
+        let mut changed = receipt;
+        changed.publication_sequence = changed.publication_sequence.saturating_add(1);
+        changed.committed_publication_sequence = changed.publication_sequence;
+        assert!(driver_task_usb_oldgood_stable_read_with(
+            || {},
+            || {
+                let current = sample.get();
+                sample.set(current.saturating_add(1));
+                Some(if current == 0 { receipt } else { changed })
+            },
+            || {},
+        )
+        .is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_current_binding_rejects_partial_poisoned_or_stale_identity() {
+        let descriptor = usb_oldgood_test_descriptor();
+        let (task_key, identity_token, link) =
+            driver_task_current_usb_descriptor_identity(descriptor)
+                .expect("exact USB descriptor must expose one sealed client link");
+        let receipt = usb_oldgood_test_receipt(descriptor);
+        assert!(driver_task_usb_oldgood_receipt_matches_current(
+            receipt,
+            task_key,
+            identity_token,
+            link,
+        ));
+
+        let mut partial = receipt;
+        partial.step_mask &= !pi4_driver_abi::DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE;
+        partial.input_generation = 0;
+        partial.committed_publication_sequence = partial.publication_sequence;
+        assert!(!driver_task_usb_oldgood_receipt_matches_current(
+            partial,
+            task_key,
+            identity_token,
+            link,
+        ));
+        let mut poisoned = receipt;
+        poisoned.step_mask |= pi4_driver_abi::DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER;
+        poisoned.committed_publication_sequence = poisoned.publication_sequence;
+        assert!(!driver_task_usb_oldgood_receipt_matches_current(
+            poisoned,
+            task_key,
+            identity_token,
+            link,
+        ));
+        let mut stale = receipt;
+        stale.identity_token ^= 1;
+        assert!(!driver_task_usb_oldgood_receipt_matches_current(
+            stale,
+            task_key,
+            identity_token,
+            link,
+        ));
+        let mut torn = receipt;
+        torn.committed_publication_sequence = 0;
+        assert!(!driver_task_usb_oldgood_receipt_matches_current(
+            torn,
+            task_key,
+            identity_token,
+            link,
+        ));
+
+        let mut owner_link = descriptor;
+        owner_link.bus_links[0].flags |= DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER;
+        assert!(driver_task_current_usb_descriptor_identity(owner_link).is_none());
+        let mut wrong_task = descriptor;
+        wrong_task.task_key = DRIVER_TASK_KEY_PCIE_ROOT as u32;
+        assert!(driver_task_current_usb_descriptor_identity(wrong_task).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_context_rejects_descriptor_ring_or_root_writer_change() {
+        let descriptor = usb_oldgood_test_descriptor();
+        let identity = driver_task_current_usb_descriptor_identity(descriptor)
+            .expect("test descriptor must carry the exact USB client identity");
+        let receipt = usb_oldgood_test_receipt(descriptor);
+        let context = DriverTaskUsbOldgoodCurrentContext {
+            snapshot: DriverTaskUsbOldgoodPassiveSnapshot {
+                receipt: None,
+                usb_owner: true,
+                pcie_owner: true,
+                usb_descriptor_sealed: true,
+                pcie_descriptor_sealed: true,
+            },
+            identity: Some(identity),
+            ring_root_ptr: 0x7000_0000,
+            root_ring_writers: 0,
+        };
+        assert!(driver_task_usb_oldgood_context_accepts_receipt(
+            context, context, receipt,
+        ));
+
+        let mut changed_ring = context;
+        changed_ring.ring_root_ptr = changed_ring.ring_root_ptr.saturating_add(0x1000);
+        assert!(!driver_task_usb_oldgood_context_accepts_receipt(
+            context,
+            changed_ring,
+            receipt,
+        ));
+        let mut changed_descriptor = context;
+        let (task_key, token, mut link) = identity;
+        link.token ^= 1;
+        changed_descriptor.identity = Some((task_key, token, link));
+        assert!(!driver_task_usb_oldgood_context_accepts_receipt(
+            context,
+            changed_descriptor,
+            receipt,
+        ));
+        let mut writer_active = context;
+        writer_active.root_ring_writers = 1;
+        assert!(!driver_task_usb_oldgood_context_accepts_receipt(
+            context,
+            writer_active,
+            receipt,
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_receipt_range_is_disjoint_from_root_ring_housekeeping() {
+        let receipt_start = usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET);
+        let receipt_end = receipt_start + usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES);
+        let auxiliary_end = usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_OFFSET)
+            + usize::from(DRIVER_RUNTIME_CONTINUATION_GRANT_BYTES);
+        let completion_end =
+            DRIVER_TASK_RING_COMPLETION_OFFSET + core::mem::size_of::<DriverTaskCompletionRecord>();
+        let progress_end = usize::from(DRIVER_RUNTIME_RING_PROGRESS_OFFSET)
+            + usize::from(pi4_driver_abi::DRIVER_RUNTIME_RING_PROGRESS_BYTES);
+
+        assert!(auxiliary_end <= receipt_start);
+        assert!(completion_end <= receipt_start);
+        assert!(progress_end <= receipt_start);
+        assert!(receipt_end <= DRIVER_TASK_RING_FRAME_OFFSET);
+        assert!(describe_driver_task_ring_payload_at(receipt_start, &[0; 1], 0).is_none());
+        assert!(cyw43_sdio_runtime_restart_context(DriverTaskHotPath::UsbKeyboard).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn deferred_descriptor_status_distinguishes_retained_pending_from_bounded_no_reply() {
+        assert_eq!(
+            deferred_runtime_init_descriptor_status(
+                DriverTaskDescriptorReplayMode::RetainedTurn,
+                None,
+                false,
+            ),
+            "pending",
+        );
+        assert_eq!(
+            deferred_runtime_init_descriptor_status(
+                DriverTaskDescriptorReplayMode::Bounded,
+                None,
+                false,
+            ),
+            "no-reply",
+        );
+        let completion = DriverTaskCompletionRecord::progress(1, 7);
+        assert_eq!(
+            deferred_runtime_init_descriptor_status(
+                DriverTaskDescriptorReplayMode::RetainedTurn,
+                Some(completion),
+                false,
+            ),
+            "unexpected-completion",
+        );
+        assert_eq!(
+            deferred_runtime_init_descriptor_status(
+                DriverTaskDescriptorReplayMode::Bounded,
+                Some(completion),
+                true,
+            ),
+            "ready",
+        );
+    }
 
     #[cfg(feature = "kernel")]
     #[test]

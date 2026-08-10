@@ -583,6 +583,35 @@ const LOCAL_SEAT_NET_MIRROR_INITIAL_LINES: u64 = 4;
 // permitting an unbounded producer queue.
 const CONSOLE_OUTPUT_BACKLOG_LINES: usize = 72;
 const CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE: usize = 3;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT: usize = 31;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_OWNER_LINE_COUNT: usize = 6;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_OWNER_HOT_PATH_ORDER: [crate::hal::driver_task::DriverTaskHotPath;
+    WIFI_OLDGOOD_OWNER_LINE_COUNT] = [
+    crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard,
+    crate::hal::driver_task::DriverTaskHotPath::HdmiText,
+    crate::hal::driver_task::DriverTaskHotPath::PcieRoot,
+    crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi,
+    crate::hal::driver_task::DriverTaskHotPath::SdioHost,
+];
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT: usize =
+    WIFI_OLDGOOD_OWNER_LINE_COUNT + WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_SMP_ACTIVITY_LINE_RESERVE: usize = 32;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_RETAINED_PREFIX_STEPS: u8 = 26;
+#[cfg(feature = "kernel")]
+const WIFI_OLDGOOD_RETAINED_LINE_MAX_BYTES: usize =
+    crate::hal::driver_task::DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES;
+#[cfg(feature = "kernel")]
+const USB_OLDGOOD_RETAINED_LINE_COUNT: usize = 2;
+#[cfg(feature = "kernel")]
+const USB_OLDGOOD_RETAINED_LINE_MAX_BYTES: usize =
+    crate::hal::driver_task::DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
 const CONSOLE_PARSE_ERROR_REPEAT_MAX: u16 = 1024;
@@ -592,6 +621,453 @@ const SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS: u64 = 10_000;
 const SERIAL_INPUT_IDLE_TRACE_LIMIT: u8 = 2;
 #[cfg(feature = "kernel")]
 const SERIAL_RAW_UART_PREFLUSH_TURNS: usize = 8;
+
+#[cfg(feature = "kernel")]
+fn wifi_oldgood_retained_line(
+    args: fmt::Arguments<'_>,
+) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+    let mut line = HeaplessString::new();
+    line.write_fmt(args).ok()?;
+    (line.len() <= WIFI_OLDGOOD_RETAINED_LINE_MAX_BYTES).then_some(line)
+}
+
+#[cfg(feature = "kernel")]
+fn wifi_oldgood_hash_valid(hash: &str) -> bool {
+    hash.len() == 64
+        && hash
+            .as_bytes()
+            .iter()
+            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
+}
+
+#[cfg(feature = "kernel")]
+fn push_wifi_oldgood_retained_line(
+    lines: &mut HeaplessVec<
+        HeaplessString<DEFAULT_LINE_CAPACITY>,
+        WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT,
+    >,
+    args: fmt::Arguments<'_>,
+) -> Option<()> {
+    lines.push(wifi_oldgood_retained_line(args)?).ok()
+}
+
+#[cfg(feature = "kernel")]
+fn build_wifi_oldgood_retained_prefix(
+    receipt: crate::drivers::driver_task_net::Cyw43OldgoodPrefixReceipt,
+    dhcp: crate::net::Cyw43OldgoodDhcpReceipt,
+    firmware: WifiFirmwareContractTrace,
+) -> Option<
+    HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT>,
+> {
+    let max_u32_as_usize = u32::MAX as usize;
+    if receipt.attempt != 1
+        || receipt.pair_epoch == 0
+        || receipt.generation == 0
+        || receipt.completed_steps != 24
+        || receipt.generation != dhcp.generation
+        || !dhcp.bound
+        || receipt.firmware_len == 0
+        || receipt.firmware_len > max_u32_as_usize
+        || receipt.nvram_len == 0
+        || receipt.nvram_len > max_u32_as_usize
+        || receipt.clm_len == 0
+        || receipt.clm_len > max_u32_as_usize
+        || receipt.firmware_len != firmware.firmware_len
+        || receipt.nvram_len != firmware.nvram_len
+        || Some(receipt.clm_len) != firmware.clm_len
+        || !firmware.firmware_download_verified
+        || firmware.armcr4_release_attempts == 0
+        || !wifi_oldgood_hash_valid(firmware.firmware_sha256)
+        || !wifi_oldgood_hash_valid(firmware.nvram_sha256)
+        || !wifi_oldgood_hash_valid(firmware.clm_sha256)
+        || !matches!(receipt.ulp_status, "ready" | "unsupported")
+        || receipt.clm_index == 0
+        || receipt.clm_offset != receipt.clm_len
+        || receipt.firmware_version_len == 0
+        || receipt.firmware_version_len > max_u32_as_usize
+        || receipt.clm_version_len == 0
+        || receipt.clm_version_len > max_u32_as_usize
+        || receipt.join_generation_started != receipt.generation
+        || receipt.join_ssid_len == 0
+        || receipt.join_ssid_len > max_u32_as_usize
+        || receipt.join_result != 0
+        || !crate::drivers::driver_task_net::cyw43_oldgood_association_event_valid(
+            receipt.association_event,
+        )
+        || receipt.m1_len == 0
+        || receipt.m1_len > max_u32_as_usize
+        || receipt.m2_len == 0
+        || receipt.m2_len > max_u32_as_usize
+        || receipt.m3_len == 0
+        || receipt.m3_len > max_u32_as_usize
+        || receipt.m4_len == 0
+        || receipt.m4_len > max_u32_as_usize
+        || receipt.secure_eapol_rx < 2
+        || dhcp.transaction_id == 0
+        || dhcp.ip == [0; 4]
+        || !(1..=32).contains(&dhcp.prefix_len)
+        || dhcp.gateway == [0; 4]
+        || dhcp.lease_seconds == 0
+    {
+        return None;
+    }
+
+    let id = receipt.pair_epoch;
+    let mut lines = HeaplessVec::new();
+    push_wifi_oldgood_retained_line(
+        &mut lines,
+        format_args!(
+            "WIFI_OLDGOOD_RETAINED_BEGIN id={} attempt={} pair_epoch={} generation={} prefix_steps={} fw={} nvram={} clm={}",
+            id,
+            receipt.attempt,
+            receipt.pair_epoch,
+            receipt.generation,
+            WIFI_OLDGOOD_RETAINED_PREFIX_STEPS,
+            receipt.firmware_len,
+            receipt.nvram_len,
+            receipt.clm_len,
+        ),
+    )?;
+    for (artifact, hash) in [
+        ("firmware", firmware.firmware_sha256),
+        ("nvram", firmware.nvram_sha256),
+        ("clm", firmware.clm_sha256),
+    ] {
+        push_wifi_oldgood_retained_line(
+            &mut lines,
+            format_args!(
+                "WIFI_OLDGOOD_RETAINED_HASH id={} artifact={} sha256={}",
+                id, artifact, hash,
+            ),
+        )?;
+    }
+
+    for args in [
+        format_args!(
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init blocker=ready detail=0x5500"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=net-engine-init status=ready"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-firmware status=ready"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-function2 status=ready"
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 stage=cyw43-control-txglomalign event=pre-tx-drain-ready poll={}",
+            receipt.txglom_poll,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 stage=cyw43-control-txglomalign event=tx-complete result={}",
+            receipt.txglom_result,
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-txglomalign status=ready"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-ulp-sdioctrl status={}",
+            receipt.ulp_status,
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-rxglom status=ready"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-mac status=ready"
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-revinfo status=ready"
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload action=ready index={} offset={} len={} flags=0x0000",
+            receipt.clm_index,
+            receipt.clm_offset,
+            receipt.clm_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 stage=cyw43-control-firmware-version name=ver printable_len={}",
+            receipt.firmware_version_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 stage=cyw43-control-clm-version name=clmver printable_len={}",
+            receipt.clm_version_len,
+        ),
+        format_args!(
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-up status=ready"
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 path=association-supervisor action=ready generation={} ssid_len={} result=0x{:08x}",
+            receipt.generation,
+            receipt.join_ssid_len,
+            receipt.join_result,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=required associated=yes link_up=yes assoc_event={} assoc_poll={} eapol_rx=0",
+            receipt.association_event,
+            receipt.association_poll,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m1 action=recv-m1 poll={} len={}",
+            receipt.m1_poll,
+            receipt.m1_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m2 action=send-m2 poll={} len={}",
+            receipt.m2_poll,
+            receipt.m2_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m3 action=recv-m3 poll={} len={}",
+            receipt.m3_poll,
+            receipt.m3_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m4 action=send-m4 poll={} len={}",
+            receipt.m4_poll,
+            receipt.m4_len,
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk stage=cyw43-host-eapol-ptk status=ready"
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk stage=cyw43-host-eapol-gtk status=ready"
+        ),
+        format_args!(
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=secure associated=yes link_up=yes eapol_rx={}",
+            receipt.secure_eapol_rx,
+        ),
+        format_args!(
+            "[dhcp] start ready interface=wifi generation={} xid=0x{:08x} now_ms={}",
+            dhcp.generation,
+            dhcp.transaction_id,
+            dhcp.start_now_ms,
+        ),
+        format_args!(
+            "[dhcp] lease bound generation={} ip={}.{}.{}.{}/{} gateway={}.{}.{}.{} server={}.{}.{}.{} lease_s={}",
+            dhcp.generation,
+            dhcp.ip[0],
+            dhcp.ip[1],
+            dhcp.ip[2],
+            dhcp.ip[3],
+            dhcp.prefix_len,
+            dhcp.gateway[0],
+            dhcp.gateway[1],
+            dhcp.gateway[2],
+            dhcp.gateway[3],
+            dhcp.server_id[0],
+            dhcp.server_id[1],
+            dhcp.server_id[2],
+            dhcp.server_id[3],
+            dhcp.lease_seconds,
+        ),
+    ] {
+        push_wifi_oldgood_retained_line(&mut lines, args)?;
+    }
+    push_wifi_oldgood_retained_line(
+        &mut lines,
+        format_args!(
+            "WIFI_OLDGOOD_RETAINED_END id={} attempt={} pair_epoch={} generation={} prefix_steps={} status=complete",
+            id,
+            receipt.attempt,
+            receipt.pair_epoch,
+            receipt.generation,
+            WIFI_OLDGOOD_RETAINED_PREFIX_STEPS,
+        ),
+    )?;
+    (lines.len() == WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT).then_some(lines)
+}
+
+#[cfg(feature = "kernel")]
+fn current_wifi_oldgood_owner_lines(
+) -> Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, WIFI_OLDGOOD_OWNER_LINE_COUNT>> {
+    use crate::hal::driver_task::{
+        compact_driver_task_owner_state_line, current_pi4_acceptance_hot_path_mask,
+        pi4_pre_root_net_bootstrap_selection, Pi4PreRootNetBootstrapSelection,
+    };
+
+    if pi4_pre_root_net_bootstrap_selection() != Pi4PreRootNetBootstrapSelection::Wifi {
+        return None;
+    }
+    let required = current_pi4_acceptance_hot_path_mask();
+    let mut lines = HeaplessVec::new();
+    let mut covered = 0usize;
+    for hot_path in WIFI_OLDGOOD_OWNER_HOT_PATH_ORDER {
+        if required & hot_path.owner_state_bit() == 0 {
+            return None;
+        }
+        covered |= hot_path.owner_state_bit();
+        lines
+            .push(compact_driver_task_owner_state_line(hot_path)?)
+            .ok()?;
+    }
+    (lines.len() == WIFI_OLDGOOD_OWNER_LINE_COUNT && required == covered).then_some(lines)
+}
+
+#[cfg(feature = "kernel")]
+fn enqueue_wifi_oldgood_retained_batch(
+    queue: &mut HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
+    outputs: HeaplessVec<PendingConsoleOutput, WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT>,
+) -> bool {
+    if outputs.len() != WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT {
+        return false;
+    }
+    let Some(required) = queue
+        .len()
+        .checked_add(WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT)
+        .and_then(|required| required.checked_add(WIFI_OLDGOOD_SMP_ACTIVITY_LINE_RESERVE))
+    else {
+        return false;
+    };
+    let body_capacity =
+        CONSOLE_OUTPUT_BACKLOG_LINES.saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE);
+    if required > body_capacity {
+        return false;
+    }
+
+    let insert_at = queue
+        .iter()
+        .position(|queued| queued.kind.is_background() || queued.kind.is_high_impact())
+        .unwrap_or(queue.len());
+    let mut staged_queue = queue.clone();
+    for (offset, output) in outputs.into_iter().enumerate() {
+        if staged_queue
+            .insert(insert_at.saturating_add(offset), output)
+            .is_err()
+        {
+            return false;
+        }
+    }
+    *queue = staged_queue;
+    true
+}
+
+#[cfg(feature = "kernel")]
+fn usb_oldgood_retained_lines(
+    snapshot: crate::hal::driver_task::DriverTaskUsbOldgoodPassiveSnapshot,
+    command_ready: bool,
+) -> Option<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, USB_OLDGOOD_RETAINED_LINE_COUNT>> {
+    let receipt = snapshot
+        .receipt
+        .unwrap_or_else(pi4_driver_abi::DriverRuntimeUsbOldgoodReceipt::zeroed);
+    let source = if snapshot.receipt.is_some() {
+        "linked-runtime-hid"
+    } else {
+        "none"
+    };
+    let proof_gate = if snapshot.receipt.is_some() { 14 } else { 0 };
+    let blocker = if !snapshot.usb_owner {
+        "usb-owner-missing"
+    } else if !snapshot.pcie_owner {
+        "pcie-owner-missing"
+    } else if !snapshot.usb_descriptor_sealed {
+        "usb-descriptor-missing"
+    } else if !snapshot.pcie_descriptor_sealed {
+        "pcie-descriptor-missing"
+    } else if snapshot.receipt.is_none() {
+        "receipt-missing"
+    } else if !command_ready {
+        "command-not-ready"
+    } else {
+        "none"
+    };
+    let mut receipt_line = HeaplessString::new();
+    write!(
+        receipt_line,
+        "USB_OLDGOOD_RETAINED v=1 task={} token=0x{:08x} link_epoch={} link_token=0x{:08x} epoch={} seq={} mask=0x{:08x} topology=0x{:08x} input_gen={} commit={} source={}",
+        receipt.task_key,
+        receipt.identity_token,
+        receipt.link_epoch,
+        receipt.link_token,
+        receipt.lifetime_epoch,
+        receipt.publication_sequence,
+        receipt.step_mask,
+        receipt.topology,
+        receipt.input_generation,
+        receipt.committed_publication_sequence,
+        source,
+    )
+    .ok()?;
+    let mut current_line = HeaplessString::new();
+    write!(
+        current_line,
+        "USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners={}+{} descriptors={}+{} command_ready={} proof_gate={} blocker={} root_pointer=no",
+        if snapshot.usb_owner {
+            "driver-owned"
+        } else {
+            "missing"
+        },
+        if snapshot.pcie_owner {
+            "driver-owned"
+        } else {
+            "missing"
+        },
+        if snapshot.usb_descriptor_sealed {
+            "sealed"
+        } else {
+            "missing"
+        },
+        if snapshot.pcie_descriptor_sealed {
+            "sealed"
+        } else {
+            "missing"
+        },
+        if command_ready { "yes" } else { "no" },
+        proof_gate,
+        blocker,
+    )
+    .ok()?;
+    if receipt_line.len() > USB_OLDGOOD_RETAINED_LINE_MAX_BYTES
+        || current_line.len() > USB_OLDGOOD_RETAINED_LINE_MAX_BYTES
+    {
+        return None;
+    }
+    let mut lines = HeaplessVec::new();
+    lines.push(receipt_line).ok()?;
+    lines.push(current_line).ok()?;
+    Some(lines)
+}
+
+#[cfg(feature = "kernel")]
+fn enqueue_usb_oldgood_retained_pair(
+    queue: &mut HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
+    lines: &HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, USB_OLDGOOD_RETAINED_LINE_COUNT>,
+) -> bool {
+    if lines.len() != USB_OLDGOOD_RETAINED_LINE_COUNT {
+        return false;
+    }
+    let capacity =
+        CONSOLE_OUTPUT_BACKLOG_LINES.saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE);
+    let mut staged = queue.clone();
+    while staged.len().saturating_add(USB_OLDGOOD_RETAINED_LINE_COUNT) > capacity {
+        let Some(index) = staged
+            .iter()
+            .rposition(|output| output.kind.is_background() || output.kind.is_high_impact())
+        else {
+            return false;
+        };
+        staged.remove(index);
+    }
+    let insert_at = staged
+        .iter()
+        .position(|output| output.kind.is_background() || output.kind.is_high_impact())
+        .unwrap_or(staged.len());
+    for (offset, line) in lines.iter().enumerate() {
+        let Some(output) =
+            PendingConsoleOutput::try_from_str(PendingConsoleOutputKind::Line, line.as_str())
+        else {
+            return false;
+        };
+        if staged
+            .insert(insert_at.saturating_add(offset), output)
+            .is_err()
+        {
+            return false;
+        }
+    }
+    *queue = staged;
+    true
+}
 #[cfg(all(feature = "kernel", feature = "usb"))]
 const POST_PROMPT_LOCAL_SEAT_ATTACH_IDLE_GRACE_MS: u64 = 0;
 #[cfg(all(feature = "kernel", feature = "usb"))]
@@ -8705,6 +9181,8 @@ where
     }
 
     fn emit_smp_activity(&mut self) {
+        #[cfg(feature = "kernel")]
+        self.emit_smp_activity_oldgood_retained_prefix();
         let snapshot = self.smp_activity_snapshot();
         let previous = self.last_smp_activity_snapshot;
         self.emit_console_line(
@@ -8720,6 +9198,76 @@ where
         self.emit_smp_activity_affinity();
         self.emit_console_line("[smp] activity end");
         self.last_smp_activity_snapshot = Some(snapshot);
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_smp_activity_oldgood_retained_prefix(&mut self) {
+        if !self.last_input_source.is_physical_console() {
+            return;
+        }
+        let receipt = match crate::drivers::driver_task_net::cyw43_oldgood_prefix_receipt() {
+            Some(receipt) => receipt,
+            None => return,
+        };
+        let dhcp = match crate::net::cyw43_oldgood_dhcp_receipt() {
+            Some(dhcp) => dhcp,
+            None => return,
+        };
+        let firmware = match self
+            .wifi_debug
+            .as_mut()
+            .and_then(|wifi_debug| wifi_debug.firmware_contract_trace())
+        {
+            Some(firmware) => firmware,
+            None => return,
+        };
+        let owners = match current_wifi_oldgood_owner_lines() {
+            Some(owners) => owners,
+            None => return,
+        };
+        let prefix = match build_wifi_oldgood_retained_prefix(receipt, dhcp, firmware) {
+            Some(prefix) => prefix,
+            None => return,
+        };
+
+        // Re-read every mutable identity immediately before preflight. A new
+        // Join, DHCP restart, pair recovery, or owner transition cannot splice
+        // itself into the already-built transaction.
+        if crate::drivers::driver_task_net::cyw43_oldgood_prefix_receipt() != Some(receipt)
+            || crate::net::cyw43_oldgood_dhcp_receipt() != Some(dhcp)
+            || self
+                .wifi_debug
+                .as_mut()
+                .and_then(|wifi_debug| wifi_debug.firmware_contract_trace())
+                != Some(firmware)
+            || current_wifi_oldgood_owner_lines() != Some(owners.clone())
+        {
+            return;
+        }
+
+        let mut outputs =
+            HeaplessVec::<PendingConsoleOutput, WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT>::new();
+        for line in owners.iter().chain(prefix.iter()) {
+            let output = match PendingConsoleOutput::try_from_str(
+                PendingConsoleOutputKind::Line,
+                line.as_str(),
+            ) {
+                Some(output) => output,
+                None => return,
+            };
+            if outputs.push(output).is_err() {
+                return;
+            }
+        }
+        if outputs.len() != WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT {
+            return;
+        }
+        if !enqueue_wifi_oldgood_retained_batch(&mut self.pending_console_output, outputs) {
+            return;
+        }
+        for line in owners.iter().chain(prefix.iter()) {
+            crate::log_buffer::append_log_line(line.as_str());
+        }
     }
 
     fn smp_activity_snapshot(&self) -> SmpActivitySnapshot {
@@ -10002,6 +10550,11 @@ where
             UsbDebugCommand::Help => {}
             UsbDebugCommand::Status | UsbDebugCommand::DumpState => {
                 self.with_local_seat_mirror_suppressed(|this| {
+                    let command_ready = this
+                        .local_seat
+                        .as_ref()
+                        .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
+                    this.emit_usb_oldgood_retained_projection(command_ready);
                     this.emit_usb_diag_liveness_status();
                     let (backend_attached, polling_enabled) = {
                         let local_seat = match this.local_seat.as_mut() {
@@ -10026,6 +10579,11 @@ where
             }
             UsbDebugCommand::Diag => {
                 self.with_local_seat_mirror_suppressed(|this| {
+                    let command_ready = this
+                        .local_seat
+                        .as_ref()
+                        .is_some_and(|local_seat| local_seat.usb_keyboard_command_ready_latched());
+                    this.emit_usb_oldgood_retained_projection(command_ready);
                     this.emit_usb_diag_liveness_status();
                     let (backend_attached, polling_enabled) = {
                         let local_seat = match this.local_seat.as_mut() {
@@ -10116,6 +10674,24 @@ where
             "detail=subcommand={subcommand} scope=serial-local"
         ));
         self.emit_ack_ok(USB_DEBUG_ACK_LABEL, Some(detail.as_str()));
+    }
+
+    #[cfg(feature = "kernel")]
+    fn emit_usb_oldgood_retained_projection(&mut self, command_ready: bool) {
+        let snapshot = crate::hal::driver_task::driver_task_usb_oldgood_passive_snapshot();
+        let Some(lines) = usb_oldgood_retained_lines(snapshot, command_ready) else {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+            return;
+        };
+        if !enqueue_usb_oldgood_retained_pair(&mut self.pending_console_output, &lines) {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -23749,6 +24325,491 @@ mod tests {
         );
         crate::hal::driver_task::test_clear_sdio_clock_snapshot_override();
         crate::hal::driver_task::test_clear_wifi_driver_task_bootstrap_failure();
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_oldgood_test_receipt() -> crate::drivers::driver_task_net::Cyw43OldgoodPrefixReceipt {
+        crate::drivers::driver_task_net::Cyw43OldgoodPrefixReceipt {
+            attempt: 1,
+            pair_epoch: 7,
+            generation: 9,
+            join_generation_started: 9,
+            completed_steps: 24,
+            firmware_len: 609_309,
+            nvram_len: 1_744,
+            clm_len: 2_676,
+            txglom_poll: 0,
+            txglom_result: 1,
+            ulp_status: "unsupported",
+            clm_index: 3,
+            clm_offset: 2_676,
+            firmware_version_len: 79,
+            clm_version_len: 26,
+            join_ssid_len: 8,
+            join_result: 0,
+            association_event: "assoc",
+            association_poll: 1,
+            m1_poll: 1,
+            m1_len: 121,
+            m2_poll: 1,
+            m2_len: 177,
+            m3_poll: 2,
+            m3_len: 153,
+            m4_poll: 2,
+            m4_len: 113,
+            secure_eapol_rx: 2,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_oldgood_test_dhcp() -> crate::net::Cyw43OldgoodDhcpReceipt {
+        crate::net::Cyw43OldgoodDhcpReceipt {
+            generation: 9,
+            transaction_id: 0x1234_5678,
+            start_now_ms: 54_321,
+            ip: [192, 168, 86, 154],
+            prefix_len: 24,
+            gateway: [192, 168, 86, 1],
+            server_id: [192, 168, 86, 1],
+            lease_seconds: 3_600,
+            bound: true,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn wifi_oldgood_test_firmware() -> WifiFirmwareContractTrace {
+        WifiFirmwareContractTrace {
+            firmware_len: 609_309,
+            nvram_len: 1_744,
+            clm_len: Some(2_676),
+            firmware_sha256: "d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
+            nvram_sha256: "ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
+            clm_sha256: "9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
+            board_type: "raspberrypi,4-model-b",
+            reset_vector: Some(0x0019_8000),
+            firmware_download_verified: true,
+            armcr4_release_attempts: 1,
+            sr_kso_clock_ready: true,
+            alp_request: 0x08,
+            ht_request: 0x10,
+            ht_retry_request: 0x10,
+            force_ht_after_proof_request: None,
+            chipclkcsr: Some(0xd0),
+            wakeupctrl: Some(0x02),
+            sleepcsr: Some(0x01),
+            cardcap: Some(0x08),
+            f1_state: "enabled-ready",
+            f2_state: "enabled-ready",
+            current_clock_hz: 41_666_666,
+            preferred_data_clock_hz: 41_666_666,
+            blocker: "none",
+            next_step: "complete",
+            proof: None,
+            ht_summary: "ready",
+            function2_gate: "ready",
+            ht_phase_count: 0,
+            ht_phase_records: [WifiHtPhaseRecord::EMPTY; WIFI_HT_PHASE_RECORD_CAPACITY],
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_oldgood_owner_order_is_canonical_for_the_retained_parser() {
+        let actual = WIFI_OLDGOOD_OWNER_HOT_PATH_ORDER.map(|hot_path| {
+            (
+                hot_path.as_str(),
+                hot_path.contract().name,
+                matches!(
+                    hot_path,
+                    crate::hal::driver_task::DriverTaskHotPath::UsbKeyboard
+                        | crate::hal::driver_task::DriverTaskHotPath::Cyw43Wifi
+                        | crate::hal::driver_task::DriverTaskHotPath::SdioHost
+                ),
+            )
+        });
+        assert_eq!(
+            actual,
+            [
+                ("serial-console", "serial", false),
+                ("usb-keyboard", "usb-local-seat", true),
+                ("hdmi-text", "hdmi-text", false),
+                ("pcie-root", "pcie-root", false),
+                ("cyw43-wifi", "cyw43455", true),
+                ("sdio-host", "sdio-host", true),
+            ],
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_oldgood_retained_prefix_emits_exact_ordered_legacy_grammar() {
+        let lines = build_wifi_oldgood_retained_prefix(
+            wifi_oldgood_test_receipt(),
+            wifi_oldgood_test_dhcp(),
+            wifi_oldgood_test_firmware(),
+        )
+        .expect("complete bound proof must build");
+        let expected = [
+            "WIFI_OLDGOOD_RETAINED_BEGIN id=7 attempt=1 pair_epoch=7 generation=9 prefix_steps=26 fw=609309 nvram=1744 clm=2676",
+            "WIFI_OLDGOOD_RETAINED_HASH id=7 artifact=firmware sha256=d608f866582519c0a28d86db43040f4f1b98dd1d153e72e9752586546b4a36c3",
+            "WIFI_OLDGOOD_RETAINED_HASH id=7 artifact=nvram sha256=ca709be81a78bdb6932936374f39943acbd7af07fae6151011127599a3ce9e3d",
+            "WIFI_OLDGOOD_RETAINED_HASH id=7 artifact=clm sha256=9823842cae9fb9a5dd1e5fb31f595516ec7deee341354bef30bb3026eee29cc1",
+            "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init blocker=ready detail=0x5500",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=net-engine-init status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-firmware status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-function2 status=ready",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 stage=cyw43-control-txglomalign event=pre-tx-drain-ready poll=0",
+            "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 stage=cyw43-control-txglomalign event=tx-complete result=1",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-txglomalign status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-ulp-sdioctrl status=unsupported",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-rxglom status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-mac status=ready",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-revinfo status=ready",
+            "CYW43_DRIVER_TASK_CLM contract=cyw43455 stage=cyw43-control-clmload action=ready index=3 offset=2676 len=2676 flags=0x0000",
+            "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 stage=cyw43-control-firmware-version name=ver printable_len=79",
+            "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 stage=cyw43-control-clm-version name=clmver printable_len=26",
+            "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi stage=cyw43-control-up status=ready",
+            "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 path=association-supervisor action=ready generation=9 ssid_len=8 result=0x00000000",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=required associated=yes link_up=yes assoc_event=assoc assoc_poll=1 eapol_rx=0",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m1 action=recv-m1 poll=1 len=121",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m2 action=send-m2 poll=1 len=177",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m3 action=recv-m3 poll=2 len=153",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m4 action=send-m4 poll=2 len=113",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk stage=cyw43-host-eapol-ptk status=ready",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk stage=cyw43-host-eapol-gtk status=ready",
+            "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 status=secure associated=yes link_up=yes eapol_rx=2",
+            "[dhcp] start ready interface=wifi generation=9 xid=0x12345678 now_ms=54321",
+            "[dhcp] lease bound generation=9 ip=192.168.86.154/24 gateway=192.168.86.1 server=192.168.86.1 lease_s=3600",
+            "WIFI_OLDGOOD_RETAINED_END id=7 attempt=1 pair_epoch=7 generation=9 prefix_steps=26 status=complete",
+        ];
+
+        assert_eq!(lines.len(), expected.len());
+        for (actual, expected) in lines.iter().zip(expected) {
+            assert_eq!(actual.as_str(), expected);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_oldgood_retained_prefix_fits_maximum_integer_width_and_console_capacity() {
+        let mut receipt = wifi_oldgood_test_receipt();
+        receipt.pair_epoch = u64::MAX;
+        receipt.generation = u32::MAX;
+        receipt.join_generation_started = u32::MAX;
+        receipt.firmware_len = u32::MAX as usize;
+        receipt.nvram_len = u32::MAX as usize;
+        receipt.clm_len = u32::MAX as usize;
+        receipt.txglom_poll = usize::MAX;
+        receipt.txglom_result = u32::MAX;
+        receipt.clm_index = u16::MAX;
+        receipt.clm_offset = u32::MAX as usize;
+        receipt.firmware_version_len = u32::MAX as usize;
+        receipt.clm_version_len = u32::MAX as usize;
+        receipt.join_ssid_len = u32::MAX as usize;
+        receipt.association_poll = u32::MAX;
+        receipt.m1_poll = usize::MAX;
+        receipt.m1_len = u32::MAX as usize;
+        receipt.m2_poll = usize::MAX;
+        receipt.m2_len = u32::MAX as usize;
+        receipt.m3_poll = usize::MAX;
+        receipt.m3_len = u32::MAX as usize;
+        receipt.m4_poll = usize::MAX;
+        receipt.m4_len = u32::MAX as usize;
+        receipt.secure_eapol_rx = u32::MAX;
+
+        let mut dhcp = wifi_oldgood_test_dhcp();
+        dhcp.generation = u32::MAX;
+        dhcp.transaction_id = u32::MAX;
+        dhcp.start_now_ms = u64::MAX;
+        dhcp.ip = [u8::MAX; 4];
+        dhcp.prefix_len = 32;
+        dhcp.gateway = [u8::MAX; 4];
+        dhcp.server_id = [u8::MAX; 4];
+        dhcp.lease_seconds = u32::MAX;
+
+        let mut firmware = wifi_oldgood_test_firmware();
+        firmware.firmware_len = u32::MAX as usize;
+        firmware.nvram_len = u32::MAX as usize;
+        firmware.clm_len = Some(u32::MAX as usize);
+        firmware.armcr4_release_attempts = u8::MAX;
+        let lines = build_wifi_oldgood_retained_prefix(receipt, dhcp, firmware)
+            .expect("all integer maxima must still fit bounded rows");
+
+        assert_eq!(lines.len(), WIFI_OLDGOOD_RETAINED_PREFIX_LINE_COUNT);
+        assert!(lines
+            .iter()
+            .all(|line| line.len() <= WIFI_OLDGOOD_RETAINED_LINE_MAX_BYTES));
+        assert_eq!(
+            WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT + WIFI_OLDGOOD_SMP_ACTIVITY_LINE_RESERVE,
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE,
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_oldgood_retained_prefix_rejects_incomplete_or_cross_generation_evidence() {
+        let receipt = wifi_oldgood_test_receipt();
+        let dhcp = wifi_oldgood_test_dhcp();
+        let firmware = wifi_oldgood_test_firmware();
+
+        let mut incomplete = receipt;
+        incomplete.completed_steps = 23;
+        assert!(build_wifi_oldgood_retained_prefix(incomplete, dhcp, firmware).is_none());
+        let mut wrong_generation = dhcp;
+        wrong_generation.generation = receipt.generation.wrapping_add(1);
+        assert!(build_wifi_oldgood_retained_prefix(receipt, wrong_generation, firmware).is_none());
+        let mut bad_hash = firmware;
+        bad_hash.firmware_sha256 = "not-a-complete-sha256";
+        assert!(build_wifi_oldgood_retained_prefix(receipt, dhcp, bad_hash).is_none());
+        let mut disconnect_history = receipt;
+        disconnect_history.association_event = "link-down";
+        assert!(build_wifi_oldgood_retained_prefix(disconnect_history, dhcp, firmware).is_none());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn wifi_oldgood_retained_batch_enqueue_is_atomic_and_reserves_smp_tail() {
+        fn batch() -> HeaplessVec<PendingConsoleOutput, WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT> {
+            let mut outputs = HeaplessVec::new();
+            for index in 0..WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT {
+                let text = if index < WIFI_OLDGOOD_OWNER_LINE_COUNT {
+                    "owner-row"
+                } else {
+                    "prefix-row"
+                };
+                outputs
+                    .push(
+                        PendingConsoleOutput::try_from_str(PendingConsoleOutputKind::Line, text)
+                            .expect("test row fits"),
+                    )
+                    .expect("batch capacity is exact");
+            }
+            outputs
+        }
+
+        let mut queue = HeaplessVec::new();
+        assert!(enqueue_wifi_oldgood_retained_batch(&mut queue, batch()));
+        assert_eq!(queue.len(), WIFI_OLDGOOD_RETAINED_BATCH_LINE_COUNT);
+        assert!(queue[..WIFI_OLDGOOD_OWNER_LINE_COUNT]
+            .iter()
+            .all(|line| line.text == "owner-row"));
+        assert!(queue[WIFI_OLDGOOD_OWNER_LINE_COUNT..]
+            .iter()
+            .all(|line| line.text == "prefix-row"));
+
+        let mut blocked = HeaplessVec::new();
+        blocked
+            .push(
+                PendingConsoleOutput::try_from_str(
+                    PendingConsoleOutputKind::BackgroundLine,
+                    "preexisting",
+                )
+                .expect("test row fits"),
+            )
+            .expect("queue has capacity");
+        let before = blocked.clone();
+        assert!(!enqueue_wifi_oldgood_retained_batch(&mut blocked, batch()));
+        assert_eq!(blocked, before, "failed preflight cannot partially enqueue");
+    }
+
+    #[cfg(feature = "kernel")]
+    fn usb_oldgood_event_test_snapshot(
+    ) -> crate::hal::driver_task::DriverTaskUsbOldgoodPassiveSnapshot {
+        let mut receipt = pi4_driver_abi::DriverRuntimeUsbOldgoodReceipt::new(
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+            u32::MAX,
+        );
+        receipt.publication_sequence = u32::MAX;
+        receipt.step_mask = pi4_driver_abi::DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK;
+        receipt.topology = u32::MAX;
+        receipt.input_generation = u32::MAX;
+        crate::hal::driver_task::DriverTaskUsbOldgoodPassiveSnapshot {
+            receipt: Some(receipt.commit()),
+            usb_owner: true,
+            pcie_owner: true,
+            usb_descriptor_sealed: true,
+            pcie_descriptor_sealed: true,
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_retained_pair_has_strict_bounded_grammar() {
+        let lines = usb_oldgood_retained_lines(usb_oldgood_event_test_snapshot(), true)
+            .expect("complete maximum-width receipt must fit two retained rows");
+        assert_eq!(lines.len(), USB_OLDGOOD_RETAINED_LINE_COUNT);
+        assert_eq!(
+            lines[0].as_str(),
+            "USB_OLDGOOD_RETAINED v=1 task=4294967295 token=0xffffffff link_epoch=4294967295 link_token=0xffffffff epoch=4294967295 seq=4294967295 mask=0x00003fff topology=0xffffffff input_gen=4294967295 commit=4294967295 source=linked-runtime-hid",
+        );
+        assert_eq!(
+            lines[1].as_str(),
+            "USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=driver-owned+driver-owned descriptors=sealed+sealed command_ready=yes proof_gate=14 blocker=none root_pointer=no",
+        );
+        assert!(lines
+            .iter()
+            .all(|line| line.len() <= USB_OLDGOOD_RETAINED_LINE_MAX_BYTES));
+
+        let missing = usb_oldgood_retained_lines(
+            crate::hal::driver_task::DriverTaskUsbOldgoodPassiveSnapshot::default(),
+            false,
+        )
+        .expect("fail-closed missing receipt must retain exact pair grammar");
+        assert_eq!(
+            missing[0].as_str(),
+            "USB_OLDGOOD_RETAINED v=1 task=0 token=0x00000000 link_epoch=0 link_token=0x00000000 epoch=0 seq=0 mask=0x00000000 topology=0x00000000 input_gen=0 commit=0 source=none",
+        );
+        assert!(missing[1].contains(
+            "owners=missing+missing descriptors=missing+missing command_ready=no proof_gate=0 blocker=usb-owner-missing root_pointer=no"
+        ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_retained_pair_enqueue_is_adjacent_and_atomic_under_backlog() {
+        let lines = usb_oldgood_retained_lines(usb_oldgood_event_test_snapshot(), true)
+            .expect("test receipt must format");
+        let mut queue = HeaplessVec::new();
+        queue
+            .push(
+                PendingConsoleOutput::try_from_str(
+                    PendingConsoleOutputKind::Line,
+                    "prior-response",
+                )
+                .expect("test row fits"),
+            )
+            .expect("queue has capacity");
+        queue
+            .push(
+                PendingConsoleOutput::try_from_str(
+                    PendingConsoleOutputKind::BackgroundLine,
+                    "background",
+                )
+                .expect("test row fits"),
+            )
+            .expect("queue has capacity");
+        assert!(enqueue_usb_oldgood_retained_pair(&mut queue, &lines));
+        assert_eq!(queue[1].text.as_str(), lines[0].as_str());
+        assert_eq!(queue[2].text.as_str(), lines[1].as_str());
+        assert_eq!(queue[3].text.as_str(), "background");
+
+        let body_capacity =
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+        let mut blocked = HeaplessVec::new();
+        while blocked.len() < body_capacity.saturating_sub(1) {
+            blocked
+                .push(
+                    PendingConsoleOutput::try_from_str(PendingConsoleOutputKind::Line, "body")
+                        .expect("test row fits"),
+                )
+                .expect("queue has capacity");
+        }
+        let before = blocked.clone();
+        assert!(!enqueue_usb_oldgood_retained_pair(&mut blocked, &lines));
+        assert_eq!(blocked, before, "a blocked pair cannot partially enqueue");
+
+        let mut evictable = before;
+        let _ = evictable.pop();
+        evictable
+            .push(
+                PendingConsoleOutput::try_from_str(
+                    PendingConsoleOutputKind::HighImpactLine,
+                    "evictable-one",
+                )
+                .expect("test row fits"),
+            )
+            .expect("queue has capacity");
+        evictable
+            .push(
+                PendingConsoleOutput::try_from_str(
+                    PendingConsoleOutputKind::HighImpactLine,
+                    "evictable-two",
+                )
+                .expect("test row fits"),
+            )
+            .expect("queue has capacity");
+        assert!(enqueue_usb_oldgood_retained_pair(&mut evictable, &lines));
+        assert!(evictable
+            .windows(2)
+            .any(|pair| pair[0].text == lines[0] && pair[1].text == lines[1]));
+        assert!(!evictable
+            .iter()
+            .any(|output| output.text.starts_with("evictable-")));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn usb_oldgood_projection_call_sites_are_passive_adjacent_and_active_excluded() {
+        let driver = LoopbackSerial::<16384>::new();
+        let serial = SerialPort::<_, 16384, 16384, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut local_seat = LocalSeatRuntime::new(crate::local_seat::LocalSeatStatus {
+            keyboard_device: "usb-kbd0",
+            display_device: "hdmi0",
+            line_bytes: 64,
+            buffer_lines: 8,
+        });
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_local_seat(&mut local_seat)
+            .with_test_pi4_debug_commands();
+
+        for command in [
+            UsbDebugCommand::Status,
+            UsbDebugCommand::DumpState,
+            UsbDebugCommand::Diag,
+        ] {
+            pump.pending_console_output.clear();
+            pump.handle_usb_debug_command(command);
+            assert!(pump.pending_console_output.len() >= USB_OLDGOOD_RETAINED_LINE_COUNT);
+            assert!(pump.pending_console_output[0]
+                .text
+                .starts_with("USB_OLDGOOD_RETAINED "));
+            assert!(pump.pending_console_output[1]
+                .text
+                .starts_with("USB_OLDGOOD_CURRENT "));
+            assert_eq!(
+                pump.pending_console_output
+                    .iter()
+                    .filter(|output| output.text.starts_with("USB_OLDGOOD_RETAINED "))
+                    .count(),
+                1,
+            );
+            assert_eq!(
+                pump.pending_console_output
+                    .iter()
+                    .filter(|output| output.text.starts_with("USB_OLDGOOD_CURRENT "))
+                    .count(),
+                1,
+            );
+        }
+
+        for command in [
+            UsbDebugCommand::EnableKeyboard,
+            UsbDebugCommand::ProbeKeyboard,
+        ] {
+            pump.pending_console_output.clear();
+            pump.serial_mut().driver_mut().drain_tx();
+            pump.handle_usb_debug_command(command);
+            assert!(!pump
+                .pending_console_output
+                .iter()
+                .any(|output| output.text.starts_with("USB_OLDGOOD_")));
+            let transcript: Vec<u8> = pump
+                .serial_mut()
+                .driver_mut()
+                .drain_tx()
+                .into_iter()
+                .collect();
+            assert!(!String::from_utf8(transcript)
+                .expect("active USB transcript must be utf8")
+                .contains("USB_OLDGOOD_"));
+        }
     }
 
     #[cfg(feature = "kernel")]
@@ -43539,6 +44600,7 @@ mod tests {
             rendered.contains("OK USB detail=subcommand=enable-kbd"),
             "{rendered}"
         );
+        assert!(!rendered.contains("USB_OLDGOOD_"), "{rendered}");
         assert!(local_seat.backend_keyboard_polling_enabled());
     }
 
@@ -43596,6 +44658,7 @@ mod tests {
             rendered.contains("OK USB detail=subcommand=probe-kbd"),
             "{rendered}"
         );
+        assert!(!rendered.contains("USB_OLDGOOD_"), "{rendered}");
         assert!(
             rendered.len() < 2048,
             "bounded probe response must not saturate serial output: {} bytes",
@@ -43637,6 +44700,23 @@ mod tests {
             .collect();
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        let rows: Vec<&str> = rendered.lines().collect();
+        let receipt_row = rows
+            .iter()
+            .position(|line| line.starts_with("USB_OLDGOOD_RETAINED "))
+            .expect("dump-state must begin with the passive USB receipt row");
+        let current_row = rows
+            .iter()
+            .position(|line| line.starts_with("USB_OLDGOOD_CURRENT "))
+            .expect("dump-state must include the adjacent current-state row");
+        let liveness_row = rows
+            .iter()
+            .position(|line| line.starts_with("usb: diag_liveness "))
+            .expect("existing status output must follow the receipt pair");
+        assert_eq!(current_row, receipt_row + 1, "{rendered}");
+        assert!(current_row < liveness_row, "{rendered}");
+        assert_eq!(rendered.matches("USB_OLDGOOD_RETAINED ").count(), 1);
+        assert_eq!(rendered.matches("USB_OLDGOOD_CURRENT ").count(), 1);
         assert!(
             rendered.contains("usb: local-seat attached=no polling=deferred"),
             "{rendered}"
@@ -43692,6 +44772,23 @@ mod tests {
             .collect();
         drop(pump);
         let rendered = String::from_utf8(transcript).expect("serial output must be utf8");
+        let rows: Vec<&str> = rendered.lines().collect();
+        let receipt_row = rows
+            .iter()
+            .position(|line| line.starts_with("USB_OLDGOOD_RETAINED "))
+            .expect("diag must begin with the passive USB receipt row");
+        let current_row = rows
+            .iter()
+            .position(|line| line.starts_with("USB_OLDGOOD_CURRENT "))
+            .expect("diag must include the adjacent current-state row");
+        let liveness_row = rows
+            .iter()
+            .position(|line| line.starts_with("usb: diag_liveness "))
+            .expect("existing diag output must follow the receipt pair");
+        assert_eq!(current_row, receipt_row + 1, "{rendered}");
+        assert!(current_row < liveness_row, "{rendered}");
+        assert_eq!(rendered.matches("USB_OLDGOOD_RETAINED ").count(), 1);
+        assert_eq!(rendered.matches("USB_OLDGOOD_CURRENT ").count(), 1);
         assert!(
             rendered.contains("usb: local-seat attached=no polling=enabled action=diag-passive"),
             "{rendered}"

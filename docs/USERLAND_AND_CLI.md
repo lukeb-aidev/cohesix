@@ -1,4 +1,4 @@
-<!-- Copyright © 2026 Lukas Bower -->
+<!-- Copyright 2026 Lukas Bower -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 <!-- Purpose: Define the as-built Cohesix console, cohsh, and .coh command surfaces. -->
 <!-- Author: Lukas Bower -->
@@ -88,6 +88,18 @@ specific driver: `seatPoll_s`, `kbdB_s`, `seat_drop_s`, and
 `hdmi_drop_s` belong only to the HDMI core. HDMI mirror-queue drops are not USB
 keyboard drops, and neither driver's rate is duplicated onto the other's core.
 
+On a physical-console request with Wi-Fi selected, either `smp` spelling may
+prepend a passive retained old-good transaction before the ordinary activity
+report. It appears only when the current Wi-Fi attempt, pair, connection
+generation, firmware identity, ordered association/EAPOL/DHCP receipt, and six
+current driver-owner records form one complete snapshot. The prefix is one
+atomic 37-line batch: owner records for serial, USB, HDMI, PCIe, CYW43, and SDIO
+in that order, followed by a contiguous 31-line
+`WIFI_OLDGOOD_RETAINED_BEGIN`/hash/26-step/`WIFI_OLDGOOD_RETAINED_END`
+transaction. Its presence performs no device work; its absence remains missing
+evidence. Fresh netstats, authenticated TCP, terminal nettest, and DPC rows
+must follow it in the capture and cannot be supplied by the retained block.
+
 `test` is present in the shared parser but the target root console directs the
 operator to the host-side `cohsh` implementation. Pi 4 profiles may add `usb`
 and `wifi` diagnostic families. Their gate meanings are documented in
@@ -108,6 +120,22 @@ retained service turn completes; a cached ready latch with a pending request is
 `keyboard-unavailable continuation=pending`. The same passive status also
 reports HDMI queue state separately from the isolated display driver's
 completion receipt.
+
+Every passive `usb status`, `usb dump-state`, and `usb diag` response begins
+with one atomic adjacent old-good pair:
+
+```text
+USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
+USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
+```
+
+The owner and descriptor pairs are ordered USB then PCIe. A complete current
+receipt uses `mask=0x00003fff`, repeats `seq` in `commit`, names
+`source=linked-runtime-hid`, and requires both owners, both sealed descriptors,
+command readiness, `proof_gate=14`, and `blocker=none`. Missing evidence is
+reported as `v=1` with zero identity/body fields and `source=none`; the command
+does not fabricate or advance a hardware transition. Active `usb enable-kbd`
+and `usb probe-kbd` do not emit either old-good row.
 
 After `nettest` admission, allow its bounded 15-second window to finish and
 query `netstats`. The authoritative line is
@@ -135,8 +163,14 @@ erase the prompt prefix, and held up/down arrows use counter-paced repeat plus
 completed one-row viewport steps. If command readiness is invalidated, HDMI
 retracts the prompt and stale console-ready banner while preserving the typed
 suffix, and restores them only after fresh readiness. This changes no command
-grammar, driver-task ABI, or
-USB/HDMI authority.
+grammar or USB/HDMI authority. The isolated USB runtime additionally publishes
+one passive fixed 48-byte old-good receipt for its exact linked controller,
+hub, HID endpoint, interrupt-IN, first-report, and first-byte sequence. Local
+seat does not release endpoint readiness or a pre-proof input byte until both
+the PCIe and USB descriptor/owner proof chains are current; it retains the
+bounded bytes meanwhile and releases them exactly once. A failed service or
+recovery clears that cache, while an outstanding retained attach ticket cannot
+be discarded by a cached-ready shortcut.
 
 ### Shared console line protocol
 

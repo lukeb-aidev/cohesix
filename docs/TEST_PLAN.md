@@ -3989,8 +3989,36 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     host-EAPOL state-machine proof, not generic Gate 8 inference. If the outer
     `wifi: debug subcommand=diag action=complete` row is present, it must follow
     the matching `diag_complete`; a capture clipped after that inner terminal
-    need not invent the missing outer row. USB ready proof
-    also requires `USB_LOCAL_SEAT_STATE=ready`, `USB_COMMAND_READY=yes`,
+    need not invent the missing outer row. The separate old-good prefix comes
+    only from a physical-console `smp` or `smp activity` request. It is one
+    all-or-nothing 37-line batch: six compact current owner rows in the exact
+    `(hot_path, contract, bus_link_seal)` order
+    `(serial-console, serial, none)`,
+    `(usb-keyboard, usb-local-seat, valid)`,
+    `(hdmi-text, hdmi-text, none)`,
+    `(pcie-root, pcie-root, none)`,
+    `(cyw43-wifi, cyw43455, valid)`, and
+    `(sdio-host, sdio-host, valid)`, immediately followed by 31 physically
+    contiguous retained rows. Those rows are one BEGIN, three same-ID
+    firmware/NVRAM/CLM hashes, the strict 26-step SDIO-engine-through-DHCP-bound
+    legacy grammar, and one matching complete END. BEGIN requires
+    `id=pair_epoch`, attempt 1, one nonzero pair/generation identity,
+    `prefix_steps=26`, and the concrete
+    artifact lengths, including normalized NVRAM upload length 1,744. The
+    NVRAM hash nevertheless remains the SHA-256 of the immutable 2,074-byte
+    source artifact. The association label is exactly one of `assoc`,
+    `link-up`, `eapol-m1`, `eapol-m2`, or `eapol-m3`. Each row is at most 243
+    bytes; emission reserves 32 further body rows for ordinary SMP output
+    within the 69-row body bound.
+    The latest malformed/incomplete reserved prefix quarantines older complete
+    evidence, and a later Join, Gate 8 lifecycle, or recovery boundary revokes
+    it. Cross-pair/generation tails fail. After END, the fresh tail order is
+    netstats counters; a physically adjacent same-generation authenticated-TCP
+    row; same-generation bound netstats; secure netstats; same-generation TCP
+    ready; same-generation terminal nettest; then healthy DPC. The serial
+    helper therefore requests this prefix before its fresh Wi-Fi tail. USB
+    ready proof also requires `USB_LOCAL_SEAT_STATE=ready`,
+    `USB_COMMAND_READY=yes`,
     `USB_FIRST_REPORT_READY=yes`, and `USB_BUSY_AFTER_READY=no` so parser
     admission cannot hide missing first-report or post-ready busy evidence. A
     decoded held-key/modifier report while the attach/recovery idle guard is
@@ -4009,6 +4037,50 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     must be isolated runtime HID sourced. Wi-Fi replay rejects failed readiness,
     failed join, generic EAPOL message tokens, firmware-supplicant shortcuts,
     and started-only nettest output.
+  - The isolated USB runtime's new evidence is one 48-byte, pointer-free
+    `DriverRuntimeUsbOldgoodReceipt` at shared-ring offset 192. Tests must prove
+    its exact 14-step monotonic prefix: xHCI ready, command event, root-port
+    reset, hub addressed, hub configured, hub context, hub-port power,
+    hub-port status, hub-port ready, hub-child probe, HID endpoint,
+    interrupt-IN, first report, and first byte. The record binds task key,
+    descriptor identity, USB-to-PCIe link epoch/token, controller lifetime,
+    publication sequence, packed root/hub/child/IN-endpoint topology, and exact
+    input generation; its final word repeats the publication sequence only
+    after the body. Two cache-invalidated reads must be identical. Normal
+    endpoint rearm preserves the receipt, endpoint recovery revokes it, a new
+    controller lifecycle rebinds it, and candidate retries may retain only the
+    exact proven prefix. Torn commit, invalid order, poison, partial identity,
+    stale descriptor/link, and cross-path stitching all fail closed.
+  - Each passive `usb status`, `usb dump-state`, and `usb diag` response must
+    project exactly two adjacent rows before its ordinary detail:
+
+    ```text
+    USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
+    USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
+    ```
+
+    The current pairs are USB then PCIe. Acceptance requires the latest exact
+    physical pair, version 1, nonzero receipt identity/topology/input fields,
+    `mask=0x00003fff`, `seq=commit`, `source=linked-runtime-hid`, both owners
+    `driver-owned`, both descriptors `sealed`, `command_ready=yes`,
+    `proof_gate=14`, and `blocker=none`. An absent receipt is emitted as `v=1`
+    with zero identity/body fields and `source=none`. A gap, clipped or
+    malformed current row, later reserved USB old-good row, invalid topology,
+    stale identity, or uncommitted receipt
+    revokes an older complete pair. `usb enable-kbd` and `usb probe-kbd` are
+    active and must not project either row.
+  - Local-seat tests must hold endpoint completion and any bounded pre-proof
+    bytes private until both the PCIe and USB descriptor replay plus owner-state
+    chains are current. Attach remains `Pending`; the bytes enter the parser
+    exactly once after proof. An idle first report before replay must not force
+    controller reinitialization, a cached-ready completion must not discard an
+    outstanding retained attach command, and service failure/recovery must
+    clear the endpoint cache.
+  - Serial-helper prompt tests must accept a prompt split only across the
+    physically contiguous tail of the prior guarded `ping` read and the next
+    bounded read. The helper retains at most marker-length-minus-one bytes,
+    rejects intervening asynchronous text as noncontiguous, and does not issue
+    the next diagnostic before the fresh complete prompt.
   - Existing logs may be normalized for triage only:
     - `scripts/pi4_gate_proof.sh --normalize-only --log <existing-log> --allow-summary-only`
     - `--allow-summary-only` is not acceptance proof and must not be combined with any `--require-*` hardware acceptance flag.
@@ -4094,8 +4166,10 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       ready-banner readiness, startup-feedback cadence/timing, serial runtime
       ring RX/TX turns, and
       Wi-Fi progress suppression during USB boot activity and after USB
-      first-byte proof. These checks introduce no console command, driver-task
-      ABI field, or USB/HDMI authority change. Pi 4 manifest-default boots must use
+      first-byte proof. These checks introduce no console command or USB/HDMI
+      authority change. The additive 48-byte USB old-good receipt is the only
+      ABI evidence extension described above. Pi 4 manifest-default boots must
+      use
       `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
       `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing
       declared devices fail visibly. Runtime backend attach failures may

@@ -334,7 +334,7 @@ def oldgood_wifi_replay_lines() -> list[str]:
         "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
         "netstats: generation=9 udp_rx=2 udp_tx=4 tcp_accepts=1 tcp_auth=1 "
         "tcp_rx_bytes=58 tcp_tx_bytes=6782",
-        "netstats: mode=dhcp policy=wifi active=wifi standby=wired "
+        "netstats: generation=9 mode=dhcp policy=wifi active=wifi standby=wired "
         "addr_src=dhcp-lease ip=192.168.10.50 gateway=192.168.10.1 dhcp=bound",
         "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 eapol_secure=1",
         "netstatus: generation=9 ip=192.168.10.50 gateway=192.168.10.1 "
@@ -347,6 +347,125 @@ def oldgood_wifi_line_index(lines: list[str], needle: str) -> int:
     """Return the first synthetic WiFi replay line index containing `needle`."""
 
     return next(index for index, line in enumerate(lines) if needle in line)
+
+
+def retained_wifi_oldgood_receipt_lines() -> list[str]:
+    """Return the exact compact owner and retained-prefix serial transaction."""
+
+    return [
+        "DRIVER_TASK_OWNER_STATE contract=serial hot_path=serial-console "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
+        "root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=usb-local-seat hot_path=usb-keyboard "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
+        "root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=hdmi-text hot_path=hdmi-text "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
+        "root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=pcie-root hot_path=pcie-root "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=none "
+        "root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=cyw43455 hot_path=cyw43-wifi "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
+        "root_pointer=no",
+        "DRIVER_TASK_OWNER_STATE contract=sdio-host hot_path=sdio-host "
+        "owner_state=driver-owned descriptor=present descriptor_version=8 "
+        "descriptor_seal=valid artifact_hash=nonzero bus_link_seal=valid "
+        "root_pointer=no",
+        "WIFI_OLDGOOD_RETAINED_BEGIN id=1 attempt=1 pair_epoch=1 "
+        "generation=9 prefix_steps=26 fw=609309 nvram=1744 clm=2676",
+        "WIFI_OLDGOOD_RETAINED_HASH id=1 artifact=firmware "
+        f"sha256={normalizer.CYW43_CAPTURE_FIRMWARE_SHA256}",
+        "WIFI_OLDGOOD_RETAINED_HASH id=1 artifact=nvram "
+        f"sha256={normalizer.CYW43_CAPTURE_NVRAM_SHA256}",
+        "WIFI_OLDGOOD_RETAINED_HASH id=1 artifact=clm "
+        f"sha256={normalizer.CYW43_CAPTURE_CLM_SHA256}",
+        "SDIO_DRIVER_TASK_REPLAY_STATUS role=sdio-host stage=engine-init "
+        "blocker=ready detail=0x5500",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=net-engine-init status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-firmware status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-function2 status=ready",
+        "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+        "stage=cyw43-control-txglomalign event=pre-tx-drain-ready poll=0",
+        "CYW43_DRIVER_TASK_CONTROL_SPLIT contract=cyw43455 "
+        "stage=cyw43-control-txglomalign event=tx-complete result=16",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-txglomalign status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-ulp-sdioctrl status=unsupported",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-rxglom status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-mac status=ready",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-revinfo status=ready",
+        "CYW43_DRIVER_TASK_CLM contract=cyw43455 "
+        "stage=cyw43-control-clmload action=ready index=2 offset=2676 "
+        "len=2676 flags=0x0000",
+        "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
+        "stage=cyw43-control-firmware-version name=ver printable_len=48",
+        "CYW43_DRIVER_TASK_TEXT_IOVAR contract=cyw43455 "
+        "stage=cyw43-control-clm-version name=clmver printable_len=16",
+        "DRIVER_TASK_RESOURCE_INIT contract=cyw43455 hot_path=cyw43-wifi "
+        "stage=cyw43-control-up status=ready",
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=association-supervisor action=ready generation=9 ssid_len=7 "
+        "result=0x00000000",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=required associated=yes link_up=yes assoc_event=assoc "
+        "assoc_poll=2 eapol_rx=0",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m1 "
+        "action=recv-m1 poll=3 len=99",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m2 "
+        "action=send-m2 poll=4 len=121",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m3 "
+        "action=recv-m3 poll=5 len=151",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE contract=cyw43455 msg=m4 "
+        "action=send-m4 poll=6 len=99",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=ptk "
+        "stage=cyw43-host-eapol-ptk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_KEY contract=cyw43455 kind=gtk "
+        "stage=cyw43-host-eapol-gtk status=ready",
+        "CYW43_DRIVER_TASK_HOST_EAPOL_STATUS contract=cyw43455 "
+        "status=secure associated=yes link_up=yes eapol_rx=2",
+        "[dhcp] start ready interface=wifi generation=9 xid=0x01020304 "
+        "now_ms=1000",
+        "[dhcp] lease bound generation=9 ip=192.168.86.154/24 "
+        "gateway=192.168.86.1 server=192.168.86.1 lease_s=3600",
+        "WIFI_OLDGOOD_RETAINED_END id=1 attempt=1 pair_epoch=1 "
+        "generation=9 prefix_steps=26 status=complete",
+    ]
+
+
+def retained_wifi_oldgood_replay_lines() -> list[str]:
+    """Return a full Gate-10 trace using the new retained old-good prefix."""
+
+    return [
+        *oldgood_wifi_resource_replay_lines(),
+        *retained_wifi_oldgood_receipt_lines(),
+        "netstats: rx_pkts=4 tx_pkts=9 rx_used=4 tx_used=9 polls=30",
+        "netstats: generation=9 udp_rx=2 udp_tx=4 tcp_accepts=1 "
+        "tcp_auth=1 tcp_rx_bytes=58 tcp_tx_bytes=6782",
+        "netstats: generation=9 mode=dhcp policy=wifi active=wifi standby=wired "
+        "addr_src=dhcp-lease ip=192.168.86.154 gateway=192.168.86.1 "
+        "dhcp=bound",
+        "netstats: wifi_assoc=1 wifi_link=1 eapol_rx=2 eapol_start=1 "
+        "eapol_secure=1",
+        "netstatus: generation=9 ip=192.168.86.154 "
+        "gateway=192.168.86.1 src=dhcp-lease dhcp=bound tcp_ready=yes",
+        "nettest: generation=9 run_generation=2 enabled=true running=false "
+        "verdict=peer-assisted-pass tx_ok=true udp_echo_ok=false tcp_ok=false "
+        "console_ok=true peer_assisted_ok=true",
+        *healthy_wifi_dpc_triplet(generation=9),
+    ]
 
 
 def oldgood_usb_resource_replay_lines() -> list[str]:
@@ -390,6 +509,20 @@ def oldgood_usb_resource_replay_lines() -> list[str]:
         "ascii=0x74 detail=0x0501 result=0x00000001",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
         "first_byte_source=linked-runtime-hid proof_gate=10 target_gate=10 blocker=none",
+    ]
+
+
+def retained_usb_oldgood_receipt_lines() -> list[str]:
+    """Return one exact adjacent current USB runtime receipt pair."""
+
+    return [
+        "USB_OLDGOOD_RETAINED v=1 task=12 token=0xdeadbeef "
+        "link_epoch=7 link_token=0xc001d00d epoch=3 seq=14 "
+        "mask=0x00003fff topology=0x10230581 input_gen=9 commit=14 "
+        "source=linked-runtime-hid",
+        "USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root "
+        "owners=driver-owned+driver-owned descriptors=sealed+sealed "
+        "command_ready=yes proof_gate=14 blocker=none root_pointer=no",
     ]
 
 
@@ -10658,6 +10791,102 @@ def test_gate_summary_accepts_oldgood_usb_resource_replay_contract() -> None:
     assert record["USB_OLDGOOD_MISSING"] == "none"
 
 
+def test_gate_summary_accepts_identity_bound_usb_oldgood_retained_pair() -> None:
+    """The adjacent complete runtime/current pair is an additive replay proof."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(retained_usb_oldgood_receipt_lines())
+    ).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "yes"
+    assert record["USB_OLDGOOD_LAST"] == "runtime-gate10"
+    assert record["USB_OLDGOOD_MISSING"] == "none"
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "missing"),
+    [
+        ("v=1", "v=2", "retained-receipt-version"),
+        ("task=12", "task=0", "retained-receipt-identity"),
+        ("task=12", "task=4294967296", "retained-receipt-numeric-invalid"),
+        ("token=0xdeadbeef", "token=0x00000000", "retained-receipt-identity"),
+        ("mask=0x00003fff", "mask=0x00001fff", "retained-receipt-steps"),
+        ("mask=0x00003fff", "mask=0x80003fff", "retained-receipt-steps"),
+        ("commit=14", "commit=13", "retained-receipt-uncommitted"),
+        ("topology=0x10230581", "topology=0x10230501", "retained-receipt-topology"),
+        ("input_gen=9", "input_gen=0", "retained-receipt-identity"),
+        (
+            "source=linked-runtime-hid",
+            "source=none",
+            "retained-receipt-source",
+        ),
+        ("owners=driver-owned+driver-owned", "owners=missing+driver-owned", "usb-owner-state"),
+        ("owners=driver-owned+driver-owned", "owners=driver-owned+missing", "pcie-owner-state"),
+        ("descriptors=sealed+sealed", "descriptors=missing+sealed", "usb-descriptor-seal"),
+        ("descriptors=sealed+sealed", "descriptors=sealed+missing", "pcie-descriptor-seal"),
+        ("command_ready=yes", "command_ready=no", "command-ready"),
+        ("proof_gate=14", "proof_gate=0", "runtime-gate10"),
+        ("blocker=none", "blocker=receipt-missing", "runtime-gate10"),
+    ],
+)
+def test_usb_oldgood_retained_pair_rejects_incomplete_or_noncurrent_proof(
+    old: str,
+    new: str,
+    missing: str,
+) -> None:
+    """Every runtime identity and current-root condition remains fail-closed."""
+
+    lines = [
+        line.replace(old, new, 1) if old in line else line
+        for line in retained_usb_oldgood_receipt_lines()
+    ]
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_MISSING"] == missing
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("gap", "missing-current", "malformed-current", "trailing-reserved"),
+)
+def test_usb_oldgood_retained_pair_requires_latest_physical_adjacency(
+    mutation: str,
+) -> None:
+    """A clipped, spliced, or superseded pair cannot reuse older evidence."""
+
+    lines = retained_usb_oldgood_receipt_lines()
+    if mutation == "gap":
+        lines.insert(1, "unclassified physical serial gap")
+    elif mutation == "missing-current":
+        lines.pop()
+    elif mutation == "malformed-current":
+        lines[-1] = "USB_OLDGOOD_CURRENT clipped"
+    else:
+        lines.append("USB_OLDGOOD_TRUNCATED")
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_MISSING"] != "none"
+
+
+def test_newer_invalid_usb_oldgood_pair_revokes_older_complete_pair() -> None:
+    """Only the latest passive USB receipt transaction can carry authority."""
+
+    lines = [
+        *retained_usb_oldgood_receipt_lines(),
+        retained_usb_oldgood_receipt_lines()[0],
+        retained_usb_oldgood_receipt_lines()[1].replace(
+            "command_ready=yes", "command_ready=no"
+        ),
+    ]
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["USB_OLDGOOD_REPLAY"] == "no"
+    assert record["USB_OLDGOOD_MISSING"] == "command-ready"
+
+
 def test_gate_summary_rejects_usb_oldgood_hid_endpoint_not_ready() -> None:
     """A not-ready HID endpoint breadcrumb is a blocker, not endpoint proof."""
 
@@ -15146,6 +15375,208 @@ def test_gate_summary_accepts_oldgood_wifi_replay_contract() -> None:
     assert record["SDIO_IRQ158_INBAND_PROOF"] == "yes"
     assert record["WIFI_SUBGATE"] == "8h-data-admission"
     assert record["WIFI_SUBGATE_NAME"] == "8h-data-admission"
+
+
+def test_gate_summary_accepts_identity_bound_wifi_oldgood_retained_prefix() -> None:
+    """The compact replay prefix must close only with fresh live tail proof."""
+
+    lines = [
+        line
+        for line in retained_wifi_oldgood_replay_lines()
+        if not line.startswith(("wifi: firmware_contract", "wifi: firmware_release"))
+    ]
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(lines)
+    ).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "yes"
+    assert record["WIFI_OLDGOOD_LAST"] == "dpc-healthy-after-tcp"
+    assert record["WIFI_OLDGOOD_MISSING"] == "none"
+    assert record["WIFI_FIRMWARE_IDENTITY_PROOF"] == "yes"
+
+
+def test_wifi_oldgood_retained_prefix_rejects_noncontiguous_or_reordered_rows() -> None:
+    """Filtered or reordered physical rows cannot reconstruct an atomic receipt."""
+
+    for mutation in ("gap", "swap"):
+        lines = retained_wifi_oldgood_replay_lines()
+        begin = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_BEGIN")
+        if mutation == "gap":
+            lines.insert(begin + 2, "unclassified physical serial gap")
+        else:
+            lines[begin + 1], lines[begin + 2] = (
+                lines[begin + 2],
+                lines[begin + 1],
+            )
+
+        record = normalizer.summarize_gates(
+            normalizer.parse_events(lines)
+        ).to_record()
+
+        assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+        assert record["WIFI_OLDGOOD_MISSING"] != "none"
+
+
+def test_wifi_oldgood_retained_prefix_rejects_wrong_owner_or_identity() -> None:
+    """Current owner seals and pair/generation identity are mandatory."""
+
+    for old, new in (
+        ("contract=serial ", "contract=serial-console "),
+        ("generation=9 prefix_steps=26", "generation=10 prefix_steps=26"),
+    ):
+        lines = retained_wifi_oldgood_replay_lines()
+        receipt_start = oldgood_wifi_line_index(
+            lines, "DRIVER_TASK_OWNER_STATE contract=serial "
+        )
+        receipt_end = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_END")
+        changed = False
+        for index in range(receipt_start, receipt_end + 1):
+            if old in lines[index]:
+                lines[index] = lines[index].replace(old, new, 1)
+                changed = True
+                break
+        assert changed
+
+        record = normalizer.summarize_gates(
+            normalizer.parse_events(lines)
+        ).to_record()
+
+        assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+
+
+def test_newer_incomplete_wifi_oldgood_retained_prefix_revokes_older_complete() -> None:
+    """A clipped later receipt cannot leave an older transaction authoritative."""
+
+    lines = [
+        *retained_wifi_oldgood_replay_lines(),
+        "WIFI_OLDGOOD_RETAINED_BEGIN",
+    ]
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_MISSING"] == "retained-prefix-begin-malformed"
+
+
+@pytest.mark.parametrize(
+    "boundary",
+    [
+        "CYW43_DRIVER_TASK_JOIN_REQUEST contract=cyw43455 "
+        "path=association-supervisor action=ready generation=10 ssid_len=7 "
+        "result=0x00000000",
+        "CYW43_GATE8_RECOVERY",
+    ],
+)
+def test_wifi_oldgood_retained_prefix_is_revoked_by_later_join_or_recovery(
+    boundary: str,
+) -> None:
+    """A later association lifecycle edge invalidates the retained generation."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events([*retained_wifi_oldgood_replay_lines(), boundary])
+    ).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_MISSING"] == "retained-prefix-invalidated"
+
+
+def test_wifi_oldgood_retained_prefix_requires_fresh_tcp_and_dpc_tail() -> None:
+    """The passive prefix cannot reuse older TCP or DPC evidence."""
+
+    for removed in ("tcp_accepts=1", "CYW43_SDIO_DPC generation=9"):
+        lines = [
+            line
+            for line in retained_wifi_oldgood_replay_lines()
+            if removed not in line
+        ]
+        record = normalizer.summarize_gates(
+            normalizer.parse_events(lines)
+        ).to_record()
+
+        assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+        assert record["WIFI_OLDGOOD_MISSING"] != "none"
+
+
+def test_wifi_oldgood_retained_prefix_rejects_cross_generation_network_tail() -> None:
+    """Association-generation TCP/nettest rows cannot be stitched across boots."""
+
+    lines = retained_wifi_oldgood_replay_lines()
+    end = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_END")
+    for index in range(end + 1, len(lines)):
+        lines[index] = lines[index].replace("generation=9", "generation=10")
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_MISSING"] in {
+        "tcp-authenticated",
+        "gate8-identity-current",
+    }
+
+
+def test_truncated_wifi_oldgood_retained_prefix_cannot_supply_live_gate7() -> None:
+    """Passive replay rows remain non-authoritative even when the tail is clipped."""
+
+    lines = retained_wifi_oldgood_receipt_lines()
+    secure = oldgood_wifi_line_index(
+        lines,
+        "status=secure associated=yes link_up=yes",
+    )
+    events = normalizer.parse_events(lines[: secure + 1])
+    proof = normalizer.summarize_wifi_gate7_proof(
+        normalizer.wifi_oldgood_authority_events(events)
+    )
+
+    assert not proof.complete
+
+
+def test_malformed_wifi_oldgood_retained_prefix_revokes_older_live_authority() -> None:
+    """A clipped passive lifecycle row cannot hide behind an older Gate 7/8."""
+
+    lines = retained_wifi_oldgood_replay_lines()
+    begin = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_BEGIN")
+    end = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_END")
+    for index in range(begin, end + 1):
+        if "msg=m1" in lines[index]:
+            lines[index] = "CYW43_DRIVER_TASK_HOST_EAPOL_MESSAGE clipped"
+            break
+    else:
+        raise AssertionError("missing retained M1 row")
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
+    assert record["WIFI_OLDGOOD_MISSING"] == "host-eapol-m1"
+    assert record["WIFI_GATE7_COMPLETE"] == "no"
+    assert record["WIFI_GATE8_COMPLETE"] == "no"
+    assert int(record["WIFI_GATE"]) < 10
+
+
+@pytest.mark.parametrize(
+    ("old", "new"),
+    [
+        ("index=2 ", "index=65536 "),
+        ("assoc_poll=2 ", "assoc_poll=4294967296 "),
+        ("eapol_rx=2", "eapol_rx=4294967296"),
+    ],
+)
+def test_wifi_oldgood_retained_prefix_rejects_impossible_producer_widths(
+    old: str,
+    new: str,
+) -> None:
+    """The parser must enforce the Rust producer's u16/u32 field widths."""
+
+    lines = retained_wifi_oldgood_replay_lines()
+    begin = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_BEGIN")
+    end = oldgood_wifi_line_index(lines, "WIFI_OLDGOOD_RETAINED_END")
+    for index in range(begin, end + 1):
+        if old in lines[index]:
+            lines[index] = lines[index].replace(old, new, 1)
+            break
+    else:
+        raise AssertionError(f"missing retained field {old!r}")
+
+    record = normalizer.summarize_gates(normalizer.parse_events(lines)).to_record()
+
+    assert record["WIFI_OLDGOOD_REPLAY"] == "no"
 
 
 def test_oldgood_wifi_replay_requires_authenticated_tcp_counters() -> None:

@@ -216,10 +216,11 @@ class FakeController:
         timeout_s: float,
         *,
         label: str,
+        stream_prefix: bytes = b"",
     ) -> bytes:
         del timeout_s, label
         assert self.reads, f"unexpected read for markers {tuple(markers)!r}"
-        snapshot = self.reads.pop(0)
+        snapshot = stream_prefix + self.reads.pop(0)
         assert any(pi4_serial_reboot.serial_marker_seen(snapshot, marker) for marker in markers)
         return snapshot
 
@@ -430,6 +431,58 @@ def test_serial_timeout_tail_conceals_truncated_secret_prefix(
     assert "<redacted-partial>" in str(caught.value)
 
 
+def test_serial_read_matches_prompt_across_prior_stream_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A marker can remain contiguous while crossing two bounded waits."""
+
+    controller, _ = redaction_controller(b"secret-ticket")
+
+    class PromptSerial:
+        def read(self, _size: int) -> bytes:
+            return b"ohesix> "
+
+    controller._serial = PromptSerial()
+    times = iter((0.0, 0.0))
+    monkeypatch.setattr(pi4_serial_reboot.time, "monotonic", lambda: next(times))
+
+    snapshot = controller.read_until(
+        (pi4_serial_reboot.ROOT_PROMPT_FULL,),
+        1.0,
+        label="split prompt",
+        stream_prefix=b"c",
+    )
+
+    assert snapshot == pi4_serial_reboot.ROOT_PROMPT_FULL
+
+
+def test_serial_read_rejects_noncontiguous_prompt_tail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Unrelated bytes between waits cannot complete the root prompt."""
+
+    controller, _ = redaction_controller(b"secret-ticket")
+
+    class InterruptedPromptSerial:
+        def __init__(self) -> None:
+            self.reads = [b"async\nohesix> ", b""]
+
+        def read(self, _size: int) -> bytes:
+            return self.reads.pop(0) if self.reads else b""
+
+    controller._serial = InterruptedPromptSerial()
+    times = iter((0.0, 0.0, 2.0))
+    monkeypatch.setattr(pi4_serial_reboot.time, "monotonic", lambda: next(times))
+
+    with pytest.raises(pi4_serial_reboot.SerialMarkerTimeout):
+        controller.read_until(
+            (pi4_serial_reboot.ROOT_PROMPT_FULL,),
+            1.0,
+            label="interrupted split prompt",
+            stream_prefix=b"c",
+        )
+
+
 def test_saved_wifi_uses_old_root_menu_option_one() -> None:
     """Saved Wi-Fi proof must use the saved-settings root path."""
 
@@ -623,13 +676,13 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
             ),
             NETSTATS_WIFI_PENDING,
             NETSTATS_WIFI_BOUND,
+            b"OK SMP\ncohesix>",
             NETTEST_STARTED,
             NETTEST_RESULT,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -644,14 +697,14 @@ def test_wifi_diagnostics_wait_for_supervisor_and_dhcp_before_nettest() -> None:
     assert controller.sent[:4] == [
         "netstats",
         "netstats",
+        "smp activity",
         "nettest",
-        "netstats",
     ]
     assert controller.diagnostic_barriers[:4] == [
         "netstats",
         "netstats-dhcp-poll-2",
+        "smp activity-prefix",
         "nettest",
-        "netstats-final",
     ]
     assert controller.events.index(
         "read:terminal CYW43 bootstrap supervisor status"
@@ -690,12 +743,12 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            b"OK SMP\ncohesix>",
             NETSTATS_OK,
             NETSTATS_TERMINAL_PASS,
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -708,7 +761,7 @@ def test_wifi_failed_supervisor_fails_closed_without_nettest() -> None:
 
     assert not diagnostics_ok
     assert "nettest" not in controller.sent
-    assert controller.sent[:2] == ["netstats", "netstats"]
+    assert controller.sent[:3] == ["smp activity", "netstats", "netstats"]
     assert "wifi-supervisor:failed" in controller.notes[-1]
     assert any(
         "action=skip-unavailable-nettest" in note for note in controller.notes
@@ -761,12 +814,12 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
     controller = FakeController(
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input\n",
+            b"OK SMP\ncohesix>",
             NETSTATS_OK,
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
         ]
     )
     controller.drain_reads.append(
@@ -785,12 +838,12 @@ def test_wifi_ready_retraction_waits_for_permanent_before_diagnostics() -> None:
     assert not diagnostics_ok
     assert "nettest" not in controller.sent
     assert controller.sent == [
+        "smp activity",
         "netstats",
         "netstats",
         "wifi diag",
         "usb diag",
         "usb status",
-        "smp activity",
     ]
     assert controller.drains[0] == (
         pi4_serial_reboot.WIFI_READY_STABILITY_WINDOW_S,
@@ -903,11 +956,11 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
 
     controller = DhcpResultTimeoutController(
         [
+            b"OK SMP\ncohesix>",
             NETSTATS_OK,
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -922,11 +975,11 @@ def test_wifi_dhcp_timeout_preserves_later_diagnostics() -> None:
     assert not diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "netstats",
         "wifi diag",
         "usb diag",
         "usb status",
-        "smp activity",
     ]
     assert controller.dhcp_result_timeout_s is not None
     assert 0 < controller.dhcp_result_timeout_s <= 0.5
@@ -988,6 +1041,26 @@ def test_diagnostic_barrier_accepts_full_prompt_following_ping() -> None:
     assert controller.reads == []
 
 
+def test_diagnostic_barrier_accepts_prompt_split_after_first_byte() -> None:
+    """The ping read tail and next read form one contiguous fresh prompt."""
+
+    controller = FakeController(
+        [
+            b"OK PING reply=pong\nc",
+            b"ohesix> ",
+        ]
+    )
+
+    pi4_serial_reboot.RedactingSerialController.synchronize_root_diagnostic_command(
+        controller,
+        label="wifi diag",
+    )
+
+    assert controller.sent == ["", "ping"]
+    assert controller.root_terminator_guards == [False, True]
+    assert controller.reads == []
+
+
 def test_diagnostics_reinforce_root_command_terminators() -> None:
     """Root diagnostics use guarded terminators without injecting a blank command."""
 
@@ -995,6 +1068,7 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
         [
             b"[local-seat] usb keyboard command-ready action=enable-command-input clean_polls=2 no_reply=0 recovery_pending=no\n",
             NETSTATS_WIFI_BOUND,
+            b"OK SMP\ncohesix>",
             (
                 NETTEST_RESULT.replace(b"generation=14", b"generation=13")
                 + NETTEST_STARTED
@@ -1004,7 +1078,6 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
             b"OK WIFI\ncohesix>",
             b"OK USB\ncohesix>",
             b"OK USB\ncohesix>",
-            b"OK SMP\ncohesix>",
         ]
     )
 
@@ -1018,23 +1091,23 @@ def test_diagnostics_reinforce_root_command_terminators() -> None:
     assert diagnostics_ok
     assert controller.sent == [
         "netstats",
+        "smp activity",
         "nettest",
         "netstats",
         "wifi diag",
         "usb diag",
         "usb status",
-        "smp activity",
     ]
     assert controller.public_sent[0] == "netstats"
     assert controller.reinforced == [True, True, True, True, True, True, True]
     assert controller.diagnostic_barriers == [
         "netstats",
+        "smp activity-prefix",
         "nettest",
         "netstats-final",
         "wifi diag",
         "usb diag",
         "usb status",
-        "smp activity",
     ]
     assert (
         "nettest async-terminal observed generation=14 "
