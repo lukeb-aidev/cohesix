@@ -181,8 +181,14 @@ def _strong_driver_task_proof_lines() -> list[str]:
         "[cohesix] WARNING: usb stop failed or was inactive before Cohesix boot; xHCI trust tokens cleared before Cohesix cold boot",
         "[Cohesix] Root console ready (type 'help' for commands)",
         "cohesix> driver proof",
+        "[local-seat] usb keyboard command-ready source=linked-runtime-hid "
+        "clean_polls=2 no_reply=0 recovery_pending=no",
         "usb: runtime_gate keyboard=yes first_report=yes first_byte=yes "
-        "first_byte_source=linked-runtime-hid proof_gate=10 blocker=none",
+        "first_byte_source=linked-runtime-hid command_ready=yes proof_gate=10 "
+        "blocker=none",
+        "usb: runtime_queue queue_valid=yes queued_reports=1 "
+        "doorbell_pending=no transfer_events=1 report_status=produced-byte "
+        "blocker=none",
         "OK NETTEST success",
         "netstats: active=wifi addr_src=dhcp-lease dhcp=bound wifi_assoc=1 "
         "wifi_link=1 eapol_secure=1 eapol_rx=1 rx_pkts=1 tx_pkts=1",
@@ -1194,7 +1200,12 @@ def test_gate_proof_driver_task_proof_does_not_require_usb_first_byte(
     lines = [
         line
         for line in _strong_driver_task_proof_lines()
-        if not line.startswith("usb: runtime_gate")
+        if not line.startswith(
+            (
+                "usb: runtime_gate",
+                "[local-seat] usb keyboard command-ready",
+            )
+        )
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1303,10 +1314,10 @@ def test_gate_proof_accepts_wifi_selected_driver_task_proof_without_genet(
     assert "PI4_RUNTIME_DMA_PROOF=fresh-pi" in result.stdout
 
 
-def test_gate_proof_requires_usb_oldgood_replay_for_ready(
+def test_gate_proof_accepts_functional_usb_without_oldgood_receipt(
     tmp_path: pathlib.Path,
 ) -> None:
-    """USB gate 10 alone must not satisfy the full ready proof."""
+    """Current USB function does not depend on the dormant old-good receipt."""
 
     venv_dir = REPO_ROOT / ".venv"
     if not (venv_dir / "bin" / "python").is_file():
@@ -1334,9 +1345,11 @@ def test_gate_proof_requires_usb_oldgood_replay_for_ready(
         text=True,
     )
 
-    assert result.returncode == 2
+    assert result.returncode == 0
     assert "USB_OLDGOOD_REPLAY=no" in result.stdout
-    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+    assert "USB_RUNTIME_QUEUE_VALID=yes" in result.stdout
+    assert "USB_RUNTIME_QUEUED_REPORTS=1" in result.stdout
+    assert "USB_PHYSICAL_INPUT_PROOF=yes" in result.stdout
 
 
 def test_gate_proof_accepts_identity_bound_usb_oldgood_retained_pair(
@@ -1381,10 +1394,10 @@ def test_gate_proof_accepts_identity_bound_usb_oldgood_retained_pair(
     assert "USB_OLDGOOD_MISSING=none" in result.stdout
 
 
-def test_gate_proof_rejects_uncommitted_usb_oldgood_retained_pair(
+def test_gate_proof_ignores_uncommitted_dormant_usb_oldgood_receipt(
     tmp_path: pathlib.Path,
 ) -> None:
-    """A torn sequence-last USB receipt cannot satisfy ready acceptance."""
+    """A torn passive receipt cannot override current functional USB proof."""
 
     venv_dir = REPO_ROOT / ".venv"
     if not (venv_dir / "bin" / "python").is_file():
@@ -1417,15 +1430,16 @@ def test_gate_proof_rejects_uncommitted_usb_oldgood_retained_pair(
         text=True,
     )
 
-    assert result.returncode == 2
+    assert result.returncode == 0
     assert "USB_OLDGOOD_REPLAY=no" in result.stdout
-    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+    assert "USB_OLDGOOD_MISSING=retained-receipt-uncommitted" in result.stdout
+    assert "USB_RUNTIME_QUEUE_VALID=yes" in result.stdout
 
 
-def test_gate_proof_requires_usb_first_report_for_ready(
+def test_gate_proof_requires_usb_first_report_and_byte_for_ready(
     tmp_path: pathlib.Path,
 ) -> None:
-    """Full USB ready proof must not accept command-ready admission alone."""
+    """Full USB readiness cannot substitute command admission for HID input."""
 
     venv_dir = REPO_ROOT / ".venv"
     if not (venv_dir / "bin" / "python").is_file():
@@ -1438,8 +1452,8 @@ def test_gate_proof_requires_usb_first_report_for_ready(
             .replace("first_byte=yes", "first_byte=no")
             .replace("first_byte_source=linked-runtime-hid", "first_byte_source=none")
             for line in _strong_driver_task_proof_lines()
+            if not line.startswith("[local-seat] usb keyboard command-ready")
         ),
-        "[local-seat] usb keyboard command-ready source=linked-runtime-hid clean_polls=2 no_reply=0 recovery_pending=no",
     ]
     log_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1460,8 +1474,7 @@ def test_gate_proof_requires_usb_first_report_for_ready(
     )
 
     assert result.returncode == 2
-    assert "USB_OLDGOOD_REPLAY=no" in result.stdout
-    assert "USB_OLDGOOD_REPLAY expected yes got no" in result.stderr
+    assert "USB_FIRST_REPORT_READY expected yes got no" in result.stderr
 
 
 def test_gate_proof_accepts_ready_with_oldgood_replay_contracts(

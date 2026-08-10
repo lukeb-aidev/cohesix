@@ -3958,11 +3958,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       ARP-warmed latency. A missing first reply fails the lifetime even when
       Gate 8, DHCP, later pings, and TCP pass.
   - `--require-usb-ready`, `--require-wifi-ready`, and `--require-ready` are
-    stricter than gate/blocker success. They require the isolated runtime
-    old-good replay fields from `scripts/pi4_trace_normalize.py --gate-summary`:
-    `USB_OLDGOOD_REPLAY=yes`, `USB_OLDGOOD_MISSING=none`,
-    `WIFI_OLDGOOD_REPLAY=yes`, and `WIFI_OLDGOOD_MISSING=none` for the selected
-    full-ready path. Wi-Fi proof also requires
+    stricter than gate/blocker success. USB readiness requires current USB and
+    PCIe descriptor/owner proof, Gate 10, command readiness, the exact one-deep
+    interrupt-IN queue, and real linked-runtime HID/parser/display liveness.
+    The reserved USB old-good ABI record is not published by the current
+    runtime, so `USB_OLDGOOD_REPLAY=no` or `USB_OLDGOOD_MISSING` naming only the
+    dormant receipt is not a blocker. Wi-Fi readiness still requires the
+    isolated runtime old-good fields `WIFI_OLDGOOD_REPLAY=yes` and
+    `WIFI_OLDGOOD_MISSING=none` for the selected full-ready path. Wi-Fi proof
+    also requires
     `CYW43_BOOTSTRAP_SUPERVISOR_SEEN=yes`,
     `CYW43_BOOTSTRAP_SUPERVISOR_READY=yes`,
     `CYW43_BOOTSTRAP_SUPERVISOR_LAST_STATUS=ready`,
@@ -4030,31 +4034,25 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     input; it may schedule one bounded `LocalSeat` turn but cannot retain the
     selected-network operator fence without a decoded or buffered byte or
     physical response. A
-    replay miss reports the first missing translated May/U-Boot/Linux behavior
-    through `*_OLDGOOD_MISSING`; gate 10 without replay remains triage evidence
-    only. USB replay requires distinct ordered endpoint, interrupt-IN,
-    first-report, first-byte, and runtime-gate proof, and the first report/byte
-    must be isolated runtime HID sourced. Wi-Fi replay rejects failed readiness,
-    failed join, generic EAPOL message tokens, firmware-supplicant shortcuts,
-    and started-only nettest output.
-  - The isolated USB runtime's new evidence is one 48-byte, pointer-free
-    `DriverRuntimeUsbOldgoodReceipt` at shared-ring offset 192. Tests must prove
-    its exact 14-step monotonic prefix: xHCI ready, command event, root-port
-    reset, hub addressed, hub configured, hub context, hub-port power,
-    hub-port status, hub-port ready, hub-child probe, HID endpoint,
-    interrupt-IN, first report, and first byte. The record binds task key,
-    descriptor identity, USB-to-PCIe link epoch/token, controller lifetime,
-    publication sequence, packed root/hub/child/IN-endpoint topology, and exact
-    input generation; its final word repeats the publication sequence only
-    after the body. Partial prefixes must remain runtime-private and leave the
-    shared record zero; only the complete first-byte terminal may publish once.
-    Fault, recovery, or reordered evidence must clear or preserve zero rather
-    than interleave shared-ring work with enumeration. Two cache-invalidated
-    reads must be identical. Normal
-    endpoint rearm preserves the receipt, endpoint recovery revokes it, a new
-    controller lifecycle rebinds it, and candidate retries may retain only the
-    exact proven prefix. Torn commit, invalid order, poison, partial identity,
-    stale descriptor/link, and cross-path stitching all fail closed.
+    Wi-Fi replay miss reports the first missing translated May/U-Boot/Linux
+    behavior through `WIFI_OLDGOOD_MISSING`; Wi-Fi Gate 10 without replay
+    remains triage evidence only. USB acceptance instead requires distinct
+    endpoint, interrupt-IN, first-report, first-byte, and runtime-gate evidence,
+    and the first report/byte must be isolated runtime HID sourced. Wi-Fi replay
+    rejects failed readiness, failed join, generic EAPOL message tokens,
+    firmware-supplicant shortcuts, and started-only nettest output.
+  - The fixed 48-byte, pointer-free `DriverRuntimeUsbOldgoodReceipt` at
+    shared-ring offset 192 remains an ABI/root-reader compatibility reservation.
+    The isolated USB runtime does not stage or publish its former partial or
+    terminal receipt state. This runtime-only ablation is a scoped Milestone 26b
+    regression repair: fresh exact-image candidates with receipt instrumentation
+    stopped immediately after otherwise successful phases 198, 316, and 412,
+    while the earlier path reliably reached physical enumeration, the one-deep
+    interrupt-IN queue, and command readiness. ABI tests must still prove the
+    reserved record is fixed-layout, pointer-free, identity-bound, and
+    commit-last; root tests must stable-read an unchanged zero record without
+    granting it authority. No runtime publication-order test is required while
+    the feature is dormant.
   - Each passive `usb status`, `usb dump-state`, and `usb diag` response must
     project exactly two adjacent rows before its ordinary detail:
 
@@ -4063,16 +4061,15 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
     ```
 
-    The current pairs are USB then PCIe. Acceptance requires the latest exact
-    physical pair, version 1, nonzero receipt identity/topology/input fields,
-    `mask=0x00003fff`, `seq=commit`, `source=linked-runtime-hid`, both owners
-    `driver-owned`, both descriptors `sealed`, `command_ready=yes`,
-    `proof_gate=14`, and `blocker=none`. An absent receipt is emitted as `v=1`
-    with zero identity/body fields and `source=none`. A gap, clipped or
-    malformed current row, later reserved USB old-good row, invalid topology,
-    stale identity, or uncommitted receipt
-    revokes an older complete pair. `usb enable-kbd` and `usb probe-kbd` are
-    active and must not project either row.
+    The current pairs are USB then PCIe. The dormant receipt is emitted as
+    `v=1` with zero identity/body fields and `source=none`; its
+    `receipt-missing`/`proof_gate=0` state is diagnostic and does not revoke
+    otherwise current physical USB proof. Acceptance still requires both owners
+    `driver-owned`, both descriptors `sealed`, `command_ready=yes`, Gate 10, the
+    one-deep interrupt-IN queue, and current linked-runtime HID/parser/display
+    liveness. A clipped or malformed current owner row fails closed.
+    `usb enable-kbd` and `usb probe-kbd` are active and must not project either
+    row.
   - Local-seat tests must hold endpoint completion and any bounded pre-proof
     bytes private until both the PCIe and USB descriptor replay plus owner-state
     chains are current. Attach remains `Pending`; the bytes enter the parser
@@ -4091,7 +4088,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
   - Existing logs may be normalized for triage only:
     - `scripts/pi4_gate_proof.sh --normalize-only --log <existing-log> --allow-summary-only`
     - `--allow-summary-only` is not acceptance proof and must not be combined with any `--require-*` hardware acceptance flag.
-  - `scripts/pi4_trace_normalize.py --boot-summary` is a fail-closed boot ledger, not an alternative proof path. A `pass` slice requires clean serial, prompt/root-console readiness, arch-counter timer proof, dedicated driver-task owner/DMA/counter proof, selected network proof, `NET_TCP_READY=yes` or `NETTEST_PROOF=yes`, USB cold-boot and old-good local-seat proof, USB burst proof, and HDMI/serial responsiveness. Console-only boots, DHCP-only wired boots, and Wi-Fi boots without `WIFI_OLDGOOD_REPLAY=yes` remain failed slices even when the prompt is usable.
+  - `scripts/pi4_trace_normalize.py --boot-summary` is a fail-closed boot ledger, not an alternative proof path. A `pass` slice requires clean serial, prompt/root-console readiness, arch-counter timer proof, dedicated driver-task owner/DMA/counter proof, selected network proof, `NET_TCP_READY=yes` or `NETTEST_PROOF=yes`, USB cold-boot plus current descriptor/owner/queue and functional local-seat proof, USB burst proof, and HDMI/serial responsiveness. The dormant USB old-good receipt is not required. Console-only boots, DHCP-only wired boots, and Wi-Fi boots without `WIFI_OLDGOOD_REPLAY=yes` remain failed slices even when the prompt is usable.
   - When `cohsh` reaches the Pi over Wi-Fi/TCP, keep the raw serial log and the `cohsh` transcript together in the Pi 4 evidence directory. TCP `cohsh` output is not mirrored back into the UART log, so the normalizer may be run over a combined serial-plus-`cohsh` evidence file for the final `netstats`/`netstatus` assertions while retaining the raw serial log as the boot source of truth.
   - Capture boot evidence showing:
     - `manifest.hw.network.mode=<static|dhcp>`; Pi 4 manifest-default boots must show `dhcp`
@@ -4106,7 +4103,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`; DHCP-bound evidence is address proof only, while acceptance still requires listener/command evidence (`netstatus ... tcp_ready=yes`, authenticated `cohsh`, or successful `nettest`).
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
-    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: companion `queued_reports` and `transfer_events` fields may be untyped bytes from an earlier enumeration result and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. Hardware acceptance also reaches `USB_OLDGOOD_REPLAY=yes` / `USB_OLDGOOD_MISSING=none` for the isolated hub-keyboard sequence before claiming the local-seat keyboard experience is complete. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, current USB and PCIe descriptor/owner proof, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: companion `queued_reports` and `transfer_events` fields may be untyped bytes from an earlier enumeration result and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. The dormant USB old-good receipt is not hardware acceptance authority. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing
@@ -4174,8 +4171,9 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
       ring RX/TX turns, and
       Wi-Fi progress suppression during USB boot activity and after USB
       first-byte proof. These checks introduce no console command or USB/HDMI
-      authority change. The additive 48-byte USB old-good receipt is the only
-      ABI evidence extension described above. Pi 4 manifest-default boots must
+      authority change. The reserved 48-byte USB old-good slot is the only ABI
+      evidence extension described above; runtime publication is dormant. Pi 4
+      manifest-default boots must
       use
       `hw.local_seat.enabled=true`, `hw.local_seat.required=true`, and matching
       `usb-kbd0`/`hdmi0` `hw.devices[] required=true` declarations so missing

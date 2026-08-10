@@ -626,26 +626,16 @@ reusable ownership pattern.
   existing steady keyboard turn even when no new HID report arrives; report
   count is not elapsed time and must not become the repeat clock.
 - Represent retained work as typed `Pending`, `Complete`, or `Failed`.
-- Retain the isolated USB runtime's old-good evidence in one fixed 48-byte,
-  pointer-free `DriverRuntimeUsbOldgoodReceipt` at shared-ring offset 192. The
-  ordered prefix is exactly: xHCI ready, command event, root-port reset, hub
-  addressed, hub configured, hub context ready, hub-port power, hub-port
-  status, hub-port ready, hub-child probe, HID endpoint, interrupt-IN, first
-  report, and first byte. Bind it to the USB task key and descriptor identity,
-  the sealed USB-to-PCIe link epoch/token, one nonzero controller lifetime, the
-  packed endpoint topology, and the exact first-byte input generation. Publish
-  the body with a nonzero monotonic sequence and repeat that sequence in the
-  final word only after the body is visible. Keep every partial prefix
-  runtime-private and publish the shared record once only when the first-byte
-  step completes the exact mask; enumeration faults and endpoint recovery
-  clear any older shared terminal. Root accepts only two identical, complete
-  samples. A torn commit, skipped/reordered prefix, mixed candidate,
-  stale identity, or poisoned record fails closed.
-- Preserve the receipt across the normal rearm of the same interrupt-IN
-  endpoint. A new controller lifetime rebinds every identity, while endpoint
-  recovery revokes the prior receipt. A root- or hub-port candidate retry may
-  retain only its exact already-proved prefix; it must not stitch topology or
-  input from another path.
+- Keep the fixed 48-byte, pointer-free `DriverRuntimeUsbOldgoodReceipt` ABI slot
+  at shared-ring offset 192 reserved for compatibility, but do not stage or
+  publish its partial or terminal state from the isolated USB runtime. Fresh
+  exact-image boots with that instrumentation stopped immediately after
+  otherwise successful control-transfer phases 198, 316, and 412. The scoped
+  Milestone 26b repair therefore restores the previously reliable physical
+  enumeration path and its one-deep interrupt-IN/command-ready behavior. Root
+  may continue to stable-read and passively project the reserved zero record;
+  that projection grants no admission, scheduling, recovery, or acceptance
+  authority.
 - Give enumeration and recovery finite attempt and elapsed-time bounds.
 - Expose active, outstanding, and active-without-progress state separately;
   cached readiness must not hide a retained request that has stopped making
@@ -729,9 +719,10 @@ reusable ownership pattern.
 - Allow display mirroring and redraw to degrade before serial or keyboard
   command liveness.
 - These local-seat rules change no console grammar, physical owner, poller,
-  retry path, or scheduling authority. The additive fixed USB old-good receipt
-  is passive evidence in the existing shared driver-task ring. USB remains the
-  sole xHCI/HID owner and HDMI remains the child-only framebuffer renderer.
+  retry path, or scheduling authority. The reserved fixed USB old-good slot and
+  root projection are passive compatibility diagnostics; runtime publication
+  is dormant. USB remains the sole xHCI/HID owner and HDMI remains the
+  child-only framebuffer renderer.
 
 ### 7.4 Network-device pattern
 
@@ -863,28 +854,27 @@ after a later malformed/incomplete reserved record, Join, Gate 8 lifecycle, or
 recovery boundary, and requires later same-generation netstats, authenticated
 TCP, terminal nettest, and healthy DPC evidence.
 
-Each passive `usb status`, `usb dump-state`, or `usb diag` response projects
-the USB receipt as exactly two physically adjacent uppercase rows before its
-ordinary detail:
+Each passive `usb status`, `usb dump-state`, or `usb diag` response continues
+to project the reserved USB slot and current root snapshot as two adjacent
+uppercase rows before its ordinary detail:
 
 ```text
 USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0x<8hex> epoch=<u32> seq=<u32> mask=0x<8hex> topology=0x<8hex> input_gen=<u32> commit=<u32> source=<linked-runtime-hid|none>
 USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
 ```
 
-The first row is the stable runtime record; absent or rejected evidence is
-projected truthfully as `v=1` with zero identity/body fields and `source=none`.
-The second row is a
-fresh root snapshot in USB-then-PCIe order. Acceptance requires version 1,
-nonzero current identity/link/lifetime/publication/input fields, commit equal
-to publication sequence, exact step mask `0x00003fff`, a valid packed
-root-port/hub/child/IN-endpoint topology, `source=linked-runtime-hid`, both
-owners `driver-owned`, both descriptors `sealed`, `command_ready=yes`,
-`proof_gate=14`, and `blocker=none`. The pair is enqueued atomically with each
-row bounded to 243 bytes. Only the latest exact adjacent pair is proof; a gap,
-clip, malformed current row, later reserved USB old-good row, stale identity,
-or uncommitted receipt revokes an older complete pair. Active `usb enable-kbd`
-and `usb probe-kbd` operations do not project either retained row.
+The runtime-publication repair leaves the first row truthfully at `v=1` with
+zero identity/body fields and `source=none`; the ABI slot and stable root reader
+remain so older tooling fails closed. The second row is a fresh USB-then-PCIe
+root snapshot. Its current descriptor and owner fields remain independently
+required, but `receipt-missing` and `proof_gate=0` do not fail physical USB
+acceptance while runtime publication is dormant. Current acceptance instead
+requires both owners `driver-owned`, both descriptors `sealed`, Gate 10,
+`command_ready=yes`, one armed interrupt-IN transfer, zero current no-reply or
+queue-collapse state, and real linked-runtime HID input reaching the parser and
+HDMI. The pair remains passive and each row is bounded to 243 bytes. Active
+`usb enable-kbd` and `usb probe-kbd` operations do not project either retained
+row.
 
 ### 8.2 Passive versus active commands
 

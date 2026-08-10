@@ -485,19 +485,14 @@ a serial `ping` and a USB-keyboard `ping` must still return. If any tail is
 absent, stop sending input and preserve the sample. A merged or overlapped
 serial transcript is not acceptance evidence.
 
-The isolated USB runtime also retains one 48-byte, commit-last old-good receipt
-at shared-ring offset 192. It must bind the current USB descriptor and sealed
-USB-to-PCIe link to one controller lifetime, then advance in exact order through
-xHCI ready, command event, root reset, hub address/configuration/context,
-hub-port power/status/readiness, child probe, HID endpoint, interrupt-IN, first
-report, and first byte. Root must stable-double-read one identical committed
-record. Partial steps remain runtime-private and produce no shared-ring writes
-or barriers between physical enumeration transfers; the runtime publishes the
-record once only after the complete first-byte step. A skipped/reordered step,
-path/candidate stitch, stale identity, torn
-commit, or poisoned record is not `USB_OLDGOOD_REPLAY` proof. Normal endpoint
-rearm preserves the same receipt; endpoint recovery revokes it and a new
-controller lifecycle rebinds it.
+The 48-byte `DriverRuntimeUsbOldgoodReceipt` ABI slot at shared-ring offset 192
+remains reserved, and root may still stable-double-read and passively project
+it. The isolated USB runtime does not currently stage or publish partial or
+terminal receipt state. Fresh exact-image boots with that instrumentation
+regressed immediately after otherwise successful physical phases 198, 316,
+and 412, so the scoped Milestone 26b repair restored the previously reliable
+enumeration and one-deep interrupt-IN path. A zero record is therefore expected
+compatibility state, not a substitute for functional USB evidence.
 
 `usb status`, `usb dump-state`, and `usb diag` expose that receipt as one
 atomic physically adjacent pair:
@@ -507,13 +502,15 @@ USB_OLDGOOD_RETAINED v=1 task=<u32> token=0x<8hex> link_epoch=<u32> link_token=0
 USB_OLDGOOD_CURRENT contracts=usb-local-seat+pcie-root owners=<driver-owned|missing>+<driver-owned|missing> descriptors=<sealed|missing>+<sealed|missing> command_ready=<yes|no> proof_gate=<0|14> blocker=<none|receipt-missing|usb-owner-missing|pcie-owner-missing|usb-descriptor-missing|pcie-descriptor-missing|command-not-ready> root_pointer=no
 ```
 
-Require the latest pair with `mask=0x00003fff`, nonzero identity/topology/input
-fields, `seq=commit`, `source=linked-runtime-hid`, USB and PCIe owners both
-`driver-owned`, both descriptors `sealed`, `command_ready=yes`,
-`proof_gate=14`, and `blocker=none`. Missing evidence is truthful `v=1` with
-zero identity/body fields and `source=none`; any gap, truncation, malformed or
-later reserved row, wrong identity, or uncommitted sequence fails closed. Active
-`usb enable-kbd` and `usb probe-kbd` commands emit neither old-good row.
+The reserved first row remains truthful as `v=1` with zero identity/body fields
+and `source=none`; do not require `mask=0x00003fff`, `proof_gate=14`, or
+`USB_OLDGOOD_REPLAY=yes` while runtime publication is dormant. The current row
+must still show both USB and PCIe owners as `driver-owned` and both descriptors
+as `sealed`. Physical acceptance additionally requires Gate 10,
+`command_ready=yes`, a current one-deep interrupt-IN queue, no current no-reply
+or recovery failure, and real linked-runtime HID input reaching parser ingress
+and visible HDMI output. Active `usb enable-kbd` and `usb probe-kbd` commands
+emit neither old-good row.
 
 The first serial `cohesix>` prompt is not permission to type on the USB local
 seat. HDMI can first show `USB controller starting...` and bounded
@@ -556,10 +553,10 @@ and becomes visible through that healthy display service. Do not require a
 fault injection merely to exercise this branch on otherwise healthy hardware.
 
 This behavior retains the existing console grammar and physical authority.
-The additive fixed USB old-good receipt is passive evidence in the existing
-shared driver-task ring. HAL still admits resources, the isolated USB runtime
-remains the sole xHCI/HID owner, and the isolated HDMI runtime remains the sole
-framebuffer renderer.
+The reserved fixed USB old-good slot and root projection are passive
+compatibility diagnostics; runtime publication is dormant. HAL still admits
+resources, the isolated USB runtime remains the sole xHCI/HID owner, and the
+isolated HDMI runtime remains the sole framebuffer renderer.
 
 `usb probe-kbd` is also output-bounded: it emits the one-slice result, explicit
 `continuation=pending|terminal` state, cached runtime contract, verdict, and

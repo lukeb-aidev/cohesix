@@ -19710,10 +19710,10 @@ def boot_evidence_blockers(record: Mapping[str, object]) -> list[str]:
             if record.get("USB_BUSY_AFTER_READY") == "yes"
             else "local-seat-usb-busy-proof-missing"
         )
-    if record.get("USB_OLDGOOD_REPLAY") != "yes":
-        blockers.append("local-seat-usb-oldgood-replay-missing")
-    if record.get("USB_OLDGOOD_MISSING") != "none":
-        blockers.append("local-seat-usb-oldgood-incomplete")
+    # The reserved USB old-good receipt remains parseable for legacy logs, but
+    # its runtime producer is dormant. Current functional USB proof comes from
+    # the live owner/descriptor, Gate-10, one-deep queue, and input-liveness
+    # records above and below; absence of the passive receipt is not a blocker.
     if record.get("USB_BURST_PROOF") != "yes":
         blockers.append("local-seat-usb-burst-proof-missing")
     if record.get("USB_BURST_DROPS") not in {0, "0"}:

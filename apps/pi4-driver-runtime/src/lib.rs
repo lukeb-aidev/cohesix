@@ -52,12 +52,11 @@ use pi4_driver_abi::{
     DriverRuntimeGenetCompletionResultParts, DriverRuntimeInitDescriptor,
     DriverRuntimeIrqDescriptor, DriverRuntimeResourceRangeDescriptor,
     DriverRuntimeSdioCommandDescriptor, DriverRuntimeSdioPhysicalLifetimeRecord,
-    DriverRuntimeUsbOldgoodReceipt, DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE,
-    DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT,
-    DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER, DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR, DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT,
-    DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR, DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
-    DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
+    DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE, DRIVER_RUNTIME_BUS_LINK_CYW43_NOTIFICATION_SLOT,
+    DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT, DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER,
+    DRIVER_RUNTIME_BUS_LINK_PCIE_ENDPOINT_SLOT, DRIVER_RUNTIME_BUS_LINK_PCIE_RING_VADDR,
+    DRIVER_RUNTIME_BUS_LINK_SDIO_NOTIFICATION_SLOT, DRIVER_RUNTIME_BUS_LINK_SDIO_RING_VADDR,
+    DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY, DRIVER_RUNTIME_COMMAND_FLAG_PERSISTENT_TRANSACTION,
     DRIVER_RUNTIME_COMMAND_FLAG_STEADY_SERVICE_LEASE,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_ASSERT_WRITE,
     DRIVER_RUNTIME_CYW43_ARMCR4_RESET_EDGE_CLEAR_WRITE,
@@ -545,16 +544,6 @@ use pi4_driver_abi::{
     DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_UNMATCHED_TRANSFER,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_MASK,
     DRIVER_RUNTIME_USB_KEYBOARD_RESULT_REPORT_STATUS_SHIFT,
-    DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER, DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES,
-    DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET, DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE, DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_REPORT,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT, DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CHILD_PROBE,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONFIGURED, DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONTEXT,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_POWER, DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_READY,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_STATUS, DRIVER_RUNTIME_USB_OLDGOOD_STEP_INTERRUPT_IN,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK, DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET,
-    DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
     DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_READY, DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT,
     DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT, HOT_PATH_CYW43_WIFI, HOT_PATH_GENET_NIC,
@@ -2467,15 +2456,6 @@ struct UsbRuntimeState {
     keyboard_led_sync_cooldown: u8,
     led_sync_failed: bool,
     reports: u32,
-    oldgood_receipt: DriverRuntimeUsbOldgoodReceipt,
-    oldgood_hub_slot: u8,
-    oldgood_hub_configured: bool,
-    oldgood_hub_context_ready: bool,
-    oldgood_candidate_hub_slot: u8,
-    oldgood_candidate_hub_port: u8,
-    oldgood_ready_hub_slot: u8,
-    oldgood_ready_hub_port: u8,
-    oldgood_child_slot: u8,
 }
 
 impl UsbRuntimeState {
@@ -2570,442 +2550,12 @@ impl UsbRuntimeState {
             keyboard_led_sync_cooldown: 0,
             led_sync_failed: false,
             reports: 0,
-            oldgood_receipt: DriverRuntimeUsbOldgoodReceipt::zeroed(),
-            oldgood_hub_slot: 0,
-            oldgood_hub_configured: false,
-            oldgood_hub_context_ready: false,
-            oldgood_candidate_hub_slot: 0,
-            oldgood_candidate_hub_port: 0,
-            oldgood_ready_hub_slot: 0,
-            oldgood_ready_hub_port: 0,
-            oldgood_child_slot: 0,
         }
     }
 
     fn reset(&mut self) {
         *self = Self::new();
     }
-}
-
-fn usb_oldgood_link(
-    descriptor: &DriverRuntimeInitDescriptor,
-) -> Option<DriverRuntimeBusLinkDescriptor> {
-    if !descriptor.sealed_identity_self_consistent()
-        || descriptor.hot_path != HOT_PATH_USB_KEYBOARD
-        || descriptor.role_bit != ROLE_USB
-    {
-        return None;
-    }
-    let mut index = 0usize;
-    while index < descriptor.bus_link_count as usize {
-        let link = descriptor.bus_links[index];
-        if link.owner_hot_path == HOT_PATH_PCIE_ROOT
-            && link.channel_id == DRIVER_RUNTIME_BUS_LINK_CHANNEL_USB_PCIE
-            && link.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_CLIENT != 0
-            && link.flags & DRIVER_RUNTIME_BUS_LINK_FLAG_OWNER == 0
-            && link.sealed_for_client(descriptor.task_key, HOT_PATH_USB_KEYBOARD)
-        {
-            return Some(link);
-        }
-        index += 1;
-    }
-    None
-}
-
-fn usb_oldgood_clear_ring_record() {
-    let offset = usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET);
-    let commit_offset = offset
-        + core::mem::offset_of!(
-            DriverRuntimeUsbOldgoodReceipt,
-            committed_publication_sequence
-        );
-    let _ = write_runtime_payload_commit_u32_physical(commit_offset, 0);
-    driver_task_shared_store_barrier();
-    let mut index = 0usize;
-    while index < usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES) - 4 {
-        write_ring_byte(offset + index, 0);
-        index += 1;
-    }
-    driver_task_shared_store_barrier();
-    driver_task_shared_clean_range(
-        DRIVER_TASK_RING_VADDR + offset,
-        usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES),
-    );
-}
-
-fn usb_oldgood_publish(receipt: DriverRuntimeUsbOldgoodReceipt) -> bool {
-    if !receipt.complete() {
-        return false;
-    }
-    let offset = usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET);
-    let commit_offset = offset
-        + core::mem::offset_of!(
-            DriverRuntimeUsbOldgoodReceipt,
-            committed_publication_sequence
-        );
-    if !write_runtime_payload_commit_u32_physical(commit_offset, 0) {
-        return false;
-    }
-    driver_task_shared_store_barrier();
-    driver_task_shared_clean_range(DRIVER_TASK_RING_VADDR + commit_offset, 4);
-
-    write_ring_u32(offset, receipt.magic);
-    write_ring_u16(offset + 4, receipt.version);
-    write_ring_u16(offset + 6, receipt.len);
-    write_ring_u32(offset + 8, receipt.task_key);
-    write_ring_u32(offset + 12, receipt.identity_token);
-    write_ring_u32(offset + 16, receipt.link_epoch);
-    write_ring_u32(offset + 20, receipt.link_token);
-    write_ring_u32(offset + 24, receipt.lifetime_epoch);
-    write_ring_u32(offset + 28, receipt.publication_sequence);
-    write_ring_u32(offset + 32, receipt.step_mask);
-    write_ring_u32(offset + 36, receipt.topology);
-    write_ring_u32(offset + 40, receipt.input_generation);
-    driver_task_shared_store_barrier();
-    driver_task_shared_clean_range(
-        DRIVER_TASK_RING_VADDR + offset,
-        usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_BYTES),
-    );
-    if !write_runtime_payload_commit_u32_physical(
-        commit_offset,
-        receipt.committed_publication_sequence,
-    ) {
-        return false;
-    }
-    driver_task_shared_store_barrier();
-    driver_task_shared_clean_range(DRIVER_TASK_RING_VADDR + commit_offset, 4);
-    #[cfg(all(not(target_os = "none"), test))]
-    TEST_USB_OLDGOOD_PUBLISHES.fetch_add(1, Ordering::AcqRel);
-    true
-}
-
-fn usb_oldgood_reset_path_tracking(state: &mut UsbRuntimeState) {
-    state.oldgood_hub_slot = 0;
-    state.oldgood_hub_configured = false;
-    state.oldgood_hub_context_ready = false;
-    state.oldgood_candidate_hub_slot = 0;
-    state.oldgood_candidate_hub_port = 0;
-    state.oldgood_ready_hub_slot = 0;
-    state.oldgood_ready_hub_port = 0;
-    state.oldgood_child_slot = 0;
-}
-
-fn usb_oldgood_next_lifetime_epoch(state: &UsbRuntimeState, sequence: u32) -> u32 {
-    state
-        .oldgood_receipt
-        .valid()
-        .then_some(state.oldgood_receipt.lifetime_epoch)
-        .and_then(|epoch| epoch.checked_add(1))
-        .unwrap_or(sequence.max(1))
-}
-
-fn usb_oldgood_begin_lifecycle(
-    state: &mut UsbRuntimeState,
-    descriptor: &DriverRuntimeInitDescriptor,
-    lifetime_epoch: u32,
-) -> bool {
-    usb_oldgood_clear_ring_record();
-    usb_oldgood_reset_path_tracking(state);
-    let Some(link) = usb_oldgood_link(descriptor).filter(|_| lifetime_epoch != 0) else {
-        state.oldgood_receipt = DriverRuntimeUsbOldgoodReceipt::zeroed();
-        return false;
-    };
-    state.oldgood_receipt = DriverRuntimeUsbOldgoodReceipt::new(
-        descriptor.task_key,
-        descriptor.identity_token,
-        link.epoch,
-        link.token,
-        lifetime_epoch,
-    )
-    .commit();
-    state.oldgood_receipt.valid()
-}
-
-// Keep partial replay evidence runtime-private so observing the xHCI owner does
-// not add shared-ring writes or barriers between physical enumeration steps.
-fn usb_oldgood_restage(state: &mut UsbRuntimeState) -> bool {
-    if !state.oldgood_receipt.valid() {
-        return false;
-    }
-    let Some(next) = state.oldgood_receipt.publication_sequence.checked_add(1) else {
-        state.oldgood_receipt.step_mask |= DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER;
-        state.oldgood_receipt.committed_publication_sequence = 0;
-        state.oldgood_receipt = state.oldgood_receipt.commit();
-        return false;
-    };
-    state.oldgood_receipt.publication_sequence = next;
-    state.oldgood_receipt.committed_publication_sequence = 0;
-    state.oldgood_receipt = state.oldgood_receipt.commit();
-    true
-}
-
-fn usb_oldgood_poison(state: &mut UsbRuntimeState) -> bool {
-    if !state.oldgood_receipt.valid()
-        || state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER != 0
-    {
-        return false;
-    }
-    state.oldgood_receipt.step_mask |= DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER;
-    usb_oldgood_restage(state)
-}
-
-fn usb_oldgood_revoke_shared(state: &mut UsbRuntimeState) {
-    let _ = usb_oldgood_poison(state);
-    usb_oldgood_clear_ring_record();
-}
-
-const fn usb_oldgood_expected_step(step_mask: u32) -> Option<u32> {
-    let steps = step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK;
-    if steps == DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK {
-        None
-    } else {
-        Some(1 << steps.count_ones())
-    }
-}
-
-fn usb_oldgood_advance(
-    state: &mut UsbRuntimeState,
-    step: u32,
-    topology: Option<u32>,
-    input_generation: Option<u32>,
-) -> bool {
-    if !state.oldgood_receipt.valid()
-        || state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER != 0
-    {
-        return false;
-    }
-    if usb_oldgood_expected_step(state.oldgood_receipt.step_mask) != Some(step)
-        || (step == DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT)
-            != topology.is_some_and(|value| value != 0)
-        || (step == DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE)
-            != input_generation.is_some_and(|value| value != 0)
-    {
-        return usb_oldgood_poison(state);
-    }
-    if let Some(topology) = topology {
-        state.oldgood_receipt.topology = topology;
-    }
-    if let Some(input_generation) = input_generation {
-        state.oldgood_receipt.input_generation = input_generation;
-    }
-    state.oldgood_receipt.step_mask |= step;
-    if !usb_oldgood_restage(state) {
-        return false;
-    }
-    if step == DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE {
-        return state.oldgood_receipt.complete() && usb_oldgood_publish(state.oldgood_receipt);
-    }
-    true
-}
-
-fn usb_oldgood_restart_root_candidate(state: &mut UsbRuntimeState) -> bool {
-    let retained_prefix =
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY | DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT;
-    if !usb_oldgood_restart_candidate(state, retained_prefix) {
-        return false;
-    }
-    usb_oldgood_reset_path_tracking(state);
-    usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET,
-        None,
-        None,
-    )
-}
-
-fn usb_oldgood_restart_candidate(state: &mut UsbRuntimeState, retained_prefix: u32) -> bool {
-    let steps = state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK;
-    if !state.oldgood_receipt.valid()
-        || state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_INVALID_ORDER != 0
-        || steps & retained_prefix != retained_prefix
-    {
-        return usb_oldgood_poison(state);
-    }
-    if steps != retained_prefix {
-        state.oldgood_receipt.step_mask = retained_prefix;
-        if retained_prefix & DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT == 0 {
-            state.oldgood_receipt.topology = 0;
-        }
-        if retained_prefix & DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE == 0 {
-            state.oldgood_receipt.input_generation = 0;
-        }
-        if !usb_oldgood_restage(state) {
-            return false;
-        }
-    }
-    true
-}
-
-fn usb_oldgood_note_hub_configured(state: &mut UsbRuntimeState, hub_slot: u8) {
-    if hub_slot == 0
-        || state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK
-            != (DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY
-                | DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT
-                | DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET
-                | DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED)
-    {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    state.oldgood_hub_slot = hub_slot;
-    state.oldgood_hub_configured = usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONFIGURED,
-        None,
-        None,
-    );
-    state.oldgood_hub_context_ready = false;
-    state.oldgood_candidate_hub_slot = 0;
-    state.oldgood_candidate_hub_port = 0;
-    state.oldgood_ready_hub_slot = 0;
-    state.oldgood_ready_hub_port = 0;
-    state.oldgood_child_slot = 0;
-}
-
-fn usb_oldgood_note_hub_context(state: &mut UsbRuntimeState, hub_slot: u8) {
-    if !state.oldgood_hub_configured || state.oldgood_hub_slot != hub_slot || hub_slot == 0 {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    state.oldgood_hub_context_ready = usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONTEXT,
-        None,
-        None,
-    );
-}
-
-fn usb_oldgood_restart_hub_port_candidate(
-    state: &mut UsbRuntimeState,
-    hub_slot: u8,
-    hub_port: u8,
-) -> bool {
-    let retained_prefix = (DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONTEXT << 1) - 1;
-    if !state.oldgood_hub_context_ready
-        || state.oldgood_hub_slot != hub_slot
-        || hub_slot == 0
-        || hub_port == 0
-    {
-        return usb_oldgood_poison(state);
-    }
-    if !usb_oldgood_restart_candidate(state, retained_prefix) {
-        return false;
-    }
-    state.oldgood_candidate_hub_slot = hub_slot;
-    state.oldgood_candidate_hub_port = hub_port;
-    state.oldgood_ready_hub_slot = 0;
-    state.oldgood_ready_hub_port = 0;
-    state.oldgood_child_slot = 0;
-    true
-}
-
-fn usb_oldgood_note_hub_port_power(state: &mut UsbRuntimeState, hub_slot: u8, hub_port: u8) {
-    if state.oldgood_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_port != hub_port
-        || hub_slot == 0
-        || hub_port == 0
-    {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    let _ = usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_POWER,
-        None,
-        None,
-    );
-}
-
-fn usb_oldgood_note_hub_port_status(state: &mut UsbRuntimeState, hub_slot: u8, hub_port: u8) {
-    if state.oldgood_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_port != hub_port
-        || hub_slot == 0
-        || hub_port == 0
-    {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    if state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_STATUS == 0 {
-        let _ = usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_STATUS,
-            None,
-            None,
-        );
-    }
-}
-
-fn usb_oldgood_note_hub_port_ready(state: &mut UsbRuntimeState, hub_slot: u8, hub_port: u8) {
-    if state.oldgood_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_slot != hub_slot
-        || state.oldgood_candidate_hub_port != hub_port
-        || hub_slot == 0
-        || hub_port == 0
-    {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    if usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_READY,
-        None,
-        None,
-    ) {
-        state.oldgood_ready_hub_slot = hub_slot;
-        state.oldgood_ready_hub_port = hub_port;
-        state.oldgood_child_slot = 0;
-    }
-}
-
-fn usb_oldgood_note_hub_child(state: &mut UsbRuntimeState, child: &UsbEnumerationDevice) {
-    let retained_prefix = (DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_PORT_READY << 1) - 1;
-    if child.slot == 0
-        || child.parent_hub_slot != state.oldgood_ready_hub_slot
-        || child.parent_hub_port != state.oldgood_ready_hub_port
-        || !usb_oldgood_restart_candidate(state, retained_prefix)
-        || !usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CHILD_PROBE,
-            None,
-            None,
-        )
-    {
-        state.oldgood_child_slot = 0;
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    state.oldgood_child_slot = child.slot;
-}
-
-fn usb_oldgood_topology(device: &UsbEnumerationDevice, endpoint_address: u8) -> u32 {
-    (u32::from(device.root_port & 0x0f) << 28)
-        | (u32::from(device.parent_hub_slot) << 20)
-        | (u32::from(device.parent_hub_port & 0x0f) << 16)
-        | (u32::from(device.slot) << 8)
-        | u32::from(endpoint_address)
-}
-
-fn usb_oldgood_note_hid_endpoint(state: &mut UsbRuntimeState, device: &UsbEnumerationDevice) {
-    if !state.oldgood_hub_configured
-        || !state.oldgood_hub_context_ready
-        || device.depth == 0
-        || device.parent_hub_slot != state.oldgood_hub_slot
-        || device.parent_hub_slot != state.oldgood_ready_hub_slot
-        || device.parent_hub_port != state.oldgood_ready_hub_port
-        || device.slot != state.oldgood_child_slot
-    {
-        let _ = usb_oldgood_poison(state);
-        return;
-    }
-    let topology = usb_oldgood_topology(device, state.keyboard_endpoint_address);
-    let _ = usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_HID_ENDPOINT,
-        Some(topology),
-        None,
-    );
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -14445,9 +13995,7 @@ fn usb_runtime_init(
             DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_BEGIN,
             aux0,
         );
-        let lifetime_epoch = usb_oldgood_next_lifetime_epoch(state, sequence);
         state.reset();
-        let _ = usb_oldgood_begin_lifecycle(state, descriptor, lifetime_epoch);
         publish_runtime_progress(
             sequence,
             DRIVER_RUNTIME_RING_PROGRESS_USB_STATE_RESET_DONE,
@@ -14455,12 +14003,6 @@ fn usb_runtime_init(
         );
         publish_runtime_progress(sequence, DRIVER_RUNTIME_RING_PROGRESS_USB_HW_ENTRY, aux0);
         let detail = usb_runtime_init_hw(sequence, aux0, descriptor, state)?;
-        let _ = usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY,
-            None,
-            None,
-        );
         state.initialized = true;
         Some(detail)
     });
@@ -43323,16 +42865,14 @@ fn usb_runtime_poll_keyboard(state: &mut UsbRuntimeState, sequence: u32, aux0: u
             for (index, byte) in payload.iter_mut().take(payload_len).enumerate() {
                 *byte = read_dma_byte(report_vaddr + index);
             }
-            let decoded_bytes = usb_keyboard_report_payload_to_frame_at_with_progress(
+            bytes = bytes.saturating_add(usb_keyboard_report_payload_to_frame_at_with_progress(
                 state,
                 &payload[..payload_len],
                 bytes,
                 sequence,
                 aux0,
-            );
-            bytes = bytes.saturating_add(decoded_bytes);
+            ));
             let _ = usb_keyboard_note_valid_report_status(state);
-            usb_oldgood_note_first_byte(state, decoded_bytes);
             if !usb_keyboard_rearm_after_completed_interrupt_in(state, descriptor, recovery_aux) {
                 recovery_attempted = true;
                 break;
@@ -43465,32 +43005,8 @@ fn usb_keyboard_note_valid_report_status(state: &mut UsbRuntimeState) -> bool {
     if !usb_keyboard_report_status_counts_as_valid_report(state.keyboard_last_report_status) {
         return false;
     }
-    let first_linked_report = state.keyboard_valid_report_events == 0;
     state.keyboard_valid_report_events = state.keyboard_valid_report_events.saturating_add(1);
-    if first_linked_report {
-        let _ = usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_REPORT,
-            None,
-            None,
-        );
-    }
     true
-}
-
-fn usb_oldgood_note_first_byte(state: &mut UsbRuntimeState, decoded_bytes: usize) {
-    if decoded_bytes == 0
-        || state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE != 0
-    {
-        return;
-    }
-    let input_generation = state.keyboard_transfer_generation;
-    let _ = usb_oldgood_advance(
-        state,
-        DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE,
-        None,
-        Some(input_generation),
-    );
 }
 
 const fn usb_keyboard_post_first_report_unmatched(state: &UsbRuntimeState) -> bool {
@@ -43706,19 +43222,11 @@ fn usb_runtime_reinitialize_controller(
     deep_cold_attempts: u8,
     deep_cold_detail: u16,
 ) -> u16 {
-    let lifetime_epoch = usb_oldgood_next_lifetime_epoch(state, sequence);
     state.reset();
-    let _ = usb_oldgood_begin_lifecycle(state, descriptor, lifetime_epoch);
     state.enumeration_cold_reinit_attempts = command_cold_attempts;
     state.enumeration_deep_cold_reinit_attempts = deep_cold_attempts;
     state.enumeration_deep_cold_reinit_detail = deep_cold_detail;
     if let Some(detail) = usb_runtime_init_hw(sequence, aux0, descriptor, state) {
-        let _ = usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY,
-            None,
-            None,
-        );
         state.initialized = true;
         state.init_detail = detail;
         usb_reset_enumeration_cursor(state);
@@ -43754,7 +43262,6 @@ fn usb_prepare_deep_cold_reinit_attempt(state: &mut UsbRuntimeState, detail: u16
 }
 
 fn usb_mark_enumeration_fault(state: &mut UsbRuntimeState, detail: u16) {
-    usb_oldgood_revoke_shared(state);
     state.init_detail = detail;
     if usb_detail_warrants_deep_cold_reinit(detail) {
         state.enumeration_retry_cooldown = 0;
@@ -45470,9 +44977,6 @@ static TEST_RUNTIME_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_RUNTIME_IRQ_ACK_FAILURES_REMAINING: AtomicU32 = AtomicU32::new(0);
-
-#[cfg(all(not(target_os = "none"), test))]
-static TEST_USB_OLDGOOD_PUBLISHES: AtomicU32 = AtomicU32::new(0);
 
 #[cfg(all(not(target_os = "none"), test))]
 static TEST_RUNTIME_SDIO_IRQ_ACK_CALLS: AtomicU32 = AtomicU32::new(0);
@@ -51432,14 +50936,13 @@ fn usb_prepare_hub_port(
     hub_info: UsbHubInfo,
     port: u8,
 ) -> Option<u32> {
-    let _ = usb_oldgood_restart_hub_port_candidate(state, hub.slot, port);
     if usb_hub_eager_port_power_enabled(hub, hub_info.power_mode) {
         publish_runtime_progress(
             sequence,
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_BEGIN,
             aux0,
         );
-        let power_set = usb_hub_set_feature(
+        let _ = usb_hub_set_feature(
             state,
             descriptor,
             hub,
@@ -51453,9 +50956,6 @@ fn usb_prepare_hub_port(
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_POWER_DONE,
             aux0,
         );
-        if power_set {
-            usb_oldgood_note_hub_port_power(state, hub.slot, port);
-        }
     } else {
         usb_spin_wait(usb_hub_power_settle_spins(hub_info.pwr_on_2_pwr_good));
     }
@@ -51479,7 +50979,6 @@ fn usb_prepare_hub_port(
             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
             aux0,
         );
-        usb_oldgood_note_hub_port_status(state, hub.slot, port);
         status_seen = true;
         let clear_mask = usb_hub_pre_reset_change_clear_mask(status.change);
         usb_record_hub_port_status_sample(
@@ -51547,7 +51046,6 @@ fn usb_prepare_hub_port(
                         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
                         aux0,
                     );
-                    usb_oldgood_note_hub_port_ready(state, hub.slot, port);
                     return Some(usb_hub_speed_from_status(recovered.status));
                 }
                 last = Some(recovered);
@@ -51593,7 +51091,6 @@ fn usb_prepare_hub_port(
                 DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_STATUS_DONE,
                 aux0,
             );
-            usb_oldgood_note_hub_port_status(state, hub.slot, port);
             status_seen = true;
             last = Some(status);
             if usb_hub_port_ready_after_reset(status) {
@@ -51625,7 +51122,6 @@ fn usb_prepare_hub_port(
                     DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
                     aux0,
                 );
-                usb_oldgood_note_hub_port_ready(state, hub.slot, port);
                 return Some(usb_hub_speed_from_status(status.status));
             }
             usb_hub_publish_port_not_ready(sequence, aux0, status);
@@ -51695,7 +51191,6 @@ fn usb_prepare_hub_port(
                             DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
                             aux0,
                         );
-                        usb_oldgood_note_hub_port_ready(state, hub.slot, port);
                         return Some(usb_hub_speed_from_status(recovered.status));
                     }
                     usb_hub_publish_port_not_ready(sequence, aux0, recovered);
@@ -51718,7 +51213,6 @@ fn usb_prepare_hub_port(
                 DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_PORT_READY,
                 aux0,
             );
-            usb_oldgood_note_hub_port_ready(state, hub.slot, port);
             return Some(usb_hub_speed_from_status(status.status));
         }
     } else if !status_seen && port <= USB_HUB_BLIND_PREPARE_PORT_LIMIT {
@@ -51773,7 +51267,6 @@ fn usb_probe_hub_child_candidate(
         *next_device_index = index_before;
         return false;
     };
-    usb_oldgood_note_hub_child(state, &child);
     if usb_probe_device_for_keyboard(
         sequence,
         aux0,
@@ -51908,7 +51401,6 @@ fn usb_scan_hub_children(
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_SET_CONFIGURATION_DONE,
         aux0,
     );
-    usb_oldgood_note_hub_configured(state, hub.slot);
     usb_spin_wait(USB_HUB_SET_CONFIGURATION_SETTLE_SPINS);
     publish_runtime_progress(
         sequence,
@@ -51956,7 +51448,6 @@ fn usb_scan_hub_children(
         DRIVER_RUNTIME_RING_PROGRESS_USB_HUB_CONTEXT_DONE,
         aux0,
     );
-    usb_oldgood_note_hub_context(state, hub.slot);
     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_HUB_TOPOLOGY_SEEN;
     let ports = hub_info.ports.min(15);
     for scan_pass in 0..USB_HUB_CHILD_SCAN_PASSES {
@@ -52038,7 +51529,6 @@ fn usb_probe_device_for_keyboard(
         state.keyboard_slot = device.slot;
         state.keyboard_port = device.root_port;
         state.keyboard_ep0_ring_offset = device.ep0_ring_offset;
-        usb_oldgood_note_hid_endpoint(state, &device);
         usb_reset_keyboard_interrupt_queue(state);
         publish_runtime_progress(
             sequence,
@@ -52113,14 +51603,6 @@ fn usb_probe_device_for_keyboard(
                 },
                 aux0,
             );
-            if interrupt_ready {
-                let _ = usb_oldgood_advance(
-                    state,
-                    DRIVER_RUNTIME_USB_OLDGOOD_STEP_INTERRUPT_IN,
-                    None,
-                    None,
-                );
-            }
         }
         let ready = configured && endpoint_ready && protocol_ready && interrupt_ready;
         state.ep0_enqueue = device.ep0_enqueue;
@@ -52195,14 +51677,6 @@ fn xhci_probe_command_path(
     descriptor: &DriverRuntimeInitDescriptor,
 ) -> bool {
     if state.command_path_proven {
-        if state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT == 0 {
-            let _ = usb_oldgood_advance(
-                state,
-                DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT,
-                None,
-                None,
-            );
-        }
         return true;
     }
     if state.command_proof_pending {
@@ -52262,12 +51736,6 @@ fn xhci_probe_command_path(
                     );
                     state.command_path_proven = true;
                     state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_COMMAND_RING_READY;
-                    let _ = usb_oldgood_advance(
-                        state,
-                        DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT,
-                        None,
-                        None,
-                    );
                     true
                 } else {
                     publish_runtime_progress(
@@ -52419,7 +51887,6 @@ fn usb_scan_root_ports_for_keyboard(
             port,
             state.port_event_candidate_mask & bit != 0,
         ) {
-            let _ = usb_oldgood_restart_root_candidate(state);
             publish_runtime_progress(
                 sequence,
                 DRIVER_RUNTIME_RING_PROGRESS_USB_ROOT_PORT_RESET_DONE,
@@ -52448,12 +51915,6 @@ fn usb_scan_root_ports_for_keyboard(
                 state.enumeration_best_detail = best_detail;
                 return false;
             };
-            let _ = usb_oldgood_advance(
-                state,
-                DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED,
-                None,
-                None,
-            );
             usb_remember_best_enumeration_detail(&mut best_detail, state.init_detail);
             if usb_probe_device_for_keyboard(
                 sequence,
@@ -52815,7 +52276,6 @@ fn xhci_recover_keyboard_interrupt_endpoint_with_progress(
     descriptor: &DriverRuntimeInitDescriptor,
     progress: Option<(u32, u32)>,
 ) -> bool {
-    usb_oldgood_revoke_shared(state);
     state.keyboard_last_recovery_stage =
         pi4_driver_abi::DRIVER_RUNTIME_USB_KEYBOARD_RECOVERY_STAGE_BEGIN;
     publish_usb_keyboard_endpoint_recovery_progress(
@@ -59085,54 +58545,6 @@ mod tests {
             | (u32::from(read_runtime_payload_byte_physical(offset + 3)) << 24)
     }
 
-    fn read_usb_oldgood_receipt_for_test() -> DriverRuntimeUsbOldgoodReceipt {
-        let base = usize::from(DRIVER_RUNTIME_USB_OLDGOOD_RECEIPT_OFFSET);
-        DriverRuntimeUsbOldgoodReceipt {
-            magic: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, magic),
-            ),
-            version: read_runtime_payload_u16_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, version),
-            ),
-            len: read_runtime_payload_u16_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, len),
-            ),
-            task_key: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, task_key),
-            ),
-            identity_token: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, identity_token),
-            ),
-            link_epoch: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, link_epoch),
-            ),
-            link_token: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, link_token),
-            ),
-            lifetime_epoch: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, lifetime_epoch),
-            ),
-            publication_sequence: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, publication_sequence),
-            ),
-            step_mask: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, step_mask),
-            ),
-            topology: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, topology),
-            ),
-            input_generation: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(DriverRuntimeUsbOldgoodReceipt, input_generation),
-            ),
-            committed_publication_sequence: read_runtime_payload_u32_for_test(
-                base + core::mem::offset_of!(
-                    DriverRuntimeUsbOldgoodReceipt,
-                    committed_publication_sequence
-                ),
-            ),
-        }
-    }
-
     fn read_cyw43_bus_episode_u16_for_test(field_offset: usize) -> u16 {
         read_runtime_payload_u16_for_test(
             usize::from(pi4_driver_abi::DRIVER_RUNTIME_CYW43_BUS_EPISODE_OFFSET) + field_offset,
@@ -60011,7 +59423,6 @@ mod tests {
         CYW43_ACTIVE_PARENT_SEQUENCE.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_PRODUCTION_CHAIN_ENABLED.store(false, Ordering::Release);
         TEST_RUNTIME_TIMER_COUNTER_TICKS.store(0, Ordering::Release);
-        TEST_USB_OLDGOOD_PUBLISHES.store(0, Ordering::Release);
         TEST_CYW43_FOREGROUND_STATE_SNAPSHOTS.store(0, Ordering::Release);
         TEST_CYW43_CONTROL_TX_DONE_PUBLISHES.store(0, Ordering::Release);
         TEST_CYW43_ROOT_WAKE_SIGNALS.store(0, Ordering::Release);
@@ -66408,8 +65819,6 @@ mod tests {
             state.dpc_shared_epoch = 0x4359_5301;
             state.dpc_cursor.event_sequence = 91;
             state.dpc_cursor.action = Cyw43DpcAction::CaptureStatus;
-            state.dpc_child_timing.begin(0x4359_5301, 91, 17);
-            state.dpc_child_timing_publisher.begin_epoch(0x4359_5301);
             assert!(cyw43_control_exchange_begin(state, request, 0));
         });
         SDIO_RUNTIME_STATE.with_mut(|state| {
@@ -103896,293 +103305,6 @@ mod tests {
         );
     }
 
-    fn advance_usb_oldgood_through_interrupt_for_test(
-        state: &mut UsbRuntimeState,
-        descriptor: &DriverRuntimeInitDescriptor,
-        lifetime_epoch: u32,
-    ) -> UsbEnumerationDevice {
-        assert!(usb_oldgood_begin_lifecycle(
-            state,
-            descriptor,
-            lifetime_epoch
-        ));
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_XHCI_READY,
-            None,
-            None,
-        ));
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_COMMAND_EVENT,
-            None,
-            None,
-        ));
-        assert!(usb_oldgood_restart_root_candidate(state));
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED,
-            None,
-            None,
-        ));
-        usb_oldgood_note_hub_configured(state, 2);
-        usb_oldgood_note_hub_context(state, 2);
-        assert!(usb_oldgood_restart_hub_port_candidate(state, 2, 1));
-        usb_oldgood_note_hub_port_power(state, 2, 1);
-        usb_oldgood_note_hub_port_status(state, 2, 1);
-        usb_oldgood_note_hub_port_ready(state, 2, 1);
-        let child = UsbEnumerationDevice {
-            slot: 3,
-            root_port: 1,
-            depth: 1,
-            parent_hub_slot: 2,
-            parent_hub_port: 1,
-            ..UsbEnumerationDevice::empty()
-        };
-        usb_oldgood_note_hub_child(state, &child);
-        state.keyboard_endpoint_address = 0x81;
-        usb_oldgood_note_hid_endpoint(state, &child);
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_INTERRUPT_IN,
-            None,
-            None,
-        ));
-        child
-    }
-
-    fn complete_usb_oldgood_for_test(
-        state: &mut UsbRuntimeState,
-        descriptor: &DriverRuntimeInitDescriptor,
-        lifetime_epoch: u32,
-        input_generation: u32,
-    ) -> DriverRuntimeUsbOldgoodReceipt {
-        let _ = advance_usb_oldgood_through_interrupt_for_test(state, descriptor, lifetime_epoch);
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_REPORT,
-            None,
-            None,
-        ));
-        assert!(usb_oldgood_advance(
-            state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE,
-            None,
-            Some(input_generation),
-        ));
-        read_usb_oldgood_receipt_for_test()
-    }
-
-    #[test]
-    fn usb_oldgood_partial_steps_remain_private_and_completion_publishes_once() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
-        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
-        let link = usb_oldgood_link(&descriptor).expect("sealed USB-to-PCIe link");
-        let mut state = UsbRuntimeState::new();
-        let child = advance_usb_oldgood_through_interrupt_for_test(&mut state, &descriptor, 0x55);
-
-        let staged = state.oldgood_receipt;
-        assert!(staged.valid());
-        assert_eq!(staged.task_key, descriptor.task_key);
-        assert_eq!(staged.identity_token, descriptor.identity_token);
-        assert_eq!(staged.link_epoch, link.epoch);
-        assert_eq!(staged.link_token, link.token);
-        assert_eq!(staged.lifetime_epoch, 0x55);
-        assert_eq!(
-            staged.step_mask,
-            (DRIVER_RUNTIME_USB_OLDGOOD_STEP_INTERRUPT_IN << 1) - 1
-        );
-        assert_eq!(
-            staged.topology,
-            usb_oldgood_topology(&child, state.keyboard_endpoint_address)
-        );
-        assert_eq!(staged.input_generation, 0);
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 0);
-
-        state.keyboard_attach_awaiting_idle = true;
-        state.keyboard_last_report_status = DRIVER_RUNTIME_USB_KEYBOARD_REPORT_STATUS_FILTERED_KEY;
-        assert!(usb_keyboard_note_valid_report_status(&mut state));
-        assert!(!usb_keyboard_has_first_valid_report(&state));
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 0);
-        usb_oldgood_note_first_byte(&mut state, 0);
-        assert_eq!(
-            state.oldgood_receipt.step_mask & DRIVER_RUNTIME_USB_OLDGOOD_STEP_FIRST_BYTE,
-            0
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 0);
-        state.keyboard_attach_awaiting_idle = false;
-        state.keyboard_transfer_generation = 19;
-        usb_oldgood_note_first_byte(&mut state, 1);
-
-        let complete = read_usb_oldgood_receipt_for_test();
-        assert!(complete.complete());
-        assert_eq!(complete.step_mask, DRIVER_RUNTIME_USB_OLDGOOD_STEP_MASK);
-        assert_eq!(complete.input_generation, 19);
-        assert_eq!(complete.publication_sequence, 15);
-        assert_eq!(
-            complete.committed_publication_sequence,
-            complete.publication_sequence
-        );
-        assert_eq!(
-            DriverRuntimeUsbOldgoodReceipt::stable_snapshot(complete, complete),
-            Some(complete)
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 1);
-
-        state.keyboard_transfer_generation = 20;
-        usb_oldgood_note_first_byte(&mut state, 1);
-        assert_eq!(read_usb_oldgood_receipt_for_test(), complete);
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 1);
-    }
-
-    #[test]
-    fn usb_oldgood_reordering_remains_private_and_never_publishes() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
-        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
-        let mut state = UsbRuntimeState::new();
-        let first = advance_usb_oldgood_through_interrupt_for_test(&mut state, &descriptor, 0x66);
-
-        assert!(usb_oldgood_restart_root_candidate(&mut state));
-        assert_eq!(
-            state.oldgood_receipt.step_mask,
-            (DRIVER_RUNTIME_USB_OLDGOOD_STEP_ROOT_PORT_RESET << 1) - 1
-        );
-        assert_eq!(state.oldgood_receipt.topology, 0);
-        assert!(!state.oldgood_receipt.poisoned());
-
-        assert!(usb_oldgood_advance(
-            &mut state,
-            DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_ADDRESSED,
-            None,
-            None,
-        ));
-        usb_oldgood_note_hub_configured(&mut state, 4);
-        usb_oldgood_note_hub_context(&mut state, 4);
-        assert!(usb_oldgood_restart_hub_port_candidate(&mut state, 4, 1));
-        usb_oldgood_note_hub_port_power(&mut state, 4, 1);
-        usb_oldgood_note_hub_port_status(&mut state, 4, 1);
-        assert!(usb_oldgood_restart_hub_port_candidate(&mut state, 4, 2));
-        assert_eq!(
-            state.oldgood_receipt.step_mask,
-            (DRIVER_RUNTIME_USB_OLDGOOD_STEP_HUB_CONTEXT << 1) - 1
-        );
-        assert!(!state.oldgood_receipt.poisoned());
-
-        usb_oldgood_note_hub_port_power(&mut state, 4, 2);
-        usb_oldgood_note_hub_port_status(&mut state, 4, 2);
-        usb_oldgood_note_hub_port_ready(&mut state, 4, 2);
-        let second = UsbEnumerationDevice {
-            slot: 5,
-            root_port: 2,
-            depth: 1,
-            parent_hub_slot: 4,
-            parent_hub_port: 2,
-            ..UsbEnumerationDevice::empty()
-        };
-        usb_oldgood_note_hub_child(&mut state, &second);
-        state.keyboard_endpoint_address = 0x81;
-        usb_oldgood_note_hid_endpoint(&mut state, &first);
-        assert!(state.oldgood_receipt.poisoned());
-        let poisoned = state.oldgood_receipt;
-        usb_oldgood_note_hid_endpoint(&mut state, &second);
-        assert!(state.oldgood_receipt.poisoned());
-        assert_eq!(state.oldgood_receipt.step_mask, poisoned.step_mask);
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 0);
-    }
-
-    #[test]
-    fn usb_oldgood_completion_survives_normal_rearm_but_recovery_clears() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
-        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
-        let mut state = UsbRuntimeState::new();
-        let published = complete_usb_oldgood_for_test(&mut state, &descriptor, 0x77, 23);
-        assert!(published.complete());
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 1);
-        let before_rearm = state.oldgood_receipt;
-        state.db_offset = 0x1000;
-        state.keyboard_slot = 3;
-        state.keyboard_endpoint_id = 3;
-        state.keyboard_ep_max_packet = USB_BOOT_REPORT_BYTES as u16;
-        assert!(usb_keyboard_rearm_after_completed_interrupt_in(
-            &mut state,
-            &descriptor,
-            false
-        ));
-        assert_eq!(state.oldgood_receipt, before_rearm);
-        assert!(!state.oldgood_receipt.poisoned());
-        assert_eq!(read_usb_oldgood_receipt_for_test(), published);
-
-        assert!(!xhci_recover_keyboard_interrupt_endpoint(
-            &mut state,
-            &descriptor
-        ));
-        assert!(state.oldgood_receipt.poisoned());
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 1);
-    }
-
-    #[test]
-    fn usb_oldgood_fault_and_lifecycle_reset_clear_shared_receipt() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
-        let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
-        let mut state = UsbRuntimeState::new();
-        assert!(complete_usb_oldgood_for_test(&mut state, &descriptor, 0x88, 31).complete());
-
-        let next_epoch = usb_oldgood_next_lifetime_epoch(&state, 1);
-        assert!(usb_oldgood_begin_lifecycle(
-            &mut state,
-            &descriptor,
-            next_epoch
-        ));
-        let rebound = state.oldgood_receipt;
-        assert!(rebound.valid());
-        assert_eq!(rebound.lifetime_epoch, 0x89);
-        assert_eq!(rebound.publication_sequence, 1);
-        assert_eq!(rebound.step_mask, 0);
-        assert!(!rebound.poisoned());
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-
-        state.reset();
-        assert!(complete_usb_oldgood_for_test(&mut state, &descriptor, 0x90, 32).complete());
-        usb_mark_enumeration_fault(&mut state, DRIVER_RUNTIME_USB_INIT_DETAIL_HID_ATTACH_FAILED);
-        assert!(state.oldgood_receipt.poisoned());
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-        assert_eq!(TEST_USB_OLDGOOD_PUBLISHES.load(Ordering::Acquire), 2);
-
-        let mut unlinked = descriptor;
-        unlinked.bus_link_count = 0;
-        assert!(!usb_oldgood_begin_lifecycle(&mut state, &unlinked, 0x91));
-        assert_eq!(
-            read_usb_oldgood_receipt_for_test(),
-            DriverRuntimeUsbOldgoodReceipt::zeroed()
-        );
-    }
-
     #[test]
     fn usb_keyboard_lock_state_matches_old_good_hid_path() {
         let _guard = test_guard();
@@ -108610,8 +107732,6 @@ mod tests {
 
     #[test]
     fn usb_enumeration_fault_marks_deep_cold_retry_window() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -109582,8 +108702,6 @@ mod tests {
 
     #[test]
     fn usb_keyboard_repeated_recovery_failures_force_reenumeration() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
         let mut state = UsbRuntimeState::new();
         state.initialized = true;
         state.init_detail = DRIVER_RUNTIME_USB_INIT_DETAIL_KEYBOARD_READY;
@@ -109634,8 +108752,6 @@ mod tests {
 
     #[test]
     fn usb_keyboard_recovery_aux_hard_limit_forces_reenumeration() {
-        let _guard = test_guard();
-        reset_runtime_for_test();
         let descriptor = descriptor_for(HOT_PATH_USB_KEYBOARD, ROLE_USB);
         let mut state = UsbRuntimeState::new();
         state.initialized = true;

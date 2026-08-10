@@ -113,8 +113,9 @@ Options:
                              Example: USB_BLOCKER=cmd-poll-only-timeout.
   --allow-summary-only       Do not require USB/WiFi evidence gates. This is
                              for exploratory summaries only, not proof output.
-  --require-usb-ready        Require USB startup gate 10, a fresh post-diag
-                             key-path proof, and the old-good replay contract.
+  --require-usb-ready        Require current USB owner/descriptor proof,
+                             startup gate 10, an exact one-deep queue, and a
+                             fresh post-diag key-path proof.
   --require-wifi-ready       Require WiFi gate 10, DHCP, nettest, authenticated
                              TCP bytes, healthy DPC, ordered Gate 7a-7e proof,
                              and the linked old-good CYW43 replay contract.
@@ -126,8 +127,8 @@ Options:
                              and zero budget-overrun proof.
   --require-input-responsive Require serial echo, USB burst, and HDMI proof
                              breadcrumbs with zero USB burst drops.
-  --require-ready            Require both USB and WiFi ready gates plus their
-                             linked old-good replay contracts.
+  --require-ready            Require current functional USB readiness plus the
+                             WiFi ready gate and linked old-good replay contract.
   -h, --help                 Show this help
 
 Default proof commands:
@@ -552,8 +553,15 @@ run_normalizer() {
         args+=("--expect" "USB_GATE_SCOPE=startup")
         args+=("--expect" "USB_CURRENT_LIVENESS=pass")
         args+=("--expect" "USB_PHYSICAL_INPUT_PROOF=yes")
-        args+=("--expect" "USB_OLDGOOD_REPLAY=yes")
-        args+=("--expect" "USB_OLDGOOD_MISSING=none")
+        args+=("--expect" "DRIVER_TASK_OWNER_STATE_PROOF=yes")
+        args+=("--expect" "DRIVER_TASK_RUNTIME_DESCRIPTOR_SEAL_PROOF=yes")
+        args+=("--expect" "USB_RUNTIME_QUEUE_VALID=yes")
+        args+=("--expect" "USB_RUNTIME_QUEUED_REPORTS=1")
+        args+=("--expect" "USB_FIRST_BYTE_READY=yes")
+        args+=("--expect" "USB_POST_FIRST_BYTE_BLOCKER=none")
+        args+=("--expect" "USB_STARTUP_BLOCKER_SEEN=no")
+        args+=("--expect" "USB_ACTIVE_BLOCKER_SEEN=no")
+        args+=("--expect" "USB_KEYBOARD_NO_REPLIES=0")
     fi
     if [[ "${REQUIRE_WIFI_READY}" -eq 1 ]]; then
         args+=("--expect" "CYW43_BOOTSTRAP_SUPERVISOR_SEEN=yes")

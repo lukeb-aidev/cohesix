@@ -456,10 +456,6 @@ def main() -> int:
             "usb_keyboard_held_arrow_repeat_is_separate_from_report_edges",
             "usb_keyboard_steady_poll_emits_due_arrow_repeat_without_new_report",
             "hdmi_runtime_csi_scroll_steps_preserve_cursor_and_dirty_one_edge_row",
-            "usb_oldgood_partial_steps_remain_private_and_completion_publishes_once",
-            "usb_oldgood_reordering_remains_private_and_never_publishes",
-            "usb_oldgood_completion_survives_normal_rearm_but_recovery_clears",
-            "usb_oldgood_fault_and_lifecycle_reset_clear_shared_receipt",
         ],
         "crates/pi4-driver-abi/src/lib.rs": [
             "cyw43_dpc_client_layout_is_bounded_and_sequence_last",
@@ -527,7 +523,7 @@ def main() -> int:
         ],
         "tests/test_pi4_gate_proof.py": [
             "test_gate_proof_accepts_identity_bound_usb_oldgood_retained_pair",
-            "test_gate_proof_rejects_uncommitted_usb_oldgood_retained_pair",
+            "test_gate_proof_ignores_uncommitted_dormant_usb_oldgood_receipt",
         ],
         "tests/test_pi4_serial_reboot.py": [
             "test_serial_read_matches_prompt_across_prior_stream_tail",

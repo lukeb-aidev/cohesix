@@ -1428,16 +1428,6 @@ def test_boot_summary_rejects_console_only_boot_without_network_proof() -> None:
         ),
         ("USB_LOCAL_SEAT_STATE", "unknown", "local-seat-usb-state-not-ready"),
         ("USB_BUSY_AFTER_READY", "unknown", "local-seat-usb-busy-proof-missing"),
-        (
-            "USB_OLDGOOD_REPLAY",
-            "no",
-            "local-seat-usb-oldgood-replay-missing",
-        ),
-        (
-            "USB_OLDGOOD_MISSING",
-            "first-byte",
-            "local-seat-usb-oldgood-incomplete",
-        ),
         ("USB_BURST_PROOF", "no", "local-seat-usb-burst-proof-missing"),
         ("USB_BURST_DROPS", 1, "local-seat-usb-burst-drops"),
         (
@@ -1462,6 +1452,21 @@ def test_boot_summary_requires_complete_operator_liveness_proof(
     record[field] = value
 
     assert expected_blocker in normalizer.boot_evidence_blockers(record)
+
+
+def test_boot_summary_treats_usb_oldgood_receipt_as_diagnostic_only() -> None:
+    """A dormant USB old-good receipt cannot reject current functional proof."""
+
+    record = normalizer.summarize_gates(
+        normalizer.parse_events(strict_wired_boot_proof_lines())
+    ).to_record()
+    assert normalizer.boot_evidence_blockers(record) == []
+
+    record["USB_OLDGOOD_REPLAY"] = "no"
+    record["USB_OLDGOOD_LAST"] = "none"
+    record["USB_OLDGOOD_MISSING"] = "not-run"
+
+    assert normalizer.boot_evidence_blockers(record) == []
 
 
 def test_latest_boot_slice_keeps_same_boot_uboot_usb_evidence() -> None:
