@@ -4070,16 +4070,21 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     liveness. A clipped or malformed current owner row fails closed.
     `usb enable-kbd` and `usb probe-kbd` are active and must not project either
     row.
-  - Local-seat tests must hold endpoint completion and any bounded pre-proof
-    bytes private until both the PCIe and USB descriptor replay plus owner-state
-    chains are current. Attach remains `Pending`; the bytes enter the parser
-    exactly once after proof. An idle first report before replay must not force
-    controller reinitialization, a cached-ready completion must not discard an
-    outstanding retained attach command, and service failure/recovery must
-    clear the endpoint cache.
-  - Missing PCIe or USB descriptor/owner proof must continue on later outer
-    local-seat turns even before the root prompt is available. Pre-prompt
-    enumeration deferral is permitted only after both proof chains are current.
+  - Local-seat tests must preserve the known-working `2668c34f76ff`
+    command/first-report path. The established attach phase performs PCIe
+    descriptor/prep and owner registration, then USB descriptor replay and
+    runtime initialization; it registers the USB owner once controller init is
+    ready, before enumeration. There is no second owner/descriptor proof phase or
+    deferred endpoint/byte cache after a linked completion. A valid input frame
+    enters the existing parser-admission path once; a valid first-report
+    completion follows the existing command-ready transition. HAL and gate
+    tests independently remain acceptance-red without both current owners and
+    descriptors, Gate 10, the exact one-deep queue, and real HID/parser/HDMI
+    liveness.
+  - `linked_usb_pending_enumeration_defers_retry_until_prompt` must retain the
+    existing pre-prompt deferral only while the controller is attached,
+    enumeration is pending, the keyboard is not ready, and the root prompt is
+    absent. That deferral supplies no descriptor or owner proof authority.
   - Serial-helper prompt tests must accept a prompt split only across the
     physically contiguous tail of the prior guarded `ping` read and the next
     bounded read. The helper retains at most marker-length-minus-one bytes,

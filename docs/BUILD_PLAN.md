@@ -6763,28 +6763,28 @@ publication, and restores the `2668c34f76ff` physical enumeration and one-deep
 command-ready path. The reserved record grants no command, wake, retry,
 recovery, scheduling, device, or acceptance authority.
 
-The exact `2668c34f76ff` candidate matrix then exposed a deeper retained-proof
-ordering defect without showing a physical xHCI/HID failure. An idle
-`FIRST_REPORT_READY` completion could publish keyboard/command readiness before
-the pending PCIe and USB runtime-descriptor replay and owner-state registration
-had terminalized; the attach state machine then treated cached keyboard
-readiness as complete and bypassed those missing proof phases. The same
-retained in-flight descriptor turn was truthfully `Pending` in source but was
-projected as a terminal `no-reply` blocker, and the detailed enumeration/owner
-breadcrumbs emitted after linked-serial cutover were retained only in the
-bounded Queen log, where they could be evicted before acceptance. The bounded
-repair therefore makes command readiness conditional on current descriptor and
-owner proof, reports an exact retained request as pending until its own terminal
-or fault, and projects compact identity-bound USB/PCIe owner state plus the
-reserved zero compatibility record through the existing `usb diag`/`usb status`
-response owner.
-It adds no raw-UART writer, USB operation, retry, poll, wake, authority path, or
-acceptance inference from Gate 10. One rebuilt same-image functional local-seat
-sample must arm `usb diag` before real keyboard input and prove printable input,
-arrow/lock activity, visible HDMI echo/history, current counter growth, and zero
-drops; the five network-repeatability reboots may then use the explicitly
-documented matrix-level passive current-owner/queue/display sentinels rather
-than silently waiving the functional anchor.
+The exact `2668c34f76ff` candidate matrix then exposed an apparent retained-proof
+ordering mismatch without showing a physical xHCI/HID failure. A superseded
+follow-up attempted to hold endpoint completion and bytes behind an additional
+PCIe/USB descriptor-and-owner proof scheduler. The current source removes that
+second scheduler and its endpoint cache, restoring the known-working
+`2668c34f76ff` command/first-report path. The established attach phase performs
+PCIe descriptor/prep and owner registration, then USB descriptor replay and
+runtime initialization; it registers the USB owner once controller init is
+ready, before enumeration.
+HAL and gate tooling separately require current USB/PCIe owner and descriptor
+proof, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness for
+acceptance. Compact identity-bound USB/PCIe owner state and the reserved zero
+compatibility record remain passive `usb diag`/`usb status` evidence rather than
+local-seat progress authority.
+This restoration adds no raw-UART writer, USB operation, retry, poll, wake,
+authority path, or acceptance inference from Gate 10. One rebuilt same-image
+functional local-seat sample must arm `usb diag` before real keyboard input and
+prove printable input, arrow/lock activity, visible HDMI echo/history, current
+counter growth, and zero drops; the five network-repeatability reboots may then
+use the explicitly documented matrix-level passive
+current-owner/queue/display sentinels rather than silently waiving the
+functional anchor.
 
 The 2026-08-06 exact `5b57ebcdcf73` boot reached firmware/control readiness and
 the pre-Join drain, then allocated request 64 without publishing its
@@ -7007,8 +7007,8 @@ Inputs: crates/pi4-driver-abi/src/lib.rs, apps/pi4-driver-runtime/src/lib.rs, ap
 Changes:
   - crates/pi4-driver-abi/src/lib.rs — retain one fixed 48-byte, commit-last, role-qualified USB old-good record reservation in the existing ring gap. It remains pointer-free and has no admission, command, wake, retry, recovery, scheduling, ownership, or acceptance semantics; root may passively project the zero record for compatibility.
   - apps/pi4-driver-runtime/src/lib.rs — request a one-second HID idle report on the existing interrupt-IN lifetime so an unchanged keyboard establishes its safe attach baseline before the separate five-second liveness deadline, repeat only held arrow usages from the exported virtual counter and selected timer frequency, preserve make/release edges for every ordinary key, and render bounded one-row HDMI scroll steps without report-count timing or a second input/display owner. Remove the USB old-good partial/final publication state and hooks after fresh exact-image regressions at phases 198, 316, and 412, restoring the prior physical enumeration/one-deep queue path while preserving every Wi-Fi change.
-  - apps/root-task/src/local_seat.rs — revoke stale prompt and console-ready presentation across attach/recovery boundaries, re-release the interactive HDMI prompt after current USB command admission and display health, re-admit the ready banner after current USB command admission, retain the canonical prompt/input row until its matching display completion, preserve FIFO output and the prompt backspace floor, and chase completed viewport state through bounded receipts. Retain the bounded canonical `[local-seat] usb keyboard command-ready action=enable-command-input ...` receipt exactly once in `queen.log`, keep its verbose counter detail log-only, and do not project either through a pre-cutover raw-UART path. Treat idle first-report completion as endpoint health only: descriptor replay and current PCIe/USB owner-state proof must terminalize before keyboard/command readiness or attach completion can be published, without reinitializing an already-live controller.
-    Missing PCIe/USB descriptor or owner proof remains retained proof-chain work before the root prompt and receives later outer local-seat turns; only an ordinary enumeration retry after both proof chains are current may use the existing pre-prompt deferral.
+  - apps/root-task/src/local_seat.rs — revoke stale prompt and console-ready presentation across attach/recovery boundaries, re-release the interactive HDMI prompt after current USB command admission and display health, re-admit the ready banner after current USB command admission, retain the canonical prompt/input row until its matching display completion, preserve FIFO output and the prompt backspace floor, and chase completed viewport state through bounded receipts. Retain the bounded canonical `[local-seat] usb keyboard command-ready action=enable-command-input ...` receipt exactly once in `queen.log`, keep its verbose counter detail log-only, and do not project either through a pre-cutover raw-UART path. Restore the known-working `2668c34f76ff` command/first-report path: keep PCIe descriptor/prep and owner registration followed by USB descriptor replay/runtime init and USB owner registration before enumeration, but remove the second post-completion descriptor/owner proof scheduler and its deferred endpoint/byte cache. Valid linked input follows the existing parser-admission path once and a valid first report follows the existing command-ready transition.
+    HAL and gate acceptance independently require current USB/PCIe owners and descriptors, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. An ordinary pending enumeration retry retains the existing pre-prompt deferral, which grants no descriptor or owner proof authority.
   - apps/root-task/src/event/mod.rs — project passive bounded USB controller, keyboard-enumeration, and first-report startup feedback, and attribute USB/HDMI SMP activity to each manifest-selected runtime core while preserving `Dispatch -> Display -> Serial` priority and granting no USB or HDMI scheduling authority. EventPump is the sole serial projector for the canonical command-ready receipt and queues it exactly once immediately before `[drivers] USB console ready` through the existing HighImpact/EventPump path. Sustained status treats the single armed interrupt-IN transfer and a zero current no-reply streak as healthy, and uses current HDMI driver-task active authority instead of cumulative submitted/completed gaps. The existing passive `usb diag`/`usb status` and `smp activity` response paths project compact current USB/PCIe owner state and the reserved zero compatibility record through the linked serial owner; they must fit the bounded line/backlog contract and cannot issue, retry, wake, or authorize hardware.
   - apps/root-task/src/hal/driver_task.rs — bound the retained steady USB poll to its existing finite no-progress allowance, fail closed instead of retaining a permanently split submitted/completed request, and require a current live-complete keyboard probe rather than promoting cached readiness. Classify the existing `USB_RESET_DONE` progress edge as part of the already bounded extended controller-init/reset timeout so the following run-stage setup is not cut down to the generic three-resume allowance. Preserve an exact retained descriptor request as pending rather than projecting a terminal no-reply blocker; only its own replacement, timeout, typed fault, or fail-closed terminal may make it red. Expose one shared compact owner-state formatter sourced only from the current HAL registration and descriptor-seal truth so USB, PCIe, CYW43, SDIO, and GENET diagnostic receipts cannot drift.
   - scripts/pi4_gate_proof.sh + focused gate-proof fixtures — keep passive `usb status` as the default hardware-proof action, make active `usb probe-kbd` opt-in, and accept only current end-to-end input/display receipt evidence.
@@ -7039,7 +7039,7 @@ Checks:
   - Ordinary keys emit once per make/release edge; only held arrows repeat, after a 300 ms initial delay and at 50 ms intervals scaled from `CNTVCT_EL0` and `TIMER_CLOCK_HZ`, and arrow escape bytes never enter the command parser.
   - HID setup requests an unchanged boot report every one second on the existing endpoint lifetime, so an idle keyboard can establish the attach baseline before the unchanged five-second exact-transfer failure deadline; no additional poll, retry, wakeup, fallback, or owner is introduced.
   - A retained steady USB poll cannot remain permanently split between submitted and completed state: the existing bounded no-progress allowance terminalizes it fail-closed, and cached keyboard readiness alone cannot promote a pending live probe to attached.
-  - An idle first report cannot bypass current PCIe/USB descriptor replay or owner registration. Exact retained replay is reported as pending, and command readiness plus attach completion appear only after the same current proof chain terminalizes. The dormant old-good receipt is not used to authorize either transition.
+  - The restored `2668c34f76ff` local-seat path has no second descriptor/owner proof scheduler or deferred endpoint/byte cache after a linked completion. The established attach phase performs PCIe descriptor/prep and owner registration, then USB descriptor replay and runtime initialization; it registers the USB owner once controller init is ready, before enumeration. HAL/gate acceptance separately fails closed without current USB/PCIe owner and descriptor proof, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. The dormant old-good receipt authorizes neither progress nor acceptance.
   - `USB_RESET_DONE` retains the existing bounded extended controller-init/reset allowance; it does not create a new timeout, retry, wake, owner, or unbounded lifetime.
   - The canonical command-ready receipt remains exactly once in `queen.log` and appears exactly once on serial immediately before `[drivers] USB console ready`; EventPump is the only serial projector. Before a current linked-runtime HID byte is accepted, the truthful state is `usb-physical-input-unproven`, with no post-first-byte failure classification.
   - Serial remains usable during USB startup; HDMI shows bounded passive startup feedback but no interactive prompt until current USB command readiness and display health both hold. The console-ready banner is re-admitted canonically only after current USB command readiness and becomes visible only through healthy display service. Attach/recovery revokes stale first-report, command, prompt, and ready-banner presentation, and only current-lifetime proof re-releases them.

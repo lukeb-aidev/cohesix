@@ -422,12 +422,7 @@ def main() -> int:
             "runtime_hdmi_backspace_stops_at_prompt_floor",
             "runtime_hdmi_rapid_arrows_chase_completed_viewport_one_row_per_frame",
             "physical_pi_hdmi_prompt_visibility_requires_usb_command_readiness",
-            "idle_first_report_before_replay_keeps_attach_pending_without_controller_reinit",
-            "linked_usb_endpoint_cache_lifecycle_is_runtime_owned_and_coherent",
-            "linked_usb_preproof_input_survives_and_releases_exactly_once_after_proof",
-            "linked_usb_complete_shortcuts_preserve_retained_attach_ticket",
-            "terminal_usb_readiness_requires_both_descriptor_and_owner_proof_chains",
-            "pre_prompt_usb_retry_does_not_starve_missing_descriptor_or_owner_proof",
+            "linked_usb_pending_enumeration_defers_retry_until_prompt",
         ],
         "apps/pi4-driver-runtime/src/lib.rs": [
             "genet_tx_len_status",

@@ -663,19 +663,21 @@ reusable ownership pattern.
   `usb-physical-input-unproven`. Gate 10, command readiness, or first-report
   readiness alone must never be relabelled as first-byte evidence and cannot
   produce a `usb-post-first-byte-*` blocker.
-- Do not publish terminal keyboard readiness, or release a pre-proof HID byte
-  into the parser, until both current attach proof chains are complete: the
-  PCIe and USB descriptor replays and their registered driver-owned owner
-  states. If the linked endpoint completes first, retain that one completion
-  and its bounded bytes in the `LocalSeat` runtime, keep attach `Pending`, and
-  release the bytes exactly once after both proof chains become current. Do
-  not reinitialize an already attached controller merely because owner proof
-  is still catching up, and do not let a cached-ready shortcut discard an
-  outstanding retained attach ticket. Clear the cache on failed service or
-  recovery so stale bytes cannot cross lifetimes. Missing descriptor or owner
-  proof remains retained proof-chain work on each outer local-seat turn; only
-  an ordinary enumeration retry after both proof chains are current may defer
-  until the root prompt is available.
+- Preserve the known-working `2668c34f76ff` command/first-report path. The
+  established attach sequence performs PCIe descriptor/prep and owner
+  registration, then USB descriptor replay and runtime initialization; it
+  registers the USB owner once controller init is ready, before enumeration.
+  `LocalSeat` does not
+  add a second proof-scheduling phase after endpoint completion and does not
+  cache a completion or HID bytes while waiting for another descriptor/owner
+  pass. A valid linked input frame follows the existing parser-admission path
+  once, and a valid first-report completion follows the existing command-ready
+  transition. Current hardware acceptance independently requires both USB and
+  PCIe owners to be `driver-owned`, both descriptors to be `sealed`, Gate 10,
+  the exact one-deep queue, and real HID/parser/HDMI liveness; endpoint progress
+  alone cannot satisfy those gates. An ordinary pending enumeration retry may
+  retain the existing pre-prompt deferral, but that deferral is not descriptor
+  or owner proof authority.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the

@@ -529,17 +529,19 @@ that prompt release itself follows USB command readiness and healthy display
 retry state. These records observe the existing retained USB frontier and do
 not add a poll, retry, wake, completion, command, ABI field, or hardware owner.
 
-Endpoint completion is not terminal local-seat readiness until the current
-PCIe and USB descriptor replays and both registered driver-owner states are
-also present. When a report or input byte arrives first, `LocalSeat` keeps the
-single completion and bounded bytes private, leaves attach `Pending`, and
-releases them to the parser exactly once after both proof chains close. An
-already attached controller is not reinitialized merely to wait for that
-proof, an outstanding attach ticket cannot be discarded by a cached-ready
-shortcut, and failed service or recovery clears the deferred endpoint cache.
-Missing descriptor or owner proof remains retained proof-chain work on each
-outer local-seat turn. Only an ordinary enumeration retry after both proof
-chains are current may defer until the root prompt is available.
+The current source restores the known-working `2668c34f76ff`
+command/first-report behavior. Its established attach sequence performs PCIe
+descriptor/prep and owner registration, then USB descriptor replay and runtime
+initialization; it registers the USB owner once controller init is ready,
+before enumeration. `LocalSeat` no longer adds a second descriptor/owner proof
+scheduler after endpoint completion. It does not keep a completed endpoint or
+HID bytes in a deferred proof cache: a valid linked input frame follows the
+existing parser-admission path once, and a valid first report follows the
+existing command-ready transition. The independent HAL/gate sample remains
+fail-closed unless both current owners and descriptors, Gate 10, the exact
+one-deep queue, and real HID/parser/HDMI liveness all pass; endpoint completion
+alone is not board acceptance. An ordinary pending enumeration retry retains
+the existing pre-prompt deferral, which supplies no descriptor or owner proof.
 
 After the HDMI prompt appears, verify that every typed character reaches the
 canonical command row, backspace stops at the prompt prefix, and held up/down
