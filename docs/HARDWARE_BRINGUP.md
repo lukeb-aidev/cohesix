@@ -537,6 +537,9 @@ releases them to the parser exactly once after both proof chains close. An
 already attached controller is not reinitialized merely to wait for that
 proof, an outstanding attach ticket cannot be discarded by a cached-ready
 shortcut, and failed service or recovery clears the deferred endpoint cache.
+Missing descriptor or owner proof remains retained proof-chain work on each
+outer local-seat turn. Only an ordinary enumeration retry after both proof
+chains are current may defer until the root prompt is available.
 
 After the HDMI prompt appears, verify that every typed character reaches the
 canonical command row, backspace stops at the prompt prefix, and held up/down

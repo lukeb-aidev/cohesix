@@ -1618,8 +1618,13 @@ const fn linked_local_seat_usb_pre_prompt_retry_deferred(
     keyboard_ready: bool,
     enumeration_pending: bool,
     root_console_ready: bool,
+    proof_chains_ready: bool,
 ) -> bool {
-    controller_attached && enumeration_pending && !keyboard_ready && !root_console_ready
+    controller_attached
+        && enumeration_pending
+        && !keyboard_ready
+        && !root_console_ready
+        && proof_chains_ready
 }
 
 /// Deterministic local-seat initialisation outcome.
@@ -5403,6 +5408,7 @@ impl LocalSeatRuntime {
                     keyboard_ready,
                     enumeration_pending,
                     self.root_console_ready,
+                    proof_chains_ready,
                 ) {
                     return LocalSeatServiceTurn::Pending;
                 }
@@ -12884,18 +12890,24 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "usb"))]
     #[test]
-    fn linked_usb_pending_enumeration_defers_retry_until_prompt() {
+    fn pre_prompt_usb_retry_does_not_starve_missing_descriptor_or_owner_proof() {
         assert!(linked_local_seat_usb_pre_prompt_retry_deferred(
+            true, false, true, false, true
+        ));
+        assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
+            true, false, true, false, false
+        ));
+        assert!(linked_local_seat_usb_attach_probe_required(
             true, false, true, false
         ));
         assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
-            true, false, true, true
+            true, false, true, true, true
         ));
         assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
-            false, false, true, false
+            false, false, true, false, true
         ));
         assert!(!linked_local_seat_usb_pre_prompt_retry_deferred(
-            true, true, true, false
+            true, true, true, false, true
         ));
     }
 

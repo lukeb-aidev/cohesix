@@ -10973,8 +10973,9 @@ where
         let linked_result = crate::local_seat::linked_local_seat_usb_runtime_result();
         #[cfg(not(all(feature = "usb", target_arch = "aarch64", target_os = "none")))]
         let linked_result = 0u32;
+        let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
         let (queued_reports, doorbell_pending, _, transfer_events, report_status) =
-            Self::usb_runtime_queue_fields(linked_result);
+            Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
         let local_trace = self
             .local_seat
             .as_ref()
@@ -11000,7 +11001,7 @@ where
             "usb: probe_contract detail=0x{:04x} result=0x{:08x} queue_valid={} queued_reports={} doorbell={} transfer_events={} report_status={} no_reply={} cooldown={}",
             linked_detail,
             linked_result,
-            Self::yes_no(Self::usb_runtime_detail_has_queue_result(linked_detail)),
+            Self::yes_no(queue_valid),
             queued_reports,
             Self::yes_no(doorbell_pending),
             transfer_events,
@@ -11061,9 +11062,9 @@ where
             len: 0,
             flags: 0,
         };
-        let (queued_reports, doorbell_pending, preserved_events, transfer_events, report_status) =
-            Self::usb_runtime_queue_fields(linked_result);
         let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
+        let (queued_reports, doorbell_pending, preserved_events, transfer_events, report_status) =
+            Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
         let mut line = format_message(format_args!(
             "usb: local-seat attached={} polling={}",
             if backend_attached { "yes" } else { "no" },
@@ -11342,7 +11343,7 @@ where
                 preserved_events,
                 transfer_events,
                 report_status,
-            ) = Self::usb_runtime_queue_fields(linked_result);
+            ) = Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
             let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
             let input_observation = Self::usb_runtime_keyboard_input_observation(
                 linked_first_byte,
@@ -13804,6 +13805,18 @@ where
     }
 
     #[cfg(feature = "kernel")]
+    const fn usb_runtime_queue_render_fields(
+        detail: u16,
+        result: u32,
+    ) -> (u32, bool, u32, u32, u32) {
+        if Self::usb_runtime_detail_has_queue_result(detail) {
+            Self::usb_runtime_queue_fields(result)
+        } else {
+            (0, false, 0, 0, 0)
+        }
+    }
+
+    #[cfg(feature = "kernel")]
     const fn usb_runtime_keyboard_recovery_diag_fields(
         frame: crate::hal::driver_task::DriverFrameDescriptor,
     ) -> (bool, u32, u32, u32, u32, u32, u32) {
@@ -14230,7 +14243,7 @@ where
                 _preserved_events,
                 _transfer_events,
                 report_status,
-            ) = Self::usb_runtime_queue_fields(linked_result);
+            ) = Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
             let queue_valid = Self::usb_runtime_detail_has_queue_result(linked_detail);
             let input_observation = Self::usb_runtime_keyboard_input_observation(
                 linked_first_byte,
@@ -14276,11 +14289,7 @@ where
                 preserved_events,
                 transfer_events,
                 report_status,
-            ) = if queue_result {
-                Self::usb_runtime_queue_fields(linked_result)
-            } else {
-                (0, false, 0, 0, 0)
-            };
+            ) = Self::usb_runtime_queue_render_fields(linked_detail, linked_result);
             let next_action = if proof_gate >= 10 {
                 "acceptance-complete"
             } else if keyboard_ready && !first_report {
@@ -36708,6 +36717,33 @@ mod tests {
         );
         assert!(
             !KernelConsoleTestPump::usb_runtime_progress_superseded_by_command_ready(true, 10, 10)
+        );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn linked_usb_runtime_queue_render_fields_reject_enumeration_snapshot_bytes() {
+        let enumeration_result = 0x0f00_0001;
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_fields(enumeration_result),
+            (1, false, 0, 15, 0),
+            "the raw result bytes are not queue telemetry during enumeration"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_render_fields(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_INIT_DETAIL_ROOT_PORT_CONNECTED,
+                enumeration_result,
+            ),
+            (0, false, 0, 0, 0),
+            "an enumeration snapshot must render unavailable queue fields as zero"
+        );
+        assert_eq!(
+            KernelConsoleTestPump::usb_runtime_queue_render_fields(
+                pi4_driver_abi::DRIVER_RUNTIME_USB_SERVICE_DETAIL_FIRST_REPORT_PENDING,
+                0x0302_0104,
+            ),
+            (4, true, 2, 3, 0),
+            "a first-report result remains valid queue telemetry"
         );
     }
 

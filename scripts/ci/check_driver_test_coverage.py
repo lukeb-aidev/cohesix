@@ -427,6 +427,7 @@ def main() -> int:
             "linked_usb_preproof_input_survives_and_releases_exactly_once_after_proof",
             "linked_usb_complete_shortcuts_preserve_retained_attach_ticket",
             "terminal_usb_readiness_requires_both_descriptor_and_owner_proof_chains",
+            "pre_prompt_usb_retry_does_not_starve_missing_descriptor_or_owner_proof",
         ],
         "apps/pi4-driver-runtime/src/lib.rs": [
             "genet_tx_len_status",
@@ -483,6 +484,7 @@ def main() -> int:
             "test_gate_summary_does_not_infer_first_byte_from_usb_gate10",
             "test_gate_summary_uses_linked_runtime_first_byte_for_post_input_health",
             "test_gate_summary_uses_current_active_no_progress_not_cumulative_keep_active",
+            "test_gate_summary_quarantines_invalid_usb_queue_enumeration_snapshot",
             "test_gate_summary_rejects_non_one_deep_queue_before_first_byte",
             "test_gate_summary_keeps_invalid_queue_depth_after_later_first_byte",
             "test_boot_evidence_requires_current_one_deep_usb_queue",

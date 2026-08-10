@@ -679,7 +679,10 @@ reusable ownership pattern.
   not reinitialize an already attached controller merely because owner proof
   is still catching up, and do not let a cached-ready shortcut discard an
   outstanding retained attach ticket. Clear the cache on failed service or
-  recovery so stale bytes cannot cross lifetimes.
+  recovery so stale bytes cannot cross lifetimes. Missing descriptor or owner
+  proof remains retained proof-chain work on each outer local-seat turn; only
+  an ordinary enumeration retry after both proof chains are current may defer
+  until the root prompt is available.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the

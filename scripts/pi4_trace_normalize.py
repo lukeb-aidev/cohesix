@@ -11399,6 +11399,8 @@ def update_usb_keyboard_pressure_field(
 def usb_hid_interrupt_no_completion_seen(fields: Mapping[str, str]) -> bool:
     """Return true for an armed HID queue with explicit no-completion debt."""
 
+    if fields.get("queue_valid", "").lower() == "no":
+        return False
     queued_reports = parse_hex_int(fields.get("queued_reports"))
     transfer_events = parse_hex_int(fields.get("transfer_events"))
     doorbell_pending = (
@@ -11681,26 +11683,38 @@ def summarize_usb_runtime_queue(events: Iterable[TraceEvent]) -> UsbRuntimeQueue
             or raw.startswith("usb: sustained_input")
             or raw.startswith("usb: recovery_request")
         ):
-            queued_reports = parse_hex_int(fields.get("queued_reports"))
-            if queued_reports is not None:
-                values["queued_reports"] = queued_reports
-                values["queue_observed"] = True
-                values["queue_observed_after_ready"] = command_ready_seen
-                values["no_completion_debt"] = (
-                    field_lower(event, "pre_first_report_no_completion")
-                    in {"1", "true", "yes"}
-                    or field_lower(event, "debt") in {"1", "true", "yes"}
-                    or field_lower(event, "full_idle_queue") in {"1", "true", "yes"}
-                )
-            transfer_events = parse_hex_int(fields.get("transfer_events"))
-            if transfer_events is not None:
-                values["transfer_events"] = transfer_events
-            report_status = field_lower(event, "report_status")
-            if report_status:
-                values["report_status"] = report_status.replace("_", "-")
             queue_valid = field_lower(event, "queue_valid")
             if queue_valid:
                 values["queue_valid"] = queue_valid
+            if queue_valid == "no":
+                # Before HID queue setup, `result` carries enumeration state.
+                # The generic diagnostic formatter still exposes its low/high
+                # bytes under the queue field names, so revoke those untyped
+                # values rather than reporting them as current queue counters.
+                values["queued_reports"] = 0
+                values["transfer_events"] = 0
+                values["queue_observed"] = True
+                values["queue_observed_after_ready"] = command_ready_seen
+                values["no_completion_debt"] = False
+            else:
+                queued_reports = parse_hex_int(fields.get("queued_reports"))
+                if queued_reports is not None:
+                    values["queued_reports"] = queued_reports
+                    values["queue_observed"] = True
+                    values["queue_observed_after_ready"] = command_ready_seen
+                    values["no_completion_debt"] = (
+                        field_lower(event, "pre_first_report_no_completion")
+                        in {"1", "true", "yes"}
+                        or field_lower(event, "debt") in {"1", "true", "yes"}
+                        or field_lower(event, "full_idle_queue")
+                        in {"1", "true", "yes"}
+                    )
+                transfer_events = parse_hex_int(fields.get("transfer_events"))
+                if transfer_events is not None:
+                    values["transfer_events"] = transfer_events
+            report_status = field_lower(event, "report_status")
+            if report_status:
+                values["report_status"] = report_status.replace("_", "-")
             doorbell_pending = field_lower(event, "doorbell_pending")
             if doorbell_pending:
                 values["doorbell_pending"] = doorbell_pending
@@ -14299,7 +14313,10 @@ def summarize_usb_post_first_byte_blocker(events: Iterable[TraceEvent]) -> str:
         if report_status == "unmatched-transfer" or "unmatched-transfer" in raw:
             blocker = "usb-post-first-byte-unmatched-transfer"
             continue
-        if raw.startswith("usb: stall_telemetry") or raw.startswith("usb: runtime_queue"):
+        if (
+            raw.startswith("usb: stall_telemetry")
+            or raw.startswith("usb: runtime_queue")
+        ) and field_lower(event, "queue_valid") != "no":
             queued_reports = parse_hex_int(event.fields.get("queued_reports"))
             if queued_reports == 0:
                 blocker = "usb-post-first-byte-queue-empty"

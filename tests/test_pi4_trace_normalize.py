@@ -9939,6 +9939,38 @@ def test_gate_summary_tracks_usb_startup_churn_without_marking_recovered() -> No
     assert "local-seat-usb-startup-blocker" in normalizer.boot_evidence_blockers(record)
 
 
+def test_gate_summary_quarantines_invalid_usb_queue_enumeration_snapshot() -> None:
+    """Enumeration result bytes must not become HID queue counters."""
+
+    events = normalizer.parse_events(
+        [
+            "usb: runtime_queue queue_valid=no detail=0x0205 "
+            "result=0x0f000001 queued_reports=1 doorbell_pending=no "
+            "preserved_events=0 transfer_events=15 report_status=none",
+            "usb: stall_telemetry queue_valid=no queued_reports=1 doorbell=no "
+            "preserved=0 transfer_events=15 report_status=none",
+            "usb: sustained_input queue_valid=no detail=0x0205 "
+            "result=0x0f000001 queued_reports=1 transfer_events=15 "
+            "report_status=none arming=0 accepted=0 drained=0 echoed=0",
+            "usb: runtime_gate keyboard=no first_report=no first_byte=no "
+            "command_ready=no proof_gate=7 target_gate=10 "
+            "blocker=hub-descriptor-transfer-failed",
+        ]
+    )
+
+    record = normalizer.summarize_gates(events).to_record()
+
+    assert record["USB_RUNTIME_QUEUE_VALID"] == "no"
+    assert record["USB_RUNTIME_QUEUED_REPORTS"] == 0
+    assert record["USB_RUNTIME_TRANSFER_EVENTS"] == 0
+    assert record["USB_GATE"] == 7
+    assert record["USB_BLOCKER"] == "hub-descriptor-transfer-failed"
+    assert record["USB_STARTUP_BLOCKER_SEEN"] == "yes"
+    assert "local-seat-usb-one-deep-proof-missing" in (
+        normalizer.boot_evidence_blockers(record)
+    )
+
+
 def test_gate_summary_names_usb_hid_interrupt_no_completion() -> None:
     events = normalizer.parse_events(
         [
