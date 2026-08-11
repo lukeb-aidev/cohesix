@@ -553,11 +553,13 @@ The canonical Mac command performs the clean build and runs medium first, then
 high against a separate fresh equivalent four-core `virt,gic-version=3` boot:
 
 ```bash
-: "${COH_AUTH_TOKEN:?set the TCP console auth token}"
-: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set the REST write token}"
+HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$(openssl rand -hex 32)"
+export HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 
 scripts/m26e_qemu_pressure.sh \
   --run-dir out/m26e-qemu-pressure
+
+unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
@@ -572,6 +574,16 @@ cohsh and host-agent transcripts, staged component, and exact target-session
 and image/archive manifests. The driver hash always comes from
 `out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio`; the large archive is
 embedded in rootserver and is not duplicated into the system CPIO.
+
+The runner derives the TCP console token from the compiler-selected Queen
+ticket in `configs/root_task.toml` and checks both generated builds against the
+resolved manifest before any QEMU acceptance work. An optional inherited
+`COH_AUTH_TOKEN` must match that compiler-owned value; an environment-only
+console token is rejected because it cannot change the target. The REST bearer
+is a distinct fresh 256-bit host-edge value. Retained-evidence scanning rejects
+the complete REST bearer everywhere and credential-bearing console forms such
+as an `AUTH` frame or token assignment, while ordinary public source names such
+as `bootstrap` and `bootstrap-trace` are not misclassified as leaked secrets.
 
 Before each load it exercises bounded fault/teardown/recreation and the exact
 host-ticket-v2 GPU/LoRA receipt matrix through existing control files and host

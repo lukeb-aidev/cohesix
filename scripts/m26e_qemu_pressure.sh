@@ -39,8 +39,14 @@ Options:
   -h, --help             Show this help
 
 Required environment (values are never printed):
-  COH_AUTH_TOKEN
   HIVE_GATEWAY_REQUEST_AUTH_TOKEN
+                         A fresh 64-character lowercase hexadecimal REST bearer.
+
+Optional environment:
+  COH_AUTH_TOKEN         When set, it must equal the compiler-generated Queen
+                         ticket secret. The runner always derives the console
+                         token from the selected manifest and never compiles an
+                         environment-only console credential.
 
 The command is QEMU-only. It never executes Raspberry Pi hardware tests and
 never classifies the bootstrap-trace GPU/LoRA snapshot as provider-live.
@@ -168,6 +174,57 @@ print(lexical)
 PY
 }
 
+queen_console_token() {
+    local manifest=$1
+    local format=$2
+    python3 - "$manifest" "$format" <<'PY'
+import json
+from pathlib import Path
+import stat
+import sys
+import tomllib
+
+manifest = Path(sys.argv[1])
+format_name = sys.argv[2]
+info = manifest.lstat()
+if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
+    raise SystemExit("manifest Queen ticket input is not a regular non-symlink file")
+if format_name == "toml":
+    document = tomllib.loads(manifest.read_text(encoding="utf-8"))
+elif format_name == "json":
+    document = json.loads(manifest.read_text(encoding="utf-8"))
+else:
+    raise SystemExit(f"unsupported manifest format: {format_name}")
+tickets = document.get("tickets")
+if not isinstance(tickets, list):
+    raise SystemExit("manifest tickets must be a list")
+matches = [
+    ticket.get("secret")
+    for ticket in tickets
+    if isinstance(ticket, dict) and ticket.get("role") == "queen"
+]
+if len(matches) != 1 or not isinstance(matches[0], str):
+    raise SystemExit("manifest must declare exactly one Queen ticket secret")
+secret = matches[0]
+if (
+    not secret
+    or secret.strip() != secret
+    or any(ord(character) < 0x21 or ord(character) == 0x7F for character in secret)
+    or secret == "changeme"
+):
+    raise SystemExit("manifest Queen ticket secret is unusable")
+print(secret)
+PY
+}
+
+validate_resolved_console_token() {
+    local resolved
+    resolved="$(queen_console_token "$RESOLVED_MANIFEST" json)"
+    [[ "$resolved" == "$M26E_CONSOLE_AUTH_TOKEN" ]] || \
+        die "generated Queen console token differs from the selected source manifest"
+    unset resolved
+}
+
 RUN_DIR="out/m26e-qemu-pressure"
 SEL4_SOURCE="out/sel4/source-v16-clean"
 SEL4_BUILD="out/sel4/profile-v2/qemu-smp-production"
@@ -176,6 +233,8 @@ COMPILER_DIR="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-non
 COMPILER_ARCHIVE="out/toolchain/downloads/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf.tar.xz"
 QEMU_BIN="/opt/homebrew/bin/qemu-system-aarch64"
 GDB_BIN="out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb"
+SOURCE_MANIFEST="$REPO_ROOT/configs/root_task.toml"
+RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 JOBS=10
 CHECK_ONLY=0
 
@@ -414,6 +473,7 @@ M26E_AVAILABLE_KIB="$(df -Pk "$REPO_ROOT" | awk 'NR == 2 {print $4}')"
     die "clean QEMU pressure requires at least 40 GiB free"
 
 if (( CHECK_ONLY == 1 )); then
+    queen_console_token "$SOURCE_MANIFEST" toml >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-service-gdb --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-critical-gdb --help >/dev/null
@@ -424,17 +484,19 @@ if (( CHECK_ONLY == 1 )); then
     exit 0
 fi
 
-: "${COH_AUTH_TOKEN:?m26e-qemu-pressure: COH_AUTH_TOKEN is required}"
 : "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?m26e-qemu-pressure: HIVE_GATEWAY_REQUEST_AUTH_TOKEN is required}"
-[[ "$COH_AUTH_TOKEN" != "changeme" ]] || die "placeholder TCP auth token is forbidden"
 [[ "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" != "changeme" ]] || \
     die "placeholder REST auth token is forbidden"
-M26E_CONSOLE_AUTH_TOKEN=$COH_AUTH_TOKEN
+M26E_CONSOLE_AUTH_TOKEN="$(queen_console_token "$SOURCE_MANIFEST" toml)"
+if [[ -n "${COH_AUTH_TOKEN:-}" && "$COH_AUTH_TOKEN" != "$M26E_CONSOLE_AUTH_TOKEN" ]]; then
+    die "COH_AUTH_TOKEN differs from the compiler-selected Queen console token"
+fi
 M26E_REST_AUTH_TOKEN=$HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 M26E_CONSOLE_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
 M26E_REST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
 python3 - <<'PY'
 import os
+import re
 
 console = os.environ["M26E_CONSOLE_AUTH_TOKEN"]
 gateway = os.environ["M26E_REST_AUTH_TOKEN"]
@@ -447,6 +509,8 @@ for label, value in (("console", console), ("gateway", gateway)):
         raise SystemExit(f"{label} secret must be nonempty, trimmed, and control-free")
 if console == gateway:
     raise SystemExit("console and gateway request secrets must be distinct")
+if re.fullmatch(r"[0-9a-f]{64}", gateway) is None:
+    raise SystemExit("gateway request secret must be 64 lowercase hexadecimal characters")
 PY
 unset COH_AUTH_TOKEN COHSH_AUTH_TOKEN HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 
@@ -595,6 +659,7 @@ BUILD_ARGS=(
 
 log "building canonical release-qemu,bootstrap-trace artifacts"
 "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+validate_resolved_console_token
 
 TEST_PLAN_STATE_DIR="$RUN_DIR/test-plan"
 log "running the canonical five-stage QEMU test plan"
@@ -607,6 +672,7 @@ scripts/ci/test_plan_run.sh \
 require_quiescent_host
 log "rebuilding the exact pressure artifact set after staged QEMU validation"
 "$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
+validate_resolved_console_token
 
 OUT_ROOT="$REPO_ROOT/out/cohesix"
 HOST_TOOLS="$OUT_ROOT/host-tools"
@@ -619,7 +685,6 @@ ELFLOADER_IMAGE="$OUT_ROOT/staging/elfloader"
 SYSTEM_CPIO="$OUT_ROOT/cohesix-system.cpio"
 KERNEL_IMAGE="$SEL4_BUILD/kernel/kernel.elf"
 GENERATED_INVENTORY="$REPO_ROOT/configs/generated/root_task_topology.json"
-RESOLVED_MANIFEST="$REPO_ROOT/configs/generated/root_task_resolved.json"
 TARGET_ARTIFACT_DIR="$REPO_ROOT/target/aarch64-unknown-none/release"
 WORKER_HEART_ELF="$TARGET_ARTIFACT_DIR/worker-heart"
 WORKER_GPU_ELF="$TARGET_ARTIFACT_DIR/worker-gpu"
@@ -2060,9 +2125,14 @@ import stat
 import sys
 
 root = Path(sys.argv[1])
-secrets = (
-    os.environ["M26E_SCAN_CONSOLE_TOKEN"].encode(),
-    os.environ["M26E_SCAN_REST_TOKEN"].encode(),
+console = os.environ["M26E_SCAN_CONSOLE_TOKEN"].encode()
+rest = os.environ["M26E_SCAN_REST_TOKEN"].encode()
+console_credential_forms = (
+    b"AUTH " + console,
+    b"COH_AUTH_TOKEN=" + console,
+    b"COHSH_AUTH_TOKEN=" + console,
+    b'"auth_token":"' + console,
+    b'"auth_token": "' + console,
 )
 for directory, names, files in os.walk(root, followlinks=False):
     for name in [*names, *files]:
@@ -2072,8 +2142,12 @@ for directory, names, files in os.walk(root, followlinks=False):
             raise SystemExit(f"retained evidence contains an unexpected symlink: {path}")
         if stat.S_ISREG(info.st_mode):
             raw = path.read_bytes()
-            if any(secret in raw for secret in secrets):
-                raise SystemExit(f"retained evidence contains authentication secret bytes: {path}")
+            if rest in raw:
+                raise SystemExit(f"retained evidence contains REST bearer bytes: {path}")
+            if any(form in raw for form in console_credential_forms):
+                raise SystemExit(
+                    f"retained evidence contains a console credential form: {path}"
+                )
 PY
 unset M26E_CONSOLE_AUTH_TOKEN M26E_REST_AUTH_TOKEN
 

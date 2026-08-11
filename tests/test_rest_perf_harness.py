@@ -1886,6 +1886,12 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         '--run-dir "$TEST_PLAN_STATE_DIR"',
         'M26E_SCAN_CONSOLE_TOKEN="$M26E_CONSOLE_AUTH_TOKEN"',
         'M26E_SCAN_REST_TOKEN="$M26E_REST_AUTH_TOKEN"',
+        'M26E_CONSOLE_AUTH_TOKEN="$(queen_console_token "$SOURCE_MANIFEST" toml)"',
+        'queen_console_token "$SOURCE_MANIFEST" toml >/dev/null',
+        'validate_resolved_console_token',
+        're.fullmatch(r"[0-9a-f]{64}", gateway)',
+        'b"AUTH " + console',
+        'if rest in raw:',
         'unset M26E_CONSOLE_AUTH_TOKEN M26E_REST_AUTH_TOKEN',
     ):
         assert literal in source
@@ -1893,7 +1899,114 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     assert "qemu-gdb-services" not in source
     assert "staging/cohesix/artifacts/cohesix-driver-runtimes.cpio" not in source
     assert "--auth-token" not in source
+    assert ': "${COH_AUTH_TOKEN:?' not in source
+    assert "M26E_CONSOLE_AUTH_TOKEN=$COH_AUTH_TOKEN" not in source
     assert 'find "$REPO_ROOT"' not in source
+    preserve = source.index('PRESERVE_ROOT="$(mktemp -d ')
+    assert source.index("COH_AUTH_TOKEN differs from the compiler-selected") < preserve
+    assert source.index("gateway request secret must be 64 lowercase") < preserve
+
+
+def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(
+    tmp_path: pathlib.Path,
+) -> None:
+    token_parser = next(
+        block
+        for block in embedded_python_blocks(pressure_runner_source())
+        if "manifest Queen ticket input" in block
+    )
+    toml_manifest = tmp_path / "root_task.toml"
+    toml_manifest.write_text(
+        '[[tickets]]\nrole = "queen"\nsecret = "bootstrap"\n',
+        encoding="utf-8",
+    )
+    json_manifest = tmp_path / "root_task_resolved.json"
+    json_manifest.write_text(
+        json.dumps({"tickets": [{"role": "queen", "secret": "bootstrap"}]}),
+        encoding="utf-8",
+    )
+
+    for manifest, format_name in (
+        (toml_manifest, "toml"),
+        (json_manifest, "json"),
+    ):
+        completed = subprocess.run(
+            [sys.executable, "-", str(manifest), format_name],
+            input=token_parser,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        assert completed.returncode == 0, completed.stderr
+        assert completed.stdout == "bootstrap\n"
+
+    toml_manifest.write_text(
+        '[[tickets]]\nrole = "queen"\nsecret = "one"\n'
+        '[[tickets]]\nrole = "queen"\nsecret = "two"\n',
+        encoding="utf-8",
+    )
+    duplicate = subprocess.run(
+        [sys.executable, "-", str(toml_manifest), "toml"],
+        input=token_parser,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert duplicate.returncode != 0
+    assert "exactly one Queen ticket secret" in duplicate.stderr
+
+
+def test_m26e_qemu_pressure_secret_scan_is_context_aware(
+    tmp_path: pathlib.Path,
+) -> None:
+    leak_scanner = next(
+        block
+        for block in embedded_python_blocks(pressure_runner_source())
+        if "console_credential_forms" in block
+    )
+    console = "bootstrap"
+    rest = "a" * 64
+
+    def scan(root: pathlib.Path) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["M26E_SCAN_CONSOLE_TOKEN"] = console
+        env["M26E_SCAN_REST_TOKEN"] = rest
+        return subprocess.run(
+            [sys.executable, "-", str(root)],
+            input=leak_scanner,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    benign = tmp_path / "benign"
+    benign.mkdir()
+    (benign / "source-inventory.json").write_text(
+        "apps/root-task/src/bootstrap release-qemu,bootstrap-trace\n",
+        encoding="utf-8",
+    )
+    assert scan(benign).returncode == 0
+
+    console_leak = tmp_path / "console-leak"
+    console_leak.mkdir()
+    (console_leak / "uart.log").write_text(
+        f"AUTH {console}\n",
+        encoding="utf-8",
+    )
+    console_result = scan(console_leak)
+    assert console_result.returncode != 0
+    assert "console credential form" in console_result.stderr
+
+    rest_leak = tmp_path / "rest-leak"
+    rest_leak.mkdir()
+    (rest_leak / "gateway.log").write_text(rest, encoding="utf-8")
+    rest_result = scan(rest_leak)
+    assert rest_result.returncode != 0
+    assert "REST bearer bytes" in rest_result.stderr
 
 
 def test_m26e_qemu_pressure_quiescence_uses_actual_output_writers() -> None:

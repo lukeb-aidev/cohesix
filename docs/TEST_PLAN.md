@@ -4253,6 +4253,10 @@ four-core AArch64 `virt` boots then use `--launch-existing`, which verifies and
 launches the same locked elfloader, kernel, rootserver, system CPIO, GICv3
 topology, and build context without rebuilding or repackaging. Retries remain
 disabled, control errors remain strict, and in-flight work remains bounded.
+The runner derives and revalidates the compiler-owned Queen console token from
+the source and resolved manifests; an optional `COH_AUTH_TOKEN` must match it.
+The separately supplied REST mutation bearer must be a fresh 64-character
+lowercase hexadecimal value and must not appear anywhere in retained evidence.
 
 Each normal pressure boot has two evidence stages. Before load, external GDB and the existing
 Queen/host-ticket paths must directly produce the complete Worker/service
