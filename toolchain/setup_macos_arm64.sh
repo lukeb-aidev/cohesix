@@ -22,6 +22,7 @@ BREW_PACKAGES=(
     python@3.13
     qemu
     coreutils
+    cpio
     jq
     protobuf
     repo
@@ -116,6 +117,46 @@ if [[ "$("${HOMEBREW_PYTHON}" -c 'import sys; print(f"{sys.version_info.major}.{
     echo "The seL4 profile environment requires CPython 3.13." >&2
     exit 1
 fi
+"${HOMEBREW_PYTHON}" - "${PROFILE_CONTRACT}" <<'PY'
+import hashlib
+from pathlib import Path
+import subprocess
+import sys
+import tomllib
+
+with Path(sys.argv[1]).open("rb") as stream:
+    declared = tomllib.load(stream)["toolchain"]["cpio"]
+tool = Path(declared["path"])
+if not tool.is_file():
+    raise SystemExit(f"Pinned GNU cpio is missing: {tool}")
+actual_sha256 = hashlib.sha256(tool.read_bytes()).hexdigest()
+if actual_sha256 != declared["sha256"]:
+    raise SystemExit(
+        f"Pinned GNU cpio digest mismatch: expected {declared['sha256']}, "
+        f"got {actual_sha256}"
+    )
+version = subprocess.run(
+    (str(tool), "--version"),
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout.splitlines()[0]
+expected_version = f"cpio (GNU cpio) {declared['version']}"
+if version != expected_version:
+    raise SystemExit(
+        f"Pinned GNU cpio version mismatch: expected {expected_version!r}, "
+        f"got {version!r}"
+    )
+help_text = subprocess.run(
+    (str(tool), "--help"),
+    check=True,
+    capture_output=True,
+    text=True,
+).stdout
+missing = [option for option in declared["required_options"] if option not in help_text]
+if missing:
+    raise SystemExit(f"Pinned GNU cpio lacks required options: {', '.join(missing)}")
+PY
 if [[ -L "${REPO_ROOT}/out" || -L "${TOOLCHAIN_ROOT}" ]]; then
     echo "Refusing a symlinked out/toolchain root." >&2
     exit 1

@@ -14,8 +14,9 @@ not vendor, upstream seL4 build outputs.
 | Component | Current contract | Source of truth |
 | --- | --- | --- |
 | Rust | 1.97.1 minimal profile, `rustfmt`, `clippy`, `aarch64-unknown-none` | `rust-toolchain.toml` |
-| Host packages | Git, CMake, Ninja, LLVM 17, CPython 3.13, QEMU, coreutils, `jq`, protobuf, `repo`, GNU make, OpenSSL 3, and `pkgconf` | `toolchain/setup_macos_arm64.sh` |
+| Host packages | Git, CMake, Ninja, LLVM 17, CPython 3.13, QEMU, coreutils, GNU `cpio`, `jq`, protobuf, `repo`, GNU make, OpenSSL 3, and `pkgconf` | `toolchain/setup_macos_arm64.sh` |
 | AArch64 compiler | Official Arm GNU Toolchain 15.2.Rel1 macOS Arm64 archive; GCC 15.2.1; target `aarch64-none-elf` | `configs/sel4/profiles.toml` |
+| seL4 archive tool | GNU `cpio` 2.15 at the exact Apple Silicon Homebrew Cellar path, with pinned binary SHA-256 and archive options | `configs/sel4/profiles.toml` |
 | seL4 Python environment | Dedicated `out/toolchain/sel4-profile-venv`; two hash locks; exact 38-distribution closure | `configs/sel4/python-bootstrap.lock`, `configs/sel4/python-build-requirements.lock` |
 | Pi packaging tool | `mkimage` built from the official DENX U-Boot 2026.01 release tarball | `configs/sel4/profiles.toml` |
 | Kernel baseline | Complete upstream seL4Test manifest 16.0.0 source set, including seL4 commit `6e7c3b733d296cfd88d5fbf635c96e447a882374` | `configs/sel4/profiles.toml`, `docs/audit/M26D_SEL4_16_PROVENANCE.md` |
@@ -48,6 +49,8 @@ rustup target list --installed | rg '^aarch64-unknown-none$'
 qemu-system-aarch64 --version | head -n 1
 cmake --version | head -n 1
 ninja --version
+/opt/homebrew/Cellar/cpio/2.15/bin/cpio --version | head -n 1
+shasum -a 256 /opt/homebrew/Cellar/cpio/2.15/bin/cpio
 "$(brew --prefix python@3.13)/bin/python3.13" --version
 PROFILE_CC=out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gcc
 "$PROFILE_CC" -dumpfullversion
@@ -66,6 +69,15 @@ and the SHA-256 of GCC, G++, CPP, assembler, linker, objcopy, ar, and ranlib.
 Setup writes `cohesix-compiler-provenance.json` beside the extracted toolchain;
 the validator requires the archive, provenance, executable hashes, GCC 15.2.1,
 and `aarch64-none-elf` target to agree.
+
+Upstream seL4 archive rules invoke the bare command name `cpio` with GNU-only
+`--append` and `--owner` behavior. The profile contract therefore binds GNU
+`cpio` 2.15 by its resolved, versioned Homebrew Cellar path and executable
+digest, validates every required option, prepends that exact directory to both
+configure and build `PATH`, and records the identity in the causal host-input
+stamp. The option closure includes `--reproducible`, so a fresh CMake configure
+retains deterministic archive metadata. `/usr/bin/cpio` is BSD `cpio` and is
+never an eligible substitute.
 
 The Pi host-tool contract downloads the official DENX
 `u-boot-2026.01.tar.bz2` archive, verifies size and SHA-256
@@ -198,8 +210,9 @@ target architecture. A separate CAmkES smoke checkout may test upstream host
 compatibility, but it is not part of the pinned Cohesix toolchain, generated
 profile evidence, or TCB. The 2026-07-23 macOS smoke configured and compiled
 the upstream `adder` example through capDL source generation, then stopped
-when BSD `cpio` rejected the upstream GNU-only `--append --owner=+0:+0`
-invocation; simulation was not reached. See
+when the then-unbound BSD `cpio` rejected the upstream GNU-only
+`--append --owner=+0:+0` invocation; simulation was not reached. Operational Cohesix
+profiles now fail closed unless the pinned GNU tool above wins `PATH`. See
 `docs/audit/M26D_SEL4_16_PROVENANCE.md` for the bounded result.
 
 ## 3. Select a generated profile intentionally
@@ -368,6 +381,9 @@ directories, pre-existing completion stamps, and pre-existing declared build
 outputs. All profiles disable seL4 binary memoization. Build stamps record the
 configure/build boundary and causal freshness of each required output, so a
 no-op rebuild, copied artifact, or re-stamp cannot qualify as a fresh build.
+Changing the pinned GNU `cpio`, setup script, or profile contract requires
+rerunning `toolchain/setup_macos_arm64.sh` and configuring a new empty profile
+tree; an older provenance record or configured tree is intentionally rejected.
 
 ```bash
 out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py configure \

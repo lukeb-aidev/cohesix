@@ -31,6 +31,14 @@ ar_sha256 = "38f32b4a1b196da8ef1c34412f68792bb2a3cdc8c20d5c98d70fa44f13c9c1bb"
 ranlib_sha256 = "939545db6eac3b78e5e145dcf428db22229aa6eec04cd86f95ca90f9a8d00e99"
 required_programs = ["aarch64-none-elf-gcc", "aarch64-none-elf-g++", "aarch64-none-elf-cpp", "aarch64-none-elf-as", "aarch64-none-elf-ld", "aarch64-none-elf-objcopy", "aarch64-none-elf-ar", "aarch64-none-elf-ranlib"]
 
+[toolchain.cpio]
+path = "/opt/homebrew/Cellar/cpio/2.15/bin/cpio"
+provider = "homebrew"
+formula = "cpio"
+version = "2.15"
+sha256 = "b09b46a77c735ab2d0687e87c7fadd2b4060a8c9492f1d896ee507b1d5262304"
+required_options = ["--append", "--owner", "--quiet", "--format", "--file", "--reproducible"]
+
 [toolchain.python]
 path = "out/toolchain/sel4-profile-venv/bin/python"
 provider = "homebrew"

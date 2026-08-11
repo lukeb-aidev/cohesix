@@ -372,6 +372,45 @@ def load_contract(path: Path = DEFAULT_CONTRACT) -> dict[str, Any]:
     ]:
         raise ProfileError("toolchain.compiler.required_programs is not the exact closure")
 
+    cpio_contract = toolchain.get("cpio")
+    if not isinstance(cpio_contract, dict):
+        raise ProfileError("profile contract toolchain.cpio table is missing")
+    for key in ("path", "provider", "formula", "version"):
+        require_contract_string(cpio_contract, key, "toolchain.cpio")
+    require_contract_sha256(cpio_contract, "sha256", "toolchain.cpio")
+    if cpio_contract["provider"] != "homebrew":
+        raise ProfileError("unsupported toolchain.cpio.provider")
+    if cpio_contract["formula"] != "cpio":
+        raise ProfileError("toolchain.cpio.formula must be cpio")
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)+", cpio_contract["version"]) is None:
+        raise ProfileError("toolchain.cpio.version is invalid")
+    cpio_path = Path(cpio_contract["path"])
+    expected_cpio_path = (
+        Path("/opt/homebrew/Cellar")
+        / cpio_contract["formula"]
+        / cpio_contract["version"]
+        / "bin"
+        / "cpio"
+    )
+    if not cpio_path.is_absolute() or cpio_path != expected_cpio_path:
+        raise ProfileError(
+            "toolchain.cpio.path must bind the exact Apple Silicon Homebrew "
+            f"Cellar binary: {expected_cpio_path}"
+        )
+    required_cpio_options = cpio_contract.get("required_options")
+    if required_cpio_options != [
+        "--append",
+        "--owner",
+        "--quiet",
+        "--format",
+        "--file",
+        "--reproducible",
+    ]:
+        raise ProfileError(
+            "toolchain.cpio.required_options must exactly declare the upstream "
+            "seL4 archive option closure"
+        )
+
     python_contract = toolchain.get("python")
     if not isinstance(python_contract, dict):
         raise ProfileError("profile contract toolchain.python table is missing")
@@ -848,6 +887,65 @@ def executable_identity(path: Path | None) -> dict[str, Any] | None:
     }
 
 
+def gnu_cpio_supply_chain_input(
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the pinned GNU cpio required by upstream seL4 archive rules."""
+
+    toolchain = contract.get("toolchain")
+    declared = toolchain.get("cpio") if isinstance(toolchain, dict) else None
+    if not isinstance(declared, dict):
+        raise ProfileError("profile contract toolchain.cpio table is invalid")
+    path_value = declared.get("path")
+    if not isinstance(path_value, str) or not path_value:
+        raise ProfileError("profile contract toolchain.cpio.path is invalid")
+    tool = Path(path_value).expanduser()
+    if not tool.is_absolute():
+        tool = Path(os.path.abspath(ROOT / tool))
+    if tool.name != "cpio" or not tool.is_file() or not os.access(tool, os.X_OK):
+        raise ProfileError(f"pinned GNU cpio is missing or not executable: {tool}")
+    identity = executable_identity(tool)
+    expected_sha256 = declared.get("sha256")
+    if identity is None or identity["sha256"] != expected_sha256:
+        observed = identity.get("sha256") if identity is not None else None
+        raise ProfileError(
+            "pinned GNU cpio binary digest mismatch: expected "
+            f"{expected_sha256}, got {observed}"
+        )
+    version = run_checked((str(tool), "--version")).stdout.splitlines()
+    observed_version = version[0].strip() if version else ""
+    expected_version = f"cpio (GNU cpio) {declared.get('version')}"
+    if observed_version != expected_version:
+        raise ProfileError(
+            "pinned GNU cpio version mismatch: expected "
+            f"{expected_version!r}, got {observed_version!r}"
+        )
+    help_result = run_checked((str(tool), "--help"))
+    help_text = f"{help_result.stdout}\n{help_result.stderr}"
+    required_options = declared.get("required_options")
+    if not isinstance(required_options, list) or not all(
+        isinstance(option, str) and option for option in required_options
+    ):
+        raise ProfileError("profile contract toolchain.cpio.required_options is invalid")
+    missing_options = [
+        option for option in required_options if option not in help_text
+    ]
+    if missing_options:
+        raise ProfileError(
+            "pinned GNU cpio lacks upstream seL4 archive options: "
+            + ", ".join(missing_options)
+        )
+    return {
+        "schema": "cohesix-gnu-cpio-host-input/v1",
+        "declared": dict(declared),
+        "provider": declared.get("provider"),
+        "formula": declared.get("formula"),
+        "version": observed_version,
+        "required_options": list(required_options),
+        "executable": identity,
+    }
+
+
 def python_supply_chain_inputs(
     contract: Mapping[str, Any],
     profile: Mapping[str, Any],
@@ -1172,14 +1270,20 @@ def wrapper_build_inputs(
     """Describe exact wrapper-side host inputs used for one artifact build."""
 
     objcopy_wrapper = resolve_profile_tool(profile, "objcopy_stdout_wrapper")
+    cpio_tool = (
+        gnu_cpio_supply_chain_input(contract)
+        if profile.get("build_mode") == "wrapper"
+        else None
+    )
 
     return {
-        "schema": "cohesix-sel4-wrapper-host-inputs/v3",
+        "schema": "cohesix-sel4-wrapper-host-inputs/v4",
         "profile": profile_name,
         "target": "rootserver_image",
         "wrapper_sha256": sha256_file(WRAPPER_CMAKE),
         "compiler": compiler_supply_chain_inputs(contract),
         "python_tool": python_supply_chain_inputs(contract, profile),
+        "cpio_tool": cpio_tool,
         "objcopy_stdout_wrapper": executable_identity(objcopy_wrapper),
         "mkimage_tool": mkimage_supply_chain_inputs(contract, profile),
     }
@@ -3492,6 +3596,11 @@ def wrapper_path_prefixes(
     if not isinstance(path_prefixes, list) or not path_prefixes:
         raise ProfileError("profile compiler path_prefixes are invalid")
     prefixes: list[Path] = []
+    if profile.get("build_mode") == "wrapper":
+        cpio_input = gnu_cpio_supply_chain_input(contract)
+        cpio_executable = cpio_input["executable"]
+        cpio_path = Path(str(cpio_executable["path"]))
+        prefixes.append(cpio_path.parent)
     for index, value in enumerate(path_prefixes):
         candidate = contract_repo_path(
             value,

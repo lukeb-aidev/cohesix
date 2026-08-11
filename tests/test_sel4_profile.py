@@ -1731,6 +1731,7 @@ def test_pi_build_path_binds_profile_mkimage_tool(
     assert environment is not None
     assert environment["PATH"] == os.pathsep.join(
         (
+            str(Path(contract["toolchain"]["cpio"]["path"]).parent),
             *(
                 str(
                     sel4_profile.contract_repo_path(
@@ -1768,6 +1769,7 @@ def test_wrapper_build_path_binds_profile_python_tool(
     assert environment is not None
     assert environment["PATH"] == os.pathsep.join(
         (
+            str(Path(contract["toolchain"]["cpio"]["path"]).parent),
             *(
                 str(
                     sel4_profile.contract_repo_path(
@@ -1783,6 +1785,71 @@ def test_wrapper_build_path_binds_profile_python_tool(
             "/usr/bin",
         )
     )
+
+
+def test_wrapper_build_path_selects_pinned_gnu_cpio(
+    contract: dict[str, Any],
+) -> None:
+    """The bare upstream cpio command must resolve to the pinned GNU binary."""
+
+    profile = contract["profiles"]["qemu_smp_production"]
+    environment = sel4_profile.wrapper_build_environment(
+        contract,
+        profile,
+        {"PATH": "/usr/bin:/bin"},
+    )
+    cpio_path = Path(contract["toolchain"]["cpio"]["path"])
+    cpio = sel4_profile.gnu_cpio_supply_chain_input(contract)
+
+    assert environment is not None
+    assert shutil.which("cpio", path=environment["PATH"]) == str(cpio_path)
+    assert environment["PATH"].split(os.pathsep)[0] == str(cpio_path.parent)
+    assert cpio["version"] == "cpio (GNU cpio) 2.15"
+    assert cpio["executable"]["sha256"] == contract["toolchain"]["cpio"][
+        "sha256"
+    ]
+    assert set(cpio["required_options"]) == {
+        "--append",
+        "--owner",
+        "--quiet",
+        "--format",
+        "--file",
+        "--reproducible",
+    }
+
+
+def test_wrapper_build_path_rejects_bsd_cpio(
+    tmp_path: Path,
+    contract: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A compatible filename must not substitute for GNU cpio semantics."""
+
+    fake_cpio = tmp_path / "cpio"
+    fake_cpio.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1\" = \"--version\" ]; then\n"
+        "  echo 'bsdcpio 3.5.3 - libarchive 3.7.4'\n"
+        "  exit 0\n"
+        "fi\n"
+        "echo '--append --owner --quiet --format --file --reproducible'\n",
+        encoding="utf-8",
+    )
+    fake_cpio.chmod(0o755)
+    local_contract = copy.deepcopy(contract)
+    local_contract["toolchain"]["cpio"].update(
+        {
+            "path": str(fake_cpio),
+            "sha256": sel4_profile.sha256_file(fake_cpio),
+        }
+    )
+
+    with pytest.raises(sel4_profile.ProfileError, match="version mismatch"):
+        sel4_profile.wrapper_build_environment(
+            local_contract,
+            local_contract["profiles"]["qemu_smp_production"],
+            {"PATH": "/usr/bin:/bin"},
+        )
 
 
 def test_verified_build_path_binds_profile_python_tool(
@@ -1837,6 +1904,47 @@ def test_real_contract_declares_pinned_generated_mkimage() -> None:
     )
 
 
+def test_real_contract_declares_exact_cellar_gnu_cpio() -> None:
+    """The Mac profile must not trust BSD cpio or a mutable Homebrew opt link."""
+
+    cpio = sel4_profile.load_contract()["toolchain"]["cpio"]
+
+    assert cpio == {
+        "path": "/opt/homebrew/Cellar/cpio/2.15/bin/cpio",
+        "provider": "homebrew",
+        "formula": "cpio",
+        "version": "2.15",
+        "sha256": (
+            "b09b46a77c735ab2d0687e87c7fadd2b4060a8c9492f1d896ee507b1d5262304"
+        ),
+        "required_options": [
+            "--append",
+            "--owner",
+            "--quiet",
+            "--format",
+            "--file",
+            "--reproducible",
+        ],
+    }
+
+
+def test_wrapper_host_inputs_bind_exact_gnu_cpio(
+    contract: dict[str, Any],
+) -> None:
+    """The causal host-input record must include the selected archive tool."""
+
+    inputs = sel4_profile.wrapper_build_inputs(
+        contract,
+        "qemu_smp_production",
+        contract["profiles"]["qemu_smp_production"],
+    )
+
+    assert inputs["schema"] == "cohesix-sel4-wrapper-host-inputs/v4"
+    assert inputs["cpio_tool"] == sel4_profile.gnu_cpio_supply_chain_input(
+        contract
+    )
+
+
 def test_missing_profile_mkimage_is_rejected(
     contract: dict[str, Any],
 ) -> None:
@@ -1870,9 +1978,10 @@ def test_profile_mkimage_command_name_is_fail_closed(
         )
 
 
-def test_setup_script_provisions_contract_bound_compiler_python_and_mkimage() -> None:
+def test_setup_script_provisions_contract_bound_compiler_cpio_python_and_mkimage() -> None:
     real_contract = sel4_profile.load_contract()
     compiler_contract = real_contract["toolchain"]["compiler"]
+    cpio_contract = real_contract["toolchain"]["cpio"]
     python_contract = real_contract["toolchain"]["python"]
     mkimage_contract = real_contract["toolchain"]["mkimage"]
     setup = (sel4_profile.ROOT / "toolchain" / "setup_macos_arm64.sh").read_text(
@@ -1910,6 +2019,11 @@ def test_setup_script_provisions_contract_bound_compiler_python_and_mkimage() ->
     assert 'tar -xJf "${COMPILER_ARCHIVE}"' in setup
     assert 'export PATH="${COMPILER_BIN}:${PATH}"' in setup
     assert '"schema": "cohesix-compiler-provenance/v1"' in setup
+    assert "\n    cpio\n" in setup
+    assert 'declared = tomllib.load(stream)["toolchain"]["cpio"]' in setup
+    assert 'version = subprocess.run(' in setup
+    assert 'declared["required_options"]' in setup
+    assert cpio_contract["path"] in setup or 'declared["path"]' in setup
     assert 'PROFILE_VENV="${TOOLCHAIN_ROOT}/sel4-profile-venv"' in setup
     assert (
         f'PYTHON_BOOTSTRAP_LOCK_SHA256="'
@@ -1976,6 +2090,24 @@ def test_contract_rejects_compiler_path_escape(tmp_path: Path) -> None:
     )
 
     with pytest.raises(sel4_profile.ProfileError, match="escapes the repository"):
+        sel4_profile.load_contract(tampered)
+
+
+def test_contract_rejects_mutable_gnu_cpio_opt_path(tmp_path: Path) -> None:
+    """The cpio contract must name the resolved versioned Cellar executable."""
+
+    text = sel4_profile.DEFAULT_CONTRACT.read_text(encoding="utf-8")
+    tampered = tmp_path / "tampered-cpio-path.toml"
+    tampered.write_text(
+        text.replace(
+            'path = "/opt/homebrew/Cellar/cpio/2.15/bin/cpio"',
+            'path = "/opt/homebrew/opt/cpio/bin/cpio"',
+            1,
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(sel4_profile.ProfileError, match="exact Apple Silicon"):
         sel4_profile.load_contract(tampered)
 
 
