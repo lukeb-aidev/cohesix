@@ -3747,6 +3747,7 @@ pub fn is_boot_reserved_slot(slot: seL4_CPtr) -> bool {
 pub struct ReservedUntyped {
     cap: seL4_Untyped,
     paddr: usize,
+    previous_used_bytes: u128,
     offset_bytes: u128,
     size_bits: u8,
     index: usize,
@@ -3870,6 +3871,7 @@ impl DevicePtPool {
 
     fn reserve_page_table(&mut self) -> Result<ReservedUntyped, seL4_Error> {
         let page_table_bytes = self.page_table_bytes();
+        let previous_used_bytes = self.used_bytes;
         let aligned_start =
             (self.used_bytes + (page_table_bytes - 1)) & !(page_table_bytes.saturating_sub(1));
         let end = aligned_start.saturating_add(page_table_bytes);
@@ -3894,6 +3896,7 @@ impl DevicePtPool {
         Ok(ReservedUntyped {
             cap: self.ut_slot,
             paddr: self.paddr.saturating_add(aligned_start),
+            previous_used_bytes: previous_used_bytes as u128,
             offset_bytes: aligned_start as u128,
             size_bits: self.size_bits,
             index: self.index,
@@ -3902,12 +3905,15 @@ impl DevicePtPool {
     }
 
     fn release(&mut self, reserved: &ReservedUntyped) {
-        let bytes = reserved
-            .reserved_bytes
-            .min(self.used_bytes as u128)
-            .try_into()
-            .unwrap_or(0);
-        self.used_bytes = self.used_bytes.saturating_sub(bytes);
+        let expected_end = reserved
+            .offset_bytes
+            .saturating_add(reserved.reserved_bytes);
+        if self.matches_index(reserved.index)
+            && self.used_bytes as u128 == expected_end
+            && reserved.previous_used_bytes <= reserved.offset_bytes
+        {
+            self.used_bytes = reserved.previous_used_bytes as usize;
+        }
     }
 }
 
@@ -3961,6 +3967,7 @@ impl<'a> UntypedCatalog<'a> {
         let entry = self.entries.get_mut(index)?;
         let obj_bytes = Self::object_bytes(obj_bits);
         let capacity_bytes = entry.capacity_bytes();
+        let previous_used_bytes = entry.used_bytes;
         let aligned_start = Self::aligned_start(entry.used_bytes, obj_bytes);
         let end = aligned_start.saturating_add(obj_bytes);
         if end > capacity_bytes {
@@ -3970,6 +3977,7 @@ impl<'a> UntypedCatalog<'a> {
         Some(ReservedUntyped {
             cap: self.bootinfo.untyped.start + index as seL4_CPtr,
             paddr: entry.desc.paddr as usize + aligned_start as usize,
+            previous_used_bytes,
             offset_bytes: aligned_start,
             size_bits: entry.desc.size_bits,
             index,
@@ -4162,10 +4170,23 @@ impl<'a> UntypedCatalog<'a> {
         }
     }
 
-    /// Releases a previously reserved untyped so it may be reused.
+    /// Rolls back the newest reservation before any successful retype consumes it.
+    ///
+    /// A non-LIFO or already-consumed token is left reserved. This fail-closed
+    /// behavior keeps the software cursor from moving behind seL4's untyped
+    /// watermark.
     pub fn release(&mut self, reserved: &ReservedUntyped) {
         if let Some(entry) = self.entries.get_mut(reserved.index) {
-            entry.used_bytes = entry.used_bytes.saturating_sub(reserved.reserved_bytes);
+            let expected_end = reserved
+                .offset_bytes
+                .saturating_add(reserved.reserved_bytes);
+            let expected_cap = self.bootinfo.untyped.start + reserved.index as seL4_CPtr;
+            if reserved.cap == expected_cap
+                && entry.used_bytes == expected_end
+                && reserved.previous_used_bytes <= reserved.offset_bytes
+            {
+                entry.used_bytes = reserved.previous_used_bytes;
+            }
         }
     }
 
@@ -7030,7 +7051,10 @@ impl<'a> KernelEnv<'a> {
             let depth = self.bootinfo.init_cnode_depth();
             let _ = seL4_CNode_Delete(self.init_cnode_cap(), pt_slot as seL4_CPtr, depth.into());
         }
-        self.release_reserved_page_table(&reserved);
+        // Retyping consumed the parent-untyped watermark. Deleting this
+        // derived cap cannot rewind that watermark while sibling objects from
+        // the same BootInfo untyped remain live, so the reservation must stay
+        // consumed even when the kernel already supplied this table.
 
         if Self::mapping_already_present(map_res) {
             // The kernel may boot with intermediate tables already installed
@@ -7075,7 +7099,7 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Pending);
         if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
             self.record_retype(trace, RetypeStatus::Err(err));
-            self.untyped.release(&reserved);
+            self.release_reserved_page_table(&reserved);
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
@@ -7101,7 +7125,9 @@ impl<'a> KernelEnv<'a> {
             let depth = self.bootinfo.init_cnode_depth();
             let _ = seL4_CNode_Delete(self.init_cnode_cap(), pd_slot as seL4_CPtr, depth.into());
         }
-        self.untyped.release(&reserved);
+        // The successful retype advanced the kernel watermark. Cap deletion
+        // does not make these bytes reusable without revoking/resetting the
+        // parent untyped, which is not safe while its siblings remain live.
 
         if Self::mapping_already_present(map_res) {
             // The final page mapping remains strict; this accepts only a
@@ -7139,7 +7165,7 @@ impl<'a> KernelEnv<'a> {
         self.record_retype(trace, RetypeStatus::Pending);
         if let Err(err) = self.retype_page_table(reserved.cap(), &trace) {
             self.record_retype(trace, RetypeStatus::Err(err));
-            self.untyped.release(&reserved);
+            self.release_reserved_page_table(&reserved);
             return Err(err);
         }
         self.record_retype(trace, RetypeStatus::Ok);
@@ -7165,7 +7191,9 @@ impl<'a> KernelEnv<'a> {
             let depth = self.bootinfo.init_cnode_depth();
             let _ = seL4_CNode_Delete(self.init_cnode_cap(), pud_slot as seL4_CPtr, depth.into());
         }
-        self.untyped.release(&reserved);
+        // Keep the software watermark aligned with seL4 after the successful
+        // retype; deleting only this cap cannot reclaim its parent-untyped
+        // allocation while other descendants survive.
 
         if Self::mapping_already_present(map_res) {
             // Treat a pre-existing intermediate directory as discovered boot
@@ -7801,6 +7829,53 @@ mod tests {
     }
 
     #[test]
+    fn release_restores_exact_pre_alignment_watermark() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0;
+        bootinfo.untyped.end = 1;
+        bootinfo.untypedList[0].paddr = 0x4000_0000;
+        bootinfo.untypedList[0].sizeBits = 16;
+        bootinfo.untypedList[0].isDevice = 0;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        catalog.record_usage(0, 0x800);
+        let aligned = catalog.reserve_ram(PAGE_BITS as u8).expect("aligned page");
+        assert_eq!(aligned.offset_bytes(), 0x1000);
+        catalog.release(&aligned);
+
+        let next = catalog.reserve_ram(11).expect("reservation after rollback");
+        assert_eq!(next.offset_bytes(), 0x800);
+        assert_eq!(next.paddr(), 0x4000_0800);
+    }
+
+    #[test]
+    fn consumed_translation_page_is_not_reused_after_cap_deletion() {
+        let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
+        bootinfo.untyped.start = 0x300;
+        bootinfo.untyped.end = 0x302;
+        bootinfo.untypedList[0].paddr = 0x4023_a000;
+        bootinfo.untypedList[0].sizeBits = 13;
+        bootinfo.untypedList[0].isDevice = 0;
+        bootinfo.untypedList[1].paddr = 0x4023_c000;
+        bootinfo.untypedList[1].sizeBits = 14;
+        bootinfo.untypedList[1].isDevice = 0;
+
+        let mut catalog = UntypedCatalog::new(&bootinfo, None);
+        catalog.record_usage(0, PAGE_SIZE as u128);
+        let boot_collision = catalog
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .expect("trial table reservation");
+        assert_eq!(boot_collision.paddr(), 0x4023_b000);
+
+        // A successful retype consumed this reservation. Deleting only the
+        // derived cap after a boot-seeded map collision must not release it.
+        let next = catalog
+            .reserve_ram(PAGE_TABLE_BITS as u8)
+            .expect("next table reservation");
+        assert_eq!(next.paddr(), 0x4023_c000);
+    }
+
+    #[test]
     fn reserve_device_prefers_closest_covered_untyped() {
         let mut bootinfo: seL4_BootInfo = unsafe { core::mem::zeroed() };
         bootinfo.untyped.start = 0x300;
@@ -8071,6 +8146,7 @@ mod tests {
         let reserved = ReservedUntyped {
             cap: 0x200,
             paddr: 0,
+            previous_used_bytes: 0,
             offset_bytes: 0,
             size_bits: PAGE_BITS as u8,
             index: 0,
@@ -8103,6 +8179,7 @@ mod tests {
         let dummy = ReservedUntyped {
             cap: 0x555,
             paddr: 0,
+            previous_used_bytes: 0,
             offset_bytes: 0,
             size_bits: PAGE_TABLE_BITS as u8,
             index: 0,
