@@ -269,12 +269,20 @@ No other agent roles exist unless explicitly introduced in `BUILD_PLAN.md`.
 - VM artifacts remain `no_std`
 
 ### 5. Regression Pack (Milestone ≥ 8)
-- All changes **MUST** use the staged Test Plan runner as the source of truth:
+- `docs/TEST_PLAN.md` is authoritative for test selection, execution order,
+  target evidence, convergence diagnostics, and acceptance.
+- Non-claiming convergence or diagnostic workflows defined there may be used
+  during development, but they never satisfy or replace acceptance evidence.
+- Final milestone or release claims **MUST** complete the applicable staged Test
+  Plan workflow:
   - `scripts/ci/test_plan_run.sh --list`
   - `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
 - Target- or surface-specific additions (for example `.coh`, REST, Pi 4, release, or hardware bring-up gates) must be run when the touched milestone or `docs/TEST_PLAN.md` requires them.
 - Output drift (ACK/ERR/END grammar, `/proc` layouts, telemetry formats) fails CI.
-- New tests are additive; existing fixtures remain canonical.
+- Canonical protocol/as-built fixtures remain authoritative unless the governing
+  contract intentionally changes. Tests may be added, simplified, consolidated,
+  replaced, or removed under Test Discipline; test count is not a compatibility
+  guarantee.
 
 ### 6. Cross-Milestone Stability
 - Changes to console grammar, NineDoor error codes, or `/proc` formats are breaking.
@@ -347,6 +355,46 @@ cross-surface drift blocks merge.
   ```
   cargo run -p coh-rtc -- configs/root_task.toml --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json
   ```
+
+### Test Discipline
+- Tests **MUST** preserve distinct, independently known contracts; do not add a
+  test merely because code changed. Prefer small deterministic tests for
+  parsing, bounds, arithmetic, ABI/layout, serialization, policy, state
+  machines, and other pure behavior.
+- Match authority to the behavior exercised: pure contracts use deterministic
+  unit tests; host-component contracts use focused host/component tests;
+  QEMU/seL4 runtime behavior requires QEMU evidence; physical Pi behavior
+  requires Pi hardware evidence. Each layer proves only what it exercises.
+- Host and target tests prove different contract classes. Do not model more
+  QEMU, seL4, Pi hardware, scheduling, IPC, IRQ, DMA/cache, or driver behavior
+  in host tests than a genuine host-testable contract requires. A green host
+  simulation is not target acceptance, and target evidence does not replace an
+  unexercised pure contract test.
+- If host simulation and QEMU or Pi evidence disagree, investigate the host
+  simulation before changing target code merely to satisfy it.
+- After a target-discovered defect, add a host regression only when the cause is
+  a useful deterministic host-testable invariant. Preserve the smallest
+  independently understood invariant; do not recreate the full target scenario
+  in mocks, and do not require a host regression for every target defect.
+- Tests **MUST NOT** depend on uncontrolled wall-clock time, sleeps, randomness,
+  execution order, external networks, or shared mutable state/environment unless
+  that behavior is the contract under test. Fixed or injected inputs are
+  preferred; controlled time, randomness, network, filesystem, and mocks remain
+  legitimate when required by the contract.
+- Where a contract defines one exact result, prefer an exact assertion. Do not
+  loosen assertions, widen accepted outcomes, increase arbitrary polling or
+  retry counts, or change expected values merely to make a test pass. Predicates,
+  ranges, and set membership remain valid when they are the actual contract.
+- Tests **MUST NOT** duplicate production constants, tables, or implementation
+  logic and call agreement independent evidence. Expected truth must come from
+  an independent specification, generated contract, ABI, fixture, protocol, or
+  other authoritative source.
+- When scoped work directly affects an existing test, it may be simplified,
+  consolidated, replaced, or removed only when its protection is demonstrably
+  redundant, implementation-coupled, misleading, obsolete, or superseded by
+  stronger evidence. Do not perform unrelated test cleanup, optimize for test
+  count, or delete useful deterministic tests because QEMU or Pi also exercises
+  related behavior.
 
 ---
 
