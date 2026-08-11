@@ -137,6 +137,12 @@ def test_archive_and_component_manifest_tampering_fail(tmp_path: Path) -> None:
 
 def test_qemu_build_keeps_driver_and_worker_archives_separate() -> None:
     script = (ROOT / "scripts" / "cohesix-build-run.sh").read_text(encoding="utf-8")
+    build_script = (ROOT / "apps" / "root-task" / "build.rs").read_text(
+        encoding="utf-8"
+    )
+    linker_script = (ROOT / "apps" / "root-task" / "sel4.ld").read_text(
+        encoding="utf-8"
+    )
     assert "driver_runtime_classic_comparator.toml" in script
     assert 'python3 "$DRIVER_MANIFEST_TOOL" build' in script
     assert 'COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="$DRIVER_ARCHIVE_PATH"' in script
@@ -147,6 +153,10 @@ def test_qemu_build_keeps_driver_and_worker_archives_separate() -> None:
     assert "rootfs must not duplicate the rootserver-embedded driver archive" in script
     assert "cohesix/artifacts/cohesix-driver-runtime-manifest.json" in script
     assert "cohesix/artifacts/cohesix-worker-images.cpio" in script
+    assert '"#[used]\\n\\' in build_script
+    assert '.cohesix_driver_runtime_payload' in build_script
+    assert "[u8; include_bytes!" in build_script
+    assert "KEEP(*(.cohesix_driver_runtime_payload))" in linker_script
     driver_build = script.index('python3 "$DRIVER_MANIFEST_TOOL" build')
     root_build = script.index('COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="$DRIVER_ARCHIVE_PATH"')
     assert driver_build < root_build

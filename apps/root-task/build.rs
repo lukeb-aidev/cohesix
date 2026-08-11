@@ -1085,12 +1085,14 @@ fn emit_pi4_driver_runtime_payload() -> io::Result<()> {
             emit_cargo_directive(format!("cargo:rerun-if-changed={}", payload.display()));
             let payload = rust_string_literal(&payload.to_string_lossy());
             contents.push_str(&format!(
-                "pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = include_bytes!({payload});\n",
+                "#[used]\n\
+#[link_section = \".cohesix_driver_runtime_payload\"]\n\
+pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: [u8; include_bytes!({payload}).len()] = *include_bytes!({payload});\n",
             ));
         }
         _ => {
             contents
-                .push_str("pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: &[u8] = &[];\n");
+                .push_str("pub(crate) static EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD: [u8; 0] = [];\n");
         }
     }
 

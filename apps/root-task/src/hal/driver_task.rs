@@ -2131,7 +2131,7 @@ fn driver_runtime_payload() -> Option<&'static [u8]> {
 
 #[cfg(feature = "kernel")]
 fn embedded_driver_runtime_payload() -> Option<&'static [u8]> {
-    let payload = embedded_runtime_payload::EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD;
+    let payload: &'static [u8] = &embedded_runtime_payload::EMBEDDED_PI4_DRIVER_RUNTIME_PAYLOAD;
     (!payload.is_empty()).then_some(payload)
 }
 

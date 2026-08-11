@@ -109,7 +109,7 @@ required_dts_literals = ["arm,gic-v3", "method = \"smc\""]
 forbidden_dts_literals = ["arm,cortex-a15-gic"]
 dts_files = ["kernel/kernel.dts", "qemu-arm-virt.dts"]
 qemu_gic_version = 3
-minimum_elfloader_archive_bytes = 3145728
+minimum_elfloader_archive_bytes = 7340032
 timer_clock_hz = 62500000
 
 [profiles.qemu_smp_production.artifact_policy]
@@ -166,7 +166,7 @@ ElfloaderRootserversLast = "ON"
 ElfloaderImage = "elf"
 ElfloaderIncludeDtb = "ON"
 CMAKE_BUILD_TYPE = "Release"
-COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "2097152"
+COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES = "6291456"
 
 [profiles.qemu_smp_production.generated]
 PLAT_QEMU_ARM_VIRT = true

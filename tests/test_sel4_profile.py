@@ -1488,10 +1488,10 @@ def test_qemu_production_reserves_rootserver_archive_capacity() -> None:
     wrapper = sel4_profile.WRAPPER_CMAKE.read_text(encoding="utf-8")
 
     profile = contract["profiles"]["qemu_smp_production"]
-    assert profile["minimum_elfloader_archive_bytes"] >= 3 * 1024 * 1024
+    assert profile["minimum_elfloader_archive_bytes"] >= 7 * 1024 * 1024
     assert (
         int(profile["cmake"]["COHESIX_ROOTSERVER_ARCHIVE_RESERVE_BYTES"])
-        >= 2 * 1024 * 1024
+        >= 6 * 1024 * 1024
     )
     assert "cohesix_rootserver_archive_reserve" in wrapper
     assert "target_sources(sel4test-driver" in wrapper

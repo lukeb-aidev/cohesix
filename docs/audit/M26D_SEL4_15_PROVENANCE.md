@@ -122,14 +122,20 @@ The first integrated default-consumer run exposed that the release-optimized
 seL4Test placeholder left only 1,089,536 bytes in the linked elfloader CPIO,
 while the boot-minimized Cohesix root task required a 2,548,964-byte rebuilt
 archive. The rewrite helper correctly refused to grow a linked ELF in place.
-The production contract now reserves 2,097,152 file-backed placeholder bytes
-and requires at least 3,145,728 bytes of validated archive capacity. The reserve
-is discarded when the placeholder is replaced; the bounded rewrite and rootfs
-size guard remain fail-closed. The fresh production wrapper exposed 3,186,688
-bytes of linked archive capacity. The integrated default-consumer build then
+At M26d acceptance, the production contract reserved 2,097,152 file-backed
+placeholder bytes and required at least 3,145,728 bytes of validated archive
+capacity. The reserve was discarded when the placeholder was replaced; the
+bounded rewrite and rootfs size guard remained fail-closed. The fresh
+production wrapper exposed 3,186,688 bytes of linked archive capacity. The
+integrated default-consumer build then
 rewrote it to 2,548,964 bytes, stripped the 755,528-byte boot-only rootserver
 ELF, passed the rootfs size guard, selected GICv3, and completed its `--no-run`
 packaging path successfully.
+
+Milestone 26e retains the exact 4,393,984-byte MCS driver archive inside the
+rootserver. The current QEMU policy therefore reserves 6 MiB and requires a
+7 MiB minimum elfloader archive; replacement and rootfs guards remain separate
+and fail closed.
 
 ## Current canonical QEMU runtime evidence
 

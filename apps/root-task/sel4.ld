@@ -41,6 +41,11 @@ SECTIONS
     KEEP(*(.rodata.*BUILD_MARKER_BYTES*))
   } :text
 
+  /* Compiler-validated linked-driver archive retained even in QEMU builds. */
+  .cohesix_driver_runtime_payload : ALIGN(16) {
+    KEEP(*(.cohesix_driver_runtime_payload))
+  } :text
+
   .rodata : {
     *(.rodata .rodata.*)
     *(.gnu.linkonce.r.*)
