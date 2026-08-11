@@ -1865,6 +1865,7 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'preserve_input "$PROFILE_VENV"',
         'preserve_input "$COMPILER_ARCHIVE"',
         'if [[ -e "$REPO_ROOT/target/CACHEDIR.TAG" ]]; then',
+        'if [[ -d "$REPO_ROOT/target" ]]; then',
         'find "$REPO_ROOT/target" -depth -mindepth 1 -delete',
         'find "$REPO_ROOT/out" -depth -mindepth 1 -delete',
         'rmdir "$REPO_ROOT/target"',
