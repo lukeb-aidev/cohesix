@@ -29,7 +29,7 @@ CATALOG = """\
 # Copyright 2026 Lukas Bower
 
 [catalog]
-schema = "cohesix-test-plan-actions/v1"
+schema = "cohesix-test-plan-actions/v2"
 minimum_python = "3.11"
 default_claims = ["common-hermetic"]
 claim_tiers = ["common-hermetic", "qemu-integration", "release"]
@@ -472,6 +472,31 @@ class TestPlanEvidenceTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("legacy active evidence", result.stderr)
 
+    def test_convergence_result_cannot_substitute_for_acceptance_stage(self) -> None:
+        state = self.fixture.state("convergence-is-not-acceptance")
+        state.mkdir(parents=True)
+        (state / "convergence-result.json").write_text(
+            json.dumps(
+                {
+                    "schema": "cohesix-test-plan-convergence/v1",
+                    "banner": "NON-CLAIMING TARGET DIAGNOSTIC",
+                    "claiming": False,
+                    "promotion_eligible": False,
+                    "result": "PASS",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = self.fixture.run(state, stage=5)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(
+            "missing or stale target-qualified attestation for stage 01",
+            result.stderr,
+        )
+        self.assertFalse((state / "stage_05.done").exists())
+
     def test_missing_marker_or_fingerprint_fails_closed(self) -> None:
         for filename in (
             "stage_01.done",
@@ -912,6 +937,14 @@ class TestPlanEvidenceTests(unittest.TestCase):
             capture_output=True,
             text=True,
         )
+        unittest_accepted = subprocess.run(
+            [*base_command, "printf 'Ran 2 tests\\n'"],
+            cwd=self.fixture.root,
+            env=self.fixture.environment(),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
 
         self.assertEqual(rejected.returncode, 1)
         self.assertIn(
@@ -919,6 +952,11 @@ class TestPlanEvidenceTests(unittest.TestCase):
             rejected.stderr,
         )
         self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertEqual(
+            unittest_accepted.returncode,
+            0,
+            unittest_accepted.stderr,
+        )
 
     def test_process_group_signal_tolerates_exit_race(self) -> None:
         sys.path.insert(0, str(CI_DIR))

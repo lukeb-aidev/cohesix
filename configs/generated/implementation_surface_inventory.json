@@ -5870,6 +5870,34 @@
       "evidence_eligible": false
     },
     {
+      "id": "tracked:scripts/cohsh/converge_target_activity.coh",
+      "kind": "tracked_surface",
+      "path": "scripts/cohsh/converge_target_activity.coh",
+      "implementation_class": "diagnostic",
+      "owner": "host-shell",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit script invocation; rule=coh-scripts",
+      "package_disposition": "diagnostic_script",
+      "evidence_requirement": "script result requires target-bound receipt",
+      "current_observed_mode": "operator_playbook",
+      "evidence_eligible": false
+    },
+    {
+      "id": "tracked:scripts/cohsh/converge_worker.coh",
+      "kind": "tracked_surface",
+      "path": "scripts/cohsh/converge_worker.coh",
+      "implementation_class": "diagnostic",
+      "owner": "host-shell",
+      "milestone": "Milestone 26e — production surface truth and mock-stub retirement",
+      "production_reachable": false,
+      "selection_source": "explicit script invocation; rule=coh-scripts",
+      "package_disposition": "diagnostic_script",
+      "evidence_requirement": "script result requires target-bound receipt",
+      "current_observed_mode": "operator_playbook",
+      "evidence_eligible": false
+    },
+    {
       "id": "tracked:scripts/cohsh/fixtures/telemetry_push_oversize.txt",
       "kind": "tracked_surface",
       "path": "scripts/cohsh/fixtures/telemetry_push_oversize.txt",

@@ -1659,6 +1659,10 @@ def run_catalog_command(
                     r"(?:^|\s)(\d+)\s+passed(?:\s|,|$)",
                     flags=re.IGNORECASE,
                 ),
+                re.compile(
+                    r"Ran\s+(\d+)\s+tests?",
+                    flags=re.IGNORECASE,
+                ),
             )
             for raw_line in output:
                 line = raw_line.decode("utf-8", errors="replace")

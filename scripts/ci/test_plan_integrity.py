@@ -17,6 +17,9 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 DOC = ROOT / "docs" / "TEST_PLAN.md"
 RUNNER = ROOT / "scripts" / "ci" / "test_plan_run.sh"
+CONVERGENCE = ROOT / "scripts" / "ci" / "test_plan_converge.py"
+CONVERGENCE_WRAPPER = ROOT / "scripts" / "ci" / "test_plan_converge.sh"
+TARGET_CANARY = ROOT / "scripts" / "ci" / "test_plan_target_canary.sh"
 COMMON = ROOT / "scripts" / "ci" / "test_plan_common.sh"
 EVIDENCE = ROOT / "scripts" / "ci" / "test_plan_evidence.py"
 RESOURCES = ROOT / "scripts" / "ci" / "test_plan_resources.sh"
@@ -145,6 +148,7 @@ def verify_python_lane(errors: list[str]) -> None:
         "scripts/ci/test_qemu_artifact.py",
         "scripts/ci/test_swarmui_ui_gate.py",
         "scripts/ci/test_test_plan_catalog.py",
+        "scripts/ci/test_test_plan_converge.py",
         "scripts/ci/test_test_plan_integrity.py",
         "scripts/ci/test_test_plan_resources.py",
         "scripts/ci/test_test_plan_runner.py",
@@ -171,6 +175,9 @@ def verify_headers(errors: list[str]) -> None:
         QEMU_HELPER,
         ROOT / "scripts" / "ci" / "swarmui_ui_gate.sh",
         ROOT / "scripts" / "ci" / "test_plan_catalog.py",
+        CONVERGENCE,
+        CONVERGENCE_WRAPPER,
+        TARGET_CANARY,
         EVIDENCE,
         RESOURCES,
         ROOT / "scripts" / "ci" / "test_plan_integrity.py",
@@ -180,6 +187,8 @@ def verify_headers(errors: list[str]) -> None:
         DUE_DILIGENCE,
         QEMU_BATCH,
         PI4_IMAGE_BUILD,
+        ROOT / "scripts" / "cohsh" / "converge_target_activity.coh",
+        ROOT / "scripts" / "cohsh" / "converge_worker.coh",
         CI,
     ]
     for path in paths:
@@ -218,6 +227,8 @@ def main() -> int:
     stage_05 = read(STAGES[5])
     due_diligence = read(DUE_DILIGENCE)
     qemu_batch = read(QEMU_BATCH)
+    convergence = read(CONVERGENCE)
+    target_canary = read(TARGET_CANARY)
     ci = read(CI)
 
     verify_fixture_hashes(errors, document)
@@ -244,6 +255,13 @@ def main() -> int:
             "configs/test_plan_actions.toml",
             "unknown changed path selects the complete catalog",
             "TP_HOST_JOBS",
+            "NON-CLAIMING TARGET DIAGNOSTIC",
+            "Target-entry integrity",
+            "Broad host closure",
+            "No more than two speculative target-code edits",
+            "after the first complete MCS root boot is stable under QEMU",
+            "promotion_eligible=false",
+            "scripts/ci/test_plan_converge.sh",
         ),
         "docs/TEST_PLAN.md",
     )
@@ -260,6 +278,32 @@ def main() -> int:
             "refresh stage 5",
         ),
         "scripts/ci/test_plan_run.sh",
+    )
+    require(
+        errors,
+        convergence,
+        (
+            'RESULT_SCHEMA = "cohesix-test-plan-convergence/v1"',
+            'BANNER = "NON-CLAIMING TARGET DIAGNOSTIC"',
+            '"claiming": False',
+            '"promotion_eligible": False',
+            "select_convergence_focus",
+            "first_failing_proof_layer",
+        ),
+        "scripts/ci/test_plan_converge.py",
+    )
+    require(
+        errors,
+        target_canary,
+        (
+            "--launch-existing",
+            "cohesix-qemu-launch-artifacts.json",
+            "verify-pi4-evidence",
+            "pi4_image_identity.py",
+            "WORKER_TASK_READY",
+            "Cohesix console ready",
+        ),
+        "scripts/ci/test_plan_target_canary.sh",
     )
     require(
         errors,

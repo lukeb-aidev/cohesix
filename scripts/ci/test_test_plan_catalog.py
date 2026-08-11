@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Author: Lukas Bower
-# Purpose: Verify the test-plan catalog rejects drift, duplicate work, and zero-match test filters.
+# Purpose: Verify acceptance and convergence catalog validation, routing, and documentation.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -33,6 +33,13 @@ class TestPlanCatalogTests(unittest.TestCase):
         self.assertGreater(len(data["action"]), 20)
         for stage in range(1, 6):
             self.assertTrue(catalog.select_actions(data, stage=stage))
+        self.assertTrue(catalog.select_actions(data, stage=0))
+        self.assertTrue(
+            all(
+                action.get("evidence_class", "acceptance") == "acceptance"
+                for action in catalog.select_actions(data, stage=0)
+            )
+        )
 
     def test_exact_duplicate_command_is_rejected(self) -> None:
         data = catalog.load_catalog(CATALOG_PATH)
@@ -101,7 +108,15 @@ class TestPlanCatalogTests(unittest.TestCase):
         )
 
         self.assertEqual(unmatched, ["unknown-surface/new.file"])
-        self.assertEqual(len(actions), len(data["action"]))
+        acceptance_count = sum(
+            action.get("evidence_class", "acceptance") == "acceptance"
+            for action in data["action"]
+        )
+        self.assertEqual(len(actions), acceptance_count)
+        self.assertNotIn(
+            "diagnostic.qemu-canary",
+            [action["id"] for action in actions],
+        )
 
     def test_recommend_accepts_nul_delimited_paths(self) -> None:
         result = subprocess.run(
@@ -140,13 +155,17 @@ class TestPlanCatalogTests(unittest.TestCase):
     def test_document_check_rejects_a_stale_generated_block(self) -> None:
         data = catalog.load_catalog(CATALOG_PATH)
         rendered = catalog.markdown_catalog(data)
+        convergence_rendered = catalog.markdown_convergence(data)
         with tempfile.TemporaryDirectory() as temporary:
             document = Path(temporary) / "TEST_PLAN.md"
             document.write_text(
                 "# Test\n\n"
                 f"{catalog.DOC_START}\n"
                 "stale\n"
-                f"{catalog.DOC_END}\n",
+                f"{catalog.DOC_END}\n"
+                f"{catalog.CONVERGENCE_DOC_START}\n"
+                "stale\n"
+                f"{catalog.CONVERGENCE_DOC_END}\n",
                 encoding="utf-8",
             )
             result = subprocess.run(
@@ -166,7 +185,7 @@ class TestPlanCatalogTests(unittest.TestCase):
             self.assertIn("generated action catalog is stale", result.stderr)
 
             document.write_text(
-                f"# Test\n\n{rendered}\n",
+                f"# Test\n\n{rendered}\n\n{convergence_rendered}\n",
                 encoding="utf-8",
             )
             current = subprocess.run(

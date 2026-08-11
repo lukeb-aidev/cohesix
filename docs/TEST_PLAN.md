@@ -5,9 +5,236 @@
 
 # Test Plan
 
-## Mandatory Agent Execution Contract
+## Development order: target first, acceptance complete
 
-This contract is normative for contributors and automation.
+During active target development, obtain real QEMU or Pi 4 evidence as early as
+safely possible. Use host/unit tests to freeze target-discovered invariants and
+prevent known regressions. Use the complete staged pipeline only when producing
+acceptance evidence. This is a sequencing correction, not a reduction in test
+coverage, provenance, or release rigor.
+
+Two workflows are deliberately separate:
+
+- **Convergence evidence** is a development and diagnosis aid. It is emitted as
+  `NON-CLAIMING TARGET DIAGNOSTIC`, uses the distinct
+  `cohesix-test-plan-convergence/v1` schema, and cannot write Stage PASS
+  attestations or Milestone 26e acceptance records. It does not require an
+  earlier Stage 01, 02, 03, 04, or 05 attestation.
+- **Acceptance evidence** is the only basis for a milestone or release claim.
+  The existing Stage 01-05 runner, target-specific attestations, immutable
+  artifacts, pressure/repeatability evidence, due diligence, and conditional
+  claim tiers remain authoritative and fail closed.
+
+A convergence PASS never satisfies, bypasses, or promotes an acceptance gate.
+Run the full acceptance workflow again against the exact final source, image,
+target, profile, and topology before making a claim.
+
+### Target-first convergence entry point
+
+Use the separate runner during active Milestone 26e work:
+
+```bash
+# Explicit focus is preferred when a dirty tree spans several surfaces.
+scripts/ci/test_plan_converge.sh \
+  --target qemu \
+  --focus root-mcs \
+  --path apps/root-task/src/kernel.rs
+
+# Reuse a previously built immutable out/cohesix launch set.
+scripts/ci/test_plan_converge.sh \
+  --target qemu \
+  --focus worker \
+  --launch-existing
+
+# Let the declarative trigger paths choose the focus for a bounded change set.
+scripts/ci/test_plan_converge.sh \
+  --target qemu \
+  --changed-from origin/main
+```
+
+`--focus` accepts `root-mcs`, `ninedoor`, `console-network`, `worker`,
+`pi4-driver`, `live-transport`, `python-sdk`, `swarmui`,
+`test-plan-tooling`, or `docs`; use `--list-focus` for the generated inventory.
+Automatic selection fails rather than silently choosing QEMU for a Pi-first
+path or choosing a focus for an unmatched path. The selected actions come from
+`configs/test_plan_actions.toml`; there is no second command catalog.
+
+Every run creates a fresh directory below `out/test-plan-convergence/` and
+records the Git commit, complete dirty-tree/source digest, catalog digest,
+target, exact profile, focus, changed paths, selected action IDs, session/run
+ID, action logs and hashes, target observation, built-image and immutable
+identity hashes where applicable, UART/serial path and hash, result
+(`PASS`, `FAIL`, or `BLOCKED`), first failed proof layer, and optional
+`--hypothesis`/`--note`. Results are immutable candidate observations with
+`claiming=false` and `promotion_eligible=false`.
+
+### Changed-path convergence routing
+
+The convergence focus and action metadata below are generated from the same
+catalog used by acceptance. The first authoritative evidence is selected by
+the most specific matching focus; broad host closure is not added before a
+target canary merely because it is part of final acceptance.
+
+<!-- test-plan-convergence:start -->
+| Focus | Target | First authoritative evidence | Exact profile |
+| --- | --- | --- | --- |
+| `pi4-driver` | pi4 | one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault | `pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml` |
+| `worker` | qemu | canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation | `qemu_smp_production / configs/root_task.toml` |
+| `ninedoor` | qemu | canonical QEMU boot, isolated NineDoor READY, and one real 9P operation | `qemu_smp_production / configs/root_task.toml` |
+| `console-network` | qemu | canonical QEMU boot, isolated console READY, and one authenticated live TCP operation | `qemu_smp_production / configs/root_task.toml` |
+| `root-mcs` | qemu | canonical QEMU boot, root steady state, one real target operation, and no unexpected seL4 fault | `qemu_smp_production / configs/root_task.toml` |
+| `live-transport` | qemu, pi4 | one authenticated operation over the changed live target transport | `selected target production profile` |
+| `python-sdk` | qemu, pi4 | focused Python SDK tests | `host-only Python SDK` |
+| `swarmui` | qemu, pi4 | focused SwarmUI package tests | `host-only SwarmUI` |
+| `test-plan-tooling` | qemu, pi4 | focused test-plan tooling tests and catalog/document consistency | `test-plan tooling` |
+| `docs` | qemu, pi4 | documentation metadata and generated-contract consistency | `generated documentation contracts` |
+<!-- test-plan-convergence:end -->
+
+Representative results are normative:
+
+- root task, MCS, IPC, capability, Worker, or service-isolation changes start
+  with a QEMU target canary;
+- Pi boot, MMIO, DMA, IRQ, timer, cache, driver-runtime ABI, networking, or
+  physical ownership changes start with a Pi 4 target canary;
+- TCP, REST, gateway, or cohsh changes perform one live operation against the
+  selected real target;
+- Python SDK and SwarmUI changes run their focused host suite; and
+- documentation-only changes run documentation/generated consistency checks.
+
+### Target-entry integrity versus broad host closure
+
+Stage 01 remains intact for compatibility and final acceptance, but its
+responsibilities have two different positions during development:
+
+**Target-entry integrity** is the minimum safe pre-target set: validate the
+generated contracts used by changed target code, validate the selected
+feature/profile, compile the exact target release configuration, run only
+cheap required ABI/layout checks, and optionally run one narrow test when it
+directly protects the target-entry contract.
+
+**Broad host closure** remains mandatory for acceptance but normally follows a
+successful target canary during active target work: workspace-wide tests and
+Clippy, complete root/runtime feature suites, SwarmUI, mock `coh`, Python SDK
+and examples, unrelated drivers, broad regressions, and dependency/risk/
+governance closure. A host-only focus may run its focused host test first
+because the host surface itself is the changed execution path.
+
+### QEMU convergence proof order
+
+For root-task behavior, MCS, isolation, Workers, capability/IPC/scheduling,
+fault handling, SMP, image construction, or startup, run only:
+
+1. generated contracts and selected configuration required by the change;
+2. exact `qemu_smp_production` target compilation;
+3. genuinely required cheap ABI/layout/static checks;
+4. the immutable canonical Milestone 26e QEMU image boot;
+5. `Cohesix console ready` root steady state;
+6. the changed service READY marker, or real `WORKER_TASK_READY` for a Worker;
+7. one real operation through the changed target path;
+8. absence of unexpected seL4 faults, capability errors, scheduler failures,
+   timeouts, or runtime panics;
+9. one bounded budget/timeout/fault-recovery operation when the change affects
+   scheduling or recovery, selected with `--operation-script` when the default
+   probe is not the changed recovery path; then
+10. the smallest focused host regression guard that freezes the discovered
+    invariant.
+
+Stop at the first failed layer. Do not run broad workspace, UI, mock-client,
+Python SDK, unrelated driver, or general regression suites before this canary
+unless one of those surfaces is itself the selected focus. `--launch-existing`
+validates and launches the bound `cohesix-qemu-launch-artifacts.json`; it never
+restages or silently rebuilds an immutable diagnostic artifact.
+
+The QEMU proof ladder is:
+
+```text
+source/config identity -> exact target build -> image validity -> target boot
+-> root steady state -> changed service/Worker READY -> one real operation
+-> changed failure/recovery path -> focused regression guard
+-> broader integration regressions -> pressure/repeatability -> final acceptance
+```
+
+### Pi 4 convergence checkpoints and proof order
+
+Use Pi early when QEMU cannot authoritatively model firmware/U-Boot, physical
+MMIO/IRQ/timers, DMA/cache coherency, the driver-runtime ABI, physical device
+ownership/networking/concurrency, or shared root capability construction that
+may differ on hardware. The convergence runner does not discover or overwrite
+an SD device and never fabricates physical evidence. Prepare and independently
+preserve the exact readback and live boot record, then provide them explicitly:
+
+```bash
+scripts/ci/test_plan_converge.sh \
+  --target pi4 \
+  --focus pi4-driver \
+  --pi4-target-evidence out/<run>/target-evidence.json \
+  --pi4-readback-image out/<run>/readback.img \
+  --pi4-identity-metadata out/<run>/readback.img.identity.json \
+  --pi4-serial-log /absolute/path/to/current-nonempty-uart.log \
+  --pi4-host <pi-address>
+```
+
+The first Pi diagnostic proves only: exact source/image identity; flash/readback
+identity; one real boot; root and touched service/device readiness; one real
+operation through the selected path; UART liveness across that operation; and
+no unexpected fault in the bound boot. Missing hardware inputs produce
+`BLOCKED`, never synthetic PASS. Full cold/warm repeatability, pressure, TCP
+matrices, RF claims, benchmark, and hardware qualification remain later
+acceptance activities.
+
+Milestone 26e requires lightweight Pi checkpoints:
+
+1. after the first complete MCS root boot is stable under QEMU;
+2. after isolated critical services work under QEMU;
+3. after Worker loading and fault recovery work;
+4. before resource/capability/topology ABI assumptions are frozen; and
+5. before Milestone 26e acceptance.
+
+Each checkpoint is a new image/source-bound Pi observation, not permission to
+reuse old hardware proof. The first four may use the lightweight convergence
+lane. The fifth must be followed by the complete required Pi qualification and
+acceptance evidence. Follow the canonical build -> flash -> readback -> boot ->
+saved boot/profile policy -> device/network proof -> console/liveness proof ->
+target-qualified Test Plan -> benchmark/repeatability ladder in
+[HARDWARE_BRINGUP.md](HARDWARE_BRINGUP.md); this document does not redefine it.
+
+### Rabbit-hole prevention rules
+
+These rules are normative during target convergence:
+
+1. No more than two speculative target-code edits may occur without rerunning
+   the relevant QEMU or Pi diagnostic.
+2. A target failure overrides host PASS results when diagnosing target
+   behavior.
+3. Do not add broad tests while the target remains red unless a new test
+   distinguishes one specific observed target hypothesis.
+4. Stop at the first failed proof layer. Do not debug TCP while boot, image
+   identity, capability construction, service readiness, IRQ delivery, or an
+   earlier layer remains unresolved.
+5. Do not optimize or broadly refactor a failing path before its target failure
+   mechanism is understood.
+6. Every target fix must identify the observed target failure, hypothesis, code
+   change, and target observation that proves or disproves the hypothesis.
+7. Once the target fix is proved, add the smallest appropriate regression/unit
+   guard that freezes the discovered invariant.
+8. Unit tests are not authoritative evidence for live scheduling, capability
+   installation, real IPC, IRQ delivery, DMA/cache correctness, or physical
+   device behavior.
+
+### Candidate collection, validation, and acceptance promotion
+
+Target observations may be collected early as candidate convergence evidence
+and validated for schema, source, image, profile, target, action-log, and UART
+integrity. They are never promoted in place. Acceptance evidence is created
+only by a new complete staged run after all required stages pass and current
+source, image, target/profile/topology, pressure, repeatability, and hardware
+identities still match. A stale convergence result, even a PASS, cannot become
+accepted Milestone 26e evidence.
+
+## Mandatory Acceptance Execution Contract
+
+This contract is normative whenever a milestone, release, or claim-tier result
+is being produced. It is unchanged by the development convergence lane.
 
 1. Run `scripts/ci/test_plan_run.sh --list`, then use the staged runner with a
    dedicated state directory. The runner resumes digest-valid evidence by
@@ -564,6 +791,16 @@ from that catalog.
 | `qemu.rest-regression` | 4 | `qemu-integration` | target / qemu | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
 | `pi4.rest-regression` | 4 | `pi4-transport` | target / pi4 | `scripts/ci/test_plan_stage_04_rest_multiplexer.sh` |
 | `release.unique-governance` | 5 | `release` | target / qemu, pi4 | `scripts/ci/due_diligence_gate.sh` |
+| `diagnostic.qemu-canary` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `scripts/ci/test_plan_target_canary.sh --target qemu` |
+| `diagnostic.pi4-canary` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `scripts/ci/test_plan_target_canary.sh --target pi4` |
+| `diagnostic.guard-root-mcs` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test mcs_activation_order -- --test-threads=1` |
+| `diagnostic.guard-worker` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1` |
+| `diagnostic.guard-ninedoor` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test ninedoor_service_isolation -- --test-threads=1` |
+| `diagnostic.guard-console-network` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu | `cargo test -p root-task --no-default-features --features driver-tests-qemu --test console_network_service -- --test-threads=1` |
+| `diagnostic.guard-pi4-driver` | NON-CLAIMING diagnostic | `non-claiming` | conditional / pi4 | `cargo test -p root-task --no-default-features --features driver-tests-pi4 --test driver_task_mcs -- --test-threads=1` |
+| `diagnostic.guard-live-transport` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `cargo test -p cohsh --no-default-features --features tcp` |
+| `diagnostic.python-sdk` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `scripts/ci/python_test_gate.sh --sdk-tests` |
+| `diagnostic.test-plan-tooling` | NON-CLAIMING diagnostic | `non-claiming` | conditional / qemu, pi4 | `python3 scripts/ci/test_test_plan_catalog.py && python3 scripts/ci/test_test_plan_converge.py` |
 | `ui.swarmui-playwright` | conditional | `ui` | conditional / qemu, pi4 | `scripts/ci/swarmui_ui_gate.sh --run` |
 | `performance.gateway-telemetry` | conditional | `performance` | conditional / qemu, pi4 | evidence-only: telemetry-summary-matrix, ops-csv, ramp-csv, ramp-svg |
 | `federation.three-hive-relay` | conditional | `federation` | conditional / qemu, pi4 | evidence-only: federation-result-manifest, relay-counter-snapshots, evidence-timeline, scale-summary |
@@ -668,7 +905,9 @@ Validate the full Cohesix stack end-to-end: generated artifacts, QEMU boot, TCP 
   preserve the artifact path and update `docs/BENCHMARKS.md` in the same change.
 
 ## Staged and conditional procedures
-Run in order. Skips produce INCOMPLETE markers and the stage will fail.
+For acceptance, run in order. Skips produce INCOMPLETE markers and the stage
+will fail. During active target convergence, use the separate non-claiming
+entry point above; its result cannot satisfy any procedure in this section.
 - Scripted runner (recommended): `scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>`
 
 ### Automated Stage 01 — Reusable common-hermetic closure
@@ -3302,16 +3541,21 @@ isolated local-seat attach/init chain; each attempt consumes one later
 marker advances, stopping at the finite cap, keyboard readiness, or no new
 marker.
 
-Root-console startup must emit UART-visible `[mark] root-console.start.begin`,
-publish `cohesix>` after bounded non-Wi-Fi driver startup settles or fails
-closed, and emit `[mark] root-console.start.ok` before persistent Wi-Fi
-bootstrap, `/log/queen.log`, or NineDoor log-stream handoff; host-EAPOL,
-association, DHCP, and retained gate-local progress cannot hold the serial
-shell hostage. Once `cohesix>` is published and USB polling is armed, serial
-UART and USB keyboard input must both feed the shared parser concurrently after
-USB proof succeeds; during a Wi-Fi HAL turn local-seat dispatch remains
-buffered and command-fenced even though HDMI has not yet claimed interactive
-readiness.
+Root-console startup must emit UART-visible `[mark] root-console.start.begin`
+and publish the ready line plus command list after bounded non-Wi-Fi driver
+startup settles or fails closed. On the isolated QEMU VirtIO path, source emits
+that ready line and command list directly under the bootstrap SC, then queues
+`[mark] root-console.start.ok`; the nonempty FIFO retains the initial
+`cohesix>` prompt behind the marker.
+Neither record drains until a steady Operator after the one-time activation
+yield, so absence of the marker on the wire is not evidence that source has not
+crossed the console lifecycle boundary. Physical Pi retains its existing
+direct/linked startup route. Host-EAPOL, association, DHCP, and retained
+gate-local progress cannot hold the serial shell hostage. Once `cohesix>` is
+published and USB polling is armed, serial UART and USB keyboard input must both
+feed the shared parser concurrently after USB proof succeeds; during a Wi-Fi
+HAL turn local-seat dispatch remains buffered and command-fenced even though
+HDMI has not yet claimed interactive readiness.
 
 Steady physical Pi root submits serial/network service turns through bounded
 ring calls; HDMI submits are limited to high-impact progress lines, while init,
@@ -4804,7 +5048,7 @@ mismatch, fewer than two total refills, missing consumed-time evidence, and an
 active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
 10,000 us core window. The Pi table includes seven linked-driver records; the
 default QEMU table deliberately does not fabricate those hardware TCBs.
-Manifest `root_task.schema = "1.10"` adds exactly one fixed, root-retained
+Manifest `root_task.schema = "1.11"` adds exactly one fixed, root-retained
 NineDoor bootstrap SC outside the steady temporal-task topology. Resource
 admission must therefore total 18 SCs for QEMU and 25 for Pi; the former 17/24
 totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
@@ -4819,31 +5063,176 @@ idle/trampoline entrypoint, or activation before registry seal. Critical
 permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU and Pi compiler fixtures must both assert the exact `root-control`
 candidate: `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
-`m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4` provenance.
+`m26e-qemu-root-bounded-runtime-unit-candidate-v11` provenance. The
+QEMU root row must select
+`virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
+non-root row must select zero. Validation must reject every QEMU root value
+other than exact `64`, including `0`, `65`, `1024`, and `u32::MAX`, plus a
+nonzero non-VirtIO root bound or a nonzero non-root bound. The fixtures must
+also assert the exact active `console-network-service` candidate:
+`3000 us / 10000 us`,
+`2400 us` WCET, `7500 us` response, and
+`m26e-qemu-console-one-unit-per-refill-candidate-v4` provenance.
 The WCET is a per-phase live candidate because the v2 whole-turn interpretation
 exhausted the complete 2750-us refill at the console-network control wake, and
 the live compact-page run at source `00bf02540` timed out `root-control` at the
 console-network control poll, disproving the v3 combined Network/runtime-IPC
-phase. The `5100 us` response is per-phase scheduler admission, not end-to-end
-host/TCP latency. They must also assert the derived
+phase. The live run at source `4d1a47b89` retained three outer phases but timed
+out in `VirtioTxToken::consume` after queue notify, disproving v4's multi-unit
+Network turn. The later live v5 run raised child timeout badge `0x26ee0007` at
+`Send` after `publish_exchange` with exactly `3000 us` consumed, then raised
+root timeout badge `0x26ee0001` at the sole outer `seL4_Yield` after
+containment/quarantine with exactly `2750 us` consumed. Those failures disprove
+the multi-material child turn and whole-containment Recovery turn. The `5100 us`
+response is per-phase scheduler admission, not
+end-to-end host/TCP latency. They must also assert the derived
 core-0 demand of `9000 us` and the console-network response bound of `7500 us`;
 stale pre-live values fail closed.
+The canonical v6 root ELF SHA-256 was
+`0059fd675b476106888d6ca62c8bba21f9b340b9aa607e000fbf96997fd29900`.
+That run raised root timeout badge `0x26ee0001` after exactly `2750 us` at the
+sole outer yield. Its saved state proves the preceding Network visit composed
+an empty ObserveChild, no-op StageOutput and Disconnect, then committed and
+signalled the first 60-byte ARP ingress as sequence 1. The child was healthy and
+no Recovery ran. Treat this only as failure evidence that a no-op lower unit
+must consume its own Network visit.
+The canonical v7 root ELF SHA-256 was
+`d2f69bddbf56deef6919ec6ea802e9d3c44a691c2dbe05aa59428854bbf7a6ae`.
+It emitted the startup command list while the UART-visible
+`[mark] root-console.start.ok` record remained queued; that wire absence does
+not locate the source before the console lifecycle transition. Before any
+ordinary Network or Recovery phase, `root-control` consumed exactly `2750 us`
+and raised current-fault class `Timeout`, badge `0x26ee0001`, at serial queue
+`inner_dequeue` (PC `0x43e84`) called by `SerialPort::flush_tx_unlocked`
+(LR `0x77b74`). Treat this only as v7 failure evidence that every serial poll
+and flush within one VirtIO Operator must share one bounded credit.
+The canonical v8 root ELF SHA-256 was
+`5052e7a5070987c252d3c1f5cf6f27172bd5ece1836a8f6c2a5c329c789a0a61`.
+With the generated `64`-byte limit active, `root-control` still consumed its
+complete `2750 us` refill and raised current-fault `Timeout`, badge
+`0x26ee0001`, at PC `0xede84` immediately after `emit_prompt_now`. Treat this
+only as v8 failure evidence that the byte limit must also admit at most one
+retained output-record attempt in each isolated VirtIO Operator.
+The canonical v9 root ELF SHA-256 was
+`fa488c9367136f0eadef7182a18691664c3ae51c2ac2974e12000ff5d27f38ed`;
+its CPIO SHA-256 was
+`aca549e99e0d86299e9f98348d896b730259277654544ebd22a74595b61e9bfb`.
+The direct command list completed under the bootstrap SC. At the first
+post-bind Operator, serial was idle, the one-record cursor was full, and the
+retained marker plus initial prompt were still queued. `root-control` consumed
+the complete `2750 us` refill and raised current-fault `Timeout`, badge
+`0x26ee0001`, at PC `0x13a798`, the first instruction of `compiler_builtins`
+`memmove`. LR `0x79ccc` was
+`heapless::Vec<PendingConsoleOutput, 72>::remove(0)` and `x2 = 0x110` described
+the prospective 272-byte move, but zero bytes were copied. Treat this as
+aggregate first-post-bind refill exhaustion across activation tail work,
+no-work containment probes, and the Operator prefix. Do not classify it as
+copy-cost evidence or as a failure of the one-record admission rule.
+
+The canonical v10 root ELF SHA-256 was
+`022908395c954f73a67136f70fe4404d96e0cf1ff16f4531fa95eae7a6f57cb5`.
+Its post-activation yield completed, and UART emitted the retained startup
+marker and prompt in separate bounded Operator visits. The second fresh Runtime
+consumed the complete `2750 us` and raised root timeout badge `0x26ee0001` at
+PC `0xce98c`, the `seL4_NBWait`/nonblocking receive on root endpoint `0x0a70`.
+The saved successor was Network, the output FIFO was empty, its record cursor
+was inactive, and the response barrier had crossed the prompt. Treat this as
+failure evidence for v10's composed Runtime responsibilities; do not classify
+it as activation, output, Network, or Recovery failure.
+
+The same run recorded exact console timeout sequence 1, badge `0x26ee0007`,
+with Terminal policy. The child was saved at `seL4_Wait` with
+`service_pending = 1` and `control_pending = 1`, proving one completed logical
+unit composed with its pending successor on residual SC. Recovery reached
+Complete with the TCB suspended, SC unbound, mappings scrubbed, capabilities
+revoked, objects deleted, and generation fenced; NineDoor remained healthy.
+Treat this as failure evidence for the v3 child replenishment boundary, not
+containment completeness. The v11 root and v4 child candidates remain pending
+fresh canonical QEMU authentication and fault injection.
+
 The ordinary EventPump regression must prove the QEMU-only cyclic order
 Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch, exclusive
 per-phase ownership, successor commit before every early return, and the sole
-outer `seL4_Yield` between phases. Before each selected phase, it must prove
+recurring outer `seL4_Yield` between phases. The QEMU Runtime regression must
+prove one persistent Worker -> ControlEndpoint -> BootstrapDrain -> StreamFlush
+-> RebootTail cursor and exactly one selected unit per Runtime visit, including
+an idle/no-op. Worker performs at most one work item or idle check; no visit may
+search another Runtime unit for work. The successor commits before return, and
+Recovery preserves it. The MCS fault-endpoint poll must compile to a no-op and
+consume no cursor unit. StreamFlush must use one visit per earlier retained
+line, one visit for the retained final line, a later selected no-line visit for
+cursor/bandwidth finalization only, and the following selected visit for END
+only. Tests must reject a line plus finalization, finalization plus END, or two
+line emissions in one visit. Legacy Pi/non-VirtIO Runtime must retain its
+48-line/16-KiB behavior. Every isolated Network visit must attempt
+exactly one internal unit, including a no-op. The persistent lower cursor must
+cycle ObserveChild -> StageOutput -> Disconnect -> Ingress -> ServiceTick ->
+ObserveChild. A no-op advances the cursor; any successful lower unit that
+signals the child forces the next lower attempt to ObserveChild. A pending
+compact normal-success diagnostic must emit first, at most one record on a
+non-publish visit, and return. Otherwise retained TX preempts the lower cursor,
+performs no more than two bounded reclaim checks, attempts exactly one TX, and
+returns on success or backpressure. Both preemptions must preserve the lower
+cursor and forced-observe state. The gate must queue normal-success records for
+successful attempt sequences 0 through 63 and every 64th eligible success
+thereafter, never every post-window TX, while counters remain continuous. An
+ObserveChild attempt may copy and retain active output/event data but must
+return without TX. Tests must prove Observe -> TX -> DeferredDiagnostic before
+resuming the preserved lower state for a sampled success, with no second
+publication able to overwrite or merge the pending diagnostic. Anomalies must
+remain immediate. Tests must prove TX descriptor
+initialization, avail publication, optional notify, and in-flight identity commit
+are atomic; there is no post-publication buffer write, completion wait, duplicate
+publication, or head reuse before bounded reclaim.
+
+The Operator serial regression must instantiate exactly one generated `64`-byte
+I/O credit at isolated VirtIO Operator entry and share it across every
+root-context serial RX poll and TX flush. Repeated helper calls must not reset
+credit; each accepted or emitted byte debits the same total, and exhaustion
+retains remaining bytes for a later Operator. When TX backlog exists at entry,
+the test must prove an exact `32`-byte TX reservation and at most `32` bytes of
+RX service. With no entry backlog, RX may consume all `64`. Counterfactuals
+must prove that sustained RX cannot suppress pending ACK/ERR/END output, total
+service never exceeds `64`, and the physical/linked serial driver's independent
+`max_bytes=1024` contract and all non-VirtIO/Pi turns are unchanged.
+When the generated VirtIO serial limit is nonzero, the same regression must
+prove that exactly zero or one retained output record is attempted in an
+Operator, a second FIFO or response-tail record remains queued and ordered for
+the next Operator, and helper re-entry cannot admit another record. The
+zero-bound Pi/non-VirtIO regression must preserve the existing two-record
+attempt limit and its prior phasing.
+
+The active child regression must prove that one active-MCS replenishment closes
+at most one logical unit in retained-first priority: completion publication,
+service-event publication, egress publication, service-poll continuation, new
+ingress, then new control. Every unit must commit fully or remain pending. After
+the initial Ready signal and every later nonterminal unit, including idle or
+backpressure retention, source order and behavior tests must prove exactly one
+`seL4_Yield` followed by exactly one `seL4_Wait`. Subsequent progress must be
+caused by replenishment plus the existing root service tick and notification;
+retained scheduler state must survive. Terminal revoke/shutdown must use only
+its wait-only park. Tests must reject zero or two active yields, Wait-before-Yield,
+a new cap, ABI/schema change, or numeric timing drift.
+
+Before each selected phase, the regression must prove
 console-network mailbox precedence and permit a NineDoor probe only when the
 console probe reports no work. If either containment owner consumes or attempts
 work, the regression must classify the complete refill as one exclusive
-Recovery turn, execute no EventPump phase, preserve the selected ordinary phase,
-and reach the same sole outer yield. Simultaneous faults must produce console
-Recovery, yield, then NineDoor Recovery, with no new authority, SC, budget,
-refill, or internal yield. It must also prove that an attached VirtIO
+Recovery turn, advance at most one material containment unit in fixed
+owner-local order, persist the successor, execute no EventPump phase, preserve
+the selected ordinary phase plus retained Runtime- and Network-unit states, and reach the same
+sole outer yield. Console work must retain precedence until its sequence is
+complete; only then may simultaneous NineDoor work advance. No Recovery turn may
+fall through to the pump, and no new authority, SC, budget, refill, or internal
+yield is permitted. It must also prove
+that an attached VirtIO
 contract suppresses the Pi/GENET-only synchronous
 `SERIAL_INPUT_TRACE stage=idle` path before and after console-network
 quarantine. Quarantine must retain all three exclusive phases, with Network
-observing quarantine and fencing NIC work rather than combining Operator and
-Runtime/IPC. An attached GENET contract must retain the existing trace cadence,
+observing quarantine, preserving both Runtime and Network retained unit states,
+and fencing NIC work
+rather than polling or combining Operator and Runtime/IPC. An attached GENET
+contract must retain the existing trace cadence,
 and non-VirtIO/Pi phase behavior must remain unchanged. A complete idle line
 immediately before a root-control timeout at the outer yield is a failed QEMU
 phase, not qualification evidence.
@@ -4852,7 +5241,15 @@ synchronous bootstrap IPC trace completes after registry seal and before any
 restricted child activation. It must reject root-control temporal activation
 from kernel bootstrap: the one HAL transition is guarded in userland and may be
 called only at the serial console, deferred-network supervisor, or non-serial
-pump event-loop seam.
+pump event-loop seam. After the successful MCS bind and timeout-endpoint setup,
+the regression must prove exactly one universal activation-seam `seL4_Yield`
+occurs before either containment mailbox probe or the first EventPump phase,
+with no pre-arm retained-output drain and no other post-bind work interposed.
+That yield must preserve Operator as the first ordinary phase and leave the
+queued startup marker and prompt ordered for steady service. The existing one
+outer yield per Recovery or ordinary phase remains the sole recurring boundary;
+the activation yield occurs once per boot on both QEMU and Pi and adds one Pi
+startup-period wait without changing Pi phase semantics.
 
 Handoff tests must cover an eight-record root-control queue, one Worker fault
 mailbox per admitted Worker, one owner mailbox per generated isolated service,
@@ -4899,8 +5296,9 @@ associated. Only an explicitly generated `replenish-once` timeout may reply
 once; the current allowlist is empty. Root-fault faults route to
 root-emergency, and root-emergency has no recovery edge.
 
-NineDoor schema tests must require `root_task.schema = "1.10"` and reject schema
-1.9. They must admit exactly one root-retained, one-shot scheduling context with
+NineDoor and temporal-contract schema tests must require
+`root_task.schema = "1.11"` and reject schema 1.10 or older. They must admit
+exactly one root-retained, one-shot scheduling context with
 object bits 8, `3000 us / 10000 us`, and `max_refills = 2`; any different value,
 missing fixed SC accounting, child-Cspace SC or SchedControl cap, or NineDoor
 `TCB.SetAffinity` path fails closed. The candidate is not target-qualified by
@@ -4941,9 +5339,11 @@ root-relative CPtr. The init/root-control TCB retains its kernel-provided
 bootstrap SC until userland reaches the selected serial console,
 deferred-network supervisor, or non-serial pump event-loop seam. Only there may
 it apply the generated root-control temporal policy, exactly once and before
-steady polling. The init/root-control MCS dispatcher never receives or polls
-the fault endpoint because it owns no receive Reply object. The boot is a
-failure if any
+steady polling. It must then yield the partially consumed initial refill and
+wait for the next MCS replenishment before probing either containment mailbox
+or entering the first Operator. The init/root-control MCS dispatcher never
+receives or polls the fault endpoint because it owns no receive Reply object.
+The boot is a failure if any
 named duty does not execute on its generated TCB/SC, if root-control temporal
 policy is armed during kernel bootstrap, if init continues polling an MCS fault
 endpoint after transfer, or if a fault, timeout, simultaneous wake, saturation,
@@ -5052,8 +5452,55 @@ injection on four-core GICv3 QEMU remained pending after the compact repair.
 The following compact-page run at source `00bf02540` reached the root prompt
 but timed out `root-control` at the console-network control poll before
 authenticated regression. Record that run only as the live failure that
-disproved v3's combined Network/runtime-IPC phase. The v4 three-phase candidate
-must repeat all target gates; neither prior failure is qualification evidence.
+disproved v3's combined Network/runtime-IPC phase. The next live run at source
+`4d1a47b89` preserved the three-phase outer cycle but timed out `root-control`
+in `VirtioTxToken::consume` after queue notify. Record that saved PC as failure
+evidence for v4's multi-unit Network visit, not as a TX-completion wait: published
+descriptors complete asynchronously. The v5 bounded-Network-unit candidate must
+not be promoted: the following live v5 run consumed exactly `3000 us` in the
+active console child and raised timeout badge `0x26ee0007` at `Send` after
+`publish_exchange`, then consumed exactly `2750 us` in root Recovery and raised
+timeout badge `0x26ee0001` at the sole outer yield after containment/quarantine.
+The next canonical run used root ELF SHA-256
+`0059fd675b476106888d6ca62c8bba21f9b340b9aa607e000fbf96997fd29900`.
+Its child was healthy and no Recovery ran, but root timeout badge `0x26ee0001`
+followed exact `2750 us` consumption at the outer yield after Network composed
+empty ObserveChild, no-op StageOutput and Disconnect, and committed/signalled
+60-byte ARP ingress sequence 1. Record that only as the v6 failure that requires
+one attempted lower unit per visit. The following v7 run used root ELF
+`d2f69bddbf56deef6919ec6ea802e9d3c44a691c2dbe05aa59428854bbf7a6ae`
+and timed out before the queued UART-visible `[mark] root-console.start.ok`,
+Network, or Recovery became visible; do not treat the missing marker as a
+source-order boundary. Root consumed exactly `2750 us` and raised `Timeout`
+badge `0x26ee0001` at serial queue `inner_dequeue` (PC `0x43e84`) from
+`SerialPort::flush_tx_unlocked` (LR `0x77b74`). Record that only as the v7
+failure requiring one shared Operator serial-I/O credit. The following v8 run used root ELF
+`5052e7a5070987c252d3c1f5cf6f27172bd5ece1836a8f6c2a5c329c789a0a61`,
+consumed the complete `2750 us` root-control refill, and raised `Timeout` badge
+`0x26ee0001` at PC `0xede84` immediately after `emit_prompt_now`. Record that
+only as the v8 failure requiring at most one retained output-record attempt per
+nonzero-credit VirtIO Operator. The following v9 run used root ELF
+`fa488c9367136f0eadef7182a18691664c3ae51c2ac2974e12000ff5d27f38ed`
+and CPIO
+`aca549e99e0d86299e9f98348d896b730259277654544ebd22a74595b61e9bfb`.
+It consumed the complete `2750 us` first post-bind refill and raised `Timeout`
+badge `0x26ee0001` at PC `0x13a798`, the first `memmove` instruction reached
+from `PendingConsoleOutput::remove(0)` (LR `0x79ccc`, prospective length
+`0x110`). Zero bytes were copied, the output cursor remained full, serial was
+idle, and the marker plus prompt remained queued. Record that only as aggregate
+first-post-bind refill exhaustion; do not attribute the timeout to copy cost or
+the still-enforced one-record rule. The v10 root ELF
+`022908395c954f73a67136f70fe4404d96e0cf1ff16f4531fa95eae7a6f57cb5`
+then crossed its activation seam and emitted the marker and prompt, but the
+second fresh Runtime consumed the full `2750 us` and raised root timeout badge
+`0x26ee0001` at PC `0xce98c`, the root-endpoint nonblocking receive. The same
+run recorded child timeout sequence 1, badge `0x26ee0007`, Terminal, with the
+child at `seL4_Wait`, `service_pending = 1`, and `control_pending = 1`.
+Recovery reached the six-field Complete proof and NineDoor stayed healthy. The
+v11 root and v4 child candidates must repeat authentication and standard/timeout
+fault injection before Stage 03, Hive Gateway pressure benchmarks, or complete
+host-tool validation proceeds; none of the prior failures is qualification
+evidence.
 
 Child tests cover partial and oversized frames, malformed authentication,
 constant-time token acceptance, command release only after `AUTH`, one-packet
@@ -5067,37 +5514,92 @@ Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch cycle for the
 isolated VirtIO contract. The next phase is committed before any early return
 within an admitted ordinary phase. Operator gives pending physical input/output
 priority and dispatches at most one buffered network line; Runtime/IPC alone
-performs `KernelIpc::dispatch`, bounded bootstrap drain, stream flush, and the
-reboot tail with serial and network command ingress suppressed; Network alone
+selects one persistent Worker -> ControlEndpoint -> BootstrapDrain ->
+StreamFlush -> RebootTail unit with serial and network command ingress
+suppressed. Worker performs at most one work item or idle check, each no-op
+still consumes its selected visit, and the successor is retained. The MCS fault
+poll consumes no unit. StreamFlush emits at most one retained line per selected
+visit; the visit after the final line performs cursor/bandwidth finalization
+only and the following selected visit emits END only. Legacy Pi/non-VirtIO
+Runtime retains its 48-line/16-KiB path. Network alone
 performs VirtIO/NIC service and cannot execute a command or general runtime-IPC
-dispatch. Each phase returns to the sole existing outer yield before its
+dispatch. Each phase returns to the sole recurring outer yield before its
 successor begins. Reboot, serial cutover, and linked-runtime routing remain
 earlier owners and do not falsely advance this QEMU-only phase state. Equivalent
-non-VirtIO and Pi turns must retain their pre-v4 behavior. The isolated VirtIO
-regression must repeat the same phase-order and ownership assertions after
-console-network quarantine; a combined Operator+Runtime/IPC fallback fails.
+non-VirtIO and Pi turns must retain their existing behavior. Separately, every
+MCS profile must perform one post-activation yield before the first containment
+probe or Operator, preserving the retained startup FIFO and adding only the
+documented one-period Pi startup wait. That activation seam is not one of the
+recurring phase yields. The isolated
+VirtIO Operator must create one generated `64`-byte serial-I/O credit, share it
+across all root-context poll/flush calls, and retain unfinished bytes when it is
+exhausted. Entry-time TX backlog must reserve `32` bytes for TX and cap RX at
+`32`; without TX backlog RX may use all `64`. Tests must reject any helper-local
+credit reset, aggregate service above `64`, suppressed pending output under
+sustained RX, or application of this cut to linked-runtime/Pi paths.
+Within each isolated Network phase, source and behavior tests must prove exactly one attempted unit
+per visit, including a no-op. The persistent lower cursor must select
+ObserveChild -> StageOutput -> Disconnect -> Ingress -> ServiceTick ->
+ObserveChild. Each lower attempt returns; a no-op advances, and a successful
+unit that signals the child forces the next lower attempt to ObserveChild. A
+deferred normal-success diagnostic preempts first and drains exactly one compact
+record. Otherwise retained egress preempts for exactly one TX attempt and
+returns on success or backpressure. Both preemptions must leave the exact lower
+cursor and forced-observe state unchanged. An ObserveChild attempt may copy and
+retain activity but returns without TX. A published TX must initialize the bounded
+payload and atomically publish the descriptor, avail entry, optional notify, and
+in-flight identity before returning to the sole outer yield. Tests must show no
+post-notify buffer mutation or wait for completion, and that backpressure retains
+egress without duplicate publication. The retained-TX unit may perform no more
+than two bounded reclaim checks before its one attempt. Tests must prove the
+bounded early 0-through-63 and every-64th-success diagnostic gate, continuous
+counters, and Observe -> TX -> DeferredDiagnostic before resuming the preserved
+lower state for sampled successes. A second publication cannot overwrite or
+merge a pending diagnostic; anomalies remain immediate.
+
+Child-loop source and behavior tests must separately prove one closed logical
+unit per active-MCS replenishment in the retained-first order completion publication
+-> service-event publication -> egress publication -> service-poll continuation
+-> new ingress -> new control. A coalesced badge may
+retain several later units, but the current turn performs only the first
+eligible one. After Ready and every later nonterminal unit, including idle or
+backpressure retention, it must execute exactly one `seL4_Yield` and then one
+`seL4_Wait`; retained state and the existing root service tick drive the
+successor without any new notification cap. Terminal revoke/shutdown uses only
+its wait-only park.
+
+The isolated VirtIO regression must repeat the same phase-order and ownership
+assertions after console-network quarantine. Quarantine must preserve the outer
+phase plus retained Runtime- and Network-unit states while fencing NIC polls; a combined
+Operator+Runtime/IPC fallback fails.
 Recovery-turn coverage must independently inject console-only, NineDoor-only,
 and simultaneous pending records before each of the three ordinary phases. It
-must prove console-first conditional probing, one attempted containment per
-outer refill, zero ordinary pump work during Recovery, phase-state preservation,
-and one outer yield before the next containment or ordinary phase. A containment
-error still consumes its exclusive Recovery turn and cannot fall through into
-the pump.
+must prove console-first conditional probing, one material containment unit
+per outer refill, successor-cursor retention, zero ordinary pump work during
+Recovery, phase-state plus Runtime/Network cursor preservation, and one outer yield before the next
+containment unit or ordinary phase. Console coverage must assert suspend;
+unbind; four indexed frame lifecycle units, each performing scrub plus
+cache-clean plus unmap; two indexed cap deletes; anchor revoke/reset; and final
+proof/quarantine. A containment error still consumes its exclusive Recovery
+turn and cannot fall through into the pump.
 The QEMU run must additionally show that all generated sources are constructed
 suspended, the exact fault registry is sealed before the console child resumes,
 one authenticated `cohsh` session observes the existing ACK/ERR/END fixtures,
 malformed/authentication load cannot bypass root policy, and child fault or
 timeout leaves serial, local-seat, root-fault, and root-emergency progress live.
 Simultaneous console-network and NineDoor fault injection must show two
-root-control Recovery refills in console-then-NineDoor order with an outer yield
-between them and no ordinary EventPump work interleaved.
+or more root-control Recovery refills as required by their retained unit
+cursors, with every console unit preceding every NineDoor unit, an outer yield
+between material units, and no ordinary EventPump work interleaved.
 The QEMU MCS transcript must contain no `TCB.SetAffinity` or affinity-failure marker:
 root bridge attachment is bookkeeping, while execution placement comes only
 from the generated SchedControl/SC binding. A live VM fault in the console
 entry stack-zero loop or a root-fault timeout during `TCB.Suspend` is a failed
 stack/temporal contract, not acceptable containment evidence. A root-control
-timeout at the child control-wake send also fails the v3 per-phase candidate;
-passing compilation or compiler admission cannot replace that live check.
+timeout in or after one admitted Runtime unit, Network unit, child logical unit,
+or Recovery primitive fails the v11/v4 candidates; a PC after publication or at
+the outer yield still fails the bound. Passing compilation or compiler admission
+cannot replace that live check.
 Scale back network mirroring before command responses; never starve the
 physical operator queues or fatal output. This gate deliberately performs no
 Pi 4 execution and cannot qualify GENET, CYW43, or SDIO behavior.
@@ -5152,7 +5654,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329`
+- `configs/generated/root_task_resolved.json` — `sha256:b100a7bab9d47965ca5f37826a62535edfb3dfccbebe23a5670bf13f5709fdf9`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

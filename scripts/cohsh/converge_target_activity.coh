@@ -1,0 +1,8 @@
+# Author: Lukas Bower
+# Purpose: Exercise one bounded live target scheduling and device-activity path.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+smp activity
+EXPECT SUBSTR OK SMP mode=activity
+quit

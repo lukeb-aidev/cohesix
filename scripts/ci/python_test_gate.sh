@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Run the complete Cohesix Python test or example lane with a pinned shared pytest environment.
+# Purpose: Run complete or focused Cohesix Python lanes with a pinned shared pytest environment.
 # Copyright 2026 Lukas Bower
 
 set -euo pipefail
@@ -17,8 +17,10 @@ Usage: scripts/ci/python_test_gate.sh MODE
 
 Modes:
   --tests          Run all repository, client, due-diligence, and test-plan tests.
+  --sdk-tests      Run only the Cohesix Python SDK tests.
   --examples       Run the four Python client example smoke checks.
   --list-tests     Print the pytest paths without creating an environment.
+  --list-sdk-tests Print the focused Python SDK pytest path.
   --list-examples  Print the example smoke identifiers without running them.
   --cache-key      Print the interpreter- and requirements-specific cache key.
 EOF
@@ -107,6 +109,10 @@ list_examples() {
     "mixed-closed-loop-ai-factory"
 }
 
+list_sdk_tests() {
+  printf '%s\n' "tools/cohesix-py/tests"
+}
+
 release_venv_lock() {
   if [[ "${venv_lock_owned:-0}" == "1" ]]; then
     rmdir "${venv_lock_dir}" 2>/dev/null || true
@@ -180,6 +186,12 @@ run_tests() {
   "${venv_python}" -m pytest -q "${python_test_paths[@]}"
 }
 
+run_sdk_tests() {
+  prepare_pytest
+  cd "${repo_root}"
+  "${venv_python}" -m pytest -q tools/cohesix-py/tests
+}
+
 run_examples() {
   compute_cache_key
   local python_playbook_out="${TP_PYTHON_PLAYBOOK_OUT:-${repo_root}/out/test-plan/python-playbooks}"
@@ -206,11 +218,17 @@ case "$1" in
   --tests)
     run_tests
     ;;
+  --sdk-tests)
+    run_sdk_tests
+    ;;
   --examples)
     run_examples
     ;;
   --list-tests)
     list_tests
+    ;;
+  --list-sdk-tests)
+    list_sdk_tests
     ;;
   --list-examples)
     list_examples

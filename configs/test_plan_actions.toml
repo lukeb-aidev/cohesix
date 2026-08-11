@@ -3,7 +3,7 @@
 # Copyright 2026 Lukas Bower
 
 [catalog]
-schema = "cohesix-test-plan-actions/v1"
+schema = "cohesix-test-plan-actions/v2"
 minimum_python = "3.11"
 default_claims = ["common-hermetic", "qemu-integration", "release"]
 claim_tiers = [
@@ -16,6 +16,143 @@ claim_tiers = [
   "federation",
   "release",
 ]
+
+[[convergence_focus]]
+id = "pi4-driver"
+targets = ["pi4"]
+description = "Pi boot, MMIO, DMA, IRQ, cache, timer, driver-runtime ABI, networking, and physical-ownership changes."
+profile = "pi4_diagnostic / configs/root_task_pi4_uboot_aarch64.toml"
+authoritative_evidence = "one exact-image Pi boot, touched service/device liveness, one live operation, UART liveness, and no unexpected target fault"
+priority = 100
+trigger_paths = [
+  "apps/pi4-driver-runtime/**",
+  "crates/pi4-driver-abi/**",
+  "apps/root-task/src/hal/pi4_*.rs",
+  "apps/root-task/src/drivers/bcm*.rs",
+  "apps/root-task/src/drivers/sd*.rs",
+  "apps/root-task/src/drivers/cyw43/**",
+  "configs/root_task_pi4_uboot_aarch64.toml",
+  "scripts/pi4*.py",
+  "scripts/pi4*.sh",
+  "u-boot/**",
+]
+
+[[convergence_focus]]
+id = "worker"
+targets = ["qemu"]
+description = "Executable Worker construction, loading, capability, lifecycle, and recovery changes."
+profile = "qemu_smp_production / configs/root_task.toml"
+authoritative_evidence = "canonical QEMU boot, real Worker READY, and one bounded startup/teardown/restart recovery operation"
+priority = 95
+trigger_paths = [
+  "apps/root-task/src/hal/worker_task.rs",
+  "apps/root-task/src/userland/**",
+  "apps/*worker*/**",
+  "crates/*worker*/**",
+  "scripts/worker_task_evidence.py",
+]
+
+[[convergence_focus]]
+id = "ninedoor"
+targets = ["qemu"]
+description = "NineDoor isolation, IPC, passive MCS bootstrap, and service-runtime changes."
+profile = "qemu_smp_production / configs/root_task.toml"
+authoritative_evidence = "canonical QEMU boot, isolated NineDoor READY, and one real 9P operation"
+priority = 90
+trigger_paths = [
+  "apps/root-task/src/ninedoor_service.rs",
+  "apps/root-task/tests/ninedoor_service_isolation.rs",
+  "apps/ninedoor*/**",
+  "crates/ninedoor*/**",
+]
+
+[[convergence_focus]]
+id = "console-network"
+targets = ["qemu"]
+description = "Isolated console service, live TCP transport, and console scheduling changes."
+profile = "qemu_smp_production / configs/root_task.toml"
+authoritative_evidence = "canonical QEMU boot, isolated console READY, and one authenticated live TCP operation"
+priority = 90
+trigger_paths = [
+  "apps/console-network-runtime/**",
+  "apps/root-task/src/console_network_service.rs",
+  "apps/root-task/src/hal/console_network.rs",
+  "apps/root-task/src/net/**",
+  "apps/root-task/tests/console_network_service.rs",
+]
+
+[[convergence_focus]]
+id = "root-mcs"
+targets = ["qemu"]
+description = "Root-task MCS, IPC, capability, CSpace, scheduling, fault, SMP, image, and startup changes."
+profile = "qemu_smp_production / configs/root_task.toml"
+authoritative_evidence = "canonical QEMU boot, root steady state, one real target operation, and no unexpected seL4 fault"
+priority = 80
+trigger_paths = [
+  "apps/root-task/**",
+  "apps/*-runtime/**",
+  "crates/sel4*/**",
+  "configs/root_task.toml",
+  "configs/sel4/**",
+  "scripts/cohesix-build-run.sh",
+]
+
+[[convergence_focus]]
+id = "live-transport"
+targets = ["qemu", "pi4"]
+description = "cohsh, TCP, REST, and gateway changes that require one live target transport operation."
+profile = "selected target production profile"
+authoritative_evidence = "one authenticated operation over the changed live target transport"
+priority = 70
+trigger_paths = [
+  "apps/cohsh/**",
+  "apps/coh/**",
+  "apps/hive-gateway/**",
+  "scripts/cohsh/**",
+  "scripts/rest_*.py",
+]
+
+[[convergence_focus]]
+id = "python-sdk"
+targets = ["qemu", "pi4"]
+description = "Host-only Python SDK and example changes."
+profile = "host-only Python SDK"
+authoritative_evidence = "focused Python SDK tests"
+priority = 60
+trigger_paths = ["tools/cohesix-py/**"]
+
+[[convergence_focus]]
+id = "swarmui"
+targets = ["qemu", "pi4"]
+description = "Host-only SwarmUI changes."
+profile = "host-only SwarmUI"
+authoritative_evidence = "focused SwarmUI package tests"
+priority = 60
+trigger_paths = ["apps/swarmui/**", "tools/swarmui-ui-tests/**"]
+
+[[convergence_focus]]
+id = "test-plan-tooling"
+targets = ["qemu", "pi4"]
+description = "Test-plan catalog, runner, selection, and evidence tooling changes."
+profile = "test-plan tooling"
+authoritative_evidence = "focused test-plan tooling tests and catalog/document consistency"
+priority = 55
+trigger_paths = [
+  "configs/test_plan_actions.toml",
+  "scripts/ci/test_plan*.py",
+  "scripts/ci/test_plan*.sh",
+  "scripts/ci/test_test_plan*.py",
+  "scripts/ci/check_test_plan.sh",
+]
+
+[[convergence_focus]]
+id = "docs"
+targets = ["qemu", "pi4"]
+description = "Documentation-only changes."
+profile = "generated documentation contracts"
+authoritative_evidence = "documentation metadata and generated-contract consistency"
+priority = 10
+trigger_paths = ["docs/**", "README.md", "AGENTS.md"]
 
 [[action]]
 id = "integrity.cargo-metadata"
@@ -48,6 +185,17 @@ trigger_paths = [
 ]
 expected_evidence = ["command-result"]
 test_policy = "none"
+convergence_focuses = [
+  "root-mcs",
+  "worker",
+  "ninedoor",
+  "console-network",
+  "pi4-driver",
+  "live-transport",
+  "test-plan-tooling",
+  "docs",
+]
+convergence_phase = "target-entry"
 
 [[action]]
 id = "host.format"
@@ -115,6 +263,8 @@ trigger_paths = ["apps/swarmui/**", "crates/**", "tests/fixtures/**"]
 expected_evidence = ["command-result", "nonzero-test-inventory"]
 test_policy = "nonzero"
 minimum_test_count = 1
+convergence_focuses = ["swarmui"]
+convergence_phase = "focused-host"
 
 [[action]]
 id = "host.coh-mock-tests"
@@ -317,6 +467,14 @@ timeout_seconds = 600
 trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "tools/sel4-profile-project/**"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
+convergence_focuses = [
+  "root-mcs",
+  "worker",
+  "ninedoor",
+  "console-network",
+  "live-transport",
+]
+convergence_phase = "target-entry"
 
 [[action]]
 id = "target.root-task-qemu-release"
@@ -343,6 +501,8 @@ timeout_seconds = 600
 trigger_paths = ["configs/sel4/**", "scripts/sel4_profile.py", "seL4/build_UBOOT/**"]
 expected_evidence = ["command-result", "sel4-profile-identity"]
 test_policy = "none"
+convergence_focuses = ["pi4-driver", "live-transport"]
+convergence_phase = "target-entry"
 
 [[action]]
 id = "target.root-task-pi4-release"
@@ -423,6 +583,180 @@ timeout_seconds = 3600
 trigger_paths = ["docs/audit/**", "scripts/ci/**", "Cargo.lock", "deny.toml"]
 expected_evidence = ["prior-stage-attestations", "cargo-audit-report", "cargo-deny-report", "release-governance-result"]
 test_policy = "none"
+
+[[action]]
+id = "diagnostic.qemu-canary"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu"]
+description = "Boot the immutable canonical M26e QEMU image, prove focus-specific readiness, and perform one live operation."
+command = "scripts/ci/test_plan_target_canary.sh --target qemu"
+timeout_seconds = 3600
+trigger_paths = ["apps/root-task/**", "apps/*-runtime/**", "apps/cohsh/**", "configs/root_task.toml", "scripts/cohsh/**"]
+expected_evidence = ["non-claiming-target-observation", "qemu-launch-artifact", "uart-log"]
+test_policy = "none"
+convergence_focuses = [
+  "root-mcs",
+  "worker",
+  "ninedoor",
+  "console-network",
+  "live-transport",
+]
+convergence_phase = "target-canary"
+
+[[action]]
+id = "diagnostic.pi4-canary"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["pi4"]
+description = "Validate caller-bound Pi image/readback/boot evidence, touched service liveness, UART liveness, and one live operation."
+command = "scripts/ci/test_plan_target_canary.sh --target pi4"
+timeout_seconds = 1200
+trigger_paths = ["apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "apps/root-task/src/hal/pi4_*.rs", "configs/root_task_pi4_uboot_aarch64.toml"]
+expected_evidence = ["non-claiming-target-observation", "pi4-readback-identity", "uart-log"]
+test_policy = "none"
+convergence_focuses = ["pi4-driver", "live-transport"]
+convergence_phase = "target-canary"
+
+[[action]]
+id = "diagnostic.guard-root-mcs"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu"]
+description = "Freeze the target-discovered root MCS activation-order invariant after the QEMU canary."
+command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test mcs_activation_order -- --test-threads=1"
+timeout_seconds = 900
+trigger_paths = ["apps/root-task/**"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["root-mcs"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-worker"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu"]
+description = "Freeze the target-discovered Worker fault-lifecycle invariant after real Worker READY."
+command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test worker_fault_lifecycle -- --test-threads=1"
+timeout_seconds = 900
+trigger_paths = ["apps/root-task/src/hal/worker_task.rs", "apps/root-task/src/userland/**"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["worker"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-ninedoor"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu"]
+description = "Freeze the target-discovered NineDoor isolation invariant after one real 9P operation."
+command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test ninedoor_service_isolation -- --test-threads=1"
+timeout_seconds = 900
+trigger_paths = ["apps/root-task/src/ninedoor_service.rs", "apps/root-task/tests/ninedoor_service_isolation.rs"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["ninedoor"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-console-network"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu"]
+description = "Freeze the target-discovered isolated-console service invariant after one real TCP operation."
+command = "cargo test -p root-task --no-default-features --features driver-tests-qemu --test console_network_service -- --test-threads=1"
+timeout_seconds = 900
+trigger_paths = ["apps/console-network-runtime/**", "apps/root-task/src/console_network_service.rs", "apps/root-task/src/net/**"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["console-network"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-pi4-driver"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["pi4"]
+description = "Freeze the target-discovered driver-task MCS/ABI invariant after the Pi canary."
+command = "cargo test -p root-task --no-default-features --features driver-tests-pi4 --test driver_task_mcs -- --test-threads=1"
+timeout_seconds = 900
+trigger_paths = ["apps/pi4-driver-runtime/**", "crates/pi4-driver-abi/**", "apps/root-task/src/hal/pi4_*.rs"]
+expected_evidence = ["focused-regression-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["pi4-driver"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.guard-live-transport"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Run the focused cohsh TCP package guard after the live target operation."
+command = "cargo test -p cohsh --no-default-features --features tcp"
+timeout_seconds = 900
+trigger_paths = ["apps/cohsh/**", "apps/coh/**", "apps/hive-gateway/**", "scripts/cohsh/**"]
+expected_evidence = ["focused-host-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["live-transport"]
+convergence_phase = "focused-regression"
+
+[[action]]
+id = "diagnostic.python-sdk"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Run only the Python SDK tests for Python-only convergence."
+command = "scripts/ci/python_test_gate.sh --sdk-tests"
+timeout_seconds = 1200
+trigger_paths = ["tools/cohesix-py/**"]
+expected_evidence = ["focused-host-result", "pytest-summary"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["python-sdk"]
+convergence_phase = "focused-host"
+
+[[action]]
+id = "diagnostic.test-plan-tooling"
+stage = 0
+tier = "non-claiming"
+evidence_class = "diagnostic"
+scope = "conditional"
+targets = ["qemu", "pi4"]
+description = "Run focused catalog and convergence-runner selection/evidence tests."
+command = "python3 scripts/ci/test_test_plan_catalog.py && python3 scripts/ci/test_test_plan_converge.py"
+timeout_seconds = 600
+trigger_paths = ["configs/test_plan_actions.toml", "scripts/ci/test_plan*.py", "scripts/ci/test_plan*.sh"]
+expected_evidence = ["focused-host-result"]
+test_policy = "nonzero"
+minimum_test_count = 1
+convergence_focuses = ["test-plan-tooling"]
+convergence_phase = "focused-host"
 
 [[action]]
 id = "ui.swarmui-playwright"

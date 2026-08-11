@@ -19,6 +19,7 @@ shell_scripts=(
   scripts/ci/python_test_gate.sh
   scripts/ci/swarmui_ui_gate.sh
   scripts/ci/test_plan_common.sh
+  scripts/ci/test_plan_converge.sh
   scripts/ci/test_plan_resources.sh
   scripts/ci/test_plan_run.sh
   scripts/ci/test_plan_stage_01_integrity.sh
@@ -26,6 +27,7 @@ shell_scripts=(
   scripts/ci/test_plan_stage_03_qemu_tcp_regression.sh
   scripts/ci/test_plan_stage_04_rest_multiplexer.sh
   scripts/ci/test_plan_stage_05_due_diligence.sh
+  scripts/ci/test_plan_target_canary.sh
   scripts/cohsh/REST_regression_batch.sh
   scripts/cohsh/run_regression_batch.sh
 )

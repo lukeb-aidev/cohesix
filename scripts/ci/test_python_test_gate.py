@@ -1,5 +1,5 @@
 # Author: Lukas Bower
-# Purpose: Verify the consolidated Python test gate selects complete, stable test and example lanes.
+# Purpose: Verify complete acceptance and focused convergence Python test lanes.
 # Copyright 2026 Lukas Bower
 
 from __future__ import annotations
@@ -57,6 +57,12 @@ class PythonTestGateTests(unittest.TestCase):
                 "mixed-closed-loop-ai-factory",
             ],
         )
+
+    def test_sdk_convergence_lane_excludes_broad_repository_tests(self) -> None:
+        result = self.run_gate("--list-sdk-tests")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["tools/cohesix-py/tests"])
 
     def test_cache_key_is_bound_to_python_and_locked_requirements(self) -> None:
         first = self.run_gate("--cache-key")

@@ -25,9 +25,19 @@ DEFAULT_CATALOG = ROOT / "configs" / "test_plan_actions.toml"
 DEFAULT_DOC = ROOT / "docs" / "TEST_PLAN.md"
 DOC_START = "<!-- test-plan-catalog:start -->"
 DOC_END = "<!-- test-plan-catalog:end -->"
+CONVERGENCE_DOC_START = "<!-- test-plan-convergence:start -->"
+CONVERGENCE_DOC_END = "<!-- test-plan-convergence:end -->"
 ACTION_ID_RE = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 ALLOWED_SCOPES = {"common", "provisioned-target", "target", "conditional"}
 ALLOWED_TARGETS = {"qemu", "pi4"}
+ALLOWED_EVIDENCE_CLASSES = {"acceptance", "diagnostic"}
+CONVERGENCE_PHASE_ORDER = {
+    "target-entry": 10,
+    "target-canary": 20,
+    "focused-regression": 30,
+    "focused-host": 30,
+    "docs-integrity": 10,
+}
 ALLOWED_POLICIES = {
     "none",
     "nonzero",
@@ -201,11 +211,12 @@ def validate_catalog(data: dict[str, Any], path: pathlib.Path) -> None:
     errors: list[str] = []
     metadata = data.get("catalog")
     actions = data.get("action")
+    focuses = data.get("convergence_focus", [])
     if not isinstance(metadata, dict):
         errors.append("missing [catalog] metadata")
         metadata = {}
-    if metadata.get("schema") != "cohesix-test-plan-actions/v1":
-        errors.append("catalog.schema must be cohesix-test-plan-actions/v1")
+    if metadata.get("schema") != "cohesix-test-plan-actions/v2":
+        errors.append("catalog.schema must be cohesix-test-plan-actions/v2")
     tiers = metadata.get("claim_tiers")
     if (
         not isinstance(tiers, list)
@@ -232,6 +243,60 @@ def validate_catalog(data: dict[str, Any], path: pathlib.Path) -> None:
     if not isinstance(actions, list) or not actions:
         errors.append("catalog must contain at least one [[action]]")
         actions = []
+    if not isinstance(focuses, list):
+        errors.append("convergence_focus must be a list of tables")
+        focuses = []
+
+    focus_ids: set[str] = set()
+    focus_targets: dict[str, set[str]] = {}
+    focus_action_counts: dict[str, int] = {}
+    for index, raw_focus in enumerate(focuses, start=1):
+        if not isinstance(raw_focus, dict):
+            errors.append(f"convergence focus #{index} must be a table")
+            continue
+        focus_id = _require_string(
+            raw_focus,
+            "id",
+            f"convergence focus #{index}",
+            errors,
+        )
+        if focus_id and not ACTION_ID_RE.fullmatch(focus_id):
+            errors.append(f"{focus_id}: convergence focus id has invalid syntax")
+        if focus_id in focus_ids:
+            errors.append(f"{focus_id}: duplicate convergence focus id")
+        focus_ids.add(focus_id)
+        targets = _require_string_list(
+            raw_focus,
+            "targets",
+            focus_id,
+            errors,
+        )
+        unknown_targets = sorted(set(targets) - ALLOWED_TARGETS)
+        if unknown_targets:
+            errors.append(
+                f"{focus_id}: convergence focus has unknown targets "
+                f"{unknown_targets}"
+            )
+        focus_targets[focus_id] = set(targets)
+        focus_action_counts[focus_id] = 0
+        _require_string(raw_focus, "description", focus_id, errors)
+        _require_string(raw_focus, "profile", focus_id, errors)
+        _require_string(
+            raw_focus,
+            "authoritative_evidence",
+            focus_id,
+            errors,
+        )
+        _require_string_list(raw_focus, "trigger_paths", focus_id, errors)
+        priority = raw_focus.get("priority")
+        if (
+            not isinstance(priority, int)
+            or isinstance(priority, bool)
+            or priority <= 0
+        ):
+            errors.append(
+                f"{focus_id}: convergence focus priority must be a positive integer"
+            )
 
     seen_ids: set[str] = set()
     seen_commands: dict[str, str] = {}
@@ -256,8 +321,18 @@ def validate_catalog(data: dict[str, Any], path: pathlib.Path) -> None:
             stage_ids[stage].append(action_id)
 
         tier = _require_string(action, "tier", action_id, errors)
-        if tier and tier not in tiers:
+        evidence_class = action.get("evidence_class", "acceptance")
+        if evidence_class not in ALLOWED_EVIDENCE_CLASSES:
+            errors.append(
+                f"{action_id}: evidence_class must be one of "
+                f"{sorted(ALLOWED_EVIDENCE_CLASSES)}"
+            )
+        if evidence_class == "acceptance" and tier and tier not in tiers:
             errors.append(f"{action_id}: unknown tier {tier!r}")
+        if evidence_class == "diagnostic" and tier != "non-claiming":
+            errors.append(
+                f"{action_id}: diagnostic actions must use tier='non-claiming'"
+            )
         scope = _require_string(action, "scope", action_id, errors)
         if scope and scope not in ALLOWED_SCOPES:
             errors.append(f"{action_id}: unknown scope {scope!r}")
@@ -294,6 +369,53 @@ def validate_catalog(data: dict[str, Any], path: pathlib.Path) -> None:
             errors.append(f"{action_id}: stage 0 actions must use conditional scope")
         if stage and scope == "conditional":
             errors.append(f"{action_id}: staged actions cannot use conditional scope")
+        if evidence_class == "diagnostic" and (
+            stage != 0 or scope != "conditional" or manual
+        ):
+            errors.append(
+                f"{action_id}: diagnostic actions must be executable "
+                "stage-0 conditional actions"
+            )
+
+        convergence_focuses = action.get("convergence_focuses", [])
+        convergence_phase = action.get("convergence_phase")
+        if convergence_focuses:
+            if (
+                not isinstance(convergence_focuses, list)
+                or any(
+                    not isinstance(focus, str) or not focus
+                    for focus in convergence_focuses
+                )
+                or len(convergence_focuses) != len(set(convergence_focuses))
+            ):
+                errors.append(
+                    f"{action_id}: convergence_focuses must be a unique "
+                    "non-empty string list"
+                )
+                convergence_focuses = []
+            unknown_focuses = sorted(set(convergence_focuses) - focus_ids)
+            if unknown_focuses:
+                errors.append(
+                    f"{action_id}: unknown convergence focuses {unknown_focuses}"
+                )
+            if convergence_phase not in CONVERGENCE_PHASE_ORDER:
+                errors.append(
+                    f"{action_id}: convergence_phase must be one of "
+                    f"{sorted(CONVERGENCE_PHASE_ORDER)}"
+                )
+            for focus in convergence_focuses:
+                focus_action_counts[focus] = focus_action_counts.get(focus, 0) + 1
+                if focus in focus_targets and not (
+                    set(targets) & focus_targets[focus]
+                ):
+                    errors.append(
+                        f"{action_id}: target set does not overlap convergence "
+                        f"focus {focus}"
+                    )
+        elif convergence_phase is not None:
+            errors.append(
+                f"{action_id}: convergence_phase requires convergence_focuses"
+            )
 
         if policy == "nonzero":
             minimum = action.get("minimum_test_count")
@@ -393,6 +515,11 @@ def validate_catalog(data: dict[str, Any], path: pathlib.Path) -> None:
     for stage, ids in stage_ids.items():
         if not ids:
             errors.append(f"stage {stage} has no catalog action")
+    for focus_id, count in focus_action_counts.items():
+        if count == 0:
+            errors.append(
+                f"{focus_id}: convergence focus has no executable catalog action"
+            )
 
     if errors:
         formatted = "\n".join(f"  - {error}" for error in errors)
@@ -407,13 +534,14 @@ def select_actions(
     target: str | None = None,
     tier: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return actions matching all supplied selectors, preserving order."""
+    """Return acceptance actions matching selectors, preserving order."""
 
     actions: list[dict[str, Any]] = data["action"]
     return [
         action
         for action in actions
-        if (stage is None or action["stage"] == stage)
+        if action.get("evidence_class", "acceptance") == "acceptance"
+        and (stage is None or action["stage"] == stage)
         and (scope is None or action["scope"] == scope)
         and (target is None or target in action["targets"])
         and (tier is None or action["tier"] == tier)
@@ -438,7 +566,10 @@ def markdown_catalog(data: dict[str, Any]) -> str:
         "| --- | ---: | --- | --- | --- |",
     ]
     for action in data["action"]:
+        evidence_class = action.get("evidence_class", "acceptance")
         stage = str(action["stage"]) if action["stage"] else "conditional"
+        if evidence_class == "diagnostic":
+            stage = "NON-CLAIMING diagnostic"
         target = ", ".join(action["targets"])
         scope_target = f"{action['scope']} / {target}"
         proof = (
@@ -451,6 +582,23 @@ def markdown_catalog(data: dict[str, Any]) -> str:
             f"{scope_target} | {proof} |"
         )
     rows.append(DOC_END)
+    return "\n".join(rows)
+
+
+def markdown_convergence(data: dict[str, Any]) -> str:
+    """Render convergence routing from the same canonical catalog."""
+
+    rows = [
+        CONVERGENCE_DOC_START,
+        "| Focus | Target | First authoritative evidence | Exact profile |",
+        "| --- | --- | --- | --- |",
+    ]
+    for focus in data["convergence_focus"]:
+        rows.append(
+            f"| `{focus['id']}` | {', '.join(focus['targets'])} | "
+            f"{focus['authoritative_evidence']} | `{focus['profile']}` |"
+        )
+    rows.append(CONVERGENCE_DOC_END)
     return "\n".join(rows)
 
 
@@ -469,17 +617,58 @@ def replace_doc_catalog(text: str, rendered: str) -> str:
     return text[:start] + rendered + text[end:]
 
 
+def replace_generated_block(
+    text: str,
+    *,
+    start_marker: str,
+    end_marker: str,
+    rendered: str,
+) -> str:
+    """Replace one uniquely marked generated documentation block."""
+
+    start = text.find(start_marker)
+    end = text.find(end_marker)
+    if start < 0 or end < 0 or end < start:
+        raise CatalogError(
+            f"document must contain one {start_marker} ... {end_marker} block"
+        )
+    if (
+        text.find(start_marker, start + 1) >= 0
+        or text.find(end_marker, end + 1) >= 0
+    ):
+        raise CatalogError(f"document contains duplicate {start_marker} markers")
+    end += len(end_marker)
+    return text[:start] + rendered + text[end:]
+
+
+def render_document(data: dict[str, Any], text: str) -> str:
+    """Refresh both catalog-owned TEST_PLAN.md blocks."""
+
+    updated = replace_doc_catalog(text, markdown_catalog(data))
+    return replace_generated_block(
+        updated,
+        start_marker=CONVERGENCE_DOC_START,
+        end_marker=CONVERGENCE_DOC_END,
+        rendered=markdown_convergence(data),
+    )
+
+
 def matching_actions(
     data: dict[str, Any], changed_paths: list[str]
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Map changed paths to catalog actions and return unmatched paths."""
+    """Map changed paths to acceptance actions and return unmatched paths."""
 
+    acceptance_actions = [
+        action
+        for action in data["action"]
+        if action.get("evidence_class", "acceptance") == "acceptance"
+    ]
     selected: list[dict[str, Any]] = []
     unmatched: list[str] = []
     for changed in changed_paths:
         matches = [
             action
-            for action in data["action"]
+            for action in acceptance_actions
             if any(
                 fnmatch.fnmatchcase(changed, pattern)
                 or pathlib.PurePosixPath(changed).match(pattern)
@@ -492,8 +681,102 @@ def matching_actions(
             if action not in selected:
                 selected.append(action)
     if unmatched:
-        selected = list(data["action"])
+        selected = acceptance_actions
     return selected, unmatched
+
+
+def path_matches(path: str, patterns: list[str]) -> bool:
+    """Return whether one repository path matches any catalog pattern."""
+
+    return any(
+        fnmatch.fnmatchcase(path, pattern)
+        or pathlib.PurePosixPath(path).match(pattern)
+        for pattern in patterns
+    )
+
+
+def find_focus(data: dict[str, Any], focus_id: str) -> dict[str, Any]:
+    """Return one convergence focus or fail with a useful diagnostic."""
+
+    matches = [
+        focus
+        for focus in data["convergence_focus"]
+        if focus["id"] == focus_id
+    ]
+    if not matches:
+        raise CatalogError(f"unknown convergence focus: {focus_id}")
+    return matches[0]
+
+
+def select_convergence_focus(
+    data: dict[str, Any],
+    *,
+    target: str,
+    changed_paths: list[str],
+) -> tuple[dict[str, Any], list[str]]:
+    """Select the highest-priority compatible focus for changed paths."""
+
+    if target not in ALLOWED_TARGETS:
+        raise CatalogError(f"unknown convergence target: {target}")
+    if not changed_paths:
+        raise CatalogError(
+            "automatic convergence selection requires at least one changed path"
+        )
+    path_focuses: list[dict[str, Any]] = []
+    unmatched: list[str] = []
+    for changed in changed_paths:
+        matches = [
+            focus
+            for focus in data["convergence_focus"]
+            if path_matches(changed, focus["trigger_paths"])
+        ]
+        if not matches:
+            unmatched.append(changed)
+            continue
+        selected_for_path = max(matches, key=lambda item: item["priority"])
+        if target not in selected_for_path["targets"]:
+            raise CatalogError(
+                f"{changed}: first authoritative convergence focus "
+                f"{selected_for_path['id']} requires target "
+                f"{', '.join(selected_for_path['targets'])}, not {target}"
+            )
+        path_focuses.append(selected_for_path)
+    if unmatched:
+        raise CatalogError(
+            "automatic convergence selection has unmatched paths; choose "
+            "--focus explicitly after changed-path analysis: "
+            + ", ".join(unmatched)
+        )
+    selected = max(path_focuses, key=lambda item: item["priority"])
+    return selected, changed_paths
+
+
+def convergence_actions(
+    data: dict[str, Any], *, target: str, focus_id: str
+) -> list[dict[str, Any]]:
+    """Return the ordered target-entry, canary, and focused guard actions."""
+
+    focus = find_focus(data, focus_id)
+    if target not in focus["targets"]:
+        raise CatalogError(
+            f"convergence focus {focus_id} does not support target {target}"
+        )
+    indexed = [
+        (index, action)
+        for index, action in enumerate(data["action"])
+        if focus_id in action.get("convergence_focuses", [])
+        and target in action["targets"]
+    ]
+    return [
+        action
+        for _, action in sorted(
+            indexed,
+            key=lambda item: (
+                CONVERGENCE_PHASE_ORDER[item[1]["convergence_phase"]],
+                item[0],
+            ),
+        )
+    ]
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -524,6 +807,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
             "timeout_seconds",
             "test_policy",
             "minimum_test_count",
+            "convergence_phase",
+            "evidence_class",
             "digest",
         ),
         default="json",
@@ -545,6 +830,16 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     recommend_parser.add_argument(
         "--format", choices=("ids", "json", "tiers"), default="ids"
+    )
+
+    converge_parser = subparsers.add_parser("converge")
+    converge_parser.add_argument(
+        "--target", choices=sorted(ALLOWED_TARGETS), required=True
+    )
+    converge_parser.add_argument("--focus")
+    converge_parser.add_argument("paths", nargs="*")
+    converge_parser.add_argument(
+        "--format", choices=("ids", "json"), default="ids"
     )
     return parser.parse_args(argv)
 
@@ -586,20 +881,21 @@ def main(argv: list[str] | None = None) -> int:
                 value = action.get(args.field, "")
                 print(value)
         elif args.subcommand == "render-doc":
-            rendered = markdown_catalog(data)
             if args.write:
                 if args.doc is None:
                     raise CatalogError("--write requires --doc")
                 doc = args.doc.resolve()
                 current = doc.read_text(encoding="utf-8")
-                updated = replace_doc_catalog(current, rendered)
+                updated = render_document(data, current)
                 if updated != current:
                     doc.write_text(updated, encoding="utf-8")
             else:
-                print(rendered)
+                print(markdown_catalog(data))
+                print()
+                print(markdown_convergence(data))
         elif args.subcommand == "check-doc":
             current = args.doc.resolve().read_text(encoding="utf-8")
-            expected = replace_doc_catalog(current, markdown_catalog(data))
+            expected = render_document(data, current)
             if current != expected:
                 raise CatalogError(
                     f"{args.doc}: generated action catalog is stale; run "
@@ -643,6 +939,36 @@ def main(argv: list[str] | None = None) -> int:
                     + ", ".join(unmatched),
                     file=sys.stderr,
                 )
+        elif args.subcommand == "converge":
+            if args.focus:
+                focus = find_focus(data, args.focus)
+                selected_paths = list(args.paths)
+            else:
+                focus, selected_paths = select_convergence_focus(
+                    data,
+                    target=args.target,
+                    changed_paths=list(args.paths),
+                )
+            actions = convergence_actions(
+                data,
+                target=args.target,
+                focus_id=focus["id"],
+            )
+            if args.format == "json":
+                print(
+                    json.dumps(
+                        {
+                            "target": args.target,
+                            "focus": focus,
+                            "changed_paths": selected_paths,
+                            "actions": actions,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                )
+            else:
+                print("\n".join(action["id"] for action in actions))
     except (CatalogError, OSError) as error:
         print(error, file=sys.stderr)
         return 1

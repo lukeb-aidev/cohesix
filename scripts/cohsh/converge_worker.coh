@@ -1,0 +1,12 @@
+# Author: Lukas Bower
+# Purpose: Exercise bounded executable Worker startup, teardown, and restart recovery.
+# Copyright 2026 Lukas Bower
+attach queen
+EXPECT OK
+spawn heartbeat ticks=8 ttl_s=60 ops=16
+EXPECT OK
+kill worker-1
+EXPECT OK
+spawn heartbeat ticks=8 ttl_s=60 ops=16
+EXPECT OK
+quit
