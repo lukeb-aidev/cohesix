@@ -50,16 +50,16 @@ external_non_rust_trees = ["crates/sel4-sys/upstream"]
 out_dir_generator_contracts = [
   "crates/sel4-sys/src/lib.rs:bindings.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
   "crates/sel4-sys/src/lib.rs:sel4_config_consts.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
-  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/console_network_service.rs:console_network_image_identity.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/ninedoor_service.rs:ninedoor_image_identity.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/worker_image.rs:worker_image_identity.rs:apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/console_network_service.rs:console_network_image_identity.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/ninedoor_service.rs:ninedoor_image_identity.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/worker_image.rs:worker_image_identity.rs:apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
 ]
 build_script_contracts = [
   "apps/pi4-driver-runtime/build.rs:f424066cecefb6ec3c2a974f47bde52785451b77d48ab0dd31fefc46ac8afec9:aa98e6fd87c6a6a72ccc01ff5332d068dc42cb30e6d95c0147ed27d7180a7975",
-  "apps/root-task/build.rs:d19715055afca3f297eabcb7fbb282f11a9a047a0ac229bb6e6ec8b5433b5447:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/build.rs:a2984ca0424b7b6f44c63520afd165a7ad4beb238d24a412153d398107109282:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
   "apps/swarmui/build.rs:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
   "crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
 ]
