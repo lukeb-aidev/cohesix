@@ -177,6 +177,57 @@ mod tests {
     }
 
     #[test]
+    fn root_control_turn_candidate_is_exactly_accounted() {
+        for manifest in [qemu_manifest(), pi4_manifest()] {
+            let root_control = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "root-control")
+                .expect("root-control temporal task");
+            assert_eq!(root_control.budget_us, 2_750);
+            assert_eq!(root_control.period_us, 10_000);
+            assert_eq!(root_control.wcet_us, 2_500);
+            assert_eq!(root_control.response_time_us, 5_100);
+            assert_eq!(
+                root_control.wcet_provenance,
+                "m26e-qemu-root-turn-candidate-v2"
+            );
+
+            let console_network = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "console-network-service")
+                .expect("console-network-service temporal task");
+            assert_eq!(console_network.response_time_us, 7_500);
+
+            let core_zero_demand = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .filter(|task| {
+                    task.core == 0 && task.execution == crate::temporal::TemporalExecution::Active
+                })
+                .map(|task| task.budget_us)
+                .sum::<u32>();
+            assert_eq!(core_zero_demand, 9_000);
+            let core_zero_admission = manifest
+                .temporal_authority
+                .core_admission
+                .iter()
+                .find(|admission| admission.core == 0)
+                .expect("core-0 temporal admission");
+            assert_eq!(core_zero_admission.capacity_us, 10_000);
+            assert_eq!(core_zero_admission.reserve_us, 1_000);
+            assert_eq!(
+                core_zero_demand,
+                core_zero_admission.capacity_us - core_zero_admission.reserve_us
+            );
+        }
+    }
+
+    #[test]
     fn generated_inventory_is_derived_from_the_maximum_role_mix() {
         let manifest = qemu_manifest();
         let rendered = render(&manifest, &"a".repeat(64)).expect("render topology");

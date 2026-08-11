@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "dc771b958545c5c4431407877f35891f126b275bc79471011eab338c118bcb65";
+    "237cabb49ce1b0b31c855e09e7cb0e4227a6504130191b46bb793568e498153d";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -230,7 +230,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         scheduling_context_slot: 1,
         scheduling_context_bits: 7,
         sched_control_core: 0,
-        budget_us: 1500,
+        budget_us: 2750,
         period_us: 10000,
         deadline_us: 10000,
         blocking_us: 0,
@@ -241,10 +241,10 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_badge: 653131777,
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
-        wcet_us: 1200,
-        response_time_us: 3800,
+        wcet_us: 2500,
+        response_time_us: 5100,
         admitted: true,
-        wcet_provenance: "m26e-qemu-candidate-v1",
+        wcet_provenance: "m26e-qemu-root-turn-candidate-v2",
         allowed_donors: &[],
         reply_objects: 0,
         max_donation_depth: 0,
@@ -422,7 +422,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
         wcet_us: 2400,
-        response_time_us: 6200,
+        response_time_us: 7500,
         admitted: true,
         wcet_provenance: "m26e-qemu-console-auth-candidate-v2",
         allowed_donors: &[],
@@ -1578,7 +1578,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.10",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c",
+    "manifest.sha256=50b51eb4e5d6f91bc0f0ecefb9974c6566328e857cd92bc2542eb06fae159016",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

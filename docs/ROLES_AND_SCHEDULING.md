@@ -248,6 +248,16 @@ and timeout policy are applied exactly once at the selected userland event-loop
 entry, immediately before steady polling; kernel construction does not arm that
 temporal policy mid-bootstrap.
 
+The QEMU and Pi manifests assign `root-control` a `2750 us / 10000 us` active
+SC, a compiler-admitted `2500 us` whole-turn WCET with provenance
+`m26e-qemu-root-turn-candidate-v2`, and a `5100 us` response bound. This
+candidate supersedes the `1500 us` budget after live four-core QEMU separately
+timed out during an unnecessary uncached cache operation and, after that
+operation was removed, during the later console-network notification send. The
+second fault proves aggregate root-turn underbudget rather than another cache
+semantic defect. Fresh canonical QEMU boot, console, regression, and pressure
+evidence remain required; compiler admission alone is not target qualification.
+
 During NineDoor construction, root configures and binds the schema-1.10
 bootstrap candidate (8 object bits, `3000 us / 10000 us`, `max_refills = 2`)
 while the child remains suspended and before registry seal. Only after the
@@ -330,7 +340,7 @@ QEMU budget demand and largest admitted response by core are:
 
 | Core | Active duties | Budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | emergency, fault, control, console-network | 7,750 us | 6,200 us |
+| 0 | emergency, fault, control, console-network | 9,000 us | 7,500 us |
 | 1 | driver supervisor, Worker supervisor | 1,750 us | 1,400 us |
 | 2 | Worker GPU, Worker LoRA | 800 us | 600 us |
 | 3 | Worker heartbeat | 300 us | 200 us |
@@ -339,14 +349,15 @@ The Pi profile adds only its seven admitted linked-driver tasks:
 
 | Core | Added Pi duties | Total budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | none | 7,750 us | 6,200 us |
+| 0 | none | 9,000 us | 7,500 us |
 | 1 | serial, USB | 3,250 us | 2,600 us |
 | 2 | HDMI, PCIe | 1,600 us | 1,200 us |
 | 3 | GENET, CYW43, SDIO | 4,300 us | 3,400 us |
 
-Every total remains below the 9,000 us usable per-core window. The Pi row is
-offline admission only until the separate linked-driver MCS and hardware gates
-pass.
+Every total remains at or below the 9,000 us usable per-core window. Core 0
+uses that complete window while preserving the separately declared 1,000 us
+reserve. The Pi row is offline admission only until the separate linked-driver
+MCS and hardware gates pass.
 
 #### Executable-slot resource arithmetic
 

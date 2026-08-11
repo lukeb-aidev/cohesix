@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c",
-  "topology_sha256": "386b3970a2623811c2d413a110910de7b6351ad25e4c5df13d5c3fecd3102505",
+  "manifest_sha256": "50b51eb4e5d6f91bc0f0ecefb9974c6566328e857cd92bc2542eb06fae159016",
+  "topology_sha256": "db42132e82258ccd21f7e93a31ab9922448db2ed946a24e5433d8781c86bc81d",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
@@ -362,7 +362,7 @@
           "admitted": true,
           "allowed_donors": [],
           "blocking_us": 0,
-          "budget_us": 1500,
+          "budget_us": 2750,
           "consumed_time_evidence": true,
           "core": 0,
           "critical_reserve": true,
@@ -379,14 +379,14 @@
           "period_us": 10000,
           "priority": 200,
           "reply_objects": 0,
-          "response_time_us": 3800,
+          "response_time_us": 5100,
           "sched_control_core": 0,
           "scheduling_context_bits": 7,
           "scheduling_context_slot": 1,
           "timeout_badge": 653131777,
           "timeout_policy": "terminal",
-          "wcet_provenance": "m26e-qemu-candidate-v1",
-          "wcet_us": 1200
+          "wcet_provenance": "m26e-qemu-root-turn-candidate-v2",
+          "wcet_us": 2500
         },
         {
           "admitted": true,
@@ -561,7 +561,7 @@
           "period_us": 10000,
           "priority": 180,
           "reply_objects": 0,
-          "response_time_us": 6200,
+          "response_time_us": 7500,
           "sched_control_core": 0,
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 6,

@@ -583,7 +583,7 @@ pub fn take_target_service_fault(
 ///
 /// The init/root-control TCB retains its bootstrap scheduling context until
 /// userland has finished construction and is about to enter the steady event
-/// loop. Applying its generated 1.5 ms budget here would charge remaining
+/// loop. Applying its generated 2.75 ms budget here would charge remaining
 /// bootstrap work to a steady-state WCET contract and can trigger a legitimate
 /// timeout before the runtime boundary exists.
 pub fn activate_critical_tcb_runtime(

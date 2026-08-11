@@ -483,7 +483,7 @@ sealed, and on a standard/timeout/protocol fault suspends, unbinds, scrubs, and
 revokes the complete retained-anchor generation before prohibiting replacement.
 The current measured repair candidate assigns 144 frames, 168 retained root
 slots, a 32-page stack at `0x72030000..0x72050000`, and an active-SC
-`3000 us / 10000 us` budget with `2400 us` WCET and `6200 us` response bound.
+`3000 us / 10000 us` budget with `2400 us` WCET and `7500 us` response bound.
 Those values remain candidate source/configuration truth until live four-core
 GICv3 QEMU completes console authentication, canonical `.coh` regression, and
 fault/timeout injection without stack or budget failure. This QEMU-first path
