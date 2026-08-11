@@ -88,19 +88,19 @@ mount_at = "/lora"
 }
 
 #[test]
-fn schema_1_5_is_rejected_after_radio_sidecar_removal() {
+fn schema_1_8_is_rejected_after_root_fault_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
-    let manifest_path = temp_dir.path().join("schema-1.5.toml");
+    let manifest_path = temp_dir.path().join("schema-1.8.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.8\"", "schema = \"1.7\"", 1);
+        .replacen("schema = \"1.9\"", "schema = \"1.8\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy"));
-    let error = compile(&options).expect_err("schema 1.5 must be rejected");
+    let error = compile(&options).expect_err("schema 1.8 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.7 (expected 1.8)"),
+        message.contains("unsupported root_task.schema 1.8 (expected 1.9)"),
         "unexpected rejection: {message}"
     );
 }

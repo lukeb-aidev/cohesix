@@ -34,14 +34,14 @@ use crate::console_network_service::{
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
-const ROOT_SLOT_COUNT: usize = 160;
+const ROOT_SLOT_COUNT: usize = 168;
 const TRANSLATION_SLOT_COUNT: usize = 8;
-const FRAME_COUNT: usize = 136;
+const FRAME_COUNT: usize = 144;
 const IMAGE_FRAME_START: usize = 0;
 const STACK_FRAME_START: usize = 106;
-const IPC_FRAME_INDEX: usize = 130;
-const INIT_FRAME_INDEX: usize = 131;
-const SHARED_FRAME_START: usize = 132;
+const IPC_FRAME_INDEX: usize = 138;
+const INIT_FRAME_INDEX: usize = 139;
+const SHARED_FRAME_START: usize = 140;
 const SHARED_FRAME_COUNT: usize = 4;
 
 const TCB_SLOT_INDEX: usize = 0;
@@ -65,7 +65,7 @@ const ROOT_REVOKE_WAKE_INDEX: usize = 3;
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
-const _: () = assert!(STACK_FRAME_START + 24 == IPC_FRAME_INDEX);
+const _: () = assert!(STACK_FRAME_START + 32 == IPC_FRAME_INDEX);
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
 
 /// One nonblocking child-output turn copied into root-owned values.
@@ -827,10 +827,9 @@ fn install_caps_and_mcs(
         root_wake_caps[index] = cap;
     }
 
-    let (standard_origin, timeout_origin) = super::critical_tcb::target_fault_endpoint_origins()
-        .ok_or(HalError::Unsupported(
-            "console-network-critical-fault-endpoints",
-        ))?;
+    let fault_origin = super::critical_tcb::target_fault_endpoint_origin().ok_or(
+        HalError::Unsupported("console-network-critical-fault-endpoint"),
+    )?;
     let (standard_badge, timeout_badge) =
         super::critical_tcb::temporal_fault_badges(SERVICE_TASK_ID)
             .ok_or(HalError::Unsupported("console-network-fault-badges"))?;
@@ -845,7 +844,7 @@ fn install_caps_and_mcs(
         standard_fault_cap,
         root_depth,
         root_cnode,
-        standard_origin,
+        fault_origin,
         root_depth,
         fault_rights,
         seL4_Word::try_from(standard_badge)
@@ -856,7 +855,7 @@ fn install_caps_and_mcs(
         timeout_fault_cap,
         root_depth,
         root_cnode,
-        timeout_origin,
+        fault_origin,
         root_depth,
         fault_rights,
         seL4_Word::try_from(timeout_badge)
@@ -990,11 +989,11 @@ mod tests {
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
-        assert_eq!(TRANSLATION_SLOT_START, 142);
-        assert_eq!(SHARED_COPY_SLOT_START, 150);
-        assert_eq!(ROOT_WAKE_SLOT_START, 154);
-        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 158);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 159);
+        assert_eq!(TRANSLATION_SLOT_START, 150);
+        assert_eq!(SHARED_COPY_SLOT_START, 158);
+        assert_eq!(ROOT_WAKE_SLOT_START, 162);
+        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 166);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 167);
         assert_eq!(TIMEOUT_FAULT_SLOT_INDEX + 1, ROOT_SLOT_COUNT);
     }
 

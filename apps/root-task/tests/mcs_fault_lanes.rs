@@ -4,9 +4,8 @@
 // Author: Lukas Bower
 
 use root_task::critical_tcb::{
-    fault_nbrecv_delivered, mcs_extra_refills, validate_critical_temporal_graph, FaultClass,
-    FaultRegistration, FaultReplyLane, FaultReplyLaneError, FaultReplyLaneState,
-    GenerationIdentity,
+    mcs_extra_refills, validate_critical_temporal_graph, FaultClass, FaultRegistration,
+    FaultReplyLane, FaultReplyLaneError, FaultReplyLaneState, GenerationIdentity,
 };
 use root_task::generated;
 
@@ -27,11 +26,53 @@ fn registration(terminal: bool) -> FaultRegistration {
 }
 
 #[test]
-fn empty_nbrecv_ignores_undefined_message_info_and_requires_a_badge() {
-    assert!(!fault_nbrecv_delivered(0));
-    for badge in [1, 0x26e3_0001, 0x26ee_0001, u64::MAX] {
-        assert!(fault_nbrecv_delivered(badge));
-    }
+fn target_runtime_blocks_on_one_shared_endpoint_and_one_reply() {
+    let source = include_str!("../src/hal/critical_tcb.rs");
+
+    assert!(
+        source.contains("sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT)")
+    );
+    assert!(source.contains("let (registration, fault_class) = resolve_target_fault(badge)?;"));
+    assert!(source.contains("sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge)"));
+    assert!(source.contains("sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT)"));
+    assert!(!source.contains("nb_recv_with_reply"));
+    assert!(!source.contains("CHILD_TIMEOUT_INBOX_SLOT"));
+    assert!(!source.contains("CHILD_TIMEOUT_REPLY_SLOT"));
+}
+
+#[test]
+fn driver_containment_clears_the_fault_association_before_reply_release() {
+    let containment_source = include_str!("../src/hal/driver_task.rs");
+    let containment_start = containment_source
+        .find("pub fn root_driver_supervisor_contain_fault(")
+        .expect("MCS driver containment entrypoint");
+    let containment = &containment_source[containment_start..];
+    let suspend = containment
+        .find("crate::sel4::suspend_tcb(")
+        .expect("driver TCB suspension");
+    let association_clear = containment
+        .find("DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR")
+        .expect("driver fault-association clear state");
+    let success = containment.find("Ok(())").expect("successful containment");
+    assert!(suspend < association_clear);
+    assert!(association_clear < success);
+
+    let root_fault_source = include_str!("../src/hal/critical_tcb.rs");
+    let supervisor_start = root_fault_source
+        .find("extern \"C\" fn root_driver_supervisor_entry")
+        .expect("driver supervisor entrypoint");
+    let supervisor = &root_fault_source[supervisor_start..];
+    let contain = supervisor
+        .find("root_driver_supervisor_contain_fault(record)")
+        .expect("driver containment call");
+    let clear_busy = supervisor
+        .find(".compare_exchange(true, false")
+        .expect("Reply association busy clear");
+    let signal_release = supervisor
+        .find("sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT)")
+        .expect("root-fault Reply release signal");
+    assert!(contain < clear_busy);
+    assert!(clear_busy < signal_release);
 }
 
 #[test]

@@ -500,6 +500,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub worker_wake_badge: u64,")?;
     writeln!(mod_contents, "    pub driver_wake_badge: u64,")?;
     writeln!(mod_contents, "    pub emergency_wake_badge: u64,")?;
+    writeln!(mod_contents, "    pub root_fault_release_badge: u64,")?;
     writeln!(mod_contents, "    pub worker_fault_badges: BadgeRange,")?;
     writeln!(mod_contents, "    pub driver_fault_badges: BadgeRange,")?;
     writeln!(mod_contents, "    pub critical_fault_badges: BadgeRange,")?;
@@ -558,8 +559,8 @@ pub fn emit_rust(
         mod_contents,
         "    pub root_fault_tcb_control_slot_base: u16,"
     )?;
-    writeln!(mod_contents, "    pub standard_reply_lanes: u8,")?;
-    writeln!(mod_contents, "    pub timeout_reply_lanes: u8,")?;
+    writeln!(mod_contents, "    pub receive_endpoints: u8,")?;
+    writeln!(mod_contents, "    pub receive_reply_lanes: u8,")?;
     writeln!(
         mod_contents,
         "    pub recoverable_timeout_tasks: &'static [&'static str],"
@@ -2122,7 +2123,7 @@ pub fn emit_rust(
     let faults = &admission.fault_registry;
     writeln!(
         bootstrap_contents,
-        "pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig = WorkerResourceAdmissionConfig {{ enabled: {}, selected_kernel: \"{}\", object_bits: KernelObjectBits {{ tcb: {}, endpoint: {}, notification: {}, reply: {}, sched_context_min: {}, cnode_slot: {}, page: {}, page_table: {}, vspace: {} }}, capacity: {}, post_construction_reserve: {}, fixed_objects: {}, executable_roles: &EXECUTABLE_ROLE_ADMISSION, allowed_role_mixes: &EXECUTABLE_ROLE_MIXES, critical_tcbs: &CRITICAL_TCB_RESOURCES, handoff: CriticalHandoffConfig {{ worker_control_queue_capacity: {}, worker_fault_mailboxes: {}, driver_fault_records: {}, worker_wake_badge: {}, driver_wake_badge: {}, emergency_wake_badge: {}, worker_fault_badges: {}, driver_fault_badges: {}, critical_fault_badges: {}, service_fault_badges: {}, timeout_fault_badges: {}, supervisor_signal_rights: {}, supervisor_wait_rights: {}, fault_sender_rights: {}, fault_receiver_rights: {}, worker_control_saturation: {}, worker_fault_saturation: {}, service_fault_saturation: {}, driver_fault_saturation: {}, worker_drain_precedence: &WORKER_SUPERVISOR_DRAIN_PRECEDENCE, driver_drain_precedence: &DRIVER_SUPERVISOR_DRAIN_PRECEDENCE }}, fault_registry: FaultRegistryAdmission {{ critical_tcbs: {}, service_tcbs: {}, worker_tcbs: {}, driver_tcbs: {}, capacity: {}, root_fault_tcb_control_slot_base: {}, standard_reply_lanes: {}, timeout_reply_lanes: {}, recoverable_timeout_tasks: &RECOVERABLE_TIMEOUT_TASKS }} }};\n",
+        "pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig = WorkerResourceAdmissionConfig {{ enabled: {}, selected_kernel: \"{}\", object_bits: KernelObjectBits {{ tcb: {}, endpoint: {}, notification: {}, reply: {}, sched_context_min: {}, cnode_slot: {}, page: {}, page_table: {}, vspace: {} }}, capacity: {}, post_construction_reserve: {}, fixed_objects: {}, executable_roles: &EXECUTABLE_ROLE_ADMISSION, allowed_role_mixes: &EXECUTABLE_ROLE_MIXES, critical_tcbs: &CRITICAL_TCB_RESOURCES, handoff: CriticalHandoffConfig {{ worker_control_queue_capacity: {}, worker_fault_mailboxes: {}, driver_fault_records: {}, worker_wake_badge: {}, driver_wake_badge: {}, emergency_wake_badge: {}, root_fault_release_badge: {}, worker_fault_badges: {}, driver_fault_badges: {}, critical_fault_badges: {}, service_fault_badges: {}, timeout_fault_badges: {}, supervisor_signal_rights: {}, supervisor_wait_rights: {}, fault_sender_rights: {}, fault_receiver_rights: {}, worker_control_saturation: {}, worker_fault_saturation: {}, service_fault_saturation: {}, driver_fault_saturation: {}, worker_drain_precedence: &WORKER_SUPERVISOR_DRAIN_PRECEDENCE, driver_drain_precedence: &DRIVER_SUPERVISOR_DRAIN_PRECEDENCE }}, fault_registry: FaultRegistryAdmission {{ critical_tcbs: {}, service_tcbs: {}, worker_tcbs: {}, driver_tcbs: {}, capacity: {}, root_fault_tcb_control_slot_base: {}, receive_endpoints: {}, receive_reply_lanes: {}, recoverable_timeout_tasks: &RECOVERABLE_TIMEOUT_TASKS }} }};\n",
         admission.enabled,
         escape_literal(&admission.selected_kernel),
         bits.tcb,
@@ -2143,6 +2144,7 @@ pub fn emit_rust(
         handoff.worker_wake_badge,
         handoff.driver_wake_badge,
         handoff.emergency_wake_badge,
+        handoff.root_fault_release_badge,
         badge_range_to_rust(handoff.worker_fault_badges),
         badge_range_to_rust(handoff.driver_fault_badges),
         badge_range_to_rust(handoff.critical_fault_badges),
@@ -2162,8 +2164,8 @@ pub fn emit_rust(
         faults.driver_tcbs,
         faults.capacity,
         faults.root_fault_tcb_control_slot_base,
-        faults.standard_reply_lanes,
-        faults.timeout_reply_lanes,
+        faults.receive_endpoints,
+        faults.receive_reply_lanes,
     )?;
     writeln!(
         bootstrap_contents,

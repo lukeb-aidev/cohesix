@@ -48,14 +48,14 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     assert_eq!(plan.revoke_anchor_slot, 16_136);
     assert_eq!(plan.objects.scheduling_contexts, 1);
     assert_eq!(plan.objects.reply_objects, 0);
-    assert_eq!(plan.objects.frames, 136);
-    assert_eq!(plan.objects.cspace_slots, 160);
+    assert_eq!(plan.objects.frames, 144);
+    assert_eq!(plan.objects.cspace_slots, 168);
     assert_eq!(plan.image_pages, 106);
-    assert_eq!(contract.stack_vaddr, 0x7200_8000);
-    assert_eq!(contract.stack_pages, 24);
+    assert_eq!(contract.stack_vaddr, 0x7203_0000);
+    assert_eq!(contract.stack_pages, 32);
     assert_eq!(
         contract.stack_vaddr + u64::from(contract.stack_pages) * SHARED_PAGE_BYTES as u64,
-        contract.packet_rx_vaddr,
+        0x7205_0000,
     );
     assert!(contract.budget_us > 0);
     assert!(contract.period_us >= contract.budget_us);

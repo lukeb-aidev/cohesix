@@ -16,7 +16,7 @@ use crate::temporal::{
     SchedulerArchitecture, TemporalAuthorityConfig, TemporalExecution, TemporalTaskKind,
 };
 
-const SCHEMA_VERSION: &str = "1.8";
+const SCHEMA_VERSION: &str = "1.9";
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
@@ -3954,14 +3954,16 @@ mod tests {
 
     #[test]
     fn console_network_service_rejects_the_pre_live_stack_contract() {
-        let mut service = super::ConsoleNetworkServiceConfig::default();
-        service.stack_vaddr = 0x7201_0000;
-        service.stack_pages = 16;
+        let service = super::ConsoleNetworkServiceConfig {
+            stack_vaddr: 0x7201_0000,
+            stack_pages: 16,
+            ..super::ConsoleNetworkServiceConfig::default()
+        };
         let error = service
             .validate()
             .expect_err("the live-faulting 16-page stack must fail closed");
         assert!(
-            error.to_string().contains("exact 24-page stack"),
+            error.to_string().contains("exact 32-page stack"),
             "unexpected error: {error}"
         );
     }
@@ -5459,14 +5461,14 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 136,
+            frames: 144,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 160,
+            cspace_slots: 168,
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0
@@ -5504,19 +5506,21 @@ impl ConsoleNetworkServiceConfig {
                 bail!("console_network_service mapped pages must be non-zero, page-aligned, and distinct");
             }
         }
-        if self.stack_vaddr != 0x7200_8000 || self.stack_pages != 24 {
-            bail!("console_network_service requires the exact 24-page stack ending at 0x72020000");
+        if self.stack_vaddr != 0x7203_0000 || self.stack_pages != 32 {
+            bail!("console_network_service requires the exact 32-page stack at 0x72030000..0x72050000");
         }
         let stack_end = self
             .stack_vaddr
             .checked_add(u64::from(self.stack_pages) * 4096)
             .ok_or_else(|| anyhow::anyhow!("console_network_service stack range overflows"))?;
-        if stack_end != self.packet_rx_vaddr
+        if stack_end != 0x7205_0000
             || mappings
                 .iter()
                 .any(|address| *address >= self.stack_vaddr && *address < stack_end)
         {
-            bail!("console_network_service stack must be disjoint and end at the packet RX page");
+            bail!(
+                "console_network_service stack must be disjoint and retain the fixed guarded range"
+            );
         }
         if self.shared_frame_bytes != 4096 || self.ethernet_frame_bytes != 1536 {
             bail!(
@@ -5588,14 +5592,14 @@ impl Default for ConsoleNetworkServiceConfig {
                 vspaces: 1,
                 page_tables: 8,
                 asids: 1,
-                frames: 136,
+                frames: 144,
                 endpoints: 0,
                 notifications: 2,
                 fault_caps: 1,
                 timeout_fault_caps: 1,
                 reply_objects: 0,
                 scheduling_contexts: 1,
-                cspace_slots: 160,
+                cspace_slots: 168,
                 untyped_bytes: 1_048_576,
             },
             packet_rx_notification_slot: 2,
@@ -5604,8 +5608,8 @@ impl Default for ConsoleNetworkServiceConfig {
             fault_endpoint_slot: 5,
             ipc_buffer_vaddr: 0x7200_0000,
             init_vaddr: 0x7200_1000,
-            stack_vaddr: 0x7200_8000,
-            stack_pages: 24,
+            stack_vaddr: 0x7203_0000,
+            stack_pages: 32,
             packet_rx_vaddr: 0x7202_0000,
             packet_tx_vaddr: 0x7202_1000,
             command_vaddr: 0x7202_2000,

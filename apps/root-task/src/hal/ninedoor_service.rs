@@ -740,8 +740,8 @@ fn install_caps_and_mcs(
             .map_err(|_| HalError::Unsupported("ninedoor-request-badge"))?,
     )?;
 
-    let (standard_origin, timeout_origin) = super::critical_tcb::target_fault_endpoint_origins()
-        .ok_or(HalError::Unsupported("ninedoor-critical-fault-endpoints"))?;
+    let fault_origin = super::critical_tcb::target_fault_endpoint_origin()
+        .ok_or(HalError::Unsupported("ninedoor-critical-fault-endpoint"))?;
     let (standard_badge, timeout_badge) =
         super::critical_tcb::temporal_fault_badges(SERVICE_TASK_ID)
             .ok_or(HalError::Unsupported("ninedoor-fault-badges"))?;
@@ -756,7 +756,7 @@ fn install_caps_and_mcs(
         standard_fault_cap,
         root_depth,
         root_cnode,
-        standard_origin,
+        fault_origin,
         root_depth,
         fault_rights,
         seL4_Word::try_from(standard_badge)
@@ -767,7 +767,7 @@ fn install_caps_and_mcs(
         timeout_fault_cap,
         root_depth,
         root_cnode,
-        timeout_origin,
+        fault_origin,
         root_depth,
         fault_rights,
         seL4_Word::try_from(timeout_badge)

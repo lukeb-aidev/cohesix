@@ -230,8 +230,9 @@ thread retains bootstrap and HAL admission authority. There is no duplicate or
 idle root-control child. Four restricted root-resident children have separate
 TCBs, active SCs, CSpaces, IPC buffers, stacks, timeout caps, and named duties:
 
-- `root-fault` owns the standard and timeout receive lanes and their distinct
-  Reply objects;
+- `root-fault` owns one compiler-generated blocking fault receive endpoint and
+  its single serialized Reply object; the exact badge resolves standard versus
+  timeout class only after receive;
 - `root-emergency` is the terminal fail-stop path;
 - `root-worker-supervisor` owns Worker lifecycle and teardown; and
 - `root-driver-supervisor` owns driver faulted-call failure and containment.
@@ -254,9 +255,23 @@ The QEMU and Pi manifests reserve `3000 us / 10000 us` for `root-fault`, with
 a compiler-admitted candidate `2400 us` containment WCET and `2600 us`
 response bound. These values supersede the original 500-us candidate: live
 four-core GICv3 QEMU proved that candidate could expire while suspending an
-already-faulted child. Standard-plus-timeout fault injection must still qualify
-the larger candidate against its two bounded receive lanes; the terminal
-timeout policy remains enabled throughout that test.
+already-faulted child. A later live four-core GICv3 boot proved that the
+replacement reserve could also be consumed by the former `seL4_NBRecv`/yield
+polling loop while no fault was available. The current repair therefore blocks
+on one shared receive endpoint instead of polling. Standard-plus-timeout fault
+injection must still qualify this candidate with terminal timeout policy
+enabled; generated admission and a successful boot are not that evidence.
+
+Standard and timeout send caps target that same endpoint and retain disjoint
+exact-identity badges. Root-fault supplies the sole Reply object to blocking
+`Recv`, resolves the sealed-registry record from the nonzero badge, and does not
+reuse the Reply while it remains associated. Ordinary terminal containment
+clears the association before the next receive. For a linked-driver fault,
+root-fault publishes the reserved containment record and blocks on the existing
+root-fault wake notification; only the driver supervisor's generated
+release-badge signal, after command-failure and containment work has released
+the association, permits root-fault to receive again. No second fault Reply,
+poller, or notification-carried fault identity exists.
 
 For an isolated service fault, `root-fault` suspends the exact registered TCB.
 For passive NineDoor only, it then consumes the dedicated
@@ -299,7 +314,7 @@ QEMU budget demand and largest admitted response by core are:
 
 | Core | Active duties | Budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | emergency, fault, control, console-network | 6,250 us | 5,000 us |
+| 0 | emergency, fault, control, console-network | 7,750 us | 6,200 us |
 | 1 | driver supervisor, Worker supervisor | 1,750 us | 1,400 us |
 | 2 | Worker GPU, Worker LoRA | 800 us | 600 us |
 | 3 | Worker heartbeat | 300 us | 200 us |
@@ -308,7 +323,7 @@ The Pi profile adds only its seven admitted linked-driver tasks:
 
 | Core | Added Pi duties | Total budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | none | 6,250 us | 5,000 us |
+| 0 | none | 7,750 us | 6,200 us |
 | 1 | serial, USB | 3,250 us | 2,600 us |
 | 2 | HDMI, PCIe | 1,600 us | 1,200 us |
 | 3 | GENET, CYW43, SDIO | 4,300 us | 3,400 us |
@@ -338,13 +353,13 @@ notification or Reply sizes rather than understating MCS object memory.
 | --- | ---: | ---: | ---: |
 | TCBs / CNodes / VSpaces / ASIDs | 18 each | 25 each | 64 each |
 | Page tables | 344 | 600 | 1,024 |
-| Frames | 2,616 | 4,664 | 8,192 |
-| Endpoints | 32 | 48 | 128 |
+| Frames | 2,624 | 4,672 | 8,192 |
+| Endpoints | 31 | 47 | 128 |
 | Notifications | 35 | 51 | 128 |
 | Standard / timeout fault caps | 18 each | 25 each | 64 each |
-| Reply objects | 15 | 22 | 64 |
+| Reply objects | 14 | 21 | 64 |
 | Scheduling contexts | 17 | 24 | 64 |
-| CSpace slots | 6,336 | 11,240 | 16,384 |
+| CSpace slots | 6,343 | 11,247 | 16,384 |
 | Untyped bytes | 103,809,024 | 137,363,456 | 268,435,456 |
 
 Allocation is fail-closed: an invalid maximum mix, aliased retention/Worker

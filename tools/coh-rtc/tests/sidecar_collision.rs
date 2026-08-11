@@ -52,7 +52,7 @@ fn sidecar_mounts_hash_prefix_on_collision() {
 # Author: Lukas Bower
 # Purpose: Test manifest for sidecar collision hashing.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"

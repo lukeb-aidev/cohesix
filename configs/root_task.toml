@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [root_task.affinity]
 enabled = true
@@ -539,12 +539,12 @@ core = 0
 scheduling_context_slot = 6
 scheduling_context_bits = 8
 sched_control_core = 0
-budget_us = 1500
+budget_us = 3000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 5000
+response_time_us = 6200
 admitted = true
 max_refills = 2
 priority = 180
@@ -552,8 +552,8 @@ mcp = 200
 timeout_badge = 653131783
 timeout_policy = "terminal"
 consumed_time_evidence = true
-wcet_us = 1200
-wcet_provenance = "m26e-qemu-candidate-v1"
+wcet_us = 2400
+wcet_provenance = "m26e-qemu-console-auth-candidate-v2"
 fault_handler = "root-fault"
 
 [console_network_service]
@@ -573,8 +573,8 @@ supervisor_wake_notification_slot = 4
 fault_endpoint_slot = 5
 ipc_buffer_vaddr = 1912602624
 init_vaddr = 1912606720
-stack_vaddr = 1912635392
-stack_pages = 24
+stack_vaddr = 1912799232
+stack_pages = 32
 packet_rx_vaddr = 1912733696
 packet_tx_vaddr = 1912737792
 command_vaddr = 1912741888
@@ -596,7 +596,7 @@ scheduling_context_slot = 6
 scheduling_context_bits = 8
 priority = 180
 mcp = 200
-budget_us = 1500
+budget_us = 3000
 period_us = 10000
 max_refills = 2
 timeout_badge = 653131783
@@ -610,14 +610,14 @@ cnodes = 1
 vspaces = 1
 page_tables = 8
 asids = 1
-frames = 136
+frames = 144
 endpoints = 0
 notifications = 2
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 0
 scheduling_contexts = 1
-cspace_slots = 160
+cspace_slots = 168
 untyped_bytes = 1048576
 
 [[temporal_authority.tasks]]
@@ -748,14 +748,14 @@ cnodes = 7
 vspaces = 7
 page_tables = 256
 asids = 7
-frames = 2056
-endpoints = 16
+frames = 2064
+endpoints = 15
 notifications = 16
 fault_caps = 7
 timeout_fault_caps = 7
-reply_objects = 7
+reply_objects = 6
 scheduling_contexts = 6
-cspace_slots = 4096
+cspace_slots = 4103
 untyped_bytes = 67108864
 
 [[worker_resource_admission.executable_roles]]
@@ -858,11 +858,11 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
 cnode_radix_bits = 6
-cspace_cap_count = 20
+cspace_cap_count = 19
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
-fault_reply_lanes = 2
+fault_reply_lanes = 1
 
 [[worker_resource_admission.critical_tcbs]]
 id = "root-emergency"
@@ -898,6 +898,7 @@ driver_fault_records = 0
 worker_wake_badge = 1
 driver_wake_badge = 2
 emergency_wake_badge = 4
+root_fault_release_badge = 8
 worker_control_saturation = "refuse-new"
 worker_fault_saturation = "fatal"
 service_fault_saturation = "fatal"
@@ -961,8 +962,8 @@ worker_tcbs = 3
 driver_tcbs = 0
 capacity = 10
 root_fault_tcb_control_slot_base = 16
-standard_reply_lanes = 1
-timeout_reply_lanes = 1
+receive_endpoints = 1
+receive_reply_lanes = 1
 recoverable_timeout_tasks = []
 
 [features]

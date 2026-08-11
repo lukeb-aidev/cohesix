@@ -317,6 +317,7 @@ pub struct CriticalHandoffConfig {
     pub worker_wake_badge: u64,
     pub driver_wake_badge: u64,
     pub emergency_wake_badge: u64,
+    pub root_fault_release_badge: u64,
     pub worker_fault_badges: BadgeRange,
     pub driver_fault_badges: BadgeRange,
     pub critical_fault_badges: BadgeRange,
@@ -344,8 +345,8 @@ pub struct FaultRegistryAdmission {
     pub driver_tcbs: u16,
     pub capacity: u16,
     pub root_fault_tcb_control_slot_base: u16,
-    pub standard_reply_lanes: u8,
-    pub timeout_reply_lanes: u8,
+    pub receive_endpoints: u8,
+    pub receive_reply_lanes: u8,
     pub recoverable_timeout_tasks: Vec<String>,
 }
 
@@ -727,8 +728,8 @@ impl WorkerResourceAdmissionConfig {
                 expected_reply_objects
             );
         }
-        if declared.standard_reply_lanes == 0 || declared.timeout_reply_lanes == 0 {
-            bail!("fault registry requires owned standard and timeout Reply lanes");
+        if declared.receive_endpoints != 1 || declared.receive_reply_lanes != 1 {
+            bail!("fault registry requires exactly one receive endpoint and one Reply lane");
         }
         let passive_recovery_caps = temporal
             .tasks
@@ -743,12 +744,15 @@ impl WorkerResourceAdmissionConfig {
             .iter()
             .find(|critical| critical.id == "root-fault")
             .ok_or_else(|| anyhow::anyhow!("root-fault resource record is missing"))?;
-        // Slots 1..=9 are the two self-fault caps, two receive endpoints, two
-        // Reply objects, and three notification signals. Passive recovery caps
-        // follow in their compiler-selected slots; every registered temporal
-        // TCB additionally needs one root-fault-local control cap because a
+        if root_fault.fault_reply_lanes != declared.receive_reply_lanes {
+            bail!("root-fault Reply-object lanes do not match the serialized receive contract");
+        }
+        // Eight fixed self-fault, receive, Reply, and notification caps occupy
+        // compiler-selected slots through slot 9 (slot 5 remains reserved).
+        // Passive recovery caps start at slot 10; every registered temporal TCB
+        // additionally needs one root-fault-local control cap because a
         // root-Cspace CPtr is meaningless inside the restricted handler CSpace.
-        let expected_root_fault_caps = 9usize
+        let expected_root_fault_caps = 8usize
             .checked_add(passive_recovery_caps)
             .and_then(|total| total.checked_add(temporal.tasks.len()))
             .ok_or_else(|| anyhow::anyhow!("root-fault CSpace arithmetic overflows"))?;
@@ -816,20 +820,20 @@ impl WorkerResourceAdmissionConfig {
         {
             bail!("critical handoff capacities do not match admitted Worker/driver slots");
         }
-        for badge in [
+        let wake_badges = [
             handoff.worker_wake_badge,
             handoff.driver_wake_badge,
             handoff.emergency_wake_badge,
-        ] {
-            if badge == 0 || !badge.is_power_of_two() {
-                bail!("critical supervisor wake badges must be non-zero one-hot values");
-            }
-        }
-        if handoff.worker_wake_badge == handoff.driver_wake_badge
-            || handoff.worker_wake_badge == handoff.emergency_wake_badge
-            || handoff.driver_wake_badge == handoff.emergency_wake_badge
+            handoff.root_fault_release_badge,
+        ];
+        if wake_badges
+            .iter()
+            .any(|badge| *badge == 0 || !badge.is_power_of_two())
         {
-            bail!("critical supervisor wake badges must be disjoint");
+            bail!("critical supervisor wake/release badges must be non-zero one-hot values");
+        }
+        if wake_badges.into_iter().collect::<BTreeSet<_>>().len() != wake_badges.len() {
+            bail!("critical supervisor wake/release badges must be disjoint");
         }
         let ranges = [
             handoff.worker_fault_badges,
@@ -1096,7 +1100,7 @@ mod tests {
                 .map(|(index, id)| CriticalTcbResource {
                     id: (*id).to_owned(),
                     cnode_radix_bits: 5,
-                    cspace_cap_count: if *id == "root-fault" { 17 } else { 8 },
+                    cspace_cap_count: if *id == "root-fault" { 16 } else { 8 },
                     revoke_anchor_slot: index as u32 + 1,
                     ipc_buffer_pages: 1,
                     stack_pages: 2,
@@ -1110,6 +1114,7 @@ mod tests {
                 worker_wake_badge: 1,
                 driver_wake_badge: 2,
                 emergency_wake_badge: 4,
+                root_fault_release_badge: 8,
                 worker_fault_badges: BadgeRange {
                     base: 0x26e1_0000,
                     count: 1,
@@ -1156,8 +1161,8 @@ mod tests {
                 driver_tcbs: 1,
                 capacity: temporal.tasks.len() as u16,
                 root_fault_tcb_control_slot_base: 16,
-                standard_reply_lanes: 1,
-                timeout_reply_lanes: 1,
+                receive_endpoints: 1,
+                receive_reply_lanes: 1,
                 recoverable_timeout_tasks: Vec::new(),
             },
         }
@@ -1211,13 +1216,83 @@ mod tests {
     }
 
     #[test]
+    fn worker_admission_requires_single_fault_receive_lane() {
+        let mut endpoints = admission();
+        endpoints.fault_registry.receive_endpoints = 2;
+        let error = endpoints
+            .validate(&temporal())
+            .expect_err("root-fault must use one shared receive endpoint");
+        assert!(error.to_string().contains("exactly one receive endpoint"));
+
+        let mut replies = admission();
+        replies.fault_registry.receive_reply_lanes = 2;
+        let error = replies
+            .validate(&temporal())
+            .expect_err("root-fault must serialize one Reply association");
+        assert!(error.to_string().contains("exactly one receive endpoint"));
+
+        let mut critical = admission();
+        critical
+            .critical_tcbs
+            .iter_mut()
+            .find(|task| task.id == "root-fault")
+            .expect("root-fault resource")
+            .fault_reply_lanes = 2;
+        critical.fixed_objects.reply_objects += 1;
+        let error = critical
+            .validate(&temporal())
+            .expect_err("root-fault Reply objects must match the receive contract");
+        assert!(error.to_string().contains("serialized receive contract"));
+    }
+
+    #[test]
+    fn worker_admission_rejects_invalid_root_fault_release_badge() {
+        let mut config = admission();
+        config.handoff.root_fault_release_badge = config.handoff.driver_wake_badge;
+        let error = config
+            .validate(&temporal())
+            .expect_err("root-fault release badge must remain disjoint");
+        assert!(error
+            .to_string()
+            .contains("wake/release badges must be disjoint"));
+    }
+
+    #[test]
     fn worker_admission_rejects_root_fault_tcb_control_slot_overlap() {
         let mut config = admission();
-        config.fault_registry.root_fault_tcb_control_slot_base = 9;
+        config.fault_registry.root_fault_tcb_control_slot_base = 8;
         let error = config
             .validate(&temporal())
             .expect_err("TCB control caps must not overlap fixed handler slots");
         assert!(error.to_string().contains("overlaps fixed handler"));
+    }
+
+    #[test]
+    fn worker_admission_rejects_root_fault_recovery_slot_overlap() {
+        let mut temporal = temporal();
+        let service = temporal
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "console-network-service")
+            .expect("unit service task");
+        service.execution = TemporalExecution::Passive;
+        service.timeout_policy = TimeoutPolicy::ReturnError;
+        service.reply_objects = 1;
+
+        let mut config = admission();
+        config.fixed_objects.reply_objects = 7;
+        config.fixed_objects.scheduling_contexts = 6;
+        config
+            .critical_tcbs
+            .iter_mut()
+            .find(|task| task.id == "root-fault")
+            .expect("unit root-fault resource")
+            .cspace_cap_count = 17;
+        config.fault_registry.root_fault_tcb_control_slot_base = 10;
+        let error = config
+            .validate(&temporal)
+            .expect_err("TCB controls must not overlap passive recovery slot 10");
+        assert!(error.to_string().contains("passive recovery caps"));
     }
 
     #[test]

@@ -173,7 +173,10 @@ mod tests {
         );
         assert_eq!(record["inventory"]["tcbs"], 10);
         assert_eq!(record["inventory"]["scheduling_contexts"], 9);
-        assert_eq!(record["inventory"]["frames"], 2104);
+        assert_eq!(record["inventory"]["frames"], 2112);
+        assert_eq!(record["inventory"]["endpoints"], 15);
+        assert_eq!(record["inventory"]["reply_objects"], 6);
+        assert_eq!(record["inventory"]["cspace_slots"], 4295);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

@@ -204,7 +204,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"
@@ -294,7 +294,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"
@@ -376,7 +376,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"
@@ -457,7 +457,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"
@@ -545,7 +545,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.8"
+schema = "1.9"
 
 [profile]
 name = "virt-aarch64"

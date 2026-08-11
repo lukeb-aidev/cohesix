@@ -4844,23 +4844,29 @@ TCB, and strictly newer supervisor and capability generations; stale or
 wrong-task replacement fails. Construction and registration errors are
 boot-fatal; a source may not be inferred from a badge range at receive time.
 
-Fault-lane tests must prove the acyclic graph and Reply cardinality. Standard
-and timeout receive lanes are distinct and each has one root-fault-owned Reply
-object. An empty `seL4_NBRecv` is recognized solely by its guaranteed zero
-badge; tests must prove stale or undefined message-info bits cannot fabricate a
-fault, while every compiler-admitted nonzero fault badge is accepted. Fault
-send caps are Write + GrantReply, receives are Read-only, and
-supervisor signals/waits are Write-only/Read-only. Ordinary Worker faults are
-suspended and handed off without Reply. Driver faults remain associated until
-the independent driver supervisor returns at most one command failure,
-suspends/unbinds the TCB, and revokes the old generation. Only an explicitly
-generated `replenish-once` timeout may reply once; the current allowlist is
-empty. Root-fault faults route to root-emergency, and root-emergency has no
-recovery edge.
+Fault-receive tests must prove the acyclic graph and exact one-endpoint,
+one-Reply cardinality. Standard and timeout send caps carry disjoint
+exact-identity badges but target the same root-fault endpoint. Root-fault owns
+the sole Read cap, supplies its one Reply object to blocking `seL4_Recv`, and
+resolves the fault class only after the sealed registry accepts the nonzero
+badge. There is no empty-receive polling path: tests must prove an idle receiver
+blocks without consuming its full budget, while every compiler-admitted
+standard and timeout badge is accepted. Fault send caps are Write + GrantReply,
+receives are Read-only, and supervisor signals/waits are
+Write-only/Read-only. Ordinary Worker faults are suspended and handed off
+without Reply. Driver faults retain the single fault association while the
+independent driver supervisor returns at most one command failure,
+suspends/unbinds the TCB, and revokes the old generation; root-fault blocks on
+its existing Read-only wake cap and may receive again only after the
+supervisor's exact generated release-badge signal. Tests must reject an early,
+wrong, aliased, or duplicate release and any attempt to reuse the Reply while
+associated. Only an explicitly generated `replenish-once` timeout may reply
+once; the current allowlist is empty. Root-fault faults route to
+root-emergency, and root-emergency has no recovery edge.
 
 NineDoor adds one separate recovery Reply object owned by its passive receive
 loop and copied only into the compiler-selected root-fault CSpace slot. Tests
-must reject reuse of either ordinary root-fault receive Reply object, reject
+must reject reuse of the ordinary root-fault receive Reply object, reject
 active console-network admission to the passive path, and prove one atomic
 ready-to-replied transition. A fault with an outstanding Call returns exact
 sequence plus typed `Closed` once before the durable service mailbox is
@@ -4872,17 +4878,19 @@ After the host gate is green, the QEMU target check must use the selected
 four-core MCS kernel, construct all 10 QEMU sources suspended, seal the exact
 registry, and finish the bounded synchronous bootstrap IPC trace before
 resuming any restricted critical child onto its generated SC. Root-fault is
-the sole standard/timeout lane receiver; its compiler-bounded child-local TCB
+the sole receiver on the shared standard/timeout fault endpoint; its
+compiler-bounded child-local TCB
 control caps must suspend the exact registered target without relying on a
 root-relative CPtr. The init/root-control TCB retains its kernel-provided
 bootstrap SC until userland reaches the selected serial console,
 deferred-network supervisor, or non-serial pump event-loop seam. Only there may
 it apply the generated root-control temporal policy, exactly once and before
-steady polling. The init/root-control MCS dispatcher never polls either fault
-lane because it owns no receive Reply object. The boot is a failure if any
+steady polling. The init/root-control MCS dispatcher never receives or polls
+the fault endpoint because it owns no receive Reply object. The boot is a
+failure if any
 named duty does not execute on its generated TCB/SC, if root-control temporal
 policy is armed during kernel bootstrap, if init continues polling an MCS fault
-lane after transfer, or if a fault, timeout, simultaneous wake, saturation,
+endpoint after transfer, or if a fault, timeout, simultaneous wake, saturation,
 handler fault, or allocation failure loses attribution or forward progress.
 None of this QEMU evidence is Pi hardware proof.
 
@@ -4930,13 +4938,18 @@ scripts/ci/test_plan_run.sh --target qemu \
 ```
 
 The compiler and root-boundary tests must agree on the exact image path and
-entrypoint, retained anchor, one-MiB child untyped, 136 frames, eight
-translation objects, 160 retained root slots, 16 child CSpace slots, a
-24-page stack at `0x72008000..0x72020000`, four shared pages, notification
-slots/badges, sole port 31337 listener, active SC budget/period/refills, and
-standard/timeout fault identities. Any drift, cap-slot alias, anchor collision,
-second listener, W+X page, unbound or tampered image, broad fault/signal rights,
-root SC borrowing, or non-pointer-free record fails before launch.
+entrypoint, retained anchor, one-MiB child untyped, 144 frames, eight
+translation objects, 168 retained root slots, 16 child CSpace slots, a
+32-page stack at `0x72030000..0x72050000`, four shared pages, notification
+slots/badges, sole port 31337 listener, active SC `3000 us / 10000 us` budget,
+`2400 us` WCET, `6200 us` response candidate, refills, and standard/timeout
+fault identities. Any drift, cap-slot alias, anchor collision, second listener,
+W+X page, unbound or tampered image, broad fault/signal rights, root SC
+borrowing, or non-pointer-free record fails before launch. These stack and
+temporal values are a measured repair candidate, not qualified truth: live
+four-core GICv3 QEMU must still complete authentication, the canonical `.coh`
+regression, and standard/timeout fault injection without stack or budget
+failure.
 
 Child tests cover partial and oversized frames, malformed authentication,
 constant-time token acceptance, command release only after `AUTH`, one-packet
@@ -5009,7 +5022,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:e2da718f132640754571d28d541fe1de804950f133f0bf7c683b237443c75cd2`
+- `configs/generated/root_task_resolved.json` — `sha256:a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

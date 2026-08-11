@@ -15,14 +15,14 @@
 //! their capability views remain separate and compiler-bounded.
 
 use crate::critical_tcb::{
-    fault_nbrecv_delivered, generated_standard_fault_badge, mcs_extra_refills,
-    passive_service_recovery_contract, service_fault_mailbox_index,
-    validate_critical_temporal_graph, validate_worker_supervisor_wake, CriticalHandoff,
-    CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin, CriticalTopologyError, FaultClass,
-    FaultHandoffError, FaultHandoffRecord, FaultRegistration, FaultRegistry, FaultRegistryError,
-    GenerationIdentity, PublishResult, WorkerControlRecord, WorkerSupervisorItem,
-    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
-    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    generated_standard_fault_badge, mcs_extra_refills, passive_service_recovery_contract,
+    service_fault_mailbox_index, validate_critical_temporal_graph, validate_worker_supervisor_wake,
+    CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
+    CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
+    FaultRegistry, FaultRegistryError, GenerationIdentity, PublishResult, WorkerControlRecord,
+    WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
+    FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY,
+    WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalTaskConfig, TemporalTaskKind, TimeoutPolicy,
@@ -40,9 +40,9 @@ const CHILD_STANDARD_FAULT_SLOT: seL4_CPtr = 1;
 const CHILD_TIMEOUT_FAULT_SLOT: seL4_CPtr = 2;
 const CHILD_INBOX_SLOT: seL4_CPtr = 3;
 const CHILD_REPLY_SLOT: seL4_CPtr = 4;
-const CHILD_TIMEOUT_REPLY_SLOT: seL4_CPtr = 5;
-const CHILD_TIMEOUT_INBOX_SLOT: seL4_CPtr = 6;
+const CHILD_DRIVER_RELEASE_SLOT: seL4_CPtr = 6;
 const CHILD_WORKER_SIGNAL_SLOT: seL4_CPtr = 7;
+const CHILD_DRIVER_RELEASE_SIGNAL_SLOT: seL4_CPtr = 7;
 const CHILD_DRIVER_SIGNAL_SLOT: seL4_CPtr = 8;
 const CHILD_EMERGENCY_SIGNAL_SLOT: seL4_CPtr = 9;
 
@@ -109,16 +109,15 @@ pub struct CriticalSignalCaps {
     pub worker_supervisor: seL4_CPtr,
     pub driver_supervisor: seL4_CPtr,
     pub emergency: seL4_CPtr,
+    pub root_fault_release: seL4_CPtr,
 }
 
-/// Root-held endpoint/Reply objects used by the exact fault receive lanes.
+/// Root-held endpoint/Reply objects used by the serialized fault receive lane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CriticalFaultCaps {
-    pub standard_endpoint: seL4_CPtr,
-    pub timeout_endpoint: seL4_CPtr,
+    pub fault_endpoint: seL4_CPtr,
     pub emergency_endpoint: seL4_CPtr,
-    pub root_fault_standard_reply: seL4_CPtr,
-    pub root_fault_timeout_reply: seL4_CPtr,
+    pub root_fault_reply: seL4_CPtr,
     pub root_emergency_reply: seL4_CPtr,
 }
 
@@ -183,10 +182,8 @@ static TARGET_FAULT_RECEIVER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TARGET_FATAL: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static TARGET_RECOVERED_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
-static STANDARD_DRIVER_LANE_BUSY: AtomicBool = AtomicBool::new(false);
-static TIMEOUT_DRIVER_LANE_BUSY: AtomicBool = AtomicBool::new(false);
-static TARGET_STANDARD_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
-static TARGET_TIMEOUT_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
+static DRIVER_FAULT_REPLY_BUSY: AtomicBool = AtomicBool::new(false);
+static TARGET_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_CNODE: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_TCB_CAP_SLOTS: [AtomicUsize; FAULT_REGISTRY_CAPACITY] =
     [const { AtomicUsize::new(0) }; FAULT_REGISTRY_CAPACITY];
@@ -211,12 +208,11 @@ pub fn temporal_fault_badges(task_id: &str) -> Option<(u64, u64)> {
     Some((generated_standard_fault_badge(task_id)?, task.timeout_badge))
 }
 
-/// Return the root-owned standard/timeout endpoint origins after construction.
+/// Return the root-owned shared fault endpoint origin after construction.
 #[must_use]
-pub fn target_fault_endpoint_origins() -> Option<(seL4_CPtr, seL4_CPtr)> {
-    let standard = TARGET_STANDARD_FAULT_ENDPOINT.load(Ordering::Acquire);
-    let timeout = TARGET_TIMEOUT_FAULT_ENDPOINT.load(Ordering::Acquire);
-    (standard != 0 && timeout != 0).then_some((standard as seL4_CPtr, timeout as seL4_CPtr))
+pub fn target_fault_endpoint_origin() -> Option<seL4_CPtr> {
+    let endpoint = TARGET_FAULT_ENDPOINT.load(Ordering::Acquire);
+    (endpoint != 0).then_some(endpoint as seL4_CPtr)
 }
 
 fn target_service_mailbox(task_id: &str) -> Result<usize, CriticalTcbConstructionError> {
@@ -656,14 +652,14 @@ pub fn activate_root_control_temporal_runtime(
 /// registered and [`activate_critical_tcb_runtime`] seals the complete graph.
 pub fn construct_critical_tcb_runtime(
     env: &mut KernelEnv<'_>,
-    standard_fault_endpoint: seL4_CPtr,
+    fault_endpoint: seL4_CPtr,
     entrypoints: CriticalTcbEntrypoints,
 ) -> Result<CriticalTcbRuntime, CriticalTcbConstructionError> {
     validate_critical_temporal_graph()?;
     entrypoints.validate()?;
-    if standard_fault_endpoint == sel4_sys::seL4_CapNull {
+    if fault_endpoint == sel4_sys::seL4_CapNull {
         return Err(sel4_error(
-            "critical.standard-fault-endpoint",
+            "critical.fault-endpoint",
             sel4_sys::seL4_InvalidCapability,
         ));
     }
@@ -683,25 +679,14 @@ pub fn construct_critical_tcb_runtime(
     let emergency_endpoint = env
         .alloc_endpoint()
         .map_err(|error| sel4_error("critical.emergency-endpoint", error))?;
-    let timeout_fault_endpoint = env
-        .alloc_endpoint()
-        .map_err(|error| sel4_error("critical.timeout-fault-endpoint", error))?;
-    if TARGET_STANDARD_FAULT_ENDPOINT
+    if TARGET_FAULT_ENDPOINT
         .compare_exchange(
             0,
-            standard_fault_endpoint as usize,
+            fault_endpoint as usize,
             Ordering::AcqRel,
             Ordering::Acquire,
         )
         .is_err()
-        || TARGET_TIMEOUT_FAULT_ENDPOINT
-            .compare_exchange(
-                0,
-                timeout_fault_endpoint as usize,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .is_err()
     {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
@@ -717,6 +702,9 @@ pub fn construct_critical_tcb_runtime(
     let root_control_wake = env
         .alloc_notification()
         .map_err(|error| sel4_error("critical.root-control-wake", error))?;
+    let root_fault_wake = env
+        .alloc_notification()
+        .map_err(|error| sel4_error("critical.root-fault-wake", error))?;
 
     let signals = CriticalSignalCaps {
         worker_supervisor_origin: worker_wake,
@@ -741,6 +729,13 @@ pub fn construct_critical_tcb_runtime(
             admission.handoff.emergency_wake_badge,
             "critical.emergency-signal",
         )?,
+        root_fault_release: mint_root_badged_cap(
+            env,
+            root_fault_wake,
+            write_only_rights(),
+            admission.handoff.root_fault_release_badge,
+            "critical.root-fault-release-signal",
+        )?,
     };
 
     let mut inventory = CriticalTcbInventory::default();
@@ -748,14 +743,14 @@ pub fn construct_critical_tcb_runtime(
     let root_control_task = temporal_task(ROOT_CONTROL_ID)?;
     let root_control_standard = mint_root_badged_cap(
         env,
-        standard_fault_endpoint,
+        fault_endpoint,
         fault_sender_rights(),
         critical_standard_badge(ROOT_CONTROL_ID)?,
         "critical.root-control-fault",
     )?;
     let root_control_timeout = mint_root_badged_cap(
         env,
-        timeout_fault_endpoint,
+        fault_endpoint,
         fault_sender_rights(),
         root_control_task.timeout_badge,
         "critical.root-control-timeout",
@@ -787,8 +782,7 @@ pub fn construct_critical_tcb_runtime(
     })?;
 
     let mut children = Vec::<CriticalChildBacking, RESTRICTED_CHILD_COUNT>::new();
-    let mut root_fault_standard_reply = None;
-    let mut root_fault_timeout_reply = None;
+    let mut root_fault_reply = None;
     let mut root_emergency_reply = None;
 
     for id in [
@@ -803,9 +797,7 @@ pub fn construct_critical_tcb_runtime(
             .for_id(id)
             .ok_or(CriticalTcbConstructionError::InvalidEntrypoint)?;
         let wake = match id {
-            ROOT_FAULT_ID => env
-                .alloc_notification()
-                .map_err(|error| sel4_error("critical.root-fault-wake", error))?,
+            ROOT_FAULT_ID => root_fault_wake,
             ROOT_EMERGENCY_ID => emergency_wake,
             WORKER_SUPERVISOR_ID => worker_wake,
             DRIVER_SUPERVISOR_ID => driver_wake,
@@ -816,15 +808,13 @@ pub fn construct_critical_tcb_runtime(
             resource,
             task,
             entry,
-            standard_fault_endpoint,
-            timeout_fault_endpoint,
+            fault_endpoint,
             emergency_endpoint,
             wake,
             signals,
         )?;
         if id == ROOT_FAULT_ID {
-            root_fault_standard_reply = Some(child.handle.reply_cap as seL4_CPtr);
-            root_fault_timeout_reply = Some(child.timeout_reply);
+            root_fault_reply = Some(child.handle.reply_cap as seL4_CPtr);
         } else if id == ROOT_EMERGENCY_ID {
             root_emergency_reply = Some(child.handle.reply_cap as seL4_CPtr);
         }
@@ -862,12 +852,9 @@ pub fn construct_critical_tcb_runtime(
         children,
         signals,
         faults: CriticalFaultCaps {
-            standard_endpoint: standard_fault_endpoint,
-            timeout_endpoint: timeout_fault_endpoint,
+            fault_endpoint,
             emergency_endpoint,
-            root_fault_standard_reply: root_fault_standard_reply
-                .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?,
-            root_fault_timeout_reply: root_fault_timeout_reply
+            root_fault_reply: root_fault_reply
                 .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?,
             root_emergency_reply: root_emergency_reply
                 .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?,
@@ -916,8 +903,7 @@ fn publish_target_driver_fault(record: FaultHandoffRecord) -> Result<(), FaultHa
 
 fn resolve_target_fault(
     badge: seL4_Word,
-    lane: FaultClass,
-) -> Result<FaultRegistration, CriticalTcbConstructionError> {
+) -> Result<(FaultRegistration, FaultClass), CriticalTcbConstructionError> {
     if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire) {
         return Err(CriticalTcbConstructionError::RegistryNotSealed);
     }
@@ -926,13 +912,7 @@ fn resolve_target_fault(
             FaultHandoffError::Contended,
         ));
     };
-    let (registration, resolved_lane) = registry.resolve(badge)?;
-    if resolved_lane != lane {
-        return Err(CriticalTcbConstructionError::FaultRegistry(
-            FaultRegistryError::UnknownBadge,
-        ));
-    }
-    Ok(registration)
+    registry.resolve(badge).map_err(Into::into)
 }
 
 fn recover_target_passive_service_call(
@@ -977,32 +957,37 @@ fn recover_target_passive_service_call(
     Ok(())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FaultReplyDisposition {
+    Released,
+    RetainedByDriver,
+}
+
 fn handle_target_fault(
     info: sel4_sys::seL4_MessageInfo,
     badge: seL4_Word,
-    lane: FaultClass,
-) -> Result<(), CriticalTcbConstructionError> {
-    let registration = resolve_target_fault(badge, lane)?;
+) -> Result<FaultReplyDisposition, CriticalTcbConstructionError> {
+    let (registration, fault_class) = resolve_target_fault(badge)?;
     let task = generated::temporal_tasks()
         .get(usize::from(registration.task_index))
         .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
     let timeout_label = sel4_sys::SEL4_MCS_FAULT_TIMEOUT_LABEL as seL4_Word;
-    if (lane == FaultClass::Timeout) != (info.label() == timeout_label) {
+    if (fault_class == FaultClass::Timeout) != (info.label() == timeout_label) {
         return Err(CriticalTcbConstructionError::FaultRegistry(
             FaultRegistryError::UnknownBadge,
         ));
     }
 
-    if lane == FaultClass::Timeout && task.timeout_policy == TimeoutPolicy::ReplenishOnce {
+    if fault_class == FaultClass::Timeout && task.timeout_policy == TimeoutPolicy::ReplenishOnce {
         let bit = 1u64
             .checked_shl(u32::from(registration.task_index))
             .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
         if TARGET_RECOVERED_TIMEOUTS.fetch_or(bit, Ordering::AcqRel) & bit == 0 {
             sel4::reply_to(
-                CHILD_TIMEOUT_REPLY_SLOT,
+                CHILD_REPLY_SLOT,
                 sel4_sys::seL4_MessageInfo::new(0, 0, 0, 0),
             );
-            return Ok(());
+            return Ok(FaultReplyDisposition::Released);
         }
     }
 
@@ -1015,24 +1000,23 @@ fn handle_target_fault(
         task_index: registration.task_index,
         identity: registration.identity,
         fault_badge: badge,
-        fault_class: lane,
+        fault_class,
         tcb_cap: registration.tcb_cap,
     };
     let fault_handler_tcb_cap = root_fault_tcb_control_cap(registration.task_index)?;
-    match task.kind {
+    let disposition = match task.kind {
         TemporalTaskKind::Worker => {
             sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-worker-suspend", error))?;
             publish_target_worker_fault(record)?;
+            FaultReplyDisposition::Released
         }
         TemporalTaskKind::Driver => {
-            let busy = match lane {
-                FaultClass::Standard => &STANDARD_DRIVER_LANE_BUSY,
-                FaultClass::Timeout => &TIMEOUT_DRIVER_LANE_BUSY,
-            };
-            busy.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            DRIVER_FAULT_REPLY_BUSY
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
                 .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
             publish_target_driver_fault(record)?;
+            FaultReplyDisposition::RetainedByDriver
         }
         TemporalTaskKind::RootControl
         | TemporalTaskKind::RootFault
@@ -1042,6 +1026,7 @@ fn handle_target_fault(
             sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-critical-suspend", error))?;
             sel4::signal_unchecked(CHILD_EMERGENCY_SIGNAL_SLOT);
+            FaultReplyDisposition::Released
         }
         TemporalTaskKind::Service | TemporalTaskKind::Drain => {
             sel4::suspend_tcb(fault_handler_tcb_cap)
@@ -1052,9 +1037,10 @@ fn handle_target_fault(
                 recover_target_passive_service_call(registration.task_index)?;
             }
             publish_target_service_fault(record)?;
+            FaultReplyDisposition::Released
         }
-    }
-    Ok(())
+    };
+    Ok(disposition)
 }
 
 extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
@@ -1064,41 +1050,31 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
             Some(CHILD_EMERGENCY_SIGNAL_SLOT),
         );
     }
+    let release_badge = generated::worker_resource_admission_config()
+        .handoff
+        .root_fault_release_badge;
     loop {
         #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
         cohesix_root_fault_qemu_evidence_turn();
-        if !STANDARD_DRIVER_LANE_BUSY.load(Ordering::Acquire) {
-            let mut badge = 0;
-            let info = sel4::nb_recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
-            if fault_nbrecv_delivered(badge) {
-                if handle_target_fault(info, badge, FaultClass::Standard).is_err() {
-                    target_fail_stop(
-                        "[critical] root-fault standard lane failed",
-                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
-                    );
-                }
+        let mut badge = 0;
+        let info = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+        let disposition = match handle_target_fault(info, badge) {
+            Ok(disposition) => disposition,
+            Err(_) => target_fail_stop(
+                "[critical] root-fault receive failed",
+                Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+            ),
+        };
+        if disposition == FaultReplyDisposition::RetainedByDriver {
+            let mut observed_badge = 0;
+            let _ = sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge);
+            if observed_badge != release_badge || DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire) {
+                target_fail_stop(
+                    "[critical] root-fault driver release invalid",
+                    Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                );
             }
         }
-        if !TIMEOUT_DRIVER_LANE_BUSY.load(Ordering::Acquire) {
-            let mut badge = 0;
-            let info = sel4::nb_recv_with_reply(
-                CHILD_TIMEOUT_INBOX_SLOT,
-                &mut badge,
-                CHILD_TIMEOUT_REPLY_SLOT,
-            );
-            if fault_nbrecv_delivered(badge) {
-                if handle_target_fault(info, badge, FaultClass::Timeout).is_err() {
-                    target_fail_stop(
-                        "[critical] root-fault timeout lane failed",
-                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
-                    );
-                }
-            }
-        }
-        // One temporal turn polls each lane at most once and handles at most
-        // one record per lane. Yield even after work so a continuous fault
-        // stream cannot consume a second turn inside the generated SC budget.
-        sel4::yield_now();
     }
 }
 
@@ -1212,10 +1188,16 @@ extern "C" fn root_driver_supervisor_entry(_arg0: seL4_Word) -> ! {
                     Some(CHILD_EMERGENCY_SIGNAL_SLOT),
                 );
             }
-            match record.fault_class {
-                FaultClass::Standard => STANDARD_DRIVER_LANE_BUSY.store(false, Ordering::Release),
-                FaultClass::Timeout => TIMEOUT_DRIVER_LANE_BUSY.store(false, Ordering::Release),
+            if DRIVER_FAULT_REPLY_BUSY
+                .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+                .is_err()
+            {
+                target_fail_stop(
+                    "[critical] driver supervisor Reply release invalid",
+                    Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                );
             }
+            sel4::signal_unchecked(CHILD_DRIVER_RELEASE_SIGNAL_SLOT);
         }
         let retry = match TARGET_HANDOFF.try_lock() {
             Some(handoff) => handoff.driver_pending(),
@@ -1227,7 +1209,7 @@ extern "C" fn root_driver_supervisor_entry(_arg0: seL4_Word) -> ! {
     }
 }
 
-/// Stable external-QEMU observation point for one root-fault polling turn.
+/// Stable external-QEMU observation point before one blocking root-fault receive.
 #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
 #[inline(never)]
 #[no_mangle]
@@ -1262,7 +1244,6 @@ pub extern "C" fn cohesix_driver_supervisor_qemu_evidence_wait() {
 struct ConstructedChild {
     handle: CriticalTcbHandle,
     backing: CriticalChildBacking,
-    timeout_reply: seL4_CPtr,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1271,8 +1252,7 @@ fn construct_restricted_child(
     resource: &CriticalTcbResource,
     task: &TemporalTaskConfig,
     entry: usize,
-    standard_fault_endpoint: seL4_CPtr,
-    timeout_fault_endpoint: seL4_CPtr,
+    fault_endpoint: seL4_CPtr,
     emergency_endpoint: seL4_CPtr,
     wake_notification: seL4_CPtr,
     signals: CriticalSignalCaps,
@@ -1292,12 +1272,6 @@ fn construct_restricted_child(
     let reply = env
         .alloc_reply()
         .map_err(|error| sel4_error("critical.child-reply", error))?;
-    let timeout_reply = if task.id == ROOT_FAULT_ID {
-        env.alloc_reply()
-            .map_err(|error| sel4_error("critical.root-fault-timeout-reply", error))?
-    } else {
-        reply
-    };
 
     let mut ipc_frame = env
         .alloc_dma_frame_attr(sel4_sys::seL4_ARM_Page_Default)
@@ -1315,9 +1289,9 @@ fn construct_restricted_child(
         )
     } else {
         (
-            standard_fault_endpoint,
+            fault_endpoint,
             critical_standard_badge(task.id)?,
-            timeout_fault_endpoint,
+            fault_endpoint,
         )
     };
     let root_fault_cap = if fault_source == sel4_sys::seL4_CapNull {
@@ -1365,7 +1339,7 @@ fn construct_restricted_child(
     }
 
     let inbox_source = match task.id {
-        ROOT_FAULT_ID => standard_fault_endpoint,
+        ROOT_FAULT_ID => fault_endpoint,
         ROOT_EMERGENCY_ID => emergency_endpoint,
         WORKER_SUPERVISOR_ID | DRIVER_SUPERVISOR_ID => wake_notification,
         _ => return Err(CriticalTcbConstructionError::MissingGeneratedRecord),
@@ -1385,13 +1359,13 @@ fn construct_restricted_child(
         mint_child_cap(
             cnode,
             child_depth,
-            CHILD_TIMEOUT_INBOX_SLOT,
+            CHILD_DRIVER_RELEASE_SLOT,
             root_cnode,
-            timeout_fault_endpoint,
+            wake_notification,
             root_depth,
             read_only_rights(),
             0,
-            "critical.root-fault-timeout-inbox",
+            "critical.root-fault-release-wait",
         )?;
         for (slot, source, stage) in [
             (
@@ -1452,6 +1426,17 @@ fn construct_restricted_child(
             root_depth,
             stage,
         )?;
+        if task.id == DRIVER_SUPERVISOR_ID {
+            copy_child_cap(
+                cnode,
+                child_depth,
+                CHILD_DRIVER_RELEASE_SIGNAL_SLOT,
+                root_cnode,
+                signals.root_fault_release,
+                root_depth,
+                "critical.driver-supervisor-root-fault-release",
+            )?;
+        }
     }
     copy_child_cap(
         cnode,
@@ -1462,17 +1447,6 @@ fn construct_restricted_child(
         root_depth,
         "critical.child-reply-slot",
     )?;
-    if task.id == ROOT_FAULT_ID {
-        copy_child_cap(
-            cnode,
-            child_depth,
-            CHILD_TIMEOUT_REPLY_SLOT,
-            root_cnode,
-            timeout_reply,
-            root_depth,
-            "critical.child-timeout-reply-slot",
-        )?;
-    }
 
     let guard_bits = sel4::word_bits().saturating_sub(seL4_Word::from(child_depth));
     let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
@@ -1534,7 +1508,6 @@ fn construct_restricted_child(
             stack_bottom,
             stack_top,
         },
-        timeout_reply,
     })
 }
 

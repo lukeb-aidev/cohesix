@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "eeec16736f2d8e55fd0067b3bdfa0cab014a5050888726175fc2e3d848a840fb";
+    "b42759034e9bcb358e535e4200658b29fdb78590d272195890a1f7ca55275b2d";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -410,7 +410,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         scheduling_context_slot: 6,
         scheduling_context_bits: 8,
         sched_control_core: 0,
-        budget_us: 1500,
+        budget_us: 3000,
         period_us: 10000,
         deadline_us: 10000,
         blocking_us: 0,
@@ -421,10 +421,10 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_badge: 653131783,
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
-        wcet_us: 1200,
-        response_time_us: 5000,
+        wcet_us: 2400,
+        response_time_us: 6200,
         admitted: true,
-        wcet_provenance: "m26e-qemu-candidate-v1",
+        wcet_provenance: "m26e-qemu-console-auth-candidate-v2",
         allowed_donors: &[],
         reply_objects: 0,
         max_donation_depth: 0,
@@ -602,14 +602,14 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 136,
+            frames: 144,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 160,
+            cspace_slots: 168,
             untyped_bytes: 1048576,
         },
         packet_rx_notification_slot: 2,
@@ -618,8 +618,8 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
         fault_endpoint_slot: 5,
         ipc_buffer_vaddr: 1912602624,
         init_vaddr: 1912606720,
-        stack_vaddr: 1912635392,
-        stack_pages: 24,
+        stack_vaddr: 1912799232,
+        stack_pages: 32,
         packet_rx_vaddr: 1912733696,
         packet_tx_vaddr: 1912737792,
         command_vaddr: 1912741888,
@@ -641,7 +641,7 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
         scheduling_context_bits: 8,
         priority: 180,
         mcp: 200,
-        budget_us: 1500,
+        budget_us: 3000,
         period_us: 10000,
         max_refills: 2,
         timeout_badge: 653131783,
@@ -759,11 +759,11 @@ pub const CRITICAL_TCB_RESOURCES: [CriticalTcbResource; 5] = [
     CriticalTcbResource {
         id: "root-fault",
         cnode_radix_bits: 6,
-        cspace_cap_count: 20,
+        cspace_cap_count: 19,
         revoke_anchor_slot: 16129,
         ipc_buffer_pages: 1,
         stack_pages: 2,
-        fault_reply_lanes: 2,
+        fault_reply_lanes: 1,
     },
     CriticalTcbResource {
         id: "root-emergency",
@@ -851,14 +851,14 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             vspaces: 7,
             page_tables: 256,
             asids: 7,
-            frames: 2056,
-            endpoints: 16,
+            frames: 2064,
+            endpoints: 15,
             notifications: 16,
             fault_caps: 7,
             timeout_fault_caps: 7,
-            reply_objects: 7,
+            reply_objects: 6,
             scheduling_contexts: 6,
-            cspace_slots: 4096,
+            cspace_slots: 4103,
             untyped_bytes: 67108864,
         },
         executable_roles: &EXECUTABLE_ROLE_ADMISSION,
@@ -871,6 +871,7 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             worker_wake_badge: 1,
             driver_wake_badge: 2,
             emergency_wake_badge: 4,
+            root_fault_release_badge: 8,
             worker_fault_badges: BadgeRange {
                 base: 652279808,
                 count: 3,
@@ -934,8 +935,8 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             driver_tcbs: 0,
             capacity: 10,
             root_fault_tcb_control_slot_base: 16,
-            standard_reply_lanes: 1,
-            timeout_reply_lanes: 1,
+            receive_endpoints: 1,
+            receive_reply_lanes: 1,
             recoverable_timeout_tasks: &RECOVERABLE_TIMEOUT_TASKS,
         },
     };
@@ -1571,9 +1572,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
-    "manifest.schema=1.8",
+    "manifest.schema=1.9",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=e2da718f132640754571d28d541fe1de804950f133f0bf7c683b237443c75cd2",
+    "manifest.sha256=a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

@@ -109,12 +109,12 @@ fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
         (18, 18, 18, 18, 18, 18)
     );
     assert_eq!(total.page_tables, 344);
-    assert_eq!(total.frames, 2_616);
-    assert_eq!(total.endpoints, 32);
+    assert_eq!(total.frames, 2_624);
+    assert_eq!(total.endpoints, 31);
     assert_eq!(total.notifications, 35);
-    assert_eq!(total.reply_objects, 15);
+    assert_eq!(total.reply_objects, 14);
     assert_eq!(total.scheduling_contexts, 17);
-    assert_eq!(total.cspace_slots, 6_336);
+    assert_eq!(total.cspace_slots, 6_343);
     assert_eq!(total.untyped_bytes, 103_809_024);
     assert!(total.tcbs <= admission.capacity.tcbs);
     assert!(total.page_tables <= admission.capacity.page_tables);

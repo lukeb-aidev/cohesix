@@ -2837,10 +2837,9 @@ fn allocate_driver_task_mcs_objects(
         .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
     let task_key = u32::try_from(task_key)
         .map_err(|_| HalError::Unsupported("driver-runtime-mcs-task-key"))?;
-    let (standard_fault_origin, timeout_fault_origin) =
-        critical_tcb::target_fault_endpoint_origins().ok_or(HalError::Unsupported(
-            "driver-runtime-mcs-critical-fault-endpoints",
-        ))?;
+    let fault_origin = critical_tcb::target_fault_endpoint_origin().ok_or(
+        HalError::Unsupported("driver-runtime-mcs-critical-fault-endpoint"),
+    )?;
     let (generated_standard_badge, generated_timeout_badge) =
         critical_tcb::temporal_fault_badges(temporal.id).ok_or(HalError::Unsupported(
             "driver-runtime-mcs-generated-fault-badges",
@@ -2919,7 +2918,7 @@ fn allocate_driver_task_mcs_objects(
         standard_fault_endpoint,
         root_depth,
         root_cnode,
-        standard_fault_origin,
+        fault_origin,
         root_depth,
         driver_runtime_fault_send_rights(),
         standard_fault_badge,
@@ -2936,7 +2935,7 @@ fn allocate_driver_task_mcs_objects(
         timeout_fault_endpoint,
         root_depth,
         root_cnode,
-        timeout_fault_origin,
+        fault_origin,
         root_depth,
         driver_runtime_fault_send_rights(),
         timeout_badge,

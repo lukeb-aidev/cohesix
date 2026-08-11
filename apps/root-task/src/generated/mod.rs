@@ -403,6 +403,7 @@ pub struct CriticalHandoffConfig {
     pub worker_wake_badge: u64,
     pub driver_wake_badge: u64,
     pub emergency_wake_badge: u64,
+    pub root_fault_release_badge: u64,
     pub worker_fault_badges: BadgeRange,
     pub driver_fault_badges: BadgeRange,
     pub critical_fault_badges: BadgeRange,
@@ -428,8 +429,8 @@ pub struct FaultRegistryAdmission {
     pub driver_tcbs: u16,
     pub capacity: u16,
     pub root_fault_tcb_control_slot_base: u16,
-    pub standard_reply_lanes: u8,
-    pub timeout_reply_lanes: u8,
+    pub receive_endpoints: u8,
+    pub receive_reply_lanes: u8,
     pub recoverable_timeout_tasks: &'static [&'static str],
 }
 
@@ -1036,9 +1037,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.8";
+pub const MANIFEST_SCHEMA: &str = "1.9";
 pub const MANIFEST_SHA256: &str =
-    "e2da718f132640754571d28d541fe1de804950f133f0bf7c683b237443c75cd2";
+    "a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

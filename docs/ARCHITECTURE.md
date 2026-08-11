@@ -158,7 +158,7 @@ flowchart LR
     Serial[Serial and local-seat consoles]
     subgraph Critical[Critical TCBs with independent active SCs]
       EventPump[Root-control event pump and Queen authority]
-      RootFault[Root-fault and recovery Reply lanes]
+      RootFault[Root-fault blocking receive and serialized Reply]
       Emergency[Root-emergency fatal output]
       WorkerSupervisor[Worker supervisor]
       DriverSupervisor[Driver supervisor]
@@ -212,10 +212,12 @@ The init TCB is the generated `root-control` owner and runs the authoritative
 event loop. Root constructs four restricted active-SC children for root-fault,
 root-emergency, Worker supervision, and driver supervision. The generated
 fault registry is sealed before any service or Worker child resumes; root-fault
-then becomes the sole standard-fault receiver. Application service-turn and
-queue bounds remain mandatory beside kernel-enforced MCS budgets. Live QEMU
+then becomes the sole receiver on one shared standard/timeout fault endpoint.
+It blocks in `Recv` with one Reply object and resolves the exact badge and class
+against the sealed registry after receive. Application service-turn and queue
+bounds remain mandatory beside kernel-enforced MCS budgets. Live QEMU
 qualification must still prove independent progress, exact timeout ownership,
-and containment for the selected image.
+serialized Reply release, and containment for the selected image.
 
 ### 3.2 Physical task isolation and memory authority
 
@@ -346,7 +348,7 @@ flowchart TB
   subgraph Target[Milestone 26e implementation - target acceptance pending]
     subgraph Critical[Five critical TCBs]
       RC[root-control and Queen - active SC]
-      RF[root-fault - active SC and Reply lanes]
+      RF[root-fault - active SC blocking receive and one Reply]
       RE[root-emergency - active SC and fail-stop]
       WS[Worker supervisor - active SC]
       DS[Driver supervisor - active SC]
@@ -366,6 +368,7 @@ flowchart TB
     RC -->|control records and wake| WS
     RF -->|reserved teardown records and wake| WS
     RF -->|reserved containment records and wake| DS
+    DS -->|fault-association release signal| RF
     WS -->|records and lifecycle notification| WH
     WS -->|records and lifecycle notification| WG
     WS -->|records and lifecycle notification| WL
@@ -399,6 +402,16 @@ bounded records and a supervisor-bound wake notification. Root-fault uses a
 separate reserved record per admitted driver to hand containment to the driver
 supervisor. Worker, driver, endpoint, notification, IRQ, command, completion,
 and fault badge domains are generated and disjoint.
+
+Standard and timeout fault send caps share one root-fault receive endpoint and
+carry disjoint exact-identity badges. Root-fault blocks on that endpoint with
+the sole receive Reply object; it does not poll an empty endpoint or receive on
+a second class lane. A linked-driver fault keeps that association serialized
+while the independently scheduled driver supervisor performs command-failure
+and containment work. Root-fault waits on the existing root-fault wake
+notification and may re-enter `Recv` only after the supervisor emits the exact
+generated release badge. The notification is a release handshake, not fault
+identity or containment authority.
 
 No policy/audit child is selected in 26e. Policy decisions, authoritative
 mutation, audit ordering, and replay state remain root-owned unless later
@@ -445,7 +458,13 @@ pointer-free pages, and consumes authenticated command records. It constructs
 the child suspended, resumes it only after the exact critical fault registry is
 sealed, and on a standard/timeout/protocol fault suspends, unbinds, scrubs, and
 revokes the complete retained-anchor generation before prohibiting replacement.
-This QEMU-first path changes no Pi driver or CYW43/SDIO behavior.
+The current measured repair candidate assigns 144 frames, 168 retained root
+slots, a 32-page stack at `0x72030000..0x72050000`, and an active-SC
+`3000 us / 10000 us` budget with `2400 us` WCET and `6200 us` response bound.
+Those values remain candidate source/configuration truth until live four-core
+GICv3 QEMU completes console authentication, canonical `.coh` regression, and
+fault/timeout injection without stack or budget failure. This QEMU-first path
+changes no Pi driver or CYW43/SDIO behavior.
 
 These are internal seL4 compartment changes. The external protocol boundary
 does not change: host NineDoor remains host Secure9P, target TCP remains the
@@ -556,7 +575,9 @@ archive hash and requires separate exact-image CYW43 coexistence evidence.
 ### 4.6 Fault, timeout, and revocation rules
 
 Child fault caps identify the exact instance and carry `Write + GrantReply`.
-Root-fault owns the Read side and the generated Reply-lane cardinality.
+Standard and timeout caps target one shared endpoint. Root-fault owns its sole
+Read cap and one serialized Reply object, blocks in `Recv`, and decodes class
+from the registry-qualified badge after receive.
 
 - An ordinary Worker fault is terminal. Root-fault suspends the Worker without
   replying, verifies the fault association is clear, and hands full teardown to
@@ -565,7 +586,9 @@ Root-fault owns the Read side and the generated Reply-lane cardinality.
   reply under its bounded budget/replenishment policy.
 - A driver fault during a command closes admission, completes the blocked
   caller exactly once with typed failure, clears both command and fault Reply
-  state, and then revokes the old generation.
+  state, and then revokes the old generation. Until the driver supervisor
+  signals the generated release badge, root-fault keeps the fault Reply
+  serialized and waits on its dedicated Read-only wake cap.
 - Service success, denial, timeout, cancellation, fault, and revoke paths must
   all return or revoke donated SC and Reply authority.
 - Service, Worker, driver, root-control, and supervisor faults route to

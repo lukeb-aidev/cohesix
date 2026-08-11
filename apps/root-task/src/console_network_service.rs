@@ -130,25 +130,25 @@ impl ConsoleNetworkContract {
             || config.objects.vspaces != 1
             || config.objects.page_tables != 8
             || config.objects.asids != 1
-            || config.objects.frames != 136
+            || config.objects.frames != 144
             || config.objects.endpoints != 0
             || config.objects.notifications != 2
             || config.objects.fault_caps != 1
             || config.objects.timeout_fault_caps != 1
             || config.objects.reply_objects != 0
             || config.objects.scheduling_contexts != 1
-            || config.objects.cspace_slots != 160
+            || config.objects.cspace_slots != 168
             || config.objects.untyped_bytes != 1_048_576
             || config.packet_rx_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || config.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
             || config.supervisor_wake_notification_slot != SUPERVISOR_WAKE_NOTIFICATION_SLOT
             || config.fault_endpoint_slot != FAULT_ENDPOINT_SLOT
-            || config.stack_vaddr != 0x7200_8000
-            || config.stack_pages != 24
+            || config.stack_vaddr != 0x7203_0000
+            || config.stack_pages != 32
             || config
                 .stack_vaddr
                 .checked_add(u64::from(config.stack_pages) * SHARED_PAGE_BYTES as u64)
-                != Some(config.packet_rx_vaddr)
+                != Some(0x7205_0000)
             || config.shared_frame_bytes as usize != SHARED_PAGE_BYTES
             || config.ethernet_frame_bytes as usize != ETHERNET_FRAME_BYTES
             || config.max_packets_per_wake == 0

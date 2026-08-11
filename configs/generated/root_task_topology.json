@@ -1,13 +1,13 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "e2da718f132640754571d28d541fe1de804950f133f0bf7c683b237443c75cd2",
-  "topology_sha256": "84ef6a8e923431e291a7f15cfa9c144130eae29af5495243474e500c4ead4834",
+  "manifest_sha256": "a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa",
+  "topology_sha256": "6663a5dfd26d79488bc4b96d2c223ba8d48fbf412bc4ecf3b26faef13345ec1e",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
       "auth_timeout_ms": 5000,
-      "budget_us": 1500,
+      "budget_us": 3000,
       "child_cspace_slots": 16,
       "command_vaddr": 1912741888,
       "control_badge": 2,
@@ -33,10 +33,10 @@
       "objects": {
         "asids": 1,
         "cnodes": 1,
-        "cspace_slots": 160,
+        "cspace_slots": 168,
         "endpoints": 0,
         "fault_caps": 1,
-        "frames": 136,
+        "frames": 144,
         "notifications": 2,
         "page_tables": 8,
         "reply_objects": 0,
@@ -62,8 +62,8 @@
       "shared_frame_bytes": 4096,
       "shutdown_badge": 4,
       "single_listener": true,
-      "stack_pages": 24,
-      "stack_vaddr": 1912635392,
+      "stack_pages": 32,
+      "stack_vaddr": 1912799232,
       "supervisor_wake_notification_slot": 4,
       "timeout_badge": 653131783,
       "timer_clock_hz": 62500000
@@ -323,7 +323,7 @@
         ],
         "required": true
       },
-      "schema": "1.8"
+      "schema": "1.9"
     },
     "temporal_authority": {
       "admission_window_us": 10000,
@@ -540,7 +540,7 @@
           "admitted": true,
           "allowed_donors": [],
           "blocking_us": 0,
-          "budget_us": 1500,
+          "budget_us": 3000,
           "consumed_time_evidence": true,
           "core": 0,
           "critical_reserve": false,
@@ -557,14 +557,14 @@
           "period_us": 10000,
           "priority": 180,
           "reply_objects": 0,
-          "response_time_us": 5000,
+          "response_time_us": 6200,
           "sched_control_core": 0,
           "scheduling_context_bits": 8,
           "scheduling_context_slot": 6,
           "timeout_badge": 653131783,
           "timeout_policy": "terminal",
-          "wcet_provenance": "m26e-qemu-candidate-v1",
-          "wcet_us": 1200
+          "wcet_provenance": "m26e-qemu-console-auth-candidate-v2",
+          "wcet_us": 2400
         },
         {
           "admitted": true,
@@ -707,8 +707,8 @@
         },
         {
           "cnode_radix_bits": 6,
-          "cspace_cap_count": 20,
-          "fault_reply_lanes": 2,
+          "cspace_cap_count": 19,
+          "fault_reply_lanes": 1,
           "id": "root-fault",
           "ipc_buffer_pages": 1,
           "revoke_anchor_slot": 16129,
@@ -821,23 +821,23 @@
         "capacity": 10,
         "critical_tcbs": 5,
         "driver_tcbs": 0,
+        "receive_endpoints": 1,
+        "receive_reply_lanes": 1,
         "recoverable_timeout_tasks": [],
         "root_fault_tcb_control_slot_base": 16,
         "service_tcbs": 2,
-        "standard_reply_lanes": 1,
-        "timeout_reply_lanes": 1,
         "worker_tcbs": 3
       },
       "fixed_objects": {
         "asids": 7,
         "cnodes": 7,
-        "cspace_slots": 4096,
-        "endpoints": 16,
+        "cspace_slots": 4103,
+        "endpoints": 15,
         "fault_caps": 7,
-        "frames": 2056,
+        "frames": 2064,
         "notifications": 16,
         "page_tables": 256,
-        "reply_objects": 7,
+        "reply_objects": 6,
         "scheduling_contexts": 6,
         "tcbs": 7,
         "timeout_fault_caps": 7,
@@ -874,6 +874,7 @@
           "read": false,
           "write": true
         },
+        "root_fault_release_badge": 8,
         "service_fault_badges": {
           "base": 652476416,
           "count": 2,
@@ -1039,14 +1040,14 @@
     "vspaces": 10,
     "page_tables": 280,
     "asids": 10,
-    "frames": 2104,
-    "endpoints": 16,
+    "frames": 2112,
+    "endpoints": 15,
     "notifications": 19,
     "fault_caps": 10,
     "timeout_fault_caps": 10,
-    "reply_objects": 7,
+    "reply_objects": 6,
     "scheduling_contexts": 9,
-    "cspace_slots": 4288,
+    "cspace_slots": 4295,
     "untyped_bytes": 70254592
   }
 }
