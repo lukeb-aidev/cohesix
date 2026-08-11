@@ -109,7 +109,7 @@ fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
         (18, 18, 18, 18, 18, 18)
     );
     assert_eq!(total.page_tables, 344);
-    assert_eq!(total.frames, 2_608);
+    assert_eq!(total.frames, 2_616);
     assert_eq!(total.endpoints, 32);
     assert_eq!(total.notifications, 35);
     assert_eq!(total.reply_objects, 15);

@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "20182cd5a998b672bfad414dbe3c52099373de371b4c20b53a8f9639ea60caa1";
+    "eeec16736f2d8e55fd0067b3bdfa0cab014a5050888726175fc2e3d848a840fb";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -242,7 +242,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
         wcet_us: 1200,
-        response_time_us: 1800,
+        response_time_us: 3800,
         admitted: true,
         wcet_provenance: "m26e-qemu-candidate-v1",
         allowed_donors: &[],
@@ -260,7 +260,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         scheduling_context_slot: 2,
         scheduling_context_bits: 8,
         sched_control_core: 0,
-        budget_us: 500,
+        budget_us: 3000,
         period_us: 10000,
         deadline_us: 10000,
         blocking_us: 0,
@@ -271,10 +271,10 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_badge: 653131778,
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
-        wcet_us: 400,
-        response_time_us: 600,
+        wcet_us: 2400,
+        response_time_us: 2600,
         admitted: true,
-        wcet_provenance: "m26e-qemu-candidate-v1",
+        wcet_provenance: "m26e-qemu-containment-candidate-v2",
         allowed_donors: &[],
         reply_objects: 0,
         max_donation_depth: 0,
@@ -422,7 +422,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         timeout_policy: TimeoutPolicy::Terminal,
         consumed_time_evidence: true,
         wcet_us: 1200,
-        response_time_us: 3000,
+        response_time_us: 5000,
         admitted: true,
         wcet_provenance: "m26e-qemu-candidate-v1",
         allowed_donors: &[],
@@ -602,7 +602,7 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 128,
+            frames: 136,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
@@ -618,8 +618,8 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
         fault_endpoint_slot: 5,
         ipc_buffer_vaddr: 1912602624,
         init_vaddr: 1912606720,
-        stack_vaddr: 1912668160,
-        stack_pages: 16,
+        stack_vaddr: 1912635392,
+        stack_pages: 24,
         packet_rx_vaddr: 1912733696,
         packet_tx_vaddr: 1912737792,
         command_vaddr: 1912741888,
@@ -851,7 +851,7 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             vspaces: 7,
             page_tables: 256,
             asids: 7,
-            frames: 2048,
+            frames: 2056,
             endpoints: 16,
             notifications: 16,
             fault_caps: 7,
@@ -1573,7 +1573,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.8",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=7ba47983f1bc7497e21d0d47ca753c0dcbeef48b52cda4bb8c4690184f04d117",
+    "manifest.sha256=e2da718f132640754571d28d541fe1de804950f133f0bf7c683b237443c75cd2",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

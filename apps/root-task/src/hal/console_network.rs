@@ -36,12 +36,12 @@ use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
 const ROOT_SLOT_COUNT: usize = 160;
 const TRANSLATION_SLOT_COUNT: usize = 8;
-const FRAME_COUNT: usize = 128;
+const FRAME_COUNT: usize = 136;
 const IMAGE_FRAME_START: usize = 0;
 const STACK_FRAME_START: usize = 106;
-const IPC_FRAME_INDEX: usize = 122;
-const INIT_FRAME_INDEX: usize = 123;
-const SHARED_FRAME_START: usize = 124;
+const IPC_FRAME_INDEX: usize = 130;
+const INIT_FRAME_INDEX: usize = 131;
+const SHARED_FRAME_START: usize = 132;
 const SHARED_FRAME_COUNT: usize = 4;
 
 const TCB_SLOT_INDEX: usize = 0;
@@ -65,7 +65,7 @@ const ROOT_REVOKE_WAKE_INDEX: usize = 3;
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
-const _: () = assert!(STACK_FRAME_START + 16 == IPC_FRAME_INDEX);
+const _: () = assert!(STACK_FRAME_START + 24 == IPC_FRAME_INDEX);
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
 
 /// One nonblocking child-output turn copied into root-owned values.
@@ -990,12 +990,12 @@ mod tests {
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
-        assert_eq!(TRANSLATION_SLOT_START, 134);
-        assert_eq!(SHARED_COPY_SLOT_START, 142);
-        assert_eq!(ROOT_WAKE_SLOT_START, 146);
-        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 150);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 151);
-        assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
+        assert_eq!(TRANSLATION_SLOT_START, 142);
+        assert_eq!(SHARED_COPY_SLOT_START, 150);
+        assert_eq!(ROOT_WAKE_SLOT_START, 154);
+        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 158);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 159);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX + 1, ROOT_SLOT_COUNT);
     }
 
     #[test]

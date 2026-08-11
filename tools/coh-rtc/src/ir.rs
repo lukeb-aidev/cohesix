@@ -3953,6 +3953,33 @@ mod tests {
     }
 
     #[test]
+    fn console_network_service_rejects_the_pre_live_stack_contract() {
+        let mut service = super::ConsoleNetworkServiceConfig::default();
+        service.stack_vaddr = 0x7201_0000;
+        service.stack_pages = 16;
+        let error = service
+            .validate()
+            .expect_err("the live-faulting 16-page stack must fail closed");
+        assert!(
+            error.to_string().contains("exact 24-page stack"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn console_network_service_rejects_a_page_inside_the_stack_range() {
+        let mut service = super::ConsoleNetworkServiceConfig::default();
+        service.init_vaddr = service.stack_vaddr;
+        let error = service
+            .validate()
+            .expect_err("a fixed page inside the stack must fail closed");
+        assert!(
+            error.to_string().contains("stack must be disjoint"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
     fn console_network_service_rejects_revoke_anchor_collision() {
         let manifest_path = repo_root()
             .join("configs/root_task.toml")
@@ -5432,7 +5459,7 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 128,
+            frames: 136,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
@@ -5477,8 +5504,19 @@ impl ConsoleNetworkServiceConfig {
                 bail!("console_network_service mapped pages must be non-zero, page-aligned, and distinct");
             }
         }
-        if self.stack_vaddr == 0 || !self.stack_vaddr.is_multiple_of(4096) || self.stack_pages < 2 {
-            bail!("console_network_service requires an aligned stack with at least two pages");
+        if self.stack_vaddr != 0x7200_8000 || self.stack_pages != 24 {
+            bail!("console_network_service requires the exact 24-page stack ending at 0x72020000");
+        }
+        let stack_end = self
+            .stack_vaddr
+            .checked_add(u64::from(self.stack_pages) * 4096)
+            .ok_or_else(|| anyhow::anyhow!("console_network_service stack range overflows"))?;
+        if stack_end != self.packet_rx_vaddr
+            || mappings
+                .iter()
+                .any(|address| *address >= self.stack_vaddr && *address < stack_end)
+        {
+            bail!("console_network_service stack must be disjoint and end at the packet RX page");
         }
         if self.shared_frame_bytes != 4096 || self.ethernet_frame_bytes != 1536 {
             bail!(
@@ -5550,7 +5588,7 @@ impl Default for ConsoleNetworkServiceConfig {
                 vspaces: 1,
                 page_tables: 8,
                 asids: 1,
-                frames: 128,
+                frames: 136,
                 endpoints: 0,
                 notifications: 2,
                 fault_caps: 1,
@@ -5566,8 +5604,8 @@ impl Default for ConsoleNetworkServiceConfig {
             fault_endpoint_slot: 5,
             ipc_buffer_vaddr: 0x7200_0000,
             init_vaddr: 0x7200_1000,
-            stack_vaddr: 0x7201_0000,
-            stack_pages: 16,
+            stack_vaddr: 0x7200_8000,
+            stack_pages: 24,
             packet_rx_vaddr: 0x7202_0000,
             packet_tx_vaddr: 0x7202_1000,
             command_vaddr: 0x7202_2000,

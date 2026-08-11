@@ -1097,7 +1097,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
         }
         // One temporal turn polls each lane at most once and handles at most
         // one record per lane. Yield even after work so a continuous fault
-        // stream cannot consume a second turn inside this 500 us SC budget.
+        // stream cannot consume a second turn inside the generated SC budget.
         sel4::yield_now();
     }
 }

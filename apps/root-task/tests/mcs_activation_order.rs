@@ -129,3 +129,20 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         "deferred-network root-control policy must be armed at its supervisor-loop seam",
     );
 }
+
+#[test]
+fn ninedoor_attachment_does_not_attempt_classic_tcb_affinity_under_mcs() {
+    let userland = include_str!("../src/userland/mod.rs");
+    let attach_start = userland
+        .find("fn attach_ninedoor_bridge<'a")
+        .expect("target NineDoor attachment helper must exist");
+    let attach_end = userland[attach_start..]
+        .find("#[cfg(not(feature = \"kernel\"))]")
+        .map(|offset| attach_start + offset)
+        .expect("target NineDoor attachment helper must have a bounded source section");
+    let attach = &userland[attach_start..attach_end];
+
+    assert!(attach.contains("pump.attach_ninedoor(ninedoor);"));
+    assert!(!attach.contains("with_role_affinity"));
+    assert!(!attach.contains("set_tcb_affinity"));
+}

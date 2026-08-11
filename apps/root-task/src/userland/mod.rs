@@ -12,7 +12,6 @@ use core::sync::atomic::{AtomicBool, Ordering};
 use core::sync::atomic::AtomicU64;
 
 #[cfg(feature = "kernel")]
-use crate::affinity;
 #[cfg(feature = "serial-console")]
 use crate::boot::uart_pl011;
 use crate::bootstrap::log as boot_log;
@@ -3127,10 +3126,11 @@ fn attach_ninedoor_bridge<'a, D, T, I, V, const RX: usize, const TX: usize, cons
     V: CapabilityValidator,
 {
     if let Some(ninedoor) = ctx.ninedoor.borrow_mut().take() {
-        let policy = affinity::policy();
-        affinity::with_role_affinity(affinity::AffinityRole::NineDoor, 0, &policy, || {
-            pump.attach_ninedoor(ninedoor);
-        });
+        // This only transfers root-owned bridge bookkeeping into the event
+        // pump. The isolated passive NineDoor child already executes on its
+        // compiler-selected MCS donation path; moving the init TCB here would
+        // introduce a second, classic-SMP placement mechanism.
+        pump.attach_ninedoor(ninedoor);
     }
 }
 

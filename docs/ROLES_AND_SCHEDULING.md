@@ -250,6 +250,14 @@ the exact critical task-index slots used by its containment loop. Root-relative
 registered TCB caps remain root-control records and are never invoked from the
 restricted root-fault CSpace.
 
+The QEMU and Pi manifests reserve `3000 us / 10000 us` for `root-fault`, with
+a compiler-admitted candidate `2400 us` containment WCET and `2600 us`
+response bound. These values supersede the original 500-us candidate: live
+four-core GICv3 QEMU proved that candidate could expire while suspending an
+already-faulted child. Standard-plus-timeout fault injection must still qualify
+the larger candidate against its two bounded receive lanes; the terminal
+timeout policy remains enabled throughout that test.
+
 For an isolated service fault, `root-fault` suspends the exact registered TCB.
 For passive NineDoor only, it then consumes the dedicated
 compiler-selected recovery Reply association: an outstanding `root-control`
@@ -291,7 +299,7 @@ QEMU budget demand and largest admitted response by core are:
 
 | Core | Active duties | Budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | emergency, fault, control, console-network | 3,750 us | 3,000 us |
+| 0 | emergency, fault, control, console-network | 6,250 us | 5,000 us |
 | 1 | driver supervisor, Worker supervisor | 1,750 us | 1,400 us |
 | 2 | Worker GPU, Worker LoRA | 800 us | 600 us |
 | 3 | Worker heartbeat | 300 us | 200 us |
@@ -300,7 +308,7 @@ The Pi profile adds only its seven admitted linked-driver tasks:
 
 | Core | Added Pi duties | Total budget demand / 10,000 us | Largest response |
 | --- | --- | ---: | ---: |
-| 0 | none | 3,750 us | 3,000 us |
+| 0 | none | 6,250 us | 5,000 us |
 | 1 | serial, USB | 3,250 us | 2,600 us |
 | 2 | HDMI, PCIe | 1,600 us | 1,200 us |
 | 3 | GENET, CYW43, SDIO | 4,300 us | 3,400 us |
@@ -330,7 +338,7 @@ notification or Reply sizes rather than understating MCS object memory.
 | --- | ---: | ---: | ---: |
 | TCBs / CNodes / VSpaces / ASIDs | 18 each | 25 each | 64 each |
 | Page tables | 344 | 600 | 1,024 |
-| Frames | 2,608 | 4,656 | 8,192 |
+| Frames | 2,616 | 4,664 | 8,192 |
 | Endpoints | 32 | 48 | 128 |
 | Notifications | 35 | 51 | 128 |
 | Standard / timeout fault caps | 18 each | 25 each | 64 each |
