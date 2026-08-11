@@ -118,17 +118,33 @@ one bounded control page, so existing `OK`/`ERR`/`END` ordering is unchanged.
 
 The compiler fixes the child image path and hash-bound ELF identity, 16-slot
 CSpace, one active MCS scheduling context, standard/timeout fault badges, and
-four pointer-free sequence-last pages. The child receives no root CSpace,
-device capability, `SchedControl`, policy object, namespace memory, or second
-listener. All child objects and translation tables descend from one retained
-one-MiB untyped anchor. Fault or timeout handling first closes admission, then
-suspends and unbinds the child, scrubs root-visible pages, and revokes the
-anchor before any generation reuse. Serial, local-seat input, emergency
-diagnostics, and fatal output remain independent root-owned paths and retain
-priority when TCP work is absent or overloaded. QEMU acceptance establishes
-this virtual transport boundary only; it is not Pi 4 NIC or CYW43 evidence, and
-the current Pi network adapter remains outside this QEMU-first construction and
-activation path until the separate hardware phase.
+four pointer-free sequence-last pages. Those pages preserve the fixed 4096-byte
+console-network ABI v1 layout while each live transfer reads or writes only its
+compact scalar header (40 bytes for packets or 64 bytes for control/events) and
+the validated active payload. The producer clears commit, release-fences,
+writes the scalar fields and active bytes, release-fences again, publishes the
+final sequence commit, and signals only afterward. The consumer bounds the
+length before copying and accepts the record only when the surrounding commit
+observations agree. Scalar reserved header fields must validate as zero.
+Inactive payload suffixes and reserved page-tail bytes convey no authority and
+are not scanned or copied per turn; construction zeroing and containment scrub
+remain the confidentiality boundary for those tails. The child maps both root-to-child
+pages (packet ingress and control) read-only, and only its packet-egress and
+event pages read-write. These access and implementation constraints change no
+ABI version, field offset, page layout, schema, authentication rule, or
+ACK/ERR/END behavior.
+
+The child receives no root CSpace, device capability, `SchedControl`, policy
+object, namespace memory, or second listener. All child objects and translation
+tables descend from one retained one-MiB untyped anchor. Fault or timeout
+handling first closes admission, then suspends and unbinds the child, scrubs
+root-visible pages, and revokes the anchor before any generation reuse. Serial,
+local-seat input, emergency diagnostics, and fatal output remain independent
+root-owned paths and retain priority when TCP work is absent or overloaded.
+QEMU acceptance establishes this virtual transport boundary only; it is not Pi
+4 NIC or CYW43 evidence, and the current Pi network adapter remains outside
+this QEMU-first construction and activation path until the separate hardware
+phase.
 
 Console parsing uses fixed-capacity buffers and a shared finite-state command
 parser. A leaky-bucket rate limiter allows two failed authentication attempts in

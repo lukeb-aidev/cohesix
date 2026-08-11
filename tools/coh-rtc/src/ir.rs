@@ -3955,6 +3955,8 @@ mod tests {
         service
             .validate()
             .expect("default console-network object inventory");
+        assert_eq!(service.objects.frames, 59 + 32 + 1 + 1 + 4);
+        assert_eq!(service.objects.cspace_slots, service.objects.frames + 24);
         service.objects.frames = service.objects.frames.saturating_sub(1);
         let error = service
             .validate()
@@ -5504,14 +5506,14 @@ impl ConsoleNetworkServiceConfig {
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 144,
+            frames: 97,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 168,
+            cspace_slots: 121,
             untyped_bytes: 1_048_576,
         };
         if self.revoke_anchor_slot == 0
@@ -5635,14 +5637,14 @@ impl Default for ConsoleNetworkServiceConfig {
                 vspaces: 1,
                 page_tables: 8,
                 asids: 1,
-                frames: 144,
+                frames: 97,
                 endpoints: 0,
                 notifications: 2,
                 fault_caps: 1,
                 timeout_fault_caps: 1,
                 reply_objects: 0,
                 scheduling_contexts: 1,
-                cspace_slots: 168,
+                cspace_slots: 121,
                 untyped_bytes: 1_048_576,
             },
             packet_rx_notification_slot: 2,

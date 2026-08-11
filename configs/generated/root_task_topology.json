@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "7d1182b465a2441d673eee56ba57ac8c19a56daf0423a4e33998f3c7f3c8b86c",
-  "topology_sha256": "79925abe1c01a7364b9d1bbf45d01d8c28733f98d739ad0a05cac31848e82adf",
+  "manifest_sha256": "97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d",
+  "topology_sha256": "513268a3d5c6098c39ee4fc3285af638aad0e3624e25a24a0da80c34e2cdb22c",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
@@ -33,10 +33,10 @@
       "objects": {
         "asids": 1,
         "cnodes": 1,
-        "cspace_slots": 168,
+        "cspace_slots": 121,
         "endpoints": 0,
         "fault_caps": 1,
-        "frames": 144,
+        "frames": 97,
         "notifications": 2,
         "page_tables": 8,
         "reply_objects": 0,
@@ -835,10 +835,10 @@
       "fixed_objects": {
         "asids": 7,
         "cnodes": 7,
-        "cspace_slots": 4103,
+        "cspace_slots": 4056,
         "endpoints": 15,
         "fault_caps": 7,
-        "frames": 2064,
+        "frames": 2017,
         "notifications": 16,
         "page_tables": 256,
         "reply_objects": 6,
@@ -1044,14 +1044,14 @@
     "vspaces": 10,
     "page_tables": 280,
     "asids": 10,
-    "frames": 2112,
+    "frames": 2065,
     "endpoints": 15,
     "notifications": 19,
     "fault_caps": 10,
     "timeout_fault_caps": 10,
     "reply_objects": 6,
     "scheduling_contexts": 10,
-    "cspace_slots": 4295,
+    "cspace_slots": 4248,
     "untyped_bytes": 70254592
   }
 }

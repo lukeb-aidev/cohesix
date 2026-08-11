@@ -4,7 +4,8 @@
 // Author: Lukas Bower
 
 use console_network_abi::{
-    ExchangeKind, ExchangePage, PacketDirection, PacketPage, SHARED_PAGE_BYTES,
+    ExchangeKind, ExchangePage, PacketDirection, PacketPage, EXCHANGE_COMMIT_OFFSET,
+    PACKET_COMMIT_OFFSET, SHARED_PAGE_BYTES,
 };
 use root_task::console_network_service::{
     BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentProof,
@@ -48,9 +49,9 @@ fn generated_contract_is_single_listener_active_mcs_authority() {
     assert_eq!(plan.revoke_anchor_slot, 16_136);
     assert_eq!(plan.objects.scheduling_contexts, 1);
     assert_eq!(plan.objects.reply_objects, 0);
-    assert_eq!(plan.objects.frames, 144);
-    assert_eq!(plan.objects.cspace_slots, 168);
-    assert_eq!(plan.image_pages, 106);
+    assert_eq!(plan.objects.frames, 97);
+    assert_eq!(plan.objects.cspace_slots, 121);
+    assert_eq!(plan.image_pages, 59);
     assert_eq!(contract.stack_vaddr, 0x7203_0000);
     assert_eq!(contract.stack_pages, 32);
     assert_eq!(
@@ -125,6 +126,11 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
     let packet_sequence = boundary
         .stage_ingress(&[1, 2, 3, 4], &mut ingress)
         .expect("first packet");
+    let staged_packet = PacketPage::decode_bounded(&ingress, generation, 0)
+        .expect("root packet publisher must preserve compact ABI bytes");
+    assert_eq!(staged_packet.direction(), PacketDirection::Ingress);
+    assert_eq!(staged_packet.sequence(), packet_sequence);
+    assert_eq!(staged_packet.packet(), &[1, 2, 3, 4]);
     assert_eq!(
         boundary.stage_ingress(&[5], &mut ingress),
         Err(BoundaryError::Backpressure)
@@ -147,6 +153,11 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
     let control_sequence = boundary
         .stage_authorized_line("OK CAT bytes=3", 10, &mut control)
         .expect("root-authorized ACK");
+    let staged_control = ExchangePage::decode_bounded(&control, generation, 0, true)
+        .expect("root control publisher must preserve compact ABI bytes");
+    assert_eq!(staged_control.kind(), ExchangeKind::SendLine);
+    assert_eq!(staged_control.sequence(), control_sequence);
+    assert_eq!(staged_control.payload(), b"OK CAT bytes=3");
     assert_eq!(
         boundary.stage_authorized_line("END CAT", 11, &mut control),
         Err(BoundaryError::Backpressure)
@@ -199,6 +210,17 @@ fn authenticated_commands_and_exact_packet_control_completions_are_bounded() {
         ))
         .expect("authenticated child command");
     assert_eq!(command.payload().expect("UTF-8 command"), "cat /proc/boot");
+
+    let disconnect_sequence = boundary
+        .stage_disconnect(13, &mut control)
+        .expect("root close-after-flush control");
+    let staged_disconnect =
+        ExchangePage::decode_bounded(&control, generation, final_control_sequence, true)
+            .expect("disconnect must preserve compact ABI bytes");
+    assert_eq!(staged_disconnect.kind(), ExchangeKind::Disconnect);
+    assert_eq!(staged_disconnect.sequence(), disconnect_sequence);
+    assert_eq!(staged_disconnect.connection_id(), 42);
+    assert!(staged_disconnect.payload().is_empty());
 }
 
 #[test]
@@ -245,5 +267,60 @@ fn stale_records_and_incomplete_teardown_fail_closed() {
     assert_eq!(
         boundary.accept_egress(&page),
         Err(BoundaryError::StaleIdentity)
+    );
+}
+
+#[test]
+fn mismatched_commits_do_not_advance_root_boundary_state() {
+    let mut boundary = ConsoleNetworkBoundary::new(13).expect("generated contract");
+    let generation = boundary.generation();
+    let mut ready = event_page(
+        generation,
+        1,
+        ExchangeKind::Ready,
+        0,
+        0,
+        READY_IDENTITY.as_bytes(),
+    );
+    ready[EXCHANGE_COMMIT_OFFSET..EXCHANGE_COMMIT_OFFSET + 8].copy_from_slice(&2u64.to_le_bytes());
+    assert_eq!(
+        boundary.accept_event(&ready),
+        Err(BoundaryError::StaleIdentity)
+    );
+    assert_eq!(boundary.state(), ServiceState::Constructing);
+
+    let ready = event_page(
+        generation,
+        1,
+        ExchangeKind::Ready,
+        0,
+        0,
+        READY_IDENTITY.as_bytes(),
+    );
+    boundary
+        .accept_event(&ready)
+        .expect("same sequence remains admissible after rejection");
+
+    let mut egress = [0u8; SHARED_PAGE_BYTES];
+    PacketPage::publish_into(
+        &mut egress,
+        PacketDirection::Egress,
+        generation,
+        1,
+        &[7, 8, 9],
+    )
+    .expect("bounded egress publication");
+    egress[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8].copy_from_slice(&2u64.to_le_bytes());
+    assert_eq!(
+        boundary.accept_egress(&egress),
+        Err(BoundaryError::StaleIdentity)
+    );
+    egress[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8].copy_from_slice(&1u64.to_le_bytes());
+    assert_eq!(
+        boundary
+            .accept_egress(&egress)
+            .expect("same packet remains admissible after rejection")
+            .as_slice(),
+        &[7, 8, 9]
     );
 }

@@ -34,14 +34,14 @@ use crate::console_network_service::{
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
 
-const ROOT_SLOT_COUNT: usize = 168;
+const ROOT_SLOT_COUNT: usize = 121;
 const TRANSLATION_SLOT_COUNT: usize = 8;
-const FRAME_COUNT: usize = 144;
+const FRAME_COUNT: usize = 97;
 const IMAGE_FRAME_START: usize = 0;
-const STACK_FRAME_START: usize = 106;
-const IPC_FRAME_INDEX: usize = 138;
-const INIT_FRAME_INDEX: usize = 139;
-const SHARED_FRAME_START: usize = 140;
+const STACK_FRAME_START: usize = 59;
+const IPC_FRAME_INDEX: usize = 91;
+const INIT_FRAME_INDEX: usize = 92;
+const SHARED_FRAME_START: usize = 93;
 const SHARED_FRAME_COUNT: usize = 4;
 
 const TCB_SLOT_INDEX: usize = 0;
@@ -716,6 +716,11 @@ fn map_shared_frames(
     let root_depth = sel4::word_bits() as u8;
     let mut frames = Vec::new();
     for (index, vaddr) in vaddrs.into_iter().enumerate() {
+        let child_rights = if matches!(index, 0 | 2) {
+            sel4_sys::seL4_CapRights::new(0, 0, 1, 0)
+        } else {
+            sel4_sys::seL4_CapRights_ReadWrite
+        };
         let frame_cap = slots[FRAME_SLOT_START + SHARED_FRAME_START + index];
         let mut frame = hal
             .env
@@ -736,7 +741,7 @@ fn map_shared_frames(
             root_cnode,
             frame_cap,
             root_depth,
-            sel4_sys::seL4_CapRights_ReadWrite,
+            child_rights,
         );
         if error != sel4_sys::seL4_NoError {
             return Err(HalError::Sel4(error));
@@ -748,7 +753,7 @@ fn map_shared_frames(
                 vspace,
                 usize::try_from(vaddr)
                     .map_err(|_| HalError::Unsupported("console-network-shared-vaddr"))?,
-                sel4_sys::seL4_CapRights_ReadWrite,
+                child_rights,
                 runtime_cacheable_xn_attributes(),
                 tracker,
             )
@@ -989,11 +994,11 @@ mod tests {
     #[test]
     fn fixed_slot_plan_accounts_every_generated_object() {
         assert_eq!(FRAME_SLOT_START, 6);
-        assert_eq!(TRANSLATION_SLOT_START, 150);
-        assert_eq!(SHARED_COPY_SLOT_START, 158);
-        assert_eq!(ROOT_WAKE_SLOT_START, 162);
-        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 166);
-        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 167);
+        assert_eq!(TRANSLATION_SLOT_START, 103);
+        assert_eq!(SHARED_COPY_SLOT_START, 111);
+        assert_eq!(ROOT_WAKE_SLOT_START, 115);
+        assert_eq!(STANDARD_FAULT_SLOT_INDEX, 119);
+        assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 120);
         assert_eq!(TIMEOUT_FAULT_SLOT_INDEX + 1, ROOT_SLOT_COUNT);
     }
 

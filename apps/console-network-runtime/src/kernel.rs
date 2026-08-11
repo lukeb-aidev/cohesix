@@ -4,13 +4,13 @@
 // Author: Lukas Bower
 
 use core::panic::PanicInfo;
-use core::ptr::{addr_of, addr_of_mut, read_volatile, write_volatile};
+use core::ptr::{addr_of, addr_of_mut, copy_nonoverlapping, read_volatile, write_volatile};
 use core::sync::atomic::{fence, Ordering};
 
 use console_network_runtime::abi::{
-    ExchangeKind, ExchangePage, PacketDirection, PacketPage, RuntimeInitDescriptor,
-    ETHERNET_FRAME_BYTES, RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_REVOKE,
-    WAKE_SHUTDOWN,
+    ExchangeKind, ExchangePage, ExchangePageHeader, PacketDirection, PacketPage, PacketPageHeader,
+    RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, ETHERNET_FRAME_BYTES,
+    RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
 use console_network_runtime::{ConsoleNetworkService, RuntimeError};
 use heapless::Deque;
@@ -300,41 +300,60 @@ fn signal_slot(slot: u32) {
     }
 }
 
+#[inline(never)]
 fn read_packet(
     page: *const PacketPage,
     generation: u64,
     last_sequence: u64,
 ) -> Result<(u64, heapless::Vec<u8, ETHERNET_FRAME_BYTES>), RuntimeError> {
-    // SAFETY: Init validation proves the page-aligned mapping and root is its
-    // sole producer. Stable commit reads reject torn or early publication.
-    let snapshot = unsafe {
+    // SAFETY: Init validation proves this page-aligned mapping. Root is the
+    // sole producer and keeps the one-slot record stable until the child
+    // publishes its exact completion. Primitive volatile header reads prevent
+    // the compiler from materializing or caching the 4-KiB aggregate.
+    unsafe {
         let commit = addr_of!((*page).committed_sequence);
         let first = read_volatile(commit);
         if first == 0 || first <= last_sequence {
             return Err(RuntimeError::Backpressure);
         }
         fence(Ordering::Acquire);
-        let snapshot = read_volatile(page);
-        fence(Ordering::Acquire);
-        let second = read_volatile(commit);
-        if first != second || snapshot.sequence != first {
+        let header = PacketPageHeader {
+            magic: read_volatile(addr_of!((*page).magic)),
+            abi_version: read_volatile(addr_of!((*page).abi_version)),
+            direction: read_volatile(addr_of!((*page).direction)),
+            generation: read_volatile(addr_of!((*page).generation)),
+            sequence: read_volatile(addr_of!((*page).sequence)),
+            committed_sequence: read_volatile(commit),
+            packet_len: read_volatile(addr_of!((*page).packet_len)),
+            flags: read_volatile(addr_of!((*page).flags)),
+            reserved0: read_volatile(addr_of!((*page).reserved0)),
+        };
+        let (direction, packet_len) = header
+            .validate(generation, last_sequence)
+            .map_err(|_| RuntimeError::PacketBound)?;
+        if direction != PacketDirection::Ingress || first != header.sequence {
             return Err(RuntimeError::PacketBound);
         }
-        snapshot
-    };
-    let (direction, bytes) = snapshot
-        .validate(generation, last_sequence)
-        .map_err(|_| RuntimeError::PacketBound)?;
-    if direction != PacketDirection::Ingress {
-        return Err(RuntimeError::PacketBound);
+        let mut bytes = [0u8; ETHERNET_FRAME_BYTES];
+        copy_nonoverlapping(
+            addr_of!((*page).packet).cast::<u8>(),
+            bytes.as_mut_ptr(),
+            packet_len,
+        );
+        fence(Ordering::Acquire);
+        let second = read_volatile(commit);
+        if first != second {
+            return Err(RuntimeError::PacketBound);
+        }
+        let mut packet = heapless::Vec::new();
+        packet
+            .extend_from_slice(&bytes[..packet_len])
+            .map_err(|_| RuntimeError::PacketBound)?;
+        Ok((header.sequence, packet))
     }
-    let mut packet = heapless::Vec::new();
-    packet
-        .extend_from_slice(bytes)
-        .map_err(|_| RuntimeError::PacketBound)?;
-    Ok((snapshot.sequence, packet))
 }
 
+#[inline(never)]
 fn read_control(
     page: *const ExchangePage,
     generation: u64,
@@ -347,49 +366,89 @@ fn read_control(
     ),
     RuntimeError,
 > {
-    // SAFETY: Init validation proves the page-aligned mapping and root is its
-    // sole producer. Stable commit reads reject torn or early publication.
-    let snapshot = unsafe {
+    // SAFETY: Descriptor validation fixes this page mapping and root is its
+    // sole producer. Only primitive header fields are volatile-read; the
+    // declared payload prefix is copied after its bound is validated.
+    unsafe {
         let commit = addr_of!((*page).committed_sequence);
         let first = read_volatile(commit);
         if first == 0 || first <= last_sequence {
             return Err(RuntimeError::Backpressure);
         }
         fence(Ordering::Acquire);
-        let snapshot = read_volatile(page);
-        fence(Ordering::Acquire);
-        let second = read_volatile(commit);
-        if first != second || snapshot.sequence != first {
+        let header = ExchangePageHeader {
+            magic: read_volatile(addr_of!((*page).magic)),
+            abi_version: read_volatile(addr_of!((*page).abi_version)),
+            kind: read_volatile(addr_of!((*page).kind)),
+            record_bytes: read_volatile(addr_of!((*page).record_bytes)),
+            payload_len: read_volatile(addr_of!((*page).payload_len)),
+            reserved0: read_volatile(addr_of!((*page).reserved0)),
+            generation: read_volatile(addr_of!((*page).generation)),
+            sequence: read_volatile(addr_of!((*page).sequence)),
+            connection_id: read_volatile(addr_of!((*page).connection_id)),
+            now_ms: read_volatile(addr_of!((*page).now_ms)),
+            related_sequence: read_volatile(addr_of!((*page).related_sequence)),
+            committed_sequence: read_volatile(commit),
+        };
+        let (kind, payload_len) = header
+            .validate(generation, last_sequence, true)
+            .map_err(|_| RuntimeError::ConsoleFrame)?;
+        if first != header.sequence {
             return Err(RuntimeError::ConsoleFrame);
         }
-        snapshot
-    };
-    let (kind, bytes) = snapshot
-        .validate(generation, last_sequence, true)
-        .map_err(|_| RuntimeError::ConsoleFrame)?;
-    let mut payload = heapless::Vec::new();
-    payload
-        .extend_from_slice(bytes)
-        .map_err(|_| RuntimeError::ConsoleFrame)?;
-    Ok((snapshot.sequence, kind, payload))
+        let mut bytes = [0u8; CONSOLE_PAYLOAD_BYTES];
+        copy_nonoverlapping(
+            addr_of!((*page).payload).cast::<u8>(),
+            bytes.as_mut_ptr(),
+            payload_len,
+        );
+        fence(Ordering::Acquire);
+        let second = read_volatile(commit);
+        if first != second {
+            return Err(RuntimeError::ConsoleFrame);
+        }
+        let mut payload = heapless::Vec::new();
+        payload
+            .extend_from_slice(&bytes[..payload_len])
+            .map_err(|_| RuntimeError::ConsoleFrame)?;
+        Ok((header.sequence, kind, payload))
+    }
 }
 
+#[inline(never)]
 fn publish_packet(page: *mut PacketPage, generation: u64, sequence: u64, packet: &[u8]) {
-    let mut staged = PacketPage::empty(PacketDirection::Egress, generation);
-    if staged.publish(sequence, packet).is_err() {
-        enter_standard_fault();
-    }
-    staged.committed_sequence = 0;
-    // SAFETY: The validated TX mapping is child-produced only. The full body
-    // precedes a release fence and sequence-last volatile commit.
+    let header =
+        match PacketPageHeader::staged(PacketDirection::Egress, generation, sequence, packet.len())
+        {
+            Ok(header) => header,
+            Err(_) => enter_standard_fault(),
+        };
+    // SAFETY: The descriptor fixes this page-aligned child-produced mapping.
+    // Each scalar and the declared payload prefix remain in that page. Root
+    // does not mutate it before consuming the sequence-last publication.
     unsafe {
-        write_volatile(page, staged);
+        write_volatile(addr_of_mut!((*page).committed_sequence), 0);
+        fence(Ordering::Release);
+        write_volatile(addr_of_mut!((*page).magic), header.magic);
+        write_volatile(addr_of_mut!((*page).abi_version), header.abi_version);
+        write_volatile(addr_of_mut!((*page).direction), header.direction);
+        write_volatile(addr_of_mut!((*page).generation), header.generation);
+        write_volatile(addr_of_mut!((*page).sequence), header.sequence);
+        write_volatile(addr_of_mut!((*page).packet_len), header.packet_len);
+        write_volatile(addr_of_mut!((*page).flags), header.flags);
+        write_volatile(addr_of_mut!((*page).reserved0), header.reserved0);
+        copy_nonoverlapping(
+            packet.as_ptr(),
+            addr_of_mut!((*page).packet).cast::<u8>(),
+            packet.len(),
+        );
         fence(Ordering::Release);
         write_volatile(addr_of_mut!((*page).committed_sequence), sequence);
     }
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(never)]
 fn publish_exchange(
     page: *mut ExchangePage,
     generation: u64,
@@ -400,25 +459,42 @@ fn publish_exchange(
     related_sequence: u64,
     payload: &[u8],
 ) {
-    let mut staged = ExchangePage::empty(generation);
-    if staged
-        .publish_related(
-            kind,
-            sequence,
-            connection_id,
-            observation_ms,
-            related_sequence,
-            payload,
-        )
-        .is_err()
-    {
-        enter_standard_fault();
-    }
-    staged.committed_sequence = 0;
-    // SAFETY: The validated event mapping is child-produced only. The full
-    // body precedes a release fence and sequence-last volatile commit.
+    let header = match ExchangePageHeader::staged(
+        kind,
+        generation,
+        sequence,
+        connection_id,
+        observation_ms,
+        related_sequence,
+        payload.len(),
+    ) {
+        Ok(header) => header,
+        Err(_) => enter_standard_fault(),
+    };
+    // SAFETY: The descriptor fixes this page-aligned child-produced mapping.
+    // The bounded body is stable until root consumes this one-slot record.
     unsafe {
-        write_volatile(page, staged);
+        write_volatile(addr_of_mut!((*page).committed_sequence), 0);
+        fence(Ordering::Release);
+        write_volatile(addr_of_mut!((*page).magic), header.magic);
+        write_volatile(addr_of_mut!((*page).abi_version), header.abi_version);
+        write_volatile(addr_of_mut!((*page).kind), header.kind);
+        write_volatile(addr_of_mut!((*page).record_bytes), header.record_bytes);
+        write_volatile(addr_of_mut!((*page).payload_len), header.payload_len);
+        write_volatile(addr_of_mut!((*page).reserved0), header.reserved0);
+        write_volatile(addr_of_mut!((*page).generation), header.generation);
+        write_volatile(addr_of_mut!((*page).sequence), header.sequence);
+        write_volatile(addr_of_mut!((*page).connection_id), header.connection_id);
+        write_volatile(addr_of_mut!((*page).now_ms), header.now_ms);
+        write_volatile(
+            addr_of_mut!((*page).related_sequence),
+            header.related_sequence,
+        );
+        copy_nonoverlapping(
+            payload.as_ptr(),
+            addr_of_mut!((*page).payload).cast::<u8>(),
+            payload.len(),
+        );
         fence(Ordering::Release);
         write_volatile(addr_of_mut!((*page).committed_sequence), sequence);
     }

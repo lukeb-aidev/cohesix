@@ -177,6 +177,59 @@ mod tests {
     }
 
     #[test]
+    fn console_network_image_shrink_is_exactly_accounted() {
+        for (
+            manifest,
+            fixed_frames,
+            fixed_slots,
+            maximum_frames,
+            maximum_slots,
+            admitted_frames,
+            admitted_slots,
+        ) in [
+            (qemu_manifest(), 2_017, 4_056, 2_065, 4_248, 2_577, 6_296),
+            (pi4_manifest(), 4_065, 8_960, 4_113, 9_152, 4_625, 11_200),
+        ] {
+            assert_eq!(manifest.console_network_service.stack_pages, 32);
+            assert_eq!(manifest.console_network_service.objects.frames, 97);
+            assert_eq!(manifest.console_network_service.objects.cspace_slots, 121);
+            assert_eq!(
+                manifest.worker_resource_admission.fixed_objects.frames,
+                fixed_frames
+            );
+            assert_eq!(
+                manifest
+                    .worker_resource_admission
+                    .fixed_objects
+                    .cspace_slots,
+                fixed_slots
+            );
+            let maximum = manifest
+                .worker_resource_admission
+                .maximum_inventory()
+                .expect("maximum inventory");
+            assert_eq!(maximum.frames, maximum_frames);
+            assert_eq!(maximum.cspace_slots, maximum_slots);
+            assert_eq!(
+                maximum.frames
+                    + manifest
+                        .worker_resource_admission
+                        .post_construction_reserve
+                        .frames,
+                admitted_frames
+            );
+            assert_eq!(
+                maximum.cspace_slots
+                    + manifest
+                        .worker_resource_admission
+                        .post_construction_reserve
+                        .cspace_slots,
+                admitted_slots
+            );
+        }
+    }
+
+    #[test]
     fn root_control_turn_candidate_is_exactly_accounted() {
         for manifest in [qemu_manifest(), pi4_manifest()] {
             let root_control = manifest
@@ -260,10 +313,10 @@ mod tests {
         );
         assert_eq!(record["inventory"]["tcbs"], 10);
         assert_eq!(record["inventory"]["scheduling_contexts"], 10);
-        assert_eq!(record["inventory"]["frames"], 2112);
+        assert_eq!(record["inventory"]["frames"], 2065);
         assert_eq!(record["inventory"]["endpoints"], 15);
         assert_eq!(record["inventory"]["reply_objects"], 6);
-        assert_eq!(record["inventory"]["cspace_slots"], 4295);
+        assert_eq!(record["inventory"]["cspace_slots"], 4248);
 
         let canonical = canonical_json(&record["topology"]).expect("canonical topology");
         assert_eq!(

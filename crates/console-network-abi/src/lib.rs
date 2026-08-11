@@ -14,9 +14,12 @@
 //! framing. Four single-producer/single-consumer pages carry one durable packet,
 //! control request, or event at a time. A producer stages a complete body and
 //! writes `committed_sequence` last before signaling the peer. The consumer
-//! validates the generation and identical sequence fields before use.
+//! validates the generation and identical sequence fields before use. Page
+//! tails are construction-zeroed, containment-scrubbed, and carry no record
+//! authority. Bounded service turns never copy or scan those padding bytes.
 
 use core::mem::{align_of, size_of};
+use core::sync::atomic::{fence, Ordering};
 
 /// Runtime-init magic (`CNI1`).
 pub const RUNTIME_INIT_MAGIC: u32 = 0x434e_4931;
@@ -91,6 +94,22 @@ pub const REQUIRED_INIT_FLAGS: u32 = INIT_FLAG_POINTER_FREE
 
 const PACKET_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 40 - ETHERNET_FRAME_BYTES;
 const EXCHANGE_RESERVED_BYTES: usize = SHARED_PAGE_BYTES - 64 - CONSOLE_PAYLOAD_BYTES;
+/// Byte offset of the packet page's sequence-last commit word.
+pub const PACKET_COMMIT_OFFSET: usize = 24;
+/// Exact bytes occupied by the packet page header.
+pub const PACKET_HEADER_BYTES: usize = 40;
+/// Byte offset of the packet page's active-length field.
+pub const PACKET_LENGTH_OFFSET: usize = 32;
+/// Byte offset of the packet payload within its shared page.
+pub const PACKET_PAYLOAD_OFFSET: usize = PACKET_HEADER_BYTES;
+/// Byte offset of the exchange page's sequence-last commit word.
+pub const EXCHANGE_COMMIT_OFFSET: usize = 56;
+/// Exact bytes occupied by the exchange page header.
+pub const EXCHANGE_HEADER_BYTES: usize = 64;
+/// Byte offset of the exchange page's active-length field.
+pub const EXCHANGE_LENGTH_OFFSET: usize = 10;
+/// Byte offset of the exchange payload within its shared page.
+pub const EXCHANGE_PAYLOAD_OFFSET: usize = EXCHANGE_HEADER_BYTES;
 const FNV64_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
 const FNV64_PRIME: u64 = 0x0000_0100_0000_01b3;
 
@@ -168,6 +187,271 @@ pub enum ExchangeKind {
     OutputDrained = 26,
 }
 
+/// Compact validated metadata for one packet-page publication.
+///
+/// Unlike [`PacketPage`], this record does not carry page alignment or the
+/// reserved tail. It lets target runtimes copy only the declared packet bytes
+/// while retaining the fixed 4-KiB wire layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PacketPageHeader {
+    /// [`PACKET_PAGE_MAGIC`].
+    pub magic: u32,
+    /// [`ABI_VERSION`].
+    pub abi_version: u16,
+    /// Raw [`PacketDirection`].
+    pub direction: u16,
+    /// Nonzero child generation.
+    pub generation: u64,
+    /// Producer sequence.
+    pub sequence: u64,
+    /// Sequence-last publication word.
+    pub committed_sequence: u64,
+    /// Initialized packet bytes.
+    pub packet_len: u16,
+    /// Reserved flags; zero.
+    pub flags: u16,
+    /// Reserved; zero.
+    pub reserved0: u32,
+}
+
+impl PacketPageHeader {
+    /// Build one uncommitted packet header after validating its bounds.
+    pub fn staged(
+        direction: PacketDirection,
+        generation: u64,
+        sequence: u64,
+        packet_len: usize,
+    ) -> Result<Self, AbiError> {
+        if generation == 0 || sequence == 0 || packet_len == 0 || packet_len > ETHERNET_FRAME_BYTES
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        Ok(Self {
+            magic: PACKET_PAGE_MAGIC,
+            abi_version: ABI_VERSION,
+            direction: direction as u16,
+            generation,
+            sequence,
+            committed_sequence: 0,
+            packet_len: packet_len as u16,
+            flags: 0,
+            reserved0: 0,
+        })
+    }
+
+    /// Validate identity, generation, sequence, direction, and packet bound.
+    pub fn validate(
+        self,
+        generation: u64,
+        after_sequence: u64,
+    ) -> Result<(PacketDirection, usize), AbiError> {
+        if self.magic != PACKET_PAGE_MAGIC || self.abi_version != ABI_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if self.generation != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        if self.sequence == 0
+            || self.sequence <= after_sequence
+            || self.committed_sequence != self.sequence
+        {
+            return Err(AbiError::InvalidSequence);
+        }
+        let packet_len = self.packet_len as usize;
+        if packet_len == 0
+            || packet_len > ETHERNET_FRAME_BYTES
+            || self.flags != 0
+            || self.reserved0 != 0
+        {
+            return Err(AbiError::InvalidBound);
+        }
+        Ok((PacketDirection::from_raw(self.direction)?, packet_len))
+    }
+}
+
+/// Compact owned packet copied from one stable shared-page publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PacketRecord {
+    direction: PacketDirection,
+    sequence: u64,
+    packet_len: u16,
+    packet: [u8; ETHERNET_FRAME_BYTES],
+}
+
+impl PacketRecord {
+    /// Validated packet direction.
+    #[must_use]
+    pub const fn direction(&self) -> PacketDirection {
+        self.direction
+    }
+
+    /// Exact producer sequence.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Initialized packet bytes only.
+    #[must_use]
+    pub fn packet(&self) -> &[u8] {
+        &self.packet[..self.packet_len as usize]
+    }
+}
+
+/// Compact validated metadata for one console exchange publication.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct ExchangePageHeader {
+    /// [`EXCHANGE_PAGE_MAGIC`].
+    pub magic: u32,
+    /// [`ABI_VERSION`].
+    pub abi_version: u16,
+    /// Raw [`ExchangeKind`].
+    pub kind: u16,
+    /// Exact fixed page size.
+    pub record_bytes: u16,
+    /// Initialized payload bytes.
+    pub payload_len: u16,
+    /// Reserved; zero.
+    pub reserved0: u32,
+    /// Nonzero child generation.
+    pub generation: u64,
+    /// Producer sequence.
+    pub sequence: u64,
+    /// Exact connection identity, or zero for READY.
+    pub connection_id: u64,
+    /// Monotonic observation timestamp supplied by the producer.
+    pub now_ms: u64,
+    /// Exact packet/control sequence acknowledged by completion kinds.
+    pub related_sequence: u64,
+    /// Sequence-last publication word.
+    pub committed_sequence: u64,
+}
+
+impl ExchangePageHeader {
+    /// Build one uncommitted exchange header after validating its metadata.
+    pub fn staged(
+        kind: ExchangeKind,
+        generation: u64,
+        sequence: u64,
+        connection_id: u64,
+        now_ms: u64,
+        related_sequence: u64,
+        payload_len: usize,
+    ) -> Result<Self, AbiError> {
+        validate_exchange_metadata(
+            kind,
+            generation,
+            sequence,
+            connection_id,
+            related_sequence,
+            payload_len,
+        )?;
+        Ok(Self {
+            magic: EXCHANGE_PAGE_MAGIC,
+            abi_version: ABI_VERSION,
+            kind: kind as u16,
+            record_bytes: SHARED_PAGE_BYTES as u16,
+            payload_len: payload_len as u16,
+            reserved0: 0,
+            generation,
+            sequence,
+            connection_id,
+            now_ms,
+            related_sequence,
+            committed_sequence: 0,
+        })
+    }
+
+    /// Validate identity, direction, generation, sequence, and payload bound.
+    pub fn validate(
+        self,
+        generation: u64,
+        after_sequence: u64,
+        root_to_child: bool,
+    ) -> Result<(ExchangeKind, usize), AbiError> {
+        if self.magic != EXCHANGE_PAGE_MAGIC || self.abi_version != ABI_VERSION {
+            return Err(AbiError::InvalidIdentity);
+        }
+        if self.record_bytes as usize != SHARED_PAGE_BYTES || self.reserved0 != 0 {
+            return Err(AbiError::InvalidLayout);
+        }
+        if self.generation != generation {
+            return Err(AbiError::StaleGeneration);
+        }
+        if self.sequence == 0
+            || self.sequence <= after_sequence
+            || self.committed_sequence != self.sequence
+        {
+            return Err(AbiError::InvalidSequence);
+        }
+        let kind = ExchangeKind::from_raw(self.kind)?;
+        if kind.root_to_child() != root_to_child {
+            return Err(AbiError::InvalidKind);
+        }
+        validate_exchange_metadata(
+            kind,
+            self.generation,
+            self.sequence,
+            self.connection_id,
+            self.related_sequence,
+            self.payload_len as usize,
+        )?;
+        Ok((kind, self.payload_len as usize))
+    }
+}
+
+/// Compact owned exchange copied from one stable shared-page publication.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExchangeRecord {
+    kind: ExchangeKind,
+    sequence: u64,
+    connection_id: u64,
+    now_ms: u64,
+    related_sequence: u64,
+    payload_len: u16,
+    payload: [u8; CONSOLE_PAYLOAD_BYTES],
+}
+
+impl ExchangeRecord {
+    /// Validated exchange kind.
+    #[must_use]
+    pub const fn kind(&self) -> ExchangeKind {
+        self.kind
+    }
+
+    /// Exact producer sequence.
+    #[must_use]
+    pub const fn sequence(&self) -> u64 {
+        self.sequence
+    }
+
+    /// Exact child connection identity.
+    #[must_use]
+    pub const fn connection_id(&self) -> u64 {
+        self.connection_id
+    }
+
+    /// Producer observation time.
+    #[must_use]
+    pub const fn now_ms(&self) -> u64 {
+        self.now_ms
+    }
+
+    /// Exact related packet/control sequence.
+    #[must_use]
+    pub const fn related_sequence(&self) -> u64 {
+        self.related_sequence
+    }
+
+    /// Initialized and UTF-8-validated payload bytes.
+    #[must_use]
+    pub fn payload(&self) -> &[u8] {
+        &self.payload[..self.payload_len as usize]
+    }
+}
+
 impl ExchangeKind {
     /// Decode a raw record kind.
     pub const fn from_raw(value: u16) -> Result<Self, AbiError> {
@@ -234,13 +518,13 @@ pub struct RuntimeInitDescriptor {
     pub child_wake_mask: u64,
     /// Child IPC-buffer mapping selected by the supervisor.
     pub ipc_buffer_vaddr: u64,
-    /// Read-write ingress packet page in the child.
+    /// Root-produced ingress packet page mapped read-only in the child.
     pub packet_rx_vaddr: u64,
-    /// Read-write egress packet page in the child.
+    /// Child-produced egress packet page mapped read-write in the child.
     pub packet_tx_vaddr: u64,
-    /// Read-write root control page in the child.
+    /// Root-produced control page mapped read-only in the child.
     pub command_vaddr: u64,
-    /// Read-write child event page in the child.
+    /// Child-produced event page mapped read-write in the child.
     pub event_vaddr: u64,
     /// Exact [`SHARED_PAGE_BYTES`].
     pub shared_frame_bytes: u32,
@@ -578,6 +862,83 @@ impl PacketPage {
         }
     }
 
+    /// Publish one packet directly into an already-zeroed shared page.
+    ///
+    /// Only the fixed header and initialized packet prefix are rewritten. The
+    /// reserved tail is construction-zeroed, non-authoritative, and left
+    /// untouched by this bounded publisher.
+    /// The mapped commit word is cleared first and written last after a release
+    /// fence, so a consumer can never accept a partially staged body.
+    pub fn publish_into(
+        output: &mut [u8],
+        direction: PacketDirection,
+        generation: u64,
+        sequence: u64,
+        packet: &[u8],
+    ) -> Result<(), AbiError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let header = PacketPageHeader::staged(direction, generation, sequence, packet.len())?;
+        output[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8].copy_from_slice(&0u64.to_le_bytes());
+        fence(Ordering::Release);
+        output[0..4].copy_from_slice(&header.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&header.abi_version.to_le_bytes());
+        output[6..8].copy_from_slice(&header.direction.to_le_bytes());
+        output[8..16].copy_from_slice(&header.generation.to_le_bytes());
+        output[16..24].copy_from_slice(&header.sequence.to_le_bytes());
+        output[32..34].copy_from_slice(&header.packet_len.to_le_bytes());
+        output[34..36].copy_from_slice(&header.flags.to_le_bytes());
+        output[36..40].copy_from_slice(&header.reserved0.to_le_bytes());
+        output[PACKET_PAYLOAD_OFFSET..PACKET_PAYLOAD_OFFSET + packet.len()].copy_from_slice(packet);
+        fence(Ordering::Release);
+        output[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8]
+            .copy_from_slice(&sequence.to_le_bytes());
+        Ok(())
+    }
+
+    /// Copy one stable packet publication without materializing a 4-KiB page.
+    pub fn decode_bounded(
+        input: &[u8],
+        generation: u64,
+        after_sequence: u64,
+    ) -> Result<PacketRecord, AbiError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let first = read_u64(input, PACKET_COMMIT_OFFSET);
+        fence(Ordering::Acquire);
+        let header = PacketPageHeader {
+            magic: read_u32(input, 0),
+            abi_version: read_u16(input, 4),
+            direction: read_u16(input, 6),
+            generation: read_u64(input, 8),
+            sequence: read_u64(input, 16),
+            committed_sequence: read_u64(input, PACKET_COMMIT_OFFSET),
+            packet_len: read_u16(input, 32),
+            flags: read_u16(input, 34),
+            reserved0: read_u32(input, 36),
+        };
+        let (direction, packet_len) = header.validate(generation, after_sequence)?;
+        if first != header.sequence {
+            return Err(AbiError::InvalidSequence);
+        }
+        let mut packet = [0; ETHERNET_FRAME_BYTES];
+        packet[..packet_len]
+            .copy_from_slice(&input[PACKET_PAYLOAD_OFFSET..PACKET_PAYLOAD_OFFSET + packet_len]);
+        fence(Ordering::Acquire);
+        let second = read_u64(input, PACKET_COMMIT_OFFSET);
+        if first != second {
+            return Err(AbiError::InvalidSequence);
+        }
+        Ok(PacketRecord {
+            direction,
+            sequence: header.sequence,
+            packet_len: header.packet_len,
+            packet,
+        })
+    }
+
     /// Stage and commit one packet. Callers signal only after this returns.
     pub fn publish(&mut self, sequence: u64, packet: &[u8]) -> Result<(), AbiError> {
         if sequence == 0 || packet.is_empty() || packet.len() > self.packet.len() {
@@ -630,18 +991,21 @@ impl PacketPage {
         if output.len() != SHARED_PAGE_BYTES {
             return Err(AbiError::InvalidLayout);
         }
+        output[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8].copy_from_slice(&0u64.to_le_bytes());
+        fence(Ordering::Release);
         output.fill(0);
         output[0..4].copy_from_slice(&self.magic.to_le_bytes());
         output[4..6].copy_from_slice(&self.abi_version.to_le_bytes());
         output[6..8].copy_from_slice(&self.direction.to_le_bytes());
         output[8..16].copy_from_slice(&self.generation.to_le_bytes());
         output[16..24].copy_from_slice(&self.sequence.to_le_bytes());
-        output[24..32].copy_from_slice(&self.committed_sequence.to_le_bytes());
         output[32..34].copy_from_slice(&self.packet_len.to_le_bytes());
         output[34..36].copy_from_slice(&self.flags.to_le_bytes());
         output[36..40].copy_from_slice(&self.reserved0.to_le_bytes());
         output[40..40 + ETHERNET_FRAME_BYTES].copy_from_slice(&self.packet);
         output[40 + ETHERNET_FRAME_BYTES..].copy_from_slice(&self.reserved);
+        fence(Ordering::Release);
+        output[24..32].copy_from_slice(&self.committed_sequence.to_le_bytes());
         Ok(())
     }
 
@@ -737,6 +1101,105 @@ impl ExchangePage {
             payload: [0; CONSOLE_PAYLOAD_BYTES],
             reserved: [0; EXCHANGE_RESERVED_BYTES],
         }
+    }
+
+    /// Publish one exchange directly into an already-zeroed shared page.
+    #[allow(clippy::too_many_arguments)]
+    pub fn publish_related_into(
+        output: &mut [u8],
+        kind: ExchangeKind,
+        generation: u64,
+        sequence: u64,
+        connection_id: u64,
+        now_ms: u64,
+        related_sequence: u64,
+        payload: &[u8],
+    ) -> Result<(), AbiError> {
+        if output.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let header = ExchangePageHeader::staged(
+            kind,
+            generation,
+            sequence,
+            connection_id,
+            now_ms,
+            related_sequence,
+            payload.len(),
+        )?;
+        output[EXCHANGE_COMMIT_OFFSET..EXCHANGE_COMMIT_OFFSET + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        fence(Ordering::Release);
+        output[0..4].copy_from_slice(&header.magic.to_le_bytes());
+        output[4..6].copy_from_slice(&header.abi_version.to_le_bytes());
+        output[6..8].copy_from_slice(&header.kind.to_le_bytes());
+        output[8..10].copy_from_slice(&header.record_bytes.to_le_bytes());
+        output[10..12].copy_from_slice(&header.payload_len.to_le_bytes());
+        output[12..16].copy_from_slice(&header.reserved0.to_le_bytes());
+        output[16..24].copy_from_slice(&header.generation.to_le_bytes());
+        output[24..32].copy_from_slice(&header.sequence.to_le_bytes());
+        output[32..40].copy_from_slice(&header.connection_id.to_le_bytes());
+        output[40..48].copy_from_slice(&header.now_ms.to_le_bytes());
+        output[48..56].copy_from_slice(&header.related_sequence.to_le_bytes());
+        output[EXCHANGE_PAYLOAD_OFFSET..EXCHANGE_PAYLOAD_OFFSET + payload.len()]
+            .copy_from_slice(payload);
+        fence(Ordering::Release);
+        output[EXCHANGE_COMMIT_OFFSET..EXCHANGE_COMMIT_OFFSET + 8]
+            .copy_from_slice(&sequence.to_le_bytes());
+        Ok(())
+    }
+
+    /// Copy one stable exchange without materializing a 4-KiB page.
+    pub fn decode_bounded(
+        input: &[u8],
+        generation: u64,
+        after_sequence: u64,
+        root_to_child: bool,
+    ) -> Result<ExchangeRecord, AbiError> {
+        if input.len() != SHARED_PAGE_BYTES {
+            return Err(AbiError::InvalidLayout);
+        }
+        let first = read_u64(input, EXCHANGE_COMMIT_OFFSET);
+        fence(Ordering::Acquire);
+        let header = ExchangePageHeader {
+            magic: read_u32(input, 0),
+            abi_version: read_u16(input, 4),
+            kind: read_u16(input, 6),
+            record_bytes: read_u16(input, 8),
+            payload_len: read_u16(input, 10),
+            reserved0: read_u32(input, 12),
+            generation: read_u64(input, 16),
+            sequence: read_u64(input, 24),
+            connection_id: read_u64(input, 32),
+            now_ms: read_u64(input, 40),
+            related_sequence: read_u64(input, 48),
+            committed_sequence: read_u64(input, EXCHANGE_COMMIT_OFFSET),
+        };
+        let (kind, payload_len) = header.validate(generation, after_sequence, root_to_child)?;
+        if first != header.sequence {
+            return Err(AbiError::InvalidSequence);
+        }
+        let mut payload = [0; CONSOLE_PAYLOAD_BYTES];
+        payload[..payload_len].copy_from_slice(
+            &input[EXCHANGE_PAYLOAD_OFFSET..EXCHANGE_PAYLOAD_OFFSET + payload_len],
+        );
+        if core::str::from_utf8(&payload[..payload_len]).is_err() {
+            return Err(AbiError::InvalidBound);
+        }
+        fence(Ordering::Acquire);
+        let second = read_u64(input, EXCHANGE_COMMIT_OFFSET);
+        if first != second {
+            return Err(AbiError::InvalidSequence);
+        }
+        Ok(ExchangeRecord {
+            kind,
+            sequence: header.sequence,
+            connection_id: header.connection_id,
+            now_ms: header.now_ms,
+            related_sequence: header.related_sequence,
+            payload_len: header.payload_len,
+            payload,
+        })
     }
 
     /// Stage and commit one directional record.
@@ -861,6 +1324,9 @@ impl ExchangePage {
         if output.len() != SHARED_PAGE_BYTES {
             return Err(AbiError::InvalidLayout);
         }
+        output[EXCHANGE_COMMIT_OFFSET..EXCHANGE_COMMIT_OFFSET + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        fence(Ordering::Release);
         output.fill(0);
         output[0..4].copy_from_slice(&self.magic.to_le_bytes());
         output[4..6].copy_from_slice(&self.abi_version.to_le_bytes());
@@ -873,9 +1339,10 @@ impl ExchangePage {
         output[32..40].copy_from_slice(&self.connection_id.to_le_bytes());
         output[40..48].copy_from_slice(&self.now_ms.to_le_bytes());
         output[48..56].copy_from_slice(&self.related_sequence.to_le_bytes());
-        output[56..64].copy_from_slice(&self.committed_sequence.to_le_bytes());
         output[64..64 + CONSOLE_PAYLOAD_BYTES].copy_from_slice(&self.payload);
         output[64 + CONSOLE_PAYLOAD_BYTES..].copy_from_slice(&self.reserved);
+        fence(Ordering::Release);
+        output[56..64].copy_from_slice(&self.committed_sequence.to_le_bytes());
         Ok(())
     }
 
@@ -931,6 +1398,46 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
         bytes[offset + 6],
         bytes[offset + 7],
     ])
+}
+
+fn validate_exchange_metadata(
+    kind: ExchangeKind,
+    generation: u64,
+    sequence: u64,
+    connection_id: u64,
+    related_sequence: u64,
+    payload_len: usize,
+) -> Result<(), AbiError> {
+    if generation == 0 || sequence == 0 || payload_len > CONSOLE_PAYLOAD_BYTES {
+        return Err(AbiError::InvalidBound);
+    }
+    if matches!(kind, ExchangeKind::SendLine | ExchangeKind::Command) && payload_len == 0 {
+        return Err(AbiError::InvalidBound);
+    }
+    if kind == ExchangeKind::Command && payload_len > COMMAND_LINE_BYTES {
+        return Err(AbiError::InvalidBound);
+    }
+    if matches!(
+        kind,
+        ExchangeKind::Connected
+            | ExchangeKind::Authenticated
+            | ExchangeKind::Command
+            | ExchangeKind::Disconnected
+            | ExchangeKind::Backpressure
+            | ExchangeKind::Rejected
+            | ExchangeKind::OutputDrained
+    ) && connection_id == 0
+    {
+        return Err(AbiError::InvalidBound);
+    }
+    let completion = matches!(
+        kind,
+        ExchangeKind::PacketConsumed | ExchangeKind::ControlCompleted | ExchangeKind::OutputDrained
+    );
+    if completion != (related_sequence != 0) {
+        return Err(AbiError::InvalidSequence);
+    }
+    Ok(())
 }
 
 const fn hash_byte(hash: u64, byte: u8) -> u64 {
@@ -989,6 +1496,16 @@ const _: () = assert!(align_of::<PacketPage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<ExchangePage>() == SHARED_PAGE_BYTES);
 const _: () = assert!(size_of::<RuntimeInitDescriptor>() == RUNTIME_INIT_DESCRIPTOR_BYTES);
 const _: () = assert!(align_of::<ExchangePage>() == SHARED_PAGE_BYTES);
+const _: () = assert!(size_of::<PacketPageHeader>() == PACKET_HEADER_BYTES);
+const _: () = assert!(size_of::<ExchangePageHeader>() == EXCHANGE_HEADER_BYTES);
+const _: () = assert!(core::mem::offset_of!(PacketPage, packet_len) == PACKET_LENGTH_OFFSET);
+const _: () =
+    assert!(core::mem::offset_of!(PacketPage, committed_sequence) == PACKET_COMMIT_OFFSET);
+const _: () = assert!(core::mem::offset_of!(PacketPage, packet) == PACKET_PAYLOAD_OFFSET);
+const _: () = assert!(core::mem::offset_of!(ExchangePage, payload_len) == EXCHANGE_LENGTH_OFFSET);
+const _: () =
+    assert!(core::mem::offset_of!(ExchangePage, committed_sequence) == EXCHANGE_COMMIT_OFFSET);
+const _: () = assert!(core::mem::offset_of!(ExchangePage, payload) == EXCHANGE_PAYLOAD_OFFSET);
 
 #[cfg(test)]
 mod tests {
@@ -1054,6 +1571,77 @@ mod tests {
         assert_eq!(packet.validate(7, 0).unwrap().1, &[1, 2, 3]);
         packet.committed_sequence = 0;
         assert_eq!(packet.validate(7, 0), Err(AbiError::InvalidSequence));
+    }
+
+    #[test]
+    fn bounded_packet_io_preserves_v1_layout_and_ignores_padding() {
+        assert_eq!(PACKET_COMMIT_OFFSET, 24);
+        assert_eq!(PACKET_LENGTH_OFFSET, 32);
+        assert_eq!(PACKET_HEADER_BYTES, PACKET_PAYLOAD_OFFSET);
+
+        let mut compact = [0xa5; SHARED_PAGE_BYTES];
+        PacketPage::publish_into(&mut compact, PacketDirection::Ingress, 7, 1, &[1, 2, 3]).unwrap();
+        assert!(compact[PACKET_PAYLOAD_OFFSET + 3..]
+            .iter()
+            .all(|byte| *byte == 0xa5));
+        let decoded = PacketPage::decode_bounded(&compact, 7, 0).unwrap();
+        assert_eq!(decoded.direction(), PacketDirection::Ingress);
+        assert_eq!(decoded.sequence(), 1);
+        assert_eq!(decoded.packet(), &[1, 2, 3]);
+
+        compact[PACKET_COMMIT_OFFSET..PACKET_COMMIT_OFFSET + 8]
+            .copy_from_slice(&0u64.to_le_bytes());
+        assert_eq!(
+            PacketPage::decode_bounded(&compact, 7, 0),
+            Err(AbiError::InvalidSequence)
+        );
+    }
+
+    #[test]
+    fn bounded_exchange_io_is_active_length_only_and_fail_closed() {
+        assert_eq!(EXCHANGE_LENGTH_OFFSET, 10);
+        assert_eq!(EXCHANGE_COMMIT_OFFSET, 56);
+        assert_eq!(EXCHANGE_HEADER_BYTES, EXCHANGE_PAYLOAD_OFFSET);
+
+        let mut compact = [0x5a; SHARED_PAGE_BYTES];
+        ExchangePage::publish_related_into(
+            &mut compact,
+            ExchangeKind::Command,
+            7,
+            3,
+            9,
+            20,
+            0,
+            b"cat /proc/boot",
+        )
+        .unwrap();
+        assert!(compact[EXCHANGE_PAYLOAD_OFFSET + b"cat /proc/boot".len()..]
+            .iter()
+            .all(|byte| *byte == 0x5a));
+        let decoded = ExchangePage::decode_bounded(&compact, 7, 0, false).unwrap();
+        assert_eq!(decoded.kind(), ExchangeKind::Command);
+        assert_eq!(decoded.connection_id(), 9);
+        assert_eq!(decoded.payload(), b"cat /proc/boot");
+
+        compact[EXCHANGE_COMMIT_OFFSET..EXCHANGE_COMMIT_OFFSET + 8]
+            .copy_from_slice(&4u64.to_le_bytes());
+        assert_eq!(
+            ExchangePage::decode_bounded(&compact, 7, 0, false),
+            Err(AbiError::InvalidSequence)
+        );
+        assert_eq!(
+            ExchangePage::publish_related_into(
+                &mut compact,
+                ExchangeKind::Command,
+                7,
+                4,
+                9,
+                21,
+                0,
+                &[b'x'; COMMAND_LINE_BYTES + 1],
+            ),
+            Err(AbiError::InvalidBound)
+        );
     }
 
     #[test]

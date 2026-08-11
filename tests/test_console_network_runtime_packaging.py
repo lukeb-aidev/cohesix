@@ -16,6 +16,9 @@ ROOT_BUILD = REPO_ROOT / "apps" / "root-task" / "build.rs"
 RUNTIME_MANIFEST = REPO_ROOT / "apps" / "console-network-runtime" / "Cargo.toml"
 RUNTIME_MAIN = REPO_ROOT / "apps" / "console-network-runtime" / "src" / "main.rs"
 RUNTIME_KERNEL = REPO_ROOT / "apps" / "console-network-runtime" / "src" / "kernel.rs"
+ROOT_HAL = (
+    REPO_ROOT / "apps" / "root-task" / "src" / "hal" / "console_network.rs"
+)
 ROOT_MANIFEST = REPO_ROOT / "configs" / "root_task.toml"
 
 
@@ -83,3 +86,33 @@ def test_runtime_qemu_fault_hooks_are_diagnostic_and_control_path_bound() -> Non
     hook = source.split("/// Stable external-QEMU evidence hook", maxsplit=1)[1]
     hook = hook.split("/// Target entry", maxsplit=1)[0]
     assert "seL4_" not in hook
+
+
+def test_runtime_shared_pages_use_bounded_sequence_last_io() -> None:
+    """The target must never materialize a volatile 4-KiB page value."""
+
+    source = RUNTIME_KERNEL.read_text(encoding="utf-8")
+
+    assert "read_volatile(page)" not in source
+    assert "write_volatile(page, staged)" not in source
+    assert "#[inline(never)]\nfn read_packet" in source
+    assert "#[inline(never)]\nfn read_control" in source
+    assert "#[inline(never)]\nfn publish_packet" in source
+    assert "#[inline(never)]\nfn publish_exchange" in source
+    assert "PacketPageHeader" in source
+    assert "ExchangePageHeader" in source
+    assert "copy_nonoverlapping" in source
+    assert source.count("unsafe {") == 12
+
+
+def test_shared_page_caps_are_directionally_minimal() -> None:
+    """The child can write only its egress packet and event pages."""
+
+    source = ROOT_HAL.read_text(encoding="utf-8")
+    mapping = source.split("fn map_shared_frames(", maxsplit=1)[1]
+    mapping = mapping.split("fn install_caps_and_mcs(", maxsplit=1)[0]
+
+    assert "let child_rights = if matches!(index, 0 | 2)" in mapping
+    assert "seL4_CapRights::new(0, 0, 1, 0)" in mapping
+    assert "seL4_CapRights_ReadWrite" in mapping
+    assert "child_rights," in mapping

@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "f57eec785a6dadc1873c34e86c00129ffeaef9c11041cb5c44121af119103a54";
+    "38a73ae8b3ec8c1be2318f30014b8f5a438626f853d93464bd9c92047bd51f40";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -606,14 +606,14 @@ pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig =
             vspaces: 1,
             page_tables: 8,
             asids: 1,
-            frames: 144,
+            frames: 97,
             endpoints: 0,
             notifications: 2,
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 0,
             scheduling_contexts: 1,
-            cspace_slots: 168,
+            cspace_slots: 121,
             untyped_bytes: 1048576,
         },
         packet_rx_notification_slot: 2,
@@ -855,14 +855,14 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             vspaces: 7,
             page_tables: 256,
             asids: 7,
-            frames: 2064,
+            frames: 2017,
             endpoints: 15,
             notifications: 16,
             fault_caps: 7,
             timeout_fault_caps: 7,
             reply_objects: 6,
             scheduling_contexts: 7,
-            cspace_slots: 4103,
+            cspace_slots: 4056,
             untyped_bytes: 67108864,
         },
         executable_roles: &EXECUTABLE_ROLE_ADMISSION,
@@ -1578,7 +1578,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.10",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=7d1182b465a2441d673eee56ba57ac8c19a56daf0423a4e33998f3c7f3c8b86c",
+    "manifest.sha256=97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

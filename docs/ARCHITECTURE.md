@@ -481,6 +481,20 @@ pointer-free pages, and consumes authenticated command records. It constructs
 the child suspended, resumes it only after the exact critical fault registry is
 sealed, and on a standard/timeout/protocol fault suspends, unbinds, scrubs, and
 revokes the complete retained-anchor generation before prohibiting replacement.
+The four pages retain their fixed 4096-byte console-network ABI v1 layouts, but
+steady exchange touches only a compact scalar header and the active payload:
+40 bytes before packet payloads and 64 bytes before control/event payloads.
+Publication clears the sequence commit, executes a release fence, writes the
+scalar header and active bytes, executes a second release fence, publishes the
+final sequence commit, and only then signals the peer. A reader accepts a record
+only when the commit surrounding its bounded copy agrees with the validated
+sequence and length. Scalar reserved header fields are validated as zero;
+reserved page-tail bytes and inactive payload tails are non-authoritative:
+construction zeros them and containment scrubs them, but a normal service turn
+neither copies nor scans those tails. The child maps
+root-to-child packet ingress and control pages read-only, while its
+child-to-root packet-egress and event pages are read-write. This changes no ABI
+version, field offset, page layout, record schema, or external console grammar.
 Steady root-control uses a two-phase outer EventPump cut: Network performs the
 bounded child/VirtIO poll with timer and IPC housekeeping while suppressing
 command execution; the following hardware-free Operator/Dispatch phase gives
@@ -493,13 +507,35 @@ The attached VirtIO contract also suppresses the Pi/GENET-only
 quarantine. That nonessential trace issues one synchronous debug syscall per
 byte and has no QEMU acceptance consumer; Pi, GENET, and linked-runtime routing
 remain unchanged.
-The current measured repair candidate assigns 144 frames, 168 retained root
-slots, a 32-page stack at `0x72030000..0x72050000`, and an active-SC
+The current measured repair candidate assigns 59 image pages, 32 stack pages,
+one IPC page, one init page, and four shared pages: 97 frames total and 121
+retained root slots. It keeps the 32-page stack at
+`0x72030000..0x72050000` and an active-SC
 `3000 us / 10000 us` budget with `2400 us` WCET and `7500 us` response bound.
+The 47-page image reduction flows through the compiler-owned fixed and maximum
+profile inventories without changing any reserve or per-Worker budget:
+
+| Profile | Fixed frames | Fixed CSpace slots | Maximum frames | Maximum CSpace slots |
+| --- | ---: | ---: | ---: | ---: |
+| QEMU SMP production | 2,017 | 4,056 | 2,065 | 4,248 |
+| Pi 4 U-Boot production | 4,065 | 8,960 | 4,113 | 9,152 |
+
 Those values remain candidate source/configuration truth until live four-core
 GICv3 QEMU completes console authentication, canonical `.coh` regression, and
 fault/timeout injection without stack or budget failure. This QEMU-first path
 changes no Pi driver or CYW43/SDIO behavior.
+
+The live run at source commit `290ef6028` refuted the earlier whole-page
+implementation. QEMU reached console readiness, but the first authenticated
+packet produced console-network timeout badge `0x26ee0007`; the saved child PC
+was inside the compiler-expanded volatile read of one 4096-byte `PacketPage`,
+whose helper reserved roughly 96 KiB beneath the already-large start frame on
+the 32-page stack. Root then timed out before draining the containment mailbox.
+That run is failure evidence, not qualification. The compact repair must show
+in target disassembly that packet/control readers and writers have bounded
+small frames and contain no whole-page aggregate load/store before a fresh
+four-core GICv3 QEMU authentication, regression, and fault-injection run may
+qualify it; that live qualification remains pending.
 
 These are internal seL4 compartment changes. The external protocol boundary
 does not change: host NineDoor remains host Secure9P, target TCP remains the

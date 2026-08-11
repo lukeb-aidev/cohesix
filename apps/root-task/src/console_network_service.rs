@@ -130,14 +130,14 @@ impl ConsoleNetworkContract {
             || config.objects.vspaces != 1
             || config.objects.page_tables != 8
             || config.objects.asids != 1
-            || config.objects.frames != 144
+            || config.objects.frames != 97
             || config.objects.endpoints != 0
             || config.objects.notifications != 2
             || config.objects.fault_caps != 1
             || config.objects.timeout_fault_caps != 1
             || config.objects.reply_objects != 0
             || config.objects.scheduling_contexts != 1
-            || config.objects.cspace_slots != 168
+            || config.objects.cspace_slots != 121
             || config.objects.untyped_bytes != 1_048_576
             || config.packet_rx_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
             || config.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
@@ -553,9 +553,13 @@ impl ConsoleNetworkBoundary {
             return Err(BoundaryError::Backpressure);
         }
         let sequence = self.next_packet_sequence;
-        let mut page = PacketPage::empty(PacketDirection::Ingress, self.generation);
-        page.publish(sequence, packet)?;
-        page.encode(output_page)?;
+        PacketPage::publish_into(
+            output_page,
+            PacketDirection::Ingress,
+            self.generation,
+            sequence,
+            packet,
+        )?;
         self.packet_inflight = Some(sequence);
         self.next_packet_sequence = next_sequence(sequence);
         Ok(sequence)
@@ -608,9 +612,16 @@ impl ConsoleNetworkBoundary {
             return Err(BoundaryError::Backpressure);
         }
         let sequence = self.next_control_sequence;
-        let mut page = ExchangePage::empty(self.generation);
-        page.publish(kind, sequence, connection_id, now_ms, payload)?;
-        page.encode(output_page)?;
+        ExchangePage::publish_related_into(
+            output_page,
+            kind,
+            self.generation,
+            sequence,
+            connection_id,
+            now_ms,
+            0,
+            payload,
+        )?;
         self.control_inflight = Some(sequence);
         self.last_control_issued = sequence;
         self.last_control_connection_id = Some(connection_id);
@@ -623,8 +634,14 @@ impl ConsoleNetworkBoundary {
         &mut self,
         input_page: &[u8],
     ) -> Result<ConsoleNetworkEvent, BoundaryError> {
-        let page = ExchangePage::decode(input_page)?;
-        let (kind, payload) = page.validate(self.generation, self.last_event_sequence, false)?;
+        let record = ExchangePage::decode_bounded(
+            input_page,
+            self.generation,
+            self.last_event_sequence,
+            false,
+        )?;
+        let kind = record.kind();
+        let payload = record.payload();
         let mut owned_payload = HeaplessVec::new();
         owned_payload
             .extend_from_slice(payload)
@@ -638,10 +655,10 @@ impl ConsoleNetworkBoundary {
                 self.state = ServiceState::Listening;
             }
             ExchangeKind::Connected => {
-                if self.state != ServiceState::Listening || page.connection_id == 0 {
+                if self.state != ServiceState::Listening || record.connection_id() == 0 {
                     return Err(BoundaryError::InvalidState);
                 }
-                self.connection_id = Some(page.connection_id);
+                self.connection_id = Some(record.connection_id());
                 self.last_control_connection_id = None;
                 self.last_output_drained_sequence = 0;
                 self.last_output_drained_connection_id = None;
@@ -649,7 +666,7 @@ impl ConsoleNetworkBoundary {
             }
             ExchangeKind::Authenticated => {
                 if self.state != ServiceState::Authenticating
-                    || self.connection_id != Some(page.connection_id)
+                    || self.connection_id != Some(record.connection_id())
                 {
                     return Err(BoundaryError::InvalidState);
                 }
@@ -657,13 +674,13 @@ impl ConsoleNetworkBoundary {
             }
             ExchangeKind::Command => {
                 if self.state != ServiceState::Authenticated
-                    || self.connection_id != Some(page.connection_id)
+                    || self.connection_id != Some(record.connection_id())
                 {
                     return Err(BoundaryError::InvalidState);
                 }
             }
             ExchangeKind::Disconnected => {
-                if self.connection_id != Some(page.connection_id) {
+                if self.connection_id != Some(record.connection_id()) {
                     return Err(BoundaryError::StaleIdentity);
                 }
                 self.connection_id = None;
@@ -675,32 +692,32 @@ impl ConsoleNetworkBoundary {
                 }
             }
             ExchangeKind::Rejected | ExchangeKind::Backpressure => {
-                if self.connection_id != Some(page.connection_id) {
+                if self.connection_id != Some(record.connection_id()) {
                     return Err(BoundaryError::StaleIdentity);
                 }
             }
             ExchangeKind::PacketConsumed => {
-                if self.packet_inflight != Some(page.related_sequence) {
+                if self.packet_inflight != Some(record.related_sequence()) {
                     return Err(BoundaryError::StaleIdentity);
                 }
                 self.packet_inflight = None;
             }
             ExchangeKind::ControlCompleted => {
-                if self.control_inflight != Some(page.related_sequence) {
+                if self.control_inflight != Some(record.related_sequence()) {
                     return Err(BoundaryError::StaleIdentity);
                 }
                 self.control_inflight = None;
             }
             ExchangeKind::OutputDrained => {
-                if self.connection_id != Some(page.connection_id)
-                    || self.last_control_connection_id != Some(page.connection_id)
-                    || page.related_sequence > self.last_control_issued
-                    || page.related_sequence <= self.last_output_drained_sequence
+                if self.connection_id != Some(record.connection_id())
+                    || self.last_control_connection_id != Some(record.connection_id())
+                    || record.related_sequence() > self.last_control_issued
+                    || record.related_sequence() <= self.last_output_drained_sequence
                 {
                     return Err(BoundaryError::StaleIdentity);
                 }
-                self.last_output_drained_sequence = page.related_sequence;
-                self.last_output_drained_connection_id = Some(page.connection_id);
+                self.last_output_drained_sequence = record.related_sequence();
+                self.last_output_drained_connection_id = Some(record.connection_id());
             }
             ExchangeKind::ShutdownComplete => {
                 if !matches!(self.state, ServiceState::Closing | ServiceState::Faulted) {
@@ -713,12 +730,12 @@ impl ConsoleNetworkBoundary {
                 return Err(BoundaryError::InvalidRecord)
             }
         }
-        self.last_event_sequence = page.sequence;
+        self.last_event_sequence = record.sequence();
         Ok(ConsoleNetworkEvent {
             kind,
-            connection_id: page.connection_id,
-            now_ms: page.now_ms,
-            related_sequence: page.related_sequence,
+            connection_id: record.connection_id(),
+            now_ms: record.now_ms(),
+            related_sequence: record.related_sequence(),
             payload: owned_payload,
         })
     }
@@ -728,16 +745,16 @@ impl ConsoleNetworkBoundary {
         &mut self,
         input_page: &[u8],
     ) -> Result<HeaplessVec<u8, ETHERNET_FRAME_BYTES>, BoundaryError> {
-        let page = PacketPage::decode(input_page)?;
-        let (direction, packet) = page.validate(self.generation, self.last_egress_sequence)?;
-        if direction != PacketDirection::Egress {
+        let record =
+            PacketPage::decode_bounded(input_page, self.generation, self.last_egress_sequence)?;
+        if record.direction() != PacketDirection::Egress {
             return Err(BoundaryError::InvalidRecord);
         }
         let mut copied = HeaplessVec::new();
         copied
-            .extend_from_slice(packet)
+            .extend_from_slice(record.packet())
             .map_err(|_| BoundaryError::InvalidRecord)?;
-        self.last_egress_sequence = page.sequence;
+        self.last_egress_sequence = record.sequence();
         Ok(copied)
     }
 

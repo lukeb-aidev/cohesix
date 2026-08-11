@@ -377,7 +377,9 @@ slots, and 1 MiB of child untyped. No namespace count multiplies these kernel
 objects.
 
 The compiler checks `fixed + maximum live role mix + post-construction reserve`
-against the selected capacity. The exact admitted totals are:
+against the selected capacity. The 59-page console-network image contributes
+97 fixed frames and 121 fixed CSpace slots after its 32-page stack, IPC/init
+pages, and four shared pages are included. The exact admitted totals are:
 
 The selected seL4 16 AArch64 SMP+MCS object-size record is TCB 11 bits,
 endpoint 4, notification 6, Reply 5, minimum scheduling context 7, CNode slot
@@ -388,13 +390,13 @@ notification or Reply sizes rather than understating MCS object memory.
 | --- | ---: | ---: | ---: |
 | TCBs / CNodes / VSpaces / ASIDs | 18 each | 25 each | 64 each |
 | Page tables | 344 | 600 | 1,024 |
-| Frames | 2,624 | 4,672 | 8,192 |
+| Frames | 2,577 | 4,625 | 8,192 |
 | Endpoints | 31 | 47 | 128 |
 | Notifications | 35 | 51 | 128 |
 | Standard / timeout fault caps | 18 each | 25 each | 64 each |
 | Reply objects | 14 | 21 | 64 |
 | Scheduling contexts | 18 | 25 | 64 |
-| CSpace slots | 6,343 | 11,247 | 16,384 |
+| CSpace slots | 6,296 | 11,200 | 16,384 |
 | Untyped bytes | 103,809,024 | 137,363,456 | 268,435,456 |
 
 Allocation is fail-closed: an invalid maximum mix, aliased retention/Worker

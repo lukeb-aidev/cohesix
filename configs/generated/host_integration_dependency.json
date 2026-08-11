@@ -6,7 +6,7 @@
     "milestone": "Milestone 26e — generated host-integration and use-case dependency contract",
     "graph_id": "m26e-host-integration",
     "source_sha256": "e4816158efae275a028937549e0d5998ba789b87cd3956cd14b838a76872f4ff",
-    "resolved_manifest_sha256": "7d1182b465a2441d673eee56ba57ac8c19a56daf0423a4e33998f3c7f3c8b86c",
+    "resolved_manifest_sha256": "97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d",
     "implementation_surface_inventory_sha256": "5b8f87872d2443ca7f9be7c371b781114af7020d5bea785d8342b5ceb105dcd8"
   },
   "host_profiles": [
