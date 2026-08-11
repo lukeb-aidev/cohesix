@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "38a73ae8b3ec8c1be2318f30014b8f5a438626f853d93464bd9c92047bd51f40";
+    "3a3f46477583304d4da649b00f718e52650d31e6356bf28b328d8eded0c1dbfa";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -244,7 +244,7 @@ pub const TEMPORAL_TASKS: [TemporalTaskConfig; 10] = [
         wcet_us: 2500,
         response_time_us: 5100,
         admitted: true,
-        wcet_provenance: "m26e-qemu-root-phase-candidate-v3",
+        wcet_provenance: "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4",
         allowed_donors: &[],
         reply_objects: 0,
         max_donation_depth: 0,
@@ -1578,7 +1578,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.10",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d",
+    "manifest.sha256=94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

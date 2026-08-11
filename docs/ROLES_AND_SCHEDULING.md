@@ -250,21 +250,44 @@ temporal policy mid-bootstrap.
 
 The QEMU and Pi manifests assign `root-control` a `2750 us / 10000 us` active
 SC, a compiler-admitted `2500 us` per-phase WCET with provenance
-`m26e-qemu-root-phase-candidate-v3`, and a `5100 us` per-phase response bound.
+`m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4`, and a
+`5100 us` per-phase response bound.
 That response-time result is scheduler admission for one runnable phase, not
 end-to-end host/TCP latency. The former
 v2 whole-turn interpretation was live-falsified: after the uncached cache
 operation was removed and the budget was raised, four-core QEMU again consumed
 the complete root-control refill at the final console-network control wake.
-The isolated VirtIO path therefore alternates an Operator/Dispatch phase and a
-Network phase on separate outer EventPump calls. Each call returns to the
-userland loop's existing `seL4_Yield` replenishment boundary; no internal yield,
-extra SC, notification omission, or cache-semantic exception implements the
-cut. The attached VirtIO contract suppresses the Pi/GENET-only synchronous
+The compact-page live run at source `00bf02540` then reached the root prompt but
+timed out `root-control` at the console-network control poll, disproving the v3
+phase that combined Network and runtime-IPC work. The isolated VirtIO path now
+cycles three exclusive outer EventPump calls: Operator/Dispatch -> Runtime/IPC
+-> Network -> Operator/Dispatch. Operator owns root policy and command dispatch;
+Runtime/IPC owns `KernelIpc::dispatch`, bootstrap drain, stream flush, and the
+reboot tail with command ingress suppressed; Network owns only VirtIO/NIC
+service. Network -> Operator preserves immediate buffered TCP dispatch, and
+Operator -> Runtime/IPC promptly services newly published control work. Each
+call commits its successor before early return and reaches the userland loop's
+sole existing `seL4_Yield` replenishment boundary; no internal yield, extra SC,
+notification omission, or cache-semantic exception implements the cut. Those
+three calls are the ordinary phase cycle. Before any one begins, root-control
+probes console-network's durable fault mailbox first and probes NineDoor only
+when the console probe reports no work. A consumed record or attempted
+containment claims that entire refill as an exclusive Recovery turn, skips and
+does not advance the selected ordinary phase, and returns through the same sole
+outer `seL4_Yield`. Simultaneous console-network and NineDoor faults serialize
+console first and NineDoor after that yield. Recovery is not another temporal
+task or authority domain and adds no SC, budget, refill, Reply authority, or
+internal yield.
+
+The three-phase state is QEMU-VirtIO-only; non-VirtIO and Pi service ordering is
+unchanged. Quarantining the console-network service does not collapse or bypass
+the QEMU phase state: Network observes quarantine and fences NIC work while
+Operator and Runtime/IPC remain separate admitted turns. The attached VirtIO
+contract suppresses the Pi/GENET-only synchronous
 raw-UART idle-input trace in both live and quarantined states; it has no QEMU
 consumer and cannot consume an admitted Operator phase. Fresh canonical QEMU
-boot, console, regression, and pressure evidence remain required; compiler
-admission alone is not target qualification.
+boot, console, regression, pressure, and fault-injection evidence remain
+required for v4; compiler admission alone is not target qualification.
 
 During NineDoor construction, root configures and binds the schema-1.10
 bootstrap candidate (8 object bits, `3000 us / 10000 us`, `max_refills = 2`)

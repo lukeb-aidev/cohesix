@@ -2755,15 +2755,16 @@ enum LinkedRuntimeServicePhase {
 
 /// Root-control service cut used by the isolated QEMU VirtIO console path.
 ///
-/// Operator/dispatch and NIC service run on separate outer EventPump calls so
-/// the userland loop's existing `seL4_Yield` is the only MCS replenishment
-/// boundary. The next phase is committed before either turn starts, making
-/// every early return preserve deterministic alternation.
+/// Operator/dispatch, NIC service, and runtime IPC run on separate outer
+/// EventPump calls so the userland loop's existing `seL4_Yield` is the only
+/// MCS replenishment boundary. The next phase is committed before any turn
+/// starts, making every early return preserve deterministic rotation.
 #[cfg(all(feature = "kernel", feature = "net-console"))]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum OrdinaryServicePhase {
     #[default]
     Operator,
+    Runtime,
     Network,
 }
 
@@ -2771,7 +2772,8 @@ enum OrdinaryServicePhase {
 impl OrdinaryServicePhase {
     const fn next(self) -> Self {
         match self {
-            Self::Operator => Self::Network,
+            Self::Operator => Self::Runtime,
+            Self::Runtime => Self::Network,
             Self::Network => Self::Operator,
         }
     }
@@ -4613,8 +4615,7 @@ where
             net.driver_task_contract() == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
         });
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let split_ordinary_virtio_turn =
-            !self.network_service_quarantined && ordinary_virtio_contract_attached;
+        let split_ordinary_virtio_turn = ordinary_virtio_contract_attached;
         #[cfg(not(all(feature = "kernel", feature = "net-console")))]
         let split_ordinary_virtio_turn = false;
         #[cfg(not(all(feature = "kernel", feature = "net-console")))]
@@ -4626,9 +4627,18 @@ where
             if phase == OrdinaryServicePhase::Network {
                 // The isolated QEMU NIC owns this complete outer turn. TCP
                 // commands remain in the bounded child adapter queue for the
-                // following hardware-free Operator turn; the userland loop
-                // yields immediately after this method returns.
-                self.poll_runtime(true, false, true);
+                // following hardware-free Operator turn. Runtime IPC remains
+                // deferred until its own phase and the userland loop yields
+                // immediately after this method returns.
+                self.poll_runtime_without_control_tail(true, false, true);
+                return;
+            }
+            if phase == OrdinaryServicePhase::Runtime {
+                // Kernel IPC, bootstrap drain, stream flush, and reboot
+                // completion own this complete hardware-free turn. Suppress
+                // both NIC service and command ingress before returning to the
+                // sole outer userland yield.
+                self.poll_runtime(true, false, false);
                 return;
             }
         }
@@ -4645,7 +4655,11 @@ where
             let serial_input = self.consume_serial();
             self.serial.flush_tx();
             let serial_output_pending = self.serial.tx_pending();
-            self.poll_runtime(false, true, service_network_this_turn);
+            if split_ordinary_virtio_turn {
+                self.poll_runtime_without_control_tail(false, true, false);
+            } else {
+                self.poll_runtime(false, true, service_network_this_turn);
+            }
             self.serial.poll_io();
             let serial_followup_input = if self.local_seat.is_some() {
                 false
@@ -4694,18 +4708,20 @@ where
             && self.dispatch_one_buffered_network_line()
         {
             // Network polling retained this one authenticated line during the
-            // preceding phase. Execute only policy/dispatch and bounded
-            // timer/IPC/stream housekeeping now; NIC service resumes after the
-            // outer replenishment boundary.
-            self.poll_runtime(true, false, false);
+            // preceding Network phase. Execute policy/dispatch and bounded
+            // timer work only; runtime IPC follows after the next outer
+            // replenishment boundary.
+            self.poll_runtime_without_control_tail(true, false, false);
             return;
         }
         let serial_output_pending = self.serial.tx_pending();
-        self.poll_runtime(
-            false,
-            serial_rx_activity || serial_input || local_input || serial_output_pending,
-            service_network_this_turn,
-        );
+        let physical_input_active =
+            serial_rx_activity || serial_input || local_input || serial_output_pending;
+        if split_ordinary_virtio_turn {
+            self.poll_runtime_without_control_tail(false, physical_input_active, false);
+        } else {
+            self.poll_runtime(false, physical_input_active, service_network_this_turn);
+        }
         self.serial.poll_io();
         let post_runtime_local_input =
             self.consume_local_seat(LocalSeatConsumePhase::PostRuntime, false);
@@ -6882,6 +6898,35 @@ where
         physical_input_active: bool,
         service_network: bool,
     ) {
+        self.poll_runtime_inner(
+            suppress_console_input,
+            physical_input_active,
+            service_network,
+            true,
+        );
+    }
+
+    fn poll_runtime_without_control_tail(
+        &mut self,
+        suppress_console_input: bool,
+        physical_input_active: bool,
+        service_network: bool,
+    ) {
+        self.poll_runtime_inner(
+            suppress_console_input,
+            physical_input_active,
+            service_network,
+            false,
+        );
+    }
+
+    fn poll_runtime_inner(
+        &mut self,
+        suppress_console_input: bool,
+        physical_input_active: bool,
+        service_network: bool,
+        service_control_tail: bool,
+    ) {
         let suppress_console_input = suppress_console_input || self.reboot_pending;
         #[cfg(not(feature = "net-console"))]
         let _ = suppress_console_input;
@@ -7093,6 +7138,9 @@ where
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         self.reconcile_cyw43_network_ready_hdmi();
 
+        if !service_control_tail {
+            return;
+        }
         self.ipc.dispatch(self.now_ms);
         #[cfg(feature = "kernel")]
         self.drain_bootstrap_ipc();
@@ -28491,6 +28539,25 @@ mod tests {
         fn dispatch(&mut self, _now_ms: u64) {}
     }
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    struct CountingIpc {
+        dispatches: std::rc::Rc<core::cell::Cell<usize>>,
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    impl CountingIpc {
+        fn new(dispatches: std::rc::Rc<core::cell::Cell<usize>>) -> Self {
+            Self { dispatches }
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    impl IpcDispatcher for CountingIpc {
+        fn dispatch(&mut self, _now_ms: u64) {
+            self.dispatches.set(self.dispatches.get().saturating_add(1));
+        }
+    }
+
     #[test]
     fn usb_runtime_progress_supersession_requires_command_ready() {
         type ConsoleTestPump =
@@ -30404,21 +30471,100 @@ mod tests {
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn ordinary_virtio_network_buffers_until_one_hardware_free_operator_dispatch() {
+    fn ordinary_virtio_rotates_operator_runtime_network_with_one_control_tail() {
         assert_eq!(
             OrdinaryServicePhase::Operator.next(),
+            OrdinaryServicePhase::Runtime
+        );
+        assert_eq!(
+            OrdinaryServicePhase::Runtime.next(),
             OrdinaryServicePhase::Network
         );
         assert_eq!(
             OrdinaryServicePhase::Network.next(),
-            OrdinaryServicePhase::Operator
+            OrdinaryServicePhase::Operator,
         );
 
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
             32768,
         >::new());
-        let timer = TestTimer::repeated(2, 1);
-        let ipc = NullIpc;
+        let timer = TestTimer::repeated(4, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let ipc = CountingIpc::new(dispatches.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.banner_emitted = true;
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Runtime,
+                "Operator must commit Runtime before command processing"
+            );
+            assert_eq!(polls.get(), 0, "Operator must not service the NIC");
+            assert_eq!(dispatches.get(), 0, "Operator must not dispatch IPC");
+            pump.serial_mut().driver_mut().push_rx(b"ping\n");
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Network,
+                "Runtime must commit Network before dispatching IPC"
+            );
+            assert_eq!(polls.get(), 0, "Runtime must not service the NIC");
+            assert_eq!(dispatches.get(), 1, "Runtime owns one IPC dispatch");
+            assert_eq!(
+                pump.metrics.console_lines, 0,
+                "Runtime must not consume buffered serial input"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Operator,
+                "Network must commit the immediately following Operator"
+            );
+            assert_eq!(polls.get(), 1, "Network owns one NIC service turn");
+            assert_eq!(
+                dispatches.get(),
+                1,
+                "Network must not compose another IPC dispatch"
+            );
+            assert_eq!(
+                pump.metrics.console_lines, 0,
+                "Network must not consume buffered serial input"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Runtime,
+                "Operator must commit Runtime after serial command dispatch"
+            );
+            assert_eq!(polls.get(), 1, "Operator must not repoll the NIC");
+            assert_eq!(dispatches.get(), 1, "Operator must not dispatch IPC");
+            assert_eq!(
+                pump.metrics.console_lines, 1,
+                "only Operator may consume the buffered serial command"
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_network_buffers_until_immediately_following_operator() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let ipc = CountingIpc::new(dispatches.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30443,6 +30589,7 @@ mod tests {
                 "Network must commit Operator before servicing the NIC"
             );
             assert_eq!(polls.get(), 1);
+            assert_eq!(dispatches.get(), 0, "Network must not dispatch IPC");
             assert_eq!(pump.metrics.console_lines, 0);
             assert!(pump
                 .net
@@ -30452,15 +30599,25 @@ mod tests {
             pump.poll();
             assert_eq!(
                 pump.ordinary_service_phase,
-                OrdinaryServicePhase::Network,
-                "Operator must commit Network before dispatching"
+                OrdinaryServicePhase::Runtime,
+                "Operator must commit Runtime after dispatching the buffered line"
             );
             assert_eq!(polls.get(), 1, "Operator must not repoll the NIC");
+            assert_eq!(dispatches.get(), 0, "Operator must not dispatch IPC");
             assert_eq!(pump.metrics.console_lines, 1);
             assert!(!pump
                 .net
                 .as_ref()
                 .is_some_and(|net| net.buffered_console_lines_pending()));
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Network,
+                "Runtime must return to Network after one control tail"
+            );
+            assert_eq!(polls.get(), 1, "Runtime must not repoll the NIC");
+            assert_eq!(dispatches.get(), 1, "Runtime owns exactly one IPC dispatch");
         }
     }
 
@@ -30471,7 +30628,8 @@ mod tests {
             32768,
         >::new());
         let timer = TestTimer::repeated(2, 1);
-        let ipc = NullIpc;
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let ipc = CountingIpc::new(dispatches.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30492,6 +30650,11 @@ mod tests {
                 pump.ordinary_service_phase,
                 OrdinaryServicePhase::Operator,
                 "the QEMU-only phase state must not advance for GENET"
+            );
+            assert_eq!(
+                dispatches.get(),
+                1,
+                "the ordinary GENET turn must retain its unsplit IPC dispatch"
             );
             assert_eq!(
                 pump.serial_input_idle_trace_count, 1,
@@ -30521,7 +30684,7 @@ mod tests {
 
             pump.poll();
 
-            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
             assert_eq!(
                 pump.serial_input_idle_trace_count, 0,
                 "VirtIO Operator must not enter the synchronous raw-UART idle trace"
@@ -30539,10 +30702,13 @@ mod tests {
             tick: 1,
             now_ms: SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS,
         });
-        let ipc = NullIpc;
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let ipc = CountingIpc::new(dispatches.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
@@ -30553,12 +30719,59 @@ mod tests {
 
             assert_eq!(
                 pump.ordinary_service_phase,
-                OrdinaryServicePhase::Operator,
-                "quarantine must fence the phase split"
+                OrdinaryServicePhase::Runtime,
+                "quarantine must preserve the exact VirtIO phase partition"
+            );
+            assert_eq!(
+                dispatches.get(),
+                0,
+                "a quarantined Operator must not compose an IPC dispatch"
             );
             assert_eq!(
                 pump.serial_input_idle_trace_count, 0,
                 "a quarantined VirtIO adapter must not re-admit raw UART work"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Network,
+                "quarantined Runtime must retain the ordinary phase rotation"
+            );
+            assert_eq!(
+                dispatches.get(),
+                1,
+                "quarantined Runtime remains the sole IPC owner"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Operator,
+                "quarantined Network must retain the immediately following Operator"
+            );
+            assert_eq!(
+                polls.get(),
+                0,
+                "quarantined Network must not invoke the contained NIC"
+            );
+            assert_eq!(
+                dispatches.get(),
+                1,
+                "quarantined Network must not compose another IPC dispatch"
+            );
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Runtime,
+                "quarantined Operator must retain the exact phase rotation"
+            );
+            assert_eq!(polls.get(), 0, "quarantined Operator must not poll the NIC");
+            assert_eq!(
+                dispatches.get(),
+                1,
+                "quarantined Operator must not compose an IPC dispatch"
             );
         }
     }

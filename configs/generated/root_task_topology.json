@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d",
-  "topology_sha256": "513268a3d5c6098c39ee4fc3285af638aad0e3624e25a24a0da80c34e2cdb22c",
+  "manifest_sha256": "94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329",
+  "topology_sha256": "8ca5e56f3893d1f6d7275d751dd5bb8baa7a3b6550de5bf940e455892f5c7ef1",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
@@ -385,7 +385,7 @@
           "scheduling_context_slot": 1,
           "timeout_badge": 653131777,
           "timeout_policy": "terminal",
-          "wcet_provenance": "m26e-qemu-root-phase-candidate-v3",
+          "wcet_provenance": "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4",
           "wcet_us": 2500
         },
         {

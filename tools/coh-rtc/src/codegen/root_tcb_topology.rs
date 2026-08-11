@@ -244,7 +244,7 @@ mod tests {
             assert_eq!(root_control.response_time_us, 5_100);
             assert_eq!(
                 root_control.wcet_provenance,
-                "m26e-qemu-root-phase-candidate-v3"
+                "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4"
             );
 
             let console_network = manifest

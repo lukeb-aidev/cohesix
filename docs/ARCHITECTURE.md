@@ -495,18 +495,40 @@ neither copies nor scans those tails. The child maps
 root-to-child packet ingress and control pages read-only, while its
 child-to-root packet-egress and event pages are read-write. This changes no ABI
 version, field offset, page layout, record schema, or external console grammar.
-Steady root-control uses a two-phase outer EventPump cut: Network performs the
-bounded child/VirtIO poll with timer and IPC housekeeping while suppressing
-command execution; the following hardware-free Operator/Dispatch phase gives
-serial and local-seat work priority, then executes at most one already-buffered
-authenticated network line. The existing outer userland yield separates the
-phases and replenishes the MCS budget; no yield occurs inside the NIC or while a
-shared-page or device transaction is open.
+Steady root-control uses three exclusive outer EventPump phases in the cyclic
+order Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch. The
+Operator/Dispatch phase gives serial and local-seat work priority and executes
+at most one already-buffered authenticated network line; it alone owns root
+policy and command dispatch. Runtime/IPC alone owns `KernelIpc::dispatch`, the
+bounded bootstrap drain, stream flush, and reboot tail, with serial and network
+command ingress suppressed. Network alone owns the bounded VirtIO/NIC service
+turn and performs no command or general runtime-IPC dispatch. Every admitted
+ordinary phase commits its successor before an early return and then reaches
+the sole outer userland `seL4_Yield`, which separates phases and replenishes the
+MCS budget. No yield occurs inside the NIC or while a shared-page or device
+transaction is open. The Network -> Operator adjacency preserves immediate
+dispatch of newly buffered TCP input, while Operator -> Runtime/IPC preserves
+prompt service of newly published control work.
+Before the selected ordinary phase begins, `root-control` probes the durable
+console-network fault mailbox first. It probes NineDoor containment only when
+the console probe reports no work. If either owner consumes a record or attempts
+containment, that complete outer refill is an exclusive Recovery turn: the
+ordinary EventPump phase is skipped without advancing its phase state, and the
+same sole outer `seL4_Yield` ends Recovery. Simultaneously pending service faults
+therefore serialize deterministically as console-network Recovery followed,
+after the yield, by NineDoor Recovery. Recovery adds no authority, TCB, SC,
+budget, refill, or internal yield; it uses the existing root-control authority
+and generated service-containment records.
 The attached VirtIO contract also suppresses the Pi/GENET-only
 `SERIAL_INPUT_TRACE stage=idle` raw-UART diagnostic, including after NIC
 quarantine. That nonessential trace issues one synchronous debug syscall per
 byte and has no QEMU acceptance consumer; Pi, GENET, and linked-runtime routing
-remain unchanged.
+remain unchanged. The three-phase state exists only for the isolated QEMU
+VirtIO contract; non-VirtIO and Pi paths retain their existing single-turn
+ownership and ordering. Console-network quarantine does not collapse the QEMU
+cycle or combine Operator with Runtime/IPC: the Network phase observes the
+quarantine and fences NIC work while all three exclusive phase boundaries
+remain active.
 The current measured repair candidate assigns 59 image pages, 32 stack pages,
 one IPC page, one init page, and four shared pages: 97 frames total and 121
 retained root slots. It keeps the 32-page stack at
@@ -536,6 +558,16 @@ in target disassembly that packet/control readers and writers have bounded
 small frames and contain no whole-page aggregate load/store before a fresh
 four-core GICv3 QEMU authentication, regression, and fault-injection run may
 qualify it; that live qualification remains pending.
+
+The next live run at source commit `00bf02540` proved the compact page helpers
+were not sufficient to qualify the two-phase root schedule. QEMU reached the
+root prompt, then `root-control` timed out at the console-network control poll
+before authenticated regression could begin. That failure disproves the v3
+combined Network/runtime-IPC phase. The v4 three-phase candidate retains every
+generated budget, WCET, response bound, core-0 arithmetic result, and child
+resource bound while assigning Operator, Runtime/IPC, and Network exclusive
+ordinary turns. It remains pending fresh canonical four-core GICv3 QEMU
+authentication, `.coh` regression, pressure, and fault-injection evidence.
 
 These are internal seL4 compartment changes. The external protocol boundary
 does not change: host NineDoor remains host Secure9P, target TCP remains the

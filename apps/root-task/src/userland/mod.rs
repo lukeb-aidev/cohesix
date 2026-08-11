@@ -453,15 +453,30 @@ where
     activate_root_control_temporal_or_fail(ctx);
     let hal_ptr = ctx.wifi_debug_hal_ptr;
     loop {
-        pump.poll();
+        #[cfg(any(
+            feature = "net-console",
+            all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
+        ))]
+        let mut recovery_turn = false;
+        #[cfg(not(any(
+            feature = "net-console",
+            all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
+        )))]
+        let recovery_turn = false;
         #[cfg(feature = "net-console")]
         if hal_ptr != 0 {
-            let _ =
-                with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_console_network(hal));
+            recovery_turn =
+                with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_console_network(hal))
+                    .unwrap_or(false);
         }
         #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
-        if hal_ptr != 0 {
-            let _ = with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal));
+        if !recovery_turn && hal_ptr != 0 {
+            recovery_turn =
+                with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal))
+                    .unwrap_or(false);
+        }
+        if !recovery_turn {
+            pump.poll();
         }
         #[cfg(not(any(
             feature = "net-console",
@@ -1817,9 +1832,10 @@ fn with_deferred_root_hal<R>(
     let hal_ptr = core::ptr::NonNull::new(hal_ptr as *mut KernelHal<'static>)?;
     // SAFETY: kernel bootstrap leaks this `KernelHal` for the root-task
     // lifetime. Root-control is single-threaded and invokes service-owner
-    // containment or deferred bootstrap only after the EventPump turn and any
-    // prior HAL operation have returned, so each mutable borrow is bounded to
-    // this closure and never overlaps a child backend operation.
+    // containment only from an exclusive pre-pump recovery turn; deferred
+    // bootstrap likewise starts after the prior outer turn has returned. Each
+    // mutable borrow is bounded to this closure and never overlaps the
+    // EventPump or another child-backend operation.
     Some(unsafe { operation(&mut *hal_ptr.as_ptr()) })
 }
 

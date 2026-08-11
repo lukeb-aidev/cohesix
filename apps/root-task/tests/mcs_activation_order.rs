@@ -105,7 +105,7 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
         .find(ACTIVATE_CALL)
         .expect("serial root-console loop must arm root-control");
     let normal_poll_loop = normal_loop
-        .find("loop {\n        pump.poll();")
+        .find("loop {")
         .expect("serial root-console poll loop must exist");
     assert_eq!(normal_loop.matches(ACTIVATE_CALL).count(), 1);
     assert!(
@@ -127,6 +127,83 @@ fn root_control_temporal_activation_exists_only_at_userland_loop_seams() {
     assert!(
         deferred_activation < supervisor_loop,
         "deferred-network root-control policy must be armed at its supervisor-loop seam",
+    );
+}
+
+#[test]
+fn root_control_containment_serializes_before_the_ordinary_pump_turn() {
+    let userland = include_str!("../src/userland/mod.rs");
+    let loop_start = userland
+        .find("fn enter_root_console_loop<'a")
+        .expect("serial root-console loop entry must exist");
+    let loop_end = userland[loop_start..]
+        .find("fn run_root_console_pump<'a")
+        .map(|offset| loop_start + offset)
+        .expect("serial root-console loop entry must have a bounded source section");
+    let root_loop = &userland[loop_start..loop_end];
+
+    let console = root_loop
+        .find("pump.contain_faulted_console_network(hal)")
+        .expect("console-network containment probe must remain first");
+    let console_assignment = root_loop[..console]
+        .rfind("recovery_turn =")
+        .expect("console-network containment result must own recovery_turn");
+    let ninedoor_guard = root_loop
+        .find("if !recovery_turn && hal_ptr != 0 {")
+        .expect("NineDoor containment must be guarded by the console result");
+    let ninedoor = root_loop
+        .find("pump.contain_faulted_ninedoor(hal)")
+        .expect("NineDoor containment probe must remain present");
+    let ninedoor_assignment = root_loop[ninedoor_guard..ninedoor]
+        .find("recovery_turn =")
+        .map(|offset| ninedoor_guard + offset)
+        .expect("NineDoor containment result must own recovery_turn");
+    let pump_guard = root_loop
+        .find("if !recovery_turn {")
+        .expect("ordinary pump must be guarded by both containment results");
+    let pump = root_loop
+        .find("pump.poll();")
+        .expect("ordinary pump call must remain present");
+    let outer_yield = root_loop
+        .find("sel4::yield_now();")
+        .expect("root-control loop must retain its sole outer yield");
+
+    assert!(
+        console_assignment < console
+            && console < ninedoor_guard
+            && ninedoor_guard < ninedoor_assignment
+            && ninedoor_assignment < ninedoor
+            && ninedoor < pump_guard
+            && pump_guard < pump
+            && pump < outer_yield,
+        "containment/pump/yield source order drifted: \
+         console_assignment={console_assignment}, console={console}, \
+         ninedoor_guard={ninedoor_guard}, ninedoor_assignment={ninedoor_assignment}, \
+         ninedoor={ninedoor}, \
+         pump_guard={pump_guard}, pump={pump}, yield={outer_yield}",
+    );
+    assert_eq!(root_loop.matches("pump.poll();").count(), 1);
+    assert_eq!(root_loop.matches("sel4::yield_now();").count(), 1);
+    assert_eq!(
+        root_loop
+            .matches("pump.contain_faulted_console_network(hal)")
+            .count(),
+        1,
+    );
+    assert_eq!(
+        root_loop
+            .matches("pump.contain_faulted_ninedoor(hal)")
+            .count(),
+        1,
+    );
+    assert_eq!(
+        root_loop.matches(".unwrap_or(false);").count(),
+        2,
+        "both optional HAL probes must preserve false-on-no-probe semantics",
+    );
+    assert!(
+        root_loop.contains("if !recovery_turn {\n            pump.poll();\n        }"),
+        "either containment result must exclude the ordinary pump from that turn",
     );
 }
 

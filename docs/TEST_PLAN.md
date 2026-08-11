@@ -4819,18 +4819,34 @@ idle/trampoline entrypoint, or activation before registry seal. Critical
 permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU and Pi compiler fixtures must both assert the exact `root-control`
 candidate: `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
-`m26e-qemu-root-phase-candidate-v3` provenance. The WCET is a per-phase live
-candidate because the v2 whole-turn interpretation exhausted the complete
-2750-us refill at the console-network control wake; the `5100 us` response is
-per-phase scheduler admission, not end-to-end host/TCP latency. They must also assert the derived
+`m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4` provenance.
+The WCET is a per-phase live candidate because the v2 whole-turn interpretation
+exhausted the complete 2750-us refill at the console-network control wake, and
+the live compact-page run at source `00bf02540` timed out `root-control` at the
+console-network control poll, disproving the v3 combined Network/runtime-IPC
+phase. The `5100 us` response is per-phase scheduler admission, not end-to-end
+host/TCP latency. They must also assert the derived
 core-0 demand of `9000 us` and the console-network response bound of `7500 us`;
 stale pre-live values fail closed.
-The ordinary EventPump regression must also prove that an attached VirtIO
+The ordinary EventPump regression must prove the QEMU-only cyclic order
+Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch, exclusive
+per-phase ownership, successor commit before every early return, and the sole
+outer `seL4_Yield` between phases. Before each selected phase, it must prove
+console-network mailbox precedence and permit a NineDoor probe only when the
+console probe reports no work. If either containment owner consumes or attempts
+work, the regression must classify the complete refill as one exclusive
+Recovery turn, execute no EventPump phase, preserve the selected ordinary phase,
+and reach the same sole outer yield. Simultaneous faults must produce console
+Recovery, yield, then NineDoor Recovery, with no new authority, SC, budget,
+refill, or internal yield. It must also prove that an attached VirtIO
 contract suppresses the Pi/GENET-only synchronous
 `SERIAL_INPUT_TRACE stage=idle` path before and after console-network
-quarantine, while an attached GENET contract retains the existing trace
-cadence. A complete idle line immediately before a root-control timeout at the
-outer yield is a failed QEMU phase, not qualification evidence.
+quarantine. Quarantine must retain all three exclusive phases, with Network
+observing quarantine and fencing NIC work rather than combining Operator and
+Runtime/IPC. An attached GENET contract must retain the existing trace cadence,
+and non-VirtIO/Pi phase behavior must remain unchanged. A complete idle line
+immediately before a root-control timeout at the outer yield is a failed QEMU
+phase, not qualification evidence.
 The source-order regression must additionally prove that the bounded
 synchronous bootstrap IPC trace completes after registry seal and before any
 restricted child activation. It must reject root-control temporal activation
@@ -5032,7 +5048,12 @@ the saved PC was in the compiler-expanded volatile read of a complete
 and root subsequently timed out before draining the containment mailbox. Record
 that run only as the live failure that invalidated whole-page transfer. Fresh
 authentication, the full canonical `.coh` batch, and standard/timeout fault
-injection on four-core GICv3 QEMU remain pending after the compact repair.
+injection on four-core GICv3 QEMU remained pending after the compact repair.
+The following compact-page run at source `00bf02540` reached the root prompt
+but timed out `root-control` at the console-network control poll before
+authenticated regression. Record that run only as the live failure that
+disproved v3's combined Network/runtime-IPC phase. The v4 three-phase candidate
+must repeat all target gates; neither prior failure is qualification evidence.
 
 Child tests cover partial and oversized frames, malformed authentication,
 constant-time token acceptance, command release only after `AUTH`, one-packet
@@ -5041,19 +5062,35 @@ frame, an `OutputDrained` completion only after the child TCP send queue empties
 and byte-exact root response forwarding. Root tests cover READY and
 connection transitions, stale generation/sequence rejection, completion-bound
 slot reuse, fault closure, and complete suspend/unbind/scrub/revoke evidence.
-The EventPump source test must also prove deterministic
-Operator/Dispatch-to-Network alternation for the isolated VirtIO contract: the
-next phase is committed before any early return within an admitted ordinary
-phase, Network polling cannot execute a command, Operator gives pending
-physical input/output priority and dispatches at most one buffered network
-line, and each phase returns to the existing outer yield before its successor
-begins. Reboot, serial cutover, and linked-runtime routing remain earlier owners
-and do not falsely advance this QEMU-only phase state.
+The EventPump source test must also prove the deterministic
+Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch cycle for the
+isolated VirtIO contract. The next phase is committed before any early return
+within an admitted ordinary phase. Operator gives pending physical input/output
+priority and dispatches at most one buffered network line; Runtime/IPC alone
+performs `KernelIpc::dispatch`, bounded bootstrap drain, stream flush, and the
+reboot tail with serial and network command ingress suppressed; Network alone
+performs VirtIO/NIC service and cannot execute a command or general runtime-IPC
+dispatch. Each phase returns to the sole existing outer yield before its
+successor begins. Reboot, serial cutover, and linked-runtime routing remain
+earlier owners and do not falsely advance this QEMU-only phase state. Equivalent
+non-VirtIO and Pi turns must retain their pre-v4 behavior. The isolated VirtIO
+regression must repeat the same phase-order and ownership assertions after
+console-network quarantine; a combined Operator+Runtime/IPC fallback fails.
+Recovery-turn coverage must independently inject console-only, NineDoor-only,
+and simultaneous pending records before each of the three ordinary phases. It
+must prove console-first conditional probing, one attempted containment per
+outer refill, zero ordinary pump work during Recovery, phase-state preservation,
+and one outer yield before the next containment or ordinary phase. A containment
+error still consumes its exclusive Recovery turn and cannot fall through into
+the pump.
 The QEMU run must additionally show that all generated sources are constructed
 suspended, the exact fault registry is sealed before the console child resumes,
 one authenticated `cohsh` session observes the existing ACK/ERR/END fixtures,
 malformed/authentication load cannot bypass root policy, and child fault or
 timeout leaves serial, local-seat, root-fault, and root-emergency progress live.
+Simultaneous console-network and NineDoor fault injection must show two
+root-control Recovery refills in console-then-NineDoor order with an outer yield
+between them and no ordinary EventPump work interleaved.
 The QEMU MCS transcript must contain no `TCB.SetAffinity` or affinity-failure marker:
 root bridge attachment is bookkeeping, while execution placement comes only
 from the generated SchedControl/SC binding. A live VM fault in the console
@@ -5115,7 +5152,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:97ed0ca13e31be891d8cc7d16d375ee9cc32242d6b97b22ca532a4c35024bd5d`
+- `configs/generated/root_task_resolved.json` — `sha256:94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
