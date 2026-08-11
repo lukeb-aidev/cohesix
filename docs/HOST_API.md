@@ -37,6 +37,84 @@ the OpenAPI document.
 Both `CAT` and `TAIL` require `max_bytes`. Only `TAIL` accepts the optional
 `lines` query. The gateway validates those bounds before contacting the target.
 
+## Worker Runtime Metadata
+
+`GET /v1/meta/bounds` may include `worker_runtime`. Its absence means
+`unknown`; clients must not reinterpret absence as `model-only`. The object is
+declaration-only and has this additive shape:
+
+```json
+{
+  "roles": [
+    {"role": "worker-heartbeat", "declaration": "executable", "executable_slots": 1}
+  ],
+  "task_abi_schema": "worker-task-abi/v1",
+  "task_abi_version": 1,
+  "worker_observation_schema": "cohesix-worker-observation/v1",
+  "worker_integration_evidence_schema": "cohesix-worker-integration-evidence/v1",
+  "maximum_live_tasks": 3,
+  "canonical_telemetry_template": "/shard/<label>/worker/<id>/telemetry",
+  "shard_bits": 8,
+  "legacy_worker_alias": true
+}
+```
+
+The role matrix and `maximum_live_tasks` are compiler bounds, not discovered
+instances or READY state. Live lifecycle and receipts remain on canonical
+`LS`, `CAT`, and `TAIL` projections below `/shard`; the legacy `/worker` alias
+is usable only when the returned gate is true.
+
+`GET /v1/meta/status` may add `backend_class` as `host-model`,
+`console-projection`, or `unknown`. Connectivity and backend class never prove
+target execution. The optional `worker_acceptance` summary is the only REST
+projection of QEMU or fresh-Pi proof, and it exists only after the gateway has
+validated a bounded local record with the shared `cohesix-worker-evidence`
+parser.
+
+Configure that import with an explicit trust root, the component record, and
+the exact current target-session file:
+
+```bash
+hive-gateway \
+  --worker-acceptance-root out/test-plan/m26e-worker-qemu \
+  --worker-acceptance-evidence out/test-plan/m26e-worker-qemu/worker-task-evidence.json \
+  --target-session out/test-plan/m26e-worker-qemu/target-session.json
+```
+
+Supply the normal bind, console, role, ticket, and request-auth options for the
+selected deployment in the same invocation.
+
+All three paths must be supplied together; the equivalent environment inputs
+are `HIVE_GATEWAY_WORKER_ACCEPTANCE_ROOT`,
+`HIVE_GATEWAY_WORKER_ACCEPTANCE_EVIDENCE`, and
+`HIVE_GATEWAY_TARGET_SESSION`. The root must be a real directory, both files
+must be canonical regular files below it, no traversed component may be a
+symlink, and each input is capped at 256 KiB. The shared validator accepts only
+a `target-component` record and requires its complete target session to equal
+the supplied current-session bytes. The session's resolved-manifest hash must
+also equal the manifest compiled into the gateway. A prior boot, a root-TCB or
+full-system record, and a component copied beside a different session all fail
+closed before load.
+
+Status exposes hashes and bounded state only: component/session hashes,
+target/proof class, topology hash, and each role's five-part identity, image
+hash, READY/completion sequences, core, scheduling context, and object counts.
+Those counts are the generated per-slot admission bundle associated with the
+observed Worker identity; status does not describe them as a kernel allocation
+or retype census.
+Raw evidence, endpoint/fault badges, CPtrs, capability values, and secrets are
+never returned. Missing or rejected input yields no proof and one typed
+`worker_acceptance_diagnostic.code` such as `not-configured`,
+`incomplete-configuration`, `outside-root`, `symlink-traversal`,
+`record-too-large`, `invalid-target-session`, `target-session-mismatch`, or
+`manifest-mismatch`.
+
+This import is deliberately staged: a same-boot QEMU pre-pressure collector
+may emit the component used to admit an executable workload, while the final
+component/root/system collector runs only after the medium/high pressure
+artifacts are immutable. The gateway must never require the final record that
+its own pressure run is helping to produce.
+
 ## Authentication and Exposure
 
 The gateway holds one upstream target-console session with a configured role
@@ -93,6 +171,12 @@ semantics in JSON. A target refusal can therefore arrive with HTTP `200`.
 Clients must inspect both the HTTP status and the JSON `status` field. Do not
 blindly retry writes after an ambiguous transport failure; verify read-only
 state first.
+
+A successful control `ECHO` means the existing target path admitted the write.
+It is not Worker READY, receipt confirmation, provider completion, target
+acceptance, or execution proof. Discover those states independently through
+canonical structured telemetry and validated acceptance evidence. The gateway
+adds no Worker action endpoint or direct Worker RPC.
 
 A successful queen telemetry segment-control `ECHO` may return the
 provider-assigned segment ID as the sole `lines` entry. Validate it as one

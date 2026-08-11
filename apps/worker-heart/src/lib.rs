@@ -3,7 +3,7 @@
 // Purpose: Provide heartbeat worker host helpers and bounded no_std loop primitives.
 // Author: Lukas Bower
 #![cfg_attr(target_os = "none", no_std)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![warn(missing_docs)]
 
 //! Heartbeat worker library.
@@ -18,6 +18,5 @@ mod host;
 pub use host::*;
 
 #[cfg(target_os = "none")]
-mod kernel {
-    //! Kernel entrypoint is compiled from the worker binary target.
-}
+#[allow(unsafe_code)]
+pub mod target_runtime;

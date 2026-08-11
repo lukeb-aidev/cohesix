@@ -29,6 +29,7 @@ cohesix-ticket = { workspace = true }
 cohsh-core = { workspace = true }
 cohesix-net-constants = { workspace = true }
 cohesix-proto = { workspace = true }
+cohesix-worker-evidence = { workspace = true }
 cohesix-rest = { path = "../../crates/cohesix-rest", optional = true }
 secure9p-codec = { workspace = true }
 nine-door = { path = "../nine-door", optional = true }

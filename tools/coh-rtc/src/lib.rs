@@ -4,7 +4,11 @@
 // Author: Lukas Bower
 
 pub mod codegen;
+pub mod host_integration;
+pub mod implementation_surface;
 pub mod ir;
+pub mod resource_admission;
+pub mod temporal;
 
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
@@ -213,4 +217,20 @@ pub fn default_swarmui_defaults_doc_path() -> PathBuf {
     Path::new("docs")
         .join("snippets")
         .join("swarmui_defaults.md")
+}
+
+pub fn default_host_integration_source_path() -> PathBuf {
+    Path::new("configs").join("host_integration_acceptance.toml")
+}
+
+pub fn default_host_integration_graph_path() -> PathBuf {
+    Path::new("configs")
+        .join("generated")
+        .join("host_integration_dependency.json")
+}
+
+pub fn default_host_integration_doc_path() -> PathBuf {
+    Path::new("docs")
+        .join("snippets")
+        .join("host_integration_dependency.md")
 }

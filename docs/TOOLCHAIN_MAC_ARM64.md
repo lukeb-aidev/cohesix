@@ -232,16 +232,15 @@ The five fresh source-build profiles use isolated `profile-v2` trees:
 | `out/sel4/profile-v2/pi4-diagnostic` | Pi 4 diagnostic source-build audit | Fresh-source audit lane only; not an input to the CYW43 exact-image lane |
 | `out/sel4/profile-v2/bcm2711-proof-eligibility` | BCM2711 proof eligibility | Upstream configuration compatibility only; not a Cohesix proof |
 
-The repo-managed `seL4/` trees were refreshed from the same v16 profile
-outputs: `seL4/build` mirrors `qemu_smp_production`,
-`seL4/SMP_build` mirrors `qemu_smp_diagnostic`, and `seL4/build_UBOOT`
-mirrors `pi4_diagnostic`. They no longer contain seL4 15 artifacts. Their
-embedded build paths and causal stamps still name the historical
-`out/sel4/profile-v2/*` builds. The Pi exact-image lane nevertheless consumes
-`seL4/build_UBOOT` as its immutable canonical diagnostic artifact input: the
-relocated validator matches each tracked artifact by digest without treating
-it as fresh source-build or release proof. Pi composition must not configure or
-build this tree. It creates only disposable outputs and evidence below `out/`.
+The repo-managed `seL4/` trees remain immutable seL4 16 Milestone 26d
+references. Milestone 26e changes the operational scheduler contract to
+SMP+MCS, so those classic-scheduler mirrors are no longer current profile
+outputs. In particular, `seL4/build_UBOOT` is intentionally rejected by the
+current `pi4_diagnostic` contract until the later fresh-Pi phase rebuilds and
+deliberately refreshes that tracked artifact set. QEMU-first work uses only the
+fresh validated `out/sel4/profile-v2/qemu-smp-*` trees. It must not relabel a
+tracked classic artifact, update only its stamp, or use it as MCS evidence.
+Pi composition never configures or builds `seL4/build_UBOOT` in place.
 
 These build directories contain generated kernel truth, not vendored seL4
 source. The selected directory must match the intended target and root-task
@@ -304,10 +303,17 @@ profile contract:
   --sel4-build "$SEL4_BUILD_DIR" \
   --out-dir out/cohesix \
   --profile release \
-  --root-task-features cohesix-dev \
+  --root-task-features release-qemu,bootstrap-trace \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
+
+`release-qemu,bootstrap-trace` is also the script default. The launcher derives
+the interrupt-controller version from the selected seL4 generated headers,
+requires GICv3, emits `virt,gic-version=3`, and rejects machine/GIC overrides
+from environment or forwarded QEMU arguments. The build regenerates the full
+compiler-owned Rust, policy, host-integration, implementation-surface, and
+QEMU/Pi Python-contract set before compiling selected artifacts.
 
 Use `--no-run` to stage artifacts without claiming a boot. Use `--transport
 qemu` when `cohsh` should own QEMU without exposing the guest TCP listener.
@@ -382,8 +388,11 @@ out/toolchain/sel4-profile-venv/bin/python scripts/sel4_profile.py validate \
   --evidence out/audit/m26d-profile-v2-qemu-smp-production.json
 ```
 
-The current Pi exact-image lane validates and consumes the tracked diagnostic
-artifact tree directly:
+The historical Pi exact-image lane used the tracked diagnostic artifact tree
+directly. Under the active Milestone 26e SMP+MCS contract the following
+validation is expected to reject the pre-26e tree; do not proceed to root-task
+or image composition until a later fresh-Pi rebuild and controlled tracked-tree
+refresh makes it pass:
 
 ```bash
 .venv/bin/python scripts/sel4_profile.py validate \
@@ -393,17 +402,10 @@ artifact tree directly:
   --require-artifacts \
   --for-runtime \
   --evidence out/audit/pi4-repo-managed-profile.json
-SEL4_BUILD_DIR="$PWD/seL4/build_UBOOT" \
-cargo check -p root-task \
-  --target aarch64-unknown-none \
-  --no-default-features \
-  --features release-pi4
-scripts/pi4-image-build.sh \
-  --manifest configs/root_task_pi4_uboot_aarch64.toml \
-  --venv .venv
 ```
 
-The tracked `cohesix-profile-build-inputs.json` must have schema
+Before Pi composition is re-enabled, the tracked
+`cohesix-profile-build-inputs.json` must have schema
 `cohesix-sel4-profile-build-inputs/v2`, status `complete`, profile
 `pi4_diagnostic`, and artifact/configuration identities that relocate under
 `seL4/build_UBOOT` without any byte change. Validation rejects a dirty tracked

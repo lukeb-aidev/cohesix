@@ -8,12 +8,5 @@
 
 //! Receipt-only LoRA worker primitives for bounded model-adapter lifecycle control.
 
-extern crate alloc;
-
 /// No_std LoRA VM receipt-loop helpers.
 pub mod vm;
-
-#[cfg(target_os = "none")]
-mod kernel {
-    //! Kernel entrypoint is compiled from the worker binary target.
-}

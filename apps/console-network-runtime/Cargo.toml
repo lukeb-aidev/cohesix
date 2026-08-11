@@ -1,0 +1,30 @@
+# Author: Lukas Bower
+# Purpose: Configure the isolated no_std TCP console and network runtime.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "console-network-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+qemu-evidence = []
+
+[dependencies]
+console-network-abi = { workspace = true }
+heapless = "0.9.3"
+smoltcp = { version = "0.13.1", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-tcp",
+] }
+
+[target.'cfg(target_os = "none")'.dependencies]
+sel4-sys = { path = "../../crates/sel4-sys" }
+
+[[bin]]
+name = "console-network-runtime"
+test = false
+bench = false

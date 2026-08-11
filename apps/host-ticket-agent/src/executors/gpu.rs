@@ -9,8 +9,11 @@ use cohsh::{queen, Session, Transport, CLIENT_QUEEN_LEASE_CTL_PATH};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::{arg_u64, read_last_line, target_components, ExecutorConfig};
-use crate::HostTicketSpec;
+use super::{
+    arg_str, arg_u64, provider_pending, read_last_line, target_components, ExecutorConfig,
+    ReconcileOutcome,
+};
+use crate::{HostTicketSpec, HOST_TICKET_V2_SCHEMA};
 
 /// Execute GPU lease ticket actions.
 pub fn execute(
@@ -19,12 +22,242 @@ pub fn execute(
     spec: &HostTicketSpec,
     _config: &ExecutorConfig,
 ) -> Result<String> {
+    if spec.schema == HOST_TICKET_V2_SCHEMA {
+        return execute_v2(transport, session, spec);
+    }
     match spec.action.as_str() {
         "gpu.lease.grant" => execute_grant(transport, session, spec),
         "gpu.lease.renew" => execute_renew(transport, session, spec),
         "gpu.lease.release" => execute_release(transport, session, spec),
         other => Err(anyhow!("unsupported gpu action {other}")),
     }
+}
+
+/// Reconcile a version-2 GPU lease operation from root-owned lease projections.
+pub fn reconcile(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+    _config: &ExecutorConfig,
+) -> Result<ReconcileOutcome> {
+    if spec.schema != HOST_TICKET_V2_SCHEMA {
+        return Ok(ReconcileOutcome::Ambiguous);
+    }
+    observe_v2_operation(transport, session, spec)
+}
+
+fn execute_v2(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+) -> Result<String> {
+    let operation_id = spec
+        .operation_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("host-ticket/v2 requires operation_id"))?;
+    let subject_ref = spec
+        .subject_ref
+        .as_deref()
+        .ok_or_else(|| anyhow!("host-ticket/v2 requires subject_ref"))?;
+    let receipt_worker_id = spec
+        .receipt_worker_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("host-ticket/v2 requires receipt_worker_id"))?;
+    let payload = match spec.action.as_str() {
+        "gpu.lease.grant" => {
+            validate_runtime_gpu_id(transport, session, subject_ref)?;
+            if find_active_lease(transport, session, operation_id)?.is_some() {
+                return Err(anyhow!(
+                    "gpu.lease.grant operation_id {operation_id} is already active"
+                ));
+            }
+            let ttl_s = to_u32(arg_u64(spec, "ttl_s").unwrap_or(120), "ttl_s")?;
+            let priority = arg_u64(spec, "priority").unwrap_or(0);
+            json!({
+                "op": "grant",
+                "id": operation_id,
+                "subject": receipt_worker_id,
+                "resource": subject_ref,
+                "ttl_s": ttl_s,
+                "priority": priority
+            })
+        }
+        "gpu.lease.renew" => {
+            validate_runtime_gpu_id(transport, session, subject_ref)?;
+            validate_existing_lease_binding(
+                transport,
+                session,
+                operation_id,
+                receipt_worker_id,
+                subject_ref,
+            )?;
+            let ttl_s = to_u32(arg_u64(spec, "ttl_s").unwrap_or(120), "ttl_s")?;
+            let priority = arg_u64(spec, "priority").unwrap_or(0);
+            json!({"op": "renew", "id": operation_id, "ttl_s": ttl_s, "priority": priority})
+        }
+        "gpu.lease.release" => {
+            validate_runtime_gpu_id(transport, session, subject_ref)?;
+            validate_existing_lease_binding(
+                transport,
+                session,
+                operation_id,
+                receipt_worker_id,
+                subject_ref,
+            )?;
+            let reason = arg_str(spec, "reason").unwrap_or("host-ticket-release");
+            json!({"op": "preempt", "id": operation_id, "reason": reason})
+        }
+        other => return Err(anyhow!("unsupported gpu action {other}")),
+    };
+    let encoded = serde_json::to_string(&payload).context("serialize GPU lease control")?;
+    if let Err(error) = transport.write(
+        session,
+        CLIENT_QUEEN_LEASE_CTL_PATH,
+        format!("{encoded}\n").as_bytes(),
+    ) {
+        return Err(provider_pending(format!(
+            "GPU lease control write outcome is unknown and will be reconciled without replay: {error}"
+        )));
+    }
+    match observe_v2_operation(transport, session, spec)? {
+        ReconcileOutcome::Committed(message) => Ok(message),
+        ReconcileOutcome::Rejected(message) => Err(anyhow!(message)),
+        ReconcileOutcome::Ambiguous => Err(provider_pending(
+            "GPU lease control was admitted; exact terminal observation is pending",
+        )),
+    }
+}
+
+fn observe_v2_operation(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+) -> Result<ReconcileOutcome> {
+    let operation_id = spec
+        .operation_id
+        .as_deref()
+        .ok_or_else(|| anyhow!("host-ticket/v2 requires operation_id"))?;
+    match spec.action.as_str() {
+        "gpu.lease.grant" | "gpu.lease.renew" => {
+            let worker_id = spec
+                .receipt_worker_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires receipt_worker_id"))?;
+            let gpu_id = spec
+                .subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires subject_ref"))?;
+            if let Some(line) = find_active_lease(transport, session, operation_id)? {
+                let subject = format!("subject={worker_id}");
+                let resource = format!("resource={gpu_id}");
+                if !line
+                    .split_whitespace()
+                    .any(|field| field == subject.as_str())
+                    || !line
+                        .split_whitespace()
+                        .any(|field| field == resource.as_str())
+                {
+                    return Ok(ReconcileOutcome::Rejected(format!(
+                        "{} operation_id={operation_id} observed=wrong-binding",
+                        spec.action
+                    )));
+                }
+                return Ok(ReconcileOutcome::Committed(format!(
+                    "{} operation_id={operation_id} observed=active",
+                    spec.action
+                )));
+            }
+            Ok(ReconcileOutcome::Ambiguous)
+        }
+        "gpu.lease.release" => {
+            let preemptions = transport.read(session, "/proc/lease/preemptions")?;
+            let id_marker = format!("id={operation_id}");
+            let worker_id = spec
+                .receipt_worker_id
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires receipt_worker_id"))?;
+            let gpu_id = spec
+                .subject_ref
+                .as_deref()
+                .ok_or_else(|| anyhow!("host-ticket/v2 requires subject_ref"))?;
+            if let Some(line) = preemptions.iter().find(|line| {
+                line.split_whitespace()
+                    .any(|field| field == id_marker.as_str())
+            }) {
+                let subject = format!("subject={worker_id}");
+                let resource = format!("resource={gpu_id}");
+                if !line
+                    .split_whitespace()
+                    .any(|field| field == subject.as_str())
+                    || !line
+                        .split_whitespace()
+                        .any(|field| field == resource.as_str())
+                {
+                    return Ok(ReconcileOutcome::Rejected(format!(
+                        "gpu.lease.release operation_id={operation_id} observed=wrong-binding"
+                    )));
+                }
+                return Ok(ReconcileOutcome::Committed(format!(
+                    "gpu.lease.release operation_id={operation_id} observed=preempted"
+                )));
+            }
+            Ok(ReconcileOutcome::Ambiguous)
+        }
+        _ => Ok(ReconcileOutcome::Ambiguous),
+    }
+}
+
+fn validate_runtime_gpu_id(
+    transport: &mut dyn Transport,
+    session: &Session,
+    gpu_id: &str,
+) -> Result<()> {
+    let entries = transport
+        .list(session, "/gpu")
+        .context("list generated /gpu inventory")?;
+    if entries.iter().any(|entry| entry == gpu_id) {
+        return Ok(());
+    }
+    Err(anyhow!(
+        "GPU id {gpu_id} is absent from the root-owned /gpu inventory"
+    ))
+}
+
+fn validate_existing_lease_binding(
+    transport: &mut dyn Transport,
+    session: &Session,
+    operation_id: &str,
+    worker_id: &str,
+    gpu_id: &str,
+) -> Result<()> {
+    let line = find_active_lease(transport, session, operation_id)?
+        .ok_or_else(|| anyhow!("lease operation_id {operation_id} is not active"))?;
+    let subject = format!("subject={worker_id}");
+    let resource = format!("resource={gpu_id}");
+    if !line
+        .split_whitespace()
+        .any(|field| field == subject.as_str())
+        || !line
+            .split_whitespace()
+            .any(|field| field == resource.as_str())
+    {
+        return Err(anyhow!(
+            "lease operation_id {operation_id} is not pinned to Worker {worker_id} and GPU {gpu_id}"
+        ));
+    }
+    Ok(())
+}
+
+fn find_active_lease(
+    transport: &mut dyn Transport,
+    session: &Session,
+    operation_id: &str,
+) -> Result<Option<String>> {
+    let lines = transport.read(session, "/proc/lease/active")?;
+    let id = format!("id={operation_id}");
+    Ok(lines
+        .into_iter()
+        .find(|line| line.split_whitespace().any(|field| field == id.as_str())))
 }
 
 fn execute_grant(
@@ -217,8 +450,36 @@ fn to_u8(value: u64, field: &str) -> Result<u8> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::*;
+    use cohesix_ticket::Role;
     use serde_json::Value;
+
+    fn v2_gpu_spec(action: &str) -> HostTicketSpec {
+        HostTicketSpec {
+            schema: HOST_TICKET_V2_SCHEMA.to_owned(),
+            id: "ticket-v2".to_owned(),
+            idempotency_key: "idem-v2".to_owned(),
+            action: action.to_owned(),
+            args: if action == "gpu.lease.release" {
+                serde_json::json!({"reason": "test"})
+            } else {
+                serde_json::json!({"ttl_s": 30})
+            },
+            receipt_mode: Some(crate::ReceiptMode::Worker),
+            operation_id: Some("lease-1".to_owned()),
+            subject_ref: Some("GPU-0".to_owned()),
+            receipt_worker_role: Some("worker-gpu".to_owned()),
+            receipt_worker_id: Some("gpu-worker-1".to_owned()),
+            receipt_supervisor_generation: Some(2),
+            receipt_cap_generation: Some(3),
+            resolved_worker_slot: Some(0),
+            resolved_lease_epoch: Some(4),
+            admission_sequence: Some(5),
+            ..HostTicketSpec::default()
+        }
+    }
 
     #[test]
     fn resolve_gpu_from_target_components() {
@@ -234,6 +495,7 @@ mod tests {
             target_hive: None,
             relay_hop: None,
             relay_correlation_id: None,
+            ..HostTicketSpec::default()
         };
         let gpu_id = resolve_gpu_id(&spec).expect("gpu id");
         assert_eq!(gpu_id, "GPU-0");
@@ -253,8 +515,136 @@ mod tests {
             target_hive: None,
             relay_hop: None,
             relay_correlation_id: None,
+            ..HostTicketSpec::default()
         };
         let gpu_id = resolve_gpu_id(&spec).expect("gpu id");
         assert_eq!(gpu_id, "GPU-9");
+    }
+
+    #[test]
+    fn v2_gpu_grant_uses_only_lease_control_and_exact_binding() {
+        let mut transport = GpuTransport::new(true);
+        let session = Session::new(1.into(), Role::Queen);
+        let result = execute(
+            &mut transport,
+            &session,
+            &v2_gpu_spec("gpu.lease.grant"),
+            &ExecutorConfig::default(),
+        )
+        .expect("grant");
+        assert!(result.contains("observed=active"));
+        assert_eq!(transport.writes.len(), 1);
+        assert_eq!(transport.writes[0].0, CLIENT_QUEEN_LEASE_CTL_PATH);
+        assert!(transport.writes[0].1.contains("\"op\":\"grant\""));
+        assert!(transport.writes[0]
+            .1
+            .contains("\"subject\":\"gpu-worker-1\""));
+        assert!(transport.writes[0].1.contains("\"resource\":\"GPU-0\""));
+        assert!(!transport
+            .writes
+            .iter()
+            .any(|(path, _payload)| path == queen::queen_ctl_path()));
+    }
+
+    #[test]
+    fn v2_gpu_ambiguous_admission_is_pending_not_rejected() {
+        let mut transport = GpuTransport::new(false);
+        let error = execute(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &v2_gpu_spec("gpu.lease.grant"),
+            &ExecutorConfig::default(),
+        )
+        .expect_err("missing observation is pending");
+        assert!(super::super::is_provider_pending(&error));
+        assert_eq!(transport.writes.len(), 1);
+    }
+
+    #[test]
+    fn v2_gpu_release_preempts_without_killing_receipt_worker() {
+        let mut transport = GpuTransport::new(true);
+        transport.files.insert(
+            "/proc/lease/active".to_owned(),
+            vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],
+        );
+        let result = execute(
+            &mut transport,
+            &Session::new(1.into(), Role::Queen),
+            &v2_gpu_spec("gpu.lease.release"),
+            &ExecutorConfig::default(),
+        )
+        .expect("release");
+        assert!(result.contains("observed=preempted"));
+        assert_eq!(transport.writes.len(), 1);
+        assert_eq!(transport.writes[0].0, CLIENT_QUEEN_LEASE_CTL_PATH);
+        assert!(transport.writes[0].1.contains("\"op\":\"preempt\""));
+    }
+
+    #[derive(Debug)]
+    struct GpuTransport {
+        files: BTreeMap<String, Vec<String>>,
+        writes: Vec<(String, String)>,
+        publish_observation: bool,
+    }
+
+    impl GpuTransport {
+        fn new(publish_observation: bool) -> Self {
+            let mut files = BTreeMap::new();
+            files.insert("/gpu".to_owned(), vec!["GPU-0".to_owned()]);
+            files.insert("/proc/lease/active".to_owned(), Vec::new());
+            files.insert("/proc/lease/preemptions".to_owned(), Vec::new());
+            Self {
+                files,
+                writes: Vec::new(),
+                publish_observation,
+            }
+        }
+    }
+
+    impl Transport for GpuTransport {
+        fn attach(&mut self, _role: Role, _ticket: Option<&str>) -> Result<Session> {
+            Ok(Session::new(1.into(), Role::Queen))
+        }
+
+        fn ping(&mut self, _session: &Session) -> Result<String> {
+            Ok("pong".to_owned())
+        }
+
+        fn tail(
+            &mut self,
+            session: &Session,
+            path: &str,
+            _lines: Option<u16>,
+        ) -> Result<Vec<String>> {
+            self.read(session, path)
+        }
+
+        fn read(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+            Ok(self.files.get(path).cloned().unwrap_or_default())
+        }
+
+        fn list(&mut self, _session: &Session, path: &str) -> Result<Vec<String>> {
+            Ok(self.files.get(path).cloned().unwrap_or_default())
+        }
+
+        fn write(&mut self, _session: &Session, path: &str, payload: &[u8]) -> Result<()> {
+            let payload = std::str::from_utf8(payload)?.trim().to_owned();
+            self.writes.push((path.to_owned(), payload.clone()));
+            if self.publish_observation && path == CLIENT_QUEEN_LEASE_CTL_PATH {
+                let value: Value = serde_json::from_str(&payload)?;
+                if value.get("op").and_then(Value::as_str) == Some("grant") {
+                    self.files.insert(
+                        "/proc/lease/active".to_owned(),
+                        vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],
+                    );
+                } else if value.get("op").and_then(Value::as_str) == Some("preempt") {
+                    self.files.insert(
+                        "/proc/lease/preemptions".to_owned(),
+                        vec!["id=lease-1 subject=gpu-worker-1 resource=GPU-0".to_owned()],
+                    );
+                }
+            }
+            Ok(())
+        }
     }
 }

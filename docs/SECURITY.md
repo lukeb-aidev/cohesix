@@ -91,7 +91,9 @@ The authenticated root-task TCP console is the only in-VM TCP listener. It is a
 line-oriented console using `AUTH`, `ATTACH`, bounded commands, `OK`/`ERR`
 responses, and `END` stream terminators; it is not a 9P-over-TCP server.
 Worker-role session attachments require a valid role ticket before namespace
-access; attachment does not start a target Worker task.
+access. Attachment does not start a target Worker task; executable
+Heartbeat/GPU/LoRA tasks are admitted separately by the generated Worker
+supervisor, while WorkerBus remains model-only.
 
 Authentication is not encryption. Bind direct console forwarding to loopback
 or carry it through an authenticated encrypted tunnel. `hive-gateway` also
@@ -104,6 +106,29 @@ authentication.
 Only one direct owner may hold the target console session. Concurrent clients
 must share one `hive-gateway` owner rather than racing `cohsh`, SwarmUI, or
 bridges against it.
+
+On the generated QEMU MCS target, that sole listener is implemented by the
+separately linked `console-network-runtime` child. The child owns smoltcp,
+Ethernet/IP/TCP state, the length-prefixed console transport, constant-time
+`AUTH` token comparison, and pre-authentication timeouts. Root owns no TCP
+parser: it receives only a copied, authenticated bounded command and remains
+the sole authority for Queen policy, tickets, namespace operations, and
+command execution. Root sends already-authorized response bytes back through
+one bounded control page, so existing `OK`/`ERR`/`END` ordering is unchanged.
+
+The compiler fixes the child image path and hash-bound ELF identity, 16-slot
+CSpace, one active MCS scheduling context, standard/timeout fault badges, and
+four pointer-free sequence-last pages. The child receives no root CSpace,
+device capability, `SchedControl`, policy object, namespace memory, or second
+listener. All child objects and translation tables descend from one retained
+one-MiB untyped anchor. Fault or timeout handling first closes admission, then
+suspends and unbinds the child, scrubs root-visible pages, and revokes the
+anchor before any generation reuse. Serial, local-seat input, emergency
+diagnostics, and fatal output remain independent root-owned paths and retain
+priority when TCP work is absent or overloaded. QEMU acceptance establishes
+this virtual transport boundary only; it is not Pi 4 NIC or CYW43 evidence, and
+the current Pi network adapter remains outside this QEMU-first construction and
+activation path until the separate hardware phase.
 
 Console parsing uses fixed-capacity buffers and a shared finite-state command
 parser. A leaky-bucket rate limiter allows two failed authentication attempts in
@@ -129,6 +154,50 @@ surface a deterministic refusal or counter; it must not create an unbounded
 queue or silent retry loop. The event pump serializes authoritative target
 state. SMP is used for separate single-threaded tasks, not shared-memory
 multithreading of authority state.
+
+The Milestone 26e namespace-service contract treats path, payload, partial
+frame, sequence, and generation fields as hostile. The as-built
+`nine-door-runtime` source validates them in a restricted `no_std` child and
+returns only a typed bounded prepared operation; the root-side contract
+independently checks the exact response identity and bytes before policy or
+mutation. Root's endpoint cap is Write + GrantReply with neither Read nor
+Grant, while the child's endpoint cap is Read-only. Request and response
+mappings are directionally restricted, exactly two pages each, and backed by
+disjoint live frame handles validated against generated virtual addresses.
+The QEMU constructor validates the embedded image digest, entry, and W^X load
+span, allocates only the compiler-budgeted anchor generation, and registers the
+still-suspended TCB before registry seal. The passive child has no scheduling
+context; its receive-loop Reply object is shared only with the generated
+root-fault recovery slot. On fault, an outstanding donor receives exactly one
+typed `Closed` failure before the durable containment record is published;
+without an outstanding Call no Reply is attempted. Recovery authority is then
+deleted before the shared frames are scrubbed/unmapped and the retained anchor
+is revoked. The active console service cannot enter this passive path. Closing
+with a partial frame, queue saturation, cancellation, child-generation
+revocation, replay, and late completion fail closed. The child receives only
+its service endpoint/Reply object and two bounded shared-frame mappings; it
+receives no Queen policy, root CSpace, device, broad namespace, scheduling
+context, or `SchedControl` authority. This internal ABI does not relax the rule
+that the authenticated console is the only in-VM TCP listener. Live QEMU fault
+injection remains evidence required beyond source and target checks; it is not
+Pi hardware acceptance.
+
+Operational host/GPU projection begins `unavailable source=none`; target source
+contains no fabricated provider or GPU topology. GPU snapshots use
+`gpu-bridge-snapshot/v2` and arrive only through an authenticated Queen
+session. Root validates the production source identity, epoch and strictly
+increasing sequence, observation time, bounded TTL, catalog and per-manifest
+digests, CAS/base/adapter compatibility, and activation generation/receipt
+before atomically replacing a generation. Fixture-mode, stale, replayed,
+forged, incompatible, or oversized snapshots fail closed. Accepted data is
+withdrawn at TTL and direct writes to the active-model pointer are denied.
+Console/REST placeholder credentials fail before connection, and fixture
+signing keys are forbidden from operational target and release closures.
+Operational manifests select `cas.signing.verification_key_path`; coh-rtc
+validates a public Ed25519 point and emits only those public bytes. The
+corresponding signing key remains in an external secret store. The checked-in
+fixture signing seed and its public counterpart are test-only and cannot be
+selected by the QEMU/Pi runtime or release manifest.
 
 <!-- coh-rtc:ticket-quotas:start -->
 ### Ticket quota limits (generated)

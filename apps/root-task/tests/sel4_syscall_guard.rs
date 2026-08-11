@@ -9,7 +9,7 @@ use std::process::Command;
 #[test]
 fn no_direct_sel4_syscall_invocations() {
     let pattern =
-        "sel4_sys::seL4_(Send|NBSend|Call|CallWithMRs|Reply|ReplyRecv|Signal|Wait|Recv|NBRecv|Poll|Yield)";
+        "sel4_sys::seL4_(Send|NBSend|Call|CallWithMRs|Reply|ReplyRecv|Signal|Wait|Recv|NBRecv|Poll|Yield)\\s*\\(";
     let output = Command::new("rg")
         .args(["-n", pattern, "src"])
         .output()

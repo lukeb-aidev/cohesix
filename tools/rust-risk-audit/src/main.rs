@@ -21,7 +21,7 @@ use syn::{
     TraitItem, TypeFnPtr, UseTree,
 };
 
-const SCANNER_VERSION: &str = "rust-risk-audit/v4";
+const SCANNER_VERSION: &str = "rust-risk-audit/v5";
 const HISTORICAL_BASELINE_COMMIT: &str = "cf8f9ee30";
 const HISTORICAL_BASELINE_FULL_COMMIT: &str = "cf8f9ee30b0431dfb79a203f38ba3c7e12c86490";
 const UNQUALIFIED_INCLUDE_ERROR: &str =
@@ -50,7 +50,7 @@ const LINKED_RUNTIME_HAL_CANONICAL_FILES: [&str; 4] = [
 ];
 const EXTERNAL_NON_RUST_TREES: [&str; 1] = ["crates/sel4-sys/upstream"];
 const SOURCE_SCOPE: &str = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, and external non-Rust trees contracted separately";
-const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 5] = [
+const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 8] = [
     (
         "crates/sel4-sys/src/lib.rs",
         "bindings.rs",
@@ -69,21 +69,42 @@ const OUT_DIR_INCLUDE_CONTRACTS: [(&str, &str, &str, &str, &str); 5] = [
         "apps/root-task/src/lib.rs",
         "built_info.rs",
         "apps/root-task/build.rs",
-        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/pi4_wifi.rs",
         "pi4_wifi_firmware.rs",
         "apps/root-task/build.rs",
-        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
         "apps/root-task/src/hal/driver_task.rs",
         "pi4_driver_runtime_payload.rs",
         "apps/root-task/build.rs",
-        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
+        "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+    ),
+    (
+        "apps/root-task/src/console_network_service.rs",
+        "console_network_image_identity.rs",
+        "apps/root-task/build.rs",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
+        "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+    ),
+    (
+        "apps/root-task/src/ninedoor_service.rs",
+        "ninedoor_image_identity.rs",
+        "apps/root-task/build.rs",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
+        "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+    ),
+    (
+        "apps/root-task/src/hal/worker_image.rs",
+        "worker_image_identity.rs",
+        "apps/root-task/build.rs",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
 ];
@@ -95,7 +116,7 @@ const BUILD_SCRIPT_CONTRACTS: [(&str, &str, &str); 4] = [
     ),
     (
         "apps/root-task/build.rs",
-        "f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be",
+        "a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112",
         "1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
     ),
     (
@@ -156,22 +177,22 @@ struct RiskCounts {
 }
 
 const ACTIVE_GLOBAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 691,
+    unsafe_count: 795,
     unwrap_count: 38,
-    expect_count: 240,
-    panic_count: 96,
+    expect_count: 243,
+    panic_count: 102,
 };
 const ACTIVE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 144,
+    unsafe_count: 160,
     unwrap_count: 0,
     expect_count: 2,
     panic_count: 0,
 };
 const ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING: RiskCounts = RiskCounts {
-    unsafe_count: 547,
+    unsafe_count: 635,
     unwrap_count: 38,
-    expect_count: 238,
-    panic_count: 96,
+    expect_count: 241,
+    panic_count: 102,
 };
 const HISTORICAL_GLOBAL_COUNTS: RiskCounts = RiskCounts {
     unsafe_count: 693,
@@ -2252,11 +2273,16 @@ fn count_files(root: &Path, files: Vec<PathBuf>, mode: AuditMode) -> Result<File
     Ok(result)
 }
 
-fn validate_complete_out_dir_contracts(includes: &[(String, String)]) -> Result<(), String> {
+fn validate_complete_out_dir_contracts(
+    root: &Path,
+    mode: AuditMode,
+    includes: &[(String, String)],
+) -> Result<(), String> {
     let mut actual = includes.to_vec();
     actual.sort();
     let mut expected: Vec<_> = OUT_DIR_INCLUDE_CONTRACTS
         .iter()
+        .filter(|(source, _, _, _, _)| mode == AuditMode::Current || root.join(source).is_file())
         .map(|(source, output, _, _, _)| ((*source).to_owned(), (*output).to_owned()))
         .collect();
     expected.sort();
@@ -2278,7 +2304,7 @@ fn count_tree(root: &Path, mode: AuditMode) -> Result<RiskCounts, String> {
     }
     files.sort();
     let audit = count_files(root, files, mode)?;
-    validate_complete_out_dir_contracts(&audit.out_dir_includes)?;
+    validate_complete_out_dir_contracts(root, mode, &audit.out_dir_includes)?;
     Ok(audit.counts)
 }
 
@@ -2317,6 +2343,9 @@ struct RiskMetadata {
     historical_expect: usize,
     historical_panic: usize,
     accepted_unsafe_delta: usize,
+    accepted_unwrap_delta: usize,
+    accepted_expect_delta: usize,
+    accepted_panic_delta: usize,
     linked_runtime_hal_historical_unsafe: usize,
     linked_runtime_hal_historical_unwrap: usize,
     linked_runtime_hal_historical_expect: usize,
@@ -2402,10 +2431,13 @@ fn validate_baseline(baseline: &RiskBaselines) -> Result<(), String> {
             .metadata
             .outside_linked_runtime_hal_historical_panic
             != HISTORICAL_OUTSIDE_LINKED_RUNTIME_HAL_COUNTS.panic_count
-        || baseline.metadata.accepted_unsafe_delta != 0
+        || baseline.metadata.accepted_unsafe_delta != 104
+        || baseline.metadata.accepted_unwrap_delta != 0
+        || baseline.metadata.accepted_expect_delta != 3
+        || baseline.metadata.accepted_panic_delta != 6
     {
         return Err(String::from(
-            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96) accepted-delta=0",
+            "risk baseline historical v4 metadata must remain global=(693,38,240,96) linked=(146,0,2,0) outside=(547,38,238,96); approved 26e deltas must be unsafe=104 unwrap=0 expect=3 panic=6",
         ));
     }
     let expected_paths: Vec<String> = LINKED_RUNTIME_HAL_PATHS
@@ -2490,7 +2522,7 @@ fn validate_baseline(baseline: &RiskBaselines) -> Result<(), String> {
         || baseline.outside_linked_runtime_hal != ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING
     {
         return Err(String::from(
-            "risk baseline ceilings must exactly match the immutable v4 active ceilings",
+            "risk baseline ceilings must exactly match the approved v5 active ceilings",
         ));
     }
     let expected_outside = baseline
@@ -3449,7 +3481,7 @@ mod tests {
             ACTIVE_OUTSIDE_LINKED_RUNTIME_HAL_CEILING
         );
 
-        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 691", "unsafe = 691\nunsafe = 691", 1);
+        let duplicate = COMPLETE_BASELINE.replacen("unsafe = 795", "unsafe = 795\nunsafe = 795", 1);
         assert!(parse_baseline(&duplicate).is_err());
     }
 

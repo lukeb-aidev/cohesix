@@ -15,10 +15,7 @@ use sel4_sys::{seL4_CPtr, seL4_Error};
 pub mod bootstrap;
 
 #[cfg(feature = "kernel")]
-use crate::{
-    sel4::{self, debug_put_char},
-    serial,
-};
+use crate::sel4::debug_put_char;
 
 pub use trace_model::TraceLevel;
 
@@ -58,16 +55,6 @@ impl<const N: usize> RateLimiter<N> {
     }
 }
 
-/// Trace sinks supported by the root task.
-#[cfg(feature = "kernel")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TraceSink {
-    /// Emit trace output directly to the UART debug console.
-    Uart,
-    /// Route trace output through the IPC endpoint when available.
-    Ipc,
-}
-
 /// [`Write`] implementation that forwards characters to [`seL4_DebugPutChar`].
 #[cfg(feature = "kernel")]
 pub struct DebugPutc;
@@ -90,33 +77,9 @@ fn emit_line(args: Arguments<'_>) {
 }
 
 #[cfg(feature = "kernel")]
-fn emit_with_sink(sink: TraceSink, args: Arguments<'_>) {
-    match sink {
-        TraceSink::Uart => emit_line(args),
-        TraceSink::Ipc => {
-            if !sel4::ep_ready() {
-                serial::puts_once("[trace] EP not ready; falling back to UART\n");
-                emit_line(args);
-            } else {
-                // IPC logging path not yet implemented; prefer UART until
-                // the dispatcher is wired.
-                emit_line(args);
-            }
-        }
-    }
-}
-
-#[cfg(feature = "kernel")]
 #[inline]
 pub(crate) fn println_args(args: Arguments<'_>) {
-    emit_with_sink(TraceSink::Uart, args);
-}
-
-/// Emit a trace line to the requested sink, falling back to UART if IPC is unavailable.
-#[cfg(feature = "kernel")]
-#[inline]
-pub fn println_args_with_sink(sink: TraceSink, args: Arguments<'_>) {
-    emit_with_sink(sink, args);
+    emit_line(args);
 }
 
 #[cfg(feature = "kernel")]

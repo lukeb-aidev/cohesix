@@ -738,5 +738,6 @@ pub fn build_local_bounds() -> cohesix_rest::BoundsResponse {
                 preemptions_bytes: cohsh::PROC_LEASE_PREEMPTIONS_BYTES,
             },
         },
+        worker_runtime: None,
     }
 }

@@ -12,6 +12,8 @@
 //! transport. The client prefixes transport acknowledgements with `[console]`
 //! so callers can distinguish remote answers from local UX noise.
 
+#[cfg(any(feature = "tcp", test))]
+mod cat_chunks;
 /// Cohesix Secure9P client helpers.
 pub mod client;
 /// Manifest-derived client policy helpers for cohsh.
@@ -24,6 +26,8 @@ mod session_pool;
 pub mod ticket_mint;
 /// Trace-aware transport helpers for cohsh.
 pub mod trace;
+/// Compiler-owned Worker role/path projection and independent state rendering.
+pub mod worker;
 
 #[allow(clippy::all, dead_code)]
 mod generated_client {
@@ -268,6 +272,7 @@ const TEST_SCRIPT_SMP_PATH: &str = "/proc/tests/selftest_smp.coh";
 const PROC_LIFECYCLE_STATE_PATH: &str = "/proc/lifecycle/state";
 const DEFAULT_TEST_TIMEOUT_SECS: u64 = 30;
 const MAX_TEST_TIMEOUT_SECS: u64 = 120;
+#[cfg(feature = "in-process")]
 const CAT_ACK_DATA_SUMMARY_BYTES: usize = 96;
 const TEST_REPORT_VERSION: &str = "1";
 const REPL_KEEPALIVE_SECS: u64 = 15;
@@ -390,6 +395,7 @@ fn parse_expect_selector<'a>(
     ))
 }
 
+#[cfg(feature = "in-process")]
 fn cat_ack_detail(path: &str, lines: &[String]) -> String {
     if path != QUEEN_LOG_PATH {
         return format!("path={path}");
@@ -2564,7 +2570,18 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 };
                 let payload = match build_spawn_payload(role, parts) {
                     Ok(payload) => payload,
-                    Err(err) => return CommandExecution::err(err, transcript),
+                    Err(err) => {
+                        if is_worker_bus_selector(role) {
+                            if let Ok(ack) = render_worker_control_ack(
+                                AckStatus::Err,
+                                "SPAWN",
+                                "role=worker-bus reason=model-only",
+                            ) {
+                                transcript.ack_lines.push(ack);
+                            }
+                        }
+                        return CommandExecution::err(err, transcript);
+                    }
                 };
                 return self.send_queen_ctl_for_test(&payload);
             }
@@ -3437,7 +3454,9 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 self.write_line(console_lines[9])?;
                 self.write_line(console_lines[10])?;
                 self.write_line(console_lines[11])?;
-                self.write_line(console_lines[12])?;
+                self.write_line(
+                    "  spawn <heartbeat|gpu|lora> [opts] - Submit Worker request (ACK is admission only)",
+                )?;
                 self.write_line(console_lines[13])?;
                 self.write_line("  bind <src> <dst>             - Bind namespace path")?;
                 self.write_line("  mount <service> <path>       - Mount service namespace")?;
@@ -3604,7 +3623,20 @@ impl<T: Transport, W: Write> Shell<T, W> {
                 let Some(role) = parts.next() else {
                     return Err(anyhow!("spawn requires a role"));
                 };
-                let payload = build_spawn_payload(role, parts)?;
+                let payload = match build_spawn_payload(role, parts) {
+                    Ok(payload) => payload,
+                    Err(err) => {
+                        if is_worker_bus_selector(role) {
+                            let ack = render_worker_control_ack(
+                                AckStatus::Err,
+                                "SPAWN",
+                                "role=worker-bus reason=model-only",
+                            )?;
+                            self.write_ack_line(&ack)?;
+                        }
+                        return Err(err);
+                    }
+                };
                 self.send_queen_ctl(&payload)?;
                 Ok(CommandStatus::Continue)
             }
@@ -4310,8 +4342,14 @@ pub(crate) fn build_spawn_payload<'a>(
     role: &str,
     args: impl Iterator<Item = &'a str>,
 ) -> Result<String> {
+    let role = role.to_ascii_lowercase();
+    if matches!(role.as_str(), "bus" | "worker-bus") {
+        return Err(anyhow!(
+            "worker-bus is model-only and cannot be spawned as a target task"
+        ));
+    }
     let mut values = parse_kv_args(args)?;
-    match role.to_ascii_lowercase().as_str() {
+    match role.as_str() {
         "heartbeat" | "worker" | "worker-heartbeat" => {
             let ticks: u64 =
                 take_required(&mut values, "ticks", |value| parse_number(value, "ticks"))?;
@@ -4341,6 +4379,13 @@ pub(crate) fn build_spawn_payload<'a>(
             }
             payload.push('}');
             Ok(payload)
+        }
+        "lora" | "worker-lora" => {
+            if !values.is_empty() {
+                let extras = values.keys().cloned().collect::<Vec<_>>().join(", ");
+                return Err(anyhow!("unknown LoRA spawn options: {extras}"));
+            }
+            Ok("{\"spawn\":\"lora\"}".to_owned())
         }
         "gpu" | "worker-gpu" => {
             let gpu_id = take_required(&mut values, "gpu_id", |value| {
@@ -4393,6 +4438,10 @@ pub(crate) fn build_spawn_payload<'a>(
         }
         _ => Err(anyhow!("unknown spawn role '{role}'")),
     }
+}
+
+fn is_worker_bus_selector(role: &str) -> bool {
+    role.eq_ignore_ascii_case("bus") || role.eq_ignore_ascii_case("worker-bus")
 }
 
 pub(crate) fn parse_path(path: &str) -> Result<Vec<String>> {
@@ -4654,6 +4703,21 @@ fn render_telemetry_ack(status: AckStatus, detail: &str) -> Result<String> {
         detail: Some(sanitized.as_str()),
     };
     render_ack(&mut line, &ack).context("telemetry ack render failed")?;
+    Ok(line)
+}
+
+fn render_worker_control_ack(
+    status: AckStatus,
+    verb: &'static str,
+    detail: &str,
+) -> Result<String> {
+    let ack = AckLine {
+        status,
+        verb,
+        detail: Some(detail),
+    };
+    let mut line = String::new();
+    render_ack(&mut line, &ack).context("Worker control ack render failed")?;
     Ok(line)
 }
 
@@ -4970,6 +5034,8 @@ mod tests {
         assert!(rendered.contains("ls <path>"));
         assert!(rendered.contains("mount <service> <path>"));
         assert!(rendered.contains("detach"));
+        assert!(rendered.contains("spawn <heartbeat|gpu|lora>"));
+        assert!(rendered.contains("ACK is admission only"));
     }
 
     #[derive(Default)]
@@ -5145,6 +5211,10 @@ mod tests {
     fn spawn_payload_requires_options() {
         assert!(build_spawn_payload("heartbeat", [].into_iter()).is_err());
         assert!(build_spawn_payload("gpu", [].into_iter()).is_err());
+        assert_eq!(
+            build_spawn_payload("lora", [].into_iter()).unwrap(),
+            "{\"spawn\":\"lora\"}"
+        );
     }
 
     #[test]
@@ -5175,6 +5245,27 @@ mod tests {
             payload,
             "{\"spawn\":\"gpu\",\"lease\":{\"gpu_id\":\"GPU-0\",\"mem_mb\":4096,\"streams\":2,\"ttl_s\":120,\"priority\":1}}"
         );
+    }
+
+    #[test]
+    fn spawn_payload_rejects_worker_bus_as_model_only() {
+        for role in ["bus", "worker-bus"] {
+            let error = build_spawn_payload(role, ["ticks=1"].into_iter())
+                .expect_err("WorkerBus must never enter the target spawn flow");
+            assert_eq!(
+                error.to_string(),
+                "worker-bus is model-only and cannot be spawned as a target task"
+            );
+        }
+    }
+
+    #[test]
+    fn spawn_payload_formats_lora_without_invented_host_arguments() {
+        assert_eq!(
+            build_spawn_payload("worker-lora", [].into_iter()).unwrap(),
+            "{\"spawn\":\"lora\"}"
+        );
+        assert!(build_spawn_payload("lora", ["ticks=1"].into_iter()).is_err());
     }
 
     #[test]

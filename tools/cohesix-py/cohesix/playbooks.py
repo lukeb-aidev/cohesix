@@ -70,6 +70,9 @@ class PlaybookReport:
     proc_snapshot: ProcSnapshot
     host_snapshot: Optional[HostSnapshot]
     telemetry_push: Optional[Dict[str, object]]
+    python_projection_compatible: bool = True
+    runtime_release_accepted: bool = False
+    production_use_case_accepted: bool = False
 
     def to_dict(self) -> Dict[str, object]:
         payload = asdict(self)
@@ -131,7 +134,7 @@ def world_class_playbooks() -> Dict[str, UseCasePlaybook]:
                 schedule=(
                     ScheduleRequest(
                         request_id="mac-peft-train-1",
-                        role="worker-gpu",
+                        role="worker-lora",
                         priority=6,
                         ticks=8,
                         budget_ms=200,

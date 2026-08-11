@@ -26,7 +26,7 @@ use cohesix_ticket::Role;
 use env_logger::Env;
 use gpu_bridge_host::auto_bridge;
 use log::LevelFilter;
-use nine_door::NineDoor;
+use nine_door::{NineDoor, ShardLayout};
 
 use cohsh::client::InProcessTransport;
 use cohsh::trace::{TraceAckMode, TraceShellTransport};
@@ -391,7 +391,7 @@ fn resolve_tcp_auth_token(cli_value: Option<&str>) -> Result<String> {
 }
 
 fn build_mock_server(seed_gpu: bool) -> Result<NineDoor> {
-    let server = NineDoor::new();
+    let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
     if seed_gpu {
         let bridge = auto_bridge(true)?;
         let snapshot = bridge.serialise_namespace()?;

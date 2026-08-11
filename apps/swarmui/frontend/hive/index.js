@@ -300,12 +300,17 @@ export const createHiveController = (container, status, options = {}) => {
       config = { ...config, ...bootstrap.hive };
       reset();
       for (const agent of bootstrap.agents) {
-        world.ensureAgent(agent.id, agent.namespace, agent.role);
+        world.ensureAgent(agent.id, agent.namespace, agent.role, agent.worker);
       }
       world.ensureAgent("queen", "/queen", "queen");
       updateStatus(bootstrap.replay ? "Hive replay" : "Hive live");
     },
     ingest: (batch) => {
+      if (Array.isArray(batch.agents)) {
+        for (const agent of batch.agents) {
+          world.ensureAgent(agent.id, agent.namespace, agent.role, agent.worker);
+        }
+      }
       pressure = batch.pressure ?? 0;
       const gateway = batch.gateway || {};
       gatewayPressure = {

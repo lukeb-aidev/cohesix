@@ -1,54 +1,31 @@
 // Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Drives the no_std GPU receipt worker-loop entrypoint.
+// Purpose: Enter the isolated GPU receipt Worker through the sealed Worker ABI.
 // Author: Lukas Bower
-#![allow(dead_code)]
 
 use core::panic::PanicInfo;
 
-use worker_gpu::vm::{
-    gpu_control_receipt_event, gpu_identity, gpu_receipt_loop, AttachRequest, EndpointCap,
-    WorkerEvent,
-};
+use worker_task_abi::{WorkerImageMetadata, WorkerRole};
 
-const BOOTSTRAP_ENDPOINT_CPTR: u64 = 1;
-const BOOTSTRAP_LEASE_TTL_MS: u64 = 60_000;
+/// Retained image-admission identity for the GPU Worker executable.
+// SAFETY: This immutable pointer-free record has fixed ABI alignment and is
+// placed in a dedicated read-only ELF section consumed before task admission.
+#[allow(unsafe_code)]
+#[used]
+#[link_section = ".cohesix.worker"]
+static COHESIX_WORKER_METADATA: WorkerImageMetadata =
+    WorkerImageMetadata::for_role(WorkerRole::Gpu);
 
-/// Entry point for seL4 GPU worker binaries.
+/// Minimal executable entrypoint receiving the shared init-page address in `x0`.
 #[allow(unsafe_code)]
 #[no_mangle]
-pub extern "C" fn _start() -> ! {
-    let identity = gpu_identity(0, 0, 1);
-    let mut loop_state = match gpu_receipt_loop(identity) {
-        Ok(loop_state) => loop_state,
-        Err(_) => spin_forever(),
-    };
-    let endpoint = match EndpointCap::new(BOOTSTRAP_ENDPOINT_CPTR, identity.badge()) {
-        Ok(endpoint) => endpoint,
-        Err(_) => spin_forever(),
-    };
-    let _ = loop_state.step(WorkerEvent::Attach(AttachRequest {
-        endpoint,
-        now_ms: 0,
-        lease_ttl_ms: BOOTSTRAP_LEASE_TTL_MS,
-    }));
-    let _ = loop_state.step(gpu_control_receipt_event(0, 0));
-    let mut now_ms = 0u64;
-    loop {
-        let _ = loop_state.step(WorkerEvent::Poll { now_ms });
-        now_ms = now_ms.saturating_add(1_000);
-        core::hint::spin_loop();
-    }
+pub extern "C" fn _start(runtime_init_address: usize) -> ! {
+    let _ = core::hint::black_box(&COHESIX_WORKER_METADATA);
+    worker_heart::target_runtime::run(WorkerRole::Gpu, runtime_init_address)
 }
 
-/// Panic handler that spins forever so debuggers can attach.
+/// Panic handler that publishes a bounded fault completion before trapping.
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    spin_forever()
-}
-
-fn spin_forever() -> ! {
-    loop {
-        core::hint::spin_loop();
-    }
+    worker_heart::target_runtime::contain_panic()
 }

@@ -4,14 +4,17 @@
 # Copyright 2026 Lukas Bower
 
 DEFAULTS = {
-    "manifest_sha256": "2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054",
+    "contract_kind": "target-neutral-fallback",
+    "manifest_sha256": None,
+    "generation_source_sha256": "8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7",
+    "execution_proof": "none",
     "secure9p": {"msize": 8192, "walk_depth": 8},
     "console": {
-        "max_line_len": 256,
+        "max_line_len": 2304,
         "max_path_len": 96,
         "max_json_len": 192,
         "max_id_len": 32,
-        "max_echo_len": 224,
+        "max_echo_len": 2048,
         "max_ticket_len": 224,
     },
     "ticket_limits": {
@@ -83,6 +86,7 @@ DEFAULTS = {
             "allowlist": [
                 "/proc",
                 "/queen",
+                "/shard",
                 "/worker",
                 "/log",
                 "/gpu",
@@ -143,3 +147,9 @@ DEFAULTS = {
         "output_root": "out/examples",
     },
 }
+
+PROFILE_SCHEMA = "cohesix-python-profile/v1"
+HOST_TICKET_REQUEST_SCHEMAS = ("host-ticket/v1", "host-ticket/v2")
+HOST_TICKET_RESULT_SCHEMAS = ("host-ticket-result/v1", "host-ticket-result/v2")
+GPU_RECEIPT_ACTIONS = ("gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release")
+PEFT_RECEIPT_ACTIONS = ("peft.export", "peft.import", "peft.activate", "peft.rollback")

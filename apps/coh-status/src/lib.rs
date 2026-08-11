@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Cohesix status tool crate surface.
 // Author: Lukas Bower
@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use cohesix_ticket::Role;
+use cohesix_worker_evidence::{parse_evidence, ValidatedEvidence};
 use cohsh::client::CohClient;
 use cohsh::policy::CohshPolicy;
 use cohsh::SECURE9P_MSIZE;
@@ -41,4 +42,31 @@ impl TraceReplay {
 pub fn trace_policy() -> TracePolicy {
     let policy = CohshPolicy::from_generated();
     TracePolicy::new(policy.trace.max_bytes, SECURE9P_MSIZE, MAX_LINE_LEN as u32)
+}
+
+/// Parse and validate one bounded Worker evidence record without deriving a
+/// weaker proof class from malformed or incomplete input.
+///
+/// `coh-status` is intentionally a read-only replay/library surface in
+/// Milestone 26e. Callers receive the shared validator's exact typed record;
+/// this function never turns namespace reachability or a generic `ready`
+/// string into Worker execution proof.
+pub fn validate_worker_evidence(payload: &[u8]) -> Result<ValidatedEvidence> {
+    parse_evidence(payload).context("Worker evidence validation failed")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_worker_evidence;
+
+    #[test]
+    fn malformed_or_untyped_worker_evidence_is_not_promoted() {
+        for payload in [
+            br#"{}"#.as_slice(),
+            br#"{"state":"ready"}"#.as_slice(),
+            br#"{"schema":"cohesix-worker-task-evidence/v1","record_kind":"target-component","verdict":"pass"}"#.as_slice(),
+        ] {
+            assert!(validate_worker_evidence(payload).is_err());
+        }
+    }
 }

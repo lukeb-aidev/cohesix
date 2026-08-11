@@ -672,6 +672,7 @@ dependencies = [
  "cohesix-net-constants",
  "cohesix-rest",
  "cohesix-ticket",
+ "cohesix-worker-evidence",
  "cohsh",
  "cohsh-core",
  "fs2",
@@ -698,6 +699,7 @@ dependencies = [
  "cohesix-cas",
  "cohesix-ticket",
  "cohsh-core",
+ "ed25519-dalek",
  "hex",
  "serde",
  "serde_json",
@@ -712,6 +714,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "cohesix-ticket",
+ "cohesix-worker-evidence",
  "cohsh",
  "cohsh-core",
  "nine-door",
@@ -751,6 +754,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cohesix-worker-evidence"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "cohsh"
 version = "0.1.0"
 dependencies = [
@@ -762,6 +776,7 @@ dependencies = [
  "cohesix-proto",
  "cohesix-rest",
  "cohesix-ticket",
+ "cohesix-worker-evidence",
  "cohsh-core",
  "env_logger",
  "fs2",
@@ -812,6 +827,20 @@ dependencies = [
 [[package]]
 name = "console-ack-wire"
 version = "0.1.0"
+
+[[package]]
+name = "console-network-abi"
+version = "0.1.0"
+
+[[package]]
+name = "console-network-runtime"
+version = "0.1.0"
+dependencies = [
+ "console-network-abi",
+ "heapless",
+ "sel4-sys",
+ "smoltcp",
+]
 
 [[package]]
 name = "const-oid"
@@ -1308,14 +1337,6 @@ dependencies = [
  "precomputed-hash",
  "selectors",
  "tendril",
-]
-
-[[package]]
-name = "domain-intents"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -1941,6 +1962,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
+ "tempfile",
+ "toml 1.1.4+spec-1.1.0",
 ]
 
 [[package]]
@@ -2064,11 +2087,13 @@ dependencies = [
  "clap",
  "cohesix-net-constants",
  "cohesix-ticket",
+ "cohesix-worker-evidence",
  "cohsh",
  "cohsh-core",
  "nine-door",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2103,10 +2128,13 @@ dependencies = [
  "cohesix-ticket",
  "cohsh",
  "cohsh-core",
+ "fs2",
+ "hex",
  "host-sidecar-bridge",
  "nine-door",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
 ]
 
@@ -2818,6 +2846,7 @@ dependencies = [
  "log",
  "secure9p-codec",
  "secure9p-core",
+ "secure9p-transport",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -2826,6 +2855,14 @@ dependencies = [
  "thiserror 2.0.19",
  "trace-model",
  "worker-gpu",
+]
+
+[[package]]
+name = "nine-door-runtime"
+version = "0.1.0"
+dependencies = [
+ "secure9p-transport",
+ "sel4-sys",
 ]
 
 [[package]]
@@ -3634,6 +3671,7 @@ dependencies = [
  "cohesix-proto",
  "cohesix-ticket",
  "cohsh-core",
+ "console-network-abi",
  "ed25519-dalek",
  "embedded-io",
  "heapless",
@@ -3645,9 +3683,12 @@ dependencies = [
  "portable-atomic",
  "regex",
  "secure9p-codec",
+ "secure9p-transport",
  "sel4-panicking",
  "sel4-runtime",
  "sel4-sys",
+ "serde",
+ "serde_json",
  "sha2 0.11.0",
  "sidecar-bus",
  "signature",
@@ -3656,6 +3697,7 @@ dependencies = [
  "static_assertions",
  "tempfile",
  "trace-model",
+ "worker-task-abi",
 ]
 
 [[package]]
@@ -3833,8 +3875,7 @@ dependencies = [
 name = "secure9p-transport"
 version = "0.1.0"
 dependencies = [
- "secure9p-codec",
- "secure9p-core",
+ "heapless",
 ]
 
 [[package]]
@@ -4324,6 +4365,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "ciborium",
+ "cohesix-rest",
  "cohesix-ticket",
  "cohsh",
  "cohsh-core",
@@ -4332,6 +4374,7 @@ dependencies = [
  "secure9p-codec",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tauri",
  "tauri-build",
  "tempfile",
@@ -5980,6 +6023,7 @@ dependencies = [
  "serde_json",
  "sha2 0.11.0",
  "worker-heart",
+ "worker-task-abi",
 ]
 
 [[package]]
@@ -5989,6 +6033,8 @@ dependencies = [
  "anyhow",
  "cohesix-ticket",
  "secure9p-codec",
+ "sel4-sys",
+ "worker-task-abi",
 ]
 
 [[package]]
@@ -5996,7 +6042,12 @@ name = "worker-lora"
 version = "0.1.0"
 dependencies = [
  "worker-heart",
+ "worker-task-abi",
 ]
+
+[[package]]
+name = "worker-task-abi"
+version = "0.1.0"
 
 [[package]]
 name = "wrapcenum-derive"

@@ -180,6 +180,23 @@ grammar. The generated command inventory is in
 rules are in
 [INTERFACES.md#target-console-contract](INTERFACES.md#target-console-contract).
 
+For the generated QEMU MCS build, `console-network-runtime` owns the sole TCP listener,
+smoltcp packet state, `AUTH` parsing, and transport framing in a restricted
+child. It forwards only a bounded command after authentication. Root still
+performs every role, ticket, quota, namespace, and command-policy decision and
+returns already-authorized response lines. This internal split adds no command,
+prompt, listener, or host-visible framing change: `cohsh` continues to observe
+the same `OK`/`ERR`/`END` stream. A child fault or timeout closes the network
+session fail-closed without taking ownership of the serial or local-seat input
+queues. When no authenticated TCP session is active, root services serial and
+then local-seat input first. During an authenticated session it gives bounded
+TCP response flushing priority while continuing to service both physical
+inputs and fatal output.
+
+This is QEMU-first as-built behavior. It does not claim that the current Pi 4
+network adapter has been moved or that GENET, CYW43, or SDIO has been exercised;
+that hardware wiring and evidence are a separate phase.
+
 - Commands and frames are bounded by the selected manifest.
 - Serial and local-seat USB keyboard ingress retain independent partial-line
   buffers. Completing or rejecting a line from one physical source does not
@@ -266,7 +283,7 @@ Run `help` in the shell for the exact inventory compiled into the binary.
 | `log` | Tail `/log/queen.log`. |
 | `log dump <file> [--force]` | Export the retained Queen log to a local file. |
 | `echo <text> > <path>` | Append one validated line. |
-| `spawn <heartbeat\|gpu> <key=value>...` | Validate role-specific arguments and submit a Queen worker-spawn request. |
+| `spawn <heartbeat\|gpu\|lora> <key=value>...` | Validate role-specific arguments and submit a Queen Worker request. A successful ACK proves request admission only, not READY. |
 | `kill <worker_id>` | Submit a Queen worker-termination request. |
 | `lifecycle <cordon\|drain\|resume\|quiesce\|reset>` | Validate and submit a lifecycle transition. `reset` changes lifecycle state; it is not a platform reboot. |
 | `telemetry push <src> --device <id>` | Upload a bounded telemetry segment or content-reference manifest. |
@@ -335,26 +352,34 @@ Treat `version` as the report-schema version. Automation must fail the run when
 
 ### Worker-spawn arguments
 
-The interactive command accepts only the current heartbeat and GPU
-parser/model-session shapes. Arguments use `key=value`; unknown, duplicate, or
-missing keys are rejected before `/queen/ctl` is written. This support does not
-mean either role has a loaded target Worker image or TCB.
+The interactive command accepts the three executable Worker declarations:
+Heartbeat, GPU, and LoRA. Arguments use `key=value`; unknown, duplicate, or
+missing keys are rejected before `/queen/ctl` is written. WorkerBus remains a
+model/session-only role: `spawn bus` and `spawn worker-bus` fail deterministically
+without writing `/queen/ctl`.
 
 | Role selector | Required keys | Optional keys |
 | --- | --- | --- |
 | `heartbeat`, `worker`, `worker-heartbeat` | `ticks` | `ttl_s`, `ops` |
 | `gpu`, `worker-gpu` | `gpu_id`, `mem_mb`, `streams`, `ttl_s` | `priority`, `budget_ttl_s`, `budget_ops` |
+| `lora`, `worker-lora` | none | none |
 
 ```text
 spawn heartbeat ticks=100 ttl_s=120 ops=500
 spawn gpu gpu_id=GPU-0 mem_mb=4096 streams=2 ttl_s=120 priority=1
+spawn lora
 ```
 
 These commands construct the strict records documented in
 [INTERFACES.md#worker-and-mount-control](INTERFACES.md#worker-and-mount-control).
-An accepted append proves only that the bounded model/session record was
-accepted. Verify the returned identifier and canonical sharded namespace; do
-not interpret either as a target Worker ready-state signal.
+An accepted append proves only that the bounded request was admitted. Observe
+the structured record at the generated canonical
+`/shard/<label>/worker/<id>/telemetry` path before reporting lifecycle state.
+Declaration, lifecycle, artifact, receipt, and execution proof are independent
+axes: configured/executable does not mean READY, a host-model record is not QEMU
+proof, and package verification is not execution evidence. The compatibility
+`/worker/<id>/telemetry` path exists only when the generated profile enables the
+legacy alias.
 
 ### Telemetry file upload
 
@@ -447,8 +472,8 @@ inputs and regenerate every affected output.
 
 <!-- coh-rtc:cohsh-policy:start -->
 ### cohsh client policy (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
-- `policy.sha256`: `f87cb9740ef906546f268d5c4390411001db53df2d7539ea559f6ebf0b034cdc`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `policy.sha256`: `9230b5fa7c137a7c1b92d1d82fdd66ef4ced33284509ce8e034a26a0577a8ddf`
 - `cohsh.pool.control_sessions`: `2`
 - `cohsh.pool.telemetry_sessions`: `24`
 - `cohsh.tail.poll_ms_default`: `1000`
@@ -465,7 +490,7 @@ inputs and regenerate every affected output.
 - `heartbeat.interval_ms`: `15000`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`)._
+_Generated from `configs/root_task.toml` (sha256: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`)._
 <!-- coh-rtc:cohsh-policy:end -->
 
 </details>
@@ -475,7 +500,23 @@ _Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf
 
 <!-- coh-rtc:cohsh-client:start -->
 ### cohsh client defaults (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `worker.task_abi_schema`: `worker-task-abi/v1`
+- `worker.task_abi_version`: `1`
+- `worker.observation_schema`: `cohesix-worker-observation/v1`
+- `worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
+- `worker.maximum_live_tasks`: `3`
+- `worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
+- `worker.shard_bits`: `8`
+- `worker.legacy_worker_alias`: `true`
+- `worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
+- `worker.receipt`: `none, pending, confirmed, rejected, stale`
+- `worker.artifact`: `missing, verified, mismatch`
+- `worker.execution_proof`: `none, host-model, qemu, fresh-pi`
+- `worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
+- `worker.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
+- `worker.role.worker-lora`: declaration=`executable`, executable_slots=`1`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
 - `trace.max_bytes`: `1048576`
@@ -494,7 +535,7 @@ _Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `telemetry_ingest.eviction_policy`: `evict-oldest`
 
-_Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`)._
+_Generated from `configs/root_task.toml` (sha256: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`)._
 <!-- coh-rtc:cohsh-client:end -->
 
 </details>
@@ -561,10 +602,26 @@ _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a
 
 <!-- coh-rtc:coh-policy:start -->
 ### coh policy defaults (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
-- `policy.sha256`: `d70352aab08c8d7e1f97d5709e85d85daaf45d0593f012e30ee19e3d35163a72`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `policy.sha256`: `adf4d126f22315bae6a84c26bb81af2836f089a5dba516e1a8f322fa0db9574f`
+- `coh.worker.task_abi_schema`: `worker-task-abi/v1`
+- `coh.worker.task_abi_version`: `1`
+- `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
+- `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
+- `coh.worker.maximum_live_tasks`: `3`
+- `coh.worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
+- `coh.worker.shard_bits`: `8`
+- `coh.worker.legacy_worker_alias`: `true`
+- `coh.worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
+- `coh.worker.receipt`: `none, pending, confirmed, rejected, stale`
+- `coh.worker.artifact`: `missing, verified, mismatch`
+- `coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`
+- `coh.worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
+- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`1`
 - `coh.mount.root`: `/`
-- `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
 - `coh.telemetry.max_devices`: `32`
 - `coh.telemetry.max_segments_per_device`: `4`
@@ -602,9 +659,9 @@ _Generated by coh-rtc (sha256: `1b869521f68c26d43c1ad278fbc557f2442e438ab12d443a
 - `check=runtime` checks `python3` and `qemu-system-aarch64` (QEMU skipped with `--mock`).
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
-- `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 
-_Generated by coh-rtc (sha256: `66febf7b6dae0625c6a004490655dfcea1dd5777fe6792ecf027164df8f2ab4f`)._
+_Generated by coh-rtc (sha256: `8ff5f5a73c1e4d454f1263e3235d01d2bde35adb6553bd578b64ae9f496b3b4b`)._
 <!-- coh-rtc:coh-doctor:end -->
 
 </details>
@@ -614,26 +671,26 @@ _Generated by coh-rtc (sha256: `66febf7b6dae0625c6a004490655dfcea1dd5777fe6792ec
 
 <!-- coh-rtc:cohesix-py:start -->
 ### Cohesix Python defaults (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
-- `cohesix.defaults.sha256`: `36f8be2922b0e3e448f0d0f1a07c649059ec1a458f493dc64167ee3d27705209`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `cohesix.defaults.sha256`: `43c79f3929b7a87053ebbaa836acfd3e869da012e92c106f66ae55a5d88e7212`
 - `secure9p.msize`: `8192`
 - `secure9p.walk_depth`: `8`
-- `console.max_line_len`: `256`
+- `console.max_line_len`: `2304`
 - `console.max_path_len`: `96`
 - `console.max_json_len`: `192`
-- `console.max_echo_len`: `224`
+- `console.max_echo_len`: `2048`
 - `telemetry_ingest.max_bytes_per_segment`: `131072`
 - `telemetry_ingest.max_total_bytes_per_device`: `524288`
 - `telemetry_ingest.max_reference_entries_per_segment`: `1024`
 - `telemetry_ingest.max_reference_manifest_bytes_per_segment`: `131072`
 - `telemetry_ingest.max_reference_bytes_per_segment`: `1073741824`
 - `coh.mount.root`: `/`
-- `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
 - `coh.run.breadcrumb.max_line_bytes`: `512`
 - `coh.peft.import.registry_root`: `out/model_registry`
 
-_Generated by coh-rtc (sha256: `e4867eca0e3e2b3a1fefa8b3fa4631c2d8b49d1f34a98b8984b8a00d72ea0a29`)._
+_Generated by coh-rtc (sha256: `b1466c8def0d67887b352765ef5a22aca904b8358402b1d77446a1665d7d6eda`)._
 <!-- coh-rtc:cohesix-py:end -->
 
 </details>
@@ -643,8 +700,8 @@ _Generated by coh-rtc (sha256: `e4867eca0e3e2b3a1fefa8b3fa4631c2d8b49d1f34a98b89
 
 <!-- coh-rtc:swarmui-defaults:start -->
 ### SwarmUI defaults (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
-- `swarmui.defaults.sha256`: `ac1dd6381ceaaf35ac90e010e896462afb3f8ccbd568458eb0b55b7ade33998a`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `swarmui.defaults.sha256`: `762f74169709822247b37e5ab20e1c44108c44adbba9e1558f9a8c9584f06aa7`
 - `swarmui.ticket_scope`: `per-ticket`
 - `swarmui.cache.enabled`: `false`
 - `swarmui.cache.max_bytes`: `262144`
@@ -666,11 +723,19 @@ _Generated by coh-rtc (sha256: `e4867eca0e3e2b3a1fefa8b3fa4631c2d8b49d1f34a98b89
 - `swarmui.hive.degrade_pressure`: `1.0`
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
-- `swarmui.paths.worker_root`: `/worker`
-- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
+- `swarmui.paths.worker_root`: `/shard`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
+- `swarmui.worker_runtime.maximum_live_tasks`: `3`
+- `swarmui.worker_runtime.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
+- `swarmui.worker_runtime.shard_bits`: `8`
+- `swarmui.worker_runtime.legacy_worker_alias`: `true`
+- `swarmui.worker_runtime.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
+- `swarmui.worker_runtime.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `swarmui.worker_runtime.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
+- `swarmui.worker_runtime.role.worker-lora`: declaration=`executable`, executable_slots=`1`
 - `trace.max_bytes`: `1048576`
 
-_Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`)._
+_Generated from `configs/root_task.toml` (sha256: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`)._
 <!-- coh-rtc:swarmui-defaults:end -->
 
 </details>

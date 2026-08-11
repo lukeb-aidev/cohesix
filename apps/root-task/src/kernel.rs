@@ -4258,6 +4258,13 @@ fn bootstrap<P: Platform>(
                 );
             }
             Err(err) => {
+                if cfg!(sel4_config_kernel_mcs) {
+                    return Err(BootError::Fatal(format!(
+                        "dedicated MCS fault endpoint construction failed: {} ({})",
+                        err as sel4_sys::seL4_Word,
+                        error_name(err)
+                    )));
+                }
                 log::warn!(
                     target: "root_task::bootstrap",
                     "[boot] unable to create dedicated fault endpoint: {} ({}) — reusing root ep",
@@ -4270,7 +4277,8 @@ fn bootstrap<P: Platform>(
 
     boot_guard.record_endpoints(ep_slot, fault_ep_slot);
     let endpoints = KernelEndpoints::new(ep_slot, fault_ep_slot);
-    let bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
+    #[allow(unused_mut)]
+    let mut bootstrap_ipc = KernelIpc::new(endpoints.control, endpoints.fault);
     boot_guard.record_substep("commit.minimal.ready");
     boot_guard.commit_minimal();
     if sel4::ep_ready() && sel4::ep_validated() {
@@ -4517,8 +4525,49 @@ fn bootstrap<P: Platform>(
     // Keep HAL storage alive for the full root-task lifetime. Local-seat
     // backends retain a raw HAL pointer for deferred runtime keyboard bring-up.
     let hal = Box::leak(Box::new(KernelHal::new(kernel_env)));
+    #[cfg(sel4_config_kernel_mcs)]
+    let critical_runtime: &'static crate::hal::critical_tcb::CriticalTcbRuntime = {
+        let runtime = crate::hal::critical_tcb::construct_critical_tcb_runtime(
+            hal.as_env_mut(),
+            fault_ep_slot,
+            crate::hal::critical_tcb::CriticalTcbEntrypoints::root_runtime(),
+        )
+        .map_err(|error| {
+            BootError::Fatal(format!(
+                "critical MCS topology construction failed: {error:?}"
+            ))
+        })?;
+        boot_log::force_uart_line(
+            "[critical] root-control accounted; four restricted TCBs constructed suspended",
+        );
+        Box::leak(Box::new(runtime))
+    };
     if consumed_slots > 0 {
         hal.consume_bootstrap_slots(consumed_slots);
+    }
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let worker_runtime = crate::hal::worker_task::TargetWorkerRuntime::bootstrap(
+            hal,
+            critical_runtime,
+            extra_bytes,
+            0,
+        )
+        .map_err(|error| {
+            BootError::Fatal(format!(
+                "isolated Worker construction failed before registry seal: {error:?}"
+            ))
+        })?;
+        bootstrap_ipc
+            .install_worker_runtime(worker_runtime)
+            .map_err(|error| {
+                BootError::Fatal(format!(
+                    "isolated Worker supervisor installation failed: {error:?}"
+                ))
+            })?;
+        boot_log::force_uart_line(
+            "[worker] Heartbeat/GPU/LoRA constructed and held suspended before registry seal",
+        );
     }
     // Admit lower, child-only MMIO before root maps higher pages from the same
     // monotonic seL4 device untyped. This retains no root VSpace alias; the
@@ -4787,12 +4836,6 @@ fn bootstrap<P: Platform>(
         );
         boot_log::force_uart_line(line.as_str());
     }
-
-    #[cfg(feature = "kernel")]
-    let ninedoor: &'static mut NineDoorBridge = {
-        let bridge = Box::new(NineDoorBridge::new());
-        Box::leak(bridge)
-    };
 
     if let Some(runtime) = local_seat_runtime.as_deref_mut() {
         boot_log::force_uart_line("[local-seat] runtime preseed hook begin");
@@ -5129,7 +5172,15 @@ fn bootstrap<P: Platform>(
                 let detail = physical_pi_wifi_boot_supervisor_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
             } else {
-                match init_net_console(hal, config) {
+                #[cfg(feature = "net-backend-virtio")]
+                let net_init_result = if matches!(config.backend, crate::net::NetBackend::Virtio) {
+                    crate::net::init_isolated_qemu_net_console(hal, config)
+                } else {
+                    init_net_console(hal, config)
+                };
+                #[cfg(not(feature = "net-backend-virtio"))]
+                let net_init_result = init_net_console(hal, config);
+                match net_init_result {
                     Ok(stack) => {
                         check_bootinfo(&mut boot_guard, "[mark] net.init.return");
                         let mac = stack.hardware_address();
@@ -5169,6 +5220,12 @@ fn bootstrap<P: Platform>(
                                 status.backend,
                                 status.dhcp_phase,
                             );
+                        } else if status.address_source == "dev-virt-isolated-child" {
+                            let _ = write!(
+                                ok_line,
+                                "[console-network] constructed owner=isolated-child generation=1 state=suspended ip={} port={port} mac={mac}",
+                                status.ip,
+                            );
                         } else {
                             let _ = write!(
                                 ok_line,
@@ -5178,7 +5235,11 @@ fn bootstrap<P: Platform>(
                         }
                         boot_log::force_uart_line(ok_line.as_str());
                         check_bootinfo(&mut boot_guard, "[mark] net.init.ready-line");
-                        boot_guard.record_invariant("net-console.ready");
+                        if status.address_source == "dev-virt-isolated-child" {
+                            boot_guard.record_invariant("console-network.constructed");
+                        } else {
+                            boot_guard.record_invariant("net-console.ready");
+                        }
                         let active_backend_label = status.backend;
                         let virtio_selected = cfg!(feature = "net-backend-virtio")
                             && active_backend_label == "virtio-net";
@@ -5252,10 +5313,177 @@ fn bootstrap<P: Platform>(
                 }
             }
         };
+        #[cfg(all(
+            feature = "net-console",
+            feature = "kernel",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        let mut net_stack = net_stack;
         #[cfg(all(feature = "net-console", not(feature = "kernel")))]
         let net_stack = None::<()>;
         #[cfg(not(feature = "net-console"))]
         let net_stack = None::<()>;
+
+        // NineDoor is deliberately constructed after the active console-network
+        // child. Its constructor performs the final QEMU fault-source
+        // registration and installs the passive service recovery Reply before
+        // the exact registry is sealed. Every child is still suspended here.
+        #[cfg(feature = "kernel")]
+        let ninedoor: &'static mut NineDoorBridge = {
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            {
+                let (runtime, boundary) =
+                    hal.construct_ninedoor_service_runtime(1).map_err(|error| {
+                        BootError::Fatal(format!(
+                            "isolated NineDoor construction failed before registry seal: {error}"
+                        ))
+                    })?;
+                Box::leak(Box::new(NineDoorBridge::with_target_namespace_service(
+                    boundary, runtime,
+                )))
+            }
+            #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+            {
+                Box::leak(Box::new(NineDoorBridge::new()))
+            }
+        };
+
+        #[cfg(all(
+            feature = "kernel",
+            target_arch = "aarch64",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
+        {
+            crate::hal::critical_tcb::seal_target_fault_registry().map_err(|error| {
+                BootError::Fatal(format!(
+                    "exact MCS fault registry seal failed after child construction: {error:?}"
+                ))
+            })?;
+            let mut registry_line = HeaplessString::<96>::new();
+            let _ = write!(
+                registry_line,
+                "[critical] exact generated fault registry sealed sources={}",
+                generated::worker_resource_admission_config()
+                    .fault_registry
+                    .capacity,
+            );
+            boot_log::force_uart_line(registry_line.as_str());
+
+            let admitted_maximum = crate::hal::worker_task::target_evidence_admitted_maximum()
+                .map_err(|error| {
+                    BootError::Fatal(format!(
+                        "root-TCB admitted-maximum derivation failed: {error:?}"
+                    ))
+                })?;
+            let mut inventory_line = HeaplessString::<512>::new();
+            let _ = write!(
+                inventory_line,
+                "ROOT_TCB_INVENTORY scope=admitted-maximum tcbs={} cnodes={} vspaces={} page_tables={} asids={} frames={} endpoints={} notifications={} fault_caps={} timeout_fault_caps={} reply_objects={} scheduling_contexts={} cspace_slots={} untyped_bytes={} state=sealed",
+                admitted_maximum.tcbs,
+                admitted_maximum.cnodes,
+                admitted_maximum.vspaces,
+                admitted_maximum.page_tables,
+                admitted_maximum.asids,
+                admitted_maximum.frames,
+                admitted_maximum.endpoints,
+                admitted_maximum.notifications,
+                admitted_maximum.fault_caps,
+                admitted_maximum.timeout_fault_caps,
+                admitted_maximum.reply_objects,
+                admitted_maximum.scheduling_contexts,
+                admitted_maximum.cspace_slots,
+                admitted_maximum.untyped_bytes,
+            );
+            boot_log::force_uart_line(inventory_line.as_str());
+
+            let actual_critical = critical_runtime.handles.len();
+            let restricted_children = critical_runtime.children.len();
+            let standard_fault_caps = critical_runtime
+                .handles
+                .iter()
+                .filter(|handle| handle.fault_endpoint_cap != 0)
+                .count();
+            let timeout_fault_caps = critical_runtime
+                .handles
+                .iter()
+                .filter(|handle| handle.timeout_endpoint_cap != 0)
+                .count();
+            let mut actual_line = HeaplessString::<256>::new();
+            let _ = write!(
+                actual_line,
+                "ROOT_CRITICAL_OBJECTS scope=constructed-actual duties={} restricted_children={} tcbs={} scheduling_contexts={} reply_objects={} standard_fault_caps={} timeout_fault_caps={} fault_registrations={} state=sealed",
+                actual_critical,
+                restricted_children,
+                actual_critical,
+                actual_critical,
+                actual_critical.saturating_add(1),
+                standard_fault_caps,
+                timeout_fault_caps,
+                generated::worker_resource_admission_config()
+                    .fault_registry
+                    .capacity,
+            );
+            boot_log::force_uart_line(actual_line.as_str());
+
+            crate::hal::critical_tcb::activate_critical_tcb_runtime(critical_runtime).map_err(
+                |error| {
+                    BootError::Fatal(format!(
+                        "critical MCS duties failed to activate after registry seal: {error:?}"
+                    ))
+                },
+            )?;
+            boot_log::force_uart_line(
+                "[critical] independent fault/emergency/Worker/driver duties active",
+            );
+
+            bootstrap_ipc.activate_worker_runtime().map_err(|error| {
+                BootError::Fatal(format!(
+                    "isolated Worker supervisor failed to arm after critical activation: {error:?}"
+                ))
+            })?;
+            boot_log::force_uart_line(
+                "[worker] target supervisor armed after exact registry and critical activation",
+            );
+
+            ninedoor.activate_target_service().map_err(|error| {
+                BootError::Fatal(format!(
+                    "isolated NineDoor failed to activate after critical receiver: {error}"
+                ))
+            })?;
+            boot_log::force_uart_line(
+                "[ninedoor-service] passive child active recovery-reply=installed",
+            );
+
+            #[cfg(feature = "net-console")]
+            {
+                let activated = net_stack
+                    .as_mut()
+                    .ok_or_else(|| {
+                        BootError::Fatal(
+                            "isolated console-network missing after exact registry seal".into(),
+                        )
+                    })?
+                    .activate_console_network_child()
+                    .map_err(|error| {
+                        BootError::Fatal(format!(
+                            "isolated console-network failed to activate: {error}"
+                        ))
+                    })?;
+                if !activated {
+                    return Err(BootError::Fatal(
+                        "selected MCS QEMU profile did not activate isolated console-network"
+                            .into(),
+                    ));
+                }
+                boot_log::force_uart_line(
+                    "[console-network] isolated child active fault_receiver=active",
+                );
+            }
+        }
+
         check_bootinfo(&mut boot_guard, "[mark] net.init.post");
         boot_guard.record_phase("TimersAndIPC");
         boot_log::force_uart_line(
@@ -6148,16 +6376,23 @@ fn log_bootstrap_payload(words: &[sel4_sys::seL4_Word]) {
     }
 }
 
-const FAULT_TAG_NULL: u64 = 0;
-const FAULT_TAG_CAP: u64 = 1;
-const FAULT_TAG_UNKNOWN_SYSCALL: u64 = 2;
-const FAULT_TAG_USER_EXCEPTION: u64 = 3;
-const FAULT_TAG_DEBUG_EXCEPTION: u64 = 4;
-const FAULT_TAG_VMFAULT: u64 = 5;
-const FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
-const FAULT_TAG_VCPU: u64 = 7;
-const FAULT_TAG_VPPI: u64 = 8;
-const FAULT_TAG_TIMEOUT: u64 = 9;
+const FAULT_TAG_NULL: u64 = sel4_sys::SEL4_FAULT_NULL_LABEL as u64;
+const FAULT_TAG_CAP: u64 = sel4_sys::SEL4_FAULT_CAP_LABEL as u64;
+const FAULT_TAG_UNKNOWN_SYSCALL: u64 = sel4_sys::SEL4_FAULT_UNKNOWN_SYSCALL_LABEL as u64;
+const FAULT_TAG_USER_EXCEPTION: u64 = sel4_sys::SEL4_FAULT_USER_EXCEPTION_LABEL as u64;
+const CLASSIC_FAULT_TAG_DEBUG_EXCEPTION: u64 = 4;
+const CLASSIC_FAULT_TAG_VMFAULT: u64 = 5;
+const CLASSIC_FAULT_TAG_VGIC_MAINTENANCE: u64 = 6;
+const CLASSIC_FAULT_TAG_VCPU: u64 = 7;
+const CLASSIC_FAULT_TAG_VPPI: u64 = 8;
+const MCS_FAULT_TAG_TIMEOUT: u64 = sel4_sys::SEL4_MCS_FAULT_TIMEOUT_LABEL as u64;
+const MCS_FAULT_TAG_VMFAULT: u64 = sel4_sys::SEL4_MCS_FAULT_VM_LABEL as u64;
+#[cfg(not(sel4_config_kernel_mcs))]
+const FAULT_TAG_VMFAULT: u64 = CLASSIC_FAULT_TAG_VMFAULT;
+#[cfg(sel4_config_kernel_mcs)]
+const FAULT_TAG_VMFAULT: u64 = MCS_FAULT_TAG_VMFAULT;
+#[cfg(sel4_config_kernel_mcs)]
+const FAULT_TAG_TIMEOUT: u64 = MCS_FAULT_TAG_TIMEOUT;
 const CONTROL_LABEL_LOG_AND_BOOTSTRAP: u64 = 0;
 const CONTROL_LABEL_HEARTBEAT: u64 = 0xB2;
 const MAX_FAULT_REGS: usize = 14;
@@ -6459,52 +6694,78 @@ fn install_fault_handler_for_tcb(
     Ok(badge)
 }
 
-fn fault_tag_name(tag: u64) -> &'static str {
+fn fault_tag_name_for_mode(mcs: bool, tag: u64) -> &'static str {
     match tag {
         FAULT_TAG_NULL => "null",
         FAULT_TAG_CAP => "cap",
         FAULT_TAG_UNKNOWN_SYSCALL => "unknown-syscall",
         FAULT_TAG_USER_EXCEPTION => "user-exception",
-        FAULT_TAG_VMFAULT => "vmfault",
-        FAULT_TAG_DEBUG_EXCEPTION => "debug-exception",
-        FAULT_TAG_VGIC_MAINTENANCE => "vgic-maintenance",
-        FAULT_TAG_VCPU => "vcpu",
-        FAULT_TAG_VPPI => "vppi",
-        FAULT_TAG_TIMEOUT => "timeout",
+        _ if mcs && tag == MCS_FAULT_TAG_TIMEOUT => "timeout",
+        _ if mcs && tag == MCS_FAULT_TAG_VMFAULT => "vmfault",
+        CLASSIC_FAULT_TAG_DEBUG_EXCEPTION if !mcs => "debug-exception",
+        CLASSIC_FAULT_TAG_VMFAULT if !mcs => "vmfault",
+        CLASSIC_FAULT_TAG_VGIC_MAINTENANCE if !mcs => "vgic-maintenance",
+        CLASSIC_FAULT_TAG_VCPU if !mcs => "vcpu",
+        CLASSIC_FAULT_TAG_VPPI if !mcs => "vppi",
         _ => "unknown",
     }
 }
 
-fn is_fault_label(label: u64) -> bool {
-    matches!(
-        label,
-        FAULT_TAG_NULL
-            | FAULT_TAG_CAP
-            | FAULT_TAG_UNKNOWN_SYSCALL
-            | FAULT_TAG_USER_EXCEPTION
-            | FAULT_TAG_VMFAULT
-            | FAULT_TAG_DEBUG_EXCEPTION
-            | FAULT_TAG_VGIC_MAINTENANCE
-            | FAULT_TAG_VCPU
-            | FAULT_TAG_VPPI
-            | FAULT_TAG_TIMEOUT
-    )
+fn fault_tag_name(tag: u64) -> &'static str {
+    fault_tag_name_for_mode(cfg!(sel4_config_kernel_mcs), tag)
 }
 
-fn fault_length_range(label: u64) -> Option<RangeInclusive<usize>> {
+fn is_fault_label_for_mode(mcs: bool, label: u64) -> bool {
+    if matches!(
+        label,
+        FAULT_TAG_NULL | FAULT_TAG_CAP | FAULT_TAG_UNKNOWN_SYSCALL | FAULT_TAG_USER_EXCEPTION
+    ) {
+        return true;
+    }
+
+    if mcs {
+        matches!(label, MCS_FAULT_TAG_TIMEOUT | MCS_FAULT_TAG_VMFAULT)
+    } else {
+        matches!(
+            label,
+            CLASSIC_FAULT_TAG_DEBUG_EXCEPTION
+                | CLASSIC_FAULT_TAG_VMFAULT
+                | CLASSIC_FAULT_TAG_VGIC_MAINTENANCE
+                | CLASSIC_FAULT_TAG_VCPU
+                | CLASSIC_FAULT_TAG_VPPI
+        )
+    }
+}
+
+fn is_fault_label(label: u64) -> bool {
+    is_fault_label_for_mode(cfg!(sel4_config_kernel_mcs), label)
+}
+
+fn fault_length_range_for_mode(mcs: bool, label: u64) -> Option<RangeInclusive<usize>> {
     match label {
         FAULT_TAG_NULL => Some(0..=0),
         FAULT_TAG_CAP => Some(2..=MAX_FAULT_REGS),
         FAULT_TAG_UNKNOWN_SYSCALL => Some(6..=MAX_FAULT_REGS),
         FAULT_TAG_USER_EXCEPTION => Some(6..=MAX_FAULT_REGS),
-        FAULT_TAG_VMFAULT => Some(3..=MAX_FAULT_REGS),
-        FAULT_TAG_DEBUG_EXCEPTION => Some(5..=MAX_FAULT_REGS),
-        FAULT_TAG_VGIC_MAINTENANCE => Some(2..=MAX_FAULT_REGS),
-        FAULT_TAG_VCPU => Some(5..=MAX_FAULT_REGS),
-        FAULT_TAG_VPPI => Some(2..=MAX_FAULT_REGS),
-        FAULT_TAG_TIMEOUT => Some(1..=MAX_FAULT_REGS),
+        _ if mcs && label == MCS_FAULT_TAG_TIMEOUT => {
+            let length = sel4_sys::SEL4_MCS_TIMEOUT_LENGTH as usize;
+            Some(length..=length)
+        }
+        _ if mcs && label == MCS_FAULT_TAG_VMFAULT => {
+            let length = sel4_sys::seL4_VMFault_Length as usize;
+            Some(length..=length)
+        }
+        CLASSIC_FAULT_TAG_VMFAULT if !mcs => Some(3..=MAX_FAULT_REGS),
+        CLASSIC_FAULT_TAG_DEBUG_EXCEPTION if !mcs => Some(5..=MAX_FAULT_REGS),
+        CLASSIC_FAULT_TAG_VGIC_MAINTENANCE if !mcs => Some(2..=MAX_FAULT_REGS),
+        CLASSIC_FAULT_TAG_VCPU if !mcs => Some(5..=MAX_FAULT_REGS),
+        CLASSIC_FAULT_TAG_VPPI if !mcs => Some(2..=MAX_FAULT_REGS),
         _ => None,
     }
+}
+
+fn fault_length_range(label: u64) -> Option<RangeInclusive<usize>> {
+    fault_length_range_for_mode(cfg!(sel4_config_kernel_mcs), label)
 }
 
 fn fault_layout_valid(label: u64, length: usize) -> bool {
@@ -6697,6 +6958,28 @@ fn decode_fault_context(
                 count = count,
             );
         }
+        #[cfg(sel4_config_kernel_mcs)]
+        FAULT_TAG_TIMEOUT => {
+            ip = 0;
+            sp = 0;
+            let data = regs
+                .get(sel4_sys::SEL4_MCS_TIMEOUT_DATA as usize)
+                .copied()
+                .unwrap_or_default();
+            let consumed_us = regs
+                .get(sel4_sys::SEL4_MCS_TIMEOUT_CONSUMED as usize)
+                .copied()
+                .unwrap_or_default();
+            log::error!(
+                target: "root_task::kernel::fault",
+                "[fault] timeout badge=0x{badge:04x} data=0x{data:016x} consumed_us={consumed_us} source={source_desc} count={count}",
+                badge = badge,
+                data = data,
+                consumed_us = consumed_us,
+                source_desc = source_desc,
+                count = count,
+            );
+        }
         _ => {
             log::error!(
                 target: "root_task::kernel::fault",
@@ -6863,6 +7146,8 @@ pub(crate) struct KernelIpc {
     fault_loop_announced: bool,
     debug_uart_announced: bool,
     control_labels_logged: HeaplessVec<u64, 4>,
+    #[cfg(sel4_config_kernel_mcs)]
+    worker_runtime: Option<crate::hal::worker_task::TargetWorkerRuntime>,
 }
 
 fn current_node_id() -> sel4_sys::seL4_Word {
@@ -6904,6 +7189,42 @@ impl KernelIpc {
             fault_loop_announced: false,
             debug_uart_announced: false,
             control_labels_logged: HeaplessVec::new(),
+            #[cfg(sel4_config_kernel_mcs)]
+            worker_runtime: None,
+        }
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn install_worker_runtime(
+        &mut self,
+        runtime: crate::hal::worker_task::TargetWorkerRuntime,
+    ) -> Result<(), crate::worker_supervisor::WorkerSupervisorError> {
+        if self.worker_runtime.is_some() {
+            return Err(crate::worker_supervisor::WorkerSupervisorError::InvalidState);
+        }
+        self.worker_runtime = Some(runtime);
+        Ok(())
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn activate_worker_runtime(
+        &mut self,
+    ) -> Result<(), crate::worker_supervisor::WorkerSupervisorError> {
+        self.worker_runtime
+            .as_mut()
+            .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)?
+            .activate()
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn service_worker_runtime(&mut self, now_ms: u64) {
+        let result = self
+            .worker_runtime
+            .as_mut()
+            .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)
+            .and_then(|runtime| runtime.service(now_ms));
+        if let Err(error) = result {
+            panic!("isolated Worker supervisor failed closed: {error:?}");
         }
     }
 
@@ -7058,62 +7379,71 @@ impl KernelIpc {
     }
 
     fn poll_fault_endpoint(&mut self, _now_ms: u64) {
-        if !self.fault_endpoint.is_valid() {
-            return;
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            // The independently scheduled root-fault child is the sole MCS
+            // receiver. This legacy dispatcher has no Reply object and must
+            // never poll either MCS fault lane, including before activation.
         }
-
-        let mut processed = 0usize;
-        loop {
-            if fault_ep_poll_budget_exhausted(processed) {
-                self.warn_fault_poll_budget_once();
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            if !self.fault_endpoint.is_valid() {
                 return;
             }
-            let mut badge: sel4_sys::seL4_Word = 0;
-            let info = crate::sel4::nb_recv(self.fault_endpoint.raw(), &mut badge);
-            if !Self::message_present(&info, badge) {
-                return;
-            }
-            processed = processed.saturating_add(1);
 
-            let label = info.label();
-            let length = info.length() as usize;
-
-            if badge == 0 || !is_fault_label(label) {
-                Self::warn_stray_fault_once();
-                if FAULT_REGISTRY.mark_stray(badge, label) {
-                    self.log_stray_fault(&info, badge, label, length);
+            let mut processed = 0usize;
+            loop {
+                if fault_ep_poll_budget_exhausted(processed) {
+                    self.warn_fault_poll_budget_once();
+                    return;
                 }
-                Self::reply_empty();
-                continue;
-            }
-
-            if !fault_layout_valid(label, length) {
-                if FAULT_REGISTRY.mark_stray(badge, label) {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] invalid fault layout on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; dropping",
-                        badge = badge,
-                        label = label,
-                        len = length,
-                    );
+                let mut badge: sel4_sys::seL4_Word = 0;
+                let info = crate::sel4::nb_recv(self.fault_endpoint.raw(), &mut badge);
+                if !Self::message_present(&info, badge) {
+                    return;
                 }
-                continue;
-            }
+                processed = processed.saturating_add(1);
 
-            if FAULT_REGISTRY.is_fatal(badge) {
-                if FAULT_REGISTRY.mark_suppressed(badge) {
-                    log::warn!(
-                        target: "root_task::kernel::fault",
-                        "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
-                        badge = badge,
-                    );
+                let label = info.label();
+                let length = info.length() as usize;
+
+                if badge == 0 || !is_fault_label(label) {
+                    Self::warn_stray_fault_once();
+                    if FAULT_REGISTRY.mark_stray(badge, label) {
+                        self.log_stray_fault(&info, badge, label, length);
+                    }
+                    Self::reply_empty();
+                    continue;
                 }
-                continue;
-            }
-            let count = record_fault_occurrence(badge);
-            let source = lookup_fault_source(badge);
-            if let Some(context) = decode_fault_context(&info, badge, source, count) {
-                handle_fatal_fault(context, source);
+
+                if !fault_layout_valid(label, length) {
+                    if FAULT_REGISTRY.mark_stray(badge, label) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] invalid fault layout on fault EP badge=0x{badge:04x} label=0x{label:08x} len={len}; dropping",
+                            badge = badge,
+                            label = label,
+                            len = length,
+                        );
+                    }
+                    continue;
+                }
+
+                if FAULT_REGISTRY.is_fatal(badge) {
+                    if FAULT_REGISTRY.mark_suppressed(badge) {
+                        log::warn!(
+                            target: "root_task::kernel::fault",
+                            "[fault] ignoring message from known-fatal badge=0x{badge:04x}",
+                            badge = badge,
+                        );
+                    }
+                    continue;
+                }
+                let count = record_fault_occurrence(badge);
+                let source = lookup_fault_source(badge);
+                if let Some(context) = decode_fault_context(&info, badge, source, count) {
+                    handle_fatal_fault(context, source);
+                }
             }
         }
     }
@@ -7285,17 +7615,26 @@ impl KernelIpc {
 impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
         if !self.fault_loop_announced {
-            log::info!(
-                "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
-                ep = if self.fault_endpoint.is_valid() {
-                    self.fault_endpoint.raw()
-                } else {
-                    self.control_ep.raw()
-                }
-            );
+            if cfg!(sel4_config_kernel_mcs) {
+                log::info!(
+                    "[fault] root-control polling disabled; independent root-fault owns ep=0x{ep:04x}",
+                    ep = self.fault_endpoint.raw(),
+                );
+            } else {
+                log::info!(
+                    "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
+                    ep = if self.fault_endpoint.is_valid() {
+                        self.fault_endpoint.raw()
+                    } else {
+                        self.control_ep.raw()
+                    }
+                );
+            }
             self.fault_loop_announced = true;
         }
         self.poll_fault_endpoint(now_ms);
+        #[cfg(sel4_config_kernel_mcs)]
+        self.service_worker_runtime(now_ms);
         let _ = self.poll_endpoint(now_ms, false);
         if self.handlers_ready {
             self.forward_staged(now_ms);
@@ -7371,15 +7710,40 @@ impl BootstrapMessageHandler for BootstrapIpcAudit {
 mod tests {
     use super::{
         bounded_message_words, copy_message_words, dtb_rejected_net_policy_reason,
-        fault_ep_poll_budget_exhausted, format_net_console_init_detail, preview_payload,
-        ControlEndpoint, FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource,
-        StagedMessage, StrayTracker, FAULT_EP_POLL_BUDGET_PER_DISPATCH, HEX_CHUNK_BYTES,
-        MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        fault_ep_poll_budget_exhausted, fault_length_range_for_mode, fault_tag_name_for_mode,
+        format_net_console_init_detail, is_fault_label_for_mode, preview_payload, ControlEndpoint,
+        FaultEndpoint, KernelIpc, PayloadPreview, Pi4BootNetPolicySource, StagedMessage,
+        StrayTracker, CLASSIC_FAULT_TAG_VMFAULT, FAULT_EP_POLL_BUDGET_PER_DISPATCH,
+        HEX_CHUNK_BYTES, MAX_HEX_LINES, MAX_MESSAGE_WORDS, MAX_PAYLOAD_LOG_BYTES,
+        MCS_FAULT_TAG_TIMEOUT, MCS_FAULT_TAG_VMFAULT,
     };
     use crate::event::IpcDispatcher;
     use crate::rust_alloc::vec::Vec;
     use core::fmt::Write as _;
     use heapless::{String as HeaplessString, Vec as HeaplessVec};
+
+    #[test]
+    fn mcs_timeout_and_vm_fault_layouts_are_cfg_specific() {
+        assert_eq!(MCS_FAULT_TAG_TIMEOUT, 5);
+        assert_eq!(MCS_FAULT_TAG_VMFAULT, 6);
+        assert_eq!(fault_tag_name_for_mode(true, 5), "timeout");
+        assert_eq!(fault_tag_name_for_mode(true, 6), "vmfault");
+        assert_eq!(fault_tag_name_for_mode(false, 5), "vmfault");
+        assert!(is_fault_label_for_mode(true, MCS_FAULT_TAG_TIMEOUT));
+        assert!(is_fault_label_for_mode(true, MCS_FAULT_TAG_VMFAULT));
+        assert!(is_fault_label_for_mode(false, CLASSIC_FAULT_TAG_VMFAULT));
+
+        let timeout = fault_length_range_for_mode(true, MCS_FAULT_TAG_TIMEOUT)
+            .expect("MCS timeout must have a generated layout");
+        assert!(timeout.contains(&(sel4_sys::SEL4_MCS_TIMEOUT_LENGTH as usize)));
+        assert!(!timeout.contains(&1));
+        assert!(!timeout.contains(&3));
+
+        let vm = fault_length_range_for_mode(true, MCS_FAULT_TAG_VMFAULT)
+            .expect("MCS VMFault must have a generated layout");
+        assert!(vm.contains(&(sel4_sys::seL4_VMFault_Length as usize)));
+        assert!(!vm.contains(&(sel4_sys::seL4_VMFault_Length as usize + 1)));
+    }
 
     #[test]
     fn root_endpoint_admission_uses_retype_window_and_publication_not_debug_tag() {

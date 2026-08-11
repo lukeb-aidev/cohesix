@@ -1,0 +1,56 @@
+# Author: Lukas Bower
+# Purpose: Bind the retired Milestone 26d classic linked-driver comparator.
+# Copyright 2026 Lukas Bower
+
+schema = "cohesix-driver-classic-comparator/v1"
+source_commit = "72288c7d28471128bb63f140d1bcd68531e07d17"
+source_profile = "qemu_smp_production-classic"
+source_root_task_sha256 = "aba162d414fdc49c943a3677d3c6b053e0dd76bad126652c3849d8d1805c79f5"
+source_kernel_sha256 = "32a227adc375cc3b6a8ff5411dd7b7089ee66260beac0f4ec69739ae53faf8f9"
+source_elfloader_sha256 = "8d87f98f3abe0b1fab7e462285e404329778afe4ea6f76c2eb7dc54f35be186f"
+source_system_cpio_sha256 = "4f91e53683f07cf661d5887fc922877ae713e46251ada1e23d77e4424e284636"
+canonical_archive_format = "newc-deterministic-v1"
+canonical_archive_bytes = 4367872
+canonical_archive_sha256 = "db2e353327cde2f91b37f40a7bf17905bb5f70cd27a999ba880a9fa7c2de9835"
+
+[[components]]
+name = "pi4-driver-serial"
+archive_path = "cohesix/bin/pi4-driver-serial"
+bytes = 623752
+sha256 = "0a07e192146c200aa49e94bbcff0060675980beb7e57d234d10c615390388418"
+
+[[components]]
+name = "pi4-driver-usb"
+archive_path = "cohesix/bin/pi4-driver-usb"
+bytes = 623752
+sha256 = "19f6b0a8cdbe6b0498542cb67033029f944f60e78603f97c2a528890d42e29db"
+
+[[components]]
+name = "pi4-driver-hdmi"
+archive_path = "cohesix/bin/pi4-driver-hdmi"
+bytes = 623752
+sha256 = "91c2727a536be380110eb68aacca842ac590a7b021b6f1fd8f96828828975a6a"
+
+[[components]]
+name = "pi4-driver-genet"
+archive_path = "cohesix/bin/pi4-driver-genet"
+bytes = 623752
+sha256 = "03a5636eb387c9e1e60aaedf711ee5b385e8ff55363b42c1cb8210e327a8cde7"
+
+[[components]]
+name = "pi4-driver-cyw43"
+archive_path = "cohesix/bin/pi4-driver-cyw43"
+bytes = 623752
+sha256 = "6f98755987b2777a842c77cee1cfb870b59141f1c16895bd0b5e3af2e62b392e"
+
+[[components]]
+name = "pi4-driver-sdio"
+archive_path = "cohesix/bin/pi4-driver-sdio"
+bytes = 623752
+sha256 = "adcf169b89d4d18a329c2595177c3449c876b80e4185597a0ee15e490a6ea854"
+
+[[components]]
+name = "pi4-driver-pcie"
+archive_path = "cohesix/bin/pi4-driver-pcie"
+bytes = 623752
+sha256 = "2e5450a9452f312bd329d341634ed37119379f8ec92a71e2bbacf8cb0e184b39"

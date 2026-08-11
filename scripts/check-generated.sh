@@ -19,6 +19,7 @@ trap 'rm -rf "${work_dir}"' EXIT
 
 generated_dir="$work_dir/generated"
 manifest_out="$work_dir/root_task_resolved.json"
+root_tcb_topology="$work_dir/root_task_topology.json"
 cas_template="$work_dir/cas_manifest_template.json"
 cli_script="$work_dir/boot_v0.coh"
 doc_snippet="$work_dir/root_task_manifest.md"
@@ -29,6 +30,7 @@ ticket_quotas="$work_dir/ticket_quotas.md"
 trace_policy="$work_dir/trace_policy.md"
 cas_interfaces="$work_dir/cas_interfaces.md"
 cas_security="$work_dir/cas_security.md"
+cbor_snippet="$work_dir/telemetry_cbor_schema.md"
 cohesix_py_defaults="$work_dir/cohesix_py_defaults.py"
 cohesix_py_doc="$work_dir/cohesix_py_defaults.md"
 coh_doctor_doc="$work_dir/coh_doctor_checks.md"
@@ -45,6 +47,11 @@ coh_policy_doc="$work_dir/coh_policy.md"
 swarmui_defaults="$work_dir/swarmui_defaults.toml"
 swarmui_defaults_rust="$work_dir/swarmui_defaults.rs"
 swarmui_defaults_doc="$work_dir/swarmui_defaults.md"
+implementation_surface_inventory="$work_dir/implementation_surface_inventory.json"
+host_integration_graph="$work_dir/host_integration_dependency.json"
+host_integration_doc="$work_dir/host_integration_dependency.md"
+cohesix_python_qemu_profile="$work_dir/cohesix_python_qemu_smp_production.json"
+cohesix_python_pi4_profile="$work_dir/cohesix_python_pi4_production.json"
 
 cargo run -p coh-rtc -- \
   "$manifest_path" \
@@ -60,6 +67,7 @@ cargo run -p coh-rtc -- \
   --trace-policy-snippet "$trace_policy" \
   --cas-interfaces-snippet "$cas_interfaces" \
   --cas-security-snippet "$cas_security" \
+  --cbor-snippet "$cbor_snippet" \
   --cohsh-policy "$cohsh_policy" \
   --cohsh-policy-rust "$cohsh_policy_rust" \
   --cohsh-policy-doc "$cohsh_policy_doc" \
@@ -73,9 +81,26 @@ cargo run -p coh-rtc -- \
   --swarmui-defaults "$swarmui_defaults" \
   --swarmui-defaults-rust "$swarmui_defaults_rust" \
   --swarmui-defaults-doc "$swarmui_defaults_doc" \
+  --implementation-surfaces "$repo_root/configs/implementation_surfaces.toml" \
+  --implementation-surface-inventory "$implementation_surface_inventory" \
+  --host-integration-source "$repo_root/configs/host_integration_acceptance.toml" \
+  --host-integration-graph "$host_integration_graph" \
+  --host-integration-doc "$host_integration_doc" \
   --cohesix-py-defaults "$cohesix_py_defaults" \
   --cohesix-py-doc "$cohesix_py_doc" \
   --coh-doctor-doc "$coh_doctor_doc"
+
+cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+  "$repo_root/configs/root_task.toml" \
+  --sel4-profiles "$repo_root/configs/sel4/profiles.toml" \
+  --profile qemu_smp_production \
+  --out "$cohesix_python_qemu_profile"
+
+cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+  "$repo_root/configs/root_task_pi4_uboot_aarch64.toml" \
+  --sel4-profiles "$repo_root/configs/sel4/profiles.toml" \
+  --profile pi4_production \
+  --out "$cohesix_python_pi4_profile"
 
 compare_file() {
   local expected="$1"
@@ -90,6 +115,7 @@ compare_file "$repo_root/apps/root-task/src/generated/mod.rs" "$generated_dir/mo
 compare_file "$repo_root/apps/root-task/src/generated/bootstrap.rs" "$generated_dir/bootstrap.rs"
 compare_file "$generated_root/root_task_resolved.json" "$manifest_out"
 compare_file "$generated_root/root_task_resolved.json.sha256" "${manifest_out}.sha256"
+compare_file "$generated_root/root_task_topology.json" "$root_tcb_topology"
 compare_file "$generated_root/cas_manifest_template.json" "$cas_template"
 compare_file "$generated_root/cas_manifest_template.json.sha256" "${cas_template}.sha256"
 compare_file "$repo_root/scripts/cohsh/boot_v0.coh" "$cli_script"
@@ -101,6 +127,7 @@ compare_file "$repo_root/docs/snippets/ticket_quotas.md" "$ticket_quotas"
 compare_file "$repo_root/docs/snippets/trace_policy.md" "$trace_policy"
 compare_file "$repo_root/docs/snippets/cas_interfaces.md" "$cas_interfaces"
 compare_file "$repo_root/docs/snippets/cas_security.md" "$cas_security"
+compare_file "$repo_root/docs/snippets/telemetry_cbor_schema.md" "$cbor_snippet"
 compare_file "$generated_root/cohsh_policy.toml" "$cohsh_policy"
 compare_file "$generated_root/cohsh_policy.toml.sha256" "${cohsh_policy}.sha256"
 compare_file "$repo_root/apps/cohsh/src/generated/policy.rs" "$cohsh_policy_rust"
@@ -120,6 +147,22 @@ compare_file "$repo_root/docs/snippets/swarmui_defaults.md" "$swarmui_defaults_d
 compare_file "$repo_root/tools/cohesix-py/cohesix/generated.py" "$cohesix_py_defaults"
 compare_file "$repo_root/docs/snippets/cohesix_py_defaults.md" "$cohesix_py_doc"
 compare_file "$repo_root/docs/snippets/coh_doctor_checks.md" "$coh_doctor_doc"
+compare_file "$generated_root/implementation_surface_inventory.json" "$implementation_surface_inventory"
+compare_file "$generated_root/host_integration_dependency.json" "$host_integration_graph"
+compare_file "$repo_root/docs/snippets/host_integration_dependency.md" "$host_integration_doc"
+compare_file "$generated_root/cohesix_python_qemu_smp_production.json" "$cohesix_python_qemu_profile"
+compare_file "$generated_root/cohesix_python_pi4_production.json" "$cohesix_python_pi4_profile"
+
+python3 "$repo_root/scripts/ci/check_implementation_surfaces.py" \
+  --repo-root "$repo_root" \
+  --inventory "$implementation_surface_inventory"
+
+python3 "$repo_root/scripts/ci/check_host_integration_inventory.py" \
+  --repo-root "$repo_root" \
+  --matrix "$repo_root/configs/host_integration_acceptance.toml" \
+  --graph "$host_integration_graph" \
+  --manifest "$manifest_out" \
+  --inventory "$implementation_surface_inventory"
 
 "$repo_root/scripts/ci/check_test_plan.sh"
 if [[ -f "$repo_root/scripts/ci/security_nist.sh" ]]; then

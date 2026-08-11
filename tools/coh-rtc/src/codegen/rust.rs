@@ -10,6 +10,8 @@ use crate::ir::{
     HostTicketLifecycleState, Manifest, NetworkBackendKind, Role, SidecarLink,
     WorkerSchedulingProfile,
 };
+use crate::resource_admission::{HandoffClass, SaturationPolicy};
+use crate::temporal::{SchedulerArchitecture, TemporalExecution, TemporalTaskKind, TimeoutPolicy};
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::collections::BTreeSet;
@@ -122,6 +124,37 @@ pub fn emit_rust(
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerTaskAbiConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub version: u16,")?;
+    writeln!(mod_contents, "    pub shared_page_bytes: u32,")?;
+    writeln!(mod_contents, "    pub ipc_buffer_vaddr: u64,")?;
+    writeln!(mod_contents, "    pub shared_page_vaddr: u64,")?;
+    writeln!(mod_contents, "    pub stack_bottom_vaddr: u64,")?;
+    writeln!(mod_contents, "    pub stack_pages: u16,")?;
+    writeln!(mod_contents, "    pub child_cnode_radix_bits: u8,")?;
+    writeln!(mod_contents, "    pub lifecycle_notification_slot: u32,")?;
+    writeln!(
+        mod_contents,
+        "    pub supervisor_wake_notification_slot: u32,"
+    )?;
+    for field in [
+        "lifecycle_control_bit",
+        "lifecycle_timeout_bit",
+        "lifecycle_shutdown_bit",
+        "lifecycle_revoke_bit",
+        "heartbeat_wake_bit",
+        "gpu_wake_bit",
+        "lora_wake_bit",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u64,")?;
+    }
+    writeln!(mod_contents, "    pub ready_timeout_ms: u32,")?;
+    writeln!(mod_contents, "    pub shutdown_grace_ms: u32,")?;
+    writeln!(mod_contents, "    pub max_control_inflight: u8,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
     writeln!(mod_contents, "pub struct WorkerSchedulingConfig {{")?;
     writeln!(mod_contents, "    pub profile: WorkerSchedulingProfile,")?;
     writeln!(mod_contents, "    pub priority: u8,")?;
@@ -149,7 +182,414 @@ pub fn emit_rust(
         mod_contents,
         "    pub notifications: WorkerNotificationConfig,"
     )?;
+    writeln!(mod_contents, "    pub task_abi: WorkerTaskAbiConfig,")?;
     writeln!(mod_contents, "    pub scheduling: WorkerSchedulingConfig,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum SchedulerArchitecture {{")?;
+    writeln!(mod_contents, "    Classic,")?;
+    writeln!(mod_contents, "    SmpMcs,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum TemporalExecution {{")?;
+    writeln!(mod_contents, "    Active,")?;
+    writeln!(mod_contents, "    Passive,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum TemporalTaskKind {{")?;
+    writeln!(mod_contents, "    RootControl,")?;
+    writeln!(mod_contents, "    RootFault,")?;
+    writeln!(mod_contents, "    RootEmergency,")?;
+    writeln!(mod_contents, "    WorkerSupervisor,")?;
+    writeln!(mod_contents, "    DriverSupervisor,")?;
+    writeln!(mod_contents, "    Service,")?;
+    writeln!(mod_contents, "    Driver,")?;
+    writeln!(mod_contents, "    Worker,")?;
+    writeln!(mod_contents, "    Drain,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub enum TimeoutPolicy {{")?;
+    writeln!(mod_contents, "    Terminal,")?;
+    writeln!(mod_contents, "    ReplenishOnce,")?;
+    writeln!(mod_contents, "    ReturnError,")?;
+    writeln!(mod_contents, "    FailStop,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub struct TemporalTaskConfig {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub kind: TemporalTaskKind,")?;
+    writeln!(mod_contents, "    pub execution: TemporalExecution,")?;
+    writeln!(mod_contents, "    pub core: u8,")?;
+    writeln!(mod_contents, "    pub scheduling_context_slot: u32,")?;
+    writeln!(mod_contents, "    pub scheduling_context_bits: u8,")?;
+    writeln!(mod_contents, "    pub sched_control_core: u8,")?;
+    writeln!(mod_contents, "    pub budget_us: u32,")?;
+    writeln!(mod_contents, "    pub period_us: u32,")?;
+    writeln!(mod_contents, "    pub deadline_us: u32,")?;
+    writeln!(mod_contents, "    pub blocking_us: u32,")?;
+    writeln!(mod_contents, "    pub jitter_us: u32,")?;
+    writeln!(mod_contents, "    pub max_refills: u8,")?;
+    writeln!(mod_contents, "    pub priority: u8,")?;
+    writeln!(mod_contents, "    pub mcp: u8,")?;
+    writeln!(mod_contents, "    pub timeout_badge: u64,")?;
+    writeln!(mod_contents, "    pub timeout_policy: TimeoutPolicy,")?;
+    writeln!(mod_contents, "    pub consumed_time_evidence: bool,")?;
+    writeln!(mod_contents, "    pub wcet_us: u32,")?;
+    writeln!(mod_contents, "    pub response_time_us: u32,")?;
+    writeln!(mod_contents, "    pub admitted: bool,")?;
+    writeln!(mod_contents, "    pub wcet_provenance: &'static str,")?;
+    writeln!(
+        mod_contents,
+        "    pub allowed_donors: &'static [&'static str],"
+    )?;
+    writeln!(mod_contents, "    pub reply_objects: u8,")?;
+    writeln!(mod_contents, "    pub max_donation_depth: u8,")?;
+    writeln!(mod_contents, "    pub fault_handler: &'static str,")?;
+    writeln!(mod_contents, "    pub critical_reserve: bool,")?;
+    writeln!(mod_contents, "    pub locality_bound: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TemporalCoreAdmission {{")?;
+    writeln!(mod_contents, "    pub core: u8,")?;
+    writeln!(mod_contents, "    pub capacity_us: u32,")?;
+    writeln!(mod_contents, "    pub reserve_us: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct TemporalAuthorityConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub architecture: SchedulerArchitecture,")?;
+    writeln!(mod_contents, "    pub cores: u8,")?;
+    writeln!(mod_contents, "    pub domains: u8,")?;
+    writeln!(mod_contents, "    pub admission_window_us: u32,")?;
+    writeln!(
+        mod_contents,
+        "    pub core_admission: &'static [TemporalCoreAdmission],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub tasks: &'static [TemporalTaskConfig],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub struct NineDoorServiceConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub abi_version: u16,")?;
+    writeln!(mod_contents, "    pub image_id: &'static str,")?;
+    writeln!(mod_contents, "    pub image_path: &'static str,")?;
+    writeln!(mod_contents, "    pub entry_symbol: &'static str,")?;
+    writeln!(mod_contents, "    pub child_cspace_slots: u16,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_bits: u8,")?;
+    writeln!(mod_contents, "    pub objects: KernelObjectBudget,")?;
+    for field in [
+        "endpoint_slot",
+        "reply_slot",
+        "root_fault_recovery_reply_slot",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u32,")?;
+    }
+    for field in [
+        "ipc_buffer_vaddr",
+        "init_vaddr",
+        "stack_vaddr",
+        "request_vaddr",
+        "response_vaddr",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u64,")?;
+    }
+    writeln!(mod_contents, "    pub stack_pages: u16,")?;
+    writeln!(mod_contents, "    pub shared_frame_bytes: u32,")?;
+    writeln!(mod_contents, "    pub max_inflight: u8,")?;
+    writeln!(mod_contents, "    pub request_badge: u64,")?;
+    writeln!(mod_contents, "    pub fault_badge: u64,")?;
+    writeln!(mod_contents, "    pub timeout_badge: u64,")?;
+    for field in [
+        "root_call_rights",
+        "child_receive_rights",
+        "root_request_rights",
+        "root_response_rights",
+        "child_request_rights",
+        "child_response_rights",
+        "core",
+        "priority",
+        "mcp",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u8,")?;
+    }
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub struct ConsoleNetworkServiceConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub abi_version: u16,")?;
+    writeln!(mod_contents, "    pub image_id: &'static str,")?;
+    writeln!(mod_contents, "    pub image_path: &'static str,")?;
+    writeln!(mod_contents, "    pub entry_symbol: &'static str,")?;
+    writeln!(mod_contents, "    pub listener_port: u16,")?;
+    writeln!(mod_contents, "    pub single_listener: bool,")?;
+    writeln!(mod_contents, "    pub child_cspace_slots: u16,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_bits: u8,")?;
+    writeln!(mod_contents, "    pub objects: KernelObjectBudget,")?;
+    for field in [
+        "packet_rx_notification_slot",
+        "packet_tx_wake_notification_slot",
+        "supervisor_wake_notification_slot",
+        "fault_endpoint_slot",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u32,")?;
+    }
+    for field in [
+        "ipc_buffer_vaddr",
+        "init_vaddr",
+        "stack_vaddr",
+        "packet_rx_vaddr",
+        "packet_tx_vaddr",
+        "command_vaddr",
+        "event_vaddr",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u64,")?;
+    }
+    writeln!(mod_contents, "    pub stack_pages: u16,")?;
+    writeln!(mod_contents, "    pub shared_frame_bytes: u32,")?;
+    writeln!(mod_contents, "    pub ethernet_frame_bytes: u16,")?;
+    writeln!(mod_contents, "    pub max_packets_per_wake: u16,")?;
+    writeln!(mod_contents, "    pub max_commands_per_wake: u16,")?;
+    writeln!(mod_contents, "    pub max_control_inflight: u8,")?;
+    for field in [
+        "packet_rx_badge",
+        "control_badge",
+        "shutdown_badge",
+        "revoke_badge",
+        "packet_tx_ready_badge",
+        "event_ready_badge",
+        "fault_badge",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u64,")?;
+    }
+    writeln!(mod_contents, "    pub core: u8,")?;
+    writeln!(mod_contents, "    pub scheduling_context_slot: u32,")?;
+    writeln!(mod_contents, "    pub scheduling_context_bits: u8,")?;
+    writeln!(mod_contents, "    pub priority: u8,")?;
+    writeln!(mod_contents, "    pub mcp: u8,")?;
+    writeln!(mod_contents, "    pub budget_us: u32,")?;
+    writeln!(mod_contents, "    pub period_us: u32,")?;
+    writeln!(mod_contents, "    pub max_refills: u8,")?;
+    writeln!(mod_contents, "    pub timeout_badge: u64,")?;
+    writeln!(mod_contents, "    pub timer_clock_hz: u64,")?;
+    writeln!(mod_contents, "    pub auth_timeout_ms: u32,")?;
+    writeln!(mod_contents, "    pub idle_timeout_ms: u32,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct KernelObjectBits {{")?;
+    for field in [
+        "tcb",
+        "endpoint",
+        "notification",
+        "reply",
+        "sched_context_min",
+        "cnode_slot",
+        "page",
+        "page_table",
+        "vspace",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u8,")?;
+    }
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]"
+    )?;
+    writeln!(mod_contents, "pub struct KernelObjectBudget {{")?;
+    for field in [
+        "tcbs",
+        "cnodes",
+        "vspaces",
+        "page_tables",
+        "asids",
+        "frames",
+        "endpoints",
+        "notifications",
+        "fault_caps",
+        "timeout_fault_caps",
+        "reply_objects",
+        "scheduling_contexts",
+        "cspace_slots",
+    ] {
+        writeln!(mod_contents, "    pub {field}: u32,")?;
+    }
+    writeln!(mod_contents, "    pub untyped_bytes: u64,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ExecutableRoleAdmission {{")?;
+    writeln!(mod_contents, "    pub role: &'static str,")?;
+    writeln!(mod_contents, "    pub task_prefix: &'static str,")?;
+    writeln!(mod_contents, "    pub namespace_capacity: u16,")?;
+    writeln!(mod_contents, "    pub executable_slots: u16,")?;
+    writeln!(mod_contents, "    pub core: u8,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
+    writeln!(mod_contents, "    pub per_slot: KernelObjectBudget,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct RoleMixCount {{")?;
+    writeln!(mod_contents, "    pub role: &'static str,")?;
+    writeln!(mod_contents, "    pub count: u16,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct ExecutableRoleMix {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub maximum: bool,")?;
+    writeln!(mod_contents, "    pub roles: &'static [RoleMixCount],")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct CriticalTcbResource {{")?;
+    writeln!(mod_contents, "    pub id: &'static str,")?;
+    writeln!(mod_contents, "    pub cnode_radix_bits: u8,")?;
+    writeln!(mod_contents, "    pub cspace_cap_count: u16,")?;
+    writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
+    writeln!(mod_contents, "    pub ipc_buffer_pages: u8,")?;
+    writeln!(mod_contents, "    pub stack_pages: u8,")?;
+    writeln!(mod_contents, "    pub fault_reply_lanes: u8,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(mod_contents, "pub struct CapabilityRights {{")?;
+    writeln!(mod_contents, "    pub read: bool,")?;
+    writeln!(mod_contents, "    pub write: bool,")?;
+    writeln!(mod_contents, "    pub grant: bool,")?;
+    writeln!(mod_contents, "    pub grant_reply: bool,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct BadgeRange {{")?;
+    writeln!(mod_contents, "    pub base: u64,")?;
+    writeln!(mod_contents, "    pub count: u16,")?;
+    writeln!(mod_contents, "    pub stride: u16,")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(
+        mod_contents,
+        "pub enum SaturationPolicy {{ RefuseNew, Fatal }}"
+    )?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug, PartialEq, Eq)]")?;
+    writeln!(
+        mod_contents,
+        "pub enum HandoffClass {{ WorkerFault, WorkerControl, DriverFault }}"
+    )?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct CriticalHandoffConfig {{")?;
+    writeln!(mod_contents, "    pub worker_control_queue_capacity: u16,")?;
+    writeln!(mod_contents, "    pub worker_fault_mailboxes: u16,")?;
+    writeln!(mod_contents, "    pub driver_fault_records: u16,")?;
+    writeln!(mod_contents, "    pub worker_wake_badge: u64,")?;
+    writeln!(mod_contents, "    pub driver_wake_badge: u64,")?;
+    writeln!(mod_contents, "    pub emergency_wake_badge: u64,")?;
+    writeln!(mod_contents, "    pub worker_fault_badges: BadgeRange,")?;
+    writeln!(mod_contents, "    pub driver_fault_badges: BadgeRange,")?;
+    writeln!(mod_contents, "    pub critical_fault_badges: BadgeRange,")?;
+    writeln!(mod_contents, "    pub service_fault_badges: BadgeRange,")?;
+    writeln!(mod_contents, "    pub timeout_fault_badges: BadgeRange,")?;
+    writeln!(
+        mod_contents,
+        "    pub supervisor_signal_rights: CapabilityRights,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub supervisor_wait_rights: CapabilityRights,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub fault_sender_rights: CapabilityRights,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub fault_receiver_rights: CapabilityRights,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub worker_control_saturation: SaturationPolicy,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub worker_fault_saturation: SaturationPolicy,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub service_fault_saturation: SaturationPolicy,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub driver_fault_saturation: SaturationPolicy,"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub worker_drain_precedence: &'static [HandoffClass],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub driver_drain_precedence: &'static [HandoffClass],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct FaultRegistryAdmission {{")?;
+    writeln!(mod_contents, "    pub critical_tcbs: u16,")?;
+    writeln!(mod_contents, "    pub service_tcbs: u16,")?;
+    writeln!(mod_contents, "    pub worker_tcbs: u16,")?;
+    writeln!(mod_contents, "    pub driver_tcbs: u16,")?;
+    writeln!(mod_contents, "    pub capacity: u16,")?;
+    writeln!(mod_contents, "    pub standard_reply_lanes: u8,")?;
+    writeln!(mod_contents, "    pub timeout_reply_lanes: u8,")?;
+    writeln!(
+        mod_contents,
+        "    pub recoverable_timeout_tasks: &'static [&'static str],"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
+    writeln!(mod_contents, "pub struct WorkerResourceAdmissionConfig {{")?;
+    writeln!(mod_contents, "    pub enabled: bool,")?;
+    writeln!(mod_contents, "    pub selected_kernel: &'static str,")?;
+    writeln!(mod_contents, "    pub object_bits: KernelObjectBits,")?;
+    writeln!(mod_contents, "    pub capacity: KernelObjectBudget,")?;
+    writeln!(
+        mod_contents,
+        "    pub post_construction_reserve: KernelObjectBudget,"
+    )?;
+    writeln!(mod_contents, "    pub fixed_objects: KernelObjectBudget,")?;
+    writeln!(
+        mod_contents,
+        "    pub executable_roles: &'static [ExecutableRoleAdmission],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub allowed_role_mixes: &'static [ExecutableRoleMix],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub critical_tcbs: &'static [CriticalTcbResource],"
+    )?;
+    writeln!(mod_contents, "    pub handoff: CriticalHandoffConfig,")?;
+    writeln!(
+        mod_contents,
+        "    pub fault_registry: FaultRegistryAdmission,"
+    )?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
     writeln!(mod_contents, "#[derive(Clone, Copy, Debug)]")?;
@@ -359,7 +799,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub chunk_bytes: u32,")?;
     writeln!(mod_contents, "    pub delta_enable: bool,")?;
     writeln!(mod_contents, "    pub signing_required: bool,")?;
-    writeln!(mod_contents, "    pub signing_key: Option<[u8; 32]>,")?;
+    writeln!(mod_contents, "    pub verification_key: Option<[u8; 32]>,")?;
     writeln!(mod_contents, "    pub models_enabled: bool,")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
@@ -638,6 +1078,7 @@ pub fn emit_rust(
     writeln!(mod_contents, "    GpuLeaseGrant,")?;
     writeln!(mod_contents, "    GpuLeaseRenew,")?;
     writeln!(mod_contents, "    GpuLeaseRelease,")?;
+    writeln!(mod_contents, "    PeftExport,")?;
     writeln!(mod_contents, "    PeftImport,")?;
     writeln!(mod_contents, "    PeftActivate,")?;
     writeln!(mod_contents, "    PeftRollback,")?;
@@ -668,10 +1109,22 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub enable: bool,")?;
     writeln!(mod_contents, "    pub request_schema: &'static str,")?;
     writeln!(mod_contents, "    pub result_schema: &'static str,")?;
+    writeln!(
+        mod_contents,
+        "    pub accepted_request_schemas: &'static [&'static str],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub accepted_result_schemas: &'static [&'static str],"
+    )?;
     writeln!(mod_contents, "    pub max_line_bytes: u32,")?;
     writeln!(
         mod_contents,
         "    pub action_allowlist: &'static [HostTicketAction],"
+    )?;
+    writeln!(
+        mod_contents,
+        "    pub receipt_action_allowlist: &'static [HostTicketAction],"
     )?;
     writeln!(
         mod_contents,
@@ -817,6 +1270,18 @@ pub fn emit_rust(
     writeln!(
         mod_contents,
         "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = bootstrap::WORKER_RUNTIME_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const TEMPORAL_AUTHORITY_CONFIG: TemporalAuthorityConfig = bootstrap::TEMPORAL_AUTHORITY_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig = bootstrap::WORKER_RESOURCE_ADMISSION_CONFIG;"
+    )?;
+    writeln!(
+        mod_contents,
+        "pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = bootstrap::NINEDOOR_SERVICE_CONFIG;"
     )?;
     writeln!(
         mod_contents,
@@ -1005,6 +1470,47 @@ pub fn emit_rust(
     writeln!(mod_contents)?;
     writeln!(
         mod_contents,
+        "pub const fn temporal_authority_config() -> TemporalAuthorityConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::TEMPORAL_AUTHORITY_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn temporal_tasks() -> &'static [TemporalTaskConfig] {{"
+    )?;
+    writeln!(mod_contents, "    &bootstrap::TEMPORAL_TASKS")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn ninedoor_service_config() -> NineDoorServiceConfig {{"
+    )?;
+    writeln!(mod_contents, "    bootstrap::NINEDOOR_SERVICE_CONFIG")?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn console_network_service_config() -> ConsoleNetworkServiceConfig {{"
+    )?;
+    writeln!(
+        mod_contents,
+        "    bootstrap::CONSOLE_NETWORK_SERVICE_CONFIG"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
+        "pub const fn worker_resource_admission_config() -> WorkerResourceAdmissionConfig {{"
+    )?;
+    writeln!(
+        mod_contents,
+        "    bootstrap::WORKER_RESOURCE_ADMISSION_CONFIG"
+    )?;
+    writeln!(mod_contents, "}}")?;
+    writeln!(mod_contents)?;
+    writeln!(
+        mod_contents,
         "pub const fn secure9p_limits() -> Secure9pLimits {{"
     )?;
     writeln!(mod_contents, "    bootstrap::SECURE9P_LIMITS")?;
@@ -1177,7 +1683,7 @@ pub fn emit_rust(
         .as_ref()
         .map(|signing| signing.required)
         .unwrap_or(false);
-    let cas_signing_key = cas_signing_key_literal(manifest, manifest_dir)?;
+    let cas_verification_key = cas_verification_key_literal(manifest, manifest_dir)?;
 
     let mut bootstrap_contents = String::new();
     writeln!(bootstrap_contents, "// Author: Lukas Bower")?;
@@ -1192,7 +1698,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents)?;
     writeln!(
         bootstrap_contents,
-        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, CachePolicy, CasConfig, ControlPlaneConfig, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExportControlConfig, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, ScheduleControlConfig, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TicketLimits, TicketSpec, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile}};"
+        "use super::{{AffinityPolicy, AttestationConfig, AttestationPolicy, AuditConfig, BadgeRange, CachePolicy, CapabilityRights, CasConfig, ConsoleNetworkServiceConfig, ControlPlaneConfig, CriticalHandoffConfig, CriticalTcbResource, DhcpPolicyConfig, DmaConfig, DmaProtectionProfile, DriverAffinityPolicy, DriverRuntimeBusLinkSpec, DriverRuntimeImagePolicy, DriverRuntimeImageSpec, DriverRuntimeIrqSpec, DriverRuntimeIrqTrigger, ExecutableRoleAdmission, ExecutableRoleMix, ExportControlConfig, FaultRegistryAdmission, HandoffClass, HardwareConfig, HardwareDevice, HardwareDeviceKind, HardwareNetworkConfig, HostConfig, HostFederationConfig, HostFederationPeer, HostProvider, HostTicketAction, HostTicketConfig, HostTicketLifecycleState, KernelObjectBits, KernelObjectBudget, LeaseControlConfig, LifecycleAutoTransition, LifecycleConfig, LifecycleState, LocalSeatConfig, NamespaceMount, NetworkBackendKind, NetworkInterfacePolicy, NetworkMode, NineDoorServiceConfig, ObservabilityConfig, PolicyConfig, PolicyLimits, PolicyRule, Proc9pConfig, Proc9pSessionConfig, ProcIngestConfig, ProcLeaseConfig, ProcPressureConfig, ProcRootConfig, ProcScheduleConfig, RoleMixCount, SaturationPolicy, ScheduleControlConfig, SchedulerArchitecture, Secure9pLimits, ShardingConfig, ShortWritePolicy, SidecarBusAdapter, SidecarBusConfig, SidecarConfig, SidecarLink, SpoolConfig, StaticIpv4Config, TelemetryConfig, TelemetryCursorConfig, TelemetryFrameSchema, TelemetryIngestConfig, TelemetryIngestEvictionPolicy, TemporalAuthorityConfig, TemporalCoreAdmission, TemporalExecution, TemporalTaskConfig, TemporalTaskKind, TicketLimits, TicketSpec, TimeoutPolicy, UiPolicyPreflightConfig, UiProc9pConfig, UiProcIngestConfig, UiProviderConfig, UiUpdatesConfig, WorkerEndpointCapConfig, WorkerNotificationConfig, WorkerResourceAdmissionConfig, WorkerRoleRuntime, WorkerRuntimeConfig, WorkerSchedulingConfig, WorkerSchedulingProfile, WorkerTaskAbiConfig}};"
     )?;
     writeln!(
         bootstrap_contents,
@@ -1287,10 +1793,35 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     let endpoint_caps = &manifest.worker_runtime.endpoint_caps;
     let notifications = &manifest.worker_runtime.notifications;
+    let task_abi = &manifest.worker_runtime.task_abi;
     let scheduling = &manifest.worker_runtime.scheduling;
     writeln!(
         bootstrap_contents,
-        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, mcs_budget_us: {}, mcs_period_us: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
+        "pub const WORKER_TASK_ABI_CONFIG: WorkerTaskAbiConfig = WorkerTaskAbiConfig {{ enabled: {}, version: {}, shared_page_bytes: {}, ipc_buffer_vaddr: {}, shared_page_vaddr: {}, stack_bottom_vaddr: {}, stack_pages: {}, child_cnode_radix_bits: {}, lifecycle_notification_slot: {}, supervisor_wake_notification_slot: {}, lifecycle_control_bit: {}, lifecycle_timeout_bit: {}, lifecycle_shutdown_bit: {}, lifecycle_revoke_bit: {}, heartbeat_wake_bit: {}, gpu_wake_bit: {}, lora_wake_bit: {}, ready_timeout_ms: {}, shutdown_grace_ms: {}, max_control_inflight: {} }};\n",
+        task_abi.enabled,
+        task_abi.version,
+        task_abi.shared_page_bytes,
+        task_abi.ipc_buffer_vaddr,
+        task_abi.shared_page_vaddr,
+        task_abi.stack_bottom_vaddr,
+        task_abi.stack_pages,
+        task_abi.child_cnode_radix_bits,
+        task_abi.lifecycle_notification_slot,
+        task_abi.supervisor_wake_notification_slot,
+        task_abi.lifecycle_control_bit,
+        task_abi.lifecycle_timeout_bit,
+        task_abi.lifecycle_shutdown_bit,
+        task_abi.lifecycle_revoke_bit,
+        task_abi.heartbeat_wake_bit,
+        task_abi.gpu_wake_bit,
+        task_abi.lora_wake_bit,
+        task_abi.ready_timeout_ms,
+        task_abi.shutdown_grace_ms,
+        task_abi.max_control_inflight,
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = WorkerRuntimeConfig {{ implementation_epoch: {}, max_workers: {}, ticket_subject_required: {}, cap_backed_authority: {}, notification_lifecycle: {}, roles: &WORKER_RUNTIME_ROLES, endpoint_caps: WorkerEndpointCapConfig {{ required: {}, attach_badge_base: {}, telemetry_badge_base: {}, lease_badge_base: {}, receipt_badge_base: {}, revoke_badge_base: {}, epoch_bits: {}, role_bits: {} }}, notifications: WorkerNotificationConfig {{ enabled: {}, revoke_badge: {}, shutdown_badge: {}, lease_expiry_badge: {}, telemetry_pressure_badge: {}, irq_badge: {} }}, task_abi: WORKER_TASK_ABI_CONFIG, scheduling: WorkerSchedulingConfig {{ profile: {}, priority: {}, domain: {}, service_turn_budget: {}, mcs_budget_us: {}, mcs_period_us: {}, timeout_endpoint_badge: {}, consumed_budget_evidence: {} }} }};\n",
         manifest.worker_runtime.implementation_epoch,
         manifest.worker_runtime.max_workers,
         manifest.worker_runtime.ticket_subject_required,
@@ -1318,6 +1849,316 @@ pub fn emit_rust(
         scheduling.mcs_period_us,
         scheduling.timeout_endpoint_badge,
         scheduling.consumed_budget_evidence,
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TEMPORAL_CORE_ADMISSION: [TemporalCoreAdmission; {}] = [",
+        manifest.temporal_authority.core_admission.len()
+    )?;
+    for record in &manifest.temporal_authority.core_admission {
+        writeln!(
+            bootstrap_contents,
+            "    TemporalCoreAdmission {{ core: {}, capacity_us: {}, reserve_us: {} }},",
+            record.core, record.capacity_us, record.reserve_us
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TEMPORAL_TASKS: [TemporalTaskConfig; {}] = [",
+        manifest.temporal_authority.tasks.len()
+    )?;
+    for task in &manifest.temporal_authority.tasks {
+        let donors = task
+            .allowed_donors
+            .iter()
+            .map(|donor| format!("\"{}\"", escape_literal(donor)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            bootstrap_contents,
+            "    TemporalTaskConfig {{ id: \"{}\", kind: {}, execution: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, sched_control_core: {}, budget_us: {}, period_us: {}, deadline_us: {}, blocking_us: {}, jitter_us: {}, max_refills: {}, priority: {}, mcp: {}, timeout_badge: {}, timeout_policy: {}, consumed_time_evidence: {}, wcet_us: {}, response_time_us: {}, admitted: {}, wcet_provenance: \"{}\", allowed_donors: &[{}], reply_objects: {}, max_donation_depth: {}, fault_handler: \"{}\", critical_reserve: {}, locality_bound: {} }},",
+            escape_literal(&task.id),
+            temporal_task_kind_to_rust(task.kind),
+            temporal_execution_to_rust(task.execution),
+            task.core,
+            task.scheduling_context_slot,
+            task.scheduling_context_bits,
+            task.sched_control_core,
+            task.budget_us,
+            task.period_us,
+            task.deadline_us,
+            task.blocking_us,
+            task.jitter_us,
+            task.max_refills,
+            task.priority,
+            task.mcp,
+            task.timeout_badge,
+            timeout_policy_to_rust(task.timeout_policy),
+            task.consumed_time_evidence,
+            task.wcet_us,
+            task.response_time_us,
+            task.admitted,
+            escape_literal(&task.wcet_provenance),
+            donors,
+            task.reply_objects,
+            task.max_donation_depth,
+            escape_literal(&task.fault_handler),
+            task.critical_reserve,
+            task.locality_bound,
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const TEMPORAL_AUTHORITY_CONFIG: TemporalAuthorityConfig = TemporalAuthorityConfig {{ enabled: {}, architecture: {}, cores: {}, domains: {}, admission_window_us: {}, core_admission: &TEMPORAL_CORE_ADMISSION, tasks: &TEMPORAL_TASKS }};\n",
+        manifest.temporal_authority.enabled,
+        scheduler_architecture_to_rust(manifest.temporal_authority.architecture),
+        manifest.temporal_authority.cores,
+        manifest.temporal_authority.domains,
+        manifest.temporal_authority.admission_window_us,
+    )?;
+    let ninedoor = &manifest.ninedoor_service;
+    writeln!(
+        bootstrap_contents,
+        "pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, endpoint_slot: {}, reply_slot: {}, root_fault_recovery_reply_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, request_vaddr: {}, response_vaddr: {}, shared_frame_bytes: {}, max_inflight: {}, request_badge: {}, fault_badge: {}, timeout_badge: {}, root_call_rights: {}, child_receive_rights: {}, root_request_rights: {}, root_response_rights: {}, child_request_rights: {}, child_response_rights: {}, core: {}, priority: {}, mcp: {} }};\n",
+        ninedoor.enabled,
+        ninedoor.abi_version,
+        escape_literal(&ninedoor.image_id),
+        escape_literal(&ninedoor.image_path),
+        escape_literal(&ninedoor.entry_symbol),
+        ninedoor.child_cspace_slots,
+        ninedoor.revoke_anchor_slot,
+        ninedoor.revoke_anchor_bits,
+        kernel_object_budget_to_rust(ninedoor.objects),
+        ninedoor.endpoint_slot,
+        ninedoor.reply_slot,
+        ninedoor.root_fault_recovery_reply_slot,
+        ninedoor.ipc_buffer_vaddr,
+        ninedoor.init_vaddr,
+        ninedoor.stack_vaddr,
+        ninedoor.stack_pages,
+        ninedoor.request_vaddr,
+        ninedoor.response_vaddr,
+        ninedoor.shared_frame_bytes,
+        ninedoor.max_inflight,
+        ninedoor.request_badge,
+        ninedoor.fault_badge,
+        ninedoor.timeout_badge,
+        ninedoor.root_call_rights,
+        ninedoor.child_receive_rights,
+        ninedoor.root_request_rights,
+        ninedoor.root_response_rights,
+        ninedoor.child_request_rights,
+        ninedoor.child_response_rights,
+        ninedoor.core,
+        ninedoor.priority,
+        ninedoor.mcp,
+    )?;
+    let console = &manifest.console_network_service;
+    writeln!(
+        bootstrap_contents,
+        "pub const CONSOLE_NETWORK_SERVICE_CONFIG: ConsoleNetworkServiceConfig = ConsoleNetworkServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", listener_port: {}, single_listener: {}, child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, packet_rx_notification_slot: {}, packet_tx_wake_notification_slot: {}, supervisor_wake_notification_slot: {}, fault_endpoint_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, packet_rx_vaddr: {}, packet_tx_vaddr: {}, command_vaddr: {}, event_vaddr: {}, shared_frame_bytes: {}, ethernet_frame_bytes: {}, max_packets_per_wake: {}, max_commands_per_wake: {}, max_control_inflight: {}, packet_rx_badge: {}, control_badge: {}, shutdown_badge: {}, revoke_badge: {}, packet_tx_ready_badge: {}, event_ready_badge: {}, fault_badge: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, priority: {}, mcp: {}, budget_us: {}, period_us: {}, max_refills: {}, timeout_badge: {}, timer_clock_hz: {}, auth_timeout_ms: {}, idle_timeout_ms: {} }};\n",
+        console.enabled,
+        console.abi_version,
+        escape_literal(&console.image_id),
+        escape_literal(&console.image_path),
+        escape_literal(&console.entry_symbol),
+        console.listener_port,
+        console.single_listener,
+        console.child_cspace_slots,
+        console.revoke_anchor_slot,
+        console.revoke_anchor_bits,
+        kernel_object_budget_to_rust(console.objects),
+        console.packet_rx_notification_slot,
+        console.packet_tx_wake_notification_slot,
+        console.supervisor_wake_notification_slot,
+        console.fault_endpoint_slot,
+        console.ipc_buffer_vaddr,
+        console.init_vaddr,
+        console.stack_vaddr,
+        console.stack_pages,
+        console.packet_rx_vaddr,
+        console.packet_tx_vaddr,
+        console.command_vaddr,
+        console.event_vaddr,
+        console.shared_frame_bytes,
+        console.ethernet_frame_bytes,
+        console.max_packets_per_wake,
+        console.max_commands_per_wake,
+        console.max_control_inflight,
+        console.packet_rx_badge,
+        console.control_badge,
+        console.shutdown_badge,
+        console.revoke_badge,
+        console.packet_tx_ready_badge,
+        console.event_ready_badge,
+        console.fault_badge,
+        console.core,
+        console.scheduling_context_slot,
+        console.scheduling_context_bits,
+        console.priority,
+        console.mcp,
+        console.budget_us,
+        console.period_us,
+        console.max_refills,
+        console.timeout_badge,
+        console.timer_clock_hz,
+        console.auth_timeout_ms,
+        console.idle_timeout_ms,
+    )?;
+    let admission = &manifest.worker_resource_admission;
+    writeln!(
+        bootstrap_contents,
+        "pub const EXECUTABLE_ROLE_ADMISSION: [ExecutableRoleAdmission; {}] = [",
+        admission.executable_roles.len()
+    )?;
+    for role in &admission.executable_roles {
+        writeln!(
+            bootstrap_contents,
+            "    ExecutableRoleAdmission {{ role: \"{}\", task_prefix: \"{}\", namespace_capacity: {}, executable_slots: {}, core: {}, revoke_anchor_slot: {}, per_slot: {} }},",
+            escape_literal(&role.role),
+            escape_literal(&role.task_prefix),
+            role.namespace_capacity,
+            role.executable_slots,
+            role.core,
+            role.revoke_anchor_slot,
+            kernel_object_budget_to_rust(role.per_slot),
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    for (index, mix) in admission.allowed_role_mixes.iter().enumerate() {
+        writeln!(
+            bootstrap_contents,
+            "pub const EXECUTABLE_ROLE_MIX_{index}: [RoleMixCount; {}] = [",
+            mix.roles.len()
+        )?;
+        for role in &mix.roles {
+            writeln!(
+                bootstrap_contents,
+                "    RoleMixCount {{ role: \"{}\", count: {} }},",
+                escape_literal(&role.role),
+                role.count,
+            )?;
+        }
+        writeln!(bootstrap_contents, "];\n")?;
+    }
+    writeln!(
+        bootstrap_contents,
+        "pub const EXECUTABLE_ROLE_MIXES: [ExecutableRoleMix; {}] = [",
+        admission.allowed_role_mixes.len()
+    )?;
+    for (index, mix) in admission.allowed_role_mixes.iter().enumerate() {
+        writeln!(
+            bootstrap_contents,
+            "    ExecutableRoleMix {{ id: \"{}\", maximum: {}, roles: &EXECUTABLE_ROLE_MIX_{index} }},",
+            escape_literal(&mix.id),
+            mix.maximum,
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const CRITICAL_TCB_RESOURCES: [CriticalTcbResource; {}] = [",
+        admission.critical_tcbs.len()
+    )?;
+    for task in &admission.critical_tcbs {
+        writeln!(
+            bootstrap_contents,
+            "    CriticalTcbResource {{ id: \"{}\", cnode_radix_bits: {}, cspace_cap_count: {}, revoke_anchor_slot: {}, ipc_buffer_pages: {}, stack_pages: {}, fault_reply_lanes: {} }},",
+            escape_literal(&task.id),
+            task.cnode_radix_bits,
+            task.cspace_cap_count,
+            task.revoke_anchor_slot,
+            task.ipc_buffer_pages,
+            task.stack_pages,
+            task.fault_reply_lanes,
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const WORKER_SUPERVISOR_DRAIN_PRECEDENCE: [HandoffClass; {}] = [{}];",
+        admission.handoff.worker_drain_precedence.len(),
+        admission
+            .handoff
+            .worker_drain_precedence
+            .iter()
+            .map(|class| handoff_class_to_rust(*class))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
+    writeln!(
+        bootstrap_contents,
+        "pub const DRIVER_SUPERVISOR_DRAIN_PRECEDENCE: [HandoffClass; {}] = [{}];",
+        admission.handoff.driver_drain_precedence.len(),
+        admission
+            .handoff
+            .driver_drain_precedence
+            .iter()
+            .map(|class| handoff_class_to_rust(*class))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )?;
+    let recoverable = admission
+        .fault_registry
+        .recoverable_timeout_tasks
+        .iter()
+        .map(|id| format!("\"{}\"", escape_literal(id)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    writeln!(
+        bootstrap_contents,
+        "pub const RECOVERABLE_TIMEOUT_TASKS: [&str; {}] = [{}];",
+        admission.fault_registry.recoverable_timeout_tasks.len(),
+        recoverable,
+    )?;
+    let bits = admission.object_bits;
+    let handoff = &admission.handoff;
+    let faults = &admission.fault_registry;
+    writeln!(
+        bootstrap_contents,
+        "pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig = WorkerResourceAdmissionConfig {{ enabled: {}, selected_kernel: \"{}\", object_bits: KernelObjectBits {{ tcb: {}, endpoint: {}, notification: {}, reply: {}, sched_context_min: {}, cnode_slot: {}, page: {}, page_table: {}, vspace: {} }}, capacity: {}, post_construction_reserve: {}, fixed_objects: {}, executable_roles: &EXECUTABLE_ROLE_ADMISSION, allowed_role_mixes: &EXECUTABLE_ROLE_MIXES, critical_tcbs: &CRITICAL_TCB_RESOURCES, handoff: CriticalHandoffConfig {{ worker_control_queue_capacity: {}, worker_fault_mailboxes: {}, driver_fault_records: {}, worker_wake_badge: {}, driver_wake_badge: {}, emergency_wake_badge: {}, worker_fault_badges: {}, driver_fault_badges: {}, critical_fault_badges: {}, service_fault_badges: {}, timeout_fault_badges: {}, supervisor_signal_rights: {}, supervisor_wait_rights: {}, fault_sender_rights: {}, fault_receiver_rights: {}, worker_control_saturation: {}, worker_fault_saturation: {}, service_fault_saturation: {}, driver_fault_saturation: {}, worker_drain_precedence: &WORKER_SUPERVISOR_DRAIN_PRECEDENCE, driver_drain_precedence: &DRIVER_SUPERVISOR_DRAIN_PRECEDENCE }}, fault_registry: FaultRegistryAdmission {{ critical_tcbs: {}, service_tcbs: {}, worker_tcbs: {}, driver_tcbs: {}, capacity: {}, standard_reply_lanes: {}, timeout_reply_lanes: {}, recoverable_timeout_tasks: &RECOVERABLE_TIMEOUT_TASKS }} }};\n",
+        admission.enabled,
+        escape_literal(&admission.selected_kernel),
+        bits.tcb,
+        bits.endpoint,
+        bits.notification,
+        bits.reply,
+        bits.sched_context_min,
+        bits.cnode_slot,
+        bits.page,
+        bits.page_table,
+        bits.vspace,
+        kernel_object_budget_to_rust(admission.capacity),
+        kernel_object_budget_to_rust(admission.post_construction_reserve),
+        kernel_object_budget_to_rust(admission.fixed_objects),
+        handoff.worker_control_queue_capacity,
+        handoff.worker_fault_mailboxes,
+        handoff.driver_fault_records,
+        handoff.worker_wake_badge,
+        handoff.driver_wake_badge,
+        handoff.emergency_wake_badge,
+        badge_range_to_rust(handoff.worker_fault_badges),
+        badge_range_to_rust(handoff.driver_fault_badges),
+        badge_range_to_rust(handoff.critical_fault_badges),
+        badge_range_to_rust(handoff.service_fault_badges),
+        badge_range_to_rust(handoff.timeout_fault_badges),
+        capability_rights_to_rust(handoff.supervisor_signal_rights),
+        capability_rights_to_rust(handoff.supervisor_wait_rights),
+        capability_rights_to_rust(handoff.fault_sender_rights),
+        capability_rights_to_rust(handoff.fault_receiver_rights),
+        saturation_policy_to_rust(handoff.worker_control_saturation),
+        saturation_policy_to_rust(handoff.worker_fault_saturation),
+        saturation_policy_to_rust(handoff.service_fault_saturation),
+        saturation_policy_to_rust(handoff.driver_fault_saturation),
+        faults.critical_tcbs,
+        faults.service_tcbs,
+        faults.worker_tcbs,
+        faults.driver_tcbs,
+        faults.capacity,
+        faults.standard_reply_lanes,
+        faults.timeout_reply_lanes,
     )?;
     writeln!(
         bootstrap_contents,
@@ -1547,12 +2388,12 @@ pub fn emit_rust(
     )?;
     writeln!(
         bootstrap_contents,
-        "pub const CAS_CONFIG: CasConfig = CasConfig {{ enable: {}, chunk_bytes: {}, delta_enable: {}, signing_required: {}, signing_key: {}, models_enabled: {} }};\n",
+        "pub const CAS_CONFIG: CasConfig = CasConfig {{ enable: {}, chunk_bytes: {}, delta_enable: {}, signing_required: {}, verification_key: {}, models_enabled: {} }};\n",
         manifest.cas.enable,
         manifest.cas.store.chunk_bytes,
         manifest.cas.delta.enable,
         cas_signing_required,
-        cas_signing_key,
+        cas_verification_key,
         manifest.ecosystem.models.enable
     )?;
     writeln!(
@@ -1851,6 +2692,52 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
+        "pub const HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS: [&str; {}] = [",
+        manifest
+            .ecosystem
+            .host
+            .tickets
+            .accepted_request_schemas
+            .len()
+    )?;
+    for schema in &manifest.ecosystem.host.tickets.accepted_request_schemas {
+        writeln!(bootstrap_contents, "    \"{}\",", escape_literal(schema))?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_TICKET_ACCEPTED_RESULT_SCHEMAS: [&str; {}] = [",
+        manifest
+            .ecosystem
+            .host
+            .tickets
+            .accepted_result_schemas
+            .len()
+    )?;
+    for schema in &manifest.ecosystem.host.tickets.accepted_result_schemas {
+        writeln!(bootstrap_contents, "    \"{}\",", escape_literal(schema))?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
+        "pub const HOST_TICKET_RECEIPT_ACTION_ALLOWLIST: [HostTicketAction; {}] = [",
+        manifest
+            .ecosystem
+            .host
+            .tickets
+            .receipt_action_allowlist
+            .len()
+    )?;
+    for action in &manifest.ecosystem.host.tickets.receipt_action_allowlist {
+        writeln!(
+            bootstrap_contents,
+            "    {},",
+            host_ticket_action_to_rust(*action)
+        )?;
+    }
+    writeln!(bootstrap_contents, "];\n")?;
+    writeln!(
+        bootstrap_contents,
         "pub const HOST_TICKET_LIFECYCLE: [HostTicketLifecycleState; {}] = [",
         manifest.ecosystem.host.tickets.lifecycle.len()
     )?;
@@ -1892,7 +2779,7 @@ pub fn emit_rust(
     writeln!(bootstrap_contents, "];\n")?;
     writeln!(
         bootstrap_contents,
-        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }}, federation: HostFederationConfig {{ enable: {}, local_hive: \"{}\", peers: &HOST_FEDERATION_PEERS, action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST, relay_queue_max_entries: {}, relay_queue_max_bytes: {}, wal_max_entries: {}, wal_max_bytes: {}, relay_timeout_ms: {} }} }};\n",
+        "pub const HOST_CONFIG: HostConfig = HostConfig {{ enable: {}, mount_at: \"{}\", providers: &HOST_PROVIDERS, tickets: HostTicketConfig {{ enable: {}, request_schema: \"{}\", result_schema: \"{}\", accepted_request_schemas: &HOST_TICKET_ACCEPTED_REQUEST_SCHEMAS, accepted_result_schemas: &HOST_TICKET_ACCEPTED_RESULT_SCHEMAS, max_line_bytes: {}, action_allowlist: &HOST_TICKET_ACTION_ALLOWLIST, receipt_action_allowlist: &HOST_TICKET_RECEIPT_ACTION_ALLOWLIST, lifecycle: &HOST_TICKET_LIFECYCLE }}, federation: HostFederationConfig {{ enable: {}, local_hive: \"{}\", peers: &HOST_FEDERATION_PEERS, action_allowlist: &HOST_FEDERATION_ACTION_ALLOWLIST, relay_queue_max_entries: {}, relay_queue_max_bytes: {}, wal_max_entries: {}, wal_max_bytes: {}, relay_timeout_ms: {} }} }};\n",
         manifest.ecosystem.host.enable,
         escape_literal(&manifest.ecosystem.host.mount_at),
         manifest.ecosystem.host.tickets.enable,
@@ -2124,6 +3011,92 @@ fn worker_scheduling_profile_to_rust(profile: WorkerSchedulingProfile) -> &'stat
     }
 }
 
+fn scheduler_architecture_to_rust(architecture: SchedulerArchitecture) -> &'static str {
+    match architecture {
+        SchedulerArchitecture::Classic => "SchedulerArchitecture::Classic",
+        SchedulerArchitecture::SmpMcs => "SchedulerArchitecture::SmpMcs",
+    }
+}
+
+fn temporal_execution_to_rust(execution: TemporalExecution) -> &'static str {
+    match execution {
+        TemporalExecution::Active => "TemporalExecution::Active",
+        TemporalExecution::Passive => "TemporalExecution::Passive",
+    }
+}
+
+fn temporal_task_kind_to_rust(kind: TemporalTaskKind) -> &'static str {
+    match kind {
+        TemporalTaskKind::RootControl => "TemporalTaskKind::RootControl",
+        TemporalTaskKind::RootFault => "TemporalTaskKind::RootFault",
+        TemporalTaskKind::RootEmergency => "TemporalTaskKind::RootEmergency",
+        TemporalTaskKind::WorkerSupervisor => "TemporalTaskKind::WorkerSupervisor",
+        TemporalTaskKind::DriverSupervisor => "TemporalTaskKind::DriverSupervisor",
+        TemporalTaskKind::Service => "TemporalTaskKind::Service",
+        TemporalTaskKind::Driver => "TemporalTaskKind::Driver",
+        TemporalTaskKind::Worker => "TemporalTaskKind::Worker",
+        TemporalTaskKind::Drain => "TemporalTaskKind::Drain",
+    }
+}
+
+fn timeout_policy_to_rust(policy: TimeoutPolicy) -> &'static str {
+    match policy {
+        TimeoutPolicy::Terminal => "TimeoutPolicy::Terminal",
+        TimeoutPolicy::ReplenishOnce => "TimeoutPolicy::ReplenishOnce",
+        TimeoutPolicy::ReturnError => "TimeoutPolicy::ReturnError",
+        TimeoutPolicy::FailStop => "TimeoutPolicy::FailStop",
+    }
+}
+
+fn kernel_object_budget_to_rust(budget: crate::resource_admission::KernelObjectBudget) -> String {
+    format!(
+        "KernelObjectBudget {{ tcbs: {}, cnodes: {}, vspaces: {}, page_tables: {}, asids: {}, frames: {}, endpoints: {}, notifications: {}, fault_caps: {}, timeout_fault_caps: {}, reply_objects: {}, scheduling_contexts: {}, cspace_slots: {}, untyped_bytes: {} }}",
+        budget.tcbs,
+        budget.cnodes,
+        budget.vspaces,
+        budget.page_tables,
+        budget.asids,
+        budget.frames,
+        budget.endpoints,
+        budget.notifications,
+        budget.fault_caps,
+        budget.timeout_fault_caps,
+        budget.reply_objects,
+        budget.scheduling_contexts,
+        budget.cspace_slots,
+        budget.untyped_bytes,
+    )
+}
+
+fn capability_rights_to_rust(rights: crate::resource_admission::CapabilityRights) -> String {
+    format!(
+        "CapabilityRights {{ read: {}, write: {}, grant: {}, grant_reply: {} }}",
+        rights.read, rights.write, rights.grant, rights.grant_reply
+    )
+}
+
+fn badge_range_to_rust(range: crate::resource_admission::BadgeRange) -> String {
+    format!(
+        "BadgeRange {{ base: {}, count: {}, stride: {} }}",
+        range.base, range.count, range.stride
+    )
+}
+
+fn saturation_policy_to_rust(policy: SaturationPolicy) -> &'static str {
+    match policy {
+        SaturationPolicy::RefuseNew => "SaturationPolicy::RefuseNew",
+        SaturationPolicy::Fatal => "SaturationPolicy::Fatal",
+    }
+}
+
+fn handoff_class_to_rust(class: HandoffClass) -> &'static str {
+    match class {
+        HandoffClass::WorkerFault => "HandoffClass::WorkerFault",
+        HandoffClass::WorkerControl => "HandoffClass::WorkerControl",
+        HandoffClass::DriverFault => "HandoffClass::DriverFault",
+    }
+}
+
 fn parse_optional_ipv4_literal(label: &str, value: &str) -> Result<Option<[u8; 4]>> {
     if value.trim().is_empty() {
         return Ok(None);
@@ -2158,6 +3131,7 @@ fn host_ticket_action_to_rust(action: HostTicketAction) -> &'static str {
         HostTicketAction::GpuLeaseGrant => "HostTicketAction::GpuLeaseGrant",
         HostTicketAction::GpuLeaseRenew => "HostTicketAction::GpuLeaseRenew",
         HostTicketAction::GpuLeaseRelease => "HostTicketAction::GpuLeaseRelease",
+        HostTicketAction::PeftExport => "HostTicketAction::PeftExport",
         HostTicketAction::PeftImport => "HostTicketAction::PeftImport",
         HostTicketAction::PeftActivate => "HostTicketAction::PeftActivate",
         HostTicketAction::PeftRollback => "HostTicketAction::PeftRollback",
@@ -2329,34 +3303,22 @@ fn telemetry_schema_label(schema: &crate::ir::TelemetryFrameSchema) -> &'static 
     }
 }
 
-fn cas_signing_key_literal(manifest: &Manifest, manifest_dir: Option<&Path>) -> Result<String> {
-    let key_path = manifest
+fn cas_verification_key_literal(
+    manifest: &Manifest,
+    manifest_dir: Option<&Path>,
+) -> Result<String> {
+    let verification_key_path = manifest
         .cas
         .signing
         .as_ref()
-        .and_then(|signing| signing.key_path.as_deref())
+        .and_then(|signing| signing.verification_key_path.as_deref())
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let Some(path) = key_path else {
+    let Some(path) = verification_key_path else {
         return Ok("None".to_owned());
     };
     let resolved = resolve_manifest_relative_path(manifest_dir, path);
-    let key_bytes = fs::read(&resolved)
-        .with_context(|| format!("failed to read cas signing key {}", resolved.display()))?;
-    let key_text = std::str::from_utf8(&key_bytes)
-        .with_context(|| format!("cas signing key {} is not valid UTF-8", resolved.display()))?;
-    let raw = hex::decode(key_text.trim()).map_err(|err| {
-        anyhow::anyhow!("cas signing key {} must be hex: {err}", resolved.display())
-    })?;
-    if raw.len() != 32 {
-        return Err(anyhow::anyhow!(
-            "cas signing key {} must be 32 bytes (got {})",
-            resolved.display(),
-            raw.len()
-        ));
-    }
-    let mut key = [0u8; 32];
-    key.copy_from_slice(&raw);
+    let key = crate::ir::read_hex_key_file(&resolved, "CAS verification key")?;
     let literal = key
         .iter()
         .map(|byte| format!("0x{byte:02x}"))
@@ -2517,12 +3479,52 @@ fn build_audit_lines(
             manifest.worker_runtime.notification_lifecycle
         ),
         format!(
+            "manifest.worker_runtime.task_abi.version={} shared_page_bytes={} ready_timeout_ms={} shutdown_grace_ms={} max_control_inflight={}",
+            manifest.worker_runtime.task_abi.version,
+            manifest.worker_runtime.task_abi.shared_page_bytes,
+            manifest.worker_runtime.task_abi.ready_timeout_ms,
+            manifest.worker_runtime.task_abi.shutdown_grace_ms,
+            manifest.worker_runtime.task_abi.max_control_inflight,
+        ),
+        format!(
             "manifest.worker_runtime.scheduling.profile={}",
             manifest.worker_runtime.scheduling.profile.as_str()
         ),
         format!(
             "manifest.worker_runtime.scheduling.service_turn_budget={}",
             manifest.worker_runtime.scheduling.service_turn_budget
+        ),
+        format!(
+            "manifest.temporal_authority.enabled={}",
+            manifest.temporal_authority.enabled
+        ),
+        format!(
+            "manifest.temporal_authority.architecture={}",
+            match manifest.temporal_authority.architecture {
+                SchedulerArchitecture::Classic => "classic",
+                SchedulerArchitecture::SmpMcs => "smp-mcs",
+            }
+        ),
+        format!(
+            "manifest.temporal_authority.tasks={}",
+            manifest.temporal_authority.tasks.len()
+        ),
+        format!(
+            "manifest.worker_resource_admission.enabled={}",
+            manifest.worker_resource_admission.enabled
+        ),
+        format!(
+            "manifest.worker_resource_admission.executable_slots={}",
+            manifest
+                .worker_resource_admission
+                .executable_roles
+                .iter()
+                .map(|role| usize::from(role.executable_slots))
+                .sum::<usize>()
+        ),
+        format!(
+            "manifest.worker_resource_admission.fault_registry.capacity={}",
+            manifest.worker_resource_admission.fault_registry.capacity
         ),
         format!(
             "manifest.features.net_console={}",

@@ -1,11 +1,12 @@
 # Author: Lukas Bower
-# Purpose: Implement Cohesix Python backends for filesystem, TCP console, REST gateway, and deterministic mock workflows.
+# Purpose: Implement filesystem, TCP, REST, and mock Cohesix Python backends.
 # Copyright 2026 Lukas Bower
 
 """Backend implementations for Cohesix Python client."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
@@ -68,6 +69,16 @@ class Backend:
 
     def get_bounds(self) -> Optional[Dict[str, Any]]:
         return None
+
+    def get_worker_runtime_bounds(self) -> Optional[Dict[str, Any]]:
+        """Return optional declaration-only Worker bounds, never readiness."""
+
+        return None
+
+    def get_backend_class(self) -> str:
+        """Return a non-proof backend projection class."""
+
+        return "unknown"
 
 
 class FilesystemBackend(Backend):
@@ -144,6 +155,11 @@ class TcpBackend(Backend):
         self.max_retries = max_retries
         self._sock: Optional[socket.socket] = None
         self._connect()
+
+    def get_backend_class(self) -> str:
+        """A direct TCP client is a console projection, not target proof."""
+
+        return "console-projection"
 
     def close(self) -> None:
         if self._sock is not None:
@@ -384,6 +400,34 @@ class RestBackend(Backend):
             raise CohesixError("invalid REST bounds payload")
         return data
 
+    def get_worker_runtime_bounds(self) -> Optional[Dict[str, Any]]:
+        """Return optional REST declaration metadata without inferring READY."""
+
+        bounds = self.get_bounds()
+        if bounds is None:
+            return None
+        value = bounds.get("worker_runtime_bounds")
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise CohesixError("invalid REST Worker runtime bounds")
+        return dict(value)
+
+    def get_backend_class(self) -> str:
+        """Read an optional gateway projection class; absence stays unknown."""
+
+        payload = self._request_payload("GET", "/v1/meta/status")
+        try:
+            data = json.loads(payload.decode("utf-8"))
+        except Exception as exc:
+            raise CohesixError("invalid REST status payload") from exc
+        if not isinstance(data, dict):
+            raise CohesixError("invalid REST status payload")
+        value = data.get("backend_class", "unknown")
+        if value not in ("host-model", "console-projection", "unknown"):
+            raise CohesixError("invalid REST backend class")
+        return str(value)
+
     def _request_json(
         self,
         method: str,
@@ -505,7 +549,14 @@ class MockBackend(FilesystemBackend):
         self._next_worker_id = 1
         self._gpu_for_worker: dict[str, str] = {}
         self._worker_for_gpu: dict[str, str] = {}
+        self._worker_roles: dict[str, str] = {}
+        self._worker_generations: dict[str, int] = {}
         self._seed()
+
+    def get_backend_class(self) -> str:
+        """Mock state is explicitly host-model and never target proof."""
+
+        return "host-model"
 
     def _seed(self) -> None:
         root = Path(self.root)
@@ -600,6 +651,7 @@ class MockBackend(FilesystemBackend):
         if "kill" in data:
             worker_id = data.get("kill")
             if isinstance(worker_id, str):
+                self._mock_worker_observation(worker_id, lifecycle="terminal")
                 gpu_id = self._gpu_for_worker.pop(worker_id, None)
                 if gpu_id:
                     self._worker_for_gpu.pop(gpu_id, None)
@@ -616,14 +668,30 @@ class MockBackend(FilesystemBackend):
                     }
                     lease_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
             return
-        if data.get("spawn") != "gpu":
+        spawn = data.get("spawn")
+        role = {
+            "heartbeat": "worker-heartbeat",
+            "gpu": "worker-gpu",
+            "lora": "worker-lora",
+        }.get(spawn)
+        if role is None:
+            return
+        requested_id = data.get("worker_id")
+        if isinstance(requested_id, str) and requested_id:
+            worker_id = requested_id
+        else:
+            worker_id = f"worker-{self._next_worker_id}"
+            self._next_worker_id += 1
+        self._worker_roles[worker_id] = role
+        self._worker_generations[worker_id] = self._worker_generations.get(worker_id, 0) + 1
+        self._mock_worker_observation(worker_id, lifecycle="ready")
+
+        if spawn != "gpu":
             return
         lease = data.get("lease", {})
         gpu_id = lease.get("gpu_id")
         if not gpu_id:
             return
-        worker_id = f"worker-{self._next_worker_id}"
-        self._next_worker_id += 1
         self._gpu_for_worker[worker_id] = gpu_id
         self._worker_for_gpu[gpu_id] = worker_id
         lease_path = Path(self.root) / "gpu" / gpu_id / "lease"
@@ -639,3 +707,44 @@ class MockBackend(FilesystemBackend):
             "priority": lease.get("priority", 1),
         }
         lease_path.write_text(json.dumps(entry) + "\n", encoding="utf-8")
+
+    def _mock_worker_observation(self, worker_id: str, *, lifecycle: str) -> None:
+        role = self._worker_roles.get(worker_id)
+        if role is None:
+            return
+        generation = self._worker_generations.get(worker_id, 1)
+        shard = hashlib.sha256(worker_id.encode("ascii")).digest()[0]
+        telemetry = (
+            Path(self.root)
+            / "shard"
+            / f"{shard:02x}"
+            / "worker"
+            / worker_id
+            / "telemetry"
+        )
+        telemetry.parent.mkdir(parents=True, exist_ok=True)
+        record = {
+            "schema": "cohesix-worker-observation/v1",
+            "public_instance_id": worker_id,
+            "identity": {
+                "role": role,
+                "slot": 0,
+                "lease_epoch": 1,
+                "supervisor_generation": generation,
+                "cap_generation": 1,
+            },
+            "state": {
+                "declaration": "executable",
+                "lifecycle": lifecycle,
+                "artifact": "missing",
+                "receipt": "none",
+                "execution_proof": "host-model",
+            },
+            "request_admitted": True,
+            "provider_completed": False,
+            "receipt_sequence": 0,
+        }
+        telemetry.write_text(
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+            encoding="utf-8",
+        )

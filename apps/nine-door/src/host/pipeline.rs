@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Enforce Secure9P batching, queue depth, and short-write retry policy.
 // Author: Lukas Bower
@@ -10,6 +10,7 @@ use std::thread;
 use std::time::Duration;
 
 use secure9p_core::{SessionLimits, ShortWritePolicy};
+use secure9p_transport::{PartialWrite, TransportError, WriteProgress, WriteRetryPolicy};
 
 /// Configuration used by the Secure9P pipeline.
 #[derive(Debug, Clone, Copy)]
@@ -108,26 +109,45 @@ impl Pipeline {
     }
 
     fn write_with_policy(&mut self, writer: &mut impl Write, buffer: &[u8]) -> io::Result<()> {
-        let mut offset = 0;
-        let mut attempts = 0u8;
-        while offset < buffer.len() {
-            let written = writer.write(&buffer[offset..])?;
-            if written == 0 || written < buffer.len() - offset {
-                self.metrics.short_writes += 1;
-                let Some(delay_ms) = self.config.short_write_policy.retry_delay_ms(attempts) else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "short write policy exhausted",
-                    ));
-                };
-                self.metrics.short_write_retries += 1;
-                attempts = attempts.saturating_add(1);
-                if delay_ms > 0 {
-                    thread::sleep(Duration::from_millis(delay_ms));
+        if buffer.is_empty() {
+            return Ok(());
+        }
+        let policy = match self.config.short_write_policy {
+            ShortWritePolicy::Reject => WriteRetryPolicy::Reject,
+            ShortWritePolicy::Retry => WriteRetryPolicy::Retry,
+        };
+        let mut progress =
+            PartialWrite::new(buffer.len(), policy).map_err(transport_write_error)?;
+        loop {
+            let written = writer.write(&buffer[progress.offset()..])?;
+            let short_writes_before = progress.short_writes();
+            let retries_before = progress.retries();
+            let step = progress.advance(written).map_err(transport_write_error);
+            self.metrics.short_writes = self
+                .metrics
+                .short_writes
+                .saturating_add(progress.short_writes().saturating_sub(short_writes_before));
+            self.metrics.short_write_retries = self
+                .metrics
+                .short_write_retries
+                .saturating_add(progress.retries().saturating_sub(retries_before));
+            match step? {
+                WriteProgress::Complete => return Ok(()),
+                WriteProgress::Continue => {}
+                WriteProgress::RetryAfter { delay_ms } => {
+                    if delay_ms > 0 {
+                        thread::sleep(Duration::from_millis(delay_ms));
+                    }
                 }
             }
-            offset = offset.saturating_add(written);
         }
-        Ok(())
     }
+}
+
+fn transport_write_error(error: TransportError) -> io::Error {
+    let kind = match error {
+        TransportError::ShortWriteExhausted => io::ErrorKind::WriteZero,
+        _ => io::ErrorKind::InvalidInput,
+    };
+    io::Error::new(kind, error.to_string())
 }

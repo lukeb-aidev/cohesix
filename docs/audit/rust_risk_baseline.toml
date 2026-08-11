@@ -3,32 +3,35 @@
 # Copyright 2026 Lukas Bower
 
 [non_test]
-unsafe = 691
+unsafe = 795
 unwrap = 38
-expect = 240
-panic = 96
+expect = 243
+panic = 102
 
 [linked_runtime_hal]
-unsafe = 144
+unsafe = 160
 unwrap = 0
 expect = 2
 panic = 0
 
 [outside_linked_runtime_hal]
-unsafe = 547
+unsafe = 635
 unwrap = 38
-expect = 238
-panic = 96
+expect = 241
+panic = 102
 
 [metadata]
-scanner = "rust-risk-audit/v4"
+scanner = "rust-risk-audit/v5"
 source_scope = "repository-authored Rust under apps/, crates/, and tools/; package integration tests and the tests-only workspace package excluded; exact hash-pinned OUT_DIR generators, Cargo build scripts, build-script inputs and shared helper tooling, rustc wrapper, and external non-Rust trees contracted separately"
 historical_baseline_commit = "cf8f9ee30"
 historical_unsafe = 693
 historical_unwrap = 38
 historical_expect = 240
 historical_panic = 96
-accepted_unsafe_delta = 0
+accepted_unsafe_delta = 104
+accepted_unwrap_delta = 0
+accepted_expect_delta = 3
+accepted_panic_delta = 6
 linked_runtime_hal_historical_unsafe = 146
 linked_runtime_hal_historical_unwrap = 0
 linked_runtime_hal_historical_expect = 2
@@ -47,13 +50,16 @@ external_non_rust_trees = ["crates/sel4-sys/upstream"]
 out_dir_generator_contracts = [
   "crates/sel4-sys/src/lib.rs:bindings.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
   "crates/sel4-sys/src/lib.rs:sel4_config_consts.rs:crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
-  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
-  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/lib.rs:built_info.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/pi4_wifi.rs:pi4_wifi_firmware.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/driver_task.rs:pi4_driver_runtime_payload.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/console_network_service.rs:console_network_image_identity.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/ninedoor_service.rs:ninedoor_image_identity.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/src/hal/worker_image.rs:worker_image_identity.rs:apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
 ]
 build_script_contracts = [
   "apps/pi4-driver-runtime/build.rs:f424066cecefb6ec3c2a974f47bde52785451b77d48ab0dd31fefc46ac8afec9:aa98e6fd87c6a6a72ccc01ff5332d068dc42cb30e6d95c0147ed27d7180a7975",
-  "apps/root-task/build.rs:f88e2bbbe5a618a41d9719dfc599d26c5be1262205c805e9a06ef06efbcd94be:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
+  "apps/root-task/build.rs:a5d032073d9c1671cc17344076c21c4065f534fad6f38eb74f5b3611bc992112:1f84446ecca892a1f879fadb5f682ac073bfb302f617380cd37b831062488521",
   "apps/swarmui/build.rs:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a:63a93c0d7a560f4f9b4f76bf6a535f74cf0a3e811cce37779370e45346ef5d9a",
   "crates/sel4-sys/build.rs:26eb919d45b0a47cc73c6883b9ccf06be4f4d29b3f7f16c96db04e835a708e43:3e92c6248fd14a2bedd425108e6b31a4b41798ebc311df14c7afebeedf642b20",
 ]

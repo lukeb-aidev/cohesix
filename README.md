@@ -201,7 +201,7 @@ SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
     --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
     --out-dir out/cohesix \
     --profile release \
-    --root-task-features cohesix-dev \
+    --root-task-features release-qemu,bootstrap-trace \
     --cargo-target aarch64-unknown-none \
     --transport tcp
 ```

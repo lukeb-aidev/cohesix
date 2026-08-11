@@ -1323,14 +1323,27 @@ pub extern "C" fn driver_task_entry(task_key: usize) -> ! {
     }
     loop {
         let mut badge: sel4_sys::seL4_Word = 0;
+        #[cfg(not(sel4_config_kernel_mcs))]
         let _ = crate::sel4::recv(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge);
+        #[cfg(sel4_config_kernel_mcs)]
+        let _ = crate::sel4::recv_with_reply(
+            DRIVER_TASK_CHILD_COMMAND_SLOT,
+            &mut badge,
+            pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
+        );
         let _ = badge;
         let result = service_pending_driver_task_command(task_key);
         // The command was delivered by `seL4_Call`; the kernel installed a
         // reply capability for this TCB, and the single reply word mirrors the
         // already-published completion slot result.
         crate::sel4::set_message_register(0, result as sel4_sys::seL4_Word);
+        #[cfg(not(sel4_config_kernel_mcs))]
         crate::sel4::reply(sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1));
+        #[cfg(sel4_config_kernel_mcs)]
+        crate::sel4::reply_to(
+            pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
         DRIVER_TASK_ENTRY_HEARTBEATS.fetch_add(1, Ordering::AcqRel);
     }
 }
@@ -1433,22 +1446,46 @@ core::arch::global_asm!(
     .global cohesix_driver_task_isolated_entry
     .type cohesix_driver_task_isolated_entry, %function
 cohesix_driver_task_isolated_entry:
+    mov x20, x0
 1:
-    wfe
+    mov x0, {child_command_slot}
+    mov x6, {command_reply_slot}
+    ldr x7, ={sys_recv}
+    svc #0
+
+    ldr x9, ={ring_vaddr}
+    ldr w10, [x9]
+    mov w12, {completion_code}
+    mov w23, w20
+    add x11, x9, {completion_offset}
+    str w10, [x11]
+    strh w12, [x11, #4]
+    strh wzr, [x11, #6]
+    str w23, [x11, #8]
+    str xzr, [x11, #12]
+
+    mov x0, {command_reply_slot}
+    mov x1, #1
+    mov w2, w23
+    ldr x7, ={sys_send}
+    svc #0
     b 1b
     .size cohesix_driver_task_isolated_entry, . - cohesix_driver_task_isolated_entry
     "#,
+    child_command_slot = const DRIVER_TASK_CHILD_COMMAND_SLOT,
+    command_reply_slot = const pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT,
+    completion_code = const DriverTaskCompletionCode::Progress as u16,
+    completion_offset = const DRIVER_TASK_RING_COMPLETION_OFFSET,
+    ring_vaddr = const DRIVER_TASK_RING_VADDR,
+    sys_recv = const sel4_sys::seL4_SysRecv,
+    sys_send = const sel4_sys::seL4_SysSend,
 );
 
 /// Whether the driver-local trampoline can complete the ring smoke ABI.
 #[cfg(feature = "kernel")]
 #[must_use]
 pub const fn isolated_trampoline_supported() -> bool {
-    cfg!(all(
-        target_arch = "aarch64",
-        target_os = "none",
-        not(sel4_config_kernel_mcs)
-    ))
+    cfg!(all(target_arch = "aarch64", target_os = "none"))
 }
 
 /// Returns the entry PC for the driver-local isolated trampoline.
@@ -2304,6 +2341,276 @@ pub fn pi4_driver_task_runtime_image_spec_for_contract(
     pi4_driver_task_runtime_image_specs()
         .into_iter()
         .find(|spec| spec.hot_path.contract() == contract)
+}
+
+/// Return the compiler-owned active MCS record for one linked runtime.
+#[must_use]
+pub fn driver_task_temporal_config(
+    hot_path: DriverTaskHotPath,
+) -> Option<crate::generated::TemporalTaskConfig> {
+    let id = match hot_path {
+        DriverTaskHotPath::SerialConsole => "driver-serial",
+        DriverTaskHotPath::UsbKeyboard => "driver-usb",
+        DriverTaskHotPath::HdmiText => "driver-hdmi",
+        DriverTaskHotPath::GenetNic => "driver-genet",
+        DriverTaskHotPath::Cyw43Wifi => "driver-cyw43",
+        DriverTaskHotPath::SdioHost => "driver-sdio",
+        DriverTaskHotPath::PcieRoot => "driver-pcie",
+    };
+    crate::generated::temporal_tasks()
+        .iter()
+        .copied()
+        .find(|task| {
+            task.id == id
+                && task.kind == crate::generated::TemporalTaskKind::Driver
+                && task.execution == crate::generated::TemporalExecution::Active
+                && task.scheduling_context_slot != 0
+                && task.budget_us != 0
+                && task.period_us != 0
+                && task.consumed_time_evidence
+                && task.locality_bound
+        })
+}
+
+/// Supervisor phase for one active-SC driver's synchronous command lane.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverFaultedCallPhase {
+    /// The current runtime generation accepts one new synchronous command.
+    Ready,
+    /// One root Call is associated with the runtime's command Reply object.
+    CallAssociated,
+    /// Root-fault published the independent fault record and closed admission.
+    FaultPublished,
+    /// Driver supervisor answered the blocked caller, when one existed.
+    FailureReplied,
+    /// The driver TCB is suspended and cannot create another association.
+    Suspended,
+    /// Command and fault Reply associations are both proven clear.
+    AssociationsClear,
+    /// Every capability derived from the old runtime generation was revoked.
+    Revoked,
+}
+
+/// Typed transition error for driver faulted-Call recovery.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverFaultedCallError {
+    /// The operation is not legal in the current recovery phase.
+    InvalidPhase,
+    /// A zero or stale command sequence was supplied.
+    SequenceMismatch,
+    /// Reconstruction did not advance the runtime generation.
+    GenerationNotAdvanced,
+}
+
+/// Supervisor action produced while answering a faulted synchronous command.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverFaultedCallReply {
+    /// The driver faulted before/after a Call and no root caller was blocked.
+    NoBlockedCaller,
+    /// Invoke the retained command Reply object exactly once with this result.
+    TypedFailure { sequence: u32, result: u32 },
+}
+
+/// Pointer-free model of the sole driver-supervisor recovery transaction.
+///
+/// Kernel actions follow these transitions in order: close admission, answer
+/// the command Reply object if associated, suspend the TCB to clear the
+/// independent fault Reply association, verify both associations, revoke the
+/// old generation, then reconstruct. The model is intentionally independent
+/// of CYW43/SDIO device recovery and therefore cannot alter device state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DriverFaultedCallRecovery {
+    generation: u32,
+    phase: DriverFaultedCallPhase,
+    sequence: u32,
+    command_reply_associated: bool,
+    fault_reply_associated: bool,
+    admission_open: bool,
+    normal_reply_count: u8,
+    failure_reply_count: u8,
+    old_generation_authority: bool,
+}
+
+impl DriverFaultedCallRecovery {
+    /// Start one constructed runtime generation with open command admission.
+    #[must_use]
+    pub const fn new(generation: u32) -> Self {
+        Self {
+            generation,
+            phase: DriverFaultedCallPhase::Ready,
+            sequence: 0,
+            command_reply_associated: false,
+            fault_reply_associated: false,
+            admission_open: generation != 0,
+            normal_reply_count: 0,
+            failure_reply_count: 0,
+            old_generation_authority: generation != 0,
+        }
+    }
+
+    /// Current recovery phase.
+    #[must_use]
+    pub const fn phase(self) -> DriverFaultedCallPhase {
+        self.phase
+    }
+
+    /// Current runtime generation.
+    #[must_use]
+    pub const fn generation(self) -> u32 {
+        self.generation
+    }
+
+    /// Whether a fresh synchronous command may be admitted.
+    #[must_use]
+    pub const fn admission_open(self) -> bool {
+        self.admission_open
+    }
+
+    /// Whether either independent Reply association remains live.
+    #[must_use]
+    pub const fn associations_live(self) -> bool {
+        self.command_reply_associated || self.fault_reply_associated
+    }
+
+    /// Cumulative normal/failure replies in this model instance.
+    #[must_use]
+    pub const fn reply_counts(self) -> (u8, u8) {
+        (self.normal_reply_count, self.failure_reply_count)
+    }
+
+    /// Admit the sole synchronous Call for this runtime.
+    pub fn admit_call(&mut self, sequence: u32) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::Ready
+            || !self.admission_open
+            || self.command_reply_associated
+        {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        if sequence == 0 {
+            return Err(DriverFaultedCallError::SequenceMismatch);
+        }
+        self.sequence = sequence;
+        self.command_reply_associated = true;
+        self.phase = DriverFaultedCallPhase::CallAssociated;
+        Ok(())
+    }
+
+    /// Finish a non-faulted Call with exactly one normal reply.
+    pub fn reply_normal(&mut self, sequence: u32) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::CallAssociated || !self.command_reply_associated {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        if sequence == 0 || sequence != self.sequence {
+            return Err(DriverFaultedCallError::SequenceMismatch);
+        }
+        self.command_reply_associated = false;
+        self.sequence = 0;
+        self.normal_reply_count = self.normal_reply_count.saturating_add(1);
+        self.phase = DriverFaultedCallPhase::Ready;
+        Ok(())
+    }
+
+    /// Record caller cancellation after the kernel cleared the command Reply association.
+    pub fn cancel_call(&mut self, sequence: u32) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::CallAssociated {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        if sequence == 0 || sequence != self.sequence {
+            return Err(DriverFaultedCallError::SequenceMismatch);
+        }
+        self.command_reply_associated = false;
+        self.sequence = 0;
+        self.phase = DriverFaultedCallPhase::Ready;
+        Ok(())
+    }
+
+    /// Close admission when root-fault publishes a standard or timeout fault.
+    ///
+    /// `sequence == 0` represents a fault before/after a synchronous Call.
+    pub fn publish_fault(&mut self, sequence: u32) -> Result<(), DriverFaultedCallError> {
+        if self.phase == DriverFaultedCallPhase::CallAssociated {
+            if sequence == 0 || sequence != self.sequence {
+                return Err(DriverFaultedCallError::SequenceMismatch);
+            }
+        } else if self.phase == DriverFaultedCallPhase::Ready {
+            if sequence != 0 || self.command_reply_associated {
+                return Err(DriverFaultedCallError::SequenceMismatch);
+            }
+        } else {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        self.admission_open = false;
+        self.fault_reply_associated = true;
+        self.phase = DriverFaultedCallPhase::FaultPublished;
+        Ok(())
+    }
+
+    /// Select the exact command-Reply action and clear that association once.
+    pub fn reply_typed_failure(
+        &mut self,
+    ) -> Result<DriverFaultedCallReply, DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::FaultPublished {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        let reply = if self.command_reply_associated {
+            self.command_reply_associated = false;
+            self.failure_reply_count = self.failure_reply_count.saturating_add(1);
+            DriverFaultedCallReply::TypedFailure {
+                sequence: self.sequence,
+                result: pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT,
+            }
+        } else {
+            DriverFaultedCallReply::NoBlockedCaller
+        };
+        self.sequence = 0;
+        self.phase = DriverFaultedCallPhase::FailureReplied;
+        Ok(reply)
+    }
+
+    /// Record the TCB suspension that clears the independent fault association.
+    pub fn suspend_faulted_tcb(&mut self) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::FailureReplied || self.command_reply_associated {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        self.fault_reply_associated = false;
+        self.phase = DriverFaultedCallPhase::Suspended;
+        Ok(())
+    }
+
+    /// Verify both Reply objects are unassociated before revocation.
+    pub fn verify_associations_clear(&mut self) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::Suspended || self.associations_live() {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        self.phase = DriverFaultedCallPhase::AssociationsClear;
+        Ok(())
+    }
+
+    /// Record revocation of every old-generation derived capability.
+    pub fn revoke_generation(&mut self) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::AssociationsClear || !self.old_generation_authority
+        {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        self.old_generation_authority = false;
+        self.phase = DriverFaultedCallPhase::Revoked;
+        Ok(())
+    }
+
+    /// Open a strictly newer reconstructed generation after revocation.
+    pub fn reconstruct(&mut self, generation: u32) -> Result<(), DriverFaultedCallError> {
+        if self.phase != DriverFaultedCallPhase::Revoked {
+            return Err(DriverFaultedCallError::InvalidPhase);
+        }
+        if generation == 0 || generation <= self.generation {
+            return Err(DriverFaultedCallError::GenerationNotAdvanced);
+        }
+        self.generation = generation;
+        self.phase = DriverFaultedCallPhase::Ready;
+        self.admission_open = true;
+        self.old_generation_authority = true;
+        Ok(())
+    }
 }
 
 /// Small dedicated CSpace radix for bootstrap driver tasks.
@@ -4137,6 +4444,18 @@ fn driver_task_ring_read_usb_oldgood_receipt(
 #[cfg(feature = "kernel")]
 struct DriverTaskCommandSlot {
     tcb: AtomicUsize,
+    mcs_command_endpoint_origin: AtomicUsize,
+    mcs_command_reply: AtomicUsize,
+    mcs_completion_notification_origin: AtomicUsize,
+    mcs_sched_context: AtomicUsize,
+    mcs_standard_fault_endpoint: AtomicUsize,
+    mcs_timeout_fault_endpoint: AtomicUsize,
+    mcs_cap_generation: AtomicU32,
+    mcs_call_sequence: AtomicU32,
+    mcs_call_phase: AtomicU32,
+    mcs_command_admission_open: AtomicU32,
+    mcs_normal_replies: AtomicU32,
+    mcs_failure_replies: AtomicU32,
     restart_entry: AtomicUsize,
     restart_stack_top: AtomicUsize,
     restart_task_key: AtomicUsize,
@@ -4794,6 +5113,18 @@ impl DriverTaskCommandSlot {
     const fn new() -> Self {
         Self {
             tcb: AtomicUsize::new(0),
+            mcs_command_endpoint_origin: AtomicUsize::new(0),
+            mcs_command_reply: AtomicUsize::new(0),
+            mcs_completion_notification_origin: AtomicUsize::new(0),
+            mcs_sched_context: AtomicUsize::new(0),
+            mcs_standard_fault_endpoint: AtomicUsize::new(0),
+            mcs_timeout_fault_endpoint: AtomicUsize::new(0),
+            mcs_cap_generation: AtomicU32::new(0),
+            mcs_call_sequence: AtomicU32::new(0),
+            mcs_call_phase: AtomicU32::new(0),
+            mcs_command_admission_open: AtomicU32::new(0),
+            mcs_normal_replies: AtomicU32::new(0),
+            mcs_failure_replies: AtomicU32::new(0),
             restart_entry: AtomicUsize::new(0),
             restart_stack_top: AtomicUsize::new(0),
             restart_task_key: AtomicUsize::new(0),
@@ -7849,6 +8180,284 @@ pub fn publish_driver_task_scheduler(
     reset_driver_task_steady_priority_for_bootstrap(slot);
 }
 
+const DRIVER_TASK_MCS_CALL_IDLE: u32 = 0;
+const DRIVER_TASK_MCS_CALL_ASSOCIATED: u32 = 1;
+const DRIVER_TASK_MCS_CALL_FAULT_PUBLISHED: u32 = 2;
+const DRIVER_TASK_MCS_CALL_FAILURE_REPLIED: u32 = 3;
+const DRIVER_TASK_MCS_CALL_SUSPENDED: u32 = 4;
+const DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR: u32 = 5;
+const DRIVER_TASK_MCS_CALL_REVOKED: u32 = 6;
+
+/// Publish the root-driver-supervisor's retained MCS containment authority.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the arguments mirror the fixed per-runtime MCS capability inventory"
+)]
+pub fn publish_driver_task_mcs_kernel_objects(
+    contract: DriverTaskContract,
+    command_endpoint_origin: usize,
+    command_reply: usize,
+    completion_notification_origin: usize,
+    sched_context: usize,
+    standard_fault_endpoint: usize,
+    timeout_fault_endpoint: usize,
+) -> bool {
+    if command_endpoint_origin == 0
+        || command_reply == 0
+        || completion_notification_origin == 0
+        || sched_context == 0
+        || standard_fault_endpoint == 0
+        || timeout_fault_endpoint == 0
+    {
+        return false;
+    }
+    let Some(slot) = driver_task_slot_for_contract(contract) else {
+        return false;
+    };
+    let generation = slot
+        .mcs_cap_generation
+        .load(Ordering::Acquire)
+        .wrapping_add(1)
+        .max(1);
+    slot.mcs_command_endpoint_origin
+        .store(command_endpoint_origin, Ordering::Relaxed);
+    slot.mcs_command_reply
+        .store(command_reply, Ordering::Relaxed);
+    slot.mcs_completion_notification_origin
+        .store(completion_notification_origin, Ordering::Relaxed);
+    slot.mcs_sched_context
+        .store(sched_context, Ordering::Relaxed);
+    slot.mcs_standard_fault_endpoint
+        .store(standard_fault_endpoint, Ordering::Relaxed);
+    slot.mcs_timeout_fault_endpoint
+        .store(timeout_fault_endpoint, Ordering::Relaxed);
+    slot.mcs_call_sequence.store(0, Ordering::Relaxed);
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_IDLE, Ordering::Relaxed);
+    slot.mcs_command_admission_open.store(1, Ordering::Relaxed);
+    slot.mcs_cap_generation.store(generation, Ordering::Release);
+    true
+}
+
+/// Return the retained capability generation for one published MCS runtime.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn driver_task_mcs_cap_generation(contract: DriverTaskContract) -> Option<u32> {
+    let generation = driver_task_slot_for_contract(contract)?
+        .mcs_cap_generation
+        .load(Ordering::Acquire);
+    (generation != 0).then_some(generation)
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn begin_driver_task_mcs_call(slot: &DriverTaskCommandSlot, sequence: u32) -> bool {
+    sequence != 0
+        && slot.mcs_command_admission_open.load(Ordering::Acquire) != 0
+        && slot
+            .mcs_call_phase
+            .compare_exchange(
+                DRIVER_TASK_MCS_CALL_IDLE,
+                DRIVER_TASK_MCS_CALL_ASSOCIATED,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+        && {
+            slot.mcs_call_sequence.store(sequence, Ordering::Release);
+            true
+        }
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn finish_driver_task_mcs_normal_reply(slot: &DriverTaskCommandSlot, sequence: u32) -> bool {
+    if slot.mcs_call_sequence.load(Ordering::Acquire) != sequence {
+        return false;
+    }
+    if slot
+        .mcs_call_phase
+        .compare_exchange(
+            DRIVER_TASK_MCS_CALL_ASSOCIATED,
+            DRIVER_TASK_MCS_CALL_IDLE,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_err()
+    {
+        return false;
+    }
+    slot.mcs_call_sequence.store(0, Ordering::Release);
+    slot.mcs_normal_replies.fetch_add(1, Ordering::AcqRel);
+    true
+}
+
+/// Driver-supervisor containment failure.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DriverSupervisorContainmentError {
+    UnsupportedScheduler,
+    UnknownRuntimeSlot,
+    IdentityMismatch,
+    FaultBadgeMismatch,
+    DuplicateOrOutOfOrder,
+    MissingAuthority,
+    Kernel(sel4_sys::seL4_Error),
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn driver_contract_for_runtime_slot(runtime_slot: u16) -> Option<DriverTaskContract> {
+    match runtime_slot {
+        0 => Some(SERIAL_DRIVER_TASK_CONTRACT),
+        1 => Some(USB_LOCAL_SEAT_DRIVER_TASK_CONTRACT),
+        2 => Some(HDMI_TEXT_DRIVER_TASK_CONTRACT),
+        3 => Some(GENET_DRIVER_TASK_CONTRACT),
+        4 => Some(CYW43_WIFI_DRIVER_TASK_CONTRACT),
+        5 => Some(SDIO_HOST_DRIVER_TASK_CONTRACT),
+        6 => Some(PCIE_ROOT_DRIVER_TASK_CONTRACT),
+        _ => None,
+    }
+}
+
+/// Return the exact generated fault-registry slot for one linked runtime.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn driver_runtime_registry_slot(contract: DriverTaskContract) -> Option<u16> {
+    (0..crate::critical_tcb::DRIVER_FAULT_RECORD_CAPACITY as u16)
+        .find(|slot| driver_contract_for_runtime_slot(*slot) == Some(contract))
+}
+
+/// Contain one durable root-fault handoff on the independent driver supervisor.
+///
+/// This hook is bounded and nonblocking: it closes admission, answers at most
+/// one associated command caller, suspends the driver to clear its independent
+/// fault association, unbinds the active SC, then revokes every derived
+/// per-generation command/completion capability. Reconstruction is a later
+/// supervisor turn and cannot overlap this old generation.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn root_driver_supervisor_contain_fault(
+    record: crate::critical_tcb::FaultHandoffRecord,
+) -> Result<(), DriverSupervisorContainmentError> {
+    let contract = driver_contract_for_runtime_slot(record.identity.slot)
+        .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
+    let slot = driver_task_slot_for_contract(contract)
+        .ok_or(DriverSupervisorContainmentError::UnknownRuntimeSlot)?;
+    let tcb = slot.tcb.load(Ordering::Acquire);
+    if tcb == 0
+        || record.tcb_cap != tcb
+        || record.identity.cap_generation != slot.mcs_cap_generation.load(Ordering::Acquire)
+    {
+        return Err(DriverSupervisorContainmentError::IdentityMismatch);
+    }
+    let expected_badge = match record.fault_class {
+        crate::critical_tcb::FaultClass::Standard => {
+            let spec = pi4_driver_task_runtime_image_spec_for_contract(contract)
+                .ok_or(DriverSupervisorContainmentError::IdentityMismatch)?;
+            let temporal = driver_task_temporal_config(spec.hot_path)
+                .ok_or(DriverSupervisorContainmentError::IdentityMismatch)?;
+            crate::hal::critical_tcb::temporal_fault_badges(temporal.id)
+                .map(|badges| badges.0)
+                .ok_or(DriverSupervisorContainmentError::IdentityMismatch)?
+        }
+        crate::critical_tcb::FaultClass::Timeout => {
+            let spec = pi4_driver_task_runtime_image_spec_for_contract(contract)
+                .ok_or(DriverSupervisorContainmentError::IdentityMismatch)?;
+            driver_task_temporal_config(spec.hot_path)
+                .ok_or(DriverSupervisorContainmentError::IdentityMismatch)?
+                .timeout_badge
+        }
+    };
+    if record.fault_badge != expected_badge {
+        return Err(DriverSupervisorContainmentError::FaultBadgeMismatch);
+    }
+    slot.mcs_command_admission_open.store(0, Ordering::Release);
+    let prior = slot.mcs_call_phase.load(Ordering::Acquire);
+    if prior != DRIVER_TASK_MCS_CALL_IDLE && prior != DRIVER_TASK_MCS_CALL_ASSOCIATED {
+        return Err(DriverSupervisorContainmentError::DuplicateOrOutOfOrder);
+    }
+    slot.mcs_call_phase
+        .compare_exchange(
+            prior,
+            DRIVER_TASK_MCS_CALL_FAULT_PUBLISHED,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .map_err(|_| DriverSupervisorContainmentError::DuplicateOrOutOfOrder)?;
+
+    if prior == DRIVER_TASK_MCS_CALL_ASSOCIATED {
+        let reply = slot.mcs_command_reply.load(Ordering::Acquire);
+        if reply == 0 || slot.mcs_call_sequence.load(Ordering::Acquire) == 0 {
+            return Err(DriverSupervisorContainmentError::MissingAuthority);
+        }
+        crate::sel4::set_message_register(
+            0,
+            pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word,
+        );
+        crate::sel4::reply_to(
+            reply as sel4_sys::seL4_CPtr,
+            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+        );
+        slot.mcs_failure_replies.fetch_add(1, Ordering::AcqRel);
+    }
+    slot.mcs_call_sequence.store(0, Ordering::Release);
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_FAILURE_REPLIED, Ordering::Release);
+
+    crate::sel4::suspend_tcb(tcb as sel4_sys::seL4_CPtr)
+        .map_err(DriverSupervisorContainmentError::Kernel)?;
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_SUSPENDED, Ordering::Release);
+    let sched_context = slot.mcs_sched_context.load(Ordering::Acquire);
+    if sched_context == 0 {
+        return Err(DriverSupervisorContainmentError::MissingAuthority);
+    }
+    crate::sel4::unbind_sched_context_object(
+        sched_context as sel4_sys::seL4_CPtr,
+        tcb as sel4_sys::seL4_CPtr,
+    )
+    .map_err(DriverSupervisorContainmentError::Kernel)?;
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_ASSOCIATIONS_CLEAR, Ordering::Release);
+
+    let root_cnode = sel4_sys::seL4_CapInitThreadCNode;
+    let root_depth = crate::sel4::word_bits() as u8;
+    for cap in [
+        slot.mcs_command_endpoint_origin.load(Ordering::Acquire),
+        slot.mcs_command_reply.load(Ordering::Acquire),
+        slot.mcs_completion_notification_origin
+            .load(Ordering::Acquire),
+    ] {
+        if cap == 0 {
+            return Err(DriverSupervisorContainmentError::MissingAuthority);
+        }
+        let error = crate::sel4::cnode_revoke(root_cnode, cap as sel4_sys::seL4_CPtr, root_depth);
+        if error != sel4_sys::seL4_NoError {
+            return Err(DriverSupervisorContainmentError::Kernel(error));
+        }
+    }
+    for cap in [
+        slot.mcs_standard_fault_endpoint.load(Ordering::Acquire),
+        slot.mcs_timeout_fault_endpoint.load(Ordering::Acquire),
+    ] {
+        if cap == 0 {
+            return Err(DriverSupervisorContainmentError::MissingAuthority);
+        }
+        let error = crate::sel4::cnode_delete(root_cnode, cap as sel4_sys::seL4_CPtr, root_depth);
+        if error != sel4_sys::seL4_NoError {
+            return Err(DriverSupervisorContainmentError::Kernel(error));
+        }
+    }
+    slot.endpoint.store(0, Ordering::Release);
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_REVOKED, Ordering::Release);
+    Ok(())
+}
+
+/// Classic kernels cannot consume the MCS driver-supervisor hook.
+#[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
+pub fn root_driver_supervisor_contain_fault(
+    _record: crate::critical_tcb::FaultHandoffRecord,
+) -> Result<(), DriverSupervisorContainmentError> {
+    Err(DriverSupervisorContainmentError::UnsupportedScheduler)
+}
+
 /// Retain the manifest-derived context required for a fenced CYW43/SDIO pair restart.
 ///
 /// The endpoint cap is recovery-only: normal SDIO handoff still removes root's
@@ -7952,6 +8561,9 @@ pub fn transition_deferred_cyw43_pair_to_bootstrap_priority(contract: DriverTask
         return false;
     }
     let priority = driver_task_bootstrap_priority(contract);
+    #[cfg(sel4_config_kernel_mcs)]
+    let _ = priority;
+    #[cfg(not(sel4_config_kernel_mcs))]
     if crate::sel4::set_tcb_sched_params(
         tcb as sel4_sys::seL4_CPtr,
         sel4_sys::seL4_CapInitThreadTCB,
@@ -7999,6 +8611,8 @@ pub fn complete_deferred_cyw43_pair_priority_cutover(contract: DriverTaskContrac
     let Ok(steady_priority) = u8::try_from(steady_priority) else {
         return false;
     };
+    #[cfg(sel4_config_kernel_mcs)]
+    let _ = steady_priority;
     if !claim_driver_task_steady_priority_cutover(slot) {
         return false;
     }
@@ -8010,6 +8624,7 @@ pub fn complete_deferred_cyw43_pair_priority_cutover(contract: DriverTaskContrac
         let _ = resolve_driver_task_steady_priority_cutover(slot, false);
         return false;
     }
+    #[cfg(not(sel4_config_kernel_mcs))]
     if crate::sel4::set_tcb_sched_params(
         tcb as sel4_sys::seL4_CPtr,
         sel4_sys::seL4_CapInitThreadTCB,
@@ -9453,6 +10068,17 @@ pub fn clear_driver_task_transport(contract: DriverTaskContract) {
     slot.root_wake_badge.store(0, Ordering::Release);
     slot.root_wake_polls.store(0, Ordering::Release);
     slot.root_wake_hits.store(0, Ordering::Release);
+    slot.mcs_command_admission_open.store(0, Ordering::Release);
+    slot.mcs_call_sequence.store(0, Ordering::Release);
+    slot.mcs_call_phase
+        .store(DRIVER_TASK_MCS_CALL_REVOKED, Ordering::Release);
+    slot.mcs_command_endpoint_origin.store(0, Ordering::Release);
+    slot.mcs_command_reply.store(0, Ordering::Release);
+    slot.mcs_completion_notification_origin
+        .store(0, Ordering::Release);
+    slot.mcs_sched_context.store(0, Ordering::Release);
+    slot.mcs_standard_fault_endpoint.store(0, Ordering::Release);
+    slot.mcs_timeout_fault_endpoint.store(0, Ordering::Release);
     #[cfg(test)]
     TEST_CYW43_ROOT_WAKE_BADGE.store(0, Ordering::Release);
     slot.ring_root_ptr.store(0, Ordering::Release);
@@ -9505,25 +10131,37 @@ struct DriverTaskPriorityRestore {
 #[cfg(feature = "kernel")]
 impl Drop for DriverTaskPriorityRestore {
     fn drop(&mut self) {
-        let tcb = self.tcb as sel4_sys::seL4_CPtr;
-        let priority = self.steady_priority;
-        let sched = crate::sel4::set_tcb_sched_params(
-            tcb,
-            sel4_sys::seL4_CapInitThreadTCB,
-            priority,
-            priority,
-        );
-        let prio = crate::sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority);
-        if sched.is_err() || prio.is_err() {
-            let mut line = heapless::String::<192>::new();
-            let _ = core::fmt::write(
+        #[cfg(sel4_config_kernel_mcs)]
+        {
+            // MCS driver priority and MCP are compiler-owned properties of the
+            // active-SC construction. Bounded service turns must not rewrite
+            // them as a compatibility substitute for temporal admission.
+            let _ = (self.contract, self.tcb, self.steady_priority);
+            return;
+        }
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let tcb = self.tcb as sel4_sys::seL4_CPtr;
+            let priority = self.steady_priority;
+            let sched = crate::sel4::set_tcb_sched_params(
+                tcb,
+                sel4_sys::seL4_CapInitThreadTCB,
+                priority,
+                priority,
+            );
+            let prio =
+                crate::sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, priority);
+            if sched.is_err() || prio.is_err() {
+                let mut line = heapless::String::<192>::new();
+                let _ = core::fmt::write(
                 &mut line,
                 format_args!(
                     "DRIVER_TASK_PRIORITY_RESTORE contract={} tcb=0x{:04x} priority={} status=failed",
                     self.contract.name, self.tcb, priority,
                 ),
             );
-            crate::bootstrap::log::force_uart_line_raw(line.as_str());
+                crate::bootstrap::log::force_uart_line_raw(line.as_str());
+            }
         }
     }
 }
@@ -9532,42 +10170,51 @@ impl Drop for DriverTaskPriorityRestore {
 fn boost_driver_task_priority_for_bounded_turn(
     contract: DriverTaskContract,
 ) -> Option<DriverTaskPriorityRestore> {
-    if !physical_pi_driver_task_only_owner_state_active() {
-        return None;
-    }
-    let task_key = driver_task_contract_key(contract)?;
-    let slot = slot_for_task_key(task_key)?;
-    let tcb = slot.tcb.load(Ordering::Acquire);
-    let steady_priority = slot.steady_priority.load(Ordering::Acquire);
-    if tcb == 0 || steady_priority == 0 || !driver_task_steady_priority_is_active(slot) {
-        return None;
-    }
-    let steady_priority = steady_priority as u8;
-    let boost = PI4_BOUNDED_BOOTSTRAP_PRIORITY;
-    if steady_priority >= boost {
-        return None;
-    }
-    let tcb_cap = tcb as sel4_sys::seL4_CPtr;
-    if crate::sel4::set_tcb_sched_params(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost, boost)
-        .is_err()
-        || crate::sel4::set_tcb_priority(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost).is_err()
+    #[cfg(sel4_config_kernel_mcs)]
     {
-        let mut line = heapless::String::<192>::new();
-        let _ = core::fmt::write(
-            &mut line,
-            format_args!(
-                "DRIVER_TASK_PRIORITY_BOOST contract={} tcb=0x{:04x} priority={} status=failed",
-                contract.name, tcb, boost,
-            ),
-        );
-        crate::bootstrap::log::force_uart_line_raw(line.as_str());
+        let _ = contract;
         return None;
     }
-    Some(DriverTaskPriorityRestore {
-        contract,
-        tcb,
-        steady_priority,
-    })
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        if !physical_pi_driver_task_only_owner_state_active() {
+            return None;
+        }
+        let task_key = driver_task_contract_key(contract)?;
+        let slot = slot_for_task_key(task_key)?;
+        let tcb = slot.tcb.load(Ordering::Acquire);
+        let steady_priority = slot.steady_priority.load(Ordering::Acquire);
+        if tcb == 0 || steady_priority == 0 || !driver_task_steady_priority_is_active(slot) {
+            return None;
+        }
+        let steady_priority = steady_priority as u8;
+        let boost = PI4_BOUNDED_BOOTSTRAP_PRIORITY;
+        if steady_priority >= boost {
+            return None;
+        }
+        let tcb_cap = tcb as sel4_sys::seL4_CPtr;
+        if crate::sel4::set_tcb_sched_params(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost, boost)
+            .is_err()
+            || crate::sel4::set_tcb_priority(tcb_cap, sel4_sys::seL4_CapInitThreadTCB, boost)
+                .is_err()
+        {
+            let mut line = heapless::String::<192>::new();
+            let _ = core::fmt::write(
+                &mut line,
+                format_args!(
+                    "DRIVER_TASK_PRIORITY_BOOST contract={} tcb=0x{:04x} priority={} status=failed",
+                    contract.name, tcb, boost,
+                ),
+            );
+            crate::bootstrap::log::force_uart_line_raw(line.as_str());
+            return None;
+        }
+        Some(DriverTaskPriorityRestore {
+            contract,
+            tcb,
+            steady_priority,
+        })
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -10135,29 +10782,40 @@ fn set_driver_task_retained_priority(
         return false;
     }
     let tcb = slot.tcb.load(Ordering::Acquire);
-    let priority = if boost {
-        PI4_BOUNDED_BOOTSTRAP_PRIORITY
-    } else {
-        let Ok(priority) = u8::try_from(slot.steady_priority.load(Ordering::Acquire)) else {
-            return false;
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let _ = boost;
+        // Retain the immutable-operation lease and generated active-SC
+        // scheduling parameters. A nonzero published TCB is the construction
+        // proof; this path deliberately performs no classic scheduling call.
+        return tcb != 0;
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        let priority = if boost {
+            PI4_BOUNDED_BOOTSTRAP_PRIORITY
+        } else {
+            let Ok(priority) = u8::try_from(slot.steady_priority.load(Ordering::Acquire)) else {
+                return false;
+            };
+            if priority == 0 {
+                return false;
+            }
+            priority
         };
-        if priority == 0 {
+        if tcb == 0
+            || crate::sel4::set_tcb_sched_params(
+                tcb as sel4_sys::seL4_CPtr,
+                sel4_sys::seL4_CapInitThreadTCB,
+                priority,
+                priority,
+            )
+            .is_err()
+        {
             return false;
         }
-        priority
-    };
-    if tcb == 0
-        || crate::sel4::set_tcb_sched_params(
-            tcb as sel4_sys::seL4_CPtr,
-            sel4_sys::seL4_CapInitThreadTCB,
-            priority,
-            priority,
-        )
-        .is_err()
-    {
-        return false;
+        true
     }
-    true
 }
 
 #[cfg(feature = "kernel")]
@@ -19461,12 +20119,13 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
                 emit_driver_task_ring_call_progress(contract, request, command, mode, progress);
             }
         }
-    } else if physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs))
+    } else if cfg!(sel4_config_kernel_mcs)
+        || (physical_pi_driver_task_only_owner_state_active() && cfg!(not(sel4_config_kernel_mcs)))
     {
-        // A blocking call is required on physical Pi builds so lower-priority
-        // driver TCBs receive CPU without relying on cross-priority yield
-        // behavior; the linked runtime replies after publishing the primitive
-        // completion record.
+        // Synchronous MCS commands use Call -> Recv -> explicit Reply so the
+        // root caller blocks until either the active-SC runtime publishes its
+        // completion or the independent supervisor returns the typed fault
+        // result. Classic Pi keeps its existing blocking Call behavior.
         if trace_call {
             emit_driver_task_ring_call_begin(contract, endpoint, request, command);
         }
@@ -19477,15 +20136,46 @@ fn run_driver_task_ring_command_with_mode_and_staging_deadline(
         // immediately before the blocking call keeps diagnostic UART emission
         // out of the message-register contract.
         crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
-        let _ = crate::sel4::call_unchecked(
-            endpoint as sel4_sys::seL4_CPtr,
-            sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
-        );
-        cache_counter_batch.record_completion_invalidate(ring_root_ptr);
-        // SAFETY: The completion pointer addresses the same validated ring
-        // page; the reply boundary guarantees the isolated runtime had a chance
-        // to publish the shared-frame result.
-        completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+        #[cfg(sel4_config_kernel_mcs)]
+        let call_admitted = begin_driver_task_mcs_call(slot, request as u32);
+        #[cfg(not(sel4_config_kernel_mcs))]
+        let call_admitted = true;
+
+        if call_admitted {
+            let _ = crate::sel4::call_unchecked(
+                endpoint as sel4_sys::seL4_CPtr,
+                sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+            );
+            #[cfg(sel4_config_kernel_mcs)]
+            let call_completed_normally = crate::sel4::message_register(0)
+                != pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word
+                && finish_driver_task_mcs_normal_reply(slot, request as u32);
+            #[cfg(not(sel4_config_kernel_mcs))]
+            let call_completed_normally = true;
+
+            if call_completed_normally {
+                cache_counter_batch.record_completion_invalidate(ring_root_ptr);
+                // SAFETY: The completion pointer addresses the same validated
+                // ring page; the reply boundary guarantees the isolated
+                // runtime published the shared-frame result first.
+                completion = unsafe { core::ptr::read_volatile(completion_ptr) };
+            } else {
+                completion = DriverTaskCompletionRecord::fault(
+                    request as u32,
+                    DriverTaskFaultCode::DeviceUnavailable,
+                );
+                completion.result = pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT;
+            }
+        } else {
+            // Admission is closed before or during reconstruction. Return the
+            // same typed result as the fault supervisor without issuing an
+            // endpoint Call against old-generation authority.
+            completion = DriverTaskCompletionRecord::fault(
+                request as u32,
+                DriverTaskFaultCode::DeviceUnavailable,
+            );
+            completion.result = pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT;
+        }
         if driver_task_ring_completion_trace_enabled(trace_call, command, completion) {
             emit_driver_task_ring_call_return(contract, endpoint, request, completion);
         }
@@ -21159,6 +21849,11 @@ unsafe fn run_driver_task_service(
     slot.result.store(0, Ordering::Release);
     slot.request_seq.store(request, Ordering::Release);
 
+    #[cfg(sel4_config_kernel_mcs)]
+    if !begin_driver_task_mcs_call(slot, request as u32) {
+        slot.active.store(0, Ordering::Release);
+        return None;
+    }
     crate::sel4::set_message_register(0, request as sel4_sys::seL4_Word);
     // `endpoint` is the root-held command endpoint cap published by
     // `KernelHal::create_driver_task`; the call carries no caps and all service
@@ -21169,6 +21864,14 @@ unsafe fn run_driver_task_service(
         endpoint as sel4_sys::seL4_CPtr,
         sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
     );
+    #[cfg(sel4_config_kernel_mcs)]
+    if crate::sel4::message_register(0)
+        == pi4_driver_abi::DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT as sel4_sys::seL4_Word
+        || !finish_driver_task_mcs_normal_reply(slot, request as u32)
+    {
+        slot.active.store(0, Ordering::Release);
+        return None;
+    }
 
     let completed = (slot.done_seq.load(Ordering::Acquire) == request)
         .then(|| slot.result.load(Ordering::Acquire));

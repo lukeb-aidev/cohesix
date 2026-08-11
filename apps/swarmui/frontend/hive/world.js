@@ -110,7 +110,7 @@ export class HiveWorld {
     }
   }
 
-  ensureAgent(id, namespace, role = "worker") {
+  ensureAgent(id, namespace, role = "worker", worker = null) {
     const existing = this.agents.get(id);
     if (existing) {
       if (namespace) {
@@ -120,6 +120,7 @@ export class HiveWorld {
       if (role) {
         existing.role = role;
       }
+      existing.worker = worker || null;
       return existing;
     }
     const seed = hashString(id);
@@ -131,6 +132,7 @@ export class HiveWorld {
       id,
       role,
       namespace,
+      worker: worker || null,
       cluster: clusterKeyFromNamespace(namespace || "/"),
       seed,
       anchor,

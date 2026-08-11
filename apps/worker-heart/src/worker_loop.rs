@@ -23,7 +23,7 @@ pub enum WorkerRole {
     /// GPU control receipt worker.
     Gpu = 2,
     /// LoRA control receipt worker.
-    Lora = 4,
+    Lora = 3,
 }
 
 impl WorkerRole {
@@ -32,17 +32,19 @@ impl WorkerRole {
     }
 }
 
-/// Immutable worker identity encoded into endpoint badges.
+/// Five-part Worker identity used by the bounded host compatibility model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct WorkerIdentity {
     /// Role assigned to the worker.
     pub role: WorkerRole,
-    /// Manifest-local worker instance identifier.
-    pub instance: u32,
+    /// Manifest-local Worker slot.
+    pub slot: u32,
     /// Lease epoch associated with this worker authority.
-    pub lease_epoch: u16,
+    pub lease_epoch: u64,
+    /// Generation of the root-owned supervisor instance.
+    pub supervisor_generation: u64,
     /// Capability-bundle or endpoint-cap generation.
-    pub cap_generation: u16,
+    pub cap_generation: u64,
 }
 
 impl WorkerIdentity {
@@ -50,16 +52,24 @@ impl WorkerIdentity {
     #[must_use]
     pub const fn new(
         role: WorkerRole,
-        instance: u32,
-        lease_epoch: u16,
-        cap_generation: u16,
+        slot: u32,
+        lease_epoch: u64,
+        supervisor_generation: u64,
+        cap_generation: u64,
     ) -> Self {
         Self {
             role,
-            instance,
+            slot,
             lease_epoch,
+            supervisor_generation,
             cap_generation,
         }
+    }
+
+    /// Return true when all generation-bearing identity components are present.
+    #[must_use]
+    pub const fn valid(self) -> bool {
+        self.lease_epoch != 0 && self.supervisor_generation != 0 && self.cap_generation != 0
     }
 
     /// Return the deterministic attach badge expected on this worker's endpoint cap.
@@ -72,7 +82,7 @@ impl WorkerIdentity {
     #[must_use]
     pub const fn badge_for(self, action: WorkerEndpointAction) -> WorkerBadge {
         let role = (self.role.badge_code() as u64) << BADGE_EPOCH_BITS;
-        let epoch = (self.lease_epoch as u64) & ((1u64 << BADGE_EPOCH_BITS) - 1);
+        let epoch = self.lease_epoch & ((1u64 << BADGE_EPOCH_BITS) - 1);
         WorkerBadge::from_raw(action.base().saturating_add(role | epoch))
     }
 }
@@ -413,6 +423,8 @@ pub struct BoundedRun {
 /// Errors returned by the worker loop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WorkerLoopError {
+    /// A generation-bearing Worker identity contained a zero component.
+    InvalidIdentity,
     /// Endpoint CPtr was zero.
     InvalidEndpointCap,
     /// Endpoint badge was zero.
@@ -494,6 +506,9 @@ pub struct WorkerLoop {
 impl WorkerLoop {
     /// Create a heartbeat worker loop.
     pub fn heartbeat(identity: WorkerIdentity, interval_ms: u64) -> Result<Self, WorkerLoopError> {
+        if !identity.valid() {
+            return Err(WorkerLoopError::InvalidIdentity);
+        }
         if identity.role != WorkerRole::Heartbeat {
             return Err(WorkerLoopError::RoleMismatch);
         }
@@ -512,6 +527,9 @@ impl WorkerLoop {
 
     /// Create a GPU receipt-only worker loop.
     pub fn gpu_receipts(identity: WorkerIdentity) -> Result<Self, WorkerLoopError> {
+        if !identity.valid() {
+            return Err(WorkerLoopError::InvalidIdentity);
+        }
         if identity.role != WorkerRole::Gpu {
             return Err(WorkerLoopError::RoleMismatch);
         }
@@ -525,6 +543,9 @@ impl WorkerLoop {
 
     /// Create a LoRA receipt-only worker loop.
     pub fn lora_receipts(identity: WorkerIdentity) -> Result<Self, WorkerLoopError> {
+        if !identity.valid() {
+            return Err(WorkerLoopError::InvalidIdentity);
+        }
         if identity.role != WorkerRole::Lora {
             return Err(WorkerLoopError::RoleMismatch);
         }
@@ -825,7 +846,7 @@ mod tests {
     use super::*;
 
     fn heartbeat_identity() -> WorkerIdentity {
-        WorkerIdentity::new(WorkerRole::Heartbeat, 7, 2, 3)
+        WorkerIdentity::new(WorkerRole::Heartbeat, 7, 2, 3, 4)
     }
 
     fn attach_event(identity: WorkerIdentity, now_ms: u64, ttl_ms: u64) -> WorkerEvent {
@@ -839,7 +860,7 @@ mod tests {
     #[test]
     fn attach_requires_matching_badge() {
         let identity = heartbeat_identity();
-        let wrong = WorkerIdentity::new(WorkerRole::Heartbeat, 7, 3, 3);
+        let wrong = WorkerIdentity::new(WorkerRole::Heartbeat, 7, 3, 3, 4);
         let endpoint = EndpointCap::new(11, wrong.badge()).expect("valid endpoint");
         let mut loop_state =
             WorkerLoop::heartbeat(identity, DEFAULT_HEARTBEAT_INTERVAL_MS).expect("heartbeat loop");
@@ -949,7 +970,7 @@ mod tests {
 
     #[test]
     fn gpu_and_lora_receipt_modes_emit_only_matching_receipts() {
-        let identity = WorkerIdentity::new(WorkerRole::Gpu, 1, 1, 1);
+        let identity = WorkerIdentity::new(WorkerRole::Gpu, 1, 1, 1, 1);
         let mut loop_state = WorkerLoop::gpu_receipts(identity).expect("gpu receipt loop");
         loop_state
             .step(attach_event(identity, 0, 10))

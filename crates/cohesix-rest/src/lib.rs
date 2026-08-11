@@ -206,6 +206,53 @@ pub struct BoundsResponse {
     pub policy: PolicyBounds,
     /// Observability bounds.
     pub observability: ObservabilityBounds,
+    /// Optional compiler-generated Worker runtime declaration and namespace bounds.
+    #[serde(default)]
+    pub worker_runtime: Option<WorkerRuntimeBounds>,
+}
+
+/// Compiler-generated Worker runtime declaration and namespace bounds.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerRuntimeBounds {
+    /// Canonical bounded role matrix.
+    pub roles: Vec<WorkerRoleBounds>,
+    /// Worker task ABI schema identifier.
+    pub task_abi_schema: String,
+    /// Worker task ABI numeric version.
+    pub task_abi_version: u16,
+    /// Worker observation schema identifier.
+    pub worker_observation_schema: String,
+    /// Worker integration-evidence schema identifier.
+    pub worker_integration_evidence_schema: String,
+    /// Maximum simultaneously live executable Worker tasks.
+    pub maximum_live_tasks: u16,
+    /// Canonical sharded Worker telemetry path template.
+    pub canonical_telemetry_template: String,
+    /// Generated Worker shard selector width.
+    pub shard_bits: u8,
+    /// Whether the legacy `/worker` alias remains enabled.
+    pub legacy_worker_alias: bool,
+}
+
+/// One generated Worker role declaration.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerRoleBounds {
+    /// Canonical role label.
+    pub role: String,
+    /// Static implementation declaration.
+    pub declaration: WorkerDeclaration,
+    /// Compiler-admitted executable slots for this role.
+    pub executable_slots: u16,
+}
+
+/// Static generated Worker implementation declaration.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerDeclaration {
+    /// A real target child image is selected.
+    Executable,
+    /// Host/session modelling only; no target task exists.
+    ModelOnly,
 }
 
 /// Secure9P protocol bounds.
@@ -354,6 +401,15 @@ pub struct ProcLeaseBounds {
 pub struct GatewayStatusResponse {
     /// True when the gateway currently has a console connection.
     pub connected: bool,
+    /// Optional transport implementation class; connectivity is a separate axis.
+    #[serde(default)]
+    pub backend_class: Option<BackendClass>,
+    /// Optional summary derived by the shared strict Worker evidence validator.
+    #[serde(default)]
+    pub worker_acceptance: Option<WorkerAcceptanceSummary>,
+    /// Typed reason no Worker acceptance summary is available.
+    #[serde(default)]
+    pub worker_acceptance_diagnostic: Option<WorkerAcceptanceDiagnostic>,
     /// Last connection or relay error, when available.
     #[serde(default)]
     pub last_error: Option<String>,
@@ -366,6 +422,176 @@ pub struct GatewayStatusResponse {
     pub connects: u64,
     /// Broker wait, retry, cache, and relay counters.
     pub broker: BrokerStatusResponse,
+}
+
+/// Gateway backend implementation class; it never supplies target proof.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum BackendClass {
+    /// In-process host model.
+    HostModel,
+    /// Console/Secure9P projection to a target.
+    ConsoleProjection,
+    /// Older or unclassified gateway.
+    Unknown,
+}
+
+/// Redacted target acceptance state for one executable role.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerAcceptanceRoleSummary {
+    /// Canonical Worker role.
+    pub role: String,
+    /// Runtime lifecycle state.
+    pub lifecycle: String,
+    /// Artifact identity state.
+    pub artifact: String,
+    /// Durable receipt state.
+    pub receipt: String,
+    /// Exact execution proof class.
+    pub execution_proof: String,
+    /// Compiler-admitted per-role slot.
+    pub slot: u16,
+    /// Root-resolved logical lease epoch.
+    pub lease_epoch: u64,
+    /// Worker-supervisor generation.
+    pub supervisor_generation: u64,
+    /// Revocable capability-bundle generation.
+    pub cap_generation: u64,
+    /// Exact executable image digest.
+    pub image_sha256: String,
+    /// Last durable READY sequence.
+    pub ready_sequence: u64,
+    /// Last durable completion sequence.
+    pub completion_sequence: u64,
+    /// Generated zero-based CPU core.
+    pub core: u8,
+    /// Exact active scheduling-context parameters.
+    pub scheduling_context: WorkerSchedulingContextSummary,
+    /// Exact generated per-instance object counts; no capability addresses.
+    pub object_inventory: KernelObjectInventorySummary,
+}
+
+/// Redacted active scheduling-context parameters for one accepted Worker.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerSchedulingContextSummary {
+    /// Execution budget in microseconds.
+    pub budget_us: u32,
+    /// Replenishment period in microseconds.
+    pub period_us: u32,
+}
+
+/// Redacted kernel-object inventory containing counts only.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct KernelObjectInventorySummary {
+    /// TCB count.
+    pub tcbs: u32,
+    /// Scheduling-context count.
+    pub scheduling_contexts: u32,
+    /// Reply-object count.
+    pub reply_objects: u32,
+    /// VSpace-root count.
+    pub vspaces: u32,
+    /// CSpace-root count.
+    pub cnodes: u32,
+    /// Page-table count.
+    pub page_tables: u32,
+    /// ASID count.
+    pub asids: u32,
+    /// Frame count.
+    pub frames: u32,
+    /// Endpoint count.
+    pub endpoints: u32,
+    /// Notification count.
+    pub notifications: u32,
+    /// Standard fault-cap count.
+    pub fault_caps: u32,
+    /// Timeout fault-cap count.
+    pub timeout_fault_caps: u32,
+    /// Admitted CSpace-slot count.
+    pub cspace_slots: u32,
+    /// Retyped untyped-memory extent in bytes.
+    pub untyped_bytes: u64,
+}
+
+/// Redacted current-target artifact identity bound to accepted evidence.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct TargetSessionSummary {
+    /// SHA-256 of the exact independently supplied target-session bytes.
+    pub target_session_sha256: String,
+    /// Exact resolved-manifest digest.
+    pub manifest_sha256: String,
+    /// Exact root image digest.
+    pub root_image_sha256: String,
+    /// Exact Worker archive digest.
+    pub worker_archive_sha256: String,
+    /// Exact Worker image-manifest digest.
+    pub worker_image_manifest_sha256: String,
+    /// Exact Worker ABI bundle digest.
+    pub worker_abi_sha256: String,
+}
+
+/// Redacted summary of a locally validated Worker acceptance record.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerAcceptanceSummary {
+    /// Exact evidence schema.
+    pub schema: String,
+    /// Exact validated record kind.
+    pub record_kind: String,
+    /// SHA-256 of the exact imported record bytes.
+    pub evidence_sha256: String,
+    /// Strict evidence verdict.
+    pub verdict: String,
+    /// Direct target when the record covers one target.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Exact proof class, never inferred from connectivity.
+    pub execution_proof: String,
+    /// Exact current target-session identity matched against this evidence.
+    pub target_session: TargetSessionSummary,
+    /// Compiler-owned accepted topology digest.
+    pub topology_sha256: String,
+    /// Per-role state when present in a target-component record.
+    #[serde(default)]
+    pub workers: Vec<WorkerAcceptanceRoleSummary>,
+}
+
+/// Typed reason no Worker acceptance summary is exposed.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WorkerAcceptanceDiagnostic {
+    /// Stable diagnostic code.
+    pub code: WorkerAcceptanceDiagnosticCode,
+}
+
+/// Fail-closed Worker acceptance import diagnostic.
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkerAcceptanceDiagnosticCode {
+    /// No import was configured.
+    NotConfigured,
+    /// The root, evidence, and target-session paths were not all configured.
+    IncompleteConfiguration,
+    /// The explicit root was absent, a symlink, or not a directory.
+    UnsafeRoot,
+    /// The evidence file was outside the explicit root.
+    OutsideRoot,
+    /// A symlink appeared below the explicit root.
+    SymlinkTraversal,
+    /// The selected path was not a regular file.
+    NotRegularFile,
+    /// The record exceeded the fixed input bound.
+    RecordTooLarge,
+    /// The bounded file could not be read.
+    ReadFailed,
+    /// The shared validator rejected the record.
+    InvalidEvidence,
+    /// The independently supplied target-session record was invalid.
+    InvalidTargetSession,
+    /// Accepted evidence did not name the exact current target session.
+    TargetSessionMismatch,
+    /// Current target manifest did not match this generated gateway policy.
+    ManifestMismatch,
+    /// The valid record kind is not an acceptance projection.
+    UnsupportedRecordKind,
 }
 
 /// Gateway broker counters returned by `/v1/meta/status`.
@@ -568,11 +794,11 @@ mod tests {
             "manifest_sha256": "deadbeef",
             "secure9p": {"msize": 8192, "walk_depth": 8},
             "console": {
-                "max_line_len": 256,
+                "max_line_len": 2304,
                 "max_path_len": 96,
                 "max_json_len": 192,
                 "max_id_len": 32,
-                "max_echo_len": 224,
+                "max_echo_len": 2048,
                 "max_ticket_len": 224
             },
             "paths": {
@@ -606,6 +832,7 @@ mod tests {
         assert_eq!(parsed.manifest_sha256, "deadbeef");
         assert_eq!(parsed.secure9p.msize, 8192);
         assert_eq!(parsed.observability.proc_schedule.queue_bytes, 256);
+        assert!(parsed.worker_runtime.is_none());
     }
 
     #[test]
@@ -641,10 +868,84 @@ mod tests {
         }"#;
         let parsed: GatewayStatusResponse = serde_json::from_str(json).expect("status json");
         assert!(parsed.connected);
+        assert!(parsed.backend_class.is_none());
+        assert!(parsed.worker_acceptance.is_none());
         assert_eq!(parsed.reconnects, 2);
         assert_eq!(parsed.broker.telemetry_waiters, 57);
         assert_eq!(parsed.broker.control_write_retry_exhaustions, 1080);
         assert_eq!(parsed.broker.relay_queue_depth, 9);
+    }
+
+    #[test]
+    fn worker_runtime_and_acceptance_extensions_parse_without_inference() {
+        let bounds = r#"{
+            "manifest_sha256":"deadbeef",
+            "secure9p":{"msize":8192,"walk_depth":8},
+            "console":{"max_line_len":2304,"max_path_len":96,"max_json_len":192,"max_id_len":32,"max_echo_len":2048,"max_ticket_len":224},
+            "paths":{"queen_ctl":"/queen/ctl","queen_lifecycle_ctl":"/queen/lifecycle/ctl","queen_schedule_ctl":"/queen/schedule/ctl","queen_lease_ctl":"/queen/lease/ctl","queen_export_ctl":"/queen/export/ctl","policy_ctl":"/policy/ctl","log":"/log/queen.log"},
+            "control_plane":{"schedule":{"enable":true,"queue_max_entries":64,"ctl_max_bytes":8192},"lease":{"enable":true,"active_max_entries":64,"preemptions_max_entries":64,"ctl_max_bytes":8192},"export":{"enable":true,"ctl_max_bytes":2048}},
+            "policy":{"enable":true,"queue_max_entries":32,"queue_max_bytes":4096,"ctl_max_bytes":2048},
+            "observability":{"proc_schedule":{"summary":true,"queue":true,"summary_bytes":128,"queue_bytes":256},"proc_lease":{"summary":true,"active":true,"preemptions":true,"summary_bytes":160,"active_bytes":256,"preemptions_bytes":256}},
+            "worker_runtime":{"roles":[{"role":"worker-heartbeat","declaration":"executable","executable_slots":1},{"role":"worker-bus","declaration":"model-only","executable_slots":0}],"task_abi_schema":"worker-task-abi/v1","task_abi_version":1,"worker_observation_schema":"cohesix-worker-observation/v1","worker_integration_evidence_schema":"cohesix-worker-integration-evidence/v1","maximum_live_tasks":1,"canonical_telemetry_template":"/shard/<label>/worker/<id>/telemetry","shard_bits":8,"legacy_worker_alias":true}
+        }"#;
+        let parsed: BoundsResponse = serde_json::from_str(bounds).expect("extended bounds JSON");
+        let runtime = parsed.worker_runtime.expect("Worker runtime extension");
+        assert_eq!(runtime.maximum_live_tasks, 1);
+        assert_eq!(
+            runtime.roles[1].declaration,
+            super::WorkerDeclaration::ModelOnly
+        );
+
+        let status = r#"{
+            "connected":true,
+            "backend_class":"console-projection",
+            "worker_acceptance":{
+                "schema":"cohesix-worker-task-evidence/v1",
+                "record_kind":"target-component",
+                "evidence_sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "verdict":"PASS",
+                "target":"qemu",
+                "execution_proof":"qemu",
+                "target_session":{
+                    "target_session_sha256":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    "manifest_sha256":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+                    "root_image_sha256":"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                    "worker_archive_sha256":"eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+                    "worker_image_manifest_sha256":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+                    "worker_abi_sha256":"1111111111111111111111111111111111111111111111111111111111111111"
+                },
+                "topology_sha256":"2222222222222222222222222222222222222222222222222222222222222222",
+                "workers":[{
+                    "role":"worker-gpu",
+                    "lifecycle":"ready",
+                    "artifact":"verified",
+                    "receipt":"confirmed",
+                    "execution_proof":"qemu",
+                    "slot":1,
+                    "lease_epoch":2,
+                    "supervisor_generation":3,
+                    "cap_generation":4,
+                    "image_sha256":"3333333333333333333333333333333333333333333333333333333333333333",
+                    "ready_sequence":5,
+                    "completion_sequence":6,
+                    "core":1,
+                    "scheduling_context":{"budget_us":100,"period_us":1000},
+                    "object_inventory":{"tcbs":1,"scheduling_contexts":1,"reply_objects":0,"vspaces":1,"cnodes":1,"page_tables":8,"asids":1,"frames":16,"endpoints":0,"notifications":1,"fault_caps":1,"timeout_fault_caps":1,"cspace_slots":64,"untyped_bytes":1048576}
+                }]
+            },
+            "reconnects":0,"connects":1,
+            "broker":{"control_waiters":0,"telemetry_waiters":0,"control_waiters_high_water":0,"telemetry_waiters_high_water":0,"control_checkouts":0,"telemetry_checkouts":0,"pool_exhausted":0,"checkout_retries":0,"timeout_rejections":0,"telemetry_yields":0,"proc_cache_hits":0,"proc_cache_misses":0,"proc_cache_evictions":0,"control_write_retryable_errors":0,"control_write_retries":0,"control_write_retry_sleep_ms":0,"control_write_retry_exhaustions":0,"control_write_success_after_retry":0,"relay_queue_depth":0,"relay_deduped":0,"relay_remote_write_failures":0}
+        }"#;
+        let parsed: GatewayStatusResponse = serde_json::from_str(status).expect("extended status");
+        assert_eq!(
+            parsed.backend_class,
+            Some(super::BackendClass::ConsoleProjection)
+        );
+        let acceptance = parsed.worker_acceptance.expect("acceptance summary");
+        assert_eq!(acceptance.workers[0].lifecycle, "ready");
+        assert_eq!(acceptance.workers[0].slot, 1);
+        assert_eq!(acceptance.target_session.manifest_sha256, "c".repeat(64));
+        assert_eq!(acceptance.execution_proof, "qemu");
     }
 
     #[test]

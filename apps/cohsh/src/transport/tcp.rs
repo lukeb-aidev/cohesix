@@ -22,6 +22,7 @@ use fs2::FileExt;
 use log::{debug, error, info, trace, warn};
 use secure9p_codec::SessionId;
 
+use crate::cat_chunks::reassemble_cat_chunks;
 use crate::proto::{parse_ack, AckStatus};
 use crate::{CohshRetryPolicy, Session, TcpConnectionInfo, Transport, TransportMetrics};
 
@@ -1459,7 +1460,11 @@ impl TcpTransport {
                                     lines.push(summary);
                                 }
                             }
-                            return Ok(lines);
+                            return if verb.eq_ignore_ascii_case("CAT") {
+                                reassemble_cat_chunks(lines)
+                            } else {
+                                Ok(lines)
+                            };
                         }
                         lines.push(response);
                     }
@@ -2191,6 +2196,7 @@ mod tests {
 
     use cohesix_proto::REASON_INVALID_TOKEN;
     use cohesix_ticket::{BudgetSpec, MountSpec, TicketClaims, TicketIssuer};
+    use sha2::{Digest, Sha256};
     const TEST_AUTH_TOKEN: &str = "test-auth-token";
 
     fn write_frame(stream: &mut TcpStream, line: &str) {
@@ -2223,6 +2229,22 @@ mod tests {
         thread::sleep(delay);
         stream.write_all(line.as_bytes()).unwrap();
         stream.flush().unwrap();
+    }
+
+    fn cat_chunk_frames(value: &str, chunk_bytes: usize) -> Vec<String> {
+        let digest = hex::encode(Sha256::digest(value.as_bytes()));
+        let chunks = value.as_bytes().chunks(chunk_bytes).collect::<Vec<_>>();
+        chunks
+            .iter()
+            .enumerate()
+            .map(|(sequence, chunk)| {
+                format!(
+                    "C1:{sequence:04x}:{:04x}:{digest}:{}",
+                    chunks.len(),
+                    core::str::from_utf8(chunk).expect("ASCII CAT fixture")
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -2290,6 +2312,45 @@ mod tests {
 
         let observed = server.join().unwrap();
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn cat_transport_transparently_reassembles_bounded_chunk_frames() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let canonical = format!(
+            "{{\"schema\":\"host-ticket-result/v2\",\"message\":\"{}\"}}",
+            "x".repeat(500)
+        );
+        let frames = cat_chunk_frames(canonical.as_str(), 176);
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            assert_eq!(
+                read_frame(&mut reader).as_deref(),
+                Some("CAT /host/tickets/status")
+            );
+            for frame in frames {
+                write_frame(&mut stream, frame.as_str());
+            }
+            write_frame(&mut stream, "END");
+        });
+
+        let stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .unwrap();
+        let reader = BufReader::new(stream.try_clone().unwrap());
+        let mut transport = TcpTransport::new("127.0.0.1", port);
+        transport.stream = Some(stream);
+        transport.reader = Some(reader);
+        transport.authenticated = true;
+        transport.auth_state = AuthState::Attached;
+        let output = transport
+            .stream_command("CAT", "/host/tickets/status")
+            .expect("CAT reassembly");
+        assert_eq!(output, vec![canonical]);
+        server.join().unwrap();
     }
 
     #[test]

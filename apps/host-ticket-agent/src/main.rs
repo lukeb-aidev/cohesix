@@ -18,8 +18,9 @@ use cohesix_ticket::Role;
 use cohsh::{NineDoorTransport, RestTransport, RoleArg, Session, TcpTransport, Transport};
 use host_ticket_agent::executors::ExecutorConfig;
 use host_ticket_agent::{
-    process_tickets_once, relay, unix_time_ms_now, HostTicketManifest, DEFAULT_CURSOR_STATE_PATH,
-    DEFAULT_RELAY_WAL_PATH, DEFAULT_RESOLVED_MANIFEST_PATH,
+    process_tickets_once_with_journal, relay, unix_time_ms_now, wal::AgentFence,
+    HostTicketManifest, DEFAULT_CURSOR_STATE_PATH, DEFAULT_EXECUTION_JOURNAL_PATH,
+    DEFAULT_EXECUTION_LOCK_PATH, DEFAULT_RELAY_WAL_PATH, DEFAULT_RESOLVED_MANIFEST_PATH,
 };
 use nine_door::{HostNamespaceConfig, HostProvider, HostTicketPolicy, NineDoor};
 
@@ -39,6 +40,12 @@ struct Args {
     /// Cursor state file for deterministic resume.
     #[arg(long, value_name = "FILE", default_value = DEFAULT_CURSOR_STATE_PATH)]
     cursor: PathBuf,
+    /// Crash-safe version-2 provider execution journal.
+    #[arg(long, value_name = "FILE", default_value = DEFAULT_EXECUTION_JOURNAL_PATH)]
+    execution_journal: PathBuf,
+    /// Process-lifetime single-agent execution fence.
+    #[arg(long, value_name = "FILE", default_value = DEFAULT_EXECUTION_LOCK_PATH)]
+    agent_lock: PathBuf,
     /// Optional mount override (defaults to manifest value).
     #[arg(long, value_name = "PATH")]
     mount: Option<String>,
@@ -78,6 +85,12 @@ struct Args {
     /// Optional explicit PEFT registry root override.
     #[arg(long, value_name = "DIR")]
     registry_root: Option<PathBuf>,
+    /// Confined destination root for PEFT exports.
+    #[arg(long, value_name = "DIR", default_value = "out/peft_exports")]
+    export_root: PathBuf,
+    /// Confined source root for PEFT adapter bundles.
+    #[arg(long, value_name = "DIR", default_value = "out/peft_adapters")]
+    adapter_root: PathBuf,
 }
 
 fn main() -> Result<()> {
@@ -95,6 +108,7 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    let _agent_fence = AgentFence::acquire(&args.agent_lock)?;
 
     let registry_root = args
         .registry_root
@@ -103,6 +117,8 @@ fn main() -> Result<()> {
     let executor_config = ExecutorConfig {
         mount: manifest.mount_path.clone(),
         registry_root,
+        export_root: args.export_root.clone(),
+        adapter_root: args.adapter_root.clone(),
     };
 
     let role = Role::from(args.role);
@@ -113,11 +129,12 @@ fn main() -> Result<()> {
 
     loop {
         let now_unix_ms = unix_time_ms_now();
-        let pass = process_tickets_once(
+        let pass = process_tickets_once_with_journal(
             transport.as_mut(),
             &session,
             &manifest,
             &args.cursor,
+            &args.execution_journal,
             &executor_config,
             now_unix_ms,
         );

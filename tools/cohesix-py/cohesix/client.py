@@ -13,15 +13,27 @@ import os
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 
 from .audit import CohesixAudit
 from .backends import Backend, TcpBackend
 from .defaults import DEFAULTS
-from .evidence import EvidencePackSummary, TimelineSummary, export_evidence_pack, write_evidence_timeline
+from .evidence import (
+    EvidencePackSummary,
+    TimelineSummary,
+    export_evidence_pack,
+    write_evidence_timeline,
+)
 from .errors import CohesixError
 from .paths import validate_path
 from .receipts import build_lease_receipt, build_run_receipt, write_receipt_json
+from .worker import (
+    TargetProfileContract,
+    WorkerClient,
+    WorkerControlResult,
+    WorkerIdentity,
+    WorkerObservation,
+)
 
 _CONSOLE = DEFAULTS.get("console", {})
 _TELEMETRY_PUSH = DEFAULTS.get("telemetry_push", {})
@@ -59,12 +71,82 @@ class GpuLeaseArgs:
 class CohesixClient:
     """Thin Cohesix client that mirrors coh host tool semantics."""
 
-    def __init__(self, backend: Backend, defaults: Optional[Dict[str, object]] = None) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        defaults: Optional[Dict[str, object]] = None,
+        profile_contract: Optional[
+            str | Path | Mapping[str, Any] | TargetProfileContract
+        ] = None,
+    ) -> None:
         self.backend = backend
         self.defaults = defaults or DEFAULTS
         self.paths = self.defaults.get("paths", {})
         self.policy = self.defaults.get("coh", {})
         self.retry = self.defaults.get("retry", {})
+        self._worker_client = (
+            WorkerClient(backend, profile_contract)
+            if profile_contract is not None
+            else None
+        )
+
+    @property
+    def workers(self) -> WorkerClient:
+        """Return the Worker projection bound to an explicit target contract."""
+
+        if self._worker_client is None:
+            raise CohesixError(
+                "Worker APIs require an explicit target-qualified profile contract"
+            )
+        return self._worker_client
+
+    def worker_spawn(
+        self, role: str, public_instance_id: str, *, slot: int = 0
+    ) -> WorkerControlResult:
+        """Submit a Worker spawn request; the result reports admission only."""
+
+        return self.workers.spawn(role, public_instance_id, slot=slot)
+
+    def worker_observe(
+        self,
+        role: str,
+        public_instance_id: str,
+        *,
+        expected_identity: Optional[WorkerIdentity] = None,
+    ) -> WorkerObservation:
+        """Observe one exact Worker generation through its canonical namespace."""
+
+        return self.workers.observe(
+            role,
+            public_instance_id,
+            expected_identity=expected_identity,
+        )
+
+    def worker_wait_ready(
+        self,
+        role: str,
+        public_instance_id: str,
+        *,
+        timeout_s: Optional[float] = None,
+        poll_s: float = 0.05,
+        expected_identity: Optional[WorkerIdentity] = None,
+    ) -> WorkerObservation:
+        """Wait for a durable READY projection within the generated deadline."""
+
+        return self.workers.wait_ready(
+            role,
+            public_instance_id,
+            timeout_s=timeout_s,
+            poll_s=poll_s,
+            expected_identity=expected_identity,
+        )
+
+    def worker_teardown(
+        self, role: str, public_instance_id: str
+    ) -> WorkerControlResult:
+        """Submit bounded Worker teardown without claiming terminal completion."""
+
+        return self.workers.teardown(role, public_instance_id)
 
     def gpu_list(self, audit: Optional[CohesixAudit] = None) -> List[Dict[str, object]]:
         entries = self.backend.list_dir("/gpu")

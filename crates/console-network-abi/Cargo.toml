@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Configure the pointer-free ABI shared by the console-network child and root supervisor.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "console-network-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]

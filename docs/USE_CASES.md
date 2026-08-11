@@ -28,6 +28,14 @@ The selected source manifest, resolved manifest, and generated `coh-rtc` output
 define which namespaces, roles, limits, and host projections exist in a build.
 Examples here are therefore conditional on the selected profile.
 
+The exact transitive prerequisites for all six scenarios and all nine built-in
+Python playbooks are compiler-owned in
+[`configs/generated/host_integration_dependency.json`](../configs/generated/host_integration_dependency.json).
+The generated [support table](snippets/host_integration_dependency.md) makes
+unavailable and future providers explicit. A scenario is not promoted merely
+because its Worker executes, its package exists, or a fixture, mock, or dry-run
+adapter succeeds; every required row needs independently correlated evidence.
+
 ## Current Capability Boundary
 
 | Capability | Current boundary |

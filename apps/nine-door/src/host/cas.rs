@@ -35,7 +35,7 @@ pub struct CasConfig {
     chunk_bytes: usize,
     delta_enabled: bool,
     signing_required: bool,
-    signing_key: Option<[u8; 32]>,
+    verification_key: Option<[u8; 32]>,
 }
 
 impl CasConfig {
@@ -47,7 +47,7 @@ impl CasConfig {
             chunk_bytes: 0,
             delta_enabled: false,
             signing_required: false,
-            signing_key: None,
+            verification_key: None,
         }
     }
 
@@ -56,7 +56,7 @@ impl CasConfig {
         chunk_bytes: usize,
         delta_enabled: bool,
         signing_required: bool,
-        signing_key: Option<[u8; 32]>,
+        verification_key: Option<[u8; 32]>,
         models_enabled: bool,
     ) -> Self {
         Self {
@@ -65,7 +65,7 @@ impl CasConfig {
             chunk_bytes,
             delta_enabled,
             signing_required,
-            signing_key,
+            verification_key,
         }
     }
 
@@ -81,8 +81,8 @@ impl CasConfig {
         self.chunk_bytes
     }
 
-    fn signing_key(&self) -> Option<&[u8; 32]> {
-        self.signing_key.as_ref()
+    fn verification_key(&self) -> Option<&[u8; 32]> {
+        self.verification_key.as_ref()
     }
 }
 
@@ -705,15 +705,16 @@ impl CasStore {
             ));
         }
         if let Some(signature) = manifest.signature {
-            let key = self.config.signing_key().ok_or_else(|| {
+            let key = self.config.verification_key().ok_or_else(|| {
                 self.events.push_back(CasEvent::warn(format!(
-                    "cas-manifest rejected epoch={} reason=signing-key-missing",
+                    "cas-manifest rejected epoch={} reason=verification-key-missing",
                     epoch
                 )));
-                NineDoorError::protocol(ErrorCode::Permission, "signing key missing")
+                NineDoorError::protocol(ErrorCode::Permission, "verification key missing")
             })?;
-            let verifying_key = VerifyingKey::from_bytes(key)
-                .map_err(|_| NineDoorError::protocol(ErrorCode::Invalid, "signing key invalid"))?;
+            let verifying_key = VerifyingKey::from_bytes(key).map_err(|_| {
+                NineDoorError::protocol(ErrorCode::Invalid, "verification key invalid")
+            })?;
             let payload = manifest.signature_payload().map_err(|err| {
                 NineDoorError::protocol(
                     ErrorCode::Invalid,

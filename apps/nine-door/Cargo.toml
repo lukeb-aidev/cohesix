@@ -6,12 +6,14 @@ name = "nine-door"
 version = "0.1.0"
 edition = "2021"
 publish = false
+autobins = false
 
 [features]
 default = []
 scale-tests = []
 
 [dependencies]
+secure9p-transport = { workspace = true }
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }

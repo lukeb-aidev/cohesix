@@ -414,6 +414,7 @@ mod tests {
                     preemptions_bytes: 192,
                 },
             },
+            worker_runtime: None,
         }
     }
 

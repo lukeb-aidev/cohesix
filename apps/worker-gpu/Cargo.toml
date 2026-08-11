@@ -7,8 +7,13 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+qemu-evidence = ["worker-heart/qemu-evidence"]
+
 [dependencies]
 worker-heart = { path = "../worker-heart" }
+worker-task-abi = { workspace = true }
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
@@ -20,3 +25,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 secure9p-codec = { workspace = true }
+
+[[bin]]
+name = "worker-gpu"
+test = false
+bench = false

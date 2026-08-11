@@ -9041,15 +9041,13 @@ enum RuntimeWake {
 
 /// Result of observing the runtime's combined command/notification boundary.
 ///
-/// MCS needs a compiler-declared reply object before an endpoint receive can
-/// preserve this ABI. Until that resource exists, unavailability is terminal
-/// configuration state rather than an empty poll result: treating it as
-/// `RuntimeWake::None` would recreate an unbounded cooperative-yield lane.
+/// Tests retain an explicit unavailable case to prove fail-closed routing; all
+/// selected target builds provide the compiler-declared MCS Reply object.
 #[cfg(any(target_os = "none", test))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeCommandWait {
     Wake(RuntimeWake),
-    #[cfg(any(test, sel4_config_kernel_mcs))]
+    #[cfg(test)]
     Unavailable,
 }
 
@@ -9057,7 +9055,7 @@ enum RuntimeCommandWait {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeCommandWaitRoute {
     Wake(RuntimeWake),
-    #[cfg(any(test, sel4_config_kernel_mcs))]
+    #[cfg(test)]
     FailClosed,
 }
 
@@ -9065,7 +9063,7 @@ enum RuntimeCommandWaitRoute {
 const fn runtime_command_wait_route(wait: RuntimeCommandWait) -> RuntimeCommandWaitRoute {
     match wait {
         RuntimeCommandWait::Wake(wake) => RuntimeCommandWaitRoute::Wake(wake),
-        #[cfg(any(test, sel4_config_kernel_mcs))]
+        #[cfg(test)]
         RuntimeCommandWait::Unavailable => RuntimeCommandWaitRoute::FailClosed,
     }
 }
@@ -10532,11 +10530,12 @@ fn poll_runtime_command(
     ))
 }
 
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+#[cfg(target_os = "none")]
 fn runtime_wake_from_received_tag(
     tag: sel4_sys::seL4_MessageInfo,
     badge: sel4_sys::seL4_Word,
     last_sequence: u32,
+    task_key: u32,
 ) -> RuntimeWake {
     if tag.length() == 0 {
         return if badge == 0 {
@@ -10544,6 +10543,10 @@ fn runtime_wake_from_received_tag(
         } else {
             RuntimeWake::Notification(badge as u32)
         };
+    }
+    #[cfg(sel4_config_kernel_mcs)]
+    if badge as u64 != pi4_driver_abi::driver_runtime_command_badge(task_key) {
+        return RuntimeWake::None;
     }
     // SAFETY: The fixed endpoint ABI carries the shared-ring sequence in MR0.
     let ipc_sequence = unsafe { sel4_sys::seL4_GetMR(0) as u32 };
@@ -10565,31 +10568,44 @@ fn runtime_wake_from_received_tag(
     ))
 }
 
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
-fn poll_runtime_command_or_notification(last_sequence: u32) -> RuntimeCommandWait {
+#[cfg(target_os = "none")]
+fn poll_runtime_command_or_notification(last_sequence: u32, task_key: u32) -> RuntimeCommandWait {
     let mut badge: sel4_sys::seL4_Word = 0;
     // SAFETY: Root installs the command endpoint in slot 2 and binds the
     // generated local notification to this TCB. This single nonblocking poll
     // is the retained-owner arbitration linearization point: a CARD_INT that
     // is pending here wins before any exact-granted foreground owner action in
     // this child slice.
+    #[cfg(not(sel4_config_kernel_mcs))]
     let tag = unsafe { sel4_sys::seL4_Poll(DRIVER_TASK_CHILD_COMMAND_SLOT, &mut badge) };
-    RuntimeCommandWait::Wake(runtime_wake_from_received_tag(tag, badge, last_sequence))
+    #[cfg(sel4_config_kernel_mcs)]
+    // SAFETY: The compiler-generated child CSpace contains a read-only command
+    // endpoint in slot 2 and the runtime's sole explicit Reply object in slot
+    // 6. NBRecv either leaves that object unassociated or installs exactly one
+    // caller association; the one-in-flight contract prevents replacement.
+    let tag = unsafe {
+        sel4_sys::seL4_NBRecv(
+            DRIVER_TASK_CHILD_COMMAND_SLOT,
+            &mut badge,
+            pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
+        )
+    };
+    RuntimeCommandWait::Wake(runtime_wake_from_received_tag(
+        tag,
+        badge,
+        last_sequence,
+        task_key,
+    ))
 }
 
-#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-fn poll_runtime_command_or_notification(_last_sequence: u32) -> RuntimeCommandWait {
-    RuntimeCommandWait::Unavailable
-}
-
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+#[cfg(target_os = "none")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RuntimeBlockingWaitTarget {
     CommandOrNotification,
     LocalNotification,
 }
 
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+#[cfg(target_os = "none")]
 fn runtime_blocking_wait(
     target: RuntimeBlockingWaitTarget,
     badge: &mut sel4_sys::seL4_Word,
@@ -10603,7 +10619,18 @@ fn runtime_blocking_wait(
     unsafe {
         match target {
             RuntimeBlockingWaitTarget::CommandOrNotification => {
-                sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, badge)
+                #[cfg(not(sel4_config_kernel_mcs))]
+                {
+                    sel4_sys::seL4_Recv(DRIVER_TASK_CHILD_COMMAND_SLOT, badge)
+                }
+                #[cfg(sel4_config_kernel_mcs)]
+                {
+                    sel4_sys::seL4_Recv(
+                        DRIVER_TASK_CHILD_COMMAND_SLOT,
+                        badge,
+                        pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
+                    )
+                }
             }
             RuntimeBlockingWaitTarget::LocalNotification => {
                 sel4_sys::seL4_Wait(DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT, badge)
@@ -10612,20 +10639,20 @@ fn runtime_blocking_wait(
     }
 }
 
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
-fn wait_runtime_command_or_notification(last_sequence: u32) -> RuntimeCommandWait {
+#[cfg(target_os = "none")]
+fn wait_runtime_command_or_notification(last_sequence: u32, task_key: u32) -> RuntimeCommandWait {
     let mut badge: sel4_sys::seL4_Word = 0;
     let tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::CommandOrNotification, &mut badge);
-    RuntimeCommandWait::Wake(runtime_wake_from_received_tag(tag, badge, last_sequence))
-}
-
-#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-fn wait_runtime_command_or_notification(_last_sequence: u32) -> RuntimeCommandWait {
-    RuntimeCommandWait::Unavailable
+    RuntimeCommandWait::Wake(runtime_wake_from_received_tag(
+        tag,
+        badge,
+        last_sequence,
+        task_key,
+    ))
 }
 
 const fn runtime_exact_command_wait_supported() -> bool {
-    !cfg!(sel4_config_kernel_mcs)
+    true
 }
 
 #[must_use]
@@ -16320,16 +16347,11 @@ const fn runtime_steady_local_notification_wake_route(
     }
 }
 
-#[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
+#[cfg(target_os = "none")]
 fn wait_runtime_local_notification() -> Option<u32> {
     let mut badge: sel4_sys::seL4_Word = 0;
     let _tag = runtime_blocking_wait(RuntimeBlockingWaitTarget::LocalNotification, &mut badge);
     Some(badge as u32)
-}
-
-#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-const fn wait_runtime_local_notification() -> Option<u32> {
-    None
 }
 
 /// Fence a retained physical lifetime when this kernel profile cannot provide
@@ -16378,32 +16400,6 @@ fn runtime_fail_closed_steady_wait_unavailable(
     }
 }
 
-/// Enter the terminal sink for a kernel profile that cannot express this
-/// runtime's exact combined receive contract.
-///
-/// The owner is poisoned before parking. Subsequent notification edges are
-/// consumed only to re-enter the same blocking wait; they cannot inspect a
-/// ring, advance a cursor, service MMIO, or form a cooperative-yield loop.
-#[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
-fn runtime_quarantine_unavailable_command_wait(
-    route: RuntimeNotificationRoute,
-    exact_steady_cyw43_parent: Option<DriverTaskCommandRecord>,
-) -> ! {
-    runtime_fail_closed_steady_wait_unavailable(route, exact_steady_cyw43_parent);
-    loop {
-        let mut ignored_badge: sel4_sys::seL4_Word = 0;
-        // SAFETY: Root installs the generated local notification in fixed
-        // child slot 3 before starting the runtime. This terminal quarantine
-        // never interprets its badge and performs no operation after waking.
-        let _ = unsafe {
-            sel4_sys::seL4_Wait(
-                DRIVER_TASK_CHILD_LOCAL_NOTIFICATION_SLOT,
-                &mut ignored_badge,
-            )
-        };
-    }
-}
-
 #[cfg(target_os = "none")]
 fn runtime_command_wait_wake_or_quarantine(
     wait: RuntimeCommandWait,
@@ -16412,10 +16408,6 @@ fn runtime_command_wait_wake_or_quarantine(
 ) -> RuntimeWake {
     match runtime_command_wait_route(wait) {
         RuntimeCommandWaitRoute::Wake(wake) => wake,
-        #[cfg(sel4_config_kernel_mcs)]
-        RuntimeCommandWaitRoute::FailClosed => {
-            runtime_quarantine_unavailable_command_wait(_route, _exact_steady_cyw43_parent)
-        }
     }
 }
 
@@ -16762,9 +16754,6 @@ fn runtime_handoff_durable_pending(
                     runtime_fail_closed_steady_wait_unavailable(route, exact_cyw43_parent);
                 }
                 RuntimeSteadyWaitWake::WaitUnavailable => {
-                    #[cfg(sel4_config_kernel_mcs)]
-                    runtime_quarantine_unavailable_command_wait(route, exact_cyw43_parent);
-                    #[cfg(not(sel4_config_kernel_mcs))]
                     runtime_fail_closed_steady_wait_unavailable(route, exact_cyw43_parent);
                 }
             }
@@ -56252,6 +56241,32 @@ where
     target
 }
 
+const fn runtime_one_way_completion_wake_due(
+    command: DriverTaskCommandRecord,
+    completion_committed: bool,
+) -> bool {
+    completion_committed
+        && command.sequence != 0
+        && command.flags & DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY != 0
+}
+
+#[cfg(target_os = "none")]
+fn runtime_signal_one_way_completion(command: DriverTaskCommandRecord, completion_committed: bool) {
+    #[cfg(sel4_config_kernel_mcs)]
+    if runtime_one_way_completion_wake_due(command, completion_committed) {
+        // SAFETY: HAL installs a Write-only, task-badged completion
+        // notification in fixed slot 7. The sequence-last completion is
+        // already globally visible, so this signal is only a scheduling hint.
+        unsafe {
+            sel4_sys::seL4_Signal(
+                pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT as sel4_sys::seL4_CPtr,
+            );
+        }
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    let _ = (command, completion_committed);
+}
+
 /// Run the isolated driver runtime receive/service loop.
 #[cfg(target_os = "none")]
 pub fn runtime_main(task_key: usize) -> ! {
@@ -56366,7 +56381,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             // masks/publishes/ACKs while preserving the exact transfer cursor;
             // dongle-side DPC I/O remains serialized until this child ends.
             match runtime_command_wait_wake_or_quarantine(
-                poll_runtime_command_or_notification(last_sequence),
+                poll_runtime_command_or_notification(last_sequence, task_key_marker),
                 notification_route,
                 pending_intake.map(|intake| intake.command),
             ) {
@@ -56415,7 +56430,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                         let wake = runtime_pending_wake_for_route(
                             notification_route,
                             runtime_command_wait_wake_or_quarantine(
-                                poll_runtime_command_or_notification(last_sequence),
+                                poll_runtime_command_or_notification(
+                                    last_sequence,
+                                    task_key_marker,
+                                ),
                                 notification_route,
                                 pending_intake.map(|intake| intake.command),
                             ),
@@ -56531,7 +56549,10 @@ pub fn runtime_main(task_key: usize) -> ! {
                         let wake = runtime_pending_wake_for_route(
                             notification_route,
                             runtime_command_wait_wake_or_quarantine(
-                                wait_runtime_command_or_notification(last_sequence),
+                                wait_runtime_command_or_notification(
+                                    last_sequence,
+                                    task_key_marker,
+                                ),
                                 notification_route,
                                 pending_intake.map(|intake| intake.command),
                             ),
@@ -56651,7 +56672,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 let wake = runtime_pending_wake_for_route(
                     notification_route,
                     runtime_command_wait_wake_or_quarantine(
-                        wait_runtime_command_or_notification(last_sequence),
+                        wait_runtime_command_or_notification(last_sequence, task_key_marker),
                         notification_route,
                         pending_intake.map(|intake| intake.command),
                     ),
@@ -56700,7 +56721,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             } else {
                 let _ = runtime_command_wait_wake_or_quarantine(
-                    wait_runtime_command_or_notification(last_sequence),
+                    wait_runtime_command_or_notification(last_sequence, task_key_marker),
                     notification_route,
                     None,
                 );
@@ -56737,7 +56758,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 pending_command_gate.retain_after_pending();
             } else {
                 let _ = runtime_command_wait_wake_or_quarantine(
-                    wait_runtime_command_or_notification(last_sequence),
+                    wait_runtime_command_or_notification(last_sequence, task_key_marker),
                     notification_route,
                     None,
                 );
@@ -57053,7 +57074,7 @@ pub fn runtime_main(task_key: usize) -> ! {
             // unbounded syscall storm while idle. CYW43/SDIO additionally wake
             // through their bound local notification and route that work below.
             match runtime_command_wait_wake_or_quarantine(
-                wait_runtime_command_or_notification(last_sequence),
+                wait_runtime_command_or_notification(last_sequence, task_key_marker),
                 notification_route,
                 None,
             ) {
@@ -57509,6 +57530,7 @@ pub fn runtime_main(task_key: usize) -> ! {
                 );
             },
         );
+        runtime_signal_one_way_completion(command, completion_committed);
         #[cfg(not(sel4_config_kernel_mcs))]
         if intake.reply_cap_available {
             // SAFETY: Only `seL4_Call` installs the reply cap consumed here.
@@ -57517,6 +57539,24 @@ pub fn runtime_main(task_key: usize) -> ! {
             unsafe {
                 let reply0 = completion.result as sel4_sys::seL4_Word;
                 sel4_sys::seL4_ReplyWithMRs(
+                    sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
+                    &reply0,
+                    core::ptr::null(),
+                    core::ptr::null(),
+                    core::ptr::null(),
+                );
+            }
+        }
+        #[cfg(sel4_config_kernel_mcs)]
+        if intake.reply_cap_available {
+            // SAFETY: Recv/NBRecv installed this Call's association into the
+            // compiler-declared Reply object in slot 6. The retained intake is
+            // removed exactly once above, and the one-in-flight ABI forbids a
+            // second Call from replacing the association before this send.
+            unsafe {
+                let reply0 = completion.result as sel4_sys::seL4_Word;
+                sel4_sys::seL4_MCS_ReplyWithMRs(
+                    pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as sel4_sys::seL4_CPtr,
                     sel4_sys::seL4_MessageInfo::new(0, 0, 0, 1),
                     &reply0,
                     core::ptr::null(),
@@ -64863,6 +64903,37 @@ mod tests {
     }
 
     #[test]
+    fn mcs_one_way_completion_wake_is_postcommit_and_identity_bound() {
+        let command = DriverTaskCommandRecord {
+            sequence: 0x8000_50ff,
+            opcode: OPCODE_SERVICE,
+            flags: DRIVER_RUNTIME_COMMAND_FLAG_ONE_WAY,
+            arg0: HOT_PATH_SDIO_HOST,
+            arg1: ROLE_SDIO,
+            aux0: 0,
+            aux1: 0,
+            budget: budget(),
+            frame: DriverFrameDescriptor::empty(),
+        };
+        assert!(!runtime_one_way_completion_wake_due(command, false));
+        assert!(runtime_one_way_completion_wake_due(command, true));
+        assert!(!runtime_one_way_completion_wake_due(
+            DriverTaskCommandRecord {
+                sequence: 0,
+                ..command
+            },
+            true,
+        ));
+        assert!(!runtime_one_way_completion_wake_due(
+            DriverTaskCommandRecord {
+                flags: 0,
+                ..command
+            },
+            true,
+        ));
+    }
+
+    #[test]
     fn steady_service_progress_is_sequence_last_and_identity_exact() {
         let _guard = test_guard();
         let generation = 0x4359_5108;
@@ -70192,10 +70263,31 @@ mod tests {
         descriptor: DriverRuntimeInitDescriptor,
         hot_path: u32,
     ) -> DriverRuntimeInitDescriptor {
-        descriptor.with_sealed_identity(
-            runtime_task_key_for_hot_path(hot_path) as u32,
-            runtime_artifact_hash_for_hot_path(hot_path),
-        )
+        let task_key = runtime_task_key_for_hot_path(hot_path) as u32;
+        let (slot, core, budget, standard_badge, timeout_badge) = match hot_path {
+            HOT_PATH_SERIAL_CONSOLE => (10, 1, 500, 0x26e2_0000, 0x26ed_000b),
+            HOT_PATH_USB_KEYBOARD => (11, 1, 1_000, 0x26e2_0001, 0x26ed_000c),
+            HOT_PATH_HDMI_TEXT => (12, 2, 400, 0x26e2_0002, 0x26ed_000d),
+            HOT_PATH_GENET_NIC => (13, 3, 1_000, 0x26e2_0003, 0x26ed_000e),
+            HOT_PATH_CYW43_WIFI => (14, 3, 1_500, 0x26e2_0004, 0x26ed_000f),
+            HOT_PATH_SDIO_HOST => (15, 3, 1_500, 0x26e2_0005, 0x26ed_0010),
+            HOT_PATH_PCIE_ROOT => (16, 2, 400, 0x26e2_0006, 0x26ed_0011),
+            _ => (10, 1, 500, 0x26e2_0000, 0x26ed_000b),
+        };
+        descriptor
+            .with_mcs_scheduler(
+                task_key,
+                slot,
+                8,
+                core,
+                2,
+                core,
+                budget,
+                10_000,
+                standard_badge,
+                timeout_badge,
+            )
+            .with_sealed_identity(task_key, runtime_artifact_hash_for_hot_path(hot_path))
     }
 
     fn descriptor_for(hot_path: u32, role: u32) -> DriverRuntimeInitDescriptor {

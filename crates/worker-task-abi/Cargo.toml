@@ -1,0 +1,11 @@
+# Author: Lukas Bower
+# Purpose: Configure the fixed-layout ABI shared by isolated Worker tasks and their supervisor.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "worker-task-abi"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]

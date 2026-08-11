@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Compare coh-status convergence transcript against shared fixtures.
 // Author: Lukas Bower
@@ -14,19 +14,18 @@ use cohsh::client::{CohClient, InProcessTransport, TailEvent};
 use cohsh::queen;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{role_label, ConsoleVerb};
-use nine_door::NineDoor;
+use nine_door::{NineDoor, ShardLayout};
 use secure9p_codec::OpenMode;
 
 const SCENARIO: &str = "converge_v0";
 const CONSOLE_ACK_FANOUT: usize = 1;
 const WORKER_ID: &str = "worker-1";
 const QUEEN_LOG_PATH: &str = "/log/queen.log";
-const SPAWN_PAYLOAD: &str = "{\"spawn\":\"heartbeat\",\"ticks\":1,\"budget\":{\"ttl_s\":30}}";
 
 #[test]
 fn converge_transcript_matches_fixture() -> Result<()> {
     let start = Instant::now();
-    let server = NineDoor::new();
+    let server = NineDoor::new_with_shard_layout(worker_shards());
     seed_worker(&server)?;
 
     let lines = run_converge_transcript(&server)?;
@@ -47,7 +46,7 @@ fn seed_worker(server: &NineDoor) -> Result<()> {
     let mut client = CohClient::connect(transport, Role::Queen, None)?;
     let payload = queen::spawn("heartbeat", ["ticks=4"].iter().copied())?;
     write_payload(&mut client, queen::queen_ctl_path(), payload.as_bytes())?;
-    let telemetry_path = format!("/worker/{}/telemetry", WORKER_ID);
+    let telemetry_path = worker_telemetry_path();
     write_payload(&mut client, &telemetry_path, b"tick 1\n")?;
     write_payload(&mut client, &telemetry_path, b"tick 2\n")?;
     Ok(())
@@ -69,9 +68,7 @@ fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {
     }
 
     append_tail(&mut transcript, &mut client, QUEEN_LOG_PATH)?;
-    append_spawn(&mut transcript, &mut client)?;
-
-    let telemetry_path = format!("/worker/{}/telemetry", WORKER_ID);
+    let telemetry_path = worker_telemetry_path();
     append_tail(&mut transcript, &mut client, &telemetry_path)?;
 
     for _ in 0..CONSOLE_ACK_FANOUT {
@@ -106,22 +103,15 @@ fn append_tail(
     Ok(())
 }
 
-fn append_spawn(
-    transcript: &mut Vec<String>,
-    client: &mut CohClient<InProcessTransport>,
-) -> Result<()> {
-    write_payload(client, queen::queen_ctl_path(), SPAWN_PAYLOAD.as_bytes())?;
-    let detail = format!(
-        "path={} bytes={}",
-        queen::queen_ctl_path(),
-        SPAWN_PAYLOAD.len()
-    );
-    transcript.push(render_ack_line(
-        AckStatus::Ok,
-        ConsoleVerb::Echo.ack_label(),
-        Some(detail.as_str()),
-    ));
-    Ok(())
+fn worker_shards() -> ShardLayout {
+    ShardLayout::enabled(8, true)
+}
+
+fn worker_telemetry_path() -> String {
+    format!(
+        "/{}",
+        worker_shards().worker_telemetry_path(WORKER_ID).join("/")
+    )
 }
 
 fn write_payload<T: cohsh_core::Secure9pTransport>(

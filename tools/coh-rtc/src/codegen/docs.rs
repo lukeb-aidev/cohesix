@@ -296,14 +296,19 @@ impl DocFragments {
                 signing.required
             )
             .ok();
-            if let Some(path) = signing.key_path.as_deref() {
-                writeln!(schema_md, "- `cas.signing.key_path`: `{}`", path).ok();
+            if let Some(path) = signing.verification_key_path.as_deref() {
+                writeln!(
+                    schema_md,
+                    "- `cas.signing.verification_key_path`: `{}`",
+                    path
+                )
+                .ok();
             } else {
-                writeln!(schema_md, "- `cas.signing.key_path`: `(none)`").ok();
+                writeln!(schema_md, "- `cas.signing.verification_key_path`: `(none)`").ok();
             }
         } else {
             writeln!(schema_md, "- `cas.signing.required`: `(none)`").ok();
-            writeln!(schema_md, "- `cas.signing.key_path`: `(none)`").ok();
+            writeln!(schema_md, "- `cas.signing.verification_key_path`: `(none)`").ok();
         }
         writeln!(
             schema_md,

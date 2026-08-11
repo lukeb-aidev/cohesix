@@ -12,7 +12,7 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 #[allow(clippy::all)]
-mod generated {
+pub(crate) mod generated {
     ::core::include!(::core::concat!(
         ::core::env!("CARGO_MANIFEST_DIR"),
         "/src/generated/policy.rs"

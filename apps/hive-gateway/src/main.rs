@@ -9,7 +9,9 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::env;
+use std::fs;
 use std::net::SocketAddr;
+use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TryRecvError, TrySendError};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, TryLockError};
@@ -25,6 +27,11 @@ use axum::{Json, Router};
 use clap::Parser;
 use cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT;
 use cohesix_ticket::Role;
+use cohesix_worker_evidence::{
+    parse_evidence, parse_target_session, ArtifactState, ExecutionProof, KernelObjectInventory,
+    LifecycleState, ReceiptState, Sha256Hex, TargetClass, TargetSession, ValidatedEvidence,
+    Verdict, WorkerRole,
+};
 use cohsh::policy::PolicyOverrides;
 use cohsh::{
     CohshPolicy, PoolKind, Session, SessionPool, TransportFactory, CLIENT_LOG_PATH,
@@ -44,7 +51,7 @@ use cohsh_core::{
     parse_ack, parse_role, AckStatus, RoleParseMode, MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN,
     MAX_LINE_LEN, MAX_PATH_LEN, MAX_TAIL_LINES, MAX_TICKET_LEN,
 };
-use nine_door::NineDoor;
+use nine_door::{NineDoor, ShardLayout};
 use serde::{Deserialize, Serialize};
 use tokio::net::TcpListener;
 use tokio::signal;
@@ -73,11 +80,13 @@ const BROKER_CONTROL_BURST: usize = 6;
 const TELEMETRY_WRITE_BATCH_MAX: usize = 4;
 const BROKER_IDLE_WAIT_MS: u64 = 20;
 const DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 1_200;
+const MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES: u64 = 256 * 1024;
 const MAX_CONTROL_WRITE_RETRY_WINDOW_MS: u64 = 60_000;
 const CONTROL_WRITE_RETRY_SLEEP_MS: u64 = 15;
 const CONTROL_WRITE_RETRY_MAX_SLEEP_MS: u64 = 120;
 const CONTROL_WRITE_BACKPRESSURE_COOLDOWN_MS: u64 = 250;
-const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] = &["/proc", "/queen", "/worker", "/gpu"];
+const CACHE_INVALIDATE_CONTROL_NAMESPACES: &[&str] =
+    &["/proc", "/queen", "/shard", "/worker", "/gpu"];
 const CACHE_INVALIDATE_HOST_NAMESPACES: &[&str] = &["/host"];
 const CACHE_INVALIDATE_GPU_NAMESPACES: &[&str] = &["/gpu"];
 const CACHE_INVALIDATE_SCHEDULE_NAMESPACES: &[&str] = &["/proc/schedule"];
@@ -175,6 +184,15 @@ struct Cli {
     /// Use the in-process mock NineDoor backend.
     #[arg(long, default_value_t = false)]
     mock: bool,
+    /// Import one bounded Worker acceptance record for read-only status projection.
+    #[arg(long)]
+    worker_acceptance_evidence: Option<PathBuf>,
+    /// Explicit operator or release root containing the Worker acceptance record.
+    #[arg(long)]
+    worker_acceptance_root: Option<PathBuf>,
+    /// Exact target-session identity for the console target currently behind this gateway.
+    #[arg(long)]
+    target_session: Option<PathBuf>,
 }
 
 #[derive(Clone)]
@@ -193,6 +211,8 @@ struct GatewayInner {
     broker_timeouts: BrokerTimeouts,
     control_write_retry_window_ms: u64,
     bounds: BoundsResponse,
+    backend_class: BackendClass,
+    worker_acceptance: WorkerAcceptanceImport,
     policy: CohshPolicy,
     broker: Arc<BrokerMetrics>,
     proc_cache: Mutex<ProcReadCache>,
@@ -208,6 +228,162 @@ struct BoundsResponse {
     control_plane: ControlPlaneBounds,
     policy: PolicyBounds,
     observability: ObservabilityBounds,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_runtime: Option<WorkerRuntimeBounds>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum WorkerDeclaration {
+    Executable,
+    ModelOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WorkerRoleBounds {
+    role: String,
+    declaration: WorkerDeclaration,
+    executable_slots: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct WorkerRuntimeBounds {
+    roles: Vec<WorkerRoleBounds>,
+    task_abi_schema: String,
+    task_abi_version: u16,
+    worker_observation_schema: String,
+    worker_integration_evidence_schema: String,
+    maximum_live_tasks: u16,
+    canonical_telemetry_template: String,
+    shard_bits: u8,
+    legacy_worker_alias: bool,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+#[allow(dead_code)]
+enum BackendClass {
+    HostModel,
+    ConsoleProjection,
+    Unknown,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct WorkerAcceptanceRoleSummary {
+    role: &'static str,
+    lifecycle: &'static str,
+    artifact: &'static str,
+    receipt: &'static str,
+    execution_proof: &'static str,
+    slot: u16,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+    image_sha256: String,
+    ready_sequence: u64,
+    completion_sequence: u64,
+    core: u8,
+    scheduling_context: WorkerSchedulingContextSummary,
+    object_inventory: KernelObjectInventorySummary,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct WorkerSchedulingContextSummary {
+    budget_us: u32,
+    period_us: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct KernelObjectInventorySummary {
+    tcbs: u32,
+    scheduling_contexts: u32,
+    reply_objects: u32,
+    vspaces: u32,
+    cnodes: u32,
+    page_tables: u32,
+    asids: u32,
+    frames: u32,
+    endpoints: u32,
+    notifications: u32,
+    fault_caps: u32,
+    timeout_fault_caps: u32,
+    cspace_slots: u32,
+    untyped_bytes: u64,
+}
+
+impl From<&KernelObjectInventory> for KernelObjectInventorySummary {
+    fn from(value: &KernelObjectInventory) -> Self {
+        Self {
+            tcbs: value.tcbs,
+            scheduling_contexts: value.scheduling_contexts,
+            reply_objects: value.reply_objects,
+            vspaces: value.vspaces,
+            cnodes: value.cnodes,
+            page_tables: value.page_tables,
+            asids: value.asids,
+            frames: value.frames,
+            endpoints: value.endpoints,
+            notifications: value.notifications,
+            fault_caps: value.fault_caps,
+            timeout_fault_caps: value.timeout_fault_caps,
+            cspace_slots: value.cspace_slots,
+            untyped_bytes: value.untyped_bytes,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct TargetSessionSummary {
+    target_session_sha256: String,
+    manifest_sha256: String,
+    root_image_sha256: String,
+    worker_archive_sha256: String,
+    worker_image_manifest_sha256: String,
+    worker_abi_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct WorkerAcceptanceSummary {
+    schema: String,
+    record_kind: &'static str,
+    evidence_sha256: String,
+    verdict: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    target: Option<&'static str>,
+    execution_proof: &'static str,
+    target_session: TargetSessionSummary,
+    topology_sha256: String,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    workers: Vec<WorkerAcceptanceRoleSummary>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+enum WorkerAcceptanceDiagnosticCode {
+    NotConfigured,
+    IncompleteConfiguration,
+    UnsafeRoot,
+    OutsideRoot,
+    SymlinkTraversal,
+    NotRegularFile,
+    RecordTooLarge,
+    ReadFailed,
+    InvalidEvidence,
+    InvalidTargetSession,
+    TargetSessionMismatch,
+    ManifestMismatch,
+    UnsupportedRecordKind,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct WorkerAcceptanceDiagnostic {
+    code: WorkerAcceptanceDiagnosticCode,
+}
+
+#[derive(Debug, Clone)]
+struct WorkerAcceptanceImport {
+    summary: Option<WorkerAcceptanceSummary>,
+    diagnostic: Option<WorkerAcceptanceDiagnostic>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -596,6 +772,12 @@ fn read_cache_valid_entry(cache: &mut ProcReadCache, path: &str) -> Option<Share
 struct GatewayStatusResponse {
     connected: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    backend_class: Option<BackendClass>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_acceptance: Option<WorkerAcceptanceSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    worker_acceptance_diagnostic: Option<WorkerAcceptanceDiagnostic>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     last_change_unix_ms: Option<u128>,
@@ -773,7 +955,19 @@ async fn main() -> Result<()> {
         policy.pool.control_sessions, policy.pool.telemetry_sessions
     );
     let pool = build_session_pool(&config, policy)?;
-    let bounds = build_bounds();
+    let bounds = build_bounds().context("load generated Worker runtime bounds")?;
+    let worker_acceptance = load_worker_acceptance(
+        config.worker_acceptance_root.as_deref(),
+        config.worker_acceptance_evidence.as_deref(),
+        config.target_session.as_deref(),
+        CohshPolicy::manifest_hash(),
+    );
+    if let Some(diagnostic) = worker_acceptance.diagnostic.as_ref() {
+        warn!(
+            "Worker acceptance evidence unavailable: {:?}",
+            diagnostic.code
+        );
+    }
     let shutdown = Arc::new(AtomicBool::new(false));
     let broker_metrics = Arc::new(BrokerMetrics::default());
     seed_relay_metrics_from_env(&broker_metrics);
@@ -792,6 +986,12 @@ async fn main() -> Result<()> {
             broker_timeouts: config.broker_timeouts,
             control_write_retry_window_ms: config.control_write_retry_window_ms,
             bounds,
+            backend_class: if config.mock {
+                BackendClass::HostModel
+            } else {
+                BackendClass::ConsoleProjection
+            },
+            worker_acceptance,
             policy,
             broker: broker_metrics,
             proc_cache: Mutex::new(ProcReadCache::default()),
@@ -852,6 +1052,9 @@ struct GatewayConfig {
     control_write_retry_window_ms: u64,
     mock: bool,
     allow_non_loopback_bind: bool,
+    worker_acceptance_evidence: Option<PathBuf>,
+    worker_acceptance_root: Option<PathBuf>,
+    target_session: Option<PathBuf>,
 }
 
 impl GatewayConfig {
@@ -883,6 +1086,16 @@ impl GatewayConfig {
         let role_value = env_override(cli.role, "queen", "COH_ROLE");
         let role = parse_role(&role_value, RoleParseMode::AllowWorkerAlias)
             .ok_or_else(|| anyhow::anyhow!("unsupported role '{role_value}'"))?;
+        let worker_acceptance_evidence = optional_path_override(
+            cli.worker_acceptance_evidence,
+            "HIVE_GATEWAY_WORKER_ACCEPTANCE_EVIDENCE",
+        );
+        let worker_acceptance_root = optional_path_override(
+            cli.worker_acceptance_root,
+            "HIVE_GATEWAY_WORKER_ACCEPTANCE_ROOT",
+        );
+        let target_session =
+            optional_path_override(cli.target_session, "HIVE_GATEWAY_TARGET_SESSION");
         let mut ticket = cli.ticket;
         if ticket.is_none() {
             if let Ok(value) = env::var("COH_TICKET") {
@@ -951,6 +1164,9 @@ impl GatewayConfig {
             control_write_retry_window_ms,
             mock,
             allow_non_loopback_bind,
+            worker_acceptance_evidence,
+            worker_acceptance_root,
+            target_session,
         })
     }
 }
@@ -1014,6 +1230,282 @@ fn env_override_opt_u64(value: Option<u64>, keys: &[&str]) -> Option<u64> {
         }
     }
     None
+}
+
+fn optional_path_override(value: Option<PathBuf>, key: &str) -> Option<PathBuf> {
+    if value.is_some() {
+        return value;
+    }
+    let value = env::var_os(key)?;
+    if value.is_empty() {
+        None
+    } else {
+        Some(PathBuf::from(value))
+    }
+}
+
+fn acceptance_diagnostic(code: WorkerAcceptanceDiagnosticCode) -> WorkerAcceptanceImport {
+    WorkerAcceptanceImport {
+        summary: None,
+        diagnostic: Some(WorkerAcceptanceDiagnostic { code }),
+    }
+}
+
+fn normalize_path_without_parent(path: &Path) -> Option<PathBuf> {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => return None,
+            other => normalized.push(other.as_os_str()),
+        }
+    }
+    Some(normalized)
+}
+
+fn read_bounded_trusted_file(
+    root: &Path,
+    selected: &Path,
+) -> Result<Vec<u8>, WorkerAcceptanceDiagnosticCode> {
+    let current_dir = env::current_dir().map_err(|_| WorkerAcceptanceDiagnosticCode::UnsafeRoot)?;
+    let root = if root.is_absolute() {
+        root.to_path_buf()
+    } else {
+        current_dir.join(root)
+    };
+    let selected = if selected.is_absolute() {
+        selected.to_path_buf()
+    } else {
+        current_dir.join(selected)
+    };
+    let root =
+        normalize_path_without_parent(&root).ok_or(WorkerAcceptanceDiagnosticCode::UnsafeRoot)?;
+    let selected = normalize_path_without_parent(&selected)
+        .ok_or(WorkerAcceptanceDiagnosticCode::OutsideRoot)?;
+    let root_metadata =
+        fs::symlink_metadata(&root).map_err(|_| WorkerAcceptanceDiagnosticCode::UnsafeRoot)?;
+    if root_metadata.file_type().is_symlink() || !root_metadata.is_dir() {
+        return Err(WorkerAcceptanceDiagnosticCode::UnsafeRoot);
+    }
+    let relative = selected
+        .strip_prefix(&root)
+        .map_err(|_| WorkerAcceptanceDiagnosticCode::OutsideRoot)?;
+    if relative.as_os_str().is_empty() {
+        return Err(WorkerAcceptanceDiagnosticCode::NotRegularFile);
+    }
+    let mut cursor = root.clone();
+    for component in relative.components() {
+        cursor.push(component.as_os_str());
+        let metadata = fs::symlink_metadata(&cursor)
+            .map_err(|_| WorkerAcceptanceDiagnosticCode::ReadFailed)?;
+        if metadata.file_type().is_symlink() {
+            return Err(WorkerAcceptanceDiagnosticCode::SymlinkTraversal);
+        }
+    }
+    let canonical_root =
+        fs::canonicalize(&root).map_err(|_| WorkerAcceptanceDiagnosticCode::UnsafeRoot)?;
+    let canonical_selected =
+        fs::canonicalize(&selected).map_err(|_| WorkerAcceptanceDiagnosticCode::ReadFailed)?;
+    if !canonical_selected.starts_with(&canonical_root) {
+        return Err(WorkerAcceptanceDiagnosticCode::OutsideRoot);
+    }
+    let metadata = fs::metadata(&canonical_selected)
+        .map_err(|_| WorkerAcceptanceDiagnosticCode::ReadFailed)?;
+    if !metadata.is_file() {
+        return Err(WorkerAcceptanceDiagnosticCode::NotRegularFile);
+    }
+    if metadata.len() > MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES {
+        return Err(WorkerAcceptanceDiagnosticCode::RecordTooLarge);
+    }
+    let bytes =
+        fs::read(&canonical_selected).map_err(|_| WorkerAcceptanceDiagnosticCode::ReadFailed)?;
+    if bytes.len() as u64 > MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES {
+        return Err(WorkerAcceptanceDiagnosticCode::RecordTooLarge);
+    }
+    Ok(bytes)
+}
+
+fn load_worker_acceptance(
+    root: Option<&Path>,
+    evidence: Option<&Path>,
+    target_session: Option<&Path>,
+    expected_manifest_sha256: &str,
+) -> WorkerAcceptanceImport {
+    let (Some(root), Some(evidence), Some(target_session)) = (root, evidence, target_session)
+    else {
+        return if root.is_none() && evidence.is_none() && target_session.is_none() {
+            acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::NotConfigured)
+        } else {
+            acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::IncompleteConfiguration)
+        };
+    };
+    let bytes = match read_bounded_trusted_file(root, evidence) {
+        Ok(bytes) => bytes,
+        Err(code) => return acceptance_diagnostic(code),
+    };
+    let target_session_bytes = match read_bounded_trusted_file(root, target_session) {
+        Ok(bytes) => bytes,
+        Err(code) => return acceptance_diagnostic(code),
+    };
+    let current_target_session = match parse_target_session(&target_session_bytes) {
+        Ok(session) => session,
+        Err(_) => {
+            return acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::InvalidTargetSession)
+        }
+    };
+    if current_target_session.manifest_sha256.0 != expected_manifest_sha256 {
+        return acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::ManifestMismatch);
+    }
+    let evidence_sha256 = Sha256Hex::digest(&bytes).0;
+    let target_session_sha256 = Sha256Hex::digest(&target_session_bytes).0;
+    match parse_evidence(&bytes) {
+        Ok(ValidatedEvidence::Component(record)) => {
+            if record.target_session != current_target_session {
+                return acceptance_diagnostic(
+                    WorkerAcceptanceDiagnosticCode::TargetSessionMismatch,
+                );
+            }
+            let summary = acceptance_summary(&record, evidence_sha256, target_session_sha256);
+            WorkerAcceptanceImport {
+                summary: Some(summary),
+                diagnostic: None,
+            }
+        }
+        Ok(_) => acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::UnsupportedRecordKind),
+        Err(_) => acceptance_diagnostic(WorkerAcceptanceDiagnosticCode::InvalidEvidence),
+    }
+}
+
+fn acceptance_summary(
+    record: &cohesix_worker_evidence::WorkerComponentEvidence,
+    evidence_sha256: String,
+    target_session_sha256: String,
+) -> WorkerAcceptanceSummary {
+    let target = target_label(record.target);
+    let verdict = verdict_label(record.verdict);
+    let execution_proof = if record.verdict == Verdict::Pass {
+        target_proof_label(record.target)
+    } else {
+        "none"
+    };
+    let workers = record
+        .workers
+        .iter()
+        .map(|worker| WorkerAcceptanceRoleSummary {
+            role: worker_role_label(worker.identity.role),
+            lifecycle: lifecycle_label(worker.state.lifecycle),
+            artifact: artifact_label(worker.state.artifact),
+            receipt: receipt_label(worker.state.receipt),
+            execution_proof: proof_label(worker.state.execution_proof),
+            slot: worker.identity.slot,
+            lease_epoch: worker.identity.lease_epoch,
+            supervisor_generation: worker.identity.supervisor_generation,
+            cap_generation: worker.identity.cap_generation,
+            image_sha256: worker.image_sha256.0.clone(),
+            ready_sequence: worker.ready_sequence,
+            completion_sequence: worker.completion_sequence,
+            core: worker.core,
+            scheduling_context: WorkerSchedulingContextSummary {
+                budget_us: worker.scheduling_context.budget_us,
+                period_us: worker.scheduling_context.period_us,
+            },
+            object_inventory: KernelObjectInventorySummary::from(&worker.object_inventory),
+        })
+        .collect();
+    WorkerAcceptanceSummary {
+        schema: record.schema.clone(),
+        record_kind: "target-component",
+        evidence_sha256,
+        verdict,
+        target: Some(target),
+        execution_proof,
+        target_session: target_session_summary(&record.target_session, target_session_sha256),
+        topology_sha256: record.topology_sha256.0.clone(),
+        workers,
+    }
+}
+
+fn target_session_summary(
+    session: &TargetSession,
+    target_session_sha256: String,
+) -> TargetSessionSummary {
+    TargetSessionSummary {
+        target_session_sha256,
+        manifest_sha256: session.manifest_sha256.0.clone(),
+        root_image_sha256: session.root_image_sha256.0.clone(),
+        worker_archive_sha256: session.worker_archive_sha256.0.clone(),
+        worker_image_manifest_sha256: session.worker_image_manifest_sha256.0.clone(),
+        worker_abi_sha256: session.worker_abi_sha256.0.clone(),
+    }
+}
+
+const fn verdict_label(verdict: Verdict) -> &'static str {
+    match verdict {
+        Verdict::Pass => "PASS",
+        Verdict::Fail => "FAIL",
+    }
+}
+
+const fn target_label(target: TargetClass) -> &'static str {
+    match target {
+        TargetClass::Qemu => "qemu",
+        TargetClass::Pi4 => "pi4",
+    }
+}
+
+const fn target_proof_label(target: TargetClass) -> &'static str {
+    match target {
+        TargetClass::Qemu => "qemu",
+        TargetClass::Pi4 => "fresh-pi",
+    }
+}
+
+const fn worker_role_label(role: WorkerRole) -> &'static str {
+    match role {
+        WorkerRole::WorkerHeartbeat => "worker-heartbeat",
+        WorkerRole::WorkerGpu => "worker-gpu",
+        WorkerRole::WorkerLora => "worker-lora",
+        WorkerRole::WorkerBus => "worker-bus",
+    }
+}
+
+const fn lifecycle_label(state: LifecycleState) -> &'static str {
+    match state {
+        LifecycleState::Absent => "absent",
+        LifecycleState::Queued => "queued",
+        LifecycleState::Starting => "starting",
+        LifecycleState::Ready => "ready",
+        LifecycleState::Closing => "closing",
+        LifecycleState::Faulted => "faulted",
+        LifecycleState::Terminal => "terminal",
+    }
+}
+
+const fn artifact_label(state: ArtifactState) -> &'static str {
+    match state {
+        ArtifactState::Missing => "missing",
+        ArtifactState::Verified => "verified",
+        ArtifactState::Mismatch => "mismatch",
+    }
+}
+
+const fn receipt_label(state: ReceiptState) -> &'static str {
+    match state {
+        ReceiptState::None => "none",
+        ReceiptState::Pending => "pending",
+        ReceiptState::Confirmed => "confirmed",
+        ReceiptState::Rejected => "rejected",
+        ReceiptState::Stale => "stale",
+    }
+}
+
+const fn proof_label(proof: ExecutionProof) -> &'static str {
+    match proof {
+        ExecutionProof::None => "none",
+        ExecutionProof::HostModel => "host-model",
+        ExecutionProof::Qemu => "qemu",
+        ExecutionProof::FreshPi => "fresh-pi",
+    }
 }
 
 fn broker_response_timeout_ms(value: Option<u64>, default_ms: u64, label: &str) -> Result<u64> {
@@ -1131,7 +1623,7 @@ fn apply_policy_overrides(policy: CohshPolicy, config: &GatewayConfig) -> Result
 
 fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<SharedPool> {
     if config.mock {
-        let server = NineDoor::new();
+        let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
         let factory: Arc<dyn TransportFactory> = Arc::new(move || {
             Ok(Box::new(NineDoorTransport::new(server.clone()))
                 as Box<dyn cohsh::Transport + Send>)
@@ -1157,8 +1649,90 @@ fn build_session_pool(config: &GatewayConfig, policy: CohshPolicy) -> Result<Sha
     ))
 }
 
-fn build_bounds() -> BoundsResponse {
-    BoundsResponse {
+#[derive(Debug, Deserialize)]
+struct GeneratedGatewayWorkerProfile {
+    namespace: GeneratedGatewayNamespace,
+    schemas: GeneratedGatewaySchemas,
+    worker: GeneratedGatewayWorker,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedGatewayNamespace {
+    legacy_worker_alias: bool,
+    shard_bits: u8,
+    telemetry_path_template: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedGatewaySchemas {
+    worker_observation: String,
+    worker_integration_evidence: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedGatewayWorker {
+    maximum_live_tasks: u16,
+    roles: Vec<WorkerRoleBounds>,
+    task_abi_schema: String,
+    task_abi_version: u16,
+}
+
+fn build_worker_runtime_bounds() -> Result<WorkerRuntimeBounds> {
+    const GENERATED_PROFILE: &str =
+        include_str!("../../../configs/generated/cohesix_python_qemu_smp_production.json");
+    let profile: GeneratedGatewayWorkerProfile = serde_json::from_str(GENERATED_PROFILE)
+        .context("parse compiler-generated qemu_smp_production Worker profile")?;
+    if profile.worker.roles.is_empty()
+        || profile.worker.roles.len() > 16
+        || profile.worker.maximum_live_tasks == 0
+        || profile.worker.task_abi_version == 0
+        || profile.namespace.shard_bits == 0
+        || profile.namespace.shard_bits > 8
+        || profile.worker.task_abi_schema.is_empty()
+        || profile.schemas.worker_observation.is_empty()
+        || profile.schemas.worker_integration_evidence.is_empty()
+        || profile.namespace.telemetry_path_template != "/shard/<label>/worker/<id>/telemetry"
+    {
+        anyhow::bail!("invalid compiler-generated Worker runtime bounds");
+    }
+    let executable_slots = profile
+        .worker
+        .roles
+        .iter()
+        .try_fold(0u16, |total, role| total.checked_add(role.executable_slots))
+        .context("generated Worker slot total overflow")?;
+    let mut role_names = profile
+        .worker
+        .roles
+        .iter()
+        .map(|role| role.role.as_str())
+        .collect::<Vec<_>>();
+    role_names.sort_unstable();
+    if role_names.windows(2).any(|pair| pair[0] == pair[1])
+        || executable_slots != profile.worker.maximum_live_tasks
+        || profile.worker.roles.iter().any(|role| {
+            role.role.is_empty()
+                || role.role.len() > MAX_ID_LEN
+                || (role.declaration == WorkerDeclaration::ModelOnly && role.executable_slots != 0)
+        })
+    {
+        anyhow::bail!("inconsistent compiler-generated Worker role matrix");
+    }
+    Ok(WorkerRuntimeBounds {
+        roles: profile.worker.roles,
+        task_abi_schema: profile.worker.task_abi_schema,
+        task_abi_version: profile.worker.task_abi_version,
+        worker_observation_schema: profile.schemas.worker_observation,
+        worker_integration_evidence_schema: profile.schemas.worker_integration_evidence,
+        maximum_live_tasks: profile.worker.maximum_live_tasks,
+        canonical_telemetry_template: profile.namespace.telemetry_path_template,
+        shard_bits: profile.namespace.shard_bits,
+        legacy_worker_alias: profile.namespace.legacy_worker_alias,
+    })
+}
+
+fn build_bounds() -> Result<BoundsResponse> {
+    Ok(BoundsResponse {
         manifest_sha256: CohshPolicy::manifest_hash(),
         secure9p: Secure9pBounds {
             msize: SECURE9P_MSIZE,
@@ -1220,7 +1794,8 @@ fn build_bounds() -> BoundsResponse {
                 preemptions_bytes: PROC_LEASE_PREEMPTIONS_BYTES,
             },
         },
-    }
+        worker_runtime: Some(build_worker_runtime_bounds()?),
+    })
 }
 
 fn build_gateway_broker(
@@ -1863,6 +2438,9 @@ impl AppState {
         });
         GatewayStatusResponse {
             connected: status.connected,
+            backend_class: Some(self.inner.backend_class),
+            worker_acceptance: self.inner.worker_acceptance.summary.clone(),
+            worker_acceptance_diagnostic: self.inner.worker_acceptance.diagnostic.clone(),
             last_error: status.last_error,
             last_change_unix_ms,
             reconnects: status.reconnects,
@@ -2340,8 +2918,8 @@ fn is_cacheable_read_path(path: &str) -> bool {
 fn is_cacheable_list_path(path: &str) -> bool {
     matches!(
         path,
-        "/" | "/proc" | "/queen" | "/worker" | "/gpu" | "/host"
-    )
+        "/" | "/proc" | "/queen" | "/shard" | "/worker" | "/gpu" | "/host"
+    ) || path.starts_with("/shard/")
 }
 
 fn cache_key_in_namespace(key: &str, namespace: &str) -> bool {
@@ -2743,6 +3321,307 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::Barrier;
 
+    const COMPONENT_OUTCOMES: [&str; 25] = [
+        "bounded-control-path",
+        "bounded-receipt-path",
+        "budget-exhaustion-attributed",
+        "combined-notification",
+        "driver-liveness",
+        "durable-completion-order",
+        "fault-before-ready",
+        "fault-during-ipc",
+        "forbidden-blocking-send-refused",
+        "fresh-supervisor-generation",
+        "gpu-grant-confirmed-rejected-stale",
+        "gpu-release-confirmed-rejected-stale",
+        "gpu-renew-confirmed-rejected-stale",
+        "heartbeat-progress",
+        "lora-activate-confirmed-rejected-stale",
+        "lora-export-confirmed-rejected-stale",
+        "lora-import-confirmed-rejected-stale",
+        "lora-rollback-confirmed-rejected-stale",
+        "maximum-slot-refused",
+        "no-post-revoke-activity",
+        "operator-liveness",
+        "same-role-sequential-instances",
+        "stale-record-revoked",
+        "teardown-zero-leak",
+        "timeout-attributed",
+    ];
+
+    fn valid_target_component(manifest_sha256: &str) -> (Vec<u8>, Vec<u8>) {
+        let hash = "0".repeat(64);
+        let target_session = serde_json::json!({
+            "target": "qemu",
+            "source_sha256": hash,
+            "manifest_sha256": manifest_sha256,
+            "kernel_sha256": "1".repeat(64),
+            "root_image_sha256": "2".repeat(64),
+            "driver_archive_sha256": "3".repeat(64),
+            "driver_manifest_sha256": "4".repeat(64),
+            "cyw43_coexistence_record_sha256": "5".repeat(64),
+            "worker_archive_sha256": "6".repeat(64),
+            "worker_image_manifest_sha256": "7".repeat(64),
+            "worker_abi_sha256": "8".repeat(64),
+        });
+        let inventory = serde_json::json!({
+            "tcbs": 1,
+            "scheduling_contexts": 1,
+            "reply_objects": 0,
+            "vspaces": 1,
+            "cnodes": 1,
+            "page_tables": 8,
+            "asids": 1,
+            "frames": 16,
+            "endpoints": 0,
+            "notifications": 1,
+            "fault_caps": 1,
+            "timeout_fault_caps": 1,
+            "cspace_slots": 64,
+            "untyped_bytes": 1_048_576,
+        });
+        let roles = [
+            ("worker-heartbeat", "none", 0_u16),
+            ("worker-gpu", "confirmed", 1_u16),
+            ("worker-lora", "confirmed", 2_u16),
+        ];
+        let workers = roles
+            .into_iter()
+            .enumerate()
+            .map(|(index, (role, receipt, slot))| {
+                serde_json::json!({
+                    "identity": {
+                        "role": role,
+                        "slot": slot,
+                        "lease_epoch": 1,
+                        "supervisor_generation": index + 1,
+                        "cap_generation": 1,
+                    },
+                    "state": {
+                        "declaration": "executable",
+                        "lifecycle": "ready",
+                        "artifact": "verified",
+                        "receipt": receipt,
+                        "execution_proof": "qemu",
+                    },
+                    "image_sha256": format!("{}", index + 1).repeat(64),
+                    "ready_sequence": 1,
+                    "completion_sequence": 2,
+                    "endpoint_badge": 1_u64 << (index + 1),
+                    "fault_badge": 1_u64 << (index + 9),
+                    "core": index,
+                    "scheduling_context": {"budget_us": 100, "period_us": 1_000},
+                    "object_inventory": inventory.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let evidence = serde_json::json!({
+            "schema": "cohesix-worker-task-evidence/v1",
+            "record_kind": "target-component",
+            "target": "qemu",
+            "target_session": target_session.clone(),
+            "topology_sha256": "9".repeat(64),
+            "workers": workers,
+            "integration_evidence": [
+                {"id":"gpu-receipt-path","record_kind":"worker-integration","sha256":"a".repeat(64)},
+                {"id":"peft-receipt-path","record_kind":"worker-integration","sha256":"b".repeat(64)},
+                {"id":"worker-control","record_kind":"worker-integration","sha256":"c".repeat(64)},
+            ],
+            "outcomes": COMPONENT_OUTCOMES.map(|id| serde_json::json!({
+                "id": id,
+                "class": "observation",
+                "result": "pass",
+            })),
+            "raw_evidence": [{
+                "id":"qemu-worker-transcript",
+                "sha256":"d".repeat(64),
+                "bytes":128,
+            }],
+            "verdict":"PASS",
+            "blockers":[],
+        });
+        (
+            serde_json::to_vec(&target_session).expect("serialize target session"),
+            serde_json::to_vec(&evidence).expect("serialize component evidence"),
+        )
+    }
+
+    #[test]
+    fn generated_worker_bounds_are_exact_and_bounded() {
+        let bounds = build_worker_runtime_bounds().expect("generated Worker profile parses");
+        assert_eq!(bounds.maximum_live_tasks, 3);
+        assert_eq!(bounds.task_abi_schema, "worker-task-abi/v1");
+        assert_eq!(bounds.task_abi_version, 1);
+        assert_eq!(
+            bounds.canonical_telemetry_template,
+            "/shard/<label>/worker/<id>/telemetry"
+        );
+        assert_eq!(
+            bounds
+                .roles
+                .iter()
+                .filter(|role| role.declaration == WorkerDeclaration::Executable)
+                .map(|role| role.executable_slots)
+                .sum::<u16>(),
+            bounds.maximum_live_tasks
+        );
+        assert_eq!(
+            bounds
+                .roles
+                .iter()
+                .find(|role| role.role == "worker-bus")
+                .map(|role| (&role.declaration, role.executable_slots)),
+            Some((&WorkerDeclaration::ModelOnly, 0))
+        );
+    }
+
+    #[test]
+    fn worker_acceptance_import_requires_all_explicit_paths() {
+        let manifest = CohshPolicy::manifest_hash();
+        let absent = load_worker_acceptance(None, None, None, manifest);
+        assert_eq!(
+            absent.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::NotConfigured)
+        );
+        let incomplete = load_worker_acceptance(Some(Path::new(".")), None, None, manifest);
+        assert_eq!(
+            incomplete.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::IncompleteConfiguration)
+        );
+    }
+
+    #[test]
+    fn worker_acceptance_import_binds_current_component_and_redacts_capabilities() {
+        let root = tempfile::tempdir().expect("acceptance root");
+        let target_session = root.path().join("target-session.json");
+        let evidence = root.path().join("worker-component.json");
+        let manifest = CohshPolicy::manifest_hash();
+        let (session_bytes, evidence_bytes) = valid_target_component(manifest);
+        fs::write(&target_session, session_bytes).expect("write target session");
+        fs::write(&evidence, evidence_bytes).expect("write component evidence");
+        let imported = load_worker_acceptance(
+            Some(root.path()),
+            Some(&evidence),
+            Some(&target_session),
+            manifest,
+        );
+        assert!(imported.diagnostic.is_none());
+        let summary = imported.summary.expect("validated summary");
+        assert_eq!(summary.record_kind, "target-component");
+        assert_eq!(summary.verdict, "PASS");
+        assert_eq!(summary.target, Some("qemu"));
+        assert_eq!(summary.execution_proof, "qemu");
+        assert_eq!(summary.evidence_sha256.len(), 64);
+        assert_eq!(summary.target_session.manifest_sha256, manifest);
+        assert_eq!(summary.workers.len(), 3);
+        let serialized = serde_json::to_string(&summary).expect("serialize summary");
+        assert!(!serialized.contains(root.path().to_string_lossy().as_ref()));
+        assert!(!serialized.contains("endpoint_badge"));
+        assert!(!serialized.contains("fault_badge"));
+    }
+
+    #[test]
+    fn worker_acceptance_import_rejects_outside_and_oversized_files() {
+        let root = tempfile::tempdir().expect("acceptance root");
+        let target_session = root.path().join("target-session.json");
+        let (session_bytes, _) = valid_target_component(CohshPolicy::manifest_hash());
+        fs::write(&target_session, session_bytes).expect("write target session");
+        let outside = tempfile::NamedTempFile::new().expect("outside evidence");
+        let imported = load_worker_acceptance(
+            Some(root.path()),
+            Some(outside.path()),
+            Some(&target_session),
+            CohshPolicy::manifest_hash(),
+        );
+        assert_eq!(
+            imported.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::OutsideRoot)
+        );
+
+        let oversized = root.path().join("oversized.json");
+        fs::write(
+            &oversized,
+            vec![b'x'; MAX_WORKER_ACCEPTANCE_EVIDENCE_BYTES as usize + 1],
+        )
+        .expect("write oversized evidence");
+        let imported = load_worker_acceptance(
+            Some(root.path()),
+            Some(&oversized),
+            Some(&target_session),
+            CohshPolicy::manifest_hash(),
+        );
+        assert_eq!(
+            imported.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::RecordTooLarge)
+        );
+    }
+
+    #[test]
+    fn worker_acceptance_import_rejects_manifest_and_target_session_drift() {
+        let root = tempfile::tempdir().expect("acceptance root");
+        let target_session = root.path().join("target-session.json");
+        let evidence = root.path().join("worker-component.json");
+        let manifest = CohshPolicy::manifest_hash();
+        let (session_bytes, evidence_bytes) = valid_target_component(manifest);
+        fs::write(&target_session, &session_bytes).expect("write target session");
+        fs::write(&evidence, evidence_bytes).expect("write component evidence");
+
+        let wrong_manifest = load_worker_acceptance(
+            Some(root.path()),
+            Some(&evidence),
+            Some(&target_session),
+            "f000000000000000000000000000000000000000000000000000000000000000",
+        );
+        assert_eq!(
+            wrong_manifest.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::ManifestMismatch)
+        );
+
+        let mut changed_session: serde_json::Value =
+            serde_json::from_slice(&session_bytes).expect("parse target session");
+        changed_session["root_image_sha256"] = serde_json::Value::String("e".repeat(64));
+        fs::write(
+            &target_session,
+            serde_json::to_vec(&changed_session).expect("serialize changed target session"),
+        )
+        .expect("replace target session");
+        let mismatch = load_worker_acceptance(
+            Some(root.path()),
+            Some(&evidence),
+            Some(&target_session),
+            manifest,
+        );
+        assert_eq!(
+            mismatch.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::TargetSessionMismatch)
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn worker_acceptance_import_rejects_symlink_traversal() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempfile::tempdir().expect("acceptance root");
+        let real = root.path().join("real.json");
+        let link = root.path().join("linked.json");
+        let target_session = root.path().join("target-session.json");
+        let (session_bytes, evidence_bytes) = valid_target_component(CohshPolicy::manifest_hash());
+        fs::write(&target_session, session_bytes).expect("write target session");
+        fs::write(&real, evidence_bytes).expect("write component evidence");
+        symlink(&real, &link).expect("create evidence symlink");
+        let imported = load_worker_acceptance(
+            Some(root.path()),
+            Some(&link),
+            Some(&target_session),
+            CohshPolicy::manifest_hash(),
+        );
+        assert_eq!(
+            imported.diagnostic.map(|diagnostic| diagnostic.code),
+            Some(WorkerAcceptanceDiagnosticCode::SymlinkTraversal)
+        );
+    }
+
     fn test_write_command(
         kind: PoolKind,
         path: &str,
@@ -2924,7 +3803,16 @@ mod tests {
 
     #[test]
     fn cacheable_list_path_covers_hot_roots() {
-        for path in ["/", "/proc", "/queen", "/worker", "/gpu", "/host"] {
+        for path in [
+            "/",
+            "/proc",
+            "/queen",
+            "/shard",
+            "/shard/0a/worker",
+            "/worker",
+            "/gpu",
+            "/host",
+        ] {
             assert!(
                 is_cacheable_list_path(path),
                 "expected cacheable path: {path}"
@@ -2946,6 +3834,7 @@ mod tests {
             cache_invalidation_namespaces("/queen/schedule/ctl", br#"{}"#),
             Some(CACHE_INVALIDATE_SCHEDULE_NAMESPACES)
         );
+        assert!(CACHE_INVALIDATE_CONTROL_NAMESPACES.contains(&"/shard"));
         assert_eq!(
             cache_invalidation_namespaces("/queen/lease/ctl", br#"{"op":"grant"}"#),
             Some(CACHE_INVALIDATE_LEASE_GRANT_PATHS)
@@ -3127,7 +4016,9 @@ mod tests {
         impl ReceiptTransport {
             fn new() -> Self {
                 Self {
-                    attach_transport: NineDoorTransport::new(NineDoor::new()),
+                    attach_transport: NineDoorTransport::new(NineDoor::new_with_shard_layout(
+                        ShardLayout::enabled(8, true),
+                    )),
                     acknowledgements: Vec::new(),
                 }
             }
@@ -3398,6 +4289,9 @@ mod tests {
             control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
             mock: true,
             allow_non_loopback_bind: false,
+            worker_acceptance_evidence: None,
+            worker_acceptance_root: None,
+            target_session: None,
         };
         let policy = CohshPolicy::from_generated();
         let updated = apply_policy_overrides(policy, &config).expect("apply overrides");
@@ -3449,7 +4343,11 @@ mod tests {
                     telemetry_response_ms: DEFAULT_BROKER_TELEMETRY_RESPONSE_TIMEOUT_MS,
                 },
                 control_write_retry_window_ms: DEFAULT_CONTROL_WRITE_RETRY_WINDOW_MS,
-                bounds: build_bounds(),
+                bounds: build_bounds().expect("compiled generated Worker bounds must parse"),
+                backend_class: BackendClass::Unknown,
+                worker_acceptance: acceptance_diagnostic(
+                    WorkerAcceptanceDiagnosticCode::NotConfigured,
+                ),
                 policy: CohshPolicy::from_generated(),
                 broker: Arc::new(BrokerMetrics::default()),
                 proc_cache: Mutex::new(ProcReadCache::default()),

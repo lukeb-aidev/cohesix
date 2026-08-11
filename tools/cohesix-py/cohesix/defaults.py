@@ -1,3 +1,7 @@
+# Author: Lukas Bower
+# Purpose: Expose compiler-generated target-neutral fallback defaults.
+# Copyright 2026 Lukas Bower
+
 """Default policy values derived from coh-rtc outputs."""
 
 from __future__ import annotations
@@ -42,4 +46,7 @@ DEFAULTS: Dict[str, Any] = GENERATED_DEFAULTS
 
 
 def manifest_hash() -> str:
-    return DEFAULTS.get("manifest_sha256", "unknown")
+    """Return a compatibility label without inventing target identity."""
+
+    value = DEFAULTS.get("manifest_sha256")
+    return value if isinstance(value, str) and value else "unknown"

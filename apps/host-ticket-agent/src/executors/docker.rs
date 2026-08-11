@@ -11,7 +11,7 @@ use cohsh::{Session, Transport};
 use host_sidecar_bridge::providers::{format_docker_status_line, parse_docker_info_output};
 
 use super::{arg_str, target_components, ExecutorConfig};
-use crate::HostTicketSpec;
+use crate::{text::bounded_utf8_lossy, HostTicketSpec};
 
 const MAX_CAPTURE_BYTES: usize = 256;
 
@@ -138,8 +138,8 @@ fn run_docker(args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("run docker {}", args.join(" ")))?;
-    let stdout = bounded_utf8(&output.stdout);
-    let stderr = bounded_utf8(&output.stderr);
+    let stdout = bounded_utf8_lossy(&output.stdout, MAX_CAPTURE_BYTES);
+    let stderr = bounded_utf8_lossy(&output.stderr, MAX_CAPTURE_BYTES);
     if !output.status.success() {
         return Err(anyhow!(
             "docker {} failed status={} stdout='{}' stderr='{}'",
@@ -182,14 +182,6 @@ fn resolve_container_optional(spec: &HostTicketSpec) -> Option<String> {
     None
 }
 
-fn bounded_utf8(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes).replace(['\n', '\r'], " ");
-    if text.len() <= MAX_CAPTURE_BYTES {
-        return text.trim().to_owned();
-    }
-    text[..MAX_CAPTURE_BYTES].trim().to_owned()
-}
-
 fn summarize_output(text: &str) -> String {
     let trimmed = text.trim();
     if trimmed.is_empty() {
@@ -230,6 +222,7 @@ mod tests {
             target_hive: None,
             relay_hop: None,
             relay_correlation_id: None,
+            ..HostTicketSpec::default()
         };
         assert_eq!(
             resolve_container_optional(&spec).as_deref(),
@@ -251,6 +244,7 @@ mod tests {
             target_hive: None,
             relay_hop: None,
             relay_correlation_id: None,
+            ..HostTicketSpec::default()
         };
         assert_eq!(
             resolve_container_optional(&spec).as_deref(),

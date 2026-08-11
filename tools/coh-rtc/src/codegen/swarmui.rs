@@ -224,6 +224,39 @@ fn render_defaults_toml(manifest: &Manifest, manifest_hash: &str) -> String {
         .join(", ");
     writeln!(contents, "namespace_roots = [{roots}]").ok();
     writeln!(contents).ok();
+    writeln!(contents, "[swarmui.worker_runtime]").ok();
+    writeln!(
+        contents,
+        "maximum_live_tasks = {}",
+        worker_maximum_live_tasks(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "canonical_telemetry_template = \"{}\"",
+        worker_canonical_telemetry_template(manifest)
+    )
+    .ok();
+    writeln!(contents, "shard_bits = {}", manifest.sharding.shard_bits).ok();
+    writeln!(
+        contents,
+        "legacy_worker_alias = {}",
+        manifest.sharding.legacy_worker_alias
+    )
+    .ok();
+    writeln!(contents, "roles = [").ok();
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            contents,
+            "  {{ role = \"{}\", declaration = \"{}\", executable_slots = {} }},",
+            role.role.as_str(),
+            worker_declaration(role.implemented),
+            worker_executable_slots(manifest, role.role.as_str())
+        )
+        .ok();
+    }
+    writeln!(contents, "]").ok();
+    writeln!(contents).ok();
     writeln!(contents, "[trace]").ok();
     writeln!(
         contents,
@@ -407,6 +440,46 @@ fn render_defaults_rust(manifest: &Manifest, manifest_hash: &str) -> String {
         writeln!(contents, "    \"{root}\",").ok();
     }
     writeln!(contents, "];").ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = {};",
+        worker_maximum_live_tasks(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"{}\";",
+        worker_canonical_telemetry_template(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_WORKER_SHARD_BITS: u8 = {};",
+        manifest.sharding.shard_bits
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_WORKER_LEGACY_ALIAS: bool = {};",
+        manifest.sharding.legacy_worker_alias
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const SWARMUI_WORKER_ROLE_BOUNDS: &[(&str, &str, u16)] = &["
+    )
+    .ok();
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            contents,
+            "    (\"{}\", \"{}\", {}),",
+            role.role.as_str(),
+            worker_declaration(role.implemented),
+            worker_executable_slots(manifest, role.role.as_str())
+        )
+        .ok();
+    }
+    writeln!(contents, "];").ok();
     contents
 }
 
@@ -563,6 +636,40 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
     .ok();
     writeln!(
         contents,
+        "- `swarmui.worker_runtime.maximum_live_tasks`: `{}`",
+        worker_maximum_live_tasks(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.worker_runtime.canonical_telemetry_template`: `{}`",
+        worker_canonical_telemetry_template(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.worker_runtime.shard_bits`: `{}`",
+        manifest.sharding.shard_bits
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `swarmui.worker_runtime.legacy_worker_alias`: `{}`",
+        manifest.sharding.legacy_worker_alias
+    )
+    .ok();
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            contents,
+            "- `swarmui.worker_runtime.role.{}`: declaration=`{}`, executable_slots=`{}`",
+            role.role.as_str(),
+            worker_declaration(role.implemented),
+            worker_executable_slots(manifest, role.role.as_str())
+        )
+        .ok();
+    }
+    writeln!(
+        contents,
         "- `trace.max_bytes`: `{}`",
         manifest.client_policies.trace.max_bytes
     )
@@ -574,4 +681,39 @@ fn render_defaults_doc(manifest: &Manifest, manifest_hash: &str, defaults_hash: 
     )
     .ok();
     contents
+}
+
+fn worker_declaration(implemented: bool) -> &'static str {
+    if implemented {
+        "executable"
+    } else {
+        "model-only"
+    }
+}
+
+fn worker_executable_slots(manifest: &Manifest, role: &str) -> u16 {
+    manifest
+        .worker_resource_admission
+        .executable_roles
+        .iter()
+        .find(|entry| entry.role == role)
+        .map_or(0, |entry| entry.executable_slots)
+}
+
+fn worker_maximum_live_tasks(manifest: &Manifest) -> u16 {
+    manifest
+        .worker_resource_admission
+        .executable_roles
+        .iter()
+        .fold(0u16, |total, role| {
+            total.saturating_add(role.executable_slots)
+        })
+}
+
+fn worker_canonical_telemetry_template(manifest: &Manifest) -> &str {
+    manifest
+        .worker_runtime
+        .roles
+        .first()
+        .map_or("", |role| role.telemetry_path_template.as_str())
 }

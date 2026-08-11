@@ -13,9 +13,7 @@ pub const ROOT_CONSOLE_HELP_LINES: &[&str] = &[
     "  smp [activity|dump] - Show activity; dump raw debug scheduler state",
     "  mem   - Show untyped summary",
     "  ping  - Respond with pong",
-    "  test  - Self-test (host-only; use cohsh)",
     "  cachelog [n] - Dump recent cache operations",
-    "  quit  - Exit the console session",
 ];
 
 /// cohsh CLI help lines for verbs backed by the console grammar.

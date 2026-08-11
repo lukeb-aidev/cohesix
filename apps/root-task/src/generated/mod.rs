@@ -83,6 +83,30 @@ pub struct WorkerNotificationConfig {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub struct WorkerTaskAbiConfig {
+    pub enabled: bool,
+    pub version: u16,
+    pub shared_page_bytes: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub shared_page_vaddr: u64,
+    pub stack_bottom_vaddr: u64,
+    pub stack_pages: u16,
+    pub child_cnode_radix_bits: u8,
+    pub lifecycle_notification_slot: u32,
+    pub supervisor_wake_notification_slot: u32,
+    pub lifecycle_control_bit: u64,
+    pub lifecycle_timeout_bit: u64,
+    pub lifecycle_shutdown_bit: u64,
+    pub lifecycle_revoke_bit: u64,
+    pub heartbeat_wake_bit: u64,
+    pub gpu_wake_bit: u64,
+    pub lora_wake_bit: u64,
+    pub ready_timeout_ms: u32,
+    pub shutdown_grace_ms: u32,
+    pub max_control_inflight: u8,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct WorkerSchedulingConfig {
     pub profile: WorkerSchedulingProfile,
     pub priority: u8,
@@ -104,7 +128,323 @@ pub struct WorkerRuntimeConfig {
     pub roles: &'static [WorkerRoleRuntime],
     pub endpoint_caps: WorkerEndpointCapConfig,
     pub notifications: WorkerNotificationConfig,
+    pub task_abi: WorkerTaskAbiConfig,
     pub scheduling: WorkerSchedulingConfig,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SchedulerArchitecture {
+    Classic,
+    SmpMcs,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TemporalExecution {
+    Active,
+    Passive,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TemporalTaskKind {
+    RootControl,
+    RootFault,
+    RootEmergency,
+    WorkerSupervisor,
+    DriverSupervisor,
+    Service,
+    Driver,
+    Worker,
+    Drain,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeoutPolicy {
+    Terminal,
+    ReplenishOnce,
+    ReturnError,
+    FailStop,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TemporalTaskConfig {
+    pub id: &'static str,
+    pub kind: TemporalTaskKind,
+    pub execution: TemporalExecution,
+    pub core: u8,
+    pub scheduling_context_slot: u32,
+    pub scheduling_context_bits: u8,
+    pub sched_control_core: u8,
+    pub budget_us: u32,
+    pub period_us: u32,
+    pub deadline_us: u32,
+    pub blocking_us: u32,
+    pub jitter_us: u32,
+    pub max_refills: u8,
+    pub priority: u8,
+    pub mcp: u8,
+    pub timeout_badge: u64,
+    pub timeout_policy: TimeoutPolicy,
+    pub consumed_time_evidence: bool,
+    pub wcet_us: u32,
+    pub response_time_us: u32,
+    pub admitted: bool,
+    pub wcet_provenance: &'static str,
+    pub allowed_donors: &'static [&'static str],
+    pub reply_objects: u8,
+    pub max_donation_depth: u8,
+    pub fault_handler: &'static str,
+    pub critical_reserve: bool,
+    pub locality_bound: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TemporalCoreAdmission {
+    pub core: u8,
+    pub capacity_us: u32,
+    pub reserve_us: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct TemporalAuthorityConfig {
+    pub enabled: bool,
+    pub architecture: SchedulerArchitecture,
+    pub cores: u8,
+    pub domains: u8,
+    pub admission_window_us: u32,
+    pub core_admission: &'static [TemporalCoreAdmission],
+    pub tasks: &'static [TemporalTaskConfig],
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NineDoorServiceConfig {
+    pub enabled: bool,
+    pub abi_version: u16,
+    pub image_id: &'static str,
+    pub image_path: &'static str,
+    pub entry_symbol: &'static str,
+    pub child_cspace_slots: u16,
+    pub revoke_anchor_slot: u32,
+    pub revoke_anchor_bits: u8,
+    pub objects: KernelObjectBudget,
+    pub endpoint_slot: u32,
+    pub reply_slot: u32,
+    pub root_fault_recovery_reply_slot: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub init_vaddr: u64,
+    pub stack_vaddr: u64,
+    pub request_vaddr: u64,
+    pub response_vaddr: u64,
+    pub stack_pages: u16,
+    pub shared_frame_bytes: u32,
+    pub max_inflight: u8,
+    pub request_badge: u64,
+    pub fault_badge: u64,
+    pub timeout_badge: u64,
+    pub root_call_rights: u8,
+    pub child_receive_rights: u8,
+    pub root_request_rights: u8,
+    pub root_response_rights: u8,
+    pub child_request_rights: u8,
+    pub child_response_rights: u8,
+    pub core: u8,
+    pub priority: u8,
+    pub mcp: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsoleNetworkServiceConfig {
+    pub enabled: bool,
+    pub abi_version: u16,
+    pub image_id: &'static str,
+    pub image_path: &'static str,
+    pub entry_symbol: &'static str,
+    pub listener_port: u16,
+    pub single_listener: bool,
+    pub child_cspace_slots: u16,
+    pub revoke_anchor_slot: u32,
+    pub revoke_anchor_bits: u8,
+    pub objects: KernelObjectBudget,
+    pub packet_rx_notification_slot: u32,
+    pub packet_tx_wake_notification_slot: u32,
+    pub supervisor_wake_notification_slot: u32,
+    pub fault_endpoint_slot: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub init_vaddr: u64,
+    pub stack_vaddr: u64,
+    pub packet_rx_vaddr: u64,
+    pub packet_tx_vaddr: u64,
+    pub command_vaddr: u64,
+    pub event_vaddr: u64,
+    pub stack_pages: u16,
+    pub shared_frame_bytes: u32,
+    pub ethernet_frame_bytes: u16,
+    pub max_packets_per_wake: u16,
+    pub max_commands_per_wake: u16,
+    pub max_control_inflight: u8,
+    pub packet_rx_badge: u64,
+    pub control_badge: u64,
+    pub shutdown_badge: u64,
+    pub revoke_badge: u64,
+    pub packet_tx_ready_badge: u64,
+    pub event_ready_badge: u64,
+    pub fault_badge: u64,
+    pub core: u8,
+    pub scheduling_context_slot: u32,
+    pub scheduling_context_bits: u8,
+    pub priority: u8,
+    pub mcp: u8,
+    pub budget_us: u32,
+    pub period_us: u32,
+    pub max_refills: u8,
+    pub timeout_badge: u64,
+    pub timer_clock_hz: u64,
+    pub auth_timeout_ms: u32,
+    pub idle_timeout_ms: u32,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct KernelObjectBits {
+    pub tcb: u8,
+    pub endpoint: u8,
+    pub notification: u8,
+    pub reply: u8,
+    pub sched_context_min: u8,
+    pub cnode_slot: u8,
+    pub page: u8,
+    pub page_table: u8,
+    pub vspace: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct KernelObjectBudget {
+    pub tcbs: u32,
+    pub cnodes: u32,
+    pub vspaces: u32,
+    pub page_tables: u32,
+    pub asids: u32,
+    pub frames: u32,
+    pub endpoints: u32,
+    pub notifications: u32,
+    pub fault_caps: u32,
+    pub timeout_fault_caps: u32,
+    pub reply_objects: u32,
+    pub scheduling_contexts: u32,
+    pub cspace_slots: u32,
+    pub untyped_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExecutableRoleAdmission {
+    pub role: &'static str,
+    pub task_prefix: &'static str,
+    pub namespace_capacity: u16,
+    pub executable_slots: u16,
+    pub core: u8,
+    pub revoke_anchor_slot: u32,
+    pub per_slot: KernelObjectBudget,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct RoleMixCount {
+    pub role: &'static str,
+    pub count: u16,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ExecutableRoleMix {
+    pub id: &'static str,
+    pub maximum: bool,
+    pub roles: &'static [RoleMixCount],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CriticalTcbResource {
+    pub id: &'static str,
+    pub cnode_radix_bits: u8,
+    pub cspace_cap_count: u16,
+    pub revoke_anchor_slot: u32,
+    pub ipc_buffer_pages: u8,
+    pub stack_pages: u8,
+    pub fault_reply_lanes: u8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CapabilityRights {
+    pub read: bool,
+    pub write: bool,
+    pub grant: bool,
+    pub grant_reply: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct BadgeRange {
+    pub base: u64,
+    pub count: u16,
+    pub stride: u16,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SaturationPolicy {
+    RefuseNew,
+    Fatal,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandoffClass {
+    WorkerFault,
+    WorkerControl,
+    DriverFault,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CriticalHandoffConfig {
+    pub worker_control_queue_capacity: u16,
+    pub worker_fault_mailboxes: u16,
+    pub driver_fault_records: u16,
+    pub worker_wake_badge: u64,
+    pub driver_wake_badge: u64,
+    pub emergency_wake_badge: u64,
+    pub worker_fault_badges: BadgeRange,
+    pub driver_fault_badges: BadgeRange,
+    pub critical_fault_badges: BadgeRange,
+    pub service_fault_badges: BadgeRange,
+    pub timeout_fault_badges: BadgeRange,
+    pub supervisor_signal_rights: CapabilityRights,
+    pub supervisor_wait_rights: CapabilityRights,
+    pub fault_sender_rights: CapabilityRights,
+    pub fault_receiver_rights: CapabilityRights,
+    pub worker_control_saturation: SaturationPolicy,
+    pub worker_fault_saturation: SaturationPolicy,
+    pub service_fault_saturation: SaturationPolicy,
+    pub driver_fault_saturation: SaturationPolicy,
+    pub worker_drain_precedence: &'static [HandoffClass],
+    pub driver_drain_precedence: &'static [HandoffClass],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct FaultRegistryAdmission {
+    pub critical_tcbs: u16,
+    pub service_tcbs: u16,
+    pub worker_tcbs: u16,
+    pub driver_tcbs: u16,
+    pub capacity: u16,
+    pub standard_reply_lanes: u8,
+    pub timeout_reply_lanes: u8,
+    pub recoverable_timeout_tasks: &'static [&'static str],
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct WorkerResourceAdmissionConfig {
+    pub enabled: bool,
+    pub selected_kernel: &'static str,
+    pub object_bits: KernelObjectBits,
+    pub capacity: KernelObjectBudget,
+    pub post_construction_reserve: KernelObjectBudget,
+    pub fixed_objects: KernelObjectBudget,
+    pub executable_roles: &'static [ExecutableRoleAdmission],
+    pub allowed_role_mixes: &'static [ExecutableRoleMix],
+    pub critical_tcbs: &'static [CriticalTcbResource],
+    pub handoff: CriticalHandoffConfig,
+    pub fault_registry: FaultRegistryAdmission,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -287,7 +627,7 @@ pub struct CasConfig {
     pub chunk_bytes: u32,
     pub delta_enable: bool,
     pub signing_required: bool,
-    pub signing_key: Option<[u8; 32]>,
+    pub verification_key: Option<[u8; 32]>,
     pub models_enabled: bool,
 }
 
@@ -560,6 +900,7 @@ pub enum HostTicketAction {
     GpuLeaseGrant,
     GpuLeaseRenew,
     GpuLeaseRelease,
+    PeftExport,
     PeftImport,
     PeftActivate,
     PeftRollback,
@@ -590,8 +931,11 @@ pub struct HostTicketConfig {
     pub enable: bool,
     pub request_schema: &'static str,
     pub result_schema: &'static str,
+    pub accepted_request_schemas: &'static [&'static str],
+    pub accepted_result_schemas: &'static [&'static str],
     pub max_line_bytes: u32,
     pub action_allowlist: &'static [HostTicketAction],
+    pub receipt_action_allowlist: &'static [HostTicketAction],
     pub lifecycle: &'static [HostTicketLifecycleState],
 }
 
@@ -691,15 +1035,19 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.6";
+pub const MANIFEST_SCHEMA: &str = "1.8";
 pub const MANIFEST_SHA256: &str =
-    "2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054";
+    "8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
 pub const CACHE_POLICY: CachePolicy = bootstrap::CACHE_POLICY;
 pub const DMA_CONFIG: DmaConfig = bootstrap::DMA_CONFIG;
 pub const WORKER_RUNTIME_CONFIG: WorkerRuntimeConfig = bootstrap::WORKER_RUNTIME_CONFIG;
+pub const TEMPORAL_AUTHORITY_CONFIG: TemporalAuthorityConfig = bootstrap::TEMPORAL_AUTHORITY_CONFIG;
+pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
+    bootstrap::WORKER_RESOURCE_ADMISSION_CONFIG;
+pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = bootstrap::NINEDOOR_SERVICE_CONFIG;
 pub const SECURE9P_LIMITS: Secure9pLimits = bootstrap::SECURE9P_LIMITS;
 pub const TICKET_LIMITS: TicketLimits = bootstrap::TICKET_LIMITS;
 pub const SHARDING_CONFIG: ShardingConfig = bootstrap::SHARDING_CONFIG;
@@ -764,6 +1112,26 @@ pub const fn worker_runtime_config() -> WorkerRuntimeConfig {
 
 pub const fn worker_runtime_roles() -> &'static [WorkerRoleRuntime] {
     &bootstrap::WORKER_RUNTIME_ROLES
+}
+
+pub const fn temporal_authority_config() -> TemporalAuthorityConfig {
+    bootstrap::TEMPORAL_AUTHORITY_CONFIG
+}
+
+pub const fn temporal_tasks() -> &'static [TemporalTaskConfig] {
+    &bootstrap::TEMPORAL_TASKS
+}
+
+pub const fn ninedoor_service_config() -> NineDoorServiceConfig {
+    bootstrap::NINEDOOR_SERVICE_CONFIG
+}
+
+pub const fn console_network_service_config() -> ConsoleNetworkServiceConfig {
+    bootstrap::CONSOLE_NETWORK_SERVICE_CONFIG
+}
+
+pub const fn worker_resource_admission_config() -> WorkerResourceAdmissionConfig {
+    bootstrap::WORKER_RESOURCE_ADMISSION_CONFIG
 }
 
 pub const fn secure9p_limits() -> Secure9pLimits {

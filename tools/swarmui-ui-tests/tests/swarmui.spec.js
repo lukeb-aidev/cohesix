@@ -27,32 +27,56 @@ const hiveBootstrap = {
     lod_event_budget: 512,
     status_poll_ms: 400
   },
-  namespace_roots: ["/proc", "/queen", "/worker", "/log", "/gpu"],
+  namespace_roots: ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"],
   agents: [
     {
-      id: "worker-heart-1",
-      namespace: "/worker/worker-heart-1",
-      role: "worker-heartbeat"
+      id: "opaque-heart-a",
+      namespace: "/shard/a4/worker/opaque-heart-a/telemetry",
+      role: "worker-heartbeat",
+      worker: { declaration: "executable", lifecycle: "ready" }
     },
     {
-      id: "worker-gpu-1",
-      namespace: "/worker/worker-gpu-1",
-      role: "worker-gpu"
+      id: "opaque-gpu-b",
+      namespace: "/shard/01/worker/opaque-gpu-b/telemetry",
+      role: "worker-gpu",
+      worker: { declaration: "executable", lifecycle: "starting" }
     },
     {
-      id: "worker-lora-1",
-      namespace: "/worker/worker-lora-1",
-      role: "worker-lora"
+      id: "opaque-lora-c",
+      namespace: "/shard/02/worker/opaque-lora-c/telemetry",
+      role: "worker-lora",
+      worker: { declaration: "executable", lifecycle: "ready" }
     },
     {
-      id: "worker-bus-1",
-      namespace: "/worker/worker-bus-1",
-      role: "worker-bus"
+      id: "opaque-bus-d",
+      namespace: "/shard/e3/worker/opaque-bus-d/telemetry",
+      role: "worker-bus",
+      worker: { declaration: "model-only" }
+    },
+    {
+      id: "worker-gpu-looking",
+      namespace: "/shard/ff/worker/worker-gpu-looking/telemetry",
+      role: "worker",
+      worker: {}
     }
   ]
 };
 
 const hiveBatch = {
+  agents: [
+    {
+      id: "opaque-gpu-b",
+      namespace: "/shard/01/worker/opaque-gpu-b/telemetry",
+      role: "worker-gpu",
+      worker: {
+        declaration: "executable",
+        lifecycle: "ready",
+        artifact: "verified",
+        receipt: "confirmed",
+        execution_proof: "qemu"
+      }
+    }
+  ],
   pressure: 0,
   backlog: 0,
   dropped: 0,
@@ -96,7 +120,7 @@ const hiveBatch = {
     preemptions: [
       {
         id: "lease-0",
-        subject: "worker-gpu-1",
+        subject: "opaque-gpu-b",
         resource: "gpu1",
         reason: "timeout",
         seq: 7
@@ -106,26 +130,26 @@ const hiveBatch = {
   events: [
     {
       kind: "telemetry",
-      agent: "worker-heart-1",
-      namespace: "/worker/worker-heart-1",
+      agent: "opaque-heart-a",
+      namespace: "/shard/a4/worker/opaque-heart-a/telemetry",
       role: "worker-heartbeat",
       reason: null
     },
     {
       kind: "telemetry",
-      agent: "worker-gpu-1",
-      namespace: "/worker/worker-gpu-1",
+      agent: "opaque-gpu-b",
+      namespace: "/shard/01/worker/opaque-gpu-b/telemetry",
       role: "worker-gpu",
       reason: null
     }
   ],
   overlays: [
     {
-      agent: "worker-heart-1",
+      agent: "opaque-heart-a",
       lines: ["tick 1", "tick 2"]
     },
     {
-      agent: "worker-gpu-1",
+      agent: "opaque-gpu-b",
       lines: ["gpu ok", "lease ok"]
     }
   ],
@@ -399,9 +423,25 @@ test("Live Hive keeps rendering during scroll", async ({ page }, testInfo) => {
 test("Live Hive selection wiring activates the detail pane", async ({ page }) => {
   await focusHiveCanvas(page);
   await page.evaluate(() =>
-    window.__SWARMUI_HIVE_DEBUG.selectAgent("worker-gpu-1")
+    window.__SWARMUI_HIVE_DEBUG.selectAgent("opaque-gpu-b")
   );
-  await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
+  await expect(page.locator("#hive-detail-title")).toContainText("opaque-gpu-b");
+  await expect(page.locator("#hive-detail-state")).toContainText("declaration=executable");
+  await expect(page.locator("#hive-detail-state")).toContainText("lifecycle=ready");
+  await expect(page.locator("#hive-detail-state")).toContainText("receipt=confirmed");
+  await expect(page.locator("#hive-detail-state")).toContainText("artifact=verified");
+  await expect(page.locator("#hive-detail-state")).toContainText("proof=qemu");
+});
+
+test("Role-looking Worker ids do not synthesize structured state", async ({ page }) => {
+  await focusHiveCanvas(page);
+  await page.evaluate(() =>
+    window.__SWARMUI_HIVE_DEBUG.selectAgent("worker-gpu-looking")
+  );
+  await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-looking");
+  await expect(page.locator("#hive-detail-state")).toHaveText(
+    "declaration=unknown lifecycle=unknown receipt=unknown artifact=unknown proof=unknown"
+  );
 });
 
 test("Scheduler and lease panels render /proc data", async ({ page }) => {
@@ -490,7 +530,7 @@ test("Live Hive overlays remain interactive under load", async ({ page }) => {
   await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "false");
   await cards.nth(1).click();
   await expect(cards.nth(1)).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator("#hive-detail-title")).toContainText("worker-gpu-1");
+  await expect(page.locator("#hive-detail-title")).toContainText("opaque-gpu-b");
 });
 
 test("Live Hive performance harness stays responsive", async ({ page }) => {
@@ -556,7 +596,7 @@ test("Help command emits expected transcript lines", async ({ page }) => {
 });
 
 test("Mint ticket populates the session ticket field", async ({ page }) => {
-  await fillField(page, "#session-subject", "worker-gpu-1");
+  await fillField(page, "#session-subject", "opaque-gpu-b");
   await page.locator("#mint-ticket").click();
   await expect(page.locator("#mint-status")).toContainText("Ticket minted");
   await expect.poll(async () => readFieldValue(page, "#session-ticket")).toBe(

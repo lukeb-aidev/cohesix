@@ -22,7 +22,23 @@ use core::{
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod cache;
 
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+/// Generation-revocable construction and transport for the isolated TCP console service.
+pub mod console_network;
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+/// Construction of the four restricted critical children plus init root-control accounting.
+pub mod critical_tcb;
 pub mod driver_task;
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+/// Generation-revocable passive parser boundary for the target NineDoor service.
+pub mod ninedoor_service;
+/// Compiler-bounded executable-slot reservations and revoke sequencing.
+pub mod resource_pool;
+/// W^X planning and admission for separately packaged Worker child images.
+pub mod worker_image;
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+/// Real seL4 MCS object construction and containment for Worker children.
+pub mod worker_task;
 
 #[cfg(any(feature = "kernel", feature = "cache-maintenance"))]
 pub mod dma;
@@ -1445,7 +1461,14 @@ struct KernelDriverTaskHandle {
     role_bit: usize,
     tcb: seL4_CPtr,
     cnode: seL4_CPtr,
+    command_endpoint_origin: seL4_CPtr,
     command_endpoint: seL4_CPtr,
+    command_reply: seL4_CPtr,
+    completion_notification_origin: seL4_CPtr,
+    completion_notification: seL4_CPtr,
+    sched_context: seL4_CPtr,
+    standard_fault_endpoint: seL4_CPtr,
+    timeout_fault_endpoint: seL4_CPtr,
     notification: seL4_CPtr,
     root_notification: seL4_CPtr,
     root_wake_notification: seL4_CPtr,
@@ -1470,6 +1493,34 @@ struct KernelDriverTaskHandle {
     vspace_isolated: bool,
     pointer_free_ipc: bool,
     started: bool,
+}
+
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug)]
+struct DriverTaskMcsObjects {
+    command_endpoint: seL4_CPtr,
+    command_reply: seL4_CPtr,
+    completion_notification_origin: seL4_CPtr,
+    completion_notification: seL4_CPtr,
+    sched_context: seL4_CPtr,
+    standard_fault_endpoint: seL4_CPtr,
+    timeout_fault_endpoint: seL4_CPtr,
+}
+
+#[cfg(feature = "kernel")]
+impl DriverTaskMcsObjects {
+    #[cfg(not(sel4_config_kernel_mcs))]
+    const fn classic(command_endpoint: seL4_CPtr) -> Self {
+        Self {
+            command_endpoint,
+            command_reply: 0,
+            completion_notification_origin: 0,
+            completion_notification: 0,
+            sched_context: 0,
+            standard_fault_endpoint: 0,
+            timeout_fault_endpoint: 0,
+        }
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -2099,7 +2150,29 @@ impl RuntimeInitDescriptorBuilder {
         task_key: usize,
         artifact_hash: u32,
     ) -> Result<Self, HalError> {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+            .ok_or(HalError::Unsupported("driver-runtime-temporal-config"))?;
+        if temporal.core != temporal.sched_control_core || temporal.budget_us > temporal.period_us {
+            return Err(HalError::Unsupported(
+                "driver-runtime-temporal-config-mismatch",
+            ));
+        }
+        let standard_fault_badge = crate::critical_tcb::generated_standard_fault_badge(temporal.id)
+            .ok_or(HalError::Unsupported(
+                "driver-runtime-temporal-standard-fault-badge",
+            ))?;
+        let mut descriptor = DriverRuntimeInitDescriptor::empty().with_mcs_scheduler(
+            task_key as u32,
+            temporal.scheduling_context_slot,
+            temporal.scheduling_context_bits,
+            temporal.sched_control_core,
+            temporal.max_refills,
+            temporal.core,
+            temporal.budget_us,
+            temporal.period_us,
+            standard_fault_badge,
+            temporal.timeout_badge,
+        );
         descriptor.hot_path = spec.hot_path.as_u32();
         descriptor.role_bit = role_bit as u32;
         descriptor.flags = DRIVER_RUNTIME_INIT_FLAG_POINTER_FREE
@@ -2711,6 +2784,226 @@ const fn driver_runtime_command_endpoint_receive_rights() -> sel4_sys::seL4_CapR
 }
 
 #[cfg(feature = "kernel")]
+const fn driver_runtime_command_endpoint_send_rights() -> sel4_sys::seL4_CapRights {
+    // MCS Call requires GrantReply so the receiver's dedicated Reply object can
+    // capture the caller association. Grant stays clear: no capability may be
+    // transferred over the driver command lane.
+    sel4_sys::seL4_CapRights::new(1, 0, 0, 1)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_runtime_fault_send_rights() -> sel4_sys::seL4_CapRights {
+    // The kernel delivers standard/timeout faults as Call-like IPC. Write plus
+    // GrantReply is sufficient on seL4 MCS and avoids ordinary Grant authority.
+    sel4_sys::seL4_CapRights::new(1, 0, 0, 1)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_runtime_completion_notification_send_rights() -> sel4_sys::seL4_CapRights {
+    sel4_sys::seL4_CapRights::new(0, 0, 0, 1)
+}
+
+#[cfg(feature = "kernel")]
+const fn driver_runtime_completion_notification_receive_rights() -> sel4_sys::seL4_CapRights {
+    sel4_sys::seL4_CapRights::new(0, 0, 1, 0)
+}
+
+#[cfg(all(feature = "kernel", not(sel4_config_kernel_mcs)))]
+fn allocate_driver_task_mcs_objects(
+    _env: &mut KernelEnv<'_>,
+    _contract: DriverTaskContract,
+    _task_key: usize,
+    _child_cnode: seL4_CPtr,
+    _child_depth: u8,
+    command_endpoint_origin: seL4_CPtr,
+    _fault_endpoint_origin: seL4_CPtr,
+) -> Result<DriverTaskMcsObjects, HalError> {
+    Ok(DriverTaskMcsObjects::classic(command_endpoint_origin))
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn allocate_driver_task_mcs_objects(
+    env: &mut KernelEnv<'_>,
+    contract: DriverTaskContract,
+    task_key: usize,
+    child_cnode: seL4_CPtr,
+    child_depth: u8,
+    command_endpoint_origin: seL4_CPtr,
+    _fault_endpoint_origin: seL4_CPtr,
+) -> Result<DriverTaskMcsObjects, HalError> {
+    let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
+    let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
+    let task_key = u32::try_from(task_key)
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-task-key"))?;
+    let (standard_fault_origin, timeout_fault_origin) =
+        critical_tcb::target_fault_endpoint_origins().ok_or(HalError::Unsupported(
+            "driver-runtime-mcs-critical-fault-endpoints",
+        ))?;
+    let (generated_standard_badge, generated_timeout_badge) =
+        critical_tcb::temporal_fault_badges(temporal.id).ok_or(HalError::Unsupported(
+            "driver-runtime-mcs-generated-fault-badges",
+        ))?;
+    let root_cnode = env.init_cnode_cap();
+    let root_depth = sel4::word_bits() as u8;
+
+    let command_endpoint = env.allocate_slot();
+    let command_badge = seL4_Word::try_from(pi4_driver_abi::driver_runtime_command_badge(task_key))
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-command-badge"))?;
+    let err = sel4::cnode_mint_depth(
+        root_cnode,
+        command_endpoint,
+        root_depth,
+        root_cnode,
+        command_endpoint_origin,
+        root_depth,
+        driver_runtime_command_endpoint_send_rights(),
+        command_badge,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+
+    let command_reply = env.alloc_reply().map_err(HalError::Sel4)?;
+    let err = sel4::cnode_copy_depth(
+        child_cnode,
+        pi4_driver_abi::DRIVER_RUNTIME_COMMAND_REPLY_SLOT as seL4_CPtr,
+        child_depth,
+        root_cnode,
+        command_reply,
+        root_depth,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+
+    let completion_notification_origin = env.alloc_notification().map_err(HalError::Sel4)?;
+    let completion_notification = env.allocate_slot();
+    let err = sel4::cnode_mint_depth(
+        root_cnode,
+        completion_notification,
+        root_depth,
+        root_cnode,
+        completion_notification_origin,
+        root_depth,
+        driver_runtime_completion_notification_receive_rights(),
+        0,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+    let completion_badge =
+        seL4_Word::try_from(pi4_driver_abi::driver_runtime_completion_badge(task_key))
+            .map_err(|_| HalError::Unsupported("driver-runtime-mcs-completion-badge"))?;
+    let err = sel4::cnode_mint_depth(
+        child_cnode,
+        pi4_driver_abi::DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT as seL4_CPtr,
+        child_depth,
+        root_cnode,
+        completion_notification_origin,
+        root_depth,
+        driver_runtime_completion_notification_send_rights(),
+        completion_badge,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+
+    let standard_fault_endpoint = env.allocate_slot();
+    let standard_fault_badge = seL4_Word::try_from(generated_standard_badge)
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-standard-fault-badge"))?;
+    let err = sel4::cnode_mint_depth(
+        root_cnode,
+        standard_fault_endpoint,
+        root_depth,
+        root_cnode,
+        standard_fault_origin,
+        root_depth,
+        driver_runtime_fault_send_rights(),
+        standard_fault_badge,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+
+    let timeout_fault_endpoint = env.allocate_slot();
+    let timeout_badge = seL4_Word::try_from(generated_timeout_badge)
+        .map_err(|_| HalError::Unsupported("driver-runtime-mcs-timeout-badge"))?;
+    let err = sel4::cnode_mint_depth(
+        root_cnode,
+        timeout_fault_endpoint,
+        root_depth,
+        root_cnode,
+        timeout_fault_origin,
+        root_depth,
+        driver_runtime_fault_send_rights(),
+        timeout_badge,
+    );
+    if err != seL4_NoError {
+        return Err(HalError::Sel4(err));
+    }
+
+    let sched_context = env
+        .alloc_sched_context(temporal.scheduling_context_bits)
+        .map_err(HalError::Sel4)?;
+    let sched_control = env
+        .sched_control_for_core(temporal.sched_control_core)
+        .map_err(HalError::Sel4)?;
+    let extra_refills = temporal
+        .max_refills
+        .checked_sub(2)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-refills"))?;
+    sel4::configure_sched_context(
+        sched_control,
+        sched_context,
+        u64::from(temporal.budget_us),
+        u64::from(temporal.period_us),
+        seL4_Word::from(extra_refills),
+        timeout_badge,
+        0,
+    )
+    .map_err(HalError::Sel4)?;
+
+    Ok(DriverTaskMcsObjects {
+        command_endpoint,
+        command_reply,
+        completion_notification_origin,
+        completion_notification,
+        sched_context,
+        standard_fault_endpoint,
+        timeout_fault_endpoint,
+    })
+}
+
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+fn register_driver_task_fault_source(
+    contract: DriverTaskContract,
+    tcb: seL4_CPtr,
+) -> Result<(), HalError> {
+    let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
+    let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
+    let slot = driver_task::driver_runtime_registry_slot(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-registry-slot"))?;
+    let cap_generation = driver_task::driver_task_mcs_cap_generation(contract)
+        .ok_or(HalError::Unsupported("driver-runtime-mcs-cap-generation"))?;
+    critical_tcb::register_target_fault_source(
+        temporal.id,
+        tcb,
+        crate::critical_tcb::GenerationIdentity {
+            slot,
+            lease_epoch: 1,
+            supervisor_generation: 1,
+            cap_generation,
+        },
+    )
+    .map_err(|_| HalError::Unsupported("driver-runtime-mcs-fault-register"))
+}
+
+#[cfg(feature = "kernel")]
 fn runtime_elf_page_mapping(fill: RuntimeElfPageFill) -> Result<RuntimeElfPageMapping, HalError> {
     if fill.writable && fill.executable {
         return Err(HalError::Unsupported("driver-runtime-elf-wx-page"));
@@ -3055,14 +3348,25 @@ fn apply_driver_tcb_affinity_for_boot(
     contract: DriverTaskContract,
     tcb: seL4_CPtr,
 ) -> Result<Option<u8>, HalError> {
-    let affinity_target =
-        driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
-    let affinity_policy = affinity::policy();
-    if driver_task::physical_pi_driver_task_only_owner_state_active() {
-        let selected_core = affinity::select_driver_core(&affinity_policy, affinity_target);
-        if let Some(core) = selected_core {
-            let mut line = heapless::String::<192>::new();
-            let _ = fmt::write(
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+            .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
+        let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+            .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
+        sel4::set_tcb_affinity(tcb, temporal.core).map_err(HalError::Sel4)?;
+        return Ok(Some(temporal.core));
+    }
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        let affinity_target =
+            driver_affinity_target(contract).ok_or(HalError::Unsupported("driver-affinity"))?;
+        let affinity_policy = affinity::policy();
+        if driver_task::physical_pi_driver_task_only_owner_state_active() {
+            let selected_core = affinity::select_driver_core(&affinity_policy, affinity_target);
+            if let Some(core) = selected_core {
+                let mut line = heapless::String::<192>::new();
+                let _ = fmt::write(
                 &mut line,
                 format_args!(
                     "DRIVER_TASK_AFFINITY_DEFERRED contract={} target={} selected_core={} reason=pi4-child-tcb-affinity-boot-stall-guard",
@@ -3071,12 +3375,13 @@ fn apply_driver_tcb_affinity_for_boot(
                     core,
                 ),
             );
-            crate::bootstrap::log::force_uart_line(line.as_str());
+                crate::bootstrap::log::force_uart_line(line.as_str());
+            }
+            return Ok(None);
         }
-        return Ok(None);
+        affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
+            .map_err(HalError::Affinity)
     }
-    affinity::apply_driver_tcb_affinity(tcb, affinity_target, &affinity_policy)
-        .map_err(HalError::Affinity)
 }
 
 #[cfg(feature = "kernel")]
@@ -3167,30 +3472,77 @@ fn bind_driver_tcb_notification_for_boot(
 fn configure_driver_tcb_priority_for_boot(
     contract: DriverTaskContract,
     tcb: seL4_CPtr,
+    mcs: DriverTaskMcsObjects,
 ) -> Result<(u8, u8), HalError> {
-    let steady_priority = contract.sel4_priority();
-    let bootstrap_priority = driver_task::driver_task_bootstrap_priority(contract);
-    let bootstrap_mcp = core::cmp::max(steady_priority, bootstrap_priority);
-    sel4::set_tcb_sched_params(
-        tcb,
-        sel4_sys::seL4_CapInitThreadTCB,
-        bootstrap_mcp,
-        bootstrap_priority,
-    )
-    .map_err(HalError::Sel4)?;
-    sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, bootstrap_priority)
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let spec = driver_task::pi4_driver_task_runtime_image_spec_for_contract(contract)
+            .ok_or(HalError::Unsupported("driver-runtime-mcs-image-spec"))?;
+        let temporal = driver_task::driver_task_temporal_config(spec.hot_path)
+            .ok_or(HalError::Unsupported("driver-runtime-mcs-temporal-config"))?;
+        if mcs.sched_context == 0
+            || mcs.standard_fault_endpoint == 0
+            || mcs.timeout_fault_endpoint == 0
+        {
+            return Err(HalError::Unsupported("driver-runtime-mcs-objects"));
+        }
+        sel4::set_tcb_sched_params_mcs(
+            tcb,
+            sel4_sys::seL4_CapInitThreadTCB,
+            temporal.mcp,
+            temporal.priority,
+            mcs.sched_context,
+            mcs.standard_fault_endpoint,
+        )
         .map_err(HalError::Sel4)?;
+        sel4::set_tcb_timeout_endpoint(tcb, mcs.timeout_fault_endpoint).map_err(HalError::Sel4)?;
+        let mut line = heapless::String::<224>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_MCS_ACTIVE contract={} tcb=0x{:04x} sc=0x{:04x} core={} budget_us={} period_us={} priority={} mcp={}",
+                contract.name,
+                tcb,
+                mcs.sched_context,
+                temporal.core,
+                temporal.budget_us,
+                temporal.period_us,
+                temporal.priority,
+                temporal.mcp,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        return Ok((temporal.priority, temporal.priority));
+    }
 
-    let mut line = heapless::String::<192>::new();
-    let _ = fmt::write(
-        &mut line,
-        format_args!(
-            "DRIVER_TASK_START_PRIORITY contract={} tcb=0x{:04x} bootstrap={} steady={}",
-            contract.name, tcb, bootstrap_priority, steady_priority,
-        ),
-    );
-    crate::bootstrap::log::force_uart_line(line.as_str());
-    Ok((bootstrap_priority, steady_priority))
+    #[cfg(not(sel4_config_kernel_mcs))]
+    let _ = mcs;
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        let steady_priority = contract.sel4_priority();
+        let bootstrap_priority = driver_task::driver_task_bootstrap_priority(contract);
+        let bootstrap_mcp = core::cmp::max(steady_priority, bootstrap_priority);
+        sel4::set_tcb_sched_params(
+            tcb,
+            sel4_sys::seL4_CapInitThreadTCB,
+            bootstrap_mcp,
+            bootstrap_priority,
+        )
+        .map_err(HalError::Sel4)?;
+        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, bootstrap_priority)
+            .map_err(HalError::Sel4)?;
+
+        let mut line = heapless::String::<192>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_START_PRIORITY contract={} tcb=0x{:04x} bootstrap={} steady={}",
+                contract.name, tcb, bootstrap_priority, steady_priority,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        Ok((bootstrap_priority, steady_priority))
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3200,31 +3552,40 @@ fn restore_driver_tcb_steady_priority(
     bootstrap_priority: u8,
     steady_priority: u8,
 ) -> Result<(), HalError> {
-    if bootstrap_priority == steady_priority {
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        let _ = (tcb, bootstrap_priority, steady_priority);
         driver_task::publish_driver_task_steady_priority_active(contract);
         return Ok(());
     }
-    sel4::set_tcb_sched_params(
-        tcb,
-        sel4_sys::seL4_CapInitThreadTCB,
-        steady_priority,
-        steady_priority,
-    )
-    .map_err(HalError::Sel4)?;
-    sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, steady_priority)
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        if bootstrap_priority == steady_priority {
+            driver_task::publish_driver_task_steady_priority_active(contract);
+            return Ok(());
+        }
+        sel4::set_tcb_sched_params(
+            tcb,
+            sel4_sys::seL4_CapInitThreadTCB,
+            steady_priority,
+            steady_priority,
+        )
         .map_err(HalError::Sel4)?;
+        sel4::set_tcb_priority(tcb, sel4_sys::seL4_CapInitThreadTCB, steady_priority)
+            .map_err(HalError::Sel4)?;
 
-    let mut line = heapless::String::<192>::new();
-    let _ = fmt::write(
-        &mut line,
-        format_args!(
-            "DRIVER_TASK_STEADY_PRIORITY contract={} tcb=0x{:04x} priority={}",
-            contract.name, tcb, steady_priority,
-        ),
-    );
-    crate::bootstrap::log::force_uart_line(line.as_str());
-    driver_task::publish_driver_task_steady_priority_active(contract);
-    Ok(())
+        let mut line = heapless::String::<192>::new();
+        let _ = fmt::write(
+            &mut line,
+            format_args!(
+                "DRIVER_TASK_STEADY_PRIORITY contract={} tcb=0x{:04x} priority={}",
+                contract.name, tcb, steady_priority,
+            ),
+        );
+        crate::bootstrap::log::force_uart_line(line.as_str());
+        driver_task::publish_driver_task_steady_priority_active(contract);
+        Ok(())
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -3717,7 +4078,7 @@ impl<'a> KernelHal<'a> {
         let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
         let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
         let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
-        let command_endpoint = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        let command_endpoint_origin = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
         let notification = self.env.alloc_notification().map_err(HalError::Sel4)?;
         let ipc_frame = self
             .env
@@ -3733,19 +4094,33 @@ impl<'a> KernelHal<'a> {
             .map_err(HalError::Sel4)?;
         ring_frame.as_mut_slice().fill(0);
 
-        let badge = 0xD000 | (role_bit as seL4_Word);
-        let fault_err = sel4::cnode_mint_depth(
+        let mcs = allocate_driver_task_mcs_objects(
+            &mut self.env,
+            contract,
+            task_key,
             child_cnode,
-            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             child_depth,
-            root_cnode,
+            command_endpoint_origin,
             fault_endpoint,
-            root_depth,
-            sel4_sys::seL4_CapRights_All,
-            badge,
-        );
-        if fault_err != seL4_NoError {
-            return Err(HalError::Sel4(fault_err));
+        )?;
+        let command_endpoint = mcs.command_endpoint;
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let badge = 0xD000 | (role_bit as seL4_Word);
+            let fault_err = sel4::cnode_mint_depth(
+                child_cnode,
+                driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+                child_depth,
+                root_cnode,
+                fault_endpoint,
+                root_depth,
+                sel4_sys::seL4_CapRights_All,
+                badge,
+            );
+            if fault_err != seL4_NoError {
+                return Err(HalError::Sel4(fault_err));
+            }
         }
 
         let endpoint_err = sel4::cnode_mint_depth(
@@ -3753,7 +4128,7 @@ impl<'a> KernelHal<'a> {
             driver_task::DRIVER_TASK_CHILD_COMMAND_SLOT,
             child_depth,
             root_cnode,
-            command_endpoint,
+            command_endpoint_origin,
             root_depth,
             driver_runtime_command_endpoint_receive_rights(),
             0,
@@ -3779,9 +4154,13 @@ impl<'a> KernelHal<'a> {
         }
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
+        #[cfg(sel4_config_kernel_mcs)]
+        let tcb_fault_endpoint = mcs.standard_fault_endpoint;
+        #[cfg(not(sel4_config_kernel_mcs))]
+        let tcb_fault_endpoint = driver_task::DRIVER_TASK_CHILD_FAULT_SLOT;
         sel4::set_tcb_space(
             tcb,
-            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            tcb_fault_endpoint,
             child_cnode,
             cspace_root_data,
             sel4_sys::seL4_CapInitThreadVSpace,
@@ -3791,14 +4170,28 @@ impl<'a> KernelHal<'a> {
 
         let ipc_vaddr = ipc_frame.ptr().as_ptr() as usize;
         self.env
-            .bind_remote_ipc_buffer(tcb, ipc_frame.cap(), ipc_vaddr)
+            .bind_child_ipc_buffer(tcb, ipc_frame.cap(), ipc_vaddr)
             .map_err(HalError::Sel4)?;
 
-        let (bootstrap_priority, steady_priority) =
-            configure_driver_tcb_priority_for_boot(contract, tcb)?;
-        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
-
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
+
+        let (bootstrap_priority, steady_priority) =
+            configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
+        #[cfg(sel4_config_kernel_mcs)]
+        if !driver_task::publish_driver_task_mcs_kernel_objects(
+            contract,
+            command_endpoint_origin as usize,
+            mcs.command_reply as usize,
+            mcs.completion_notification_origin as usize,
+            mcs.sched_context as usize,
+            mcs.standard_fault_endpoint as usize,
+            mcs.timeout_fault_endpoint as usize,
+        ) {
+            return Err(HalError::Unsupported("driver-runtime-mcs-recovery-publish"));
+        }
+        #[cfg(sel4_config_kernel_mcs)]
+        register_driver_task_fault_source(contract, tcb)?;
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
@@ -3844,7 +4237,14 @@ impl<'a> KernelHal<'a> {
             role_bit,
             tcb,
             cnode: child_cnode,
+            command_endpoint_origin,
             command_endpoint,
+            command_reply: mcs.command_reply,
+            completion_notification_origin: mcs.completion_notification_origin,
+            completion_notification: mcs.completion_notification,
+            sched_context: mcs.sched_context,
+            standard_fault_endpoint: mcs.standard_fault_endpoint,
+            timeout_fault_endpoint: mcs.timeout_fault_endpoint,
             notification,
             root_notification,
             root_wake_notification: 0,
@@ -4645,7 +5045,7 @@ impl<'a> KernelHal<'a> {
         let child_depth = driver_task::DRIVER_TASK_CHILD_CNODE_RADIX_BITS;
         let child_cnode = self.env.alloc_cnode(child_depth).map_err(HalError::Sel4)?;
         let tcb = self.env.alloc_tcb().map_err(HalError::Sel4)?;
-        let command_endpoint = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
+        let command_endpoint_origin = self.env.alloc_endpoint().map_err(HalError::Sel4)?;
         // Recovery keeps one private root cap that is never published as a
         // steady producer. The normal SDIO handoff still deletes its ordinary
         // root send cap; this copy is admitted only while both linked peers are
@@ -4655,7 +5055,7 @@ impl<'a> KernelHal<'a> {
         {
             Some(
                 self.env
-                    .copy_cap_to_new_slot(command_endpoint, sel4_sys::seL4_CapRights_All)
+                    .copy_cap_to_new_slot(command_endpoint_origin, sel4_sys::seL4_CapRights_All)
                     .map_err(HalError::Sel4)?,
             )
         } else {
@@ -4700,19 +5100,33 @@ impl<'a> KernelHal<'a> {
             stack_frame.as_mut_slice().fill(0);
         }
 
-        let badge = 0xD000 | (role_bit as seL4_Word);
-        let fault_err = sel4::cnode_mint_depth(
+        let mcs = allocate_driver_task_mcs_objects(
+            &mut self.env,
+            contract,
+            task_key,
             child_cnode,
-            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
             child_depth,
-            root_cnode,
+            command_endpoint_origin,
             fault_endpoint,
-            root_depth,
-            sel4_sys::seL4_CapRights_All,
-            badge,
-        );
-        if fault_err != seL4_NoError {
-            return Err(HalError::Sel4(fault_err));
+        )?;
+        let command_endpoint = mcs.command_endpoint;
+
+        #[cfg(not(sel4_config_kernel_mcs))]
+        {
+            let badge = 0xD000 | (role_bit as seL4_Word);
+            let fault_err = sel4::cnode_mint_depth(
+                child_cnode,
+                driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+                child_depth,
+                root_cnode,
+                fault_endpoint,
+                root_depth,
+                sel4_sys::seL4_CapRights_All,
+                badge,
+            );
+            if fault_err != seL4_NoError {
+                return Err(HalError::Sel4(fault_err));
+            }
         }
 
         let endpoint_err = sel4::cnode_mint_depth(
@@ -4720,7 +5134,7 @@ impl<'a> KernelHal<'a> {
             driver_task::DRIVER_TASK_CHILD_COMMAND_SLOT,
             child_depth,
             root_cnode,
-            command_endpoint,
+            command_endpoint_origin,
             root_depth,
             driver_runtime_command_endpoint_receive_rights(),
             0,
@@ -4924,9 +5338,13 @@ impl<'a> KernelHal<'a> {
 
         let guard_bits = sel4::word_bits().saturating_sub(child_depth as seL4_Word);
         let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
+        #[cfg(sel4_config_kernel_mcs)]
+        let tcb_fault_endpoint = mcs.standard_fault_endpoint;
+        #[cfg(not(sel4_config_kernel_mcs))]
+        let tcb_fault_endpoint = driver_task::DRIVER_TASK_CHILD_FAULT_SLOT;
         sel4::set_tcb_space(
             tcb,
-            driver_task::DRIVER_TASK_CHILD_FAULT_SLOT,
+            tcb_fault_endpoint,
             child_cnode,
             cspace_root_data,
             vspace,
@@ -4935,18 +5353,32 @@ impl<'a> KernelHal<'a> {
         .map_err(HalError::Sel4)?;
 
         self.env
-            .bind_remote_ipc_buffer(
+            .bind_child_ipc_buffer(
                 tcb,
                 remote_tcb_ipc_buffer_frame_cap(ipc_frame.cap(), child_ipc_frame),
                 driver_task::DRIVER_TASK_IPC_VADDR,
             )
             .map_err(HalError::Sel4)?;
 
-        let (bootstrap_priority, steady_priority) =
-            configure_driver_tcb_priority_for_boot(contract, tcb)?;
-        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
-
         let affinity_core = apply_driver_tcb_affinity_for_boot(contract, tcb)?;
+
+        let (bootstrap_priority, steady_priority) =
+            configure_driver_tcb_priority_for_boot(contract, tcb, mcs)?;
+        driver_task::publish_driver_task_scheduler(contract, tcb as usize, steady_priority);
+        #[cfg(sel4_config_kernel_mcs)]
+        if !driver_task::publish_driver_task_mcs_kernel_objects(
+            contract,
+            command_endpoint_origin as usize,
+            mcs.command_reply as usize,
+            mcs.completion_notification_origin as usize,
+            mcs.sched_context as usize,
+            mcs.standard_fault_endpoint as usize,
+            mcs.timeout_fault_endpoint as usize,
+        ) {
+            return Err(HalError::Unsupported("driver-runtime-mcs-recovery-publish"));
+        }
+        #[cfg(sel4_config_kernel_mcs)]
+        register_driver_task_fault_source(contract, tcb)?;
 
         let _notification_bound =
             bind_driver_tcb_notification_for_boot(contract, tcb, notification)?;
@@ -5210,7 +5642,14 @@ impl<'a> KernelHal<'a> {
             role_bit,
             tcb,
             cnode: child_cnode,
+            command_endpoint_origin,
             command_endpoint,
+            command_reply: mcs.command_reply,
+            completion_notification_origin: mcs.completion_notification_origin,
+            completion_notification: mcs.completion_notification,
+            sched_context: mcs.sched_context,
+            standard_fault_endpoint: mcs.standard_fault_endpoint,
+            timeout_fault_endpoint: mcs.timeout_fault_endpoint,
             notification,
             root_notification,
             root_wake_notification,
@@ -5688,7 +6127,14 @@ mod tests {
             role_bit: super::driver_task::driver_task_role_bit(contract.kind),
             tcb: 0x100,
             cnode: 0x101,
+            command_endpoint_origin: 0x10a,
             command_endpoint: 0x102,
+            command_reply: 0x10b,
+            completion_notification_origin: 0x10c,
+            completion_notification: 0x10d,
+            sched_context: 0x10e,
+            standard_fault_endpoint: 0x10f,
+            timeout_fault_endpoint: 0x110,
             notification: 0x103,
             root_notification: 0x106,
             root_wake_notification: 0x107,
@@ -6621,6 +7067,26 @@ mod tests {
             driver_runtime_command_endpoint_receive_rights().raw(),
             0b0010,
             "the child command cap may receive but cannot become a second producer"
+        );
+        assert_eq!(
+            super::driver_runtime_command_endpoint_send_rights().raw(),
+            0b1001,
+            "root command authority is Write + GrantReply without Grant or Read"
+        );
+        assert_eq!(
+            super::driver_runtime_fault_send_rights().raw(),
+            0b1001,
+            "driver fault authority is Write + GrantReply without Grant or Read"
+        );
+        assert_eq!(
+            super::driver_runtime_completion_notification_send_rights().raw(),
+            0b0001,
+            "the child completion cap may signal but cannot consume root wakes"
+        );
+        assert_eq!(
+            super::driver_runtime_completion_notification_receive_rights().raw(),
+            0b0010,
+            "the root completion cap may receive but cannot self-signal"
         );
         assert_eq!(
             super::driver_runtime_root_notification_send_rights().raw(),

@@ -14,7 +14,7 @@ servers:
 paths:
   /v1/meta/bounds:
     get:
-      summary: Manifest-derived bounds and paths.
+      summary: Manifest-derived bounds, paths, and optional Worker declarations.
       responses:
         "200":
           description: Boundaries derived from the active manifest.
@@ -24,7 +24,7 @@ paths:
                 $ref: "#/components/schemas/BoundsResponse"
   /v1/meta/status:
     get:
-      summary: Gateway connection and broker status counters.
+      summary: Gateway connection, backend class, optional Worker acceptance, and broker counters.
       responses:
         "200":
           description: Runtime gateway status and broker metrics.
@@ -440,6 +440,62 @@ components:
                   type: integer
                 preemptions_bytes:
                   type: integer
+        worker_runtime:
+          $ref: "#/components/schemas/WorkerRuntimeBounds"
+    WorkerRuntimeBounds:
+      type: object
+      description: >
+        Optional compiler-generated declaration bounds. Absence means unknown;
+        this object is not runtime READY or target proof.
+      required:
+        - roles
+        - task_abi_schema
+        - task_abi_version
+        - worker_observation_schema
+        - worker_integration_evidence_schema
+        - maximum_live_tasks
+        - canonical_telemetry_template
+        - shard_bits
+        - legacy_worker_alias
+      properties:
+        roles:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerRoleBounds"
+        task_abi_schema:
+          type: string
+        task_abi_version:
+          type: integer
+          minimum: 1
+        worker_observation_schema:
+          type: string
+        worker_integration_evidence_schema:
+          type: string
+        maximum_live_tasks:
+          type: integer
+          minimum: 1
+        canonical_telemetry_template:
+          type: string
+          const: /shard/<label>/worker/<id>/telemetry
+        shard_bits:
+          type: integer
+          minimum: 1
+          maximum: 8
+        legacy_worker_alias:
+          type: boolean
+    WorkerRoleBounds:
+      type: object
+      required: [role, declaration, executable_slots]
+      properties:
+        role:
+          type: string
+          enum: [worker-heartbeat, worker-gpu, worker-bus, worker-lora]
+        declaration:
+          type: string
+          enum: [executable, model-only]
+        executable_slots:
+          type: integer
+          minimum: 0
     GatewayStatusResponse:
       type: object
       required:
@@ -450,6 +506,14 @@ components:
       properties:
         connected:
           type: boolean
+          description: Console connection only; never target execution proof.
+        backend_class:
+          type: string
+          enum: [host-model, console-projection, unknown]
+        worker_acceptance:
+          $ref: "#/components/schemas/WorkerAcceptanceSummary"
+        worker_acceptance_diagnostic:
+          $ref: "#/components/schemas/WorkerAcceptanceDiagnostic"
         last_error:
           type: string
         last_change_unix_ms:
@@ -463,6 +527,202 @@ components:
           minimum: 0
         broker:
           $ref: "#/components/schemas/BrokerStatusResponse"
+    WorkerAcceptanceSummary:
+      type: object
+      description: >
+        Redacted projection produced only after shared-library validation of a
+        bounded local acceptance record. It adds no authority route.
+      required:
+        - schema
+        - record_kind
+        - evidence_sha256
+        - verdict
+        - target
+        - execution_proof
+        - target_session
+        - topology_sha256
+      properties:
+        schema:
+          type: string
+          enum: [cohesix-worker-task-evidence/v1]
+        record_kind:
+          type: string
+          enum: [target-component]
+        evidence_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        verdict:
+          type: string
+          enum: [PASS, FAIL]
+        target:
+          type: string
+          enum: [qemu, pi4]
+        execution_proof:
+          type: string
+          enum: [none, qemu, fresh-pi]
+        target_session:
+          $ref: "#/components/schemas/TargetSessionSummary"
+        topology_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        workers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerAcceptanceRoleSummary"
+    WorkerAcceptanceRoleSummary:
+      type: object
+      required:
+        - role
+        - lifecycle
+        - artifact
+        - receipt
+        - execution_proof
+        - slot
+        - lease_epoch
+        - supervisor_generation
+        - cap_generation
+        - image_sha256
+        - ready_sequence
+        - completion_sequence
+        - core
+        - scheduling_context
+        - object_inventory
+      properties:
+        role:
+          type: string
+          enum: [worker-heartbeat, worker-gpu, worker-lora]
+        lifecycle:
+          type: string
+          enum: [absent, queued, starting, ready, closing, faulted, terminal]
+        artifact:
+          type: string
+          enum: [missing, verified, mismatch]
+        receipt:
+          type: string
+          enum: [none, pending, confirmed, rejected, stale]
+        execution_proof:
+          type: string
+          enum: [none, host-model, qemu, fresh-pi]
+        slot:
+          type: integer
+          minimum: 0
+        lease_epoch:
+          type: integer
+          minimum: 1
+        supervisor_generation:
+          type: integer
+          minimum: 1
+        cap_generation:
+          type: integer
+          minimum: 1
+        image_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        ready_sequence:
+          type: integer
+          minimum: 0
+        completion_sequence:
+          type: integer
+          minimum: 0
+        core:
+          type: integer
+          minimum: 0
+          maximum: 3
+        scheduling_context:
+          $ref: "#/components/schemas/WorkerSchedulingContextSummary"
+        object_inventory:
+          $ref: "#/components/schemas/KernelObjectInventorySummary"
+    TargetSessionSummary:
+      type: object
+      required:
+        - target_session_sha256
+        - manifest_sha256
+        - root_image_sha256
+        - worker_archive_sha256
+        - worker_image_manifest_sha256
+        - worker_abi_sha256
+      properties:
+        target_session_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        manifest_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        root_image_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        worker_archive_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        worker_image_manifest_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        worker_abi_sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+    WorkerSchedulingContextSummary:
+      type: object
+      required: [budget_us, period_us]
+      properties:
+        budget_us:
+          type: integer
+          minimum: 1
+        period_us:
+          type: integer
+          minimum: 1
+    KernelObjectInventorySummary:
+      type: object
+      additionalProperties: false
+      required:
+        - tcbs
+        - scheduling_contexts
+        - reply_objects
+        - vspaces
+        - cnodes
+        - page_tables
+        - asids
+        - frames
+        - endpoints
+        - notifications
+        - fault_caps
+        - timeout_fault_caps
+        - cspace_slots
+        - untyped_bytes
+      properties:
+        tcbs: {type: integer, minimum: 0}
+        scheduling_contexts: {type: integer, minimum: 0}
+        reply_objects: {type: integer, minimum: 0}
+        vspaces: {type: integer, minimum: 0}
+        cnodes: {type: integer, minimum: 0}
+        page_tables: {type: integer, minimum: 0}
+        asids: {type: integer, minimum: 0}
+        frames: {type: integer, minimum: 0}
+        endpoints: {type: integer, minimum: 0}
+        notifications: {type: integer, minimum: 0}
+        fault_caps: {type: integer, minimum: 0}
+        timeout_fault_caps: {type: integer, minimum: 0}
+        cspace_slots: {type: integer, minimum: 0}
+        untyped_bytes: {type: integer, minimum: 0}
+    WorkerAcceptanceDiagnostic:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+          enum:
+            - not-configured
+            - incomplete-configuration
+            - unsafe-root
+            - outside-root
+            - symlink-traversal
+            - not-regular-file
+            - record-too-large
+            - read-failed
+            - invalid-evidence
+            - invalid-target-session
+            - target-session-mismatch
+            - manifest-mismatch
+            - unsupported-record-kind
     BrokerStatusResponse:
       type: object
       required:

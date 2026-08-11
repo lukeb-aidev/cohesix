@@ -19,7 +19,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{SwarmUiError, SwarmUiTranscript};
 
-const HIVE_SNAPSHOT_VERSION: u8 = 1;
+const HIVE_SNAPSHOT_VERSION: u8 = 2;
+const HIVE_LEGACY_MODEL_SNAPSHOT_VERSION: u8 = 1;
 const DEFAULT_LINE_CAP_BYTES: usize = 160;
 
 /// Hive renderer defaults emitted by coh-rtc.
@@ -66,6 +67,101 @@ pub struct SwarmUiHiveAgent {
     pub role: String,
     /// Namespace path for the agent.
     pub namespace: String,
+    /// Structured Worker axes. Queen agents and unknown legacy records omit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker: Option<SwarmUiWorkerState>,
+}
+
+/// Compiler-declared Worker implementation class.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiWorkerDeclaration {
+    /// A selected target profile provides bounded executable slots.
+    Executable,
+    /// The role is modeled but has no target task slot.
+    ModelOnly,
+}
+
+/// Target Worker lifecycle observed through canonical telemetry.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiWorkerLifecycle {
+    /// No target instance is present.
+    Absent,
+    /// A request is queued but not yet starting.
+    Queued,
+    /// The task is starting and has not published READY.
+    Starting,
+    /// The exact target generation published READY.
+    Ready,
+    /// Bounded teardown is in progress.
+    Closing,
+    /// The task entered a contained fault state.
+    Faulted,
+    /// The task reached a terminal state.
+    Terminal,
+}
+
+/// Worker image/artifact validation state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiWorkerArtifact {
+    /// Required artifact evidence is missing.
+    Missing,
+    /// Artifact identity was validated.
+    Verified,
+    /// Artifact identity differs from the accepted record.
+    Mismatch,
+}
+
+/// Worker receipt state kept independent of task lifecycle.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiWorkerReceipt {
+    /// No receipt is associated with the Worker.
+    None,
+    /// Receipt completion remains pending.
+    Pending,
+    /// A matching receipt was confirmed.
+    Confirmed,
+    /// The Worker rejected the receipt.
+    Rejected,
+    /// The receipt belongs to a stale generation.
+    Stale,
+}
+
+/// Evidence class for Worker execution.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SwarmUiWorkerExecutionProof {
+    /// No execution proof is available.
+    None,
+    /// The state came only from a host model.
+    HostModel,
+    /// Hash-matched QEMU acceptance evidence is available.
+    Qemu,
+    /// Hash-matched fresh Pi acceptance evidence is available.
+    FreshPi,
+}
+
+/// Independent structured axes rendered for a Worker agent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwarmUiWorkerState {
+    /// Generated declaration, or unknown when absent from an old fixture.
+    #[serde(default)]
+    pub declaration: Option<SwarmUiWorkerDeclaration>,
+    /// Canonical live lifecycle, or unknown until structured telemetry arrives.
+    #[serde(default)]
+    pub lifecycle: Option<SwarmUiWorkerLifecycle>,
+    /// Shared-validator-backed artifact state, if available.
+    #[serde(default)]
+    pub artifact: Option<SwarmUiWorkerArtifact>,
+    /// Shared-validator-backed receipt state, if available.
+    #[serde(default)]
+    pub receipt: Option<SwarmUiWorkerReceipt>,
+    /// Shared-validator-backed execution proof, if available.
+    #[serde(default)]
+    pub execution_proof: Option<SwarmUiWorkerExecutionProof>,
 }
 
 /// Event kinds derived from telemetry streams.
@@ -153,6 +249,12 @@ pub struct SwarmUiHivePressureCounters {
 pub struct SwarmUiHiveGatewayStatus {
     /// True when the gateway currently has a console connection.
     pub connected: bool,
+    /// Gateway backend class. This is never target execution proof.
+    #[serde(default)]
+    pub backend_class: Option<String>,
+    /// Redacted acceptance summary validated by the gateway's shared parser.
+    #[serde(default)]
+    pub worker_acceptance: Option<SwarmUiWorkerAcceptanceSummary>,
     /// Normalized broker pressure in the range 0..=1.
     pub pressure: f32,
     /// Normalized control-session pressure in the range 0..=1.
@@ -187,6 +289,42 @@ pub struct SwarmUiHiveGatewayStatus {
     pub relay_queue_depth: u64,
     /// Remote relay write failures since the previous Live Hive status sample.
     pub relay_remote_write_failures_delta: u64,
+}
+
+/// Redacted Worker acceptance projection from hive-gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwarmUiWorkerAcceptanceSummary {
+    /// Evidence schema.
+    pub schema: String,
+    /// Validated record kind.
+    pub record_kind: String,
+    /// SHA-256 of the imported record.
+    pub evidence_sha256: String,
+    /// Acceptance verdict.
+    pub verdict: String,
+    /// Optional target class.
+    #[serde(default)]
+    pub target: Option<String>,
+    /// Strongest proof carried by the validated record.
+    pub execution_proof: SwarmUiWorkerExecutionProof,
+    /// Optional role-level axes.
+    #[serde(default)]
+    pub workers: Vec<SwarmUiWorkerAcceptanceRole>,
+}
+
+/// Role-level axes from a validated Worker acceptance record.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SwarmUiWorkerAcceptanceRole {
+    /// Canonical Worker role.
+    pub role: String,
+    /// Lifecycle captured in the acceptance record.
+    pub lifecycle: SwarmUiWorkerLifecycle,
+    /// Artifact identity state.
+    pub artifact: SwarmUiWorkerArtifact,
+    /// Receipt state.
+    pub receipt: SwarmUiWorkerReceipt,
+    /// Execution proof for this role.
+    pub execution_proof: SwarmUiWorkerExecutionProof,
 }
 
 /// Scheduler summary counters for Live Hive.
@@ -327,7 +465,9 @@ impl SwarmUiHiveSnapshot {
 
     /// Validate snapshot version and bounds.
     pub fn validate(&self, max_events: usize) -> Result<(), String> {
-        if self.version != HIVE_SNAPSHOT_VERSION {
+        if self.version != HIVE_SNAPSHOT_VERSION
+            && self.version != HIVE_LEGACY_MODEL_SNAPSHOT_VERSION
+        {
             return Err(format!(
                 "hive snapshot version {} unsupported",
                 self.version
@@ -337,6 +477,21 @@ impl SwarmUiHiveSnapshot {
             return Err(format!("hive snapshot exceeds max events ({})", max_events));
         }
         Ok(())
+    }
+
+    fn migrate_legacy_model_state(&mut self) {
+        if self.version != HIVE_LEGACY_MODEL_SNAPSHOT_VERSION {
+            return;
+        }
+        for agent in &mut self.agents {
+            if agent.role != "queen" && agent.worker.is_none() {
+                agent.worker = Some(SwarmUiWorkerState {
+                    declaration: Some(SwarmUiWorkerDeclaration::ModelOnly),
+                    ..SwarmUiWorkerState::default()
+                });
+            }
+        }
+        self.version = HIVE_SNAPSHOT_VERSION;
     }
 }
 
@@ -356,6 +511,9 @@ pub struct SwarmUiHiveBootstrap {
 /// Incremental hive event batch for UI polling.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmUiHiveBatch {
+    /// Current structured agent records. Empty means no metadata change.
+    #[serde(default)]
+    pub agents: Vec<SwarmUiHiveAgent>,
     /// Event payloads to apply.
     pub events: Vec<SwarmUiHiveEvent>,
     /// Pressure ratio derived from backlog vs budget.
@@ -400,6 +558,8 @@ pub(crate) struct HiveReplay {
 
 impl HiveReplay {
     pub(crate) fn new(snapshot: SwarmUiHiveSnapshot) -> Self {
+        let mut snapshot = snapshot;
+        snapshot.migrate_legacy_model_state();
         Self {
             snapshot,
             cursor: 0,
@@ -417,6 +577,10 @@ impl HiveReplay {
             id: "worker-replay".to_owned(),
             role: "worker".to_owned(),
             namespace: "/worker/worker-replay".to_owned(),
+            worker: Some(SwarmUiWorkerState {
+                declaration: Some(SwarmUiWorkerDeclaration::ModelOnly),
+                ..SwarmUiWorkerState::default()
+            }),
         };
         Ok(Self::new(SwarmUiHiveSnapshot::from_transcript(
             &agent,
@@ -453,6 +617,7 @@ impl HiveReplay {
             backlog as f32 / budget as f32
         };
         SwarmUiHiveBatch {
+            agents: self.snapshot.agents.clone(),
             events,
             pressure,
             backlog,
@@ -497,6 +662,8 @@ struct DetailCache {
 pub(crate) struct HiveSessionState {
     workers: Vec<String>,
     roles: HashMap<String, String>,
+    namespaces: HashMap<String, String>,
+    agents: HashMap<String, SwarmUiHiveAgent>,
     cursors: HashMap<String, HiveTelemetryCursor>,
     buffers: HashMap<String, BoundedLineBuffer>,
     tail_policy: TailPollPolicy,
@@ -513,11 +680,18 @@ impl HiveSessionState {
     pub(crate) fn new(
         workers: Vec<String>,
         roles: HashMap<String, String>,
+        namespaces: HashMap<String, String>,
+        agents: Vec<SwarmUiHiveAgent>,
         tail_policy: TailPollPolicy,
     ) -> Self {
         Self {
             workers,
             roles,
+            namespaces,
+            agents: agents
+                .into_iter()
+                .map(|agent| (agent.id.clone(), agent))
+                .collect(),
             cursors: HashMap::new(),
             buffers: HashMap::new(),
             tail_policy,
@@ -534,7 +708,6 @@ impl HiveSessionState {
     pub(crate) fn ingest<T: Secure9pTransport>(
         &mut self,
         client: &mut CohClient<T>,
-        worker_root: &str,
         msize: u32,
         config: &SwarmUiHiveConfig,
     ) -> Result<(), SwarmUiError> {
@@ -555,16 +728,19 @@ impl HiveSessionState {
             }
             let idx = (start_index + offset) % worker_count;
             let worker_id = self.workers[idx].clone();
+            let namespace = self.namespaces.get(&worker_id).cloned().ok_or_else(|| {
+                SwarmUiError::Hive(format!("missing canonical namespace for {worker_id}"))
+            })?;
             let cursor = match self.cursors.get_mut(&worker_id) {
                 Some(cursor) => cursor,
                 None => {
-                    let path = format!("{worker_root}/{worker_id}/telemetry");
                     let fid = client
-                        .open(&path, OpenMode::read_only())
+                        .open(&namespace, OpenMode::read_only())
                         .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
                     self.cursors.entry(worker_id.clone()).or_insert_with(|| {
                         HiveTelemetryCursor::new(
                             &worker_id,
+                            &namespace,
                             fid,
                             TailPoller::new(self.tail_policy, None),
                         )
@@ -586,16 +762,18 @@ impl HiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-            let role = self.roles.get(&worker_id).map(|value| value.as_str());
-            let (consumed, touched) = cursor.drain_events(
-                worker_root,
+            let role = self.roles.get(&worker_id).cloned();
+            let (consumed, touched, observation) = cursor.drain_events(
                 &mut self.seq,
                 &mut self.queue,
                 budget,
                 &mut buffer,
-                role,
+                role.as_deref(),
                 config.line_cap_bytes as usize,
-            );
+            )?;
+            if let Some(observation) = observation {
+                self.update_runtime_observation(&worker_id, observation)?;
+            }
             self.buffers.insert(worker_id.clone(), buffer);
             if touched {
                 self.buffers_revision = self.buffers_revision.wrapping_add(1);
@@ -607,6 +785,31 @@ impl HiveSessionState {
         if processed > 0 {
             self.worker_cursor = (start_index + processed) % worker_count;
         }
+        Ok(())
+    }
+
+    pub(crate) fn agents(&self) -> Vec<SwarmUiHiveAgent> {
+        sorted_agents(&self.agents)
+    }
+
+    pub(crate) fn apply_acceptance(&mut self, acceptance: Option<&SwarmUiWorkerAcceptanceSummary>) {
+        apply_acceptance_axes(&mut self.agents, acceptance);
+    }
+
+    fn update_runtime_observation(
+        &mut self,
+        worker_id: &str,
+        observation: WorkerRuntimeObservation,
+    ) -> Result<(), SwarmUiError> {
+        let agent = self.agents.get_mut(worker_id).ok_or_else(|| {
+            SwarmUiError::Hive(format!("structured state names unknown Worker {worker_id}"))
+        })?;
+        self.roles
+            .insert(worker_id.to_owned(), observation.role.clone());
+        agent.role = observation.role;
+        let worker = agent.worker.get_or_insert_with(SwarmUiWorkerState::default);
+        worker.declaration = Some(SwarmUiWorkerDeclaration::Executable);
+        worker.lifecycle = Some(observation.lifecycle);
         Ok(())
     }
 
@@ -723,6 +926,7 @@ impl HiveSessionState {
 #[derive(Debug)]
 struct HiveTelemetryCursor {
     worker_id: String,
+    namespace: String,
     fid: u32,
     offset: u64,
     buffer: Vec<u8>,
@@ -731,9 +935,10 @@ struct HiveTelemetryCursor {
 }
 
 impl HiveTelemetryCursor {
-    fn new(worker_id: &str, fid: u32, poller: TailPoller) -> Self {
+    fn new(worker_id: &str, namespace: &str, fid: u32, poller: TailPoller) -> Self {
         Self {
             worker_id: worker_id.to_owned(),
+            namespace: namespace.to_owned(),
             fid,
             offset: 0,
             buffer: Vec::new(),
@@ -776,17 +981,17 @@ impl HiveTelemetryCursor {
     #[allow(clippy::too_many_arguments)]
     fn drain_events(
         &mut self,
-        worker_root: &str,
         seq: &mut u64,
         queue: &mut VecDeque<SwarmUiHiveEvent>,
         budget: usize,
         buffer: &mut BoundedLineBuffer,
         role: Option<&str>,
         line_cap_bytes: usize,
-    ) -> (usize, bool) {
+    ) -> Result<(usize, bool, Option<WorkerRuntimeObservation>), SwarmUiError> {
         let mut consumed = 0usize;
         let mut touched = false;
-        let namespace = format!("{worker_root}/{}/telemetry", self.worker_id);
+        let mut observation = None;
+        let mut observed_role = None;
         while consumed < budget {
             let Some(line) = self.pending.pop_front() else {
                 break;
@@ -796,10 +1001,19 @@ impl HiveTelemetryCursor {
             };
             buffer.push_line(normalized);
             touched = true;
+            if let Some(observed) = parse_worker_runtime_state(normalized, &self.worker_id)? {
+                if role != Some(observed.role.as_str()) && role != Some("worker") {
+                    return Err(SwarmUiError::Hive(
+                        "Worker runtime state role changed after discovery".to_owned(),
+                    ));
+                }
+                observed_role = Some(observed.role.clone());
+                observation = Some(observed);
+            }
             if let Some(event) = parse_line_to_event_with_namespace(
                 &self.worker_id,
-                &namespace,
-                role,
+                &self.namespace,
+                observed_role.as_deref().or(role),
                 normalized,
                 seq,
                 line_cap_bytes,
@@ -808,7 +1022,7 @@ impl HiveTelemetryCursor {
                 consumed = consumed.saturating_add(1);
             }
         }
-        (consumed, touched)
+        Ok((consumed, touched, observation))
     }
 
     fn extract_lines(&mut self, pending_cap: usize, dropped: &mut u64) -> Result<(), SwarmUiError> {
@@ -895,6 +1109,8 @@ pub(crate) fn parse_line_to_event_with_namespace(
 pub(crate) struct ConsoleHiveSessionState {
     workers: Vec<String>,
     roles: HashMap<String, String>,
+    namespaces: HashMap<String, String>,
+    agents: HashMap<String, SwarmUiHiveAgent>,
     queue: VecDeque<SwarmUiHiveEvent>,
     buffers: HashMap<String, BoundedLineBuffer>,
     pollers: HashMap<String, TailPoller>,
@@ -911,11 +1127,18 @@ impl ConsoleHiveSessionState {
     pub(crate) fn new(
         workers: Vec<String>,
         roles: HashMap<String, String>,
+        namespaces: HashMap<String, String>,
+        agents: Vec<SwarmUiHiveAgent>,
         tail_policy: TailPollPolicy,
     ) -> Self {
         Self {
             workers,
             roles,
+            namespaces,
+            agents: agents
+                .into_iter()
+                .map(|agent| (agent.id.clone(), agent))
+                .collect(),
             queue: VecDeque::new(),
             buffers: HashMap::new(),
             pollers: HashMap::new(),
@@ -933,7 +1156,6 @@ impl ConsoleHiveSessionState {
         &mut self,
         transport: &mut T,
         session: &Session,
-        worker_root: &str,
         config: &SwarmUiHiveConfig,
     ) -> Result<(), SwarmUiError> {
         let now_ms = now_ms();
@@ -953,6 +1175,9 @@ impl ConsoleHiveSessionState {
             }
             let idx = (start_index + offset) % worker_count;
             let worker_id = self.workers[idx].clone();
+            let namespace = self.namespaces.get(&worker_id).cloned().ok_or_else(|| {
+                SwarmUiError::Hive(format!("missing canonical namespace for {worker_id}"))
+            })?;
             let poller = self
                 .pollers
                 .entry(worker_id.clone())
@@ -961,9 +1186,8 @@ impl ConsoleHiveSessionState {
                 processed = processed.saturating_add(1);
                 continue;
             }
-            let path = format!("{worker_root}/{worker_id}/telemetry");
             let mut lines = transport
-                .tail(session, &path, None)
+                .tail(session, &namespace, None)
                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
             let _ = transport.drain_acknowledgements();
             poller.mark_polled(now_ms);
@@ -972,7 +1196,6 @@ impl ConsoleHiveSessionState {
                 lines = lines.split_off(keep_from);
                 self.dropped = self.dropped.saturating_add(keep_from as u64);
             }
-            let namespace = format!("{worker_root}/{worker_id}/telemetry");
             let detail_lines = config.detail_lines as usize;
             let line_cap = config.line_cap_bytes as usize;
             let per_worker = config.per_worker_bytes as usize;
@@ -980,8 +1203,10 @@ impl ConsoleHiveSessionState {
                 .buffers
                 .remove(&worker_id)
                 .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-            let role = self.roles.get(&worker_id).map(|value| value.as_str());
+            let role = self.roles.get(&worker_id).cloned();
             let mut touched = false;
+            let mut observation = None;
+            let mut observed_role = None;
             for line in lines {
                 if budget == 0 {
                     break;
@@ -991,10 +1216,21 @@ impl ConsoleHiveSessionState {
                 };
                 buffer.push_line(normalized);
                 touched = true;
+                if let Some(observed) = parse_worker_runtime_state(normalized, &worker_id)? {
+                    if role.as_deref() != Some(observed.role.as_str())
+                        && role.as_deref() != Some("worker")
+                    {
+                        return Err(SwarmUiError::Hive(
+                            "Worker runtime state role changed after discovery".to_owned(),
+                        ));
+                    }
+                    observed_role = Some(observed.role.clone());
+                    observation = Some(observed);
+                }
                 if let Some(event) = parse_line_to_event_with_namespace(
                     &worker_id,
                     &namespace,
-                    role,
+                    observed_role.as_deref().or(role.as_deref()),
                     normalized,
                     &mut self.seq,
                     config.line_cap_bytes as usize,
@@ -1004,6 +1240,9 @@ impl ConsoleHiveSessionState {
                 }
             }
             self.buffers.insert(worker_id.clone(), buffer);
+            if let Some(observation) = observation {
+                self.update_runtime_observation(&worker_id, observation)?;
+            }
             if touched {
                 self.buffers_revision = self.buffers_revision.wrapping_add(1);
             }
@@ -1020,7 +1259,6 @@ impl ConsoleHiveSessionState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn ingest_rest_parallel(
         &mut self,
-        worker_root: &str,
         config: &SwarmUiHiveConfig,
         rest_url: &str,
         request_auth_token: Option<&str>,
@@ -1066,26 +1304,31 @@ impl ConsoleHiveSessionState {
             let poll_targets = batch
                 .iter()
                 .filter(|(_, should_poll)| *should_poll)
-                .map(|(worker_id, _)| worker_id.clone())
-                .collect::<Vec<_>>();
+                .map(|(worker_id, _)| {
+                    let namespace = self.namespaces.get(worker_id).cloned().ok_or_else(|| {
+                        SwarmUiError::Hive(format!("missing canonical namespace for {worker_id}"))
+                    })?;
+                    Ok::<(String, String), SwarmUiError>((worker_id.clone(), namespace))
+                })
+                .collect::<Result<Vec<_>, _>>()?;
             if !poll_targets.is_empty() {
                 let rest_url = rest_url.to_owned();
                 let chunk_results = thread::scope(|scope| {
                     let mut handles = Vec::with_capacity(poll_targets.len());
-                    for worker_id in &poll_targets {
+                    for (worker_id, namespace) in &poll_targets {
                         let rest_url = rest_url.clone();
                         let request_auth_token = request_auth_token_owned.clone();
                         let ticket = ticket_owned.clone();
                         let worker_id = worker_id.clone();
+                        let namespace = namespace.clone();
                         handles.push(scope.spawn(move || {
                             let mut transport =
                                 CohshRestTransport::new(rest_url, request_auth_token);
                             let session = transport
                                 .attach(role, ticket.as_deref())
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
-                            let path = format!("{worker_root}/{worker_id}/telemetry");
                             let lines = transport
-                                .tail(&session, &path, None)
+                                .tail(&session, &namespace, None)
                                 .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
                             Ok::<(String, Vec<String>), SwarmUiError>((worker_id, lines))
                         }));
@@ -1129,7 +1372,9 @@ impl ConsoleHiveSessionState {
                     lines = lines.split_off(keep_from);
                     self.dropped = self.dropped.saturating_add(keep_from as u64);
                 }
-                let namespace = format!("{worker_root}/{worker_id}/telemetry");
+                let namespace = self.namespaces.get(&worker_id).cloned().ok_or_else(|| {
+                    SwarmUiError::Hive(format!("missing canonical namespace for {worker_id}"))
+                })?;
                 let detail_lines = config.detail_lines as usize;
                 let line_cap = config.line_cap_bytes as usize;
                 let per_worker = config.per_worker_bytes as usize;
@@ -1137,8 +1382,10 @@ impl ConsoleHiveSessionState {
                     .buffers
                     .remove(&worker_id)
                     .unwrap_or_else(|| BoundedLineBuffer::new(detail_lines, per_worker, line_cap));
-                let role = self.roles.get(&worker_id).map(|value| value.as_str());
+                let role = self.roles.get(&worker_id).cloned();
                 let mut touched = false;
+                let mut observation = None;
+                let mut observed_role = None;
                 for line in lines {
                     if budget == 0 {
                         break;
@@ -1148,10 +1395,21 @@ impl ConsoleHiveSessionState {
                     };
                     buffer.push_line(normalized);
                     touched = true;
+                    if let Some(observed) = parse_worker_runtime_state(normalized, &worker_id)? {
+                        if role.as_deref() != Some(observed.role.as_str())
+                            && role.as_deref() != Some("worker")
+                        {
+                            return Err(SwarmUiError::Hive(
+                                "Worker runtime state role changed after discovery".to_owned(),
+                            ));
+                        }
+                        observed_role = Some(observed.role.clone());
+                        observation = Some(observed);
+                    }
                     if let Some(event) = parse_line_to_event_with_namespace(
                         &worker_id,
                         &namespace,
-                        role,
+                        observed_role.as_deref().or(role.as_deref()),
                         normalized,
                         &mut self.seq,
                         config.line_cap_bytes as usize,
@@ -1161,6 +1419,9 @@ impl ConsoleHiveSessionState {
                     }
                 }
                 self.buffers.insert(worker_id.clone(), buffer);
+                if let Some(observation) = observation {
+                    self.update_runtime_observation(&worker_id, observation)?;
+                }
                 if touched {
                     self.buffers_revision = self.buffers_revision.wrapping_add(1);
                 }
@@ -1171,6 +1432,31 @@ impl ConsoleHiveSessionState {
         if processed > 0 {
             self.worker_cursor = (start_index + processed) % worker_count;
         }
+        Ok(())
+    }
+
+    pub(crate) fn agents(&self) -> Vec<SwarmUiHiveAgent> {
+        sorted_agents(&self.agents)
+    }
+
+    pub(crate) fn apply_acceptance(&mut self, acceptance: Option<&SwarmUiWorkerAcceptanceSummary>) {
+        apply_acceptance_axes(&mut self.agents, acceptance);
+    }
+
+    fn update_runtime_observation(
+        &mut self,
+        worker_id: &str,
+        observation: WorkerRuntimeObservation,
+    ) -> Result<(), SwarmUiError> {
+        let agent = self.agents.get_mut(worker_id).ok_or_else(|| {
+            SwarmUiError::Hive(format!("structured state names unknown Worker {worker_id}"))
+        })?;
+        self.roles
+            .insert(worker_id.to_owned(), observation.role.clone());
+        agent.role = observation.role;
+        let worker = agent.worker.get_or_insert_with(SwarmUiWorkerState::default);
+        worker.declaration = Some(SwarmUiWorkerDeclaration::Executable);
+        worker.lifecycle = Some(observation.lifecycle);
         Ok(())
     }
 
@@ -1282,24 +1568,116 @@ impl ConsoleHiveSessionState {
     }
 }
 
-pub(crate) fn role_for_agent_id(id: &str) -> &str {
-    if id.eq_ignore_ascii_case("queen") {
-        return "queen";
+#[derive(Debug, Deserialize)]
+struct WorkerRuntimeStateRecord {
+    schema: String,
+    worker_id: String,
+    role: String,
+    state: String,
+    slot: u16,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+    ready_sequence: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct WorkerRuntimeObservation {
+    pub(crate) role: String,
+    pub(crate) lifecycle: SwarmUiWorkerLifecycle,
+}
+
+pub(crate) fn parse_worker_runtime_state(
+    line: &str,
+    expected_worker_id: &str,
+) -> Result<Option<WorkerRuntimeObservation>, SwarmUiError> {
+    if !line.contains("worker-runtime-state/v1") {
+        return Ok(None);
     }
-    let lower = id.to_ascii_lowercase();
-    if lower.starts_with("worker-gpu") {
-        return "worker-gpu";
+    let record: WorkerRuntimeStateRecord = serde_json::from_str(line)
+        .map_err(|err| SwarmUiError::Hive(format!("malformed Worker runtime state: {err}")))?;
+    if record.schema != "worker-runtime-state/v1"
+        || record.worker_id != expected_worker_id
+        || record.lease_epoch == 0
+        || record.supervisor_generation == 0
+        || record.cap_generation == 0
+        || usize::from(record.slot)
+            >= usize::from(crate::generated::SWARMUI_WORKER_MAXIMUM_LIVE_TASKS)
+    {
+        return Err(SwarmUiError::Hive(
+            "Worker runtime state identity is invalid or stale".to_owned(),
+        ));
     }
-    if lower.starts_with("worker-lora") {
-        return "worker-lora";
+    let declaration = crate::generated::SWARMUI_WORKER_ROLE_BOUNDS
+        .iter()
+        .find(|(role, _, _)| *role == record.role)
+        .map(|(_, declaration, _)| *declaration);
+    if declaration != Some("executable") {
+        return Err(SwarmUiError::Hive(
+            "Worker runtime state role is not an executable generated role".to_owned(),
+        ));
     }
-    if lower.starts_with("worker-bus") {
-        return "worker-bus";
+    let lifecycle = match record.state.as_str() {
+        "absent" => SwarmUiWorkerLifecycle::Absent,
+        "queued" => SwarmUiWorkerLifecycle::Queued,
+        "starting" => SwarmUiWorkerLifecycle::Starting,
+        "ready" if record.ready_sequence != 0 => SwarmUiWorkerLifecycle::Ready,
+        "ready" => {
+            return Err(SwarmUiError::Hive(
+                "Worker READY state is missing its ready sequence".to_owned(),
+            ))
+        }
+        "closing" => SwarmUiWorkerLifecycle::Closing,
+        "faulted" => SwarmUiWorkerLifecycle::Faulted,
+        "terminal" => SwarmUiWorkerLifecycle::Terminal,
+        _ => {
+            return Err(SwarmUiError::Hive(
+                "Worker runtime state lifecycle is outside the generated vocabulary".to_owned(),
+            ))
+        }
+    };
+    Ok(Some(WorkerRuntimeObservation {
+        role: record.role,
+        lifecycle,
+    }))
+}
+
+fn sorted_agents(agents: &HashMap<String, SwarmUiHiveAgent>) -> Vec<SwarmUiHiveAgent> {
+    let mut values = agents.values().cloned().collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        (left.role != "queen", left.id.as_str()).cmp(&(right.role != "queen", right.id.as_str()))
+    });
+    values
+}
+
+fn apply_acceptance_axes(
+    agents: &mut HashMap<String, SwarmUiHiveAgent>,
+    acceptance: Option<&SwarmUiWorkerAcceptanceSummary>,
+) {
+    for agent in agents.values_mut() {
+        if let Some(worker) = agent.worker.as_mut() {
+            worker.artifact = None;
+            worker.receipt = None;
+            worker.execution_proof = None;
+        }
     }
-    if lower.starts_with("worker-heartbeat") || lower.starts_with("worker-heart") {
-        return "worker-heartbeat";
+    let Some(acceptance) = acceptance else {
+        return;
+    };
+    if acceptance.verdict != "PASS" {
+        return;
     }
-    "worker"
+    for accepted in &acceptance.workers {
+        for agent in agents
+            .values_mut()
+            .filter(|agent| agent.role == accepted.role)
+        {
+            let worker = agent.worker.get_or_insert_with(SwarmUiWorkerState::default);
+            worker.artifact = Some(accepted.artifact);
+            worker.receipt = Some(accepted.receipt);
+            worker.execution_proof = Some(accepted.execution_proof);
+        }
+    }
 }
 
 fn truncate_detail(line: &str, line_cap_bytes: usize) -> Option<String> {

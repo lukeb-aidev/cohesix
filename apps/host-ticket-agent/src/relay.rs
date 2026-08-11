@@ -254,10 +254,7 @@ fn build_relay_payload(
 }
 
 fn truncate_text(input: &str, max_chars: usize) -> String {
-    if input.len() <= max_chars {
-        return input.to_owned();
-    }
-    input[..max_chars].to_owned()
+    crate::text::truncate_utf8(input, max_chars)
 }
 
 #[cfg(test)]
@@ -365,6 +362,7 @@ mod tests {
                 wal_max_bytes: 256 * 1024,
                 relay_timeout_ms: 1500,
             },
+            ..HostTicketManifest::default()
         }
     }
 
@@ -446,6 +444,7 @@ mod tests {
             target_hive: Some("hive-b".to_owned()),
             relay_hop: Some(1),
             relay_correlation_id: Some("fed-ticket-1:idem-1:hive-a:hive-b".to_owned()),
+            ..HostTicketSpec::default()
         };
 
         let payload = build_relay_payload(

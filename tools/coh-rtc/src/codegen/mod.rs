@@ -10,6 +10,7 @@ mod coh;
 pub mod cohesix_py;
 mod cohsh;
 mod docs;
+pub mod root_tcb_topology;
 mod rust;
 mod swarmui;
 
@@ -27,6 +28,7 @@ pub struct GeneratedArtifacts {
     pub rust_dir: PathBuf,
     pub manifest_json: PathBuf,
     pub manifest_hash: PathBuf,
+    pub root_tcb_topology: PathBuf,
     pub cas_manifest_template: PathBuf,
     pub cas_manifest_template_hash: PathBuf,
     pub cli_script: PathBuf,
@@ -63,9 +65,10 @@ pub struct GeneratedArtifacts {
 impl GeneratedArtifacts {
     pub fn summary(&self) -> String {
         format!(
-            "rust={}, manifest={}, cas_template={}, cas_hash={}, cli={}, docs={}, gpu_breadcrumbs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohesix_py_defaults={}, cohesix_py_doc={}, coh_doctor_doc={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
+            "rust={}, manifest={}, root_tcb_topology={}, cas_template={}, cas_hash={}, cli={}, docs={}, gpu_breadcrumbs={}, obs_interfaces={}, obs_security={}, ticket_quotas={}, trace_policy={}, cas_interfaces={}, cas_security={}, cbor={}, cohesix_py_defaults={}, cohesix_py_doc={}, coh_doctor_doc={}, cohsh_policy={}, cohsh_hash={}, cohsh_rust={}, cohsh_docs={}, cohsh_client_rust={}, cohsh_client_doc={}, cohsh_grammar={}, cohsh_ticket_policy={}, coh_policy={}, coh_hash={}, coh_rust={}, coh_doc={}, swarmui_defaults={}, swarmui_hash={}, swarmui_rust={}, swarmui_doc={}",
             self.rust_dir.display(),
             self.manifest_json.display(),
+            self.root_tcb_topology.display(),
             self.cas_manifest_template.display(),
             self.cas_manifest_template_hash.display(),
             self.cli_script.display(),
@@ -275,6 +278,8 @@ pub fn emit_all(
         &options.swarmui_defaults_rust_out,
         &options.swarmui_defaults_doc_out,
     )?;
+    let root_tcb_topology =
+        root_tcb_topology::emit(manifest, manifest_hash, &options.manifest_out)?;
     let root_task_mod_rs = options.out_dir.join("mod.rs");
     let root_task_bootstrap_rs = options.out_dir.join("bootstrap.rs");
     format_rust_sources(&[
@@ -310,6 +315,7 @@ pub fn emit_all(
         rust_dir: options.out_dir.clone(),
         manifest_json: options.manifest_out.clone(),
         manifest_hash: hash_path,
+        root_tcb_topology,
         cas_manifest_template: cas_artifacts.template_json,
         cas_manifest_template_hash: cas_artifacts.template_hash,
         cli_script: options.cli_script_out.clone(),

@@ -15,10 +15,12 @@
 - `docs/USERLAND_AND_CLI.md` — ticket limits and CLI behavior.
 - `docs/SECURITY.md` — security constraints and quota limits.
 
-The checked-in target profiles currently mark every Worker role
-non-executable. A ticket can authorize a role-scoped session and namespace
-view, but it does not load a Worker image, start a Worker TCB, or grant a live
-seL4 endpoint capability.
+The selected Milestone 26e profiles declare `worker-heartbeat`, `worker-gpu`,
+and `worker-lora` as executable target roles. Root constructs their generated
+seL4 bundles suspended, and the Worker supervisor resumes a role only after a
+separate bounded `/queen/ctl` admission. `worker-bus` remains model-only. A
+ticket authorizes a role-scoped session and namespace view; attachment alone
+does not load, admit, resume, or prove a target Worker task.
 
 ## 1. Why worker tickets exist
 Worker tickets are the application-layer authority boundary for worker-role
@@ -100,17 +102,39 @@ fn mint_worker_heartbeat(secret: &str, subject: &str) -> Result<String, cohesix_
 - Subject identity is required for worker roles and is used to build the attach identity.
 - Ticket length and quota limits are enforced by `cohsh` and NineDoor; ensure scopes/quotas stay within the manifest limits.
 - The TCP console auth token is separate from worker tickets; both may be required in a single session.
-- Ticket acceptance proves only session authority; current profiles do not
-  create a target Worker task or capability from it.
+- Ticket acceptance proves only session authority. It does not satisfy target
+  admission, `READY`, receipt, teardown, QEMU, or fresh-Pi evidence.
+- An executable target Worker becomes live only through the generated
+  supervisor lifecycle: exact role admission, resume, identity-matched
+  `READY`, bounded work, and complete generation-fenced containment.
+- Static executable declarations for QEMU and Pi are not execution proof. The
+  matching target acceptance record must bind the exact kernel, root image,
+  Worker archive, image manifest, role image, and five-part Worker identity.
 
 ## 7. Attach flow (operator mental model)
 1. Client opens a TCP console session and authenticates with the auth token.
 2. Client issues `ATTACH <role> <ticket?>`.
 3. NineDoor validates ticket MAC, role, subject, and mount table.
 4. On success, the session is bound to the role-specific namespace. This does
-   not start or attach a target Worker task.
+   not start or attach a target Worker task; `/queen/ctl` admission and
+   identity-matched `READY` are separate operations.
 
-## 8. Common errors and recovery
+## 8. Worker tickets versus host action tickets
+
+Worker tickets authorize application sessions. The `host-ticket/v1` and
+`host-ticket/v2` records on `/host/tickets/*` authorize host-side actions and
+are a different contract.
+
+Receipt-bearing GPU lease and PEFT actions require version 2. Root accepts the
+caller record only after it matches an exact live `worker-gpu` or
+`worker-lora`, then publishes a normalized read-only `spec.snapshot` containing
+the resolved slot, lease epoch, supervisor generation, cap generation, and a
+strictly increasing admission sequence. The host agent claims only that
+root-owned snapshot. A terminal result is digest-checked against the pinned
+identity before root publishes a confirmed, rejected, or stale Worker receipt;
+the host agent never creates or tears down the receipt Worker.
+
+## 9. Common errors and recovery
 
 ### 1) `ERR ATTACH` with valid auth token
 **Signal**
@@ -132,6 +156,6 @@ fn mint_worker_heartbeat(secret: &str, subject: &str) -> Result<String, cohesix_
 **Recovery**
 - Attach as the correct role or update the mount spec in the ticket.
 
-## 9. Security hygiene
+## 10. Security hygiene
 - Treat ticket secrets like signing keys; keep them off the VM and out of logs.
 - Rotate secrets by updating `configs/root_task.toml`, regenerating artifacts, and restarting the VM.

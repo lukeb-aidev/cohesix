@@ -40,6 +40,7 @@ release-qemu = [
     "serial-console",
     "net-console",
     "net-backend-virtio",
+    "timers-arch-counter",
     "cache-maintenance",
     "usb",
 ]
@@ -128,8 +129,13 @@ embedded-io = { version = "0.7.1", default-features = false }
 nb = "1.1.0"
 portable-atomic = "1.14.0"
 pi4-driver-abi = { workspace = true }
+worker-task-abi = { workspace = true }
+console-network-abi = { workspace = true }
 secure9p-codec = { workspace = true }
+secure9p-transport = { workspace = true }
 sha2 = { workspace = true, default-features = false }
+serde = { version = "1.0.229", default-features = false, features = ["alloc", "derive"] }
+serde_json = { version = "1.0.151", default-features = false, features = ["alloc"] }
 cohesix-cas = { workspace = true }
 sidecar-bus = { path = "../sidecar-bus", default-features = false }
 ed25519-dalek = { workspace = true }
@@ -336,7 +342,78 @@ required-features = ["net-console"]
 name = "worker_authority"
 path = "tests/worker_authority.rs"
 
+[[test]]
+name = "worker_image_loader"
+path = "tests/worker_image_loader.rs"
+
+[[test]]
+name = "worker_supervisor"
+path = "tests/worker_supervisor.rs"
+
+[[test]]
+name = "worker_ipc"
+path = "tests/worker_ipc.rs"
+
+[[test]]
+name = "worker_notification"
+path = "tests/worker_notification.rs"
+
+[[test]]
+name = "worker_fault_lifecycle"
+path = "tests/worker_fault_lifecycle.rs"
+
+[[test]]
+name = "worker_resource_admission"
+path = "tests/worker_resource_admission.rs"
+
+[[test]]
+name = "worker_fault_registry"
+path = "tests/worker_fault_registry.rs"
+
+[[test]]
+name = "critical_tcb_reserves"
+path = "tests/critical_tcb_reserves.rs"
+
+[[test]]
+name = "critical_tcb_handoff"
+path = "tests/critical_tcb_handoff.rs"
+
+[[test]]
+name = "driver_supervisor_handoff"
+path = "tests/driver_supervisor_handoff.rs"
+
+[[test]]
+name = "mcs_fault_lanes"
+path = "tests/mcs_fault_lanes.rs"
+
+[[test]]
+name = "driver_task_mcs"
+path = "tests/driver_task_mcs.rs"
+
+[[test]]
+name = "driver_faulted_call_recovery"
+path = "tests/driver_faulted_call_recovery.rs"
+
+[[test]]
+name = "console_network_service"
+path = "tests/console_network_service.rs"
+
+[[test]]
+name = "ninedoor_service_isolation"
+path = "tests/ninedoor_service_isolation.rs"
+
+[[test]]
+name = "production_fallbacks"
+path = "tests/production_fallbacks.rs"
+
+[[test]]
+name = "schedule"
+path = "tests/schedule.rs"
+
 [build-dependencies]
 cargo-build-directive = { workspace = true }
 regex = "1.13.1"
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true, default-features = false }

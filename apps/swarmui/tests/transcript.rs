@@ -14,8 +14,9 @@ use cohsh::client::{CohClient, TailEvent};
 use cohsh::queen;
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::ConsoleVerb;
-use nine_door::NineDoor;
+use nine_door::{NineDoor, ShardLayout};
 use secure9p_codec::OpenMode;
+use sha2::{Digest, Sha256};
 use swarmui::{SwarmUiBackend, SwarmUiConfig, SwarmUiTransportFactory};
 
 mod support;
@@ -46,7 +47,7 @@ impl SwarmUiTransportFactory for InProcessFactory {
 #[test]
 fn converge_transcript_matches_fixture() -> Result<()> {
     let start = Instant::now();
-    let server = NineDoor::new();
+    let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
     seed_worker(&server)?;
 
     let lines = run_converge_transcript(&server)?;
@@ -67,10 +68,15 @@ fn seed_worker(server: &NineDoor) -> Result<()> {
     let mut client = CohClient::connect(transport, Role::Queen, None)?;
     let payload = queen::spawn("heartbeat", ["ticks=4"].iter().copied())?;
     write_payload(&mut client, queen::queen_ctl_path(), payload.as_bytes())?;
-    let telemetry_path = format!("/worker/{}/telemetry", WORKER_ID);
+    let telemetry_path = canonical_worker_telemetry_path(WORKER_ID);
     write_payload(&mut client, &telemetry_path, b"tick 1\n")?;
     write_payload(&mut client, &telemetry_path, b"tick 2\n")?;
     Ok(())
+}
+
+fn canonical_worker_telemetry_path(worker_id: &str) -> String {
+    let digest = Sha256::digest(worker_id.as_bytes());
+    format!("/shard/{:02x}/worker/{worker_id}/telemetry", digest[0])
 }
 
 fn run_converge_transcript(server: &NineDoor) -> Result<Vec<String>> {

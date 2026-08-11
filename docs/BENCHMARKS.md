@@ -22,6 +22,62 @@ classification, strictness, and bounded implementation defects exposed by the
 same workload. It must not relax error accounting, change authority semantics,
 hide `buffer-full`, or convert a benchmark shortcut into production behavior.
 
+Milestone 26e additionally requires a full same-harness comparison because it
+changes target scheduling, root-service IPC, and Worker execution. Its current
+lane is QEMU-first on four-core AArch64 `virt` with GICv3. Pi 4 measurements
+remain a later independent hardware lane and cannot be copied from, predicted
+by, or replaced with QEMU results.
+
+### Milestone 26e QEMU-first evidence contract
+
+The 26e benchmark artifacts are inputs to target evidence; they are not proof
+merely because a benchmark process or QEMU instance started. Retain exact bytes
+and publish their lowercase SHA-256 and byte length in the relevant
+`raw_evidence` list:
+
+| Evidence layer | Required explicit benchmark/target inputs |
+| --- | --- |
+| Worker component | Direct target transcript covering the complete Heartbeat, GPU receipt, LoRA receipt, saturation, timeout, fault, teardown, revocation, fresh-generation, operator-liveness, and driver-liveness outcome matrix; the matching live role-required integration records; medium- and high-pressure REST summaries when they exercise Worker/MCS behavior. |
+| Root TCB | Compiler-generated admitted-maximum topology/inventory, the separate constructed-actual critical-duty census and live Worker/service attachment receipts, fault-containment transcript, operator-liveness transcript, and pressure/latency summaries. |
+| Full system | Exact accepted component/root digests, four-core admission totals, no-classic-scheduler proof, normal/overload/timeout/fault/recovery results, protocol regression, same-harness performance, and the target-qualified CYW43 coexistence-record binding. |
+
+The component record exposes each Worker's attach/fault badges, assigned core,
+scheduling-context budget and period, and full compiler-budget object inventory
+as typed fields. The component emitter checks those fields against
+`coh-rtc`'s canonical `root_task_topology.json`, including the role's exact
+temporal task and per-slot object bundle. The root record exposes the generated
+maximum-role inventory as an admitted budget, not an allocation census. Its
+projected admitted-maximum copy must match compiler truth exactly across TCB,
+CNode, VSpace, page-table, ASID, frame, endpoint, notification,
+standard/timeout fault-cap, Reply, scheduling-context, CSpace-slot, and
+untyped-byte totals. Independently, `ROOT_CRITICAL_OBJECTS
+scope=constructed-actual` and the live service/Worker markers bind what was
+actually constructed, attached, faulted, and torn down; those observations are
+checked against their own bounds and are never required to equal the maximum
+budget. The full-system run input names the component and root digests
+explicitly. All three records carry complete sorted outcome matrices
+and hash-only raw-artifact descriptors. The emitters also bind their exact
+observation, compiler-topology/inventory, and target-session input bytes, so an
+edited observation invalidates downstream evidence. The compiler topology hash
+is recomputed from deterministic compact JSON and the maximum inventory is
+re-derived before either component or root promotion.
+
+QEMU qualification must retain both medium and high pressure runs with retries
+disabled, strict control-error accounting enabled, bounded in-flight work, and
+separate requested/discovered/READY Worker population counts. Record latency,
+throughput, every error class, console/operator liveness, per-core admission,
+budget exhaustion, timeout attribution, fault recovery, and post-teardown
+object/capability counts. A numerical improvement does not excuse a missing
+receipt, semantic error, liveness loss, inventory drift, or leaked authority.
+Conversely, an explicit bounded refusal remains an error for the stated error
+budget and must not be retried or reclassified away.
+
+Until those direct observations exist, the QEMU 26e evidence state is
+unaccepted. The staged Test Plan may pass its ordinary QEMU regression tier
+without emitting a 26e component/root/system PASS. Runtime release promotion
+remains impossible until an independent fresh-Pi graph supplies the matching
+three accepted records and positive hardware coexistence evidence.
+
 ## Current Qualified State
 
 | Evidence | Qualification |
@@ -299,6 +355,8 @@ Every performance claim must identify:
   target RPS, and maximum in-flight requests;
 - gateway bind, session pools, timeouts, cache settings, and auth mode;
 - retry policy and whether `buffer-full` is counted as an error;
+- population mode and the generated maximum plus requested, discovered, and
+  structured READY counts, backend class, and evidence-derived proof class;
 - overall and per-operation success, errors, latency, and throughput;
 - backpressure counter deltas;
 - exact summary, log, target-proof, and comparator artifact paths.
@@ -369,6 +427,7 @@ projections; automation and review decisions must use the versioned object.
 | --- | --- |
 | `schema` | Exact report contract identifier; reject unknown major versions. |
 | `workload` | Mode, scenario, seed, entropy, worker/multi-hive bounds, intensity, base and target RPS, duration/ramp interval, read-size controls, lifecycle/approval state, configured in-flight limit, timeout, role, auth-presence boolean, retry state, and strict-error state. These fields define comparability; secret values are never serialized. |
+| `population` | Explicit `host-model` or `executable` mode, generated maximum live tasks when applicable, requested/discovered/structured-READY counts, bounded discovery observations, gateway backend class, and evidence-derived proof class. Executable discovery never expands ids or turns connectivity into proof. |
 | `throughput` | Attempted, successful, and failed operations per second over the configured duration. Throughput without reliability is not a capacity result. |
 | `latency` | Overall average, minimum, maximum, p50, p90, p95, and p99 seconds. Use `operations` in the parent summary for per-operation latency. |
 | `reliability` | Counts, error rate, declared error budget, pass/fail result, and lossless classification of `buffer-full`, other, and unclassified errors. `all_errors_buffer_full` is `null` when no errors occurred; classification never removes an error from the total. Exact error strings remain in the parent `overall` and `operations` objects. |
@@ -423,6 +482,7 @@ test -x "$BENCH_BUNDLE/bin/hive-gateway"
 
 .venv/bin/python scripts/rest_perf_harness.py \
   --mode simulate \
+  --population-mode host-model \
   --bundle "$BENCH_BUNDLE" \
   --workers-min 8 \
   --workers-max 8 \
@@ -456,6 +516,7 @@ test -n "${COH_REST_URL:?set the accepted gateway URL}"
 
 .venv/bin/python scripts/rest_perf_harness.py \
   --mode simulate \
+  --population-mode host-model \
   --no-qemu \
   --no-gateway \
   --rest-url "$COH_REST_URL" \
@@ -477,6 +538,72 @@ test -n "${COH_REST_URL:?set the accepted gateway URL}"
 The numbers above define an example workload, not an accepted Cohesix target.
 Change one dimension at a time and retain the complete report for every
 candidate envelope.
+
+### Milestone 26e QEMU executable-Worker pressure
+
+Use `executable` only against a live QEMU boot whose gateway projects generated
+Worker bounds and imports a matching, same-boot staged component record as
+described in [HOST_API.md](HOST_API.md). The harness fails before load unless
+the gateway is a connected `console-projection`, the shared validator accepted
+the exact current target session, and the three canonical `/shard/<label>/worker/<id>/telemetry`
+records are structured READY instances matching that component. It never
+expands ids, substitutes `/worker`, or treats reachability as target proof.
+
+The canonical Mac command performs the clean build and runs medium first, then
+high against a separate fresh equivalent four-core `virt,gic-version=3` boot:
+
+```bash
+: "${COH_AUTH_TOKEN:?set the TCP console auth token}"
+: "${HIVE_GATEWAY_REQUEST_AUTH_TOKEN:?set the REST write token}"
+
+scripts/m26e_qemu_pressure.sh \
+  --run-dir out/m26e-qemu-pressure
+```
+
+The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
+SMP+MCS seL4 profile, runs the staged QEMU plan, and performs one canonical
+`scripts/cohesix-build-run.sh --no-run` artifact build. The critical-duty,
+medium, and high QEMU processes then use `--launch-existing`; each verifies and
+launches the same locked elfloader, kernel, rootserver, system CPIO, GICv3
+topology, and build context without regeneration or repackaging. It retains the
+actual QEMU command, pidfile,
+flushed UART, three role-specific GDB injection transcripts, GPU fixture status,
+cohsh and host-agent transcripts, staged component, and exact target-session
+and image/archive manifests. The driver hash always comes from
+`out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio`; the large archive is
+embedded in rootserver and is not duplicated into the system CPIO.
+
+Before each load it exercises bounded fault/teardown/recreation and the exact
+host-ticket-v2 GPU/LoRA receipt matrix through existing control files and host
+agent execution. The GPU/model/export-job input is admitted only as
+`mode=fixture` under `release-qemu,bootstrap-trace`; it is retained as fixture
+evidence and never relabelled provider-live or production. The normal pressure
+boot's UART prefix and Worker/service GDB files, together with a clearly
+separate same-artifact `-S` critical-duty transcript, produce the staged
+component imported by the gateway. The auxiliary critical boot is not labelled
+same-boot Worker or pressure evidence. The final component/root/system collector consumes the immutable preflight plus
+medium/high reports afterward, avoiding a circular dependency on the record
+the pressure run is helping produce.
+
+For both reports, retain `report.population` and require `mode=executable`,
+`maximum_live_tasks=3`, `requested=3`, `discovered=3`, `ready=3`,
+`backend_class=console-projection`, and `proof_class=qemu`. Re-derive the
+numerical maximum from `/v1/meta/bounds` if the selected generated profile
+changes; never raise the command to preserve a historical value. A control
+write outcome is `admitted`, not accepted or READY. Preserve all timeouts,
+bounded refusals, and liveness failures as measured errors; a completed QEMU
+launch or connected gateway alone leaves proof class `none`.
+
+Each summary also retains top-level `target_session_sha256` and
+`report.executable_state`: exact topology/session hashes; pre/post three-role
+identities, READY/control/receipt/completion sequences, SCs and per-slot
+compiler-admission object bundles (not a claimed live retype census);
+five canonical `/proc` snapshots; bounded lifecycle cycles; live receipt
+operations; and exact UART/GDB hashes plus required-marker index. Medium/high
+must have distinct intensities, a clean error budget, increasing GPU/LoRA
+receipt sequences, and a fresh Heartbeat supervisor generation. Missing target
+fault markers, service teardown, fixture status/job files, or immutable
+artifact equality fails closed rather than producing executable evidence.
 
 For a focused read-path run:
 
@@ -514,6 +641,7 @@ BENCH_BUNDLE="${BENCH_BUNDLE:?set one matching unpacked release bundle}"
 
 .venv/bin/python scripts/rest_perf_harness.py \
   --mode simulate \
+  --population-mode host-model \
   --bundle "$BENCH_BUNDLE" \
   --workers-min 8 \
   --workers-max 1000 \

@@ -52,6 +52,400 @@ The five staged entrypoints remain:
 - Stage 04: `scripts/ci/test_plan_stage_04_rest_multiplexer.sh`
 - Stage 05: `scripts/ci/test_plan_stage_05_due_diligence.sh`
 
+Milestone 26e host-integration inventory and evidence use the generated
+[`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
+graph. `scripts/ci/check_host_integration_inventory.py` checks exhaustive host
+surface, six-scenario, and nine-playbook coverage. The bounded runner is:
+
+```bash
+scripts/ci/host_integration_run.sh \
+  --matrix configs/host_integration_acceptance.toml \
+  --matrix-only \
+  --state-dir out/host-integration/m26e-matrix
+```
+
+Target-session lanes accept `qemu` or `pi4` only, reject stale or wrong-target
+identity, and emit one `cohesix-worker-integration-evidence/v1` record per
+dependency row. The mandatory target rows are exactly `worker-control`,
+`gpu-receipt-path`, and `peft-receipt-path`; external provider observations
+remain separate and cannot be promoted by receipt fixtures.
+
+The target runner consumes target proof and row observations as separate,
+caller-produced records; launching QEMU does not synthesize either record:
+
+```bash
+scripts/ci/host_integration_run.sh \
+  --matrix configs/host_integration_acceptance.toml \
+  --mode live \
+  --target qemu \
+  --target-session out/<run>/target-session.json \
+  --observations out/<run>/host-integration-observations.json \
+  --state-dir out/host-integration/<fresh-run>
+```
+
+`target-session.json` is an exact object containing `target` plus lowercase
+SHA-256 fields `source_sha256`, `manifest_sha256`, `kernel_sha256`,
+`root_image_sha256`, `driver_archive_sha256`, `driver_manifest_sha256`,
+`cyw43_coexistence_record_sha256`, `worker_archive_sha256`,
+`worker_image_manifest_sha256`, and `worker_abi_sha256`. The observations record uses
+`cohesix-host-integration-observations/v1`, binds the exact dependency-graph
+and resolved-manifest hashes, and supplies one mode, bounded outcome list, and
+sorted raw-evidence list for every selected row. Capability material and
+secrets are rejected; output state directories must be empty.
+
+### Milestone 26e direct target acceptance evidence
+
+Worker-component and root-TCB acceptance are separate from the normal staged
+claim tiers. A QEMU launch, reachable gateway, stage marker, integration mock,
+or packaged image never creates either record. The staged runner emits a 26e
+record only after Stages 01-05 have independently passed and the caller supplies
+the complete direct-observation inputs through `--m26e-evidence-kind`.
+
+For the live QEMU lane, first remove both Cargo and packaged output so an old
+ELF, archive, or manifest cannot enter the session, then build through the
+canonical GICv3 script:
+
+```bash
+rm -rf -- target out
+scripts/cohesix-build-run.sh \
+  --clean \
+  --cargo-target aarch64-unknown-none \
+  --no-run
+out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb \
+  --version
+```
+
+The script rejects any machine/GIC override and builds QEMU evidence symbols
+only for the selected `release-qemu,bootstrap-trace` profile. Keep the
+unstripped ELFs under `target/aarch64-unknown-none/release/`, the Worker archive
+and manifest under `out/cohesix/worker-images/`, and the canonical external
+driver archive at
+`out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio`. The driver archive
+is byte-verified inside rootserver but is intentionally not duplicated in the
+system CPIO.
+
+Capture each boot through macOS `script`. The ordinary preflight boot remains
+running while the operator drives Worker and service turns from another
+terminal:
+
+```bash
+RUN=out/m26e-qemu
+mkdir -p "$RUN/preflight"
+script -q "$RUN/preflight/uart.log" \
+  scripts/cohesix-build-run.sh \
+    --cargo-target aarch64-unknown-none \
+    --raw-qemu \
+    -- \
+    -pidfile "$RUN/preflight/qemu.pid" \
+    -gdb tcp:127.0.0.1:1234
+```
+
+Run `qemu-gdb` once for each role, preserving argument order. Each invocation
+stays attached for three generations: the operator spawns the role for the
+pre-READY fault, recreates it and submits one ordinary role work item for the
+during-IPC standard fault, recreates it and submits one more work item for MCS
+budget exhaustion, then recreates a final READY instance. GPU and LoRA work
+uses bounded v2 tickets and `host-ticket-agent --run-once`; Heartbeat uses its
+ordinary publish turn. These disposable work items are not the claimed source
+of the later seven-action receipt matrix.
+
+```bash
+GDB=out/toolchain/arm-gnu-toolchain-15.2.rel1-darwin-arm64-aarch64-none-elf/bin/aarch64-none-elf-gdb
+COMMON_GDB="--gdb $GDB --remote 127.0.0.1:1234 --target-session $RUN/target-session.json --generated-inventory configs/generated/root_task_topology.json --worker-image-manifest out/cohesix/worker-images/cohesix-worker-image-manifest.json"
+
+python3 scripts/worker_task_evidence.py qemu-gdb $COMMON_GDB \
+  --worker-elf worker-heartbeat=target/aarch64-unknown-none/release/worker-heart \
+  --worker-elf worker-gpu=target/aarch64-unknown-none/release/worker-gpu \
+  --worker-elf worker-lora=target/aarch64-unknown-none/release/worker-lora \
+  --inject-role worker-heartbeat \
+  --out "$RUN/preflight/gdb-worker-heartbeat.log"
+python3 scripts/worker_task_evidence.py qemu-gdb $COMMON_GDB \
+  --worker-elf worker-heartbeat=target/aarch64-unknown-none/release/worker-heart \
+  --worker-elf worker-gpu=target/aarch64-unknown-none/release/worker-gpu \
+  --worker-elf worker-lora=target/aarch64-unknown-none/release/worker-lora \
+  --inject-role worker-gpu \
+  --out "$RUN/preflight/gdb-worker-gpu.log"
+python3 scripts/worker_task_evidence.py qemu-gdb $COMMON_GDB \
+  --worker-elf worker-heartbeat=target/aarch64-unknown-none/release/worker-heart \
+  --worker-elf worker-gpu=target/aarch64-unknown-none/release/worker-gpu \
+  --worker-elf worker-lora=target/aarch64-unknown-none/release/worker-lora \
+  --inject-role worker-lora \
+  --out "$RUN/preflight/gdb-worker-lora.log"
+
+python3 scripts/worker_task_evidence.py qemu-service-gdb \
+  --gdb "$GDB" --remote 127.0.0.1:1234 \
+  --target-session "$RUN/target-session.json" \
+  --generated-inventory configs/generated/root_task_topology.json \
+  --service ninedoor-service \
+  --service-elf target/aarch64-unknown-none/release/nine-door-runtime \
+  --out "$RUN/preflight/gdb-ninedoor-service.log"
+python3 scripts/worker_task_evidence.py qemu-service-gdb \
+  --gdb "$GDB" --remote 127.0.0.1:1234 \
+  --target-session "$RUN/target-session.json" \
+  --generated-inventory configs/generated/root_task_topology.json \
+  --service console-network \
+  --service-elf target/aarch64-unknown-none/release/console-network-runtime \
+  --out "$RUN/preflight/gdb-console-network.log"
+```
+
+The NineDoor runner is triggered by one ordinary Secure9P request. The
+console-network runner is triggered by one authenticated control turn, service
+reconstruction, then a second authenticated control turn. No VM command or
+namespace fault-injection authority exists.
+
+The four critical-duty observation hooks occur during startup, so collect them
+on a separate halted boot of the exact same image/session:
+
+```bash
+mkdir -p "$RUN/critical"
+script -q "$RUN/critical/uart.log" \
+  scripts/cohesix-build-run.sh \
+    --cargo-target aarch64-unknown-none \
+    --raw-qemu \
+    -- \
+    -pidfile "$RUN/critical/qemu.pid" \
+    -gdb tcp:127.0.0.1:1234 \
+    -S
+python3 scripts/worker_task_evidence.py qemu-critical-gdb \
+  --gdb "$GDB" --remote 127.0.0.1:1234 \
+  --target-session "$RUN/target-session.json" \
+  --generated-inventory configs/generated/root_task_topology.json \
+  --root-elf target/aarch64-unknown-none/release/root-task \
+  --out "$RUN/preflight/gdb-critical-duties.log"
+```
+
+After the same-boot integration records and the exact 7-by-3 receipt matrix are
+present, derive the component needed by the gateway before pressure. The
+collector treats cohsh `OK SPAWN`/`OK KILL` only as admission outcomes; READY,
+artifact, receipt, and proof axes come from identity-bound UART/pressure records,
+never from caller-supplied projection text.
+
+```bash
+python3 scripts/worker_task_evidence.py collect-qemu-preflight \
+  --target-session "$RUN/target-session.json" \
+  --generated-inventory configs/generated/root_task_topology.json \
+  --uart "$RUN/preflight/uart.log" \
+  --cohsh "$RUN/preflight/cohsh.log" \
+  --gdb-log "$RUN/preflight/gdb-worker-heartbeat.log" \
+  --gdb-log "$RUN/preflight/gdb-worker-gpu.log" \
+  --gdb-log "$RUN/preflight/gdb-worker-lora.log" \
+  --service-gdb-log "$RUN/preflight/gdb-ninedoor-service.log" \
+  --service-gdb-log "$RUN/preflight/gdb-console-network.log" \
+  --critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
+  --worker-archive out/cohesix/worker-images/cohesix-worker-images.cpio \
+  --driver-archive out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio \
+  --worker-image-manifest out/cohesix/worker-images/cohesix-worker-image-manifest.json \
+  --worker-elf worker-heartbeat=target/aarch64-unknown-none/release/worker-heart \
+  --worker-elf worker-gpu=target/aarch64-unknown-none/release/worker-gpu \
+  --worker-elf worker-lora=target/aarch64-unknown-none/release/worker-lora \
+  --service-elf ninedoor-service=target/aarch64-unknown-none/release/nine-door-runtime \
+  --service-elf console-network=target/aarch64-unknown-none/release/console-network-runtime \
+  --root-elf target/aarch64-unknown-none/release/root-task \
+  --integration-dir "$RUN/integration" \
+  --out-dir "$RUN/preflight-component"
+```
+
+After separate fresh medium- and high-pressure boots, freeze each boot-local
+UART/GDB pair before writing its summary and run the final semantic collector:
+
+```bash
+python3 scripts/worker_task_evidence.py collect-qemu \
+  --target-session "$RUN/target-session.json" \
+  --generated-inventory configs/generated/root_task_topology.json \
+  --preflight-uart "$RUN/preflight/uart.log" \
+  --preflight-gdb-log "$RUN/preflight/gdb-worker-heartbeat.log" \
+  --preflight-gdb-log "$RUN/preflight/gdb-worker-gpu.log" \
+  --preflight-gdb-log "$RUN/preflight/gdb-worker-lora.log" \
+  --preflight-service-gdb-log "$RUN/preflight/gdb-ninedoor-service.log" \
+  --preflight-service-gdb-log "$RUN/preflight/gdb-console-network.log" \
+  --preflight-critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
+  --uart "$RUN/medium/uart.log" --gdb-log "$RUN/medium/gdb.log" \
+  --pressure "$RUN/medium/pressure.summary.json" \
+  --uart "$RUN/high/uart.log" --gdb-log "$RUN/high/gdb.log" \
+  --pressure "$RUN/high/pressure.summary.json" \
+  --cohsh "$RUN/cohsh.log" \
+  --worker-archive out/cohesix/worker-images/cohesix-worker-images.cpio \
+  --driver-archive out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio \
+  --worker-image-manifest out/cohesix/worker-images/cohesix-worker-image-manifest.json \
+  --worker-elf worker-heartbeat=target/aarch64-unknown-none/release/worker-heart \
+  --worker-elf worker-gpu=target/aarch64-unknown-none/release/worker-gpu \
+  --worker-elf worker-lora=target/aarch64-unknown-none/release/worker-lora \
+  --service-elf ninedoor-service=target/aarch64-unknown-none/release/nine-door-runtime \
+  --service-elf console-network=target/aarch64-unknown-none/release/console-network-runtime \
+  --root-elf target/aarch64-unknown-none/release/root-task \
+  --integration-dir "$RUN/integration" \
+  --run-dir "$RUN/test-plan" \
+  --out-dir "$RUN/accepted"
+```
+
+The QEMU-only GPU bridge snapshot remains `source=fixture`, `mode=fixture`,
+`profile=qemu`, `gate=bootstrap-trace`; it never becomes provider-live or
+production evidence. That same admitted snapshot projects exactly one
+read-only LoRA export job, `qemu-evidence-job`, containing only
+`telemetry.cbor`, `base_model.ref`, and `policy.toml`. Both fixtures disappear
+outside the explicit QEMU evidence gate. Publish it only through the existing
+bridge path:
+
+```bash
+cargo run -p gpu-bridge-host --features rest -- \
+  --mock \
+  --publish \
+  --rest-url "$COHESIX_GATEWAY_URL" \
+  --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"
+```
+
+The collector rejects missing,
+reordered, changed, symlinked, target-mismatched, or secret-bearing inputs and
+does not treat reachability or build markers as live proof.
+
+The QEMU Worker-component invocation is:
+
+```bash
+scripts/ci/test_plan_run.sh \
+  --target qemu \
+  --state-dir out/test-plan/m26e-worker-qemu \
+  --m26e-evidence-kind component \
+  --m26e-target-session out/m26e-qemu/target-session.json \
+  --m26e-generated-inventory configs/generated/root_task_topology.json \
+  --m26e-observations out/m26e-qemu/worker-component-observations.json \
+  --m26e-integration-dir out/host-integration/m26e-qemu/integration
+```
+
+`target-session.json` uses the exact hash object documented above. The
+observations file uses `cohesix-worker-component-observations/v1` and contains
+exactly `schema`, `target`, `target_session_sha256`, `workers`, `outcomes`,
+`raw_evidence`, `verdict`, and `blockers`. Each of the three Worker rows records
+its five-part identity, state axes, image hash, READY/completion sequences,
+distinct endpoint/fault badges, core, active scheduling-context budget/period,
+and full per-slot compiler-admission object inventory: TCB, CNode, VSpace, page table, ASID,
+frame, endpoint, notification, standard/timeout fault cap, Reply, scheduling
+context, CSpace slot, and untyped-byte totals. The emitter recomputes the
+compiler topology digest and derives the maximum-role inventory from the
+topology payload. It then requires each observed role's attach badge, fault
+badge, core, scheduling context, and per-slot object inventory to equal that
+generated truth. A component PASS also requires the complete, sorted 26e event
+matrix and the exact live `gpu-receipt-path`, `peft-receipt-path`, and
+`worker-control` integration records. The emitter binds the observation,
+generated-topology, and target-session input bytes into the resulting
+raw-evidence graph and writes `worker-task-evidence.json` atomically only after
+validation. It also preserves the exact three referenced integration-record
+bytes under the output state directory's `integration/` subtree so downstream
+recursive validation does not depend on an unrecorded external directory.
+
+The QEMU root-TCB invocation is:
+
+```bash
+scripts/ci/test_plan_run.sh \
+  --target qemu \
+  --state-dir out/test-plan/m26e-root-tcb-qemu \
+  --m26e-evidence-kind root \
+  --m26e-target-session out/m26e-qemu/target-session.json \
+  --m26e-worker out/test-plan/m26e-worker-qemu/worker-task-evidence.json \
+  --m26e-generated-inventory configs/generated/root_task_topology.json \
+  --m26e-observations out/m26e-qemu/root-tcb-observations.json
+```
+
+`coh-rtc` emits `configs/generated/root_task_topology.json` beside the selected
+resolved manifest. Its `cohesix-root-tcb-generated-inventory/v1` envelope has
+exactly `schema`, `profile`, `manifest_sha256`, `topology_sha256`, `topology`,
+and `inventory`. `topology_sha256` is the SHA-256 of deterministic compact JSON
+for the compiler-owned profile, root/driver topology, Worker runtime, temporal
+authority, resource admission, NineDoor service, and console-network service.
+The inventory is the admitted maximum: the exact fixed-object budget plus every
+executable slot in the one compiler-validated maximum role mix. It is not a
+kernel allocation or retype census. `scripts/check-generated.sh`
+compares the canonical QEMU output byte-for-byte. The direct input uses
+`cohesix-root-tcb-observations/v1` with the target-session digest and same
+topology, `inventory_scope=admitted-maximum`, the UART-projected admitted
+maximum, complete containment and operator-liveness
+outcomes, raw-artifact descriptors, and verdict. A PASS is impossible when the
+generated topology hash cannot be recomputed, its inventory cannot be derived,
+generated and projected admitted-maximum inventories differ, or the accepted Worker record names
+a different target session or topology. The resulting
+`root-tcb-acceptance.json` binds all three input files by digest.
+`ROOT_CRITICAL_OBJECTS scope=constructed-actual` separately records the five
+constructed duties, four restricted child TCBs, active SC/Reply counts, and
+installed standard/timeout fault-cap plus registry counts; it is the bounded
+actual critical-domain census and is never inferred from the admitted maximum.
+
+Full-system evidence remains a verification-only layer over immutable accepted
+component/root records. Its explicit `cohesix-mcs-smp-run-input/v1` observation
+contains the target session, exact component/root digests, topology, four-core
+admission rows, the complete timeout/fault/Reply/liveness/performance outcome
+matrix, and raw evidence. It can be emitted after a full staged run with:
+
+```bash
+scripts/ci/test_plan_run.sh \
+  --target qemu \
+  --state-dir out/test-plan/m26e-mcs-smp-qemu \
+  --m26e-evidence-kind system \
+  --m26e-worker out/test-plan/m26e-worker-qemu/worker-task-evidence.json \
+  --m26e-root out/test-plan/m26e-root-tcb-qemu/root-tcb-acceptance.json \
+  --m26e-observations out/m26e-qemu/mcs-smp-system-input.json
+```
+
+Missing, empty, wrong-target, stale, non-live, hash-mismatched, partial, or
+secret-bearing input fails before an acceptance record is published. Omitting
+`--m26e-evidence-kind` runs the ordinary staged plan but emits no 26e acceptance
+PASS. The same commands accept `--target pi4` only with independent fresh-Pi
+target-session, observations, integration records, and raw artifacts; QEMU
+files cannot be relabelled. Runtime release promotion still requires all six
+validated QEMU/Pi component, root, and full-system records, so QEMU-first work
+cannot produce Pi or Worker-runtime release acceptance.
+
+The tracked `seL4/build_UBOOT` reference remains a pre-26e classic-scheduler
+artifact while this QEMU-first phase is active. Current `pi4_diagnostic`
+validation must reject its stale contract hash; neither changing only the stamp
+nor reusing its bytes can produce MCS or Pi evidence. The later Pi phase must
+perform a fresh profile build, controlled tracked-artifact refresh, and all
+independent image/hardware gates before any Pi acceptance command above may
+pass.
+
+### Milestone 26e Python package and target projection
+
+Build one target-neutral wheel, inspect its exact module and extras manifest,
+and install it without dependency resolution into isolated CPython 3.11 and
+3.13 environments:
+
+```bash
+python3 -m pip wheel --no-deps \
+  --wheel-dir out/python-wheels tools/cohesix-py
+scripts/ci/python_compat_run.sh \
+  --wheel-smoke \
+  --wheel-dir out/python-wheels \
+  --package-manifest out/python-compat/m26e-python-package.json \
+  --state-dir out/python-compat/m26e-wheel
+```
+
+The wheel must contain only target-neutral defaults. The package manifest
+binds that wheel to independently compiler-generated QEMU and Pi 4
+`cohesix-python-profile/v1` contracts. A successful install or mock Worker
+observation remains host-model compatibility evidence, not target authority,
+READY proof, provider completion, runtime release acceptance, or production
+use-case acceptance.
+
+After the direct QEMU role gate has emitted an accepted, live
+`cohesix-worker-integration-evidence/v1` record for `worker-control`,
+`gpu-receipt-path`, or `peft-receipt-path`, run the QEMU projection lane:
+
+```bash
+scripts/ci/python_compat_run.sh \
+  --python-matrix 3.11,3.13 \
+  --target qemu \
+  --profile-contract configs/generated/cohesix_python_qemu_smp_production.json \
+  --wheel-dir out/python-wheels \
+  --package-manifest out/python-compat/m26e-python-package.json \
+  --matrix configs/host_integration_acceptance.toml \
+  --target-session out/<run>/worker-control.json \
+  --state-dir out/python-compat/m26e-qemu
+```
+
+The result is the release-required `python-sdk-projection` row. It consumes the
+direct role record and copies its exact target-session identities; it does not
+replace that record or raise its proof class. The Pi 4 invocation uses the Pi
+profile contract and an independently accepted fresh-Pi role record. Do not run
+or report the Pi lane from QEMU evidence.
+
 Stage 01 runs integrity first and then one broad host suite per distinct
 feature configuration. Its common-hermetic attestation may be imported into a
 second target state directory with `--reuse-common-from`. Stage 02 runs only
@@ -3658,20 +4052,21 @@ Run while QEMU is up:
     print(f"padded {len(data)} -> {len(data) + pad} bytes")
     PY
     ```
-  - Source tree: `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex`
+  - Offline fixture-only pack test: `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex` (do not upload this bundle to an operational profile).
+  - Live source tree: `test -n "${COH_CAS_SIGNING_KEY:?set external CAS signing-key path}" && ./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key "$COH_CAS_SIGNING_KEY"`; its public key must match the selected profile's `cas.signing.verification_key_path`.
   - Release bundle: pad `./traces/trace_v0.trace` into `./out/cas/trace_v0.padded`, then run `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key <path>`
-  - `./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 --auth-token changeme --ticket "$QUEEN_TICKET"`
+  - `./bin/cas-tool upload --bundle ./out/cas/1 --host 127.0.0.1 --port 31337 --auth-token "$COH_AUTH_TOKEN" --ticket "$QUEEN_TICKET"`
 - `gpu-bridge-host`:
   - `./bin/gpu-bridge-host --mock --list`
   - Optional NVML: `./bin/gpu-bridge-host --list` (enabled by default on Linux builds; omit NVML with `--no-default-features`)
-  - Live publish: `./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --interval-ms 1000 --registry demo/peft_registry`
-    - On macOS without NVML, use `--mock --publish` to avoid NVML load failures.
+  - Live publish: `./bin/gpu-bridge-host --publish --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --interval-ms 1000 --registry "$COH_GPU_REGISTRY"`
+    - On macOS without a real compiled GPU backend, run `--mock --list` only. Fixture snapshots are rejected by the operational target and are not live evidence.
 - `host-sidecar-bridge`:
   - `./bin/host-sidecar-bridge --mock --mount /host --provider systemd --provider k8s --provider docker --provider nvidia`
-  - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --watch` (requires `/host` enabled in `configs/root_task.toml`)
+  - `./bin/host-sidecar-bridge --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --watch` (requires `/host` enabled in `configs/root_task.toml`)
 - `host-ticket-agent`:
   - `./bin/host-ticket-agent --mock --run-once`
-  - `./bin/host-ticket-agent --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token changeme --run-once`
+  - `./bin/host-ticket-agent --tcp-host 127.0.0.1 --tcp-port 31337 --auth-token "$COH_AUTH_TOKEN" --run-once`
   - REST mode (gateway required): `./bin/host-ticket-agent --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN" --run-once`
 
 ### Conditional B1 — Control-ticket matrix (Milestone 25g)
@@ -3755,7 +4150,7 @@ All runs are required unless explicitly marked `NA` by platform constraints.
       - `printf 'hello-from-test-plan ts_ms=%s\n' "$(date +%s000)" >> "/tmp/coh-mount-rest/queen/telemetry/${DEV}/seg/seg-000001"`
       - `cat "/tmp/coh-mount-rest/queen/telemetry/${DEV}/latest"` (expects `seg-000001`)
   - `cas-tool` REST upload:
-    - `./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key ./resources/fixtures/cas_signing_key.hex`
+    - `test -n "${COH_CAS_SIGNING_KEY:?set external CAS signing-key path}" && ./bin/cas-tool pack --epoch 1 --input ./out/cas/trace_v0.padded --out-dir ./out/cas/1 --signing-key "$COH_CAS_SIGNING_KEY"`
     - `./bin/cas-tool upload --bundle ./out/cas/1 --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
   - `cohsh` REST CLI:
     - `./bin/cohsh --transport rest --rest-url http://127.0.0.1:8080 --rest-auth-token "$HIVE_GATEWAY_REQUEST_AUTH_TOKEN"`
@@ -3789,11 +4184,17 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 - Interactive `>coh` prompt (type commands, assert transcript lines).
 - Mint ticket flow (UI-only assertion that the host-returned token is surfaced back into the session field).
 - Live Hive UX (labels, role colors, and dot selection wiring).
+- Structured Worker state (declaration, lifecycle, receipt, artifact, and
+  proof render independently; absent axes render as unknown).
+- Opaque Worker identity (a role-looking id prefix never supplies a role,
+  READY state, receipt, artifact, or proof).
 - Live Hive performance harness (bounded render cadence and backlog checks).
 - Failure UI (auth error, disconnected state) as UI-only states.
 
 #### 4) Determinism Rules
 - Replay-first: all UI assertions are driven from replay fixtures.
+- Version-1 model-only snapshots migrate without inferring structured READY or
+  target proof from their legacy role/id strings.
 - Avoid unbounded timing-based assertions; use explicit replay fixtures and the Live Hive metrics harness for bounded render/backlog checks.
 - Transcript-based assertions only (match `OK`, `ERR`, `END` and static help lines).
 - Shell assertions must preserve the existing SwarmUI IDs and Tauri invoke contract even when the underlying controls are Spectrum Web Components.
@@ -3840,6 +4241,76 @@ All runs are required unless explicitly marked `NA` by platform constraints.
   - Manual runs of `scripts/cohsh/REST_regression_batch.sh` default to `out/regression-logs/<batch>/<script>.run*.log` unless `COHSH_LOG_ROOT` is set.
 - Verify logs show no unexpected errors or disconnects.
 - From Milestone 25 onward, use the REST batch above; the TCP/QEMU batch remains a local bring-up tool only.
+
+### Conditional B2 — Milestone 26e QEMU executable-Worker REST pressure
+
+Run the canonical `scripts/m26e_qemu_pressure.sh` command in
+[BENCHMARKS.md](BENCHMARKS.md). It cleans repository `target/` and `out/`,
+rebuilds the selected SMP+MCS seL4 profile, and uses
+`scripts/cohesix-build-run.sh` for one canonical post-gate artifact build. A
+dedicated `-S` critical-duty observation and the separate medium/high
+four-core AArch64 `virt` boots then use `--launch-existing`, which verifies and
+launches the same locked elfloader, kernel, rootserver, system CPIO, GICv3
+topology, and build context without rebuilding or repackaging. Retries remain
+disabled, control errors remain strict, and in-flight work remains bounded.
+
+Each normal pressure boot has two evidence stages. Before load, external GDB and the existing
+Queen/host-ticket paths must directly produce the complete Worker/service
+fault, teardown, fresh-generation, GPU/LoRA receipt, operator-liveness, and
+MCS observations. `collect-qemu-preflight` derives a same-boot component from
+that immutable UART prefix, the role-specific GDB transcripts, the exact
+target-session/artifact graph, the separate same-artifact critical-duty GDB
+transcript, and the three live integration rows. The critical-duty boot is an
+explicit auxiliary fault transcript and is never relabelled as same-boot Worker
+or pressure evidence. The gateway
+starts with that component, its containing trust root, and the exact current
+target-session path. The final `collect-qemu` runs only after both pressure
+reports and their per-boot UART/GDB artifacts are immutable. A prior-boot
+component or the final component that the current pressure run is helping
+produce cannot admit load.
+
+For each summary:
+
+- `report.population.mode` is `executable` and
+  `report.population.maximum_live_tasks` equals the selected generated bound;
+- requested, discovered, and structured READY populations are recorded
+  separately and equal the command's three-task population; discovery uses
+  only canonical `/shard/<label>/worker/<id>/telemetry` paths;
+- backend class is `console-projection` and proof class is `qemu`, sourced from
+  the shared-validator-backed gateway acceptance summary rather than gateway
+  reachability or QEMU startup;
+- top-level `target_session_sha256` matches the exact staged session bytes, and
+  `report.executable_state.target_session` retains its manifest, root, Worker
+  archive, image-manifest, and ABI hashes plus the generated topology hash;
+- pre/post state contains exactly three ordered Worker rows with five-part
+  identities, image hashes, READY/control/receipt/completion sequences, cores,
+  active SC budget/period, and the full generated per-slot admission object
+  bundle (not an observed retype census), plus hash-bound
+  `/proc/schedule/{summary,queue}` and `/proc/lease/{summary,active,preemptions}`
+  snapshots;
+- one bounded Heartbeat kill/recreate cycle proves terminal teardown and a
+  larger supervisor generation; GPU and LoRA retain their identity while their
+  receipt and completion sequences increase through real host-ticket-v2 work;
+- exact per-run UART/GDB bytes match `fault_artifacts`, the marker index is
+  complete, and the target transcript independently contains all role faults,
+  all seven actions with confirmed/rejected/stale outcomes, exact teardown
+  booleans, service containment, and the GICv3 target/session markers;
+- `/gpu/bridge/status` and the bounded LoRA export job identify only the
+  QEMU/bootstrap-trace fixture path. Missing, expired, production-labelled, or
+  provider-live-labelled fixture input blocks the run;
+- `report.workload.control_write_outcome` is `admitted`; no ACK, HTTP success,
+  provider result, or control write is described as accepted or READY;
+- latency, throughput, all error classes, backpressure, operator liveness,
+  timeout attribution, and post-run Worker/object state are retained. No
+  synthetic id expansion, retry masking, or bounded-refusal reclassification
+  is permitted.
+
+Fail before load if the generated bound is lower than the requested population,
+the structured READY count is insufficient, canonical shard placement is
+invalid, the gateway/session/component hashes differ, the backend is not
+`console-projection`, or any live fault/fixture artifact is absent or malformed.
+A performance error-budget failure remains a faithfully retained QEMU pressure
+result but cannot be used as a passing capacity or M26e acceptance claim.
 
 ### Conditional C — SMP parity (Milestone 25+)
 - Boot QEMU with a single core: `COHESIX_QEMU_SMP=1 scripts/cohesix-build-run.sh --transport tcp`
@@ -4241,6 +4712,255 @@ extraction directory, never from repository build output.
 - Do not progress beyond this stage until all prior attestations verify and the
   due-diligence gate is green.
 
+### Milestone 26e production-surface and fallback-retirement gate
+
+The compiler-owned source is `configs/implementation_surfaces.toml`; the only
+accepted generated inventory is
+`configs/generated/implementation_surface_inventory.json` with schema
+`cohesix-implementation-surface-inventory/v1`. Run:
+
+```bash
+cargo test -p coh-rtc implementation_surface
+python3 scripts/ci/check_implementation_surfaces.py \
+  --inventory configs/generated/implementation_surface_inventory.json
+cargo test -p root-task --tests production_fallbacks
+cargo test -p gpu-bridge-host
+scripts/release_bundle.sh --check-manifest
+scripts/check-generated.sh
+```
+
+Generation fails on missing, duplicate, or stale package/target/feature/public
+surface rows and on any production-reachable fixture class. The source/drift
+guard independently resolves Cargo metadata, selected entrypoints and feature
+closures, tracked current claims, compiled spin/no-op bodies, operational
+fallbacks, and the exact release artifact set. WorkerBus is the sole legal
+`model_only` role. A fixture, host model, diagnostic, contract, deferred,
+retired, or not-enabled row cannot satisfy target, release, attestation,
+integration, or use-case evidence.
+
+`scripts/release_bundle.sh --check-manifest` validates the inventory-selected
+version, exact host-tool architecture, selected GICv3 kernel, target-image
+sources, and every individually listed document, script, Python artifact, UI
+asset, trace/transcript fixture, support file, and versioned migration. Bundle
+creation then compares every regular-file destination against
+`release.expected_bundle_files` and emits `MANIFEST.sha256`; recursive copies,
+ignored files, missing files, and unexpected files fail.
+
+GPU bridge tests cover real-or-empty live registry behavior, no first-model
+activation, placeholder-secret rejection before connection, exact manifest and
+CAS identities, base/adapter compatibility, source epoch/sequence monotonicity,
+activation receipt validation, stale snapshot rejection, and TTL withdrawal to
+`unavailable`. The target begins with no GPU, model, lease, temperature, node,
+unit, or provider fixture state. QEMU acceptance must use the selected GICv3
+MCS closure and fresh build output; this gate is not Pi hardware evidence and
+does not modify or reclassify CYW43 behavior.
+
+### Milestone 26e executable-slot and critical-TCB admission gate
+
+Run the compiler/model gate before any QEMU target boot:
+
+```bash
+cargo test -p coh-rtc worker_admission
+cargo test -p root-task --test schedule
+cargo test -p root-task --test worker_resource_admission
+cargo test -p root-task --test worker_fault_registry
+cargo test -p root-task --test critical_tcb_reserves
+cargo test -p root-task --test critical_tcb_handoff
+cargo test -p root-task --test driver_supervisor_handoff
+cargo test -p root-task --test mcs_fault_lanes
+scripts/check-generated.sh
+```
+
+The resource test recomputes the maximum live role mix rather than multiplying
+the namespace/model capacity. It must prove, for every object class and untyped
+bytes, that `fixed + maximum mix + post-construction reserve <= capacity`.
+The selected seL4 16 AArch64 SMP+MCS header values must be TCB 11 bits,
+endpoint 4, notification 6, Reply 5, minimum scheduling context 7, CNode slot
+5, and page/page-table/VSpace 12; stale classic notification or Reply sizes are
+an admission failure.
+Reject zero/aliased/out-of-range Worker and critical retention slots, duplicate
+SC slots, mismatched Worker prefixes/cores/counts, an undeclared role mix, and
+any capacity or byte overflow. Injected allocation failure at each constructor
+stage must leave every child suspended and must not make a partially populated
+slot eligible for reuse.
+
+The temporal compiler test recomputes per-core budget demand and every active
+task's fixed-priority response-time recurrence. It must reject stale response
+results, a missed deadline, overflow, non-convergence, a core/SchedControl
+mismatch, fewer than two total refills, missing consumed-time evidence, and an
+active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
+10,000 us core window. The Pi table includes seven linked-driver records; the
+default QEMU table deliberately does not fabricate those hardware TCBs.
+
+The critical topology tests must account for the init TCB exactly once as the
+real `root-control` domain and exactly four distinct restricted children:
+`root-fault`, `root-emergency`, `root-worker-supervisor`, and
+`root-driver-supervisor`. Reject a duplicate, phantom fifth control child,
+missing kernel object, shared child CNode/TCB/SC/Reply/retention cap, wrong core,
+idle/trampoline entrypoint, or activation before registry seal. Critical
+permanent-domain retention caps are not grouped reclaimable untyped anchors.
+
+Handoff tests must cover an eight-record root-control queue, one Worker fault
+mailbox per admitted Worker, one owner mailbox per generated isolated service,
+and the generated number of driver fault records (zero on QEMU, seven on Pi).
+Root-control saturation refuses new work without blocking; Worker, service, or
+driver fault saturation is fatal and never drops a containment record. Worker
+and service mailboxes use the generated temporal-task ordinal, never a
+role-local slot. Heartbeat, GPU, and LoRA intentionally share ABI slot zero. A coalesced
+Worker wake may contain the root handoff bit and any
+combination of the three generated child-completion bits. The supervisor must
+reject every other bit, drain durable child records, and drain Worker faults
+before Worker control records. Fault-path producers and consumers must remain
+bounded and nonblocking. Root-fault suspends an isolated service before
+publishing its durable record; only that service's root-control owner may take
+the record and perform its typed caller-failure and revoke sequence.
+
+The registry is exact and profile-qualified: QEMU seals 10 live sources (5
+critical + NineDoor + console-network + 3 Workers), while Pi seals 17 by adding
+its 7 live drivers. Reject duplicate task indices or TCBs, aliased
+standard/timeout badges, zero generation components, overflow, underfill, and
+registration after seal. A contained Worker generation may replace its sealed
+entry in place only for the same task/badge pair, exact prior identity, nonzero
+TCB, and strictly newer supervisor and capability generations; stale or
+wrong-task replacement fails. Construction and registration errors are
+boot-fatal; a source may not be inferred from a badge range at receive time.
+
+Fault-lane tests must prove the acyclic graph and Reply cardinality. Standard
+and timeout receive lanes are distinct and each has one root-fault-owned Reply
+object. Fault send caps are Write + GrantReply, receives are Read-only, and
+supervisor signals/waits are Write-only/Read-only. Ordinary Worker faults are
+suspended and handed off without Reply. Driver faults remain associated until
+the independent driver supervisor returns at most one command failure,
+suspends/unbinds the TCB, and revokes the old generation. Only an explicitly
+generated `replenish-once` timeout may reply once; the current allowlist is
+empty. Root-fault faults route to root-emergency, and root-emergency has no
+recovery edge.
+
+NineDoor adds one separate recovery Reply object owned by its passive receive
+loop and copied only into the compiler-selected root-fault CSpace slot. Tests
+must reject reuse of either ordinary root-fault receive Reply object, reject
+active console-network admission to the passive path, and prove one atomic
+ready-to-replied transition. A fault with an outstanding Call returns exact
+sequence plus typed `Closed` once before the durable service mailbox is
+published; a fault between calls publishes containment without Reply. Both
+paths suspend, fence, scrub all four shared frames, delete recovery/fault caps,
+and revoke anchor 16137 before old authority can be reused.
+
+After the host gate is green, the QEMU target check must use the selected
+four-core MCS kernel, construct all 10 QEMU sources suspended, seal the exact
+registry, activate root-fault as the sole MCS receiver, then resume the other
+critical children and configure the init SC last. The init/root-control MCS
+dispatcher never polls either lane because it owns no receive Reply object. The
+boot is a failure if any named duty does not execute on its generated TCB/SC,
+if init continues polling an MCS fault lane after transfer, or if a fault,
+timeout, simultaneous wake, saturation, handler fault, or allocation failure
+loses attribution or forward progress. None of this QEMU evidence is Pi
+hardware proof.
+
+### Milestone 26e NineDoor service-isolation gate
+
+Run the fixed ABI, passive child, generated inventory, image binding, and
+target checks before the QEMU boot:
+
+```bash
+cargo test -p secure9p-transport -p nine-door-runtime
+cargo test -p root-task --test ninedoor_service_isolation
+.venv/bin/python -m pytest -q tests/test_ninedoor_runtime_packaging.py
+SEL4_BUILD_DIR=out/sel4/profile-v2/qemu-smp-production \
+COHESIX_WORKER_IMAGE_ARCHIVE=out/cohesix/worker-images/cohesix-worker-images.cpio \
+COHESIX_WORKER_IMAGE_MANIFEST=out/cohesix/worker-images/cohesix-worker-image-manifest.json \
+COHESIX_CONSOLE_NETWORK_RUNTIME_IMAGE=target/aarch64-unknown-none/release/console-network-runtime \
+COHESIX_NINEDOOR_RUNTIME_IMAGE=target/aarch64-unknown-none/release/nine-door-runtime \
+cargo check -p root-task --target aarch64-unknown-none \
+  --no-default-features --features release-qemu
+```
+
+The selected QEMU run must then show all ten sources constructed suspended,
+NineDoor registered last before seal, root-fault activated first, and NineDoor
+resumed only after that receiver is live. Inject a NineDoor standard fault both
+during one donated Call and between Calls. The first must return one typed
+failure before containment; the second must issue no Reply. Neither may leave
+the donor blocked, admit a second Reply, preserve old mappings/caps, route the
+active console through the passive path, or stop root-control progress.
+
+### Milestone 26e console-network service-isolation gate
+
+Run the fixed ABI, child transport, root boundary, packaging, and target checks
+before the QEMU boot:
+
+```bash
+cargo test -p console-network-abi -p console-network-runtime
+cargo test -p root-task --test console_network_service
+.venv/bin/python -m pytest -q tests/test_console_network_runtime_packaging.py
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
+  cargo check -p console-network-runtime --target aarch64-unknown-none
+scripts/check-generated.sh
+scripts/cohsh/run_regression_batch.sh
+scripts/ci/test_plan_run.sh --target qemu \
+  --state-dir out/test-plan/m26e-console-qemu
+```
+
+The compiler and root-boundary tests must agree on the exact image path and
+entrypoint, retained anchor, one-MiB child untyped, 128 frames, eight
+translation objects, 16 child CSpace slots, four shared pages, notification
+slots/badges, sole port 31337 listener, active SC budget/period/refills, and
+standard/timeout fault identities. Any drift, cap-slot alias, anchor collision,
+second listener, W+X page, unbound or tampered image, broad fault/signal rights,
+root SC borrowing, or non-pointer-free record fails before launch.
+
+Child tests cover partial and oversized frames, malformed authentication,
+constant-time token acceptance, command release only after `AUTH`, one-packet
+and one-control backpressure, retained output until smoltcp accepts the complete
+frame, an `OutputDrained` completion only after the child TCP send queue empties,
+and byte-exact root response forwarding. Root tests cover READY and
+connection transitions, stale generation/sequence rejection, completion-bound
+slot reuse, fault closure, and complete suspend/unbind/scrub/revoke evidence.
+The QEMU run must additionally show that all generated sources are constructed
+suspended, the exact fault registry is sealed before the console child resumes,
+one authenticated `cohsh` session observes the existing ACK/ERR/END fixtures,
+malformed/authentication load cannot bypass root policy, and child fault or
+timeout leaves serial, local-seat, root-fault, and root-emergency progress live.
+Scale back network mirroring before command responses; never starve the
+physical operator queues or fatal output. This gate deliberately performs no
+Pi 4 execution and cannot qualify GENET, CYW43, or SDIO behavior.
+
+### Milestone 26e linked-driver MCS and coexistence gate
+
+Run the QEMU-first driver gate against
+`out/sel4/profile-v2/qemu-smp-production`; do not substitute Pi hardware or a
+classic target build:
+
+```bash
+cargo test -p pi4-driver-abi -p pi4-driver-runtime --lib
+cargo test -p root-task --test driver_task_mcs --test driver_faulted_call_recovery
+.venv/bin/python -m pytest -q tests/test_driver_runtime_pipeline.py
+SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
+  cargo check -p pi4-driver-runtime --target aarch64-unknown-none
+```
+
+The root target check additionally supplies the exact Worker manifest/archive
+paths produced by the Worker pipeline. It must prove all seven compiler-owned
+active-SC records, fixed command/Reply/completion/fault cap slots, disjoint
+badge domains, `Write + GrantReply` command/fault caps, Read-only receive caps,
+Write-only signal caps, one synchronous command association, and fault-before,
+during, after, cancellation, reconstruction-generation, and normal-versus-
+failure Reply exclusion. One-way bootstrap/background completions signal only
+after their sequence-last ring commit and never consume the command Reply.
+
+`scripts/driver_runtime_manifest.py` must reproduce byte-identical newc and
+JSON outputs from identical component bytes, validate the immutable
+`configs/driver_runtime_classic_comparator.toml` source/component/archive
+graph, and verify every new component and archive hash after staging. The
+retired comparator digest is
+`db2e353327cde2f91b37f40a7bf17905bb5f70cd27a999ba880a9fa7c2de9835`;
+it is comparison identity, not MCS execution proof. The complete runtime model
+suite is the QEMU/source
+coexistence guard for unchanged CYW43/SDIO ownership, register order, fairness,
+virtual-counter deadlines, retry ceilings, pair-restart cuts, rings, IRQ
+ack/mask rules, and typed errors. This does not promote historical or current
+Pi evidence. Until a live QEMU image passes, the MCS execution gate remains
+open; until later fresh Pi tests pass, the Milestone task is not a Pi PASS.
+
 ## Trace replay limits
 <!-- coh-rtc:trace-policy:start -->
 ### Trace replay limits (generated)
@@ -4254,7 +4974,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
+- `configs/generated/root_task_resolved.json` — `sha256:8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`
@@ -4268,17 +4988,17 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 - `tests/fixtures/transcripts/converge_v0/tcp.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/cohsh.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
 - `tests/fixtures/transcripts/converge_v0/coh.txt` — `sha256:96b57611f848ef6f9691678df8b20f261dffd47db449cd63459f12f166c0f4a7`
-- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
-- `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:dafd88f7d7e984454e12815ccffd203f98c446d0eb1e8a364d79805aa69de017`
+- `tests/fixtures/transcripts/converge_v0/swarmui.txt` — `sha256:367fe0ef871277d7e3606a6747946304f1dff2217c360190f2fc8dd115f015fa`
+- `tests/fixtures/transcripts/converge_v0/coh-status.txt` — `sha256:b9a2da7b81d0bd6b8c6934330976e3990b1eb1f7dce879cfad112126b3c95a42`
 - `tests/fixtures/transcripts/control_plane_v0/cohsh.txt` — `sha256:f43434e6b3071753596e919021e573cb7f6a9831123769dd7cefb5b0c115c1ef`
 - `tests/fixtures/transcripts/run_demo_v0/cohsh.txt` — `sha256:d429aa09972892adaeabed60ef2a36e4fe366eb9e730a8467a85f27870957040`
 - `tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt` — `sha256:a761096db1c412e8b775f3bdb78a9aec79b95ef787d0e933406d23c20285f7db`
 - `tests/fixtures/transcripts/trace_v0/cohsh.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
 - `tests/fixtures/transcripts/trace_v0/swarmui.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
-- `tests/fixtures/transcripts/trace_v0/coh-status.txt` — `sha256:56b97a2d8486ed783d7cb93d38ea67811d93df6efcc24d7ed97265a4df1b1c4f`
+- `tests/fixtures/transcripts/trace_v0/coh-status.txt` — `sha256:ea020691ff4f291782b73208db03cf1707f4a64d72b94b11ab6e995d8207dc64`
 
 ## Trace fixture hashes
-- `tests/fixtures/traces/trace_v0.trace` — `sha256:0f5a1935e973fbdb57e73a952b9cd02d1060086167efb4b9e79b28169f308561`
+- `tests/fixtures/traces/trace_v0.trace` — `sha256:f5cd6eb44c1b4a51f5e1516dad9a7ec1f76fae148169744c9e8e3809f9b6c30b`
 - `tests/fixtures/traces/trace_v0.hive.cbor` — `sha256:977113ebcfad69272cbb15ddc57e7ce1ccd1df87baa6568704253cacc55e8e2d`
 
 ## Guard

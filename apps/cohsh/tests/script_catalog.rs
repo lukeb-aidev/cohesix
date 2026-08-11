@@ -175,6 +175,8 @@ fn script_token_stream_is_stable() {
             .to_owned(),
         "telemetry_ring.coh:4d0d4d260b6e0dd8f5508ee1be9971b8da93c3a3b1e77dd78b5eb95a545e6784"
             .to_owned(),
+        "worker_host_model.coh:971fad19faabe4ffd7f322f61944b9bb548810229d3617ab65090765a996122e"
+            .to_owned(),
     ]);
     assert_eq!(results, expected);
     assert_eq!(hashes.len(), results.len());

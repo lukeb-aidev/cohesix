@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Integration tests for NineDoor host namespace and GPU workflow.
 // Author: Lukas Bower
@@ -110,7 +110,22 @@ fn queen_bind_is_session_scoped() {
     let telemetry = queen1
         .read(4, 0, MAX_MSIZE)
         .expect("read remapped telemetry");
-    assert!(telemetry.is_empty());
+    let telemetry = String::from_utf8(telemetry).expect("host-model observation is UTF-8");
+    let observation: serde_json::Value =
+        serde_json::from_str(telemetry.trim()).expect("structured host-model observation");
+    assert_eq!(
+        observation
+            .get("schema")
+            .and_then(serde_json::Value::as_str),
+        Some("cohesix-worker-observation/v1")
+    );
+    assert_eq!(
+        observation
+            .get("state")
+            .and_then(|state| state.get("execution_proof"))
+            .and_then(serde_json::Value::as_str),
+        Some("host-model")
+    );
 
     let mut queen2 = server.connect().expect("create second queen session");
     queen2.version(MAX_MSIZE).expect("version handshake");

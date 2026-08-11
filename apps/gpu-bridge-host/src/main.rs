@@ -79,7 +79,9 @@ fn main() -> Result<()> {
             #[cfg(feature = "rest")]
             {
                 let mut client = GatewayClient::new(rest_url);
-                if let Some(token) = resolve_rest_auth_token(args.rest_auth_token.as_deref()) {
+                if let Some(token) = resolve_rest_auth_token(args.rest_auth_token.as_deref())
+                    .context("resolve REST authentication token")?
+                {
                     client = client.with_request_auth_token(token);
                 }
                 loop {
@@ -103,7 +105,8 @@ fn main() -> Result<()> {
                 anyhow::bail!("rest publish disabled; rebuild with --features rest");
             }
         } else {
-            let auth_token = resolve_auth_token(args.auth_token.as_deref());
+            let auth_token = resolve_auth_token(args.auth_token.as_deref())
+                .context("resolve live console authentication token")?;
             let mut client = ConsoleClient::connect(
                 &args.tcp_host,
                 args.tcp_port,
@@ -128,34 +131,47 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn resolve_auth_token(cli_token: Option<&str>) -> String {
+fn resolve_auth_token(cli_token: Option<&str>) -> Result<String> {
     if let Some(token) = cli_token {
         let trimmed = token.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            return validated_auth_token(trimmed);
         }
     }
     if let Ok(value) = std::env::var("COH_AUTH_TOKEN") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            return validated_auth_token(trimmed);
         }
     }
     if let Ok(value) = std::env::var("COHSH_AUTH_TOKEN") {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return trimmed.to_owned();
+            return validated_auth_token(trimmed);
         }
     }
-    "changeme".to_owned()
+    Err(anyhow!(
+        "live publish requires --auth-token, COH_AUTH_TOKEN, or COHSH_AUTH_TOKEN"
+    ))
+}
+
+fn validated_auth_token(value: &str) -> Result<String> {
+    if value.eq_ignore_ascii_case(&["change", "me"].concat())
+        || value.eq_ignore_ascii_case("placeholder")
+    {
+        return Err(anyhow!(
+            "live publish rejects placeholder authentication tokens"
+        ));
+    }
+    Ok(value.to_owned())
 }
 
 #[cfg(feature = "rest")]
-fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
+fn resolve_rest_auth_token(cli_value: Option<&str>) -> Result<Option<String>> {
     if let Some(value) = cli_value {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
-            return Some(trimmed.to_owned());
+            return validated_auth_token(trimmed).map(Some);
         }
     }
     for key in [
@@ -166,11 +182,11 @@ fn resolve_rest_auth_token(cli_value: Option<&str>) -> Option<String> {
         if let Ok(value) = std::env::var(key) {
             let trimmed = value.trim();
             if !trimmed.is_empty() {
-                return Some(trimmed.to_owned());
+                return validated_auth_token(trimmed).map(Some);
             }
         }
     }
-    None
+    Ok(None)
 }
 
 struct ConsoleClient {
@@ -252,5 +268,34 @@ impl ConsoleClient {
                 .unwrap_or_else(|| "unknown".to_owned());
             return Err(anyhow!("{verb} failed: {detail}"));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn explicit_live_token_is_accepted() {
+        assert_eq!(
+            resolve_auth_token(Some("real-secret")).expect("valid token"),
+            "real-secret"
+        );
+    }
+
+    #[test]
+    fn placeholder_live_token_is_rejected_before_connect() {
+        let placeholder = ["change", "me"].concat();
+        let err = resolve_auth_token(Some(&placeholder)).expect_err("placeholder must fail");
+        assert!(err.to_string().contains("placeholder"));
+    }
+
+    #[cfg(feature = "rest")]
+    #[test]
+    fn placeholder_rest_token_is_rejected_before_request() {
+        let placeholder = ["change", "me"].concat();
+        let err = resolve_rest_auth_token(Some(&placeholder))
+            .expect_err("placeholder REST token must fail");
+        assert!(err.to_string().contains("placeholder"));
     }
 }

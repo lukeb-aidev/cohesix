@@ -1,8 +1,7 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Host-side GPU bridge utilities for Cohesix, including mock/NVML discovery,
+// Purpose: Provide host-side GPU inventory, namespace serialisation, and model lifecycle helpers.
 // Author: Lukas Bower
-// namespace serialisation, and telemetry/model lifecycle helpers.
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -22,6 +21,8 @@ use std::fmt::Write;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 const TELEMETRY_SCHEMA_VERSION: &str = "gpu-telemetry/v1";
 const MAX_TELEMETRY_BYTES: usize = 4096;
@@ -30,8 +31,15 @@ const REGISTRY_AVAILABLE_DIR: &str = "available";
 const REGISTRY_MANIFEST_FILE: &str = "manifest.toml";
 const MAX_REGISTRY_MANIFEST_BYTES: usize = 8 * 1024;
 const MAX_REGISTRY_ID_BYTES: usize = 128;
-const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v1";
+const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v2";
 const GPU_BRIDGE_B64_PREFIX: &str = "b64:";
+const DEFAULT_SNAPSHOT_TTL_MS: u64 = 15_000;
+const MAX_SNAPSHOT_TTL_MS: u64 = 60_000;
+const EMPTY_VALUE: &str = "-";
+const PEFT_MODEL_FORMAT: &str = "safetensors+lora";
+const PEFT_ADAPTER_FILE: &str = "adapter.safetensors";
+const PEFT_LORA_FILE: &str = "lora.json";
+const PEFT_METRICS_FILE: &str = "metrics.json";
 
 /// Summary information about a GPU surfaced to the VM namespace.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -110,6 +118,14 @@ pub struct ModelManifest {
     pub model_id: String,
     /// TOML manifest content documenting the model artefact.
     pub manifest_toml: String,
+    /// SHA-256 of the exact manifest bytes.
+    pub manifest_sha256: String,
+    /// CAS digest of the model artefact named by the manifest.
+    pub cas_sha256: String,
+    /// Base-model identity for an adapter model.
+    pub base_model_id: Option<String>,
+    /// CAS digest of the adapter artefact, when present.
+    pub adapter_sha256: Option<String>,
 }
 
 /// Host-side model catalog with an active pointer.
@@ -119,6 +135,10 @@ pub struct GpuModelCatalog {
     pub available: Vec<ModelManifest>,
     /// Active model identifier referenced by `/gpu/models/active`.
     pub active: String,
+    /// Monotonic activation generation, or zero when no model is active.
+    pub activation_generation: u64,
+    /// Receipt binding the active model to its source/catalog generation.
+    pub activation_receipt: String,
 }
 
 impl GpuModelCatalog {
@@ -446,11 +466,37 @@ impl Inventory for CudaInventory {
 pub struct GpuBridge {
     inventories: Vec<InventoryCandidate>,
     model_registry: Option<PathBuf>,
+    fixture_mode: bool,
+    epoch: u64,
+    sequence: AtomicU64,
+}
+
+/// Identity and freshness contract carried by every published snapshot.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuSnapshotIdentity {
+    /// Authenticated publisher identity (transport authentication is enforced by Cohesix).
+    pub source_id: String,
+    /// `fixture` for explicit test data or `production` for real/empty live state.
+    pub source_mode: String,
+    /// Publisher epoch; a restart creates a newer epoch.
+    pub epoch: u64,
+    /// Strictly increasing sequence within the epoch.
+    pub sequence: u64,
+    /// Host wall-clock observation time in Unix milliseconds.
+    pub observed_unix_ms: u64,
+    /// Maximum target retention time after validated receipt.
+    pub ttl_ms: u64,
+    /// Digest of the canonical model catalog identities.
+    pub catalog_sha256: String,
+    /// Whether the registry contains validated live/fixture model state.
+    pub available: bool,
 }
 
 /// Serialised GPU topology (nodes, models, telemetry schema).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GpuNamespaceSnapshot {
+    /// Publisher, freshness, and catalog identity.
+    pub identity: GpuSnapshotIdentity,
     /// Per-GPU nodes.
     pub nodes: Vec<SerialisedGpuNode>,
     /// Model lifecycle metadata.
@@ -468,6 +514,9 @@ impl GpuBridge {
                 Box::new(MockInventory),
             )],
             model_registry: None,
+            fixture_mode: true,
+            epoch: current_unix_ms(),
+            sequence: AtomicU64::new(0),
         }
     }
 
@@ -481,6 +530,9 @@ impl GpuBridge {
                 Box::new(NvmlInventory),
             )],
             model_registry: None,
+            fixture_mode: false,
+            epoch: current_unix_ms(),
+            sequence: AtomicU64::new(0),
         }
     }
 
@@ -494,6 +546,9 @@ impl GpuBridge {
                 Box::new(CudaInventory),
             )],
             model_registry: None,
+            fixture_mode: false,
+            epoch: current_unix_ms(),
+            sequence: AtomicU64::new(0),
         }
     }
 
@@ -501,6 +556,9 @@ impl GpuBridge {
         Self {
             inventories: candidates,
             model_registry: None,
+            fixture_mode: false,
+            epoch: current_unix_ms(),
+            sequence: AtomicU64::new(0),
         }
     }
 
@@ -587,9 +645,31 @@ impl GpuBridge {
     pub fn serialise_namespace_with_report(
         &self,
     ) -> Result<(GpuNamespaceSnapshot, InventoryReport)> {
-        let models = self.build_model_catalog();
+        let mut models = self.build_model_catalog()?;
         let telemetry_schema = TelemetrySchema::lora_v1();
         let (namespaces, report) = self.build_namespace_with_report()?;
+        let source_id = format!("gpu-bridge-host/{}", report.backend.label());
+        let catalog_sha256 = catalog_sha256(&models);
+        let sequence = self
+            .sequence
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if !models.active.is_empty() {
+            let active_manifest = models
+                .available
+                .iter()
+                .find(|manifest| manifest.model_id == models.active)
+                .ok_or_else(|| anyhow!("active model is absent from validated catalog"))?;
+            models.activation_generation = sequence;
+            models.activation_receipt = activation_receipt(
+                &source_id,
+                self.epoch,
+                models.activation_generation,
+                &models.active,
+                &active_manifest.manifest_sha256,
+                &catalog_sha256,
+            );
+        }
         let nodes = namespaces
             .into_iter()
             .map(|namespace| {
@@ -608,6 +688,20 @@ impl GpuBridge {
             .collect::<Result<Vec<_>>>()?;
         Ok((
             GpuNamespaceSnapshot {
+                identity: GpuSnapshotIdentity {
+                    source_id,
+                    source_mode: if self.fixture_mode {
+                        "fixture".to_owned()
+                    } else {
+                        "production".to_owned()
+                    },
+                    epoch: self.epoch,
+                    sequence,
+                    observed_unix_ms: current_unix_ms(),
+                    ttl_ms: DEFAULT_SNAPSHOT_TTL_MS,
+                    catalog_sha256,
+                    available: !models.available.is_empty(),
+                },
                 nodes,
                 models,
                 telemetry_schema,
@@ -616,55 +710,89 @@ impl GpuBridge {
         ))
     }
 
-    fn build_model_catalog(&self) -> GpuModelCatalog {
+    fn build_model_catalog(&self) -> Result<GpuModelCatalog> {
         if let Some(root) = self.model_registry.as_ref() {
-            if let Ok(Some(catalog)) = load_registry_catalog(root) {
-                return catalog;
-            }
+            return load_registry_catalog(root)
+                .map(|catalog| catalog.unwrap_or_else(empty_model_catalog));
         }
-        default_model_catalog()
+        if self.fixture_mode {
+            Ok(fixture_model_catalog())
+        } else {
+            Ok(empty_model_catalog())
+        }
     }
 }
 
-fn default_model_catalog() -> GpuModelCatalog {
-    let available = vec![
-        ModelManifest {
-            model_id: "vision-base-v1".into(),
-            manifest_toml: r#"
-[model]
+fn empty_model_catalog() -> GpuModelCatalog {
+    GpuModelCatalog {
+        available: Vec::new(),
+        active: String::new(),
+        activation_generation: 0,
+        activation_receipt: String::new(),
+    }
+}
+
+fn fixture_model_catalog() -> GpuModelCatalog {
+    let base_cas = sha256_hex(b"fixture:vision-base-v1");
+    let adapter_cas = sha256_hex(b"fixture:vision-lora-edge:adapter");
+    let lora_cas = sha256_hex(b"fixture:vision-lora-edge");
+    let base_manifest = format!(
+        r#"[model]
 id = "vision-base-v1"
-source = "s3://artifacts/models/vision-base-v1/"
+cas_sha256 = "{base_cas}"
 format = "gguf"
 
 [metadata]
 tokens = 4096
-owner = "mlops"
-activation = "cold-reload"
-"#
-            .trim()
-            .to_string(),
-        },
-        ModelManifest {
-            model_id: "vision-lora-edge".into(),
-            manifest_toml: r#"
-[model]
+owner = "fixture"
+activation = "cold-reload""#
+    );
+    let lora_manifest = format!(
+        r#"[model]
 id = "vision-lora-edge"
+cas_sha256 = "{lora_cas}"
 base = "vision-base-v1"
-lora = "s3://artifacts/models/lora/edge-pack-01/"
+adapter_sha256 = "{adapter_cas}"
 format = "gguf+lora"
 
 [metadata]
 tokens = 4096
-owner = "mlops"
-activation = "hot-swap"
-"#
-            .trim()
-            .to_string(),
-        },
+owner = "fixture"
+activation = "hot-swap""#
+    );
+    let available = vec![
+        model_manifest("vision-base-v1", base_manifest, base_cas, None, None),
+        model_manifest(
+            "vision-lora-edge",
+            lora_manifest,
+            lora_cas,
+            Some("vision-base-v1".to_owned()),
+            Some(adapter_cas),
+        ),
     ];
     GpuModelCatalog {
         active: "vision-lora-edge".into(),
         available,
+        activation_generation: 0,
+        activation_receipt: String::new(),
+    }
+}
+
+fn model_manifest(
+    model_id: &str,
+    manifest_toml: String,
+    cas_sha256: String,
+    base_model_id: Option<String>,
+    adapter_sha256: Option<String>,
+) -> ModelManifest {
+    let manifest_sha256 = sha256_hex(manifest_toml.as_bytes());
+    ModelManifest {
+        model_id: model_id.to_owned(),
+        manifest_toml,
+        manifest_sha256,
+        cas_sha256,
+        base_model_id,
+        adapter_sha256,
     }
 }
 
@@ -681,7 +809,7 @@ fn load_registry_catalog(root: &Path) -> Result<Option<GpuModelCatalog>> {
             continue;
         }
         let model_id = match path.file_name().and_then(|name| name.to_str()) {
-            Some(name) if !name.trim().is_empty() => name.to_owned(),
+            Some(name) if valid_registry_id(name) => name.to_owned(),
             _ => continue,
         };
         let manifest_path = path.join(REGISTRY_MANIFEST_FILE);
@@ -691,31 +819,326 @@ fn load_registry_catalog(root: &Path) -> Result<Option<GpuModelCatalog>> {
         let manifest_bytes = read_bounded_file(&manifest_path, MAX_REGISTRY_MANIFEST_BYTES)?;
         let manifest_toml = String::from_utf8(manifest_bytes)
             .map_err(|_| anyhow!("manifest.toml for {model_id} is not UTF-8"))?;
-        manifests.push(ModelManifest {
-            model_id,
+        let document: RegistryModelDocument = toml::from_str(&manifest_toml)
+            .map_err(|err| anyhow!("manifest.toml for {model_id}: {err}"))?;
+        ensure!(
+            document.model.id == model_id,
+            "manifest model id does not match registry directory: {} != {model_id}",
+            document.model.id
+        );
+        ensure!(
+            valid_sha256(&document.model.cas_sha256),
+            "manifest for {model_id} has invalid cas_sha256"
+        );
+        ensure!(
+            !document.model.format.trim().is_empty(),
+            "manifest for {model_id} has empty format"
+        );
+        if let Some(base) = document.model.base.as_deref() {
+            ensure!(
+                valid_registry_id(base),
+                "manifest for {model_id} has invalid base model id"
+            );
+        }
+        if let Some(adapter) = document.model.adapter_sha256.as_deref() {
+            ensure!(
+                valid_sha256(adapter),
+                "manifest for {model_id} has invalid adapter_sha256"
+            );
+            ensure!(
+                document.model.base.is_some(),
+                "manifest for {model_id} declares an adapter without a base model"
+            );
+        }
+        validate_peft_registry_extension(&model_id, &document)?;
+        manifests.push(model_manifest(
+            &model_id,
             manifest_toml,
-        });
+            document.model.cas_sha256,
+            document.model.base,
+            document.model.adapter_sha256,
+        ));
     }
     if manifests.is_empty() {
         return Ok(None);
     }
     manifests.sort_by(|a, b| a.model_id.cmp(&b.model_id));
+    for manifest in &manifests {
+        if let Some(base) = manifest.base_model_id.as_deref() {
+            ensure!(
+                manifests.iter().any(|candidate| candidate.model_id == base),
+                "manifest for {} references unavailable base model {base}",
+                manifest.model_id
+            );
+        }
+    }
     let active_path = root.join(REGISTRY_ACTIVE_FILE);
     let active = if active_path.is_file() {
-        read_first_line(&active_path, MAX_REGISTRY_ID_BYTES)
-            .unwrap_or_else(|_| manifests[0].model_id.clone())
+        read_first_line(&active_path, MAX_REGISTRY_ID_BYTES)?
     } else {
-        manifests[0].model_id.clone()
+        String::new()
     };
-    let active = if manifests.iter().any(|manifest| manifest.model_id == active) {
-        active
-    } else {
-        manifests[0].model_id.clone()
-    };
+    ensure!(
+        active.is_empty() || valid_registry_id(&active),
+        "registry active model id is invalid"
+    );
+    ensure!(
+        active.is_empty() || manifests.iter().any(|manifest| manifest.model_id == active),
+        "registry active model id is not present in available catalog"
+    );
     Ok(Some(GpuModelCatalog {
         available: manifests,
         active,
+        activation_generation: 0,
+        activation_receipt: String::new(),
     }))
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryModelDocument {
+    model: RegistryModelIdentity,
+    #[serde(default, rename = "metadata")]
+    _metadata: Option<toml::Value>,
+    #[serde(default)]
+    provenance: Option<RegistryPeftProvenance>,
+    #[serde(default)]
+    hashes: Option<RegistryPeftHashes>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryModelIdentity {
+    id: String,
+    cas_sha256: String,
+    #[serde(default)]
+    base: Option<String>,
+    #[serde(default)]
+    adapter_sha256: Option<String>,
+    format: String,
+    #[serde(default)]
+    adapter: Option<String>,
+    #[serde(default)]
+    lora: Option<String>,
+    #[serde(default)]
+    metrics: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryPeftProvenance {
+    job_id: String,
+    approval: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RegistryPeftHashes {
+    adapter_sha256: String,
+    adapter_bytes: u64,
+    lora_sha256: String,
+    lora_bytes: u64,
+    #[serde(default)]
+    metrics_sha256: Option<String>,
+    #[serde(default)]
+    metrics_bytes: Option<u64>,
+    policy_sha256: String,
+    policy_bytes: u64,
+    telemetry_sha256: String,
+    telemetry_bytes: u64,
+}
+
+fn validate_peft_registry_extension(
+    model_id: &str,
+    document: &RegistryModelDocument,
+) -> Result<()> {
+    let model = &document.model;
+    let extension_present = model.adapter.is_some()
+        || model.lora.is_some()
+        || model.metrics.is_some()
+        || document.provenance.is_some()
+        || document.hashes.is_some();
+    if !extension_present {
+        return Ok(());
+    }
+
+    ensure!(
+        model.format == PEFT_MODEL_FORMAT,
+        "PEFT manifest for {model_id} has unsupported format"
+    );
+    ensure!(
+        model.adapter.as_deref() == Some(PEFT_ADAPTER_FILE),
+        "PEFT manifest for {model_id} has invalid adapter path"
+    );
+    ensure!(
+        model.lora.as_deref() == Some(PEFT_LORA_FILE),
+        "PEFT manifest for {model_id} has invalid LoRA metadata path"
+    );
+    ensure!(
+        model.base.is_some(),
+        "PEFT manifest for {model_id} is missing its base model"
+    );
+
+    let provenance = document
+        .provenance
+        .as_ref()
+        .ok_or_else(|| anyhow!("PEFT manifest for {model_id} is missing provenance"))?;
+    ensure!(
+        valid_registry_id(&provenance.job_id),
+        "PEFT manifest for {model_id} has invalid job id"
+    );
+    ensure!(
+        valid_registry_status(&provenance.approval),
+        "PEFT manifest for {model_id} has invalid approval status"
+    );
+
+    let hashes = document
+        .hashes
+        .as_ref()
+        .ok_or_else(|| anyhow!("PEFT manifest for {model_id} is missing artifact hashes"))?;
+    for (label, digest) in [
+        ("adapter", hashes.adapter_sha256.as_str()),
+        ("LoRA metadata", hashes.lora_sha256.as_str()),
+        ("policy", hashes.policy_sha256.as_str()),
+        ("telemetry", hashes.telemetry_sha256.as_str()),
+    ] {
+        ensure!(
+            valid_sha256(digest),
+            "PEFT manifest for {model_id} has invalid {label} digest"
+        );
+    }
+    for (label, bytes) in [
+        ("adapter", hashes.adapter_bytes),
+        ("LoRA metadata", hashes.lora_bytes),
+        ("policy", hashes.policy_bytes),
+        ("telemetry", hashes.telemetry_bytes),
+    ] {
+        ensure!(
+            bytes > 0,
+            "PEFT manifest for {model_id} has empty {label} artifact"
+        );
+    }
+
+    ensure!(
+        model.cas_sha256 == hashes.adapter_sha256,
+        "PEFT manifest for {model_id} CAS digest does not match the adapter artifact"
+    );
+    ensure!(
+        model.adapter_sha256.as_deref() == Some(hashes.adapter_sha256.as_str()),
+        "PEFT manifest for {model_id} adapter identity mismatch"
+    );
+
+    match (
+        model.metrics.as_deref(),
+        hashes.metrics_sha256.as_deref(),
+        hashes.metrics_bytes,
+    ) {
+        (None, None, None) => {}
+        (Some(PEFT_METRICS_FILE), Some(digest), Some(bytes)) => {
+            ensure!(
+                valid_sha256(digest),
+                "PEFT manifest for {model_id} has invalid metrics digest"
+            );
+            ensure!(
+                bytes > 0,
+                "PEFT manifest for {model_id} has empty metrics artifact"
+            );
+        }
+        _ => {
+            return Err(anyhow!(
+                "PEFT manifest for {model_id} has inconsistent metrics identity"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn valid_registry_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_REGISTRY_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn valid_registry_status(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn catalog_sha256(catalog: &GpuModelCatalog) -> String {
+    let mut hasher = Sha256::new();
+    for manifest in &catalog.available {
+        hasher.update(manifest.model_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(manifest.manifest_sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(manifest.cas_sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(
+            manifest
+                .base_model_id
+                .as_deref()
+                .unwrap_or(EMPTY_VALUE)
+                .as_bytes(),
+        );
+        hasher.update([0]);
+        hasher.update(
+            manifest
+                .adapter_sha256
+                .as_deref()
+                .unwrap_or(EMPTY_VALUE)
+                .as_bytes(),
+        );
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn activation_receipt(
+    source_id: &str,
+    epoch: u64,
+    generation: u64,
+    model_id: &str,
+    manifest_sha256: &str,
+    catalog_sha256: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    let epoch = epoch.to_string();
+    let generation = generation.to_string();
+    for field in [
+        source_id,
+        epoch.as_str(),
+        generation.as_str(),
+        model_id,
+        manifest_sha256,
+        catalog_sha256,
+    ] {
+        hasher.update(field.as_bytes());
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn current_unix_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    u64::try_from(millis).unwrap_or(u64::MAX)
 }
 
 fn read_bounded_file(path: &Path, max_bytes: usize) -> Result<Vec<u8>> {
@@ -785,7 +1208,19 @@ pub fn status_entry(job: &str, state: &str, detail: &str) -> String {
 #[must_use]
 pub fn namespace_to_json_pretty(snapshot: &GpuNamespaceSnapshot) -> String {
     let mut out = String::new();
-    out.push_str("{\n  \"nodes\": [\n");
+    out.push_str("{\n  \"identity\": {\n");
+    out.push_str(&format!(
+        "    \"source_id\": \"{}\",\n    \"source_mode\": \"{}\",\n    \"epoch\": {},\n    \"sequence\": {},\n    \"observed_unix_ms\": {},\n    \"ttl_ms\": {},\n    \"catalog_sha256\": \"{}\",\n    \"available\": {}\n  }},\n",
+        escape_json_string(&snapshot.identity.source_id),
+        escape_json_string(&snapshot.identity.source_mode),
+        snapshot.identity.epoch,
+        snapshot.identity.sequence,
+        snapshot.identity.observed_unix_ms,
+        snapshot.identity.ttl_ms,
+        snapshot.identity.catalog_sha256,
+        snapshot.identity.available,
+    ));
+    out.push_str("  \"nodes\": [\n");
     for (index, node) in snapshot.nodes.iter().enumerate() {
         if index > 0 {
             out.push_str(",\n");
@@ -830,12 +1265,27 @@ pub fn namespace_to_json_pretty(snapshot: &GpuNamespaceSnapshot) -> String {
             escape_json_string(&manifest.model_id)
         ));
         out.push_str(&format!(
-            "        \"manifest_toml\": \"{}\"\n",
-            escape_json_string(&manifest.manifest_toml)
+            "        \"manifest_toml\": \"{}\",\n        \"manifest_sha256\": \"{}\",\n        \"cas_sha256\": \"{}\",\n        \"base_model_id\": {},\n        \"adapter_sha256\": {}\n",
+            escape_json_string(&manifest.manifest_toml),
+            manifest.manifest_sha256,
+            manifest.cas_sha256,
+            manifest
+                .base_model_id
+                .as_deref()
+                .map(|value| format!("\"{}\"", escape_json_string(value)))
+                .unwrap_or_else(|| "null".to_owned()),
+            manifest
+                .adapter_sha256
+                .as_deref()
+                .map(|value| format!("\"{}\"", escape_json_string(value)))
+                .unwrap_or_else(|| "null".to_owned()),
         ));
         out.push_str("      }");
     }
-    out.push_str("\n    ]\n  },\n");
+    out.push_str(&format!(
+        "\n    ],\n    \"activation_generation\": {},\n    \"activation_receipt\": \"{}\"\n  }},\n",
+        snapshot.models.activation_generation, snapshot.models.activation_receipt,
+    ));
     out.push_str(&format!(
         "  \"telemetry_schema\": {}\n",
         snapshot.telemetry_schema.descriptor_json()
@@ -860,6 +1310,18 @@ pub struct GpuBridgePublish {
 pub fn namespace_to_wire(snapshot: &GpuNamespaceSnapshot) -> Vec<u8> {
     let mut out = String::new();
     let _ = writeln!(out, "schema {GPU_BRIDGE_WIRE_SCHEMA}");
+    let _ = writeln!(
+        out,
+        "snapshot source={} mode={} epoch={} sequence={} observed_unix_ms={} ttl_ms={} catalog_sha256={} available={}",
+        snapshot.identity.source_id,
+        snapshot.identity.source_mode,
+        snapshot.identity.epoch,
+        snapshot.identity.sequence,
+        snapshot.identity.observed_unix_ms,
+        snapshot.identity.ttl_ms,
+        snapshot.identity.catalog_sha256,
+        u8::from(snapshot.identity.available),
+    );
     for node in &snapshot.nodes {
         let info = BASE64_STANDARD.encode(node.info_payload.as_bytes());
         let ctl = BASE64_STANDARD.encode(node.ctl_payload.as_bytes());
@@ -875,11 +1337,38 @@ pub fn namespace_to_wire(snapshot: &GpuNamespaceSnapshot) -> Vec<u8> {
         let manifest_b64 = BASE64_STANDARD.encode(manifest.manifest_toml.as_bytes());
         let _ = writeln!(
             out,
-            "model id={} manifest={}",
-            manifest.model_id, manifest_b64
+            "model id={} manifest={} manifest_sha256={} cas_sha256={} base={} adapter_sha256={}",
+            manifest.model_id,
+            manifest_b64,
+            manifest.manifest_sha256,
+            manifest.cas_sha256,
+            manifest.base_model_id.as_deref().unwrap_or(EMPTY_VALUE),
+            manifest.adapter_sha256.as_deref().unwrap_or(EMPTY_VALUE),
         );
     }
-    let _ = writeln!(out, "active id={}", snapshot.models.active);
+    let active_manifest_sha256 = snapshot
+        .models
+        .available
+        .iter()
+        .find(|manifest| manifest.model_id == snapshot.models.active)
+        .map(|manifest| manifest.manifest_sha256.as_str())
+        .unwrap_or(EMPTY_VALUE);
+    let _ = writeln!(
+        out,
+        "active id={} generation={} receipt={} manifest_sha256={}",
+        if snapshot.models.active.is_empty() {
+            EMPTY_VALUE
+        } else {
+            snapshot.models.active.as_str()
+        },
+        snapshot.models.activation_generation,
+        if snapshot.models.activation_receipt.is_empty() {
+            EMPTY_VALUE
+        } else {
+            snapshot.models.activation_receipt.as_str()
+        },
+        active_manifest_sha256,
+    );
     let schema_b64 = BASE64_STANDARD.encode(snapshot.telemetry_schema.descriptor_json().as_bytes());
     let _ = writeln!(out, "telemetry schema={schema_b64}");
     let _ = writeln!(out, "end");
@@ -925,9 +1414,11 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
     let text =
         std::str::from_utf8(bytes).map_err(|_| anyhow!("wire payload must be UTF-8 text"))?;
     let mut schema_seen = false;
+    let mut identity: Option<GpuSnapshotIdentity> = None;
     let mut nodes = Vec::new();
     let mut models = Vec::new();
     let mut active: Option<String> = None;
+    let mut active_contract: Option<(u64, String, String)> = None;
     let mut telemetry_schema: Option<TelemetrySchema> = None;
     let mut ended = false;
 
@@ -959,6 +1450,70 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
                     return Err(anyhow!("schema line has unexpected tokens"));
                 }
                 schema_seen = true;
+            }
+            "snapshot" => {
+                ensure!(identity.is_none(), "duplicate snapshot identity line");
+                let mut source_id = None;
+                let mut source_mode = None;
+                let mut epoch = None;
+                let mut sequence = None;
+                let mut observed_unix_ms = None;
+                let mut ttl_ms = None;
+                let mut catalog_sha256 = None;
+                let mut available = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or_else(|| anyhow!("snapshot field missing '=': {part}"))?;
+                    match key {
+                        "source" => source_id = Some(value),
+                        "mode" => source_mode = Some(value),
+                        "epoch" => epoch = Some(parse_positive_u64("epoch", value)?),
+                        "sequence" => sequence = Some(parse_positive_u64("sequence", value)?),
+                        "observed_unix_ms" => {
+                            observed_unix_ms = Some(parse_positive_u64("observed_unix_ms", value)?)
+                        }
+                        "ttl_ms" => ttl_ms = Some(parse_positive_u64("ttl_ms", value)?),
+                        "catalog_sha256" => catalog_sha256 = Some(value),
+                        "available" => {
+                            available = Some(match value {
+                                "0" => false,
+                                "1" => true,
+                                _ => return Err(anyhow!("snapshot available must be 0 or 1")),
+                            })
+                        }
+                        _ => return Err(anyhow!("unsupported snapshot field: {key}")),
+                    }
+                }
+                let source_id = source_id.ok_or_else(|| anyhow!("snapshot source missing"))?;
+                ensure!(valid_source_id(source_id), "snapshot source id is invalid");
+                let source_mode = source_mode.ok_or_else(|| anyhow!("snapshot mode missing"))?;
+                ensure!(
+                    matches!(source_mode, "production" | "fixture"),
+                    "snapshot mode is invalid"
+                );
+                let ttl_ms = ttl_ms.ok_or_else(|| anyhow!("snapshot ttl missing"))?;
+                ensure!(
+                    ttl_ms <= MAX_SNAPSHOT_TTL_MS,
+                    "snapshot ttl exceeds maximum"
+                );
+                let catalog_sha256 =
+                    catalog_sha256.ok_or_else(|| anyhow!("snapshot catalog_sha256 missing"))?;
+                ensure!(
+                    valid_sha256(catalog_sha256),
+                    "snapshot catalog digest is invalid"
+                );
+                identity = Some(GpuSnapshotIdentity {
+                    source_id: source_id.to_owned(),
+                    source_mode: source_mode.to_owned(),
+                    epoch: epoch.ok_or_else(|| anyhow!("snapshot epoch missing"))?,
+                    sequence: sequence.ok_or_else(|| anyhow!("snapshot sequence missing"))?,
+                    observed_unix_ms: observed_unix_ms
+                        .ok_or_else(|| anyhow!("snapshot observation time missing"))?,
+                    ttl_ms,
+                    catalog_sha256: catalog_sha256.to_owned(),
+                    available: available.ok_or_else(|| anyhow!("snapshot availability missing"))?,
+                });
             }
             "node" => {
                 let mut id = None;
@@ -995,6 +1550,10 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
             "model" => {
                 let mut id = None;
                 let mut manifest = None;
+                let mut manifest_sha256 = None;
+                let mut cas_sha256 = None;
+                let mut base_model_id = None;
+                let mut adapter_sha256 = None;
                 for part in parts {
                     let (key, value) = part
                         .split_once('=')
@@ -1002,29 +1561,92 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
                     match key {
                         "id" => id = Some(value),
                         "manifest" => manifest = Some(value),
+                        "manifest_sha256" => manifest_sha256 = Some(value),
+                        "cas_sha256" => cas_sha256 = Some(value),
+                        "base" => base_model_id = Some(value),
+                        "adapter_sha256" => adapter_sha256 = Some(value),
                         _ => return Err(anyhow!("unsupported model field: {key}")),
                     }
                 }
                 let id = id.ok_or_else(|| anyhow!("model id missing"))?;
+                ensure!(valid_registry_id(id), "model id is invalid");
                 let manifest_toml = decode_b64_string("model manifest", manifest)?;
+                let manifest_sha256 =
+                    manifest_sha256.ok_or_else(|| anyhow!("model manifest_sha256 missing"))?;
+                ensure!(
+                    valid_sha256(manifest_sha256)
+                        && sha256_hex(manifest_toml.as_bytes()) == manifest_sha256,
+                    "model manifest digest mismatch"
+                );
+                let cas_sha256 = cas_sha256.ok_or_else(|| anyhow!("model cas_sha256 missing"))?;
+                ensure!(valid_sha256(cas_sha256), "model CAS digest is invalid");
+                let base_model_id = decode_optional_wire_value(
+                    "base model id",
+                    base_model_id.ok_or_else(|| anyhow!("model base missing"))?,
+                    valid_registry_id,
+                )?;
+                let adapter_sha256 = decode_optional_wire_value(
+                    "adapter digest",
+                    adapter_sha256.ok_or_else(|| anyhow!("model adapter digest missing"))?,
+                    valid_sha256,
+                )?;
+                ensure!(
+                    adapter_sha256.is_none() || base_model_id.is_some(),
+                    "adapter model is missing base identity"
+                );
                 models.push(ModelManifest {
                     model_id: id.to_owned(),
                     manifest_toml,
+                    manifest_sha256: manifest_sha256.to_owned(),
+                    cas_sha256: cas_sha256.to_owned(),
+                    base_model_id,
+                    adapter_sha256,
                 });
             }
             "active" => {
                 let mut id = None;
+                let mut generation = None;
+                let mut receipt = None;
+                let mut manifest_sha256 = None;
                 for part in parts {
                     let (key, value) = part
                         .split_once('=')
                         .ok_or_else(|| anyhow!("active field missing '=': {part}"))?;
                     match key {
                         "id" => id = Some(value),
+                        "generation" => {
+                            generation = Some(value.parse::<u64>().map_err(|_| {
+                                anyhow!("active generation is not an unsigned integer")
+                            })?)
+                        }
+                        "receipt" => receipt = Some(value),
+                        "manifest_sha256" => manifest_sha256 = Some(value),
                         _ => return Err(anyhow!("unsupported active field: {key}")),
                     }
                 }
                 let id = id.ok_or_else(|| anyhow!("active id missing"))?;
-                active = Some(id.to_owned());
+                let generation = generation.ok_or_else(|| anyhow!("active generation missing"))?;
+                let receipt = receipt.ok_or_else(|| anyhow!("active receipt missing"))?;
+                let manifest_sha256 =
+                    manifest_sha256.ok_or_else(|| anyhow!("active manifest_sha256 missing"))?;
+                if id == EMPTY_VALUE {
+                    ensure!(
+                        generation == 0 && receipt == EMPTY_VALUE && manifest_sha256 == EMPTY_VALUE,
+                        "empty active model must not carry activation evidence"
+                    );
+                    active = Some(String::new());
+                } else {
+                    ensure!(valid_registry_id(id), "active model id is invalid");
+                    ensure!(generation > 0, "active generation must be positive");
+                    ensure!(valid_sha256(receipt), "active receipt is invalid");
+                    ensure!(
+                        valid_sha256(manifest_sha256),
+                        "active manifest digest is invalid"
+                    );
+                    active = Some(id.to_owned());
+                }
+                active_contract =
+                    Some((generation, receipt.to_owned(), manifest_sha256.to_owned()));
             }
             "telemetry" => {
                 let mut schema = None;
@@ -1051,17 +1673,65 @@ pub fn parse_wire_snapshot(bytes: &[u8]) -> Result<GpuNamespaceSnapshot> {
     if !ended {
         return Err(anyhow!("wire payload missing end marker"));
     }
+    let identity = identity.ok_or_else(|| anyhow!("wire payload missing snapshot identity"))?;
+    ensure!(
+        identity.available == !models.is_empty(),
+        "snapshot availability disagrees with catalog"
+    );
+    ensure!(
+        catalog_sha256(&GpuModelCatalog {
+            available: models.clone(),
+            active: String::new(),
+            activation_generation: 0,
+            activation_receipt: String::new(),
+        }) == identity.catalog_sha256,
+        "snapshot catalog digest mismatch"
+    );
+    for model in &models {
+        if let Some(base) = model.base_model_id.as_deref() {
+            ensure!(
+                models.iter().any(|candidate| candidate.model_id == base),
+                "model references unavailable base model"
+            );
+        }
+    }
     let active = active.ok_or_else(|| anyhow!("wire payload missing active model id"))?;
-    if !models.is_empty() && !models.iter().any(|entry| entry.model_id == active) {
+    let (activation_generation, activation_receipt_value, active_manifest_sha256) =
+        active_contract.ok_or_else(|| anyhow!("wire payload missing active contract"))?;
+    if !active.is_empty() && !models.iter().any(|entry| entry.model_id == active) {
         return Err(anyhow!("active model id not found in available catalog"));
+    }
+    if !active.is_empty() {
+        let manifest = models
+            .iter()
+            .find(|entry| entry.model_id == active)
+            .ok_or_else(|| anyhow!("active model id not found"))?;
+        ensure!(
+            manifest.manifest_sha256 == active_manifest_sha256,
+            "active model manifest identity mismatch"
+        );
+        ensure!(
+            activation_receipt(
+                &identity.source_id,
+                identity.epoch,
+                activation_generation,
+                &active,
+                &manifest.manifest_sha256,
+                &identity.catalog_sha256,
+            ) == activation_receipt_value,
+            "active model receipt mismatch"
+        );
     }
     let telemetry_schema =
         telemetry_schema.ok_or_else(|| anyhow!("wire payload missing telemetry schema"))?;
     Ok(GpuNamespaceSnapshot {
+        identity,
         nodes,
         models: GpuModelCatalog {
             available: models,
             active,
+            activation_generation,
+            activation_receipt: activation_receipt_value,
         },
         telemetry_schema,
     })
@@ -1073,6 +1743,34 @@ fn decode_b64_string(label: &str, value: Option<&str>) -> Result<String> {
         .decode(value.as_bytes())
         .map_err(|_| anyhow!("{label} is not valid base64"))?;
     String::from_utf8(bytes).map_err(|_| anyhow!("{label} is not UTF-8"))
+}
+
+fn parse_positive_u64(label: &str, value: &str) -> Result<u64> {
+    let parsed = value
+        .parse::<u64>()
+        .map_err(|_| anyhow!("{label} is not an unsigned integer"))?;
+    ensure!(parsed > 0, "{label} must be positive");
+    Ok(parsed)
+}
+
+fn decode_optional_wire_value(
+    label: &str,
+    value: &str,
+    validate: impl FnOnce(&str) -> bool,
+) -> Result<Option<String>> {
+    if value == EMPTY_VALUE {
+        return Ok(None);
+    }
+    ensure!(validate(value), "{label} is invalid");
+    Ok(Some(value.to_owned()))
+}
+
+fn valid_source_id(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= MAX_REGISTRY_ID_BYTES
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
 }
 
 #[derive(Debug, Deserialize)]
@@ -1151,6 +1849,51 @@ pub fn auto_bridge_with_registry(mock: bool, registry_root: Option<&Path>) -> Re
 mod tests {
     use super::*;
 
+    const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SHA_B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    const SHA_C: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+
+    fn registry_manifest(model_id: &str) -> String {
+        format!(
+            "[model]\nid = \"{model_id}\"\ncas_sha256 = \"{}\"\nformat = \"gguf\"\n",
+            sha256_hex(format!("cas:{model_id}").as_bytes())
+        )
+    }
+
+    fn peft_registry_manifest(adapter_sha256: &str) -> String {
+        format!(
+            r#"[model]
+id = "model-lora"
+cas_sha256 = "{SHA_A}"
+base = "model-base"
+adapter_sha256 = "{SHA_A}"
+format = "safetensors+lora"
+adapter = "adapter.safetensors"
+lora = "lora.json"
+
+[provenance]
+job_id = "job-1"
+approval = "pending"
+
+[hashes]
+adapter_sha256 = "{adapter_sha256}"
+adapter_bytes = 12
+lora_sha256 = "{SHA_B}"
+lora_bytes = 10
+policy_sha256 = "{SHA_C}"
+policy_bytes = 24
+telemetry_sha256 = "{SHA_B}"
+telemetry_bytes = 13
+"#
+        )
+    }
+
+    fn write_registry_manifest(root: &Path, model_id: &str, manifest: String) {
+        let model_dir = root.join("available").join(model_id);
+        std::fs::create_dir_all(&model_dir).expect("create model directory");
+        std::fs::write(model_dir.join("manifest.toml"), manifest).expect("write model manifest");
+    }
+
     #[test]
     fn mock_inventory_produces_namespace() {
         let bridge = GpuBridge::mock();
@@ -1170,6 +1913,79 @@ mod tests {
     }
 
     #[test]
+    fn live_mode_without_registry_publishes_empty_model_state() {
+        let bridge = GpuBridge::from_candidates(vec![InventoryCandidate::new(
+            InventoryBackend::Mock,
+            Box::new(MockInventory),
+        )]);
+        let snapshot = bridge.serialise_namespace().expect("live snapshot");
+        assert!(snapshot.models.available.is_empty());
+        assert!(snapshot.models.active.is_empty());
+    }
+
+    #[test]
+    fn registry_never_selects_first_model_implicitly() {
+        let temp = tempfile::tempdir().expect("registry tempdir");
+        let model_dir = temp.path().join("available/model-a");
+        std::fs::create_dir_all(&model_dir).expect("create model directory");
+        std::fs::write(
+            model_dir.join("manifest.toml"),
+            registry_manifest("model-a"),
+        )
+        .expect("write model manifest");
+        let catalog = load_registry_catalog(temp.path())
+            .expect("load registry")
+            .expect("catalog");
+        assert_eq!(catalog.available.len(), 1);
+        assert!(catalog.active.is_empty());
+    }
+
+    #[test]
+    fn stale_registry_active_model_is_rejected() {
+        let temp = tempfile::tempdir().expect("registry tempdir");
+        let model_dir = temp.path().join("available/model-a");
+        std::fs::create_dir_all(&model_dir).expect("create model directory");
+        std::fs::write(
+            model_dir.join("manifest.toml"),
+            registry_manifest("model-a"),
+        )
+        .expect("write model manifest");
+        std::fs::write(temp.path().join("active"), "missing-model\n")
+            .expect("write active pointer");
+        let err = load_registry_catalog(temp.path()).expect_err("stale active must fail");
+        assert!(err.to_string().contains("not present"));
+    }
+
+    #[test]
+    fn registry_accepts_strict_coh_peft_manifest() {
+        let temp = tempfile::tempdir().expect("registry tempdir");
+        write_registry_manifest(temp.path(), "model-base", registry_manifest("model-base"));
+        write_registry_manifest(temp.path(), "model-lora", peft_registry_manifest(SHA_A));
+
+        let catalog = load_registry_catalog(temp.path())
+            .expect("load registry")
+            .expect("catalog");
+        let model = catalog
+            .available
+            .iter()
+            .find(|model| model.model_id == "model-lora")
+            .expect("PEFT model");
+        assert_eq!(model.cas_sha256, SHA_A);
+        assert_eq!(model.adapter_sha256.as_deref(), Some(SHA_A));
+        assert_eq!(model.base_model_id.as_deref(), Some("model-base"));
+    }
+
+    #[test]
+    fn registry_rejects_peft_adapter_identity_mismatch() {
+        let temp = tempfile::tempdir().expect("registry tempdir");
+        write_registry_manifest(temp.path(), "model-base", registry_manifest("model-base"));
+        write_registry_manifest(temp.path(), "model-lora", peft_registry_manifest(SHA_C));
+
+        let error = load_registry_catalog(temp.path()).expect_err("mismatch must fail");
+        assert!(error.to_string().contains("CAS digest"));
+    }
+
+    #[test]
     fn status_entry_serialises_fields() {
         let entry = status_entry("job\"1", "running", "line\nfeed");
         assert_eq!(
@@ -1186,31 +2002,37 @@ mod tests {
 
     #[test]
     fn namespace_serialises_to_pretty_json() {
-        let snapshot = GpuNamespaceSnapshot {
-            nodes: vec![SerialisedGpuNode {
-                id: "GPU-0".into(),
-                info_payload: "{\"id\":\"GPU-0\"}".into(),
-                ctl_payload: "LEASE GPU-0".into(),
-                lease_payload: "".into(),
-                status_payload: "ready".into(),
-            }],
-            models: GpuModelCatalog {
-                available: vec![ModelManifest {
-                    model_id: "foo".into(),
-                    manifest_toml: "base = \"foo\"".into(),
-                }],
-                active: "foo".into(),
-            },
-            telemetry_schema: TelemetrySchema::lora_v1(),
-        };
+        let snapshot = GpuBridge::mock()
+            .serialise_namespace()
+            .expect("fixture snapshot");
         let json = namespace_to_json_pretty(&snapshot);
         assert!(
             json.contains("\"telemetry_schema\""),
             "telemetry schema missing: {json}"
         );
-        assert!(json.contains("\"active\": \"foo\""));
-        assert!(json.contains("\"ctl_payload\": \"LEASE GPU-0\""));
+        assert!(json.contains("\"active\": \"vision-lora-edge\""));
+        assert!(json.contains("\"ctl_payload\": \"LEASE GPU-0\\n\""));
         assert!(json.contains("\"lease_payload\": \"\""));
+    }
+
+    #[test]
+    fn snapshot_wire_round_trip_preserves_identity_and_receipt() {
+        let snapshot = GpuBridge::mock()
+            .serialise_namespace()
+            .expect("fixture snapshot");
+        let decoded = parse_wire_snapshot(&namespace_to_wire(&snapshot)).expect("valid wire");
+        assert_eq!(decoded, snapshot);
+        assert!(valid_sha256(&decoded.models.activation_receipt));
+    }
+
+    #[test]
+    fn snapshot_rejects_catalog_identity_tamper() {
+        let snapshot = GpuBridge::mock()
+            .serialise_namespace()
+            .expect("fixture snapshot");
+        let mut wire = String::from_utf8(namespace_to_wire(&snapshot)).expect("wire text");
+        wire = wire.replacen("catalog_sha256=", "catalog_sha256=0", 1);
+        assert!(parse_wire_snapshot(wire.as_bytes()).is_err());
     }
 
     #[test]

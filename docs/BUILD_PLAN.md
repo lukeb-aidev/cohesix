@@ -139,7 +139,7 @@ manual availability, profile selection, implementation, and target proof.
 | [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
-| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
+| [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | In Progress — QEMU-first |
 | [27](#27) | Bounded VM-Local Persistence: Spool Stores + Settings | Pending |
 | [27a](#27a) | Formal Verification Baseline + Proof-Carrying Manifests | Pending |
 | [27b](#27b) | Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) | Pending |
@@ -1623,7 +1623,7 @@ Provide CAS-backed update distribution via NineDoor with compiler-enforced integ
 - CLI regression `scripts/cohsh/cas_roundtrip.coh` verifying download resume, signature enforcement, and delta replay.
 - Models as CAS (registry semantics via files, no new service): expose `/models/<sha256>/{weights,schema,signature}` backed by the same CAS provider; include doc example binding a model into a worker namespace via mount/bind.
 - CLI regression `scripts/cohsh/model_cas_bind.coh` uploads a dummy model bundle, verifies hash, and binds it into a worker namespace.
-- Manifest IR v1.4 fields: `cas.enable`, `cas.store.chunk_bytes`, `cas.delta.enable`, `cas.signing.key_path`. Validation ensures chunk size ≤ negotiated `msize` and signing keys present when required.
+- Manifest CAS fields are `cas.enable`, `cas.store.chunk_bytes`, `cas.delta.enable`, and `cas.signing.verification_key_path`. Validation ensures chunk size ≤ negotiated `msize` and a valid public Ed25519 verification key is present when signatures are required; target code never embeds the private signing key.
 - Docs: `docs/INTERFACES.md` describes CAS grammar, delta rules, and operational runbooks sourced from compiler output; `docs/SECURITY.md` records threat model.
 
 **Status:** Complete — CAS provider, cas-tool, model bindings, compiler v1.4 CAS fields, doc snippets, and regression coverage are aligned and green.
@@ -8599,11 +8599,11 @@ Deliverables:
 ```
 Title/ID: m26d-benchmark-revalidation-and-tuning
 Goal: Revalidate and, where needed, recover the accepted 26b REST/driver-runtime benchmark envelope on the seL4 16 baseline.
-Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, tools/host-bootpd/start-en8-bootpd.zsh, tests/test_host_bootpd_supervisor.py, apps/root-task/src/{event/mod.rs,drivers/driver_task_net.rs,hal/driver_task.rs}, apps/pi4-driver-runtime/src/lib.rs, docs/{BENCHMARKS.md,DRIVERS.md,HARDWARE_BRINGUP.md,TEST_PLAN.md}, out/bench/m26b-* artifacts, refreshed seL4 16 QEMU/Pi build artifacts, fresh Pi serial/pcap proof for the selected transport.
+Inputs: scripts/rest_perf_harness.py, tests/test_rest_perf_harness.py, tests/test_pi4_compare_driver_models.py, tools/host-bootpd/{start-en8-bootpd.zsh,install-root-bootpd.zsh,com.lukasbower.cohesix.en8-bootpd.plist,README.md}, tests/test_host_bootpd_supervisor.py, apps/root-task/src/{event/mod.rs,drivers/driver_task_net.rs,hal/driver_task.rs}, apps/pi4-driver-runtime/src/lib.rs, docs/{BENCHMARKS.md,DRIVERS.md,HARDWARE_BRINGUP.md,TEST_PLAN.md}, out/bench/m26b-* artifacts, refreshed seL4 16 QEMU/Pi build artifacts, fresh Pi serial/pcap proof for the selected transport.
 Changes:
   - docs/BENCHMARKS.md — record refreshed artifact indexes, before/after verdicts, and any explicitly classified non-blocking debt.
   - scripts/rest_perf_harness.py + tests/test_rest_perf_harness.py — provenance/reporting or strictness fixes only when needed to compare the seL4 16 run against the accepted 26b workload without changing the workload contract.
-  - tools/host-bootpd/start-en8-bootpd.zsh + tests/test_host_bootpd_supervisor.py — keep the wired/GENET direct-link DHCP control deterministic when disposable `out/` evidence is cleaned while the host supervisor remains alive.
+  - tools/host-bootpd/{start-en8-bootpd.zsh,install-root-bootpd.zsh,com.lukasbower.cohesix.en8-bootpd.plist,README.md} + tests/test_host_bootpd_supervisor.py — keep the wired/GENET direct-link DHCP control deterministic when disposable runtime evidence is cleaned while the host supervisor remains alive; bind root LaunchDaemon state to `/Users/lukasbower/cohesix/host-bootpd`, migrate a sole legacy `out/host-bootpd` tree, and reject ambiguous dual runtime trees without writing new runtime state inside the repository.
   - apps/root-task/src/**, apps/pi4-driver-runtime/src/**, crates/pi4-driver-abi/src/**, or apps/hive-gateway/src/** — bounded tuning only where same-harness evidence points to a moved layer caused or exposed by the seL4 16 refresh. For CYW43, preserve one HAL/runtime issuer and the three exact authorities required by accepted Milestone 26b task `m26b-wifi-sdio-notification-dpc-closure`: persistent op11, the separate finite urgent-op7 lease, and the post-release event-sequence DPC lease. Ordinary non-op11 foreground commands alone retain recurrent exact grants. SDIO owns and joins IRQ158 and DMA4 IRQ116 into one immutable request terminal. Root admits at most one CYW43 parent per outer turn; an exact op11 commits and signals once, and its stable `Waiting` state masks only runtime-descriptor, logical-owner, and HAL-lease self-demand. Persistent op11, urgent op7, and DPC event service route from current durable conditions rather than snapshot novelty: deterministic private phases continue even on equal snapshots, while exact child, runtime-owned credit, queue, and peer waits block immediately even when newly observed. SDIO alone takes one live joined-controller sample after a changed steady cursor before blocking. Every helper remains bounded and each immutable hardware request issues at most once. Preserve commit-before-signal, condition-before-sleep, the post-f4 immutable descriptor requirement, issued-unknown reaping, and the exact recovery lane. Decouple smoltcp admission from the sole physical owner with one CYW43-only bounded aggregate of 16 TX frames and one committed RX batch parent carrying up to eight frames. Notifications only prompt a durable-state recheck; they carry no work history or authority. A sequence-last SDIO command always reaches matching owner dispatch or a typed zero-I/O missing/competing-seal terminal; it is never discarded as no intake. Ordinary TxTokens reserve 15 aggregate slots, copied RX reserves the final paired slot before dequeue, consumption remains queue-only, and EventPump is the sole production TX coordinator. ARP, EAPOL, DHCP, TCP SYN/FIN/RST, and payload-free TCP control preempt other payload-bearing TCP and bulk while preserving FIFO order within each class. Preserve any exact retained foreign HAL descriptor, including the one RX batch parent, before op7 admission. Once the lane is free, advance one active op7 or promote and advance one eligible FIFO head before copied-RX service so replenished RX cannot starve control TX. Copied RX precedes the coordinator's physical op only while no op7 is legally runnable; otherwise it remains preserved for the following smoltcp poll. When full, promotion removes one eligible head and restores a paired slot before at most one physical advance. A terminal never promotes a successor; that frame remains queued for a later coordinator turn. Neither `Device::receive` nor reservation failure services TX. The runtime is the sole SDPCM flow-control owner: it admits each exact op7 only while `sdpcm_seq` is within the dongle-advertised `tx_max` window and retains the same op7 in `WAIT_CREDIT` otherwise. A joined Function-2 terminal releases the root frame immediately and is never converted into a second root wait for a future RX credit observation. A stable committed terminal wins before lifetime policy; a terminal-absent `Waiting` op7 remains retained only while its exact generation, pair epoch, and physical-lifetime epoch are current, and an invalidated lifetime enters the sole pair-recovery lane without replay. An issued or otherwise ambiguous active op7 deadline remains fail-closed. Purge only never-issued queue entries at generation/reset boundaries, preserve active issued-unknown poisoning, and leave GENET unchanged. RX deadlines contain exact faults only and never create source probes, rescue transactions, or another physical action.
   - docs/DRIVERS.md + docs/HARDWARE_BRINGUP.md + docs/TEST_PLAN.md — record the measured transport-specific baseline, the as-built bounded cadence correction, and a fresh-hardware acceptance target without promoting source or model evidence into Pi performance proof.
 Commands:
@@ -8892,8 +8892,12 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 ## Milestone 26e — Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation <a id="26e"></a>
 [Milestones](#Milestones)
 
-**Status:** Pending — inactive until Milestone 26d closes. This planning entry
-does not authorize implementation during the active CYW43/current-image lane.
+**Status:** In Progress — QEMU-first implementation and qualification are
+active now that Milestone 26d is complete. Pi 4 build, flash, execution, and
+fresh-hardware acceptance remain deferred until every host and four-core QEMU
+task gate below passes. Milestone 26e cannot close, and no Worker-runtime
+release acceptance may be emitted, until the later exact-image Pi 4 evidence
+also passes.
 
 **Why now (userspace TCB reduction):** Milestone 26d establishes honest
 seL4 16 kernel/profile truth and records that NineDoor parsing, TCP/smoltcp,
@@ -9160,10 +9164,10 @@ operator-visible contract explicit.
   Root maps the action code, confirmed/rejected outcome, receipt sequence, exact
   Worker identity, and SHA-256 digests of the idempotency key, operation id,
   lease/device `subject_ref`, and canonical result into the fixed-size
-  `GPU_LEASE_RECEIPT` supervisor record. `succeeded` maps to `confirmed`;
-  `failed` or `expired` maps to `rejected`; nonterminal states produce no Worker
-  completion. WorkerGpu publishes the matching durable completion and bounded
-  `worker-gpu-receipt/v1` record through
+  `GPU_LEASE_RECEIPT` supervisor record. `succeeded` maps to `confirmed`,
+  `failed` maps to `rejected`, and `expired` maps to `stale`; nonterminal states
+  produce no Worker completion. WorkerGpu publishes the matching durable
+  completion and bounded `worker-gpu-receipt/v1` record through
   `/shard/<label>/worker/<id>/telemetry`, but never receives a lease credential
   or GPU cap. Version-2 lease actions never use the current compatibility
   executor's implicit `/queen/ctl` spawn-on-grant or kill-on-release behavior:
@@ -9490,9 +9494,9 @@ Changes:
 Commands:
   - cargo test -p sel4-sys -p sel4-runtime
   - cargo test -p coh-rtc
-  - cargo test -p root-task --tests schedule
-  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --require-source --require-artifacts --for-runtime
-  - python3 scripts/sel4_profile.py validate --profile pi4_production --require-source --require-artifacts --for-runtime
+  - cargo test -p root-task --test schedule
+  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir out/sel4/profile-v2/qemu-smp-production --require-source --require-artifacts --for-runtime
+  - python3 scripts/sel4_profile.py validate --profile pi4_production --build-dir out/sel4/profile-v2/pi4-production --require-source --require-artifacts --for-runtime
   - scripts/check-generated.sh
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-foundation-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-foundation-pi4
@@ -9669,7 +9673,7 @@ Commands:
   - cargo test -p worker-heart -p worker-gpu -p worker-lora
   - cargo check -p worker-heart -p worker-gpu -p worker-lora --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: ring/control saturation, duplicate sequence, forged role/slot/epoch/supervisor-generation/cap-generation, two same-role instances, coalesced notifications, durable-completion publish/signal races, READY timeout, construction failure at every phase, ordinary terminal fault, allowlisted timeout recovery, fault before READY/during IPC, attempted forbidden blocking send, dropped telemetry, late completion/receipt, kill/fault repetition, generation exhaustion, and repeated maximum-slot churn fail or recover deterministically with no orphan namespace state, cap, mapping, pending record/signal, Reply, SC, or executable TCB; PEFT export/import/activate/rollback receipts prove the exact host-ticket-result-to-supervisor-to-WorkerLora mapping without moving host work into the VM.
+Checks: ring/control saturation, duplicate sequence, forged role/slot/epoch/supervisor-generation/cap-generation, two sequential same-role generations with a simultaneous second-live-slot refusal, coalesced notifications, durable-completion publish/signal races, READY timeout, construction failure at every phase, ordinary terminal fault, allowlisted timeout recovery, fault before READY/during IPC, attempted forbidden blocking send, dropped telemetry, late completion/receipt, kill/fault repetition, generation exhaustion, and repeated maximum-slot churn fail or recover deterministically with no orphan namespace state, cap, mapping, pending record/signal, Reply, SC, or executable TCB; PEFT export/import/activate/rollback receipts prove the exact host-ticket-result-to-supervisor-to-WorkerLora mapping without moving host work into the VM.
 Deliverables: Real transactional Heartbeat/GPU/LoRA tasks and complete per-instance 26e containment/reclamation; WorkerBus remains honestly model-only.
 
 Title/ID: m26e-host-integration-dependency-contract
@@ -9739,8 +9743,8 @@ Commands:
   - python3 -m pytest -q tests/test_rest_perf_harness.py tests/test_release_bundle.py tests/test_worker_task_evidence.py tests/test_worker_image_pipeline.py
   - scripts/cohsh/run_regression_batch.sh
   - cargo test -p coh-rtc
-  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --target qemu --required-for worker-runtime --state-dir out/host-integration/m26e-qemu
-  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --target pi4 --required-for worker-runtime --state-dir out/host-integration/m26e-pi4
+  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --mode live --target qemu --target-session out/m26e-qemu/target-session.json --observations out/m26e-qemu/host-integration-observations.json --state-dir out/host-integration/m26e-qemu
+  - scripts/ci/host_integration_run.sh --matrix configs/host_integration_acceptance.toml --mode live --target pi4 --target-session out/m26e-pi4/target-session.json --observations out/m26e-pi4/host-integration-observations.json --state-dir out/host-integration/m26e-pi4
   - scripts/check-generated.sh
 Checks: Heartbeat/GPU/LoRA use the existing spawn, kill, namespace, console, policy, and ticket paths, while WorkerBus target spawn returns an existing-form deterministic model-only error; every host surface agrees on role, public instance id, slot, epoch, supervisor generation, cap generation, lifecycle, receipt, artifact, integration obligation/observed mode, execution proof, and separately derived runtime-release versus production-use-case state; control ACK proves only admission, `implemented = true` only executable declaration, READY only live runtime state, host-model only modelling, and QEMU/fresh-Pi proof only matching evidence; absent REST bounds mean unknown and gateway connection/QEMU launch never imply proof; generic ids are never inferred to be Heartbeat; GPU lease ACTIVE, bridge publication, ticket success, PEFT completion, FUSE mount, provider `ready`, package presence, or mocks cannot independently promote READY or target proof; connected GPU grant/renew/release and PEFT export/import/activate/rollback fixtures obtain the exact bounded WorkerGpu/WorkerLora confirmed/rejected/stale receipts without moving host hardware/registry/training/inference authority; mandatory live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` target-session rows pass, while every advertised FUSE/systemd/Docker/Kubernetes/federation/SIEM/CAS/sidecar/release/provider surface records its exact current mode and later blocker rather than being promoted by compatibility; canonical `/shard` invalidation, sharding, version-1/version-2 accepted-schema matrices, local-only v2 rejection, root-pinned admitted projections, crash-safe v2 journal recovery, replay retention on existing host-ticket status/deadletter paths, validated gateway evidence-file import, SwarmUI proof sourcing, and ACK/ERR/END fixtures pass; absent, wrong-kind, stale, forged, duplicate, late, oversized, wrong-role, wrong-generation, wrong-host-profile, wrong-provider-mode, wrong-target, wrong-ABI, hash-mismatched, mode-substituted, and secret-bearing records fail deterministically; release artifacts expose no ticket, host secret, raw badge, CPtr, or capability value; no CYW43 behavioral contract or evidence classification changes.
 Deliverables: One generated protocol-faithful host Worker state/dependency contract; target-session per-row Worker-integration evidence; LoRA support across all four Cohesix PEFT receipt actions and Rust/Python/REST/UI compatibility projections; exact GPU/PEFT result-to-Worker correlation; canonical FUSE `/shard` compatibility; crash-safe local v2 execution; honest current modes for every shipped/future host surface; hash-bound Worker-runtime release inputs; and host tools ready for the separate exact QEMU/fresh-Pi promotion gate without claiming production provider/use-case completion.
@@ -9773,7 +9777,7 @@ Goal: Emit separate QEMU-accepted and Pi-accepted component records for the thre
 Inputs: all preceding 26e target-runtime Worker tasks through `m26e-host-worker-integration`, matching live `worker-control`, `gpu-receipt-path`, and `peft-receipt-path` Worker-integration records for each target, selected QEMU/Pi SMP+MCS builds and manifests, positive exact-image CYW43 closure plus the matching 26e MCS-driver coexistence record, scripts/ci/test_plan_run.sh, scripts/pi4_gate_proof.sh, exact image identities, docs/TEST_PLAN.md, canonical Worker/security/interface docs. The adjacent `m26e-python-library-as-built-compatibility` task must finish any Python-only codegen/package corrections before the shared artifact freeze, but its PASS/FAIL record is not target-component evidence and cannot substitute for or alter this gate.
 Changes:
   - scripts/worker_task_evidence.py + tests/test_worker_task_evidence.py + docs/TEST_PLAN.md — create the emitter/validator and tamper/mode/hash/target tests for `cohesix-worker-task-evidence/v1` with `record_kind=target-component`, exactly one proof target/class, a sorted bounded list of the three exact live role-required Worker-integration records, source/resolved-manifest/kernel/root/MCS-driver-archive/MCS-driver-manifest/CYW43-coexistence-record/Worker-archive/Worker-image-manifest/Worker-image hashes, role/slot/epoch/supervisor-generation/cap-generation/badge/core/SC/object inventories, bounded event outcomes, raw-artifact hashes, PASS/FAIL, and blockers.
-  - QEMU target gate — prove all three mandatory roles through the direct target authority/observation path, including Heartbeat progress, fixture-backed but live root-to-Worker GPU grant/renew/release confirmed/rejected/stale receipts, and LoRA export/import/activate/rollback confirmed/rejected/stale receipts; also prove two same-role instances, maximum-slot refusal, bounded control/receipt paths, combined notifications, durable-completion publish/signal ordering, budget exhaustion/timeout attribution, fault before READY/during IPC, forbidden-blocking-send refusal, stale-record revocation, no post-revoke activity/leak, and fresh generation under four-core SMP+MCS. Rust/Python/REST/UI/FUSE compatibility records are separate projections and cannot raise or block this runtime claim unless an explicit release profile independently requires them.
+  - QEMU target gate — prove all three mandatory roles through the direct target authority/observation path, including Heartbeat progress, fixture-backed but live root-to-Worker GPU grant/renew/release confirmed/rejected/stale receipts, and LoRA export/import/activate/rollback confirmed/rejected/stale receipts; also prove two sequential same-role generations, simultaneous second-live-slot and maximum-slot refusal, bounded control/receipt paths, combined notifications, durable-completion publish/signal ordering, budget exhaustion/timeout attribution, fault before READY/during IPC, forbidden-blocking-send refusal, stale-record revocation, no post-revoke activity/leak, and fresh generation under four-core SMP+MCS. Rust/Python/REST/UI/FUSE compatibility records are separate projections and cannot raise or block this runtime claim unless an explicit release profile independently requires them.
   - fresh Pi target gate — prove the identical direct runtime and receipt-path matrix on the exact flashed/booted image while preserving serial, local-seat, TCP, fatal, driver, and Queen liveness; require positive exact-image CYW43 closure plus the matching MCS coexistence record by immutable artifact/hash without merging proof classes. An accepted CYW43 blocker cannot produce Pi component PASS, and no host integration record can substitute for Pi execution.
   - generated/docs gate — publish only separate QEMU/Pi component acceptance records and update as-built role wording only when the selected exact hashes pass; missing target evidence cannot degrade to host/model PASS, and this task cannot emit `release-accepted`.
 Commands:
@@ -9819,11 +9823,11 @@ Changes:
 Commands:
   - cargo test -p sel4-sys -p sel4-runtime
   - cargo test -p coh-rtc
-  - cargo test -p root-task --tests schedule
+  - cargo test -p root-task --test schedule
   - cargo test -p pi4-driver-abi -p pi4-driver-runtime
   - scripts/check-generated.sh
-  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --require-source --require-artifacts --for-release --for-runtime
-  - python3 scripts/sel4_profile.py validate --profile pi4_production --require-source --require-artifacts --for-release --for-runtime
+  - python3 scripts/sel4_profile.py validate --profile qemu_smp_production --build-dir out/sel4/profile-v2/qemu-smp-production --require-source --require-artifacts --for-release --for-runtime
+  - python3 scripts/sel4_profile.py validate --profile pi4_production --build-dir out/sel4/profile-v2/pi4-production --require-source --require-artifacts --for-release --for-runtime
   - scripts/ci/test_plan_run.sh --target qemu --state-dir out/test-plan/m26e-mcs-smp-qemu
   - scripts/ci/test_plan_run.sh --target pi4 --state-dir out/test-plan/m26e-mcs-smp-pi4
   - python3 scripts/rest_perf_harness.py --mode perf --suite all --runs 5 --log-dir out/bench --log-prefix m26e-mcs-smp-qemu

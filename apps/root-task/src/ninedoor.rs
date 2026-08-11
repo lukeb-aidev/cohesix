@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+#[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
 use crate::affinity;
 use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
@@ -15,13 +16,27 @@ use crate::event::AuditSink;
 use crate::generated;
 use crate::lifecycle;
 use crate::log_buffer;
+use crate::ninedoor_service::NamespaceServiceBoundary;
 use crate::observe::IngestSnapshot;
 use crate::serial::DEFAULT_LINE_CAPACITY;
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+use crate::{
+    hal::{
+        ninedoor_service::NineDoorServiceRuntime,
+        worker_task::{
+            enqueue_target_worker_kill, enqueue_target_worker_operation,
+            enqueue_target_worker_spawn, target_worker_namespace_snapshots,
+            TargetWorkerNamespaceSnapshot,
+        },
+        HalError, KernelHal,
+    },
+    ninedoor_service::NineDoorContainmentProof,
+};
 use alloc::{
     borrow::ToOwned,
     collections::{BTreeMap, VecDeque},
     format,
-    string::String,
+    string::{String, ToString},
     vec::Vec,
 };
 use base64::{engine::general_purpose::STANDARD as BASE64_STANDARD, Engine as _};
@@ -29,12 +44,21 @@ use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
 use cohesix_ticket::TicketToken;
 use core::fmt::{self, Write};
 use core::str;
-use ed25519_dalek::{Signature, SigningKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use secure9p_codec::ErrorCode;
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+use secure9p_transport::TransportState;
+use secure9p_transport::{NamespaceOpcode, TransportError};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map as JsonMap, Value as JsonValue};
 use sha2::{Digest, Sha256};
 use sidecar_bus::{LinkState, OfflineSpool, SpoolConfig, SpoolError, SpoolFrame};
 use signature::Verifier;
+use worker_task_abi::{
+    Digest32, ReceiptDigests, WorkerAction, WorkerControlRecord, WorkerIdentity, WorkerOutcome,
+    WorkerRole,
+};
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
@@ -124,10 +148,15 @@ const MAX_LEASE_RESOURCE_LEN: usize = 48;
 const MAX_LEASE_REASON_LEN: usize = 24;
 const MAX_POLICY_REV_ID_LEN: usize = 64;
 const MAX_EXPORT_ID_LEN: usize = 64;
-const SYSTEMD_UNITS: [&str; 2] = ["cohesix-agent.service", "ssh.service"];
-const K8S_NODES: [&str; 1] = ["node-1"];
-const NVIDIA_GPUS: [&str; 1] = ["0"];
 const HOST_TICKET_ID_MAX_BYTES: usize = 128;
+const HOST_TICKET_WORKER_ID_MAX_BYTES: usize = 32;
+const HOST_TICKET_REASON_MAX_BYTES: usize = 128;
+const HOST_TICKET_V2_REQUEST_SCHEMA: &str = "host-ticket/v2";
+const HOST_TICKET_V2_RESULT_SCHEMA: &str = "host-ticket-result/v2";
+const HOST_TICKET_MAX_ADMISSIONS: usize = 256;
+const HOST_TICKET_LOG_MAX_BYTES: usize = MAX_STREAM_LINES * DEFAULT_LINE_CAPACITY;
+const CAT_CHUNK_PREFIX: &str = "C1:";
+const CAT_CHUNK_TEXT_BYTES: usize = 176;
 const GPU_LEASE_SCHEMA: &str = "gpu-lease/v1";
 const GPU_LEASE_ACTIVE_STATE: &str = "ACTIVE";
 const LEASE_STATE_ACTIVE: &str = "ACTIVE";
@@ -137,11 +166,18 @@ const GPU_STATUS_MAX_BYTES: u32 = UI_MAX_STREAM_BYTES as u32;
 const GPU_BRIDGE_CTL_MAX_BYTES: u32 = 128 * 1024;
 const GPU_BRIDGE_STATUS_MAX_BYTES: usize = 512;
 const GPU_BRIDGE_MAX_BYTES: usize = 128 * 1024;
-const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v1";
+const GPU_BRIDGE_WIRE_SCHEMA: &str = "gpu-bridge-snapshot/v2";
+const GPU_BRIDGE_MAX_TTL_MS: u64 = 60_000;
+const GPU_BRIDGE_EMPTY_VALUE: &str = "-";
 const GPU_MODELS_ACTIVE_MAX_BYTES: u32 = 4096;
 const GPU_MODEL_MANIFEST_MAX_BYTES: usize = 8 * 1024;
 const GPU_MODEL_ID_MAX_BYTES: usize = 128;
 const GPU_TELEMETRY_SCHEMA_MAX_BYTES: usize = 4096;
+const QEMU_LORA_EXPORT_JOB_ID: &str = "qemu-evidence-job";
+const QEMU_LORA_EXPORT_TELEMETRY: &[u8] = b"aa";
+const QEMU_LORA_EXPORT_BASE_MODEL: &[u8] = b"fixture-base-model";
+const QEMU_LORA_EXPORT_POLICY: &[u8] =
+    b"source = \"fixture\"\nprofile = \"qemu\"\nproduction = false\n";
 const OBSERVE_P50_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p50_ms_bytes as usize;
 const OBSERVE_P95_BYTES: usize = generated::OBSERVABILITY_CONFIG.proc_ingest.p95_ms_bytes as usize;
 const OBSERVE_BACKPRESSURE_BYTES: usize = generated::OBSERVABILITY_CONFIG
@@ -207,9 +243,12 @@ const SELFTEST_SMP_SCRIPT: &str = include_str!(concat!(
     "/../../resources/proc_tests/selftest_smp.coh"
 ));
 
-/// Minimal NineDoor bridge used by the seL4 build until the full Secure9P server is ported.
+/// Root-owned NineDoor policy and mutation bridge behind the typed parser boundary.
 #[derive(Debug)]
 pub struct NineDoorBridge {
+    namespace_service: NamespaceServiceBoundary,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_service: Option<NineDoorServiceRuntime>,
     attached: bool,
     session_role: Option<SessionRoleLabel>,
     session_ticket: Option<String>,
@@ -555,10 +594,64 @@ impl fmt::Display for NineDoorBridgeError {
     }
 }
 
+fn namespace_transport_error(error: TransportError) -> NineDoorBridgeError {
+    match error {
+        TransportError::InvalidPath => NineDoorBridgeError::InvalidPath,
+        TransportError::InvalidPayload
+        | TransportError::InvalidOperation
+        | TransportError::InvalidAbi
+        | TransportError::InvalidLimits
+        | TransportError::InvalidFrameLength
+        | TransportError::FrameTooLarge
+        | TransportError::PartialFrame
+        | TransportError::BufferTooSmall => NineDoorBridgeError::InvalidPayload,
+        TransportError::QueueFull
+        | TransportError::Closed
+        | TransportError::Revoked
+        | TransportError::UnknownRequest
+        | TransportError::StaleIdentity
+        | TransportError::ShortWriteExhausted => NineDoorBridgeError::Busy,
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+fn worker_target_error(
+    error: crate::worker_supervisor::WorkerSupervisorError,
+) -> NineDoorBridgeError {
+    use crate::worker_supervisor::WorkerSupervisorError;
+
+    match error {
+        WorkerSupervisorError::SlotBusy | WorkerSupervisorError::ControlBusy => {
+            NineDoorBridgeError::Busy
+        }
+        WorkerSupervisorError::RoleNotExecutable | WorkerSupervisorError::NotEnabled => {
+            NineDoorBridgeError::Permission
+        }
+        WorkerSupervisorError::InvalidRecord
+        | WorkerSupervisorError::InvalidGeneration
+        | WorkerSupervisorError::InvalidState
+        | WorkerSupervisorError::InvalidImage => NineDoorBridgeError::InvalidPayload,
+        WorkerSupervisorError::Backend | WorkerSupervisorError::ContainmentIncomplete => {
+            NineDoorBridgeError::Busy
+        }
+        WorkerSupervisorError::NoControlPending => NineDoorBridgeError::InvalidPayload,
+    }
+}
+
 impl NineDoorBridge {
-    /// Construct a new bridge instance.
+    /// Construct a bridge with the host compatibility boundary. A selected
+    /// target remains fail-closed until its supervisor uses
+    /// [`Self::with_namespace_service`] with a validated isolated-child
+    /// boundary.
     #[must_use]
     pub fn new() -> Self {
+        Self::with_namespace_service(NamespaceServiceBoundary::initial())
+    }
+
+    /// Construct a bridge around one already admitted namespace-service
+    /// generation. Policy and mutation state remain wholly root-owned.
+    #[must_use]
+    pub fn with_namespace_service(namespace_service: NamespaceServiceBoundary) -> Self {
         #[cfg(feature = "kernel")]
         {
             boot_log::notify_bridge_created();
@@ -568,6 +661,9 @@ impl NineDoorBridge {
         let host = HostState::new();
         let gpu = GpuState::new(host.enabled && host.has_provider(generated::HostProvider::Nvidia));
         Self {
+            namespace_service,
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            target_service: None,
             attached: false,
             session_role: None,
             session_ticket: None,
@@ -590,6 +686,92 @@ impl NineDoorBridge {
             observe: ObserveState::new(),
             cas: CasState::new(generated::cas_config()),
         }
+    }
+
+    /// Construct the operational target bridge around one already constructed
+    /// suspended passive child. Root retains all policy and mutation state.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    #[must_use]
+    pub fn with_target_namespace_service(
+        namespace_service: NamespaceServiceBoundary,
+        target_service: NineDoorServiceRuntime,
+    ) -> Self {
+        let mut bridge = Self::with_namespace_service(namespace_service);
+        bridge.target_service = Some(target_service);
+        bridge
+    }
+
+    /// Resume the passive child after the complete target fault registry and
+    /// independently scheduled root-fault receiver are live.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub fn activate_target_service(&mut self) -> Result<(), HalError> {
+        self.target_service
+            .as_mut()
+            .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))?
+            .activate()
+    }
+
+    /// Consume one durable service-fault record or a local transport revoke,
+    /// then contain the exact old generation without blocking root-control.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub fn contain_target_service_if_faulted(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<Option<NineDoorContainmentProof>, HalError> {
+        let Some(runtime) = self.target_service.as_mut() else {
+            return Ok(None);
+        };
+        let mut faulted = self.namespace_service.state() == TransportState::Revoked;
+        match crate::hal::critical_tcb::take_target_service_fault(
+            crate::ninedoor_service::SERVICE_TASK_ID,
+        ) {
+            Ok(Some(record)) => {
+                if u64::from(record.identity.supervisor_generation) != runtime.generation() {
+                    log::error!(
+                        "[ninedoor-service] fault generation mismatch expected={} observed={}",
+                        runtime.generation(),
+                        record.identity.supervisor_generation,
+                    );
+                } else {
+                    log::error!(
+                        "[ninedoor-service] generation={} terminal-fault class={:?} sequence={}",
+                        runtime.generation(),
+                        record.fault_class,
+                        record.sequence,
+                    );
+                }
+                faulted = true;
+            }
+            Ok(None) => {}
+            Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
+                crate::critical_tcb::FaultHandoffError::Contended,
+            )) => {
+                // Publication is durable. A later bounded root-control turn
+                // retries without creating a second fault or Reply.
+            }
+            Err(error) => {
+                log::error!("[ninedoor-service] invalid fault mailbox: {error:?}");
+                faulted = true;
+            }
+        }
+        if faulted {
+            let proof = runtime.contain(hal, &mut self.namespace_service)?;
+            self.target_service = None;
+            Ok(Some(proof))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn prepare_namespace<'a>(
+        &mut self,
+        opcode: NamespaceOpcode,
+        path: &'a str,
+        payload: &'a str,
+    ) -> Result<crate::ninedoor_service::PreparedNamespaceView<'a>, NineDoorBridgeError> {
+        self.namespace_service
+            .prepare(opcode, path, payload)
+            .map_err(namespace_transport_error)
     }
 
     /// Reset per-session state after a console disconnect.
@@ -628,6 +810,8 @@ impl NineDoorBridge {
         ticket: Option<&str>,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        let prepared = self.prepare_namespace(NamespaceOpcode::Attach, "", role)?;
+        let role = prepared.payload();
         let ticket_repr = ticket.unwrap_or("<none>");
         let mut message = HeaplessString::<128>::new();
         if write!(
@@ -670,6 +854,8 @@ impl NineDoorBridge {
         path: &str,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        let prepared = self.prepare_namespace(NamespaceOpcode::Tail, path, "")?;
+        let path = prepared.path();
         let mut message = HeaplessString::<128>::new();
         if write!(message, "nine-door: tail {path}").is_err() {
             // Truncated audit line is acceptable.
@@ -696,12 +882,280 @@ impl NineDoorBridge {
         Ok(None)
     }
 
+    /// Submit one root-validated GPU/PEFT result to the exact READY target
+    /// Worker generation. This is the narrow result-to-Worker seam used by the
+    /// existing host-ticket namespace; it creates no new transport or verb.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub fn submit_target_worker_operation(
+        &mut self,
+        control: WorkerControlRecord,
+    ) -> Result<TargetWorkerNamespaceSnapshot, NineDoorBridgeError> {
+        if !self.is_queen() {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        self.sync_target_worker_projections()?;
+        let snapshot = enqueue_target_worker_operation(control).map_err(worker_target_error)?;
+        self.sync_target_worker_projections()?;
+        Ok(snapshot)
+    }
+
+    /// Return the current exact target Worker projection for a public id.
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    pub fn target_worker_snapshot(
+        &mut self,
+        public_id: &str,
+    ) -> Result<TargetWorkerNamespaceSnapshot, NineDoorBridgeError> {
+        self.sync_target_worker_projections()?;
+        target_worker_namespace_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.public_id() == Some(public_id))
+            .ok_or(NineDoorBridgeError::InvalidPath)
+    }
+
+    fn handle_host_ticket_append(
+        &mut self,
+        path: &str,
+        payload: &str,
+    ) -> Result<(), NineDoorBridgeError> {
+        let lines = payload
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect::<Vec<_>>();
+        if lines.is_empty() {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        let mut contains_v2 = false;
+        for line in &lines {
+            self.host.validate_ticket_line_bytes(line)?;
+            let schema = parse_json_string_field(line, "schema")
+                .ok_or(NineDoorBridgeError::InvalidPayload)?;
+            let accepted = if path.ends_with("/tickets/spec") {
+                self.host.accepted_request_schema(schema)
+            } else {
+                self.host.accepted_result_schema(schema)
+            };
+            if !accepted {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            contains_v2 |= matches!(
+                schema,
+                HOST_TICKET_V2_REQUEST_SCHEMA | HOST_TICKET_V2_RESULT_SCHEMA
+            );
+        }
+        if contains_v2 {
+            if lines.len() != 1 {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if path.ends_with("/tickets/spec") {
+                let raw = parse_host_ticket_v2_spec(lines[0], &self.host)?;
+                return self.admit_host_ticket_v2(path, raw);
+            }
+            let result = parse_host_ticket_v2_result(lines[0], &self.host)?;
+            return self.apply_host_ticket_v2_result(path, result);
+        }
+
+        self.host.validate_append(path, payload)?;
+        let owned = lines.into_iter().map(ToOwned::to_owned).collect::<Vec<_>>();
+        self.host.can_append_ticket_lines(path, owned.as_slice())?;
+        let snapshot_path = self.host.ticket_snapshot_path(path)?;
+        let mirror_snapshot = !path.ends_with("/tickets/spec");
+        if mirror_snapshot {
+            self.host
+                .can_append_ticket_lines(snapshot_path.as_str(), owned.as_slice())?;
+        }
+        self.host
+            .append_ticket_lines_preflighted(path, owned.as_slice());
+        if mirror_snapshot {
+            self.host
+                .append_ticket_lines_preflighted(snapshot_path.as_str(), owned.as_slice());
+        }
+        Ok(())
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn admit_host_ticket_v2(
+        &mut self,
+        path: &str,
+        raw: HostTicketV2RawSpec,
+    ) -> Result<(), NineDoorBridgeError> {
+        self.sync_target_worker_projections()?;
+        self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        validate_host_ticket_v2_subject(&raw, &self.gpu)?;
+        let canonical_raw = serialize_host_ticket(&raw)?;
+        let raw_digest = sha256_bytes(canonical_raw.as_bytes());
+        let key = (raw.id.clone(), raw.idempotency_key.clone());
+        if let Some(existing) = self.host.admissions.get(&key) {
+            return if existing.raw_digest == raw_digest {
+                Ok(())
+            } else {
+                Err(NineDoorBridgeError::InvalidPayload)
+            };
+        }
+        if self.host.admissions.len() >= HOST_TICKET_MAX_ADMISSIONS {
+            return Err(NineDoorBridgeError::Busy);
+        }
+        let snapshot = target_worker_namespace_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.public_id() == Some(raw.receipt_worker_id.as_str()))
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let identity = snapshot
+            .identity
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let binding = HostTicketV2WorkerBinding {
+            public_id: snapshot
+                .public_id()
+                .ok_or(NineDoorBridgeError::InvalidPayload)?,
+            role: snapshot.role,
+            identity,
+            ready: snapshot.lifecycle == crate::worker_supervisor::WorkerLifecycleState::Ready,
+            ready_sequence: snapshot.ready_sequence,
+            last_control_sequence: snapshot.last_control_sequence,
+        };
+        let minimum_sequence = binding
+            .last_control_sequence
+            .checked_add(1)
+            .ok_or(NineDoorBridgeError::Busy)?;
+        let sequence = self.host.next_admission_sequence.max(minimum_sequence);
+        let next_sequence = sequence.checked_add(1).ok_or(NineDoorBridgeError::Busy)?;
+        let admitted = admit_host_ticket_v2_spec(raw, binding, sequence)?;
+        let canonical_snapshot = serialize_host_ticket(&admitted)?;
+        let snapshot_path = self.host.ticket_snapshot_path(path)?;
+        self.host
+            .can_append_ticket_lines(path, core::slice::from_ref(&canonical_raw))?;
+        self.host.can_append_ticket_lines(
+            snapshot_path.as_str(),
+            core::slice::from_ref(&canonical_snapshot),
+        )?;
+        self.host
+            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical_raw));
+        self.host.append_ticket_lines_preflighted(
+            snapshot_path.as_str(),
+            core::slice::from_ref(&canonical_snapshot),
+        );
+        self.host.admissions.insert(
+            key,
+            HostTicketV2Admission {
+                spec: admitted,
+                raw_digest,
+                terminal_result_digest: None,
+                terminal_outcome: None,
+            },
+        );
+        self.host.next_admission_sequence = next_sequence;
+        Ok(())
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+    fn admit_host_ticket_v2(
+        &mut self,
+        _path: &str,
+        _raw: HostTicketV2RawSpec,
+    ) -> Result<(), NineDoorBridgeError> {
+        Err(NineDoorBridgeError::InvalidPayload)
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn apply_host_ticket_v2_result(
+        &mut self,
+        path: &str,
+        result: HostTicketV2Result,
+    ) -> Result<(), NineDoorBridgeError> {
+        let key = (result.id.clone(), result.idempotency_key.clone());
+        let admission = self
+            .host
+            .admissions
+            .get(&key)
+            .cloned()
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        validate_result_binding(&result, &admission.spec)?;
+        let canonical = serialize_host_ticket(&result)?;
+        let result_digest = decode_sha256(&result.result_digest)?;
+        let snapshot_path = self.host.ticket_snapshot_path(path)?;
+        if let Some(existing_digest) = admission.terminal_result_digest {
+            return if existing_digest == result_digest && admission.terminal_outcome.is_some() {
+                Ok(())
+            } else {
+                Err(NineDoorBridgeError::InvalidPayload)
+            };
+        }
+        let terminal_outcome = host_ticket_terminal_outcome(result.state.as_str())?;
+        let Some(outcome) = terminal_outcome else {
+            self.host
+                .can_append_ticket_lines(path, core::slice::from_ref(&canonical))?;
+            self.host.can_append_ticket_lines(
+                snapshot_path.as_str(),
+                core::slice::from_ref(&canonical),
+            )?;
+            self.host
+                .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical));
+            self.host.append_ticket_lines_preflighted(
+                snapshot_path.as_str(),
+                core::slice::from_ref(&canonical),
+            );
+            return Ok(());
+        };
+
+        self.sync_target_worker_projections()?;
+        let current = target_worker_namespace_snapshots()
+            .into_iter()
+            .find(|snapshot| snapshot.public_id() == Some(result.receipt_worker_id.as_str()));
+        let current_binding = current.as_ref().and_then(|snapshot| {
+            Some(HostTicketV2WorkerBinding {
+                public_id: snapshot.public_id()?,
+                role: snapshot.role,
+                identity: snapshot.identity?,
+                ready: snapshot.lifecycle == crate::worker_supervisor::WorkerLifecycleState::Ready,
+                ready_sequence: snapshot.ready_sequence,
+                last_control_sequence: snapshot.last_control_sequence,
+            })
+        });
+        let disposition =
+            host_ticket_terminal_disposition(outcome, &admission.spec, current_binding)?;
+        self.host
+            .can_append_ticket_lines(path, core::slice::from_ref(&canonical))?;
+        self.host
+            .can_append_ticket_lines(snapshot_path.as_str(), core::slice::from_ref(&canonical))?;
+
+        if let HostTicketV2TerminalDisposition::Submit(outcome) = disposition {
+            let admitted_time_ns = crate::hal::timebase().now_ms().saturating_mul(1_000_000);
+            let control = build_host_ticket_worker_control(&result, outcome, admitted_time_ns)?;
+            self.submit_target_worker_operation(control)?;
+        }
+        self.host
+            .append_ticket_lines_preflighted(path, core::slice::from_ref(&canonical));
+        self.host.append_ticket_lines_preflighted(
+            snapshot_path.as_str(),
+            core::slice::from_ref(&canonical),
+        );
+        let terminal_outcome = match disposition {
+            HostTicketV2TerminalDisposition::Submit(outcome) => outcome,
+            HostTicketV2TerminalDisposition::Stale => WorkerOutcome::Stale,
+        };
+        if let Some(stored) = self.host.admissions.get_mut(&key) {
+            stored.terminal_result_digest = Some(result_digest);
+            stored.terminal_outcome = Some(terminal_outcome);
+        }
+        Ok(())
+    }
+
+    #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+    fn apply_host_ticket_v2_result(
+        &mut self,
+        _path: &str,
+        _result: HostTicketV2Result,
+    ) -> Result<(), NineDoorBridgeError> {
+        Err(NineDoorBridgeError::InvalidPayload)
+    }
+
     pub(crate) fn telemetry_tail_into(
         &mut self,
         path: &str,
         cursor_offset: u64,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<Option<TelemetryTailMeta>, NineDoorBridgeError> {
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projections()?;
         let Some(worker_id) = parse_worker_telemetry_path(path) else {
             return Ok(None);
         };
@@ -710,6 +1164,10 @@ impl NineDoorBridge {
             .iter()
             .find(|worker| worker.id.as_str() == worker_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        if !worker.target_published {
+            return Err(NineDoorBridgeError::InvalidPath);
+        }
         let read = worker.ring.read_from(cursor_offset, UI_MAX_STREAM_BYTES);
         output.clear();
         lines_from_bytes_into(read.bytes.as_slice(), output)?;
@@ -745,6 +1203,7 @@ impl NineDoorBridge {
 
     /// Handle a log stream request.
     pub fn log_stream(&mut self, audit: &mut dyn AuditSink) -> Result<(), NineDoorBridgeError> {
+        self.prepare_namespace(NamespaceOpcode::Log, "", "")?;
         audit.info("nine-door: log stream requested");
         Ok(())
     }
@@ -760,6 +1219,8 @@ impl NineDoorBridge {
         payload: &str,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        let prepared = self.prepare_namespace(NamespaceOpcode::Spawn, "", payload)?;
+        let payload = prepared.payload();
         let mut message = HeaplessString::<128>::new();
         if write!(
             message,
@@ -790,6 +1251,8 @@ impl NineDoorBridge {
         identifier: &str,
         audit: &mut dyn AuditSink,
     ) -> Result<(), NineDoorBridgeError> {
+        let prepared = self.prepare_namespace(NamespaceOpcode::Kill, "", identifier)?;
+        let identifier = prepared.payload();
         let mut message = HeaplessString::<128>::new();
         if write!(message, "nine-door: kill {identifier}").is_err() {
             // Truncated audit line is acceptable.
@@ -816,9 +1279,12 @@ impl NineDoorBridge {
 
     /// Append a payload line to an append-only file.
     pub fn echo(&mut self, path: &str, payload: &str) -> Result<EchoOutcome, NineDoorBridgeError> {
-        if payload.contains('\n') || payload.contains('\r') {
-            return Err(NineDoorBridgeError::InvalidPayload);
-        }
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projections()?;
+        self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        let prepared = self.prepare_namespace(NamespaceOpcode::Echo, path, payload)?;
+        let path = prepared.path();
+        let payload = prepared.payload();
         let segments = split_path_segments(path);
         if path == LOG_PATH {
             log_buffer::append_user_line(payload);
@@ -1139,19 +1605,8 @@ impl NineDoorBridge {
             if !self.gpu.enabled() || !self.gpu.models_ready() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            if !self.is_queen() {
-                return Err(NineDoorBridgeError::Permission);
-            }
-            let trimmed = trim_payload(payload.as_bytes());
-            let text =
-                core::str::from_utf8(trimmed).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
-            validate_model_id(text)?;
-            append_log_bytes(
-                &mut self.gpu.models_active_log,
-                text,
-                GPU_MODELS_ACTIVE_MAX_BYTES,
-            )?;
-            return Ok(EchoOutcome::Appended);
+            // Active state is installed only by a validated, receipt-bound host snapshot.
+            return Err(NineDoorBridgeError::Permission);
         }
         if let ["gpu", gpu_id, leaf] = segments.as_slice() {
             if !self.gpu.enabled() {
@@ -1220,8 +1675,12 @@ impl NineDoorBridge {
                 }
                 PolicyGateDecision::Allowed(_) => {}
             }
-            self.host.validate_append(path, payload)?;
-            self.host.update_value(path, payload);
+            if self.host.is_ticket_write_path(path) {
+                self.handle_host_ticket_append(path, payload)?;
+            } else {
+                self.host.validate_append(path, payload)?;
+                self.host.update_value(path, payload);
+            }
             self.log_host_write(
                 path,
                 Some(control),
@@ -1278,8 +1737,12 @@ impl NineDoorBridge {
                 }
                 PolicyGateDecision::Allowed(_) => {}
             }
-            self.host.validate_append(path, payload)?;
-            self.host.update_value(path, payload);
+            if self.host.is_ticket_write_path(path) {
+                self.handle_host_ticket_append(path, payload)?;
+            } else {
+                self.host.validate_append(path, payload)?;
+                self.host.update_value(path, payload);
+            }
             self.log_host_write(path, None, HostWriteOutcome::Allowed, Some(payload.len()));
             if self.audit.enabled {
                 self.audit.record_control(
@@ -1341,6 +1804,11 @@ impl NineDoorBridge {
         path: &str,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projections()?;
+        self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        let prepared = self.prepare_namespace(NamespaceOpcode::Cat, path, "")?;
+        let path = prepared.path();
         output.clear();
         let segments = split_path_segments(path);
         if path == LOG_PATH {
@@ -1404,6 +1872,20 @@ impl NineDoorBridge {
         }
         if self.export.enabled() && path == QUEEN_EXPORT_CTL_PATH {
             return lines_from_bytes_into(self.export.ctl_log(), output);
+        }
+        if self.export.enabled() && self.gpu.qemu_lora_export_ready() {
+            match segments.as_slice() {
+                ["queen", "export", "lora_jobs", QEMU_LORA_EXPORT_JOB_ID, "telemetry.cbor"] => {
+                    return lines_from_bytes_into(QEMU_LORA_EXPORT_TELEMETRY, output);
+                }
+                ["queen", "export", "lora_jobs", QEMU_LORA_EXPORT_JOB_ID, "base_model.ref"] => {
+                    return lines_from_bytes_into(QEMU_LORA_EXPORT_BASE_MODEL, output);
+                }
+                ["queen", "export", "lora_jobs", QEMU_LORA_EXPORT_JOB_ID, "policy.toml"] => {
+                    return lines_from_bytes_into(QEMU_LORA_EXPORT_POLICY, output);
+                }
+                _ => {}
+            }
         }
         if self.schedule.proc_enabled() {
             if path == PROC_SCHEDULE_SUMMARY_PATH {
@@ -1535,7 +2017,7 @@ impl NineDoorBridge {
             return cas_lines_from_bytes_into(&bytes, output);
         }
         if let Some(value) = self.host.entry_value(path) {
-            return lines_from_text_into(value, output);
+            return cat_lines_from_text_into(value, output);
         }
         if path == PROC_BOOT_PATH {
             return boot_lines_into(output);
@@ -1612,6 +2094,11 @@ impl NineDoorBridge {
         path: &str,
         output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
     ) -> Result<(), NineDoorBridgeError> {
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projections()?;
+        self.gpu.withdraw_expired(crate::hal::timebase().now_ms());
+        let prepared = self.prepare_namespace(NamespaceOpcode::List, path, "")?;
+        let path = prepared.path();
         output.clear();
         let sharding = generated::sharding_config();
         let segments = split_path_segments(path);
@@ -1626,7 +2113,7 @@ impl NineDoorBridge {
             if !sharding.enabled {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
-            list_shard_labels_into(output)?;
+            self.list_worker_shards_into(output)?;
             return Ok(());
         }
         if let Some((label, worker_root)) = parse_shard_worker_root(path) {
@@ -1802,6 +2289,16 @@ impl NineDoorBridge {
             if !self.export.enabled() {
                 return Err(NineDoorBridgeError::InvalidPath);
             }
+            if self.gpu.qemu_lora_export_ready() {
+                push_list_entry(output, QEMU_LORA_EXPORT_JOB_ID)?;
+            }
+            return Ok(());
+        }
+        if segments.as_slice() == ["queen", "export", "lora_jobs", QEMU_LORA_EXPORT_JOB_ID] {
+            if !self.export.enabled() || !self.gpu.qemu_lora_export_ready() {
+                return Err(NineDoorBridgeError::InvalidPath);
+            }
+            list_from_slice_into(&["telemetry.cbor", "base_model.ref", "policy.toml"], output)?;
             return Ok(());
         }
         if path == "/queen/telemetry" {
@@ -1986,16 +2483,72 @@ impl NineDoorBridge {
     ) -> Result<(), NineDoorBridgeError> {
         // Keep directory listings bounded while surfacing the most recently
         // spawned workers at high scale.
-        let start = self.workers.len().saturating_sub(MAX_STREAM_LINES);
-        for worker in self.workers.iter().skip(start) {
-            let mut line = HeaplessString::new();
-            line.push_str(worker.id.as_str())
-                .map_err(|_| NineDoorBridgeError::BufferFull)?;
-            output
-                .push(line)
-                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        let mut recent: HeaplessVec<&str, MAX_STREAM_LINES> = HeaplessVec::new();
+        for worker in self.workers.iter().rev() {
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            if !worker.target_published {
+                continue;
+            }
+            if recent.push(worker.id.as_str()).is_err() {
+                break;
+            }
+        }
+        for worker_id in recent.iter().rev() {
+            push_list_entry(output, worker_id)?;
         }
         Ok(())
+    }
+
+    fn list_worker_shards_into(
+        &self,
+        output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+    ) -> Result<(), NineDoorBridgeError> {
+        let sharding = generated::sharding_config();
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        {
+            // Target discovery reflects only the compiler-bounded current
+            // projections. A queued generation remains unpublished until its
+            // durable READY record is accepted.
+            for snapshot in target_worker_namespace_snapshots() {
+                if snapshot.ready_sequence == 0 {
+                    continue;
+                }
+                let public_id = snapshot
+                    .public_id()
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                let label = worker_shard_label(public_id, sharding);
+                if !output.iter().any(|entry| entry.as_str() == label.as_str()) {
+                    push_list_entry(output, label.as_str())?;
+                }
+            }
+            Ok(())
+        }
+
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            // The host model may contain more active shards than one bounded
+            // directory reply. Surface the most recent distinct active shards,
+            // matching the existing bounded recent-Worker listing contract.
+            let mut recent: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+                HeaplessVec::new();
+            for worker in self.workers.iter().rev() {
+                let label = worker_shard_label(worker.id.as_str(), sharding);
+                if recent.iter().any(|entry| entry.as_str() == label.as_str()) {
+                    continue;
+                }
+                let mut entry = HeaplessString::new();
+                entry
+                    .push_str(label.as_str())
+                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
+                if recent.push(entry).is_err() {
+                    break;
+                }
+            }
+            for label in recent.iter().rev() {
+                push_list_entry(output, label.as_str())?;
+            }
+            Ok(())
+        }
     }
 
     fn list_workers_for_shard_into(
@@ -2006,6 +2559,10 @@ impl NineDoorBridge {
         let sharding = generated::sharding_config();
         let mut recent: HeaplessVec<&str, MAX_STREAM_LINES> = HeaplessVec::new();
         for worker in self.workers.iter().rev() {
+            #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+            if !worker.target_published {
+                continue;
+            }
             let worker_label = worker_shard_label(worker.id.as_str(), sharding);
             if worker_label == label {
                 if recent.push(worker.id.as_str()).is_err() {
@@ -2020,6 +2577,11 @@ impl NineDoorBridge {
     }
 
     fn handle_queen_ctl(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
+        if matches!(self.session_role, Some(SessionRoleLabel::WorkerBus)) {
+            return Err(NineDoorBridgeError::Permission);
+        }
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        self.sync_target_worker_projections()?;
         let command = parse_queen_ctl(payload)?;
         match command {
             QueenCtlCommand::Spawn(target) => {
@@ -2128,24 +2690,55 @@ impl NineDoorBridge {
         worker_id: u32,
         id: HeaplessString<MAX_WORKER_ID_LEN>,
     ) -> Result<(), NineDoorBridgeError> {
-        let policy = affinity::policy();
-        let worker_index = worker_id.saturating_sub(1) as usize;
-        affinity::with_role_affinity(
-            affinity::AffinityRole::Worker,
-            worker_index,
-            &policy,
-            || {
-                if self.workers.len() >= MAX_WORKERS {
-                    return Err(NineDoorBridgeError::BufferFull);
-                }
-                let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
-                self.workers
-                    .try_reserve(1)
-                    .map_err(|_| NineDoorBridgeError::BufferFull)?;
-                self.workers.push(WorkerTelemetry { id, ring, target });
-                Ok(())
-            },
-        )
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        {
+            if self.workers.len() >= MAX_WORKERS {
+                return Err(NineDoorBridgeError::BufferFull);
+            }
+            self.workers
+                .try_reserve(1)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            let snapshot = enqueue_target_worker_spawn(target.worker_role(), id.as_str())
+                .map_err(worker_target_error)?;
+            let mut worker = WorkerTelemetry {
+                id,
+                ring: TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize),
+                target,
+                target_lifecycle: snapshot.lifecycle,
+                target_identity: snapshot.identity,
+                target_revision: 0,
+                target_ready_sequence: 0,
+                target_receipt_sequence: 0,
+                target_completion_sequence: 0,
+                target_published: false,
+            };
+            worker.apply_target_snapshot(snapshot)?;
+            self.workers.push(worker);
+            let _ = worker_id;
+            return Ok(());
+        }
+
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            let policy = affinity::policy();
+            let worker_index = worker_id.saturating_sub(1) as usize;
+            affinity::with_role_affinity(
+                affinity::AffinityRole::Worker,
+                worker_index,
+                &policy,
+                || {
+                    if self.workers.len() >= MAX_WORKERS {
+                        return Err(NineDoorBridgeError::BufferFull);
+                    }
+                    let ring = TelemetryRing::new(self.telemetry.ring_bytes_per_worker as usize);
+                    self.workers
+                        .try_reserve(1)
+                        .map_err(|_| NineDoorBridgeError::BufferFull)?;
+                    self.workers.push(WorkerTelemetry { id, ring, target });
+                    Ok(())
+                },
+            )
+        }
     }
 
     fn allocate_worker_identity(
@@ -2168,12 +2761,38 @@ impl NineDoorBridge {
     }
 
     fn remove_worker(&mut self, worker_id: &str) -> Result<(), NineDoorBridgeError> {
-        let position = self
-            .workers
-            .iter()
-            .position(|worker| worker.id.as_str() == worker_id)
-            .ok_or(NineDoorBridgeError::InvalidPath)?;
-        let _ = self.workers.swap_remove(position);
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        {
+            enqueue_target_worker_kill(worker_id).map_err(worker_target_error)?;
+            self.sync_target_worker_projections()?;
+            return Ok(());
+        }
+
+        #[cfg(not(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)))]
+        {
+            let position = self
+                .workers
+                .iter()
+                .position(|worker| worker.id.as_str() == worker_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            let _ = self.workers.swap_remove(position);
+            Ok(())
+        }
+    }
+
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    fn sync_target_worker_projections(&mut self) -> Result<(), NineDoorBridgeError> {
+        for snapshot in target_worker_namespace_snapshots() {
+            let Some(public_id) = snapshot.public_id() else {
+                continue;
+            };
+            let worker = self
+                .workers
+                .iter_mut()
+                .find(|worker| worker.id.as_str() == public_id)
+                .ok_or(NineDoorBridgeError::InvalidPath)?;
+            worker.apply_target_snapshot(snapshot)?;
+        }
         Ok(())
     }
 
@@ -2253,6 +2872,12 @@ impl NineDoorBridge {
             .iter_mut()
             .find(|worker| worker.id.as_str() == worker_id)
             .ok_or(NineDoorBridgeError::InvalidPath)?;
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        if worker.target_lifecycle != crate::worker_supervisor::WorkerLifecycleState::Ready
+            || !worker.target_published
+        {
+            return Err(NineDoorBridgeError::Permission);
+        }
         if matches!(
             self.telemetry.frame_schema,
             generated::TelemetryFrameSchema::CborV1
@@ -3532,14 +4157,20 @@ impl CasState {
             return Err(NineDoorBridgeError::Permission);
         }
         if let Some(signature) = manifest.signature {
-            let key = self.config.signing_key.ok_or_else(|| {
+            let key = self.config.verification_key.ok_or_else(|| {
                 self.log_event(&format!(
-                    "cas-manifest rejected epoch={} reason=signing-key-missing",
+                    "cas-manifest rejected epoch={} reason=verification-key-missing",
                     epoch
                 ));
                 NineDoorBridgeError::Permission
             })?;
-            let verifying_key = SigningKey::from_bytes(&key).verifying_key();
+            let verifying_key = VerifyingKey::from_bytes(&key).map_err(|_| {
+                self.log_event(&format!(
+                    "cas-manifest rejected epoch={} reason=verification-key-invalid",
+                    epoch
+                ));
+                NineDoorBridgeError::Permission
+            })?;
             let payload = manifest
                 .signature_payload()
                 .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
@@ -3761,6 +4392,94 @@ struct QuarantineEntry {
     bytes: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTicketV2RawSpec {
+    schema: String,
+    id: String,
+    idempotency_key: String,
+    action: String,
+    args: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_unix_ms: Option<u64>,
+    receipt_mode: String,
+    operation_id: String,
+    subject_ref: String,
+    receipt_worker_role: String,
+    receipt_worker_id: String,
+    receipt_supervisor_generation: u64,
+    receipt_cap_generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTicketV2AdmittedSpec {
+    schema: String,
+    id: String,
+    idempotency_key: String,
+    action: String,
+    args: JsonValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    expires_unix_ms: Option<u64>,
+    receipt_mode: String,
+    operation_id: String,
+    subject_ref: String,
+    receipt_worker_role: String,
+    receipt_worker_id: String,
+    receipt_supervisor_generation: u64,
+    receipt_cap_generation: u64,
+    resolved_worker_slot: u16,
+    resolved_lease_epoch: u64,
+    admission_sequence: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HostTicketV2Result {
+    schema: String,
+    id: String,
+    idempotency_key: String,
+    action: String,
+    state: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    message: Option<String>,
+    receipt_mode: String,
+    operation_id: String,
+    subject_ref: String,
+    receipt_worker_role: String,
+    receipt_worker_id: String,
+    receipt_supervisor_generation: u64,
+    receipt_cap_generation: u64,
+    resolved_worker_slot: u16,
+    resolved_lease_epoch: u64,
+    admission_sequence: u64,
+    result_digest: String,
+}
+
+#[derive(Debug, Clone)]
+struct HostTicketV2Admission {
+    spec: HostTicketV2AdmittedSpec,
+    raw_digest: [u8; 32],
+    terminal_result_digest: Option<[u8; 32]>,
+    terminal_outcome: Option<WorkerOutcome>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct HostTicketV2WorkerBinding<'a> {
+    public_id: &'a str,
+    role: WorkerRole,
+    identity: WorkerIdentity,
+    ready: bool,
+    ready_sequence: u64,
+    last_control_sequence: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HostTicketV2TerminalDisposition {
+    Submit(WorkerOutcome),
+    Stale,
+}
+
 #[derive(Debug)]
 struct HostEntry {
     path: String,
@@ -3778,9 +4497,14 @@ struct HostState {
     tickets_enabled: bool,
     ticket_request_schema: &'static str,
     ticket_result_schema: &'static str,
+    ticket_accepted_request_schemas: &'static [&'static str],
+    ticket_accepted_result_schemas: &'static [&'static str],
     ticket_max_line_bytes: u32,
     ticket_action_allowlist: &'static [generated::HostTicketAction],
+    ticket_receipt_action_allowlist: &'static [generated::HostTicketAction],
     ticket_lifecycle: &'static [generated::HostTicketLifecycleState],
+    next_admission_sequence: u64,
+    admissions: BTreeMap<(String, String), HostTicketV2Admission>,
     entries: Vec<HostEntry>,
 }
 
@@ -3807,9 +4531,14 @@ impl HostState {
             tickets_enabled: config.tickets.enable,
             ticket_request_schema: config.tickets.request_schema,
             ticket_result_schema: config.tickets.result_schema,
+            ticket_accepted_request_schemas: config.tickets.accepted_request_schemas,
+            ticket_accepted_result_schemas: config.tickets.accepted_result_schemas,
             ticket_max_line_bytes: config.tickets.max_line_bytes,
             ticket_action_allowlist: config.tickets.action_allowlist,
+            ticket_receipt_action_allowlist: config.tickets.receipt_action_allowlist,
             ticket_lifecycle: config.tickets.lifecycle,
+            next_admission_sequence: 1,
+            admissions: BTreeMap::new(),
             entries: Vec::new(),
         };
         if state.enabled {
@@ -3880,64 +4609,15 @@ impl HostState {
                     output,
                 ))
             }
-            ["systemd"] if self.has_provider(generated::HostProvider::Systemd) => {
-                output.clear();
-                Some(list_from_slice_into(&SYSTEMD_UNITS, output))
-            }
-            ["systemd", unit]
-                if self.has_provider(generated::HostProvider::Systemd)
-                    && SYSTEMD_UNITS.iter().any(|entry| entry == unit) =>
+            [provider]
+                if self
+                    .providers
+                    .iter()
+                    .copied()
+                    .any(|candidate| host_provider_label(candidate) == *provider) =>
             {
                 output.clear();
-                Some(list_from_slice_into(
-                    &["status", "start", "stop", "restart"],
-                    output,
-                ))
-            }
-            ["k8s"] if self.has_provider(generated::HostProvider::K8s) => {
-                output.clear();
-                Some(list_from_slice_into(&["node"], output))
-            }
-            ["k8s", "node"] if self.has_provider(generated::HostProvider::K8s) => {
-                output.clear();
-                Some(list_from_slice_into(&K8S_NODES, output))
-            }
-            ["k8s", "node", node]
-                if self.has_provider(generated::HostProvider::K8s)
-                    && K8S_NODES.iter().any(|entry| entry == node) =>
-            {
-                output.clear();
-                Some(list_from_slice_into(&["status", "cordon", "drain"], output))
-            }
-            ["docker"] if self.has_provider(generated::HostProvider::Docker) => {
-                output.clear();
-                Some(list_from_slice_into(&["status", "restart", "stop"], output))
-            }
-            ["nvidia"] if self.has_provider(generated::HostProvider::Nvidia) => {
-                output.clear();
-                Some(list_from_slice_into(&["gpu"], output))
-            }
-            ["nvidia", "gpu"] if self.has_provider(generated::HostProvider::Nvidia) => {
-                output.clear();
-                Some(list_from_slice_into(&NVIDIA_GPUS, output))
-            }
-            ["nvidia", "gpu", gpu]
-                if self.has_provider(generated::HostProvider::Nvidia)
-                    && NVIDIA_GPUS.iter().any(|entry| entry == gpu) =>
-            {
-                output.clear();
-                Some(list_from_slice_into(
-                    &["status", "power_cap", "thermal"],
-                    output,
-                ))
-            }
-            ["jetson"] if self.has_provider(generated::HostProvider::Jetson) => {
-                output.clear();
-                Some(Ok(()))
-            }
-            ["net"] if self.has_provider(generated::HostProvider::Net) => {
-                output.clear();
-                Some(Ok(()))
+                Some(list_from_slice_into(&["status"], output))
             }
             _ => None,
         }
@@ -3979,12 +4659,19 @@ impl HostState {
             return Ok(());
         }
         if path.ends_with("/tickets/spec") {
-            return self.validate_ticket_spec_lines(payload);
+            return self.validate_v1_ticket_spec_lines(payload);
         }
         if path.ends_with("/tickets/status") || path.ends_with("/tickets/deadletter") {
-            return self.validate_ticket_result_lines(payload);
+            return self.validate_v1_ticket_result_lines(payload);
         }
         Ok(())
+    }
+
+    fn is_ticket_write_path(&self, path: &str) -> bool {
+        self.tickets_enabled
+            && (path.ends_with("/tickets/spec")
+                || path.ends_with("/tickets/status")
+                || path.ends_with("/tickets/deadletter"))
     }
 
     fn update_value(&mut self, path: &str, value: &str) -> bool {
@@ -3998,7 +4685,77 @@ impl HostState {
         false
     }
 
-    fn validate_ticket_spec_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
+    fn append_ticket_lines(
+        &mut self,
+        path: &str,
+        lines: &[String],
+    ) -> Result<(), NineDoorBridgeError> {
+        self.can_append_ticket_lines(path, lines)?;
+        self.append_ticket_lines_preflighted(path, lines);
+        Ok(())
+    }
+
+    fn append_ticket_lines_preflighted(&mut self, path: &str, lines: &[String]) {
+        if let Some(entry) = self.entries.iter_mut().find(|entry| entry.path == path) {
+            for line in lines {
+                entry.value.push_str(line);
+                entry.value.push('\n');
+            }
+        }
+    }
+
+    fn ticket_snapshot_path(&self, path: &str) -> Result<String, NineDoorBridgeError> {
+        if path.ends_with("/tickets/spec")
+            || path.ends_with("/tickets/status")
+            || path.ends_with("/tickets/deadletter")
+        {
+            return Ok(format!("{path}.snapshot"));
+        }
+        Err(NineDoorBridgeError::InvalidPath)
+    }
+
+    fn can_append_ticket_lines(
+        &self,
+        path: &str,
+        lines: &[String],
+    ) -> Result<(), NineDoorBridgeError> {
+        let entry = self
+            .entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .ok_or(NineDoorBridgeError::InvalidPath)?;
+        let mut projected_bytes = entry.value.len();
+        let mut projected_wire_lines = cat_wire_line_count(entry.value.as_str())?;
+        for line in lines {
+            self.validate_ticket_line_bytes(line)?;
+            projected_bytes = projected_bytes
+                .checked_add(line.len().saturating_add(1))
+                .ok_or(NineDoorBridgeError::BufferFull)?;
+            projected_wire_lines = projected_wire_lines
+                .checked_add(cat_wire_line_count(line.as_str())?)
+                .ok_or(NineDoorBridgeError::BufferFull)?;
+        }
+        if projected_bytes > HOST_TICKET_LOG_MAX_BYTES || projected_wire_lines > MAX_STREAM_LINES {
+            return Err(NineDoorBridgeError::BufferFull);
+        }
+        Ok(())
+    }
+
+    fn accepted_request_schema(&self, schema: &str) -> bool {
+        self.ticket_accepted_request_schemas.contains(&schema)
+    }
+
+    fn accepted_result_schema(&self, schema: &str) -> bool {
+        self.ticket_accepted_result_schemas.contains(&schema)
+    }
+
+    fn receipt_action(&self, action: &str) -> bool {
+        self.ticket_receipt_action_allowlist
+            .iter()
+            .any(|allowed| host_ticket_action_label(*allowed) == action)
+    }
+
+    fn validate_v1_ticket_spec_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
         let mut saw_line = false;
         for raw_line in payload.lines() {
             let line = raw_line.trim();
@@ -4021,11 +4778,15 @@ impl HostState {
                     "target_hive",
                     "relay_hop",
                     "relay_correlation_id",
+                    "receipt_mode",
                 ],
             )?;
             let schema = parse_json_string_field(line, "schema")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            if schema != self.ticket_request_schema {
+            if schema != self.ticket_request_schema
+                || !self.accepted_request_schema(schema)
+                || schema == HOST_TICKET_V2_REQUEST_SCHEMA
+            {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
             let id =
@@ -4041,6 +4802,12 @@ impl HostState {
                 .iter()
                 .any(|allowed| host_ticket_action_label(*allowed) == action)
             {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if self.receipt_action(action) {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if parse_json_string_field(line, "receipt_mode").is_some_and(|mode| mode != "none") {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
             if let Some(target) = parse_json_string_field(line, "target") {
@@ -4079,7 +4846,7 @@ impl HostState {
         Ok(())
     }
 
-    fn validate_ticket_result_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
+    fn validate_v1_ticket_result_lines(&self, payload: &str) -> Result<(), NineDoorBridgeError> {
         let mut saw_line = false;
         for raw_line in payload.lines() {
             let line = raw_line.trim();
@@ -4101,11 +4868,15 @@ impl HostState {
                     "target_hive",
                     "relay_hop",
                     "relay_correlation_id",
+                    "receipt_mode",
                 ],
             )?;
             let schema = parse_json_string_field(line, "schema")
                 .ok_or(NineDoorBridgeError::InvalidPayload)?;
-            if schema != self.ticket_result_schema {
+            if schema != self.ticket_result_schema
+                || !self.accepted_result_schema(schema)
+                || schema == HOST_TICKET_V2_RESULT_SCHEMA
+            {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
             let id =
@@ -4123,6 +4894,12 @@ impl HostState {
                 .iter()
                 .any(|allowed| host_ticket_action_label(*allowed) == action)
             {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if self.receipt_action(action) {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+            if parse_json_string_field(line, "receipt_mode").is_some_and(|mode| mode != "none") {
                 return Err(NineDoorBridgeError::InvalidPayload);
             }
             if !self
@@ -4164,7 +4941,7 @@ impl HostState {
     }
 
     fn validate_ticket_line_bytes(&self, line: &str) -> Result<(), NineDoorBridgeError> {
-        if line.as_bytes().len() > self.ticket_max_line_bytes as usize {
+        if line.len() > self.ticket_max_line_bytes as usize {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
         Ok(())
@@ -4205,40 +4982,10 @@ impl HostState {
             self.push_read_only_entry(&["tickets", "deadletter.snapshot"], "");
         }
         for provider in self.providers.iter().copied() {
-            match provider {
-                generated::HostProvider::Systemd => {
-                    for unit in SYSTEMD_UNITS {
-                        self.push_entry(&["systemd", unit, "status"], "active", None);
-                        self.push_entry(&["systemd", unit, "start"], "", Some("systemd.start"));
-                        self.push_entry(&["systemd", unit, "stop"], "", Some("systemd.stop"));
-                        self.push_entry(&["systemd", unit, "restart"], "", Some("systemd.restart"));
-                    }
-                }
-                generated::HostProvider::K8s => {
-                    for node in K8S_NODES {
-                        self.push_entry(&["k8s", "node", node, "status"], "unknown", None);
-                        self.push_entry(&["k8s", "node", node, "cordon"], "", Some("k8s.cordon"));
-                        self.push_entry(&["k8s", "node", node, "drain"], "", Some("k8s.drain"));
-                    }
-                }
-                generated::HostProvider::Docker => {
-                    self.push_entry(&["docker", "status"], "unknown", None);
-                    self.push_entry(&["docker", "restart"], "", Some("docker.restart"));
-                    self.push_entry(&["docker", "stop"], "", Some("docker.stop"));
-                }
-                generated::HostProvider::Nvidia => {
-                    for gpu in NVIDIA_GPUS {
-                        self.push_entry(&["nvidia", "gpu", gpu, "status"], "ok", None);
-                        self.push_entry(
-                            &["nvidia", "gpu", gpu, "power_cap"],
-                            "",
-                            Some("nvidia.power_cap"),
-                        );
-                        self.push_entry(&["nvidia", "gpu", gpu, "thermal"], "42C", None);
-                    }
-                }
-                generated::HostProvider::Jetson | generated::HostProvider::Net => {}
-            }
+            self.push_read_only_entry(
+                &[host_provider_label(provider), "status"],
+                "unavailable source=none",
+            );
         }
     }
 
@@ -4276,6 +5023,22 @@ struct GpuEntry {
 struct GpuModelManifest {
     model_id: String,
     manifest_toml: String,
+    manifest_sha256: String,
+    cas_sha256: String,
+    base_model_id: Option<String>,
+    adapter_sha256: Option<String>,
+}
+
+#[derive(Debug)]
+struct GpuSnapshotIdentity {
+    source_id: String,
+    source_mode: String,
+    epoch: u64,
+    sequence: u64,
+    observed_unix_ms: u64,
+    ttl_ms: u64,
+    catalog_sha256: String,
+    available: bool,
 }
 
 #[derive(Debug)]
@@ -4294,9 +5057,12 @@ struct GpuBridgeState {
 
 #[derive(Debug)]
 struct GpuBridgeSnapshot {
+    identity: GpuSnapshotIdentity,
     entries: Vec<GpuEntry>,
     models: Vec<GpuModelManifest>,
     active: String,
+    activation_generation: u64,
+    activation_receipt: String,
     telemetry_schema: Vec<u8>,
 }
 
@@ -4323,43 +5089,28 @@ struct GpuState {
     models: Vec<GpuModelManifest>,
     models_active_log: Vec<u8>,
     telemetry_schema: Vec<u8>,
+    accepted_identity: Option<GpuSnapshotIdentity>,
+    expires_at_ms: Option<u64>,
     bridge: GpuBridgeState,
 }
 
 impl GpuState {
     fn new(enabled: bool) -> Self {
-        let mut entries = Vec::new();
-        if enabled {
-            let specs = [
-                ("GPU-0", "Mock 4090", 24_576_u32, 144_u32),
-                ("GPU-1", "Mock 4060", 8_192_u32, 64_u32),
-            ];
-            for (id, name, memory_mb, sm_count) in specs {
-                let info_payload =
-                    render_gpu_info_payload(id, name, memory_mb, sm_count, "555.0", "12.4");
-                let ctl_log = format!("LEASE {id}\n").into_bytes();
-                entries.push(GpuEntry {
-                    id: id.to_owned(),
-                    info_payload,
-                    ctl_log,
-                    lease_log: Vec::new(),
-                    status_log: Vec::new(),
-                });
-            }
-        }
         Self {
             enabled,
             ctl_max_bytes: GPU_CTL_MAX_BYTES,
             lease_max_bytes: GPU_LEASE_MAX_BYTES,
             status_max_bytes: GPU_STATUS_MAX_BYTES,
-            entries,
+            entries: Vec::new(),
             models: Vec::new(),
             models_active_log: Vec::new(),
             telemetry_schema: Vec::new(),
+            accepted_identity: None,
+            expires_at_ms: None,
             bridge: GpuBridgeState {
                 ctl_log: Vec::new(),
                 status: if enabled {
-                    b"state=idle\n".to_vec()
+                    b"state=unavailable source=none\n".to_vec()
                 } else {
                     Vec::new()
                 },
@@ -4388,6 +5139,16 @@ impl GpuState {
         !self.telemetry_schema.is_empty()
     }
 
+    fn qemu_lora_export_ready(&self) -> bool {
+        qemu_lora_export_fixture_allowed(
+            self.accepted_identity
+                .as_ref()
+                .map_or("none", |identity| identity.source_mode.as_str()),
+            cfg!(all(feature = "bootstrap-trace", feature = "release-qemu")),
+            self.expires_at_ms.is_some(),
+        )
+    }
+
     fn handle_bridge_payload(&mut self, payload: &str) -> Result<(), NineDoorBridgeError> {
         for line in payload.lines() {
             let trimmed = line.trim();
@@ -4409,8 +5170,31 @@ impl GpuState {
                     sha256,
                     snapshot,
                 }) => {
+                    let state = if snapshot.identity.available {
+                        "ok"
+                    } else {
+                        "unavailable"
+                    };
+                    let source = snapshot.identity.source_id.clone();
+                    let source_mode = snapshot.identity.source_mode.clone();
+                    let epoch = snapshot.identity.epoch;
+                    let sequence = snapshot.identity.sequence;
+                    let ttl_ms = snapshot.identity.ttl_ms;
                     self.apply_bridge_snapshot(snapshot)?;
-                    self.set_bridge_status(&format!("state=ok bytes={bytes} sha256={sha256}"))?;
+                    self.set_bridge_status(&format!(
+                        "state={state} source={source} mode={source_mode} epoch={epoch} sequence={sequence} ttl_ms={ttl_ms} bytes={bytes} sha256={sha256}"
+                    ))?;
+                    if source_mode == "fixture" {
+                        log::info!(
+                            "GPU_BRIDGE_FIXTURE_ADMISSION source={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
+                            source,
+                        );
+                        log::info!(
+                            "LORA_EXPORT_FIXTURE_ADMISSION source={} job={} mode=fixture profile=qemu gate=bootstrap-trace state=admitted",
+                            source,
+                            QEMU_LORA_EXPORT_JOB_ID,
+                        );
+                    }
                 }
                 Err(err) => {
                     let _ = self.set_bridge_status("state=err");
@@ -4487,7 +5271,20 @@ impl GpuState {
         &mut self,
         snapshot: GpuBridgeSnapshot,
     ) -> Result<(), NineDoorBridgeError> {
-        let active_line = format!("{}\n", snapshot.active);
+        if let Some(current) = self.accepted_identity.as_ref() {
+            if current.source_id == snapshot.identity.source_id
+                && (snapshot.identity.epoch < current.epoch
+                    || (snapshot.identity.epoch == current.epoch
+                        && snapshot.identity.sequence <= current.sequence))
+            {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+        }
+        let active_line = if snapshot.active.is_empty() {
+            String::new()
+        } else {
+            format!("{}\n", snapshot.active)
+        };
         if active_line.len() > GPU_MODELS_ACTIVE_MAX_BYTES as usize {
             return Err(NineDoorBridgeError::InvalidPayload);
         }
@@ -4498,7 +5295,31 @@ impl GpuState {
         self.models = snapshot.models;
         self.models_active_log = active_line.into_bytes();
         self.telemetry_schema = snapshot.telemetry_schema;
+        let now_ms = crate::hal::timebase().now_ms();
+        self.expires_at_ms = Some(now_ms.saturating_add(snapshot.identity.ttl_ms));
+        self.accepted_identity = Some(snapshot.identity);
         Ok(())
+    }
+
+    fn withdraw_expired(&mut self, now_ms: u64) {
+        let Some(expires_at_ms) = self.expires_at_ms else {
+            return;
+        };
+        if now_ms < expires_at_ms {
+            return;
+        }
+        let source = self
+            .accepted_identity
+            .as_ref()
+            .map(|identity| identity.source_id.clone())
+            .unwrap_or_else(|| "none".to_owned());
+        self.entries.clear();
+        self.models.clear();
+        self.models_active_log.clear();
+        self.telemetry_schema.clear();
+        self.expires_at_ms = None;
+        let _ =
+            self.set_bridge_status(&format!("state=unavailable source={source} reason=expired"));
     }
 
     fn set_bridge_status(&mut self, line: &str) -> Result<(), NineDoorBridgeError> {
@@ -4515,25 +5336,6 @@ impl GpuState {
         self.bridge.status = payload.into_bytes();
         Ok(())
     }
-}
-
-fn render_gpu_info_payload(
-    id: &str,
-    name: &str,
-    memory_mb: u32,
-    sm_count: u32,
-    driver_version: &str,
-    runtime_version: &str,
-) -> String {
-    format!(
-        "{{\n    \"id\": \"{}\",\n    \"name\": \"{}\",\n    \"memory_mb\": {},\n    \"sm_count\": {},\n    \"driver_version\": \"{}\",\n    \"runtime_version\": \"{}\"\n}}",
-        escape_json_string(id),
-        escape_json_string(name),
-        memory_mb,
-        sm_count,
-        escape_json_string(driver_version),
-        escape_json_string(runtime_version)
-    )
 }
 
 fn parse_gpu_bridge_begin(payload: &str) -> Result<(usize, [u8; 32]), NineDoorBridgeError> {
@@ -4574,9 +5376,11 @@ fn base64_encoded_len(bytes: usize) -> Option<usize> {
 fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBridgeError> {
     let text = core::str::from_utf8(bytes).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
     let mut schema_seen = false;
+    let mut identity: Option<GpuSnapshotIdentity> = None;
     let mut entries = Vec::new();
     let mut models = Vec::new();
     let mut active: Option<String> = None;
+    let mut active_contract: Option<(u64, String, String)> = None;
     let mut telemetry_schema: Option<Vec<u8>> = None;
     let mut ended = false;
 
@@ -4596,6 +5400,9 @@ fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBrid
         let keyword = parts.next().ok_or(NineDoorBridgeError::InvalidPayload)?;
         match keyword {
             "schema" => {
+                if schema_seen {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
                 let schema = parts.next().ok_or(NineDoorBridgeError::InvalidPayload)?;
                 if schema != GPU_BRIDGE_WIRE_SCHEMA {
                     return Err(NineDoorBridgeError::InvalidPayload);
@@ -4604,6 +5411,75 @@ fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBrid
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
                 schema_seen = true;
+            }
+            "snapshot" => {
+                if identity.is_some() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let mut source_id = None;
+                let mut source_mode = None;
+                let mut epoch = None;
+                let mut sequence = None;
+                let mut observed_unix_ms = None;
+                let mut ttl_ms = None;
+                let mut catalog_sha256 = None;
+                let mut available = None;
+                for part in parts {
+                    let (key, value) = part
+                        .split_once('=')
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    match key {
+                        "source" if source_id.is_none() => source_id = Some(value),
+                        "mode" if source_mode.is_none() => source_mode = Some(value),
+                        "epoch" if epoch.is_none() => epoch = Some(parse_gpu_positive_u64(value)?),
+                        "sequence" if sequence.is_none() => {
+                            sequence = Some(parse_gpu_positive_u64(value)?)
+                        }
+                        "observed_unix_ms" if observed_unix_ms.is_none() => {
+                            observed_unix_ms = Some(parse_gpu_positive_u64(value)?)
+                        }
+                        "ttl_ms" if ttl_ms.is_none() => {
+                            ttl_ms = Some(parse_gpu_positive_u64(value)?)
+                        }
+                        "catalog_sha256" if catalog_sha256.is_none() => {
+                            catalog_sha256 = Some(value)
+                        }
+                        "available" if available.is_none() => {
+                            available = Some(match value {
+                                "0" => false,
+                                "1" => true,
+                                _ => return Err(NineDoorBridgeError::InvalidPayload),
+                            })
+                        }
+                        _ => return Err(NineDoorBridgeError::InvalidPayload),
+                    }
+                }
+                let source_id = source_id.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_gpu_source_id(source_id)?;
+                let source_mode = source_mode.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if !gpu_snapshot_mode_allowed(
+                    source_mode,
+                    cfg!(all(feature = "bootstrap-trace", feature = "release-qemu")),
+                ) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let ttl_ms = ttl_ms.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if ttl_ms > GPU_BRIDGE_MAX_TTL_MS {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let catalog_sha256 = catalog_sha256.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_gpu_sha256(catalog_sha256)?;
+                identity = Some(GpuSnapshotIdentity {
+                    source_id: source_id.to_owned(),
+                    source_mode: source_mode.to_owned(),
+                    epoch: epoch.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                    sequence: sequence.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                    observed_unix_ms: observed_unix_ms
+                        .ok_or(NineDoorBridgeError::InvalidPayload)?,
+                    ttl_ms,
+                    catalog_sha256: catalog_sha256.to_owned(),
+                    available: available.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                });
             }
             "node" => {
                 let mut id = None;
@@ -4616,16 +5492,19 @@ fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBrid
                         .split_once('=')
                         .ok_or(NineDoorBridgeError::InvalidPayload)?;
                     match key {
-                        "id" => id = Some(value),
-                        "info" => info = Some(value),
-                        "ctl" => ctl = Some(value),
-                        "lease" => lease = Some(value),
-                        "status" => status = Some(value),
+                        "id" if id.is_none() => id = Some(value),
+                        "info" if info.is_none() => info = Some(value),
+                        "ctl" if ctl.is_none() => ctl = Some(value),
+                        "lease" if lease.is_none() => lease = Some(value),
+                        "status" if status.is_none() => status = Some(value),
                         _ => return Err(NineDoorBridgeError::InvalidPayload),
                     }
                 }
                 let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
                 validate_gpu_id(id)?;
+                if entries.iter().any(|entry: &GpuEntry| entry.id == id) {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
                 let info_payload = decode_gpu_bridge_string(info)?;
                 let ctl_log = decode_gpu_bridge_bytes(ctl)?;
                 let lease_log = decode_gpu_bridge_bytes(lease)?;
@@ -4641,50 +5520,127 @@ fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBrid
             "model" => {
                 let mut id = None;
                 let mut manifest = None;
+                let mut manifest_sha256 = None;
+                let mut cas_sha256 = None;
+                let mut base_model_id = None;
+                let mut adapter_sha256 = None;
                 for part in parts {
                     let (key, value) = part
                         .split_once('=')
                         .ok_or(NineDoorBridgeError::InvalidPayload)?;
                     match key {
-                        "id" => id = Some(value),
-                        "manifest" => manifest = Some(value),
+                        "id" if id.is_none() => id = Some(value),
+                        "manifest" if manifest.is_none() => manifest = Some(value),
+                        "manifest_sha256" if manifest_sha256.is_none() => {
+                            manifest_sha256 = Some(value)
+                        }
+                        "cas_sha256" if cas_sha256.is_none() => cas_sha256 = Some(value),
+                        "base" if base_model_id.is_none() => base_model_id = Some(value),
+                        "adapter_sha256" if adapter_sha256.is_none() => {
+                            adapter_sha256 = Some(value)
+                        }
                         _ => return Err(NineDoorBridgeError::InvalidPayload),
                     }
                 }
                 let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
                 validate_model_id(id)?;
+                if models
+                    .iter()
+                    .any(|model: &GpuModelManifest| model.model_id == id)
+                {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
                 let manifest_toml = decode_gpu_bridge_string(manifest)?;
                 if manifest_toml.len() > GPU_MODEL_MANIFEST_MAX_BYTES {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let manifest_sha256 = manifest_sha256.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_gpu_sha256(manifest_sha256)?;
+                if gpu_sha256_hex(manifest_toml.as_bytes()) != manifest_sha256 {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+                let cas_sha256 = cas_sha256.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_gpu_sha256(cas_sha256)?;
+                let base_model_id = parse_gpu_optional_identity(
+                    base_model_id.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                    validate_model_id,
+                )?;
+                let adapter_sha256 = parse_gpu_optional_identity(
+                    adapter_sha256.ok_or(NineDoorBridgeError::InvalidPayload)?,
+                    validate_gpu_sha256,
+                )?;
+                if adapter_sha256.is_some() && base_model_id.is_none() {
                     return Err(NineDoorBridgeError::InvalidPayload);
                 }
                 models.push(GpuModelManifest {
                     model_id: id.to_owned(),
                     manifest_toml,
+                    manifest_sha256: manifest_sha256.to_owned(),
+                    cas_sha256: cas_sha256.to_owned(),
+                    base_model_id,
+                    adapter_sha256,
                 });
             }
             "active" => {
                 let mut id = None;
+                let mut generation = None;
+                let mut receipt = None;
+                let mut manifest_sha256 = None;
                 for part in parts {
                     let (key, value) = part
                         .split_once('=')
                         .ok_or(NineDoorBridgeError::InvalidPayload)?;
                     match key {
-                        "id" => id = Some(value),
+                        "id" if id.is_none() => id = Some(value),
+                        "generation" if generation.is_none() => {
+                            generation = Some(
+                                value
+                                    .parse::<u64>()
+                                    .map_err(|_| NineDoorBridgeError::InvalidPayload)?,
+                            )
+                        }
+                        "receipt" if receipt.is_none() => receipt = Some(value),
+                        "manifest_sha256" if manifest_sha256.is_none() => {
+                            manifest_sha256 = Some(value)
+                        }
                         _ => return Err(NineDoorBridgeError::InvalidPayload),
                     }
                 }
                 let id = id.ok_or(NineDoorBridgeError::InvalidPayload)?;
-                validate_model_id(id)?;
-                active = Some(id.to_owned());
+                let generation = generation.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                let receipt = receipt.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                let manifest_sha256 = manifest_sha256.ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if id == GPU_BRIDGE_EMPTY_VALUE {
+                    if generation != 0
+                        || receipt != GPU_BRIDGE_EMPTY_VALUE
+                        || manifest_sha256 != GPU_BRIDGE_EMPTY_VALUE
+                    {
+                        return Err(NineDoorBridgeError::InvalidPayload);
+                    }
+                    active = Some(String::new());
+                } else {
+                    validate_model_id(id)?;
+                    if generation == 0 {
+                        return Err(NineDoorBridgeError::InvalidPayload);
+                    }
+                    validate_gpu_sha256(receipt)?;
+                    validate_gpu_sha256(manifest_sha256)?;
+                    active = Some(id.to_owned());
+                }
+                active_contract =
+                    Some((generation, receipt.to_owned(), manifest_sha256.to_owned()));
             }
             "telemetry" => {
+                if telemetry_schema.is_some() {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
                 let mut schema = None;
                 for part in parts {
                     let (key, value) = part
                         .split_once('=')
                         .ok_or(NineDoorBridgeError::InvalidPayload)?;
                     match key {
-                        "schema" => schema = Some(value),
+                        "schema" if schema.is_none() => schema = Some(value),
                         _ => return Err(NineDoorBridgeError::InvalidPayload),
                     }
                 }
@@ -4701,19 +5657,175 @@ fn parse_gpu_bridge_wire(bytes: &[u8]) -> Result<GpuBridgeSnapshot, NineDoorBrid
     if !schema_seen || !ended {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
+    let identity = identity.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if identity.available != !models.is_empty() {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if gpu_catalog_sha256(&models) != identity.catalog_sha256 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    for model in &models {
+        if let Some(base) = model.base_model_id.as_deref() {
+            if !models.iter().any(|candidate| candidate.model_id == base) {
+                return Err(NineDoorBridgeError::InvalidPayload);
+            }
+        }
+    }
     let active = active.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    let (activation_generation, activation_receipt, active_manifest_sha256) =
+        active_contract.ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if !active.is_empty()
+        && !models
+            .iter()
+            .any(|model| model.model_id.as_str() == active.as_str())
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if !active.is_empty() {
+        let model = models
+            .iter()
+            .find(|model| model.model_id == active)
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        if model.manifest_sha256 != active_manifest_sha256
+            || gpu_activation_receipt(
+                &identity.source_id,
+                identity.epoch,
+                activation_generation,
+                &active,
+                &model.manifest_sha256,
+                &identity.catalog_sha256,
+            ) != activation_receipt
+        {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+    }
     let telemetry_schema = telemetry_schema.ok_or(NineDoorBridgeError::InvalidPayload)?;
     Ok(GpuBridgeSnapshot {
+        identity,
         entries,
         models,
         active,
+        activation_generation,
+        activation_receipt,
         telemetry_schema,
     })
+}
+
+fn gpu_snapshot_mode_allowed(source_mode: &str, qemu_evidence_gate: bool) -> bool {
+    source_mode == "production" || (qemu_evidence_gate && source_mode == "fixture")
+}
+
+fn qemu_lora_export_fixture_allowed(
+    source_mode: &str,
+    qemu_evidence_gate: bool,
+    snapshot_live: bool,
+) -> bool {
+    source_mode == "fixture" && qemu_evidence_gate && snapshot_live
 }
 
 fn decode_gpu_bridge_string(value: Option<&str>) -> Result<String, NineDoorBridgeError> {
     let bytes = decode_gpu_bridge_bytes(value)?;
     String::from_utf8(bytes).map_err(|_| NineDoorBridgeError::InvalidPayload)
+}
+
+fn parse_gpu_positive_u64(value: &str) -> Result<u64, NineDoorBridgeError> {
+    let value = value
+        .parse::<u64>()
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    if value == 0 {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(value)
+}
+
+fn parse_gpu_optional_identity(
+    value: &str,
+    validate: fn(&str) -> Result<(), NineDoorBridgeError>,
+) -> Result<Option<String>, NineDoorBridgeError> {
+    if value == GPU_BRIDGE_EMPTY_VALUE {
+        return Ok(None);
+    }
+    validate(value)?;
+    Ok(Some(value.to_owned()))
+}
+
+fn validate_gpu_source_id(value: &str) -> Result<(), NineDoorBridgeError> {
+    if value.is_empty()
+        || value.len() > GPU_MODEL_ID_MAX_BYTES
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/'))
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_gpu_sha256(value: &str) -> Result<(), NineDoorBridgeError> {
+    if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn gpu_sha256_hex(bytes: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn gpu_catalog_sha256(models: &[GpuModelManifest]) -> String {
+    let mut hasher = Sha256::new();
+    for model in models {
+        hasher.update(model.model_id.as_bytes());
+        hasher.update([0]);
+        hasher.update(model.manifest_sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(model.cas_sha256.as_bytes());
+        hasher.update([0]);
+        hasher.update(
+            model
+                .base_model_id
+                .as_deref()
+                .unwrap_or(GPU_BRIDGE_EMPTY_VALUE)
+                .as_bytes(),
+        );
+        hasher.update([0]);
+        hasher.update(
+            model
+                .adapter_sha256
+                .as_deref()
+                .unwrap_or(GPU_BRIDGE_EMPTY_VALUE)
+                .as_bytes(),
+        );
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn gpu_activation_receipt(
+    source_id: &str,
+    epoch: u64,
+    generation: u64,
+    model_id: &str,
+    manifest_sha256: &str,
+    catalog_sha256: &str,
+) -> String {
+    let epoch = epoch.to_string();
+    let generation = generation.to_string();
+    let mut hasher = Sha256::new();
+    for field in [
+        source_id,
+        epoch.as_str(),
+        generation.as_str(),
+        model_id,
+        manifest_sha256,
+        catalog_sha256,
+    ] {
+        hasher.update(field.as_bytes());
+        hasher.update([0]);
+    }
+    hex::encode(hasher.finalize())
 }
 
 fn decode_gpu_bridge_bytes(value: Option<&str>) -> Result<Vec<u8>, NineDoorBridgeError> {
@@ -6691,12 +7803,95 @@ struct WorkerTelemetry {
     id: HeaplessString<MAX_WORKER_ID_LEN>,
     ring: TelemetryRing,
     target: SpawnTarget,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_lifecycle: crate::worker_supervisor::WorkerLifecycleState,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_identity: Option<WorkerIdentity>,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_revision: u64,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_ready_sequence: u64,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_receipt_sequence: u64,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_completion_sequence: u64,
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    target_published: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+impl WorkerTelemetry {
+    fn apply_target_snapshot(
+        &mut self,
+        snapshot: TargetWorkerNamespaceSnapshot,
+    ) -> Result<(), NineDoorBridgeError> {
+        if snapshot.public_id() != Some(self.id.as_str())
+            || snapshot.role != self.target.worker_role()
+            || snapshot.revision < self.target_revision
+        {
+            return Err(NineDoorBridgeError::InvalidPayload);
+        }
+        if snapshot.revision == self.target_revision {
+            return Ok(());
+        }
+        let identity = snapshot
+            .identity
+            .ok_or(NineDoorBridgeError::InvalidPayload)?;
+        let line = format!(
+            "{{\"schema\":\"worker-runtime-state/v1\",\"worker_id\":\"{}\",\"role\":\"{}\",\"state\":\"{}\",\"slot\":{},\"lease_epoch\":{},\"supervisor_generation\":{},\"cap_generation\":{},\"ready_sequence\":{},\"control_sequence\":{},\"receipt_sequence\":{},\"completion_sequence\":{}}}",
+            self.id,
+            target_worker_role_label(snapshot.role),
+            snapshot.lifecycle.label(),
+            identity.slot,
+            identity.lease_epoch,
+            identity.supervisor_generation,
+            identity.cap_generation,
+            snapshot.ready_sequence,
+            snapshot.control_sequence,
+            snapshot.receipt_sequence,
+            snapshot.completion_sequence,
+        );
+        self.ring
+            .append(line.as_bytes())
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+        self.target_lifecycle = snapshot.lifecycle;
+        self.target_identity = Some(identity);
+        self.target_revision = snapshot.revision;
+        self.target_ready_sequence = snapshot.ready_sequence;
+        self.target_receipt_sequence = snapshot.receipt_sequence;
+        self.target_completion_sequence = snapshot.completion_sequence;
+        if snapshot.ready_sequence != 0 {
+            self.target_published = true;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum SpawnTarget {
     Heartbeat,
     Gpu,
+    Lora,
+}
+
+impl SpawnTarget {
+    #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+    const fn worker_role(self) -> WorkerRole {
+        match self {
+            Self::Heartbeat => WorkerRole::Heartbeat,
+            Self::Gpu => WorkerRole::Gpu,
+            Self::Lora => WorkerRole::Lora,
+        }
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+const fn target_worker_role_label(role: WorkerRole) -> &'static str {
+    match role {
+        WorkerRole::Heartbeat => "worker-heartbeat",
+        WorkerRole::Gpu => "worker-gpu",
+        WorkerRole::Lora => "worker-lora",
+    }
 }
 
 #[derive(Debug)]
@@ -6826,6 +8021,7 @@ fn host_ticket_action_label(action: generated::HostTicketAction) -> &'static str
         generated::HostTicketAction::GpuLeaseGrant => "gpu.lease.grant",
         generated::HostTicketAction::GpuLeaseRenew => "gpu.lease.renew",
         generated::HostTicketAction::GpuLeaseRelease => "gpu.lease.release",
+        generated::HostTicketAction::PeftExport => "peft.export",
         generated::HostTicketAction::PeftImport => "peft.import",
         generated::HostTicketAction::PeftActivate => "peft.activate",
         generated::HostTicketAction::PeftRollback => "peft.rollback",
@@ -6858,7 +8054,7 @@ fn validate_host_ticket_token(value: &str) -> Result<(), NineDoorBridgeError> {
     if trimmed.is_empty() {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
-    if trimmed.as_bytes().len() > HOST_TICKET_ID_MAX_BYTES {
+    if trimmed.len() > HOST_TICKET_ID_MAX_BYTES {
         return Err(NineDoorBridgeError::InvalidPayload);
     }
     if !trimmed
@@ -6866,6 +8062,524 @@ fn validate_host_ticket_token(value: &str) -> Result<(), NineDoorBridgeError> {
         .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
     {
         return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_host_ticket_v2_token(value: &str) -> Result<(), NineDoorBridgeError> {
+    validate_host_ticket_token(value)?;
+    if value.starts_with('-') {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn parse_host_ticket_v2_spec(
+    line: &str,
+    host: &HostState,
+) -> Result<HostTicketV2RawSpec, NineDoorBridgeError> {
+    let spec: HostTicketV2RawSpec =
+        serde_json::from_str(line).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    if spec.schema != HOST_TICKET_V2_REQUEST_SCHEMA
+        || !host.accepted_request_schema(spec.schema.as_str())
+        || spec.receipt_mode != "worker"
+        || !host.receipt_action(spec.action.as_str())
+        || !host
+            .ticket_action_allowlist
+            .iter()
+            .any(|allowed| host_ticket_action_label(*allowed) == spec.action)
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    validate_host_ticket_v2_token(spec.id.as_str())?;
+    validate_host_ticket_v2_token(spec.idempotency_key.as_str())?;
+    validate_host_ticket_v2_token(spec.operation_id.as_str())?;
+    validate_host_ticket_v2_token(spec.subject_ref.as_str())?;
+    validate_host_ticket_v2_token(spec.receipt_worker_role.as_str())?;
+    validate_host_ticket_v2_token(spec.receipt_worker_id.as_str())?;
+    if spec.receipt_worker_id.len() > HOST_TICKET_WORKER_ID_MAX_BYTES
+        || spec.receipt_supervisor_generation == 0
+        || spec.receipt_cap_generation == 0
+        || spec.expires_unix_ms == Some(0)
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let action = host_ticket_action(spec.action.as_str())?;
+    if spec.receipt_worker_role != host_ticket_worker_role_label(action.role()) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    validate_host_ticket_v2_args(action, &spec.args)?;
+    Ok(spec)
+}
+
+fn parse_host_ticket_v2_result(
+    line: &str,
+    host: &HostState,
+) -> Result<HostTicketV2Result, NineDoorBridgeError> {
+    let result: HostTicketV2Result =
+        serde_json::from_str(line).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    if result.schema != HOST_TICKET_V2_RESULT_SCHEMA
+        || !host.accepted_result_schema(result.schema.as_str())
+        || result.receipt_mode != "worker"
+        || !host.receipt_action(result.action.as_str())
+        || !host
+            .ticket_action_allowlist
+            .iter()
+            .any(|allowed| host_ticket_action_label(*allowed) == result.action)
+        || !host
+            .ticket_lifecycle
+            .iter()
+            .any(|allowed| host_ticket_lifecycle_label(*allowed) == result.state)
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    validate_host_ticket_v2_token(result.id.as_str())?;
+    validate_host_ticket_v2_token(result.idempotency_key.as_str())?;
+    validate_host_ticket_v2_token(result.operation_id.as_str())?;
+    validate_host_ticket_v2_token(result.subject_ref.as_str())?;
+    validate_host_ticket_v2_token(result.receipt_worker_role.as_str())?;
+    validate_host_ticket_v2_token(result.receipt_worker_id.as_str())?;
+    if result.receipt_worker_id.len() > HOST_TICKET_WORKER_ID_MAX_BYTES
+        || result.receipt_supervisor_generation == 0
+        || result.receipt_cap_generation == 0
+        || result.resolved_lease_epoch == 0
+        || result.admission_sequence == 0
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    if result.message.as_deref().is_some_and(|message| {
+        message.is_empty() || message.len() > 192 || message.chars().any(char::is_control)
+    }) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let action = host_ticket_action(result.action.as_str())?;
+    if result.receipt_worker_role != host_ticket_worker_role_label(action.role()) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let supplied = decode_sha256(result.result_digest.as_str())?;
+    let canonical = canonical_host_ticket_v2_result_bytes(&result)?;
+    if supplied != sha256_bytes(canonical.as_slice()) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(result)
+}
+
+fn validate_host_ticket_v2_subject(
+    raw: &HostTicketV2RawSpec,
+    gpu: &GpuState,
+) -> Result<(), NineDoorBridgeError> {
+    if host_ticket_action(raw.action.as_str())?.is_gpu()
+        && gpu.entry(raw.subject_ref.as_str()).is_none()
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_host_ticket_v2_args(
+    action: WorkerAction,
+    args: &JsonValue,
+) -> Result<(), NineDoorBridgeError> {
+    let object = args
+        .as_object()
+        .ok_or(NineDoorBridgeError::InvalidPayload)?;
+    match action {
+        WorkerAction::GpuLeaseGrant | WorkerAction::GpuLeaseRenew => {
+            validate_host_ticket_arg_keys(object, &["priority", "ttl_s"])?;
+            validate_host_ticket_optional_u64(object, "ttl_s", 1, u32::MAX as u64)?;
+            validate_host_ticket_optional_u64(object, "priority", 0, u8::MAX as u64)
+        }
+        WorkerAction::GpuLeaseRelease => {
+            validate_host_ticket_arg_keys(object, &["reason"])?;
+            if let Some(reason) = object.get("reason") {
+                let reason = reason.as_str().ok_or(NineDoorBridgeError::InvalidPayload)?;
+                if reason.is_empty()
+                    || reason.len() > HOST_TICKET_REASON_MAX_BYTES
+                    || reason.chars().any(char::is_control)
+                {
+                    return Err(NineDoorBridgeError::InvalidPayload);
+                }
+            }
+            Ok(())
+        }
+        WorkerAction::PeftExport | WorkerAction::PeftActivate | WorkerAction::PeftRollback => {
+            validate_host_ticket_arg_keys(object, &[])
+        }
+        WorkerAction::PeftImport => {
+            validate_host_ticket_arg_keys(
+                object,
+                &[
+                    "adapter_ref",
+                    "adapter_sha256",
+                    "job_id",
+                    "lora_sha256",
+                    "metrics_sha256",
+                ],
+            )?;
+            for key in ["adapter_ref", "job_id"] {
+                let value = object
+                    .get(key)
+                    .and_then(JsonValue::as_str)
+                    .ok_or(NineDoorBridgeError::InvalidPayload)?;
+                validate_host_ticket_v2_token(value)?;
+            }
+            for key in ["adapter_sha256", "lora_sha256", "metrics_sha256"] {
+                if let Some(value) = object.get(key) {
+                    let value = value.as_str().ok_or(NineDoorBridgeError::InvalidPayload)?;
+                    if value.len() != 64
+                        || value.bytes().any(|byte| {
+                            !byte.is_ascii_hexdigit()
+                                || (byte.is_ascii_alphabetic() && byte.is_ascii_uppercase())
+                        })
+                    {
+                        return Err(NineDoorBridgeError::InvalidPayload);
+                    }
+                }
+            }
+            Ok(())
+        }
+        WorkerAction::HeartbeatPublish => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
+fn validate_host_ticket_arg_keys(
+    object: &JsonMap<String, JsonValue>,
+    allowed: &[&str],
+) -> Result<(), NineDoorBridgeError> {
+    if object
+        .keys()
+        .any(|key| !allowed.iter().any(|allowed| *allowed == key))
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn validate_host_ticket_optional_u64(
+    object: &JsonMap<String, JsonValue>,
+    key: &str,
+    minimum: u64,
+    maximum: u64,
+) -> Result<(), NineDoorBridgeError> {
+    let Some(value) = object.get(key) else {
+        return Ok(());
+    };
+    let value = value.as_u64().ok_or(NineDoorBridgeError::InvalidPayload)?;
+    if !(minimum..=maximum).contains(&value) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn admit_host_ticket_v2_spec(
+    raw: HostTicketV2RawSpec,
+    binding: HostTicketV2WorkerBinding<'_>,
+    admission_sequence: u64,
+) -> Result<HostTicketV2AdmittedSpec, NineDoorBridgeError> {
+    let action = host_ticket_action(raw.action.as_str())?;
+    if admission_sequence == 0
+        || !binding.ready
+        || binding.ready_sequence == 0
+        || binding.public_id != raw.receipt_worker_id
+        || binding.role != action.role()
+        || binding.identity.validate_for_role(binding.role).is_err()
+        || binding.identity.supervisor_generation != raw.receipt_supervisor_generation
+        || binding.identity.cap_generation != raw.receipt_cap_generation
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let resolved_worker_slot =
+        u16::try_from(binding.identity.slot).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    Ok(HostTicketV2AdmittedSpec {
+        schema: raw.schema,
+        id: raw.id,
+        idempotency_key: raw.idempotency_key,
+        action: raw.action,
+        args: raw.args,
+        expires_unix_ms: raw.expires_unix_ms,
+        receipt_mode: raw.receipt_mode,
+        operation_id: raw.operation_id,
+        subject_ref: raw.subject_ref,
+        receipt_worker_role: raw.receipt_worker_role,
+        receipt_worker_id: raw.receipt_worker_id,
+        receipt_supervisor_generation: raw.receipt_supervisor_generation,
+        receipt_cap_generation: raw.receipt_cap_generation,
+        resolved_worker_slot,
+        resolved_lease_epoch: binding.identity.lease_epoch,
+        admission_sequence,
+    })
+}
+
+fn validate_result_binding(
+    result: &HostTicketV2Result,
+    admitted: &HostTicketV2AdmittedSpec,
+) -> Result<(), NineDoorBridgeError> {
+    if result.id != admitted.id
+        || result.idempotency_key != admitted.idempotency_key
+        || result.action != admitted.action
+        || result.receipt_mode != admitted.receipt_mode
+        || result.operation_id != admitted.operation_id
+        || result.subject_ref != admitted.subject_ref
+        || result.receipt_worker_role != admitted.receipt_worker_role
+        || result.receipt_worker_id != admitted.receipt_worker_id
+        || result.receipt_supervisor_generation != admitted.receipt_supervisor_generation
+        || result.receipt_cap_generation != admitted.receipt_cap_generation
+        || result.resolved_worker_slot != admitted.resolved_worker_slot
+        || result.resolved_lease_epoch != admitted.resolved_lease_epoch
+        || result.admission_sequence != admitted.admission_sequence
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    Ok(())
+}
+
+fn host_ticket_action(action: &str) -> Result<WorkerAction, NineDoorBridgeError> {
+    match action {
+        "gpu.lease.grant" => Ok(WorkerAction::GpuLeaseGrant),
+        "gpu.lease.renew" => Ok(WorkerAction::GpuLeaseRenew),
+        "gpu.lease.release" => Ok(WorkerAction::GpuLeaseRelease),
+        "peft.export" => Ok(WorkerAction::PeftExport),
+        "peft.import" => Ok(WorkerAction::PeftImport),
+        "peft.activate" => Ok(WorkerAction::PeftActivate),
+        "peft.rollback" => Ok(WorkerAction::PeftRollback),
+        _ => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
+const fn host_ticket_worker_role_label(role: WorkerRole) -> &'static str {
+    match role {
+        WorkerRole::Heartbeat => "worker-heartbeat",
+        WorkerRole::Gpu => "worker-gpu",
+        WorkerRole::Lora => "worker-lora",
+    }
+}
+
+fn host_ticket_terminal_outcome(state: &str) -> Result<Option<WorkerOutcome>, NineDoorBridgeError> {
+    match state {
+        "queued" | "claimed" | "running" => Ok(None),
+        "succeeded" => Ok(Some(WorkerOutcome::Confirmed)),
+        "failed" | "expired" => Ok(Some(WorkerOutcome::Rejected)),
+        _ => Err(NineDoorBridgeError::InvalidPayload),
+    }
+}
+
+fn host_ticket_terminal_disposition(
+    outcome: WorkerOutcome,
+    admitted: &HostTicketV2AdmittedSpec,
+    current: Option<HostTicketV2WorkerBinding<'_>>,
+) -> Result<HostTicketV2TerminalDisposition, NineDoorBridgeError> {
+    let expected_role = host_ticket_action(admitted.action.as_str())?.role();
+    let admitted_identity = admission_identity(admitted)?;
+    let exact_ready = current.is_some_and(|binding| {
+        binding.ready
+            && binding.ready_sequence != 0
+            && binding.public_id == admitted.receipt_worker_id
+            && binding.role == expected_role
+            && binding.identity == admitted_identity
+    });
+    Ok(if exact_ready {
+        HostTicketV2TerminalDisposition::Submit(outcome)
+    } else {
+        HostTicketV2TerminalDisposition::Stale
+    })
+}
+
+fn admission_identity(
+    spec: &HostTicketV2AdmittedSpec,
+) -> Result<WorkerIdentity, NineDoorBridgeError> {
+    let role = host_ticket_action(spec.action.as_str())?.role();
+    let identity = WorkerIdentity::new(
+        role,
+        u32::from(spec.resolved_worker_slot),
+        spec.resolved_lease_epoch,
+        spec.receipt_supervisor_generation,
+        spec.receipt_cap_generation,
+    );
+    identity
+        .validate_for_role(role)
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    Ok(identity)
+}
+
+fn build_host_ticket_worker_control(
+    result: &HostTicketV2Result,
+    outcome: WorkerOutcome,
+    admitted_time_ns: u64,
+) -> Result<WorkerControlRecord, NineDoorBridgeError> {
+    let action = host_ticket_action(result.action.as_str())?;
+    let identity = WorkerIdentity::new(
+        action.role(),
+        u32::from(result.resolved_worker_slot),
+        result.resolved_lease_epoch,
+        result.receipt_supervisor_generation,
+        result.receipt_cap_generation,
+    );
+    identity
+        .validate_for_role(action.role())
+        .map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    let result_digest = decode_sha256(result.result_digest.as_str())?;
+    Ok(WorkerControlRecord::staged(
+        result.admission_sequence,
+        identity,
+        action,
+        outcome,
+        admitted_time_ns,
+        0,
+        ReceiptDigests {
+            ticket: Digest32::new(sha256_bytes(result.id.as_bytes())),
+            idempotency: Digest32::new(sha256_bytes(result.idempotency_key.as_bytes())),
+            operation: Digest32::new(sha256_bytes(result.operation_id.as_bytes())),
+            subject: Digest32::new(sha256_bytes(result.subject_ref.as_bytes())),
+            result: Digest32::new(result_digest),
+        },
+    )
+    .committed())
+}
+
+#[derive(Serialize)]
+struct HostTicketV2CanonicalResult<'a> {
+    schema: &'a str,
+    id: &'a str,
+    idempotency_key: &'a str,
+    action: &'a str,
+    state: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message: Option<&'a str>,
+    receipt_mode: &'a str,
+    operation_id: &'a str,
+    subject_ref: &'a str,
+    receipt_worker_role: &'a str,
+    receipt_worker_id: &'a str,
+    receipt_supervisor_generation: u64,
+    receipt_cap_generation: u64,
+    resolved_worker_slot: u16,
+    resolved_lease_epoch: u64,
+    admission_sequence: u64,
+}
+
+fn canonical_host_ticket_v2_result_bytes(
+    result: &HostTicketV2Result,
+) -> Result<Vec<u8>, NineDoorBridgeError> {
+    serde_json::to_vec(&HostTicketV2CanonicalResult {
+        schema: result.schema.as_str(),
+        id: result.id.as_str(),
+        idempotency_key: result.idempotency_key.as_str(),
+        action: result.action.as_str(),
+        state: result.state.as_str(),
+        message: result.message.as_deref(),
+        receipt_mode: result.receipt_mode.as_str(),
+        operation_id: result.operation_id.as_str(),
+        subject_ref: result.subject_ref.as_str(),
+        receipt_worker_role: result.receipt_worker_role.as_str(),
+        receipt_worker_id: result.receipt_worker_id.as_str(),
+        receipt_supervisor_generation: result.receipt_supervisor_generation,
+        receipt_cap_generation: result.receipt_cap_generation,
+        resolved_worker_slot: result.resolved_worker_slot,
+        resolved_lease_epoch: result.resolved_lease_epoch,
+        admission_sequence: result.admission_sequence,
+    })
+    .map_err(|_| NineDoorBridgeError::InvalidPayload)
+}
+
+fn serialize_host_ticket<T: Serialize>(value: &T) -> Result<String, NineDoorBridgeError> {
+    serde_json::to_string(value).map_err(|_| NineDoorBridgeError::InvalidPayload)
+}
+
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    let digest = Sha256::digest(bytes);
+    let mut output = [0u8; 32];
+    output.copy_from_slice(&digest);
+    output
+}
+
+fn decode_sha256(value: &str) -> Result<[u8; 32], NineDoorBridgeError> {
+    if value.len() != 64
+        || value.bytes().any(|byte| {
+            !byte.is_ascii_hexdigit() || (byte.is_ascii_alphabetic() && byte.is_ascii_uppercase())
+        })
+    {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let mut output = [0u8; 32];
+    hex::decode_to_slice(value, &mut output).map_err(|_| NineDoorBridgeError::InvalidPayload)?;
+    Ok(output)
+}
+
+fn cat_wire_line_count(text: &str) -> Result<usize, NineDoorBridgeError> {
+    let mut total = 0usize;
+    for line in text.lines() {
+        let line_count = if line.len() <= DEFAULT_LINE_CAPACITY {
+            1
+        } else {
+            cat_chunk_count(line)?
+        };
+        total = total
+            .checked_add(line_count)
+            .ok_or(NineDoorBridgeError::BufferFull)?;
+    }
+    Ok(total)
+}
+
+fn cat_chunk_count(line: &str) -> Result<usize, NineDoorBridgeError> {
+    let mut count = 0usize;
+    let mut start = 0usize;
+    while start < line.len() {
+        start = cat_chunk_end(line, start)?;
+        count = count
+            .checked_add(1)
+            .ok_or(NineDoorBridgeError::BufferFull)?;
+    }
+    if count == 0 || count > MAX_STREAM_LINES || count > u16::MAX as usize {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    Ok(count)
+}
+
+fn cat_chunk_end(line: &str, start: usize) -> Result<usize, NineDoorBridgeError> {
+    if start >= line.len() || !line.is_char_boundary(start) {
+        return Err(NineDoorBridgeError::InvalidPayload);
+    }
+    let mut end = start.saturating_add(CAT_CHUNK_TEXT_BYTES).min(line.len());
+    while end > start && !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    if end == start {
+        return Err(NineDoorBridgeError::BufferFull);
+    }
+    Ok(end)
+}
+
+fn cat_lines_from_text_into(
+    text: &str,
+    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
+) -> Result<(), NineDoorBridgeError> {
+    output.clear();
+    for line in text.lines() {
+        if line.len() <= DEFAULT_LINE_CAPACITY {
+            push_boot_line(output, line)?;
+            continue;
+        }
+        let count = cat_chunk_count(line)?;
+        let digest = hex::encode(sha256_bytes(line.as_bytes()));
+        let mut start = 0usize;
+        let mut sequence = 0usize;
+        while start < line.len() {
+            let end = cat_chunk_end(line, start)?;
+            let mut wire = HeaplessString::<DEFAULT_LINE_CAPACITY>::new();
+            write!(
+                wire,
+                "{CAT_CHUNK_PREFIX}{sequence:04x}:{count:04x}:{digest}:{}",
+                &line[start..end]
+            )
+            .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            output
+                .push(wire)
+                .map_err(|_| NineDoorBridgeError::BufferFull)?;
+            sequence = sequence
+                .checked_add(1)
+                .ok_or(NineDoorBridgeError::BufferFull)?;
+            start = end;
+        }
     }
     Ok(())
 }
@@ -7000,29 +8714,12 @@ fn list_from_slice(
     Ok(output)
 }
 
-fn list_shard_labels(
-) -> Result<HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>, NineDoorBridgeError>
-{
-    let mut output = HeaplessVec::new();
-    list_shard_labels_into(&mut output)?;
-    Ok(output)
-}
-
 fn list_from_slice_into(
     entries: &[&str],
     output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
 ) -> Result<(), NineDoorBridgeError> {
     for entry in entries {
         push_list_entry(output, entry)?;
-    }
-    Ok(())
-}
-
-fn list_shard_labels_into(
-    output: &mut HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES>,
-) -> Result<(), NineDoorBridgeError> {
-    for label in generated::shard_labels() {
-        push_list_entry(output, label)?;
     }
     Ok(())
 }
@@ -8358,6 +10055,7 @@ fn parse_queen_ctl(payload: &str) -> Result<QueenCtlCommand<'_>, NineDoorBridgeE
         let target = match target {
             "heartbeat" => SpawnTarget::Heartbeat,
             "gpu" => SpawnTarget::Gpu,
+            "lora" => SpawnTarget::Lora,
             _ => return Err(NineDoorBridgeError::InvalidPayload),
         };
         return Ok(QueenCtlCommand::Spawn(target));
@@ -8603,6 +10301,380 @@ mod tests {
         let _ = lifecycle::auto_boot_complete(1);
     }
 
+    fn empty_gpu_snapshot(sequence: u64, ttl_ms: u64) -> GpuBridgeSnapshot {
+        GpuBridgeSnapshot {
+            identity: GpuSnapshotIdentity {
+                source_id: "gpu-bridge-host/nvml".to_owned(),
+                source_mode: "production".to_owned(),
+                epoch: 7,
+                sequence,
+                observed_unix_ms: 1,
+                ttl_ms,
+                catalog_sha256: gpu_catalog_sha256(&[]),
+                available: false,
+            },
+            entries: Vec::new(),
+            models: Vec::new(),
+            active: String::new(),
+            activation_generation: 0,
+            activation_receipt: String::new(),
+            telemetry_schema: b"{}".to_vec(),
+        }
+    }
+
+    fn host_ticket_v2_request_fixture() -> String {
+        concat!(
+            "{\"schema\":\"host-ticket/v2\",\"id\":\"ticket-v2\",",
+            "\"idempotency_key\":\"idem-v2\",\"action\":\"gpu.lease.grant\",",
+            "\"args\":{\"ttl_s\":30},\"receipt_mode\":\"worker\",",
+            "\"operation_id\":\"lease-1\",\"subject_ref\":\"GPU-0\",",
+            "\"receipt_worker_role\":\"worker-gpu\",",
+            "\"receipt_worker_id\":\"worker-gpu-1\",",
+            "\"receipt_supervisor_generation\":2,\"receipt_cap_generation\":3}"
+        )
+        .to_owned()
+    }
+
+    fn host_ticket_v2_admitted_fixture() -> HostTicketV2AdmittedSpec {
+        let host = HostState::new();
+        let raw = parse_host_ticket_v2_spec(host_ticket_v2_request_fixture().as_str(), &host)
+            .expect("parse v2 request fixture");
+        admit_host_ticket_v2_spec(
+            raw,
+            HostTicketV2WorkerBinding {
+                public_id: "worker-gpu-1",
+                role: WorkerRole::Gpu,
+                identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
+                ready: true,
+                ready_sequence: 1,
+                last_control_sequence: 0,
+            },
+            5,
+        )
+        .expect("admit v2 request fixture")
+    }
+
+    fn host_ticket_v2_result_fixture(
+        admitted: &HostTicketV2AdmittedSpec,
+        state: &str,
+        message: Option<&str>,
+    ) -> HostTicketV2Result {
+        let mut result = HostTicketV2Result {
+            schema: HOST_TICKET_V2_RESULT_SCHEMA.to_owned(),
+            id: admitted.id.clone(),
+            idempotency_key: admitted.idempotency_key.clone(),
+            action: admitted.action.clone(),
+            state: state.to_owned(),
+            message: message.map(ToOwned::to_owned),
+            receipt_mode: admitted.receipt_mode.clone(),
+            operation_id: admitted.operation_id.clone(),
+            subject_ref: admitted.subject_ref.clone(),
+            receipt_worker_role: admitted.receipt_worker_role.clone(),
+            receipt_worker_id: admitted.receipt_worker_id.clone(),
+            receipt_supervisor_generation: admitted.receipt_supervisor_generation,
+            receipt_cap_generation: admitted.receipt_cap_generation,
+            resolved_worker_slot: admitted.resolved_worker_slot,
+            resolved_lease_epoch: admitted.resolved_lease_epoch,
+            admission_sequence: admitted.admission_sequence,
+            result_digest: String::new(),
+        };
+        result.result_digest = hex::encode(
+            canonical_host_ticket_v2_result_bytes(&result)
+                .map(|bytes| sha256_bytes(bytes.as_slice()))
+                .expect("canonical result digest"),
+        );
+        result
+    }
+
+    #[test]
+    fn gpu_snapshot_rejects_stale_sequence() {
+        let mut gpu = GpuState::new(true);
+        gpu.apply_bridge_snapshot(empty_gpu_snapshot(2, 100))
+            .expect("first snapshot");
+        let err = gpu
+            .apply_bridge_snapshot(empty_gpu_snapshot(2, 100))
+            .expect_err("replayed snapshot must fail");
+        assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn gpu_fixture_snapshot_requires_explicit_qemu_evidence_gate() {
+        assert!(gpu_snapshot_mode_allowed("production", false));
+        assert!(!gpu_snapshot_mode_allowed("fixture", false));
+        assert!(gpu_snapshot_mode_allowed("fixture", true));
+        assert!(!gpu_snapshot_mode_allowed("mock", true));
+        assert!(!qemu_lora_export_fixture_allowed("fixture", false, true));
+        assert!(!qemu_lora_export_fixture_allowed("fixture", true, false));
+        assert!(qemu_lora_export_fixture_allowed("fixture", true, true));
+        assert!(!qemu_lora_export_fixture_allowed("production", true, true));
+    }
+
+    #[test]
+    fn expired_gpu_snapshot_withdraws_provider_generation() {
+        crate::hal::set_timebase_now_ms(10);
+        let mut gpu = GpuState::new(true);
+        let mut snapshot = empty_gpu_snapshot(1, 5);
+        snapshot.entries.push(GpuEntry {
+            id: "GPU-live".to_owned(),
+            info_payload: "{}".to_owned(),
+            ctl_log: Vec::new(),
+            lease_log: Vec::new(),
+            status_log: Vec::new(),
+        });
+        gpu.apply_bridge_snapshot(snapshot)
+            .expect("snapshot applies");
+        gpu.withdraw_expired(15);
+        assert!(gpu.entries.is_empty());
+        assert!(gpu.models.is_empty());
+        assert!(core::str::from_utf8(&gpu.bridge.status)
+            .expect("status utf8")
+            .contains("reason=expired"));
+    }
+
+    #[test]
+    fn host_ticket_v2_admission_is_strict_root_owned_and_stable() {
+        let host = HostState::new();
+        let raw_line = host_ticket_v2_request_fixture();
+        let raw = parse_host_ticket_v2_spec(raw_line.as_str(), &host).expect("strict raw v2");
+        let admitted = admit_host_ticket_v2_spec(
+            raw,
+            HostTicketV2WorkerBinding {
+                public_id: "worker-gpu-1",
+                role: WorkerRole::Gpu,
+                identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
+                ready: true,
+                ready_sequence: 1,
+                last_control_sequence: 4,
+            },
+            5,
+        )
+        .expect("strict admitted v2");
+        let encoded = serialize_host_ticket(&admitted).expect("canonical admitted v2");
+        assert_eq!(encoded.len(), 394);
+        assert_eq!(admitted.resolved_worker_slot, 0);
+        assert_eq!(admitted.resolved_lease_epoch, 4);
+        assert_eq!(admitted.admission_sequence, 5);
+        assert!(!encoded.contains("target"));
+        assert!(!encoded.contains("source_hive"));
+
+        for forged in [
+            raw_line.replace(
+                "\"receipt_cap_generation\":3}",
+                "\"receipt_cap_generation\":3,\"resolved_worker_slot\":0}",
+            ),
+            raw_line.replace(
+                "\"receipt_cap_generation\":3}",
+                "\"receipt_cap_generation\":3,\"source_hive\":\"hive-a\"}",
+            ),
+            raw_line.replace("worker-gpu", "worker-lora"),
+            raw_line.replace("\"ttl_s\":30", "\"ttl_s\":30,\"path\":\"../tmp\""),
+        ] {
+            assert!(parse_host_ticket_v2_spec(forged.as_str(), &host).is_err());
+        }
+        let peft = raw_line
+            .replace("gpu.lease.grant", "peft.import")
+            .replace("{\"ttl_s\":30}", "{\"adapter_ref\":\"adapter-1\",\"adapter_sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"job_id\":\"job-1\"}")
+            .replace("worker-gpu", "worker-lora");
+        assert!(
+            parse_host_ticket_v2_spec(peft.replace("adapter-1", "../adapter").as_str(), &host,)
+                .is_err()
+        );
+        assert!(parse_host_ticket_v2_spec(
+            peft.replace(
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+            )
+            .as_str(),
+            &host,
+        )
+        .is_err());
+
+        let raw = parse_host_ticket_v2_spec(raw_line.as_str(), &host).expect("strict raw v2");
+        let not_ready = admit_host_ticket_v2_spec(
+            raw.clone(),
+            HostTicketV2WorkerBinding {
+                public_id: "worker-gpu-1",
+                role: WorkerRole::Gpu,
+                identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 2, 3),
+                ready: false,
+                ready_sequence: 1,
+                last_control_sequence: 0,
+            },
+            5,
+        );
+        assert!(not_ready.is_err());
+        let unpinned = admit_host_ticket_v2_spec(
+            raw,
+            HostTicketV2WorkerBinding {
+                public_id: "worker-gpu-1",
+                role: WorkerRole::Gpu,
+                identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 99, 3),
+                ready: true,
+                ready_sequence: 1,
+                last_control_sequence: 0,
+            },
+            5,
+        );
+        assert!(unpinned.is_err());
+    }
+
+    #[test]
+    fn host_ticket_v2_gpu_subject_must_exist_in_current_inventory() {
+        let host = HostState::new();
+        let raw = parse_host_ticket_v2_spec(host_ticket_v2_request_fixture().as_str(), &host)
+            .expect("strict raw v2");
+        let mut gpu = GpuState::new(true);
+        assert!(validate_host_ticket_v2_subject(&raw, &gpu).is_err());
+        gpu.entries.push(GpuEntry {
+            id: "GPU-0".to_owned(),
+            info_payload: "{}".to_owned(),
+            ctl_log: Vec::new(),
+            lease_log: Vec::new(),
+            status_log: Vec::new(),
+        });
+        validate_host_ticket_v2_subject(&raw, &gpu).expect("generated GPU subject");
+    }
+
+    #[test]
+    fn host_ticket_v2_result_digest_binding_and_worker_control_are_exact() {
+        let host = HostState::new();
+        let admitted = host_ticket_v2_admitted_fixture();
+        let result = host_ticket_v2_result_fixture(&admitted, "succeeded", Some("committed"));
+        let encoded = serialize_host_ticket(&result).expect("canonical result");
+        assert_eq!(encoded.len(), 506);
+        assert_eq!(
+            result.result_digest,
+            "730b822b8b3497f4ac21e3aaddf3d5f89411b95ddc05083268725dad2fb620b0"
+        );
+        let parsed =
+            parse_host_ticket_v2_result(encoded.as_str(), &host).expect("strict result digest");
+        validate_result_binding(&parsed, &admitted).expect("exact admitted binding");
+        let canonical =
+            canonical_host_ticket_v2_result_bytes(&parsed).expect("canonical digest preimage");
+        assert_eq!(canonical.len(), 423);
+
+        let control = build_host_ticket_worker_control(&parsed, WorkerOutcome::Confirmed, 123)
+            .expect("receipt control");
+        assert_eq!(control.sequence, 5);
+        assert_eq!(control.committed_sequence, 5);
+        assert_eq!(
+            control.identity,
+            admission_identity(&admitted).expect("identity")
+        );
+        assert_eq!(
+            control.worker_action().expect("action"),
+            WorkerAction::GpuLeaseGrant
+        );
+        assert_eq!(
+            control.worker_outcome().expect("outcome"),
+            WorkerOutcome::Confirmed
+        );
+        assert_eq!(
+            control.digests.result.bytes,
+            decode_sha256(&result.result_digest).expect("hash")
+        );
+        assert_eq!(control.digests.operation.bytes, sha256_bytes(b"lease-1"));
+        assert_eq!(control.digests.subject.bytes, sha256_bytes(b"GPU-0"));
+
+        let mut tampered = parsed.clone();
+        tampered.state = "failed".to_owned();
+        assert!(parse_host_ticket_v2_result(
+            serialize_host_ticket(&tampered)
+                .expect("encode tampered result")
+                .as_str(),
+            &host,
+        )
+        .is_err());
+        let mut rebound = parsed;
+        rebound.receipt_cap_generation = 4;
+        assert!(validate_result_binding(&rebound, &admitted).is_err());
+    }
+
+    #[test]
+    fn host_ticket_v2_terminal_mapping_preserves_rejected_and_stale() {
+        assert_eq!(
+            host_ticket_terminal_outcome("succeeded").expect("succeeded"),
+            Some(WorkerOutcome::Confirmed)
+        );
+        for state in ["failed", "expired"] {
+            assert_eq!(
+                host_ticket_terminal_outcome(state).expect("terminal rejection"),
+                Some(WorkerOutcome::Rejected)
+            );
+        }
+        assert_eq!(
+            host_ticket_terminal_outcome("running").expect("nonterminal"),
+            None
+        );
+
+        let admitted = host_ticket_v2_admitted_fixture();
+        let exact = HostTicketV2WorkerBinding {
+            public_id: "worker-gpu-1",
+            role: WorkerRole::Gpu,
+            identity: admission_identity(&admitted).expect("admitted identity"),
+            ready: true,
+            ready_sequence: 1,
+            last_control_sequence: 0,
+        };
+        assert_eq!(
+            host_ticket_terminal_disposition(WorkerOutcome::Rejected, &admitted, Some(exact))
+                .expect("current disposition"),
+            HostTicketV2TerminalDisposition::Submit(WorkerOutcome::Rejected)
+        );
+        let changed = HostTicketV2WorkerBinding {
+            identity: WorkerIdentity::new(WorkerRole::Gpu, 0, 4, 3, 3),
+            ..exact
+        };
+        assert_eq!(
+            host_ticket_terminal_disposition(WorkerOutcome::Confirmed, &admitted, Some(changed))
+                .expect("late disposition"),
+            HostTicketV2TerminalDisposition::Stale
+        );
+        assert_eq!(
+            host_ticket_terminal_disposition(WorkerOutcome::Confirmed, &admitted, None)
+                .expect("torn-down disposition"),
+            HostTicketV2TerminalDisposition::Stale
+        );
+    }
+
+    #[test]
+    fn host_ticket_cat_chunking_is_bounded_utf8_safe_and_digest_complete() {
+        let line = format!(
+            "{{\"schema\":\"host-ticket-result/v2\",\"message\":\"{}\"}}",
+            "🙂".repeat(300)
+        );
+        let mut output: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        cat_lines_from_text_into(line.as_str(), &mut output).expect("chunk long CAT line");
+        assert!(output.len() > 1);
+        let expected_digest = hex::encode(sha256_bytes(line.as_bytes()));
+        let expected_count = output.len();
+        let mut reconstructed = String::new();
+        for (expected_sequence, wire) in output.iter().enumerate() {
+            assert!(wire.len() <= DEFAULT_LINE_CAPACITY);
+            let fields = wire.splitn(5, ':').collect::<Vec<_>>();
+            assert_eq!(fields.len(), 5);
+            assert_eq!(fields[0], "C1");
+            assert_eq!(fields[1], format!("{expected_sequence:04x}"));
+            assert_eq!(fields[2], format!("{expected_count:04x}"));
+            assert_eq!(fields[3], expected_digest);
+            reconstructed.push_str(fields[4]);
+        }
+        assert_eq!(reconstructed, line);
+    }
+
+    #[test]
+    fn host_ticket_logs_reject_more_than_the_existing_cat_line_bound() {
+        let host = HostState::new();
+        let lines = (0..=MAX_STREAM_LINES)
+            .map(|index| format!("line-{index}"))
+            .collect::<Vec<_>>();
+        assert!(matches!(
+            host.can_append_ticket_lines("/host/tickets/status", lines.as_slice()),
+            Err(NineDoorBridgeError::BufferFull)
+        ));
+    }
+
     #[test]
     fn telemetry_ctl_echo_returns_created_segment_id_and_preallocates() {
         move_lifecycle_online_for_test();
@@ -8721,6 +10793,24 @@ mod tests {
     }
 
     #[test]
+    fn queen_control_parser_accepts_the_generated_lora_spawn_target() {
+        let command = parse_queen_ctl(r#"{"spawn":"lora"}"#).expect("parse lora spawn");
+        assert!(matches!(command, QueenCtlCommand::Spawn(SpawnTarget::Lora)));
+    }
+
+    #[test]
+    fn worker_bus_session_cannot_create_an_executable_worker() {
+        let mut bridge = NineDoorBridge::new();
+        bridge.attached = true;
+        bridge.session_role = Some(SessionRoleLabel::WorkerBus);
+        assert!(matches!(
+            bridge.handle_queen_ctl(r#"{"spawn":"heartbeat"}"#),
+            Err(NineDoorBridgeError::Permission)
+        ));
+        assert!(bridge.workers.is_empty());
+    }
+
+    #[test]
     fn thousand_worker_namespace_pressure_stays_bounded_and_recent() {
         const WORKERS: usize = 1_000;
 
@@ -8774,9 +10864,39 @@ mod tests {
     }
 
     #[test]
+    fn shard_discovery_is_bounded_to_active_model_workers() {
+        const WORKERS: usize = 1_000;
+
+        let mut bridge = NineDoorBridge::new();
+        for _ in 0..WORKERS {
+            bridge
+                .spawn_worker(SpawnTarget::Heartbeat)
+                .expect("spawn model worker");
+        }
+        let mut listing: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, MAX_STREAM_LINES> =
+            HeaplessVec::new();
+        bridge
+            .list_worker_shards_into(&mut listing)
+            .expect("list bounded active shards");
+
+        assert!(!listing.is_empty());
+        assert!(listing.len() <= MAX_STREAM_LINES);
+        for (index, label) in listing.iter().enumerate() {
+            assert!(!listing[..index].iter().any(|prior| prior == label));
+            assert!(bridge.workers.iter().any(|worker| {
+                worker_shard_label(worker.id.as_str(), generated::sharding_config()).as_str()
+                    == label.as_str()
+            }));
+        }
+    }
+
+    #[test]
     fn cas_manifest_reupload_is_idempotent() {
         let config = generated::cas_config();
-        let key_bytes = config.signing_key.expect("signing key required");
+        let key_bytes = [7u8; 32];
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+        let mut config = config;
+        config.verification_key = Some(signing_key.verifying_key().to_bytes());
         let mut cas = CasState::new(config);
         let epoch = "1";
         let payload = vec![0u8; config.chunk_bytes as usize];

@@ -13,10 +13,12 @@ use coh_rtc::{
     default_cohsh_client_doc_path, default_cohsh_client_rust_path, default_cohsh_grammar_doc_path,
     default_cohsh_policy_doc_path, default_cohsh_policy_path, default_cohsh_policy_rust_path,
     default_cohsh_ticket_policy_doc_path, default_doc_snippet_path,
-    default_gpu_breadcrumbs_snippet_path, default_observability_interfaces_snippet_path,
-    default_observability_security_snippet_path, default_swarmui_defaults_doc_path,
-    default_swarmui_defaults_path, default_swarmui_defaults_rust_path,
-    default_ticket_quotas_snippet_path, default_trace_policy_snippet_path, CompileOptions,
+    default_gpu_breadcrumbs_snippet_path, default_host_integration_doc_path,
+    default_host_integration_graph_path, default_host_integration_source_path,
+    default_observability_interfaces_snippet_path, default_observability_security_snippet_path,
+    default_swarmui_defaults_doc_path, default_swarmui_defaults_path,
+    default_swarmui_defaults_rust_path, default_ticket_quotas_snippet_path,
+    default_trace_policy_snippet_path, CompileOptions,
 };
 use std::path::PathBuf;
 
@@ -112,14 +114,32 @@ struct Args {
     /// Output path for the SwarmUI defaults doc snippet.
     #[arg(long, default_value_os_t = default_swarmui_defaults_doc_path())]
     swarmui_defaults_doc: PathBuf,
+    /// Compiler source for the implementation-surface inventory.
+    #[arg(long, default_value = "configs/implementation_surfaces.toml")]
+    implementation_surfaces: PathBuf,
+    /// Output path for the generated implementation-surface inventory.
+    #[arg(
+        long,
+        default_value = "configs/generated/implementation_surface_inventory.json"
+    )]
+    implementation_surface_inventory: PathBuf,
+    /// Compiler source for host-integration dependency and acceptance truth.
+    #[arg(long, default_value_os_t = default_host_integration_source_path())]
+    host_integration_source: PathBuf,
+    /// Output path for the generated host-integration dependency graph.
+    #[arg(long, default_value_os_t = default_host_integration_graph_path())]
+    host_integration_graph: PathBuf,
+    /// Output path for the generated host-integration documentation table.
+    #[arg(long, default_value_os_t = default_host_integration_doc_path())]
+    host_integration_doc: PathBuf,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
     let options = CompileOptions {
-        manifest_path: args.manifest,
+        manifest_path: args.manifest.clone(),
         out_dir: args.out,
-        manifest_out: args.manifest_out,
+        manifest_out: args.manifest_out.clone(),
         cas_manifest_template_out: args.cas_manifest_template,
         cli_script_out: args.cli_script,
         doc_snippet_out: args.doc_snippet,
@@ -149,6 +169,31 @@ fn main() -> Result<()> {
         swarmui_defaults_doc_out: args.swarmui_defaults_doc,
     };
     let output = compile(&options)?;
+    let surface_output = coh_rtc::implementation_surface::compile_inventory(
+        &args.implementation_surfaces,
+        &args.implementation_surface_inventory,
+    )?;
+    let repo_root = args
+        .manifest
+        .parent()
+        .and_then(std::path::Path::parent)
+        .unwrap_or_else(|| std::path::Path::new("."));
+    let host_output = coh_rtc::host_integration::compile_graph(
+        &args.host_integration_source,
+        &args.manifest_out,
+        &args.implementation_surface_inventory,
+        &repo_root.join("docs/BUILD_PLAN.md"),
+        &args.host_integration_graph,
+        &args.host_integration_doc,
+    )?;
     println!("coh-rtc: wrote {}", output.summary());
+    println!(
+        "coh-rtc: wrote implementation surfaces {}",
+        surface_output.display()
+    );
+    println!(
+        "coh-rtc: wrote host integrations {}",
+        host_output.graph.display()
+    );
     Ok(())
 }

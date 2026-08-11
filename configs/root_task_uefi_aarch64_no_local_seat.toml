@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "UEFI aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [root_task.affinity]
 enabled = true
@@ -54,7 +54,7 @@ enable = true
 
 [cas.signing]
 required = true
-key_path = "resources/fixtures/cas_signing_key.hex"
+verification_key_path = "resources/fixtures/cas_verification_key.hex"
 
 [cache]
 kernel_ops = true
@@ -334,7 +334,7 @@ k8s_poll_ms = 5000
 
 [client_policies.coh.mount]
 root = "/"
-allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+allowlist = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu", "/host"]
 
 [client_policies.coh.telemetry]
 root = "/queen/telemetry"
@@ -419,8 +419,8 @@ degrade_pressure = 1.0
 [swarmui.paths]
 telemetry_root = "/worker"
 proc_ingest_root = "/proc/ingest"
-worker_root = "/worker"
-namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+worker_root = "/shard"
+namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
 
 [ticket_limits]
 max_scopes = 8
@@ -467,11 +467,14 @@ mount_at = "/host"
 enable = true
 request_schema = "host-ticket/v1"
 result_schema = "host-ticket-result/v1"
+accepted_request_schemas = ["host-ticket/v1", "host-ticket/v2"]
+accepted_result_schemas = ["host-ticket-result/v1", "host-ticket-result/v2"]
 max_line_bytes = 2048
 action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "peft.export",
   "peft.import",
   "peft.activate",
   "peft.rollback",
@@ -486,6 +489,15 @@ action_allowlist = [
   "k8s.drain",
   "k8s.lease.sync",
 ]
+receipt_action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.export",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+]
 lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
 
 [ecosystem.host.federation]
@@ -495,6 +507,7 @@ action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "peft.export",
   "peft.import",
   "peft.activate",
   "peft.rollback",

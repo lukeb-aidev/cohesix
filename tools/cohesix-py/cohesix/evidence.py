@@ -10,6 +10,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
@@ -17,6 +18,7 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 from .audit import CohesixAudit
 from .backends import Backend
 from .errors import CohesixError
+from .worker import TargetProfileContract, WorkerObservation
 
 EVIDENCE_META_SCHEMA = "cohesix-evidence-pack/meta-v1"
 EVIDENCE_SUMMARY_SCHEMA = "cohesix-evidence-pack/summary-v1"
@@ -28,6 +30,23 @@ DEFAULT_AUDIT_FALLBACK_MAX_BYTES = 16 * 1024
 DEFAULT_REPLAY_STATUS_MAX_BYTES = 1024
 DEFAULT_PROC_BOOT_MAX_BYTES = 64 * 1024
 DEFAULT_LOG_MAX_BYTES = 128 * 1024
+WORKER_INTEGRATION_SCHEMA = "cohesix-worker-integration-evidence/v1"
+PYTHON_PROJECTION_DEPENDENCY = "python-sdk-projection"
+MAX_PYTHON_PROJECTION_EVIDENCE_BYTES = 64 * 1024
+MAX_PYTHON_PROJECTION_RAW_ARTIFACTS = 16
+_EVIDENCE_ID = re.compile(r"^[A-Za-z0-9._:-]+$")
+_SHA256_FIELDS = (
+    "source_sha256",
+    "manifest_sha256",
+    "kernel_sha256",
+    "root_image_sha256",
+    "driver_archive_sha256",
+    "driver_manifest_sha256",
+    "cyw43_coexistence_record_sha256",
+    "worker_archive_sha256",
+    "worker_image_manifest_sha256",
+    "worker_abi_sha256",
+)
 
 
 @dataclass(frozen=True)
@@ -49,6 +68,288 @@ class TimelineSummary:
     markdown_path: Path
 
 
+@dataclass(frozen=True)
+class WorkerAcceptanceAxes:
+    """Independent Python projection and acceptance axes."""
+
+    request_admitted: bool
+    worker_ready: bool
+    provider_completed: bool
+    worker_receipt: str
+    artifact: str
+    execution_proof: str
+    python_projection_compatible: bool
+    runtime_release_accepted: bool
+    production_use_case_accepted: bool
+
+
+def worker_acceptance_axes(observation: WorkerObservation) -> WorkerAcceptanceAxes:
+    """Return projection state without synthesizing target or release proof."""
+
+    return WorkerAcceptanceAxes(
+        request_admitted=observation.request_admitted,
+        worker_ready=observation.state.lifecycle == "ready",
+        provider_completed=observation.provider_completed,
+        worker_receipt=observation.state.receipt,
+        artifact=observation.state.artifact,
+        execution_proof=observation.state.execution_proof,
+        python_projection_compatible=True,
+        runtime_release_accepted=False,
+        production_use_case_accepted=False,
+    )
+
+
+def validate_worker_integration_evidence(
+    record: Mapping[str, Any],
+    *,
+    contract: TargetProfileContract,
+    dependency_graph_sha256: str,
+    expected_target: str,
+    matrix_sha256: Optional[str] = None,
+    wheel_sha256: Optional[str] = None,
+) -> None:
+    """Validate one Python projection record without promoting target proof."""
+
+    try:
+        encoded = json.dumps(record, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    except (RecursionError, TypeError, ValueError) as exc:
+        raise CohesixError("Python projection evidence is not bounded JSON") from exc
+    if len(encoded) > MAX_PYTHON_PROJECTION_EVIDENCE_BYTES:
+        raise CohesixError("Python projection evidence exceeds bounded size")
+    _reject_worker_evidence_sensitive(record)
+    if not contract.establishes_target_identity:
+        raise CohesixError(
+            "Python projection evidence requires a file-backed generated contract"
+        )
+    required = {
+        "schema",
+        "record_kind",
+        "dependency_id",
+        "owner_milestone",
+        "obligation",
+        "observed_mode",
+        "dependency_graph_sha256",
+        "manifest_sha256",
+        "component_sha256",
+        "config_sha256",
+        "artifact_sha256",
+        "host",
+        "target_session",
+        "execution_proof",
+        "outcomes",
+        "raw_evidence",
+        "verdict",
+        "blockers",
+    }
+    if set(record) != required:
+        raise CohesixError("Python projection evidence fields are missing or unknown")
+    if (
+        record["schema"] != WORKER_INTEGRATION_SCHEMA
+        or record["record_kind"] != "worker-integration"
+        or record["dependency_id"] != PYTHON_PROJECTION_DEPENDENCY
+        or record["owner_milestone"] != "m26e-python-library-as-built-compatibility"
+        or record["obligation"] != "release_required"
+    ):
+        raise CohesixError("Python projection evidence schema or ownership is invalid")
+    if record["observed_mode"] != "live" or record["verdict"] != "PASS":
+        raise CohesixError("accepted Python projection evidence must be live PASS")
+    if record["blockers"] != []:
+        raise CohesixError("accepted Python projection evidence cannot have blockers")
+    if record["dependency_graph_sha256"] != dependency_graph_sha256:
+        raise CohesixError("Python projection evidence names the wrong dependency graph")
+    for field in (
+        "dependency_graph_sha256",
+        "manifest_sha256",
+        "component_sha256",
+        "config_sha256",
+        "artifact_sha256",
+    ):
+        _worker_evidence_hash(record[field], field)
+    if record["manifest_sha256"] != contract.manifest_sha256:
+        raise CohesixError("Python projection evidence names the wrong manifest")
+    if record["component_sha256"] != contract.contract_sha256:
+        raise CohesixError("Python projection evidence names the wrong profile contract")
+    if matrix_sha256 is not None and record["config_sha256"] != matrix_sha256:
+        raise CohesixError("Python projection evidence names the wrong source matrix")
+    if wheel_sha256 is not None and record["artifact_sha256"] != wheel_sha256:
+        raise CohesixError("Python projection evidence names the wrong wheel")
+    session = record["target_session"]
+    if not isinstance(session, dict) or set(session) != {"target", *_SHA256_FIELDS}:
+        raise CohesixError("Python projection target_session fields are invalid")
+    if session["target"] != expected_target or expected_target != contract.target:
+        raise CohesixError("Python projection evidence names the wrong target")
+    if session["manifest_sha256"] != contract.manifest_sha256:
+        raise CohesixError("Python projection target session manifest is inconsistent")
+    for field in _SHA256_FIELDS:
+        _worker_evidence_hash(session[field], f"target_session.{field}")
+    expected_proof = "qemu" if expected_target == "qemu" else "fresh-pi"
+    if record["execution_proof"] != expected_proof:
+        raise CohesixError("Python projection evidence has the wrong target proof reference")
+    host = record["host"]
+    if not isinstance(host, dict) or set(host) != {
+        "profile",
+        "os",
+        "architecture",
+        "provider_version",
+    }:
+        raise CohesixError("Python projection host identity is invalid")
+    if host["profile"] not in ("macos-arm64", "linux-x86-64"):
+        raise CohesixError("Python projection host profile is unknown")
+    expected_host = {
+        "macos-arm64": ("macos", "aarch64"),
+        "linux-x86-64": ("linux", "x86_64"),
+    }[host["profile"]]
+    if (host["os"], host["architecture"]) != expected_host:
+        raise CohesixError("Python projection host identity is inconsistent")
+    if not isinstance(host["provider_version"], str) or not (
+        1 <= len(host["provider_version"].encode("utf-8")) <= 256
+    ):
+        raise CohesixError("Python projection provider version is invalid")
+    outcomes = record["outcomes"]
+    if not isinstance(outcomes, list) or not outcomes:
+        raise CohesixError("Python projection evidence has no outcomes")
+    outcome_keys = []
+    for outcome in outcomes:
+        if not isinstance(outcome, dict) or set(outcome) != {"id", "class", "result"}:
+            raise CohesixError("Python projection outcome is invalid")
+        outcome_keys.append((outcome["id"], outcome["class"], outcome["result"]))
+    if outcome_keys != sorted(set(outcome_keys)):
+        raise CohesixError("Python projection outcomes are not sorted and unique")
+    if set(outcome_keys) != {
+        ("cpython-3-11", "projection-compatibility", "accepted"),
+        ("cpython-3-13", "projection-compatibility", "accepted"),
+    }:
+        raise CohesixError("Python projection outcomes do not cover the exact host matrix")
+    raw = record["raw_evidence"]
+    if (
+        not isinstance(raw, list)
+        or not raw
+        or len(raw) > MAX_PYTHON_PROJECTION_RAW_ARTIFACTS
+    ):
+        raise CohesixError("Python projection evidence has no raw artifact references")
+    raw_keys = []
+    raw_ids = []
+    for artifact in raw:
+        if not isinstance(artifact, dict) or set(artifact) != {"id", "sha256", "bytes"}:
+            raise CohesixError("Python projection raw evidence entry is invalid")
+        artifact_id = artifact["id"]
+        if (
+            not isinstance(artifact_id, str)
+            or not 1 <= len(artifact_id.encode("utf-8")) <= 128
+            or _EVIDENCE_ID.fullmatch(artifact_id) is None
+        ):
+            raise CohesixError("Python projection raw evidence id is invalid")
+        _worker_evidence_hash(artifact["sha256"], "raw evidence")
+        byte_count = artifact["bytes"]
+        if (
+            isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count <= 0
+            or byte_count > 64 * 1024 * 1024
+        ):
+            raise CohesixError("Python projection raw evidence byte count is invalid")
+        raw_keys.append((artifact["id"], artifact["sha256"], artifact["bytes"]))
+        raw_ids.append(artifact_id)
+    if raw_keys != sorted(set(raw_keys)):
+        raise CohesixError("Python projection raw evidence is not sorted and unique")
+    if len(raw_ids) != len(set(raw_ids)):
+        raise CohesixError("Python projection raw evidence ids are ambiguous")
+
+
+def build_python_projection_evidence(
+    *,
+    contract: TargetProfileContract,
+    dependency_graph_sha256: str,
+    matrix_sha256: str,
+    wheel_sha256: str,
+    host: Mapping[str, str],
+    target_session: Mapping[str, Any],
+    interpreter_outcomes: List[Mapping[str, str]],
+    raw_evidence: List[Mapping[str, Any]],
+) -> Dict[str, Any]:
+    """Emit projection evidence by referencing, never replacing, a target session."""
+
+    proof = "qemu" if contract.target == "qemu" else "fresh-pi"
+    outcomes = [dict(item) for item in interpreter_outcomes]
+    outcomes.sort(key=lambda item: (item["id"], item["class"], item["result"]))
+    artifacts = [dict(item) for item in raw_evidence]
+    artifacts.sort(key=lambda item: (item["id"], item["sha256"], item["bytes"]))
+    record: Dict[str, Any] = {
+        "schema": WORKER_INTEGRATION_SCHEMA,
+        "record_kind": "worker-integration",
+        "dependency_id": PYTHON_PROJECTION_DEPENDENCY,
+        "owner_milestone": "m26e-python-library-as-built-compatibility",
+        "obligation": "release_required",
+        "observed_mode": "live",
+        "dependency_graph_sha256": dependency_graph_sha256,
+        "manifest_sha256": contract.manifest_sha256,
+        "component_sha256": contract.contract_sha256,
+        "config_sha256": matrix_sha256,
+        "artifact_sha256": wheel_sha256,
+        "host": dict(host),
+        "target_session": dict(target_session),
+        "execution_proof": proof,
+        "outcomes": outcomes,
+        "raw_evidence": artifacts,
+        "verdict": "PASS",
+        "blockers": [],
+    }
+    validate_worker_integration_evidence(
+        record,
+        contract=contract,
+        dependency_graph_sha256=dependency_graph_sha256,
+        expected_target=contract.target,
+        matrix_sha256=matrix_sha256,
+        wheel_sha256=wheel_sha256,
+    )
+    return record
+
+
+def _worker_evidence_hash(value: Any, field: str) -> str:
+    text = str(value)
+    if len(text) != 64 or any(char not in "0123456789abcdef" for char in text):
+        raise CohesixError(f"{field} is not lowercase SHA-256")
+    return text
+
+
+def _reject_worker_evidence_sensitive(value: Any) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            lowered = str(key).lower()
+            if lowered in {
+                "authorization",
+                "capability",
+                "capability_value",
+                "cptr",
+                "raw_badge",
+                "secret",
+                "ticket",
+                "token",
+            }:
+                raise CohesixError("Python projection evidence contains sensitive material")
+            _reject_worker_evidence_sensitive(child)
+    elif isinstance(value, list):
+        for child in value:
+            _reject_worker_evidence_sensitive(child)
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "authorization: bearer ",
+                "bearer ey",
+                "capability_value=",
+                "cohesix-ticket-",
+                "raw_badge=",
+                "secret=",
+                "token=",
+            )
+        ):
+            raise CohesixError("Python projection evidence contains sensitive material")
+
+
 TelemetryPullFn = Callable[[Path, Optional[CohesixAudit]], Tuple[int, int, int]]
 
 
@@ -64,7 +365,7 @@ def export_evidence_pack(
     """Export a deterministic evidence pack using existing Cohesix surfaces."""
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    manifest_sha256 = str(defaults.get("manifest_sha256", "unknown"))
+    manifest_sha256 = _manifest_label(defaults)
     policy_sha256 = _policy_sha256(defaults)
     bounds = _resolve_bounds(backend, defaults)
 
@@ -423,7 +724,7 @@ def _resolve_bounds(backend: Backend, defaults: Mapping[str, Any]) -> Dict[str, 
 
 def _default_bounds_snapshot(defaults: Mapping[str, Any]) -> Dict[str, Any]:
     snapshot: Dict[str, Any] = {
-        "manifest_sha256": defaults.get("manifest_sha256", "unknown"),
+        "manifest_sha256": _manifest_label(defaults),
         "secure9p": defaults.get("secure9p", {}),
         "console": defaults.get("console", {}),
         "paths": defaults.get("paths", {}),
@@ -432,6 +733,11 @@ def _default_bounds_snapshot(defaults: Mapping[str, Any]) -> Dict[str, Any]:
         "observability": defaults.get("observability", {}),
     }
     return copy.deepcopy(snapshot)
+
+
+def _manifest_label(defaults: Mapping[str, Any]) -> str:
+    value = defaults.get("manifest_sha256")
+    return value if isinstance(value, str) and value else "unknown"
 
 
 def _policy_sha256(defaults: Mapping[str, Any]) -> str:

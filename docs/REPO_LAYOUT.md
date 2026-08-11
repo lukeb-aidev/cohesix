@@ -57,7 +57,7 @@
     src/
       client.rs
       queen.rs
-  coh-status/
+  coh-status/             ← Deferred library/replay surface; standalone CLI is Milestone 29
   root-task/
     README.md            ← Event pump overview, testing commands, and feature flag notes
   nine-door/
@@ -67,6 +67,8 @@
         ui.rs            ← UI provider config + path matching
     tests/
       ui_providers.rs    ← UI provider bounds + audit tests
+  nine-door-runtime/      ← Selected no_std target namespace-service child
+  console-network-runtime/← Selected no_std target TCP console-network child
   worker-heart/
   worker-gpu/
   gpu-bridge-host/       (host-only tools)

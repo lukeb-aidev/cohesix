@@ -10,7 +10,7 @@ use anyhow::{anyhow, Context, Result};
 use cohsh::{Session, Transport};
 
 use super::{arg_str, target_components, ExecutorConfig};
-use crate::HostTicketSpec;
+use crate::{text::bounded_utf8_lossy, HostTicketSpec};
 
 const MAX_CAPTURE_BYTES: usize = 256;
 
@@ -133,8 +133,8 @@ fn run_kubectl(args: &[&str]) -> Result<String> {
         .args(args)
         .output()
         .with_context(|| format!("run kubectl {}", args.join(" ")))?;
-    let stdout = bounded_utf8(&output.stdout);
-    let stderr = bounded_utf8(&output.stderr);
+    let stdout = bounded_utf8_lossy(&output.stdout, MAX_CAPTURE_BYTES);
+    let stderr = bounded_utf8_lossy(&output.stderr, MAX_CAPTURE_BYTES);
     if !output.status.success() {
         return Err(anyhow!(
             "kubectl {} failed status={} stdout='{}' stderr='{}'",
@@ -169,14 +169,6 @@ fn resolve_node(spec: &HostTicketSpec) -> Result<String> {
         "k8s action {} requires args.node or target /host/k8s/node/<name>/...",
         spec.action
     ))
-}
-
-fn bounded_utf8(bytes: &[u8]) -> String {
-    let text = String::from_utf8_lossy(bytes).replace(['\n', '\r'], " ");
-    if text.len() <= MAX_CAPTURE_BYTES {
-        return text.trim().to_owned();
-    }
-    text[..MAX_CAPTURE_BYTES].trim().to_owned()
 }
 
 fn summarize_output(text: &str) -> String {
@@ -221,6 +213,7 @@ mod tests {
             target_hive: None,
             relay_hop: None,
             relay_correlation_id: None,
+            ..HostTicketSpec::default()
         };
         let node = resolve_node(&spec).expect("node");
         assert_eq!(node, "node-1");

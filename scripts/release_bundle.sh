@@ -14,6 +14,14 @@ RELEASE_VERSION="${RELEASE_VERSION:-0.1.0-alpha1}"
 FORCE=0
 LINUX_BUNDLE=0
 LINUX_ONLY=0
+CHECK_MANIFEST=0
+VERIFY_WORKER_ACCEPTANCE=0
+WORKER_QEMU_EVIDENCE=""
+WORKER_PI4_EVIDENCE=""
+WORKER_ROOT_QEMU_EVIDENCE=""
+WORKER_ROOT_PI4_EVIDENCE=""
+WORKER_SYSTEM_QEMU_EVIDENCE=""
+WORKER_SYSTEM_PI4_EVIDENCE=""
 LINUX_HOST_TARGET="${LINUX_HOST_TARGET:-aarch64-unknown-linux-gnu}"
 LINUX_HOST_TOOLS_DIR="${LINUX_HOST_TOOLS_DIR:-}"
 LINUX_SYNC_HOST="${LINUX_SYNC_HOST:-${COHESIX_SYNC_HOST:-}}"
@@ -23,10 +31,14 @@ LINUX_SYNC_REMOTE_DIR="${LINUX_SYNC_REMOTE_DIR:-${COHESIX_SYNC_REMOTE_DIR:-}}"
 LINUX_SYNC_LOCAL_OUT="${LINUX_SYNC_LOCAL_OUT:-${COHESIX_SYNC_LOCAL_OUT:-}}"
 HOST_TOOLS_PROFILE="${HOST_TOOLS_PROFILE:-release}"
 SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${ROOT_DIR}/out/sel4/profile-v2/qemu-smp-production}"
+IMPLEMENTATION_SURFACE_INVENTORY="${IMPLEMENTATION_SURFACE_INVENTORY:-${ROOT_DIR}/configs/generated/implementation_surface_inventory.json}"
+PYTHON_WHEEL_DIR="${PYTHON_WHEEL_DIR:-${ROOT_DIR}/out/python-wheels}"
+PYTHON_PACKAGE_MANIFEST="${PYTHON_PACKAGE_MANIFEST:-${ROOT_DIR}/out/python-compat/m26e-python-package.json}"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/release_bundle.sh [--name <release-name>] [--version <version>] [--force] [--linux] [--linux-only]
+Usage: scripts/release_bundle.sh [release options] [--check-manifest]
+       scripts/release_bundle.sh --verify-worker-acceptance <six evidence paths>
 
 Assembles a release bundle from out/cohesix into releases/<release-name> and
 creates releases/<release-name>.tar.gz.
@@ -47,7 +59,20 @@ Env overrides:
   LINUX_SYNC_LOCAL_OUT (optional local host-tools dir)
   COHESIX_SYNC_HOST/USER/KEY/REMOTE_DIR/LOCAL_OUT (aliases for LINUX_SYNC_*; use these to avoid hardcoded host/key names)
   HOST_TOOLS_PROFILE (default: release)
+  IMPLEMENTATION_SURFACE_INVENTORY (defaults to the canonical generated inventory;
+                                    intended only for non-mutating pre-regeneration validation)
+  PYTHON_WHEEL_DIR (defaults to out/python-wheels; must contain one target-neutral wheel)
+  PYTHON_PACKAGE_MANIFEST (defaults to out/python-compat/m26e-python-package.json)
   ALLOW_CROSS_LINUX_HOST_TOOLS=1 (override host-target guard for cross builds)
+
+--check-manifest validates the exact compiler-generated release input set and
+exits without creating, replacing, or deleting a release bundle.
+
+--verify-worker-acceptance validates the immutable QEMU/Pi Worker-component,
+root-TCB, and full-system graph without creating a release bundle. It requires:
+  --worker-qemu-evidence <path>       --worker-pi4-evidence <path>
+  --worker-root-qemu-evidence <path>  --worker-root-pi4-evidence <path>
+  --worker-system-qemu-evidence <path> --worker-system-pi4-evidence <path>
 USAGE
 }
 
@@ -76,6 +101,44 @@ while [[ $# -gt 0 ]]; do
       LINUX_ONLY=1
       shift
       ;;
+    --check-manifest)
+      CHECK_MANIFEST=1
+      shift
+      ;;
+    --verify-worker-acceptance)
+      VERIFY_WORKER_ACCEPTANCE=1
+      shift
+      ;;
+    --worker-qemu-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-qemu-evidence requires a path" >&2; exit 1; }
+      WORKER_QEMU_EVIDENCE="$2"
+      shift 2
+      ;;
+    --worker-pi4-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-pi4-evidence requires a path" >&2; exit 1; }
+      WORKER_PI4_EVIDENCE="$2"
+      shift 2
+      ;;
+    --worker-root-qemu-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-root-qemu-evidence requires a path" >&2; exit 1; }
+      WORKER_ROOT_QEMU_EVIDENCE="$2"
+      shift 2
+      ;;
+    --worker-root-pi4-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-root-pi4-evidence requires a path" >&2; exit 1; }
+      WORKER_ROOT_PI4_EVIDENCE="$2"
+      shift 2
+      ;;
+    --worker-system-qemu-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-system-qemu-evidence requires a path" >&2; exit 1; }
+      WORKER_SYSTEM_QEMU_EVIDENCE="$2"
+      shift 2
+      ;;
+    --worker-system-pi4-evidence)
+      [[ $# -ge 2 ]] || { echo "--worker-system-pi4-evidence requires a path" >&2; exit 1; }
+      WORKER_SYSTEM_PI4_EVIDENCE="$2"
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -88,6 +151,37 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+verify_worker_acceptance() {
+  local validator="${ROOT_DIR}/scripts/worker_task_evidence.py"
+  require_file "$validator"
+  local path
+  for path in \
+    "$WORKER_QEMU_EVIDENCE" \
+    "$WORKER_PI4_EVIDENCE" \
+    "$WORKER_ROOT_QEMU_EVIDENCE" \
+    "$WORKER_ROOT_PI4_EVIDENCE" \
+    "$WORKER_SYSTEM_QEMU_EVIDENCE" \
+    "$WORKER_SYSTEM_PI4_EVIDENCE"; do
+    [[ -n "$path" ]] || fail \
+      "--verify-worker-acceptance requires all six target/component/root/system evidence paths"
+    require_file "$path"
+  done
+
+  local verify_dir
+  verify_dir="$(mktemp -d)"
+  trap 'rm -rf "${verify_dir}"' RETURN
+  python3 "$validator" promote-release \
+    --worker-qemu "$WORKER_QEMU_EVIDENCE" \
+    --worker-pi4 "$WORKER_PI4_EVIDENCE" \
+    --root-qemu "$WORKER_ROOT_QEMU_EVIDENCE" \
+    --root-pi4 "$WORKER_ROOT_PI4_EVIDENCE" \
+    --system-qemu "$WORKER_SYSTEM_QEMU_EVIDENCE" \
+    --system-pi4 "$WORKER_SYSTEM_PI4_EVIDENCE" \
+    --out "$verify_dir/worker-release-acceptance.json" || \
+    fail "Worker-runtime acceptance graph validation failed"
+  echo "[release] Worker-runtime six-record acceptance graph: PASS"
+}
+
 OUT_DIR="${ROOT_DIR}/out/cohesix"
 STAGING_DIR="${OUT_DIR}/staging"
 GENERATED_CONFIG_DIR="${ROOT_DIR}/configs/generated"
@@ -99,6 +193,213 @@ LINUX_BUNDLE_NAME="${RELEASE_NAME}-linux"
 fail() {
   echo "$1" >&2
   exit 1
+}
+
+if [[ "$IMPLEMENTATION_SURFACE_INVENTORY" != "${ROOT_DIR}/configs/generated/implementation_surface_inventory.json" && "$CHECK_MANIFEST" -ne 1 ]]; then
+  fail "non-canonical implementation-surface inventory is allowed only with --check-manifest"
+fi
+
+release_inventory_path() {
+  printf '%s\n' "${IMPLEMENTATION_SURFACE_INVENTORY}"
+}
+
+release_inventory_values() {
+  local key="$1"
+  python3 - "$(release_inventory_path)" "$key" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+values = inventory.get("release", {}).get(sys.argv[2])
+if not isinstance(values, list) or (not values and sys.argv[2] != "versioned_migrations"):
+    raise SystemExit(f"release manifest key is missing or empty: {sys.argv[2]}")
+for value in values:
+    if not isinstance(value, str) or not value or value.startswith("/") or ".." in Path(value).parts:
+        raise SystemExit(f"invalid release path in {sys.argv[2]}: {value!r}")
+    print(value)
+PY
+}
+
+release_inventory_scalar() {
+  local key="$1"
+  python3 - "$(release_inventory_path)" "$key" <<'PY'
+import json
+from pathlib import Path
+import sys
+
+inventory = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+value = inventory.get("release", {}).get(sys.argv[2])
+if not isinstance(value, str) or not value:
+    raise SystemExit(f"release manifest key is missing or empty: {sys.argv[2]}")
+print(value)
+PY
+}
+
+validate_python_package_inputs() {
+  require_dir "$PYTHON_WHEEL_DIR"
+  require_file "$PYTHON_PACKAGE_MANIFEST"
+  local wheel_candidates=()
+  while IFS= read -r candidate; do
+    wheel_candidates+=("$candidate")
+  done < <(find "$PYTHON_WHEEL_DIR" -maxdepth 1 -type f -name 'cohesix-*.whl' -print)
+  [[ ${#wheel_candidates[@]} -eq 1 ]] || fail \
+    "Python release input requires exactly one target-neutral cohesix wheel"
+  local wheel="${wheel_candidates[0]}"
+  [[ ! -L "$wheel" && ! -L "$PYTHON_PACKAGE_MANIFEST" ]] || fail \
+    "Python release inputs must be regular non-symlink files"
+
+  python3 - \
+    "$PYTHON_PACKAGE_MANIFEST" \
+    "$wheel" \
+    "${ROOT_DIR}/configs/generated/cohesix_python_qemu_smp_production.json" \
+    "${ROOT_DIR}/configs/generated/cohesix_python_pi4_production.json" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import sys
+
+manifest_path, wheel, qemu, pi4 = map(Path, sys.argv[1:])
+
+def digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+if manifest.get("schema") != "cohesix-python-package/v1":
+    raise SystemExit("release Python package manifest schema is invalid")
+wheel_record = manifest.get("wheel", {})
+if wheel_record.get("filename") != wheel.name or wheel_record.get("sha256") != digest(wheel):
+    raise SystemExit("release Python wheel differs from its package manifest")
+if wheel.name != "cohesix-0.2.0a2-py3-none-any.whl":
+    raise SystemExit(f"release Python wheel name is not inventory-selected: {wheel.name}")
+contracts = manifest.get("profile_contracts", {})
+for target, path in (("qemu", qemu), ("pi4", pi4)):
+    value = json.loads(path.read_text(encoding="utf-8"))
+    record = contracts.get(target, {})
+    if (
+        record.get("sha256") != digest(path)
+        or record.get("manifest_sha256") != value.get("manifest_sha256")
+    ):
+        raise SystemExit(f"release Python {target} contract differs from package manifest")
+proof = manifest.get("proof_boundary", {})
+if any(
+    proof.get(field) is not False
+    for field in (
+        "package_install_is_target_proof",
+        "mock_is_target_proof",
+        "python_projection_is_authority",
+    )
+):
+    raise SystemExit("release Python package manifest widens proof authority")
+PY
+  PYTHON_RELEASE_WHEEL="$wheel"
+}
+
+validate_release_inventory_inputs() {
+  local inventory
+  inventory="$(release_inventory_path)"
+  require_file "$inventory"
+  local inventory_version
+  inventory_version="$(release_inventory_scalar version)"
+  [[ "$RELEASE_VERSION" == "$inventory_version" ]] || fail \
+    "release version ${RELEASE_VERSION} does not match compiler inventory ${inventory_version}"
+  python3 "${ROOT_DIR}/scripts/ci/check_implementation_surfaces.py" \
+    --repo-root "$ROOT_DIR" \
+    --inventory "$inventory"
+  validate_python_package_inputs
+
+  INVENTORY_PATH="$inventory" \
+  ROOT_DIR="$ROOT_DIR" \
+  HOST_TOOLS_DIR="$DEFAULT_HOST_TOOLS_DIR" \
+  STAGING_DIR="$STAGING_DIR" \
+  OUT_DIR="$OUT_DIR" \
+  python3 - <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+
+inventory = json.loads(Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8"))
+release = inventory["release"]
+root = Path(os.environ["ROOT_DIR"])
+host_root = Path(os.environ["HOST_TOOLS_DIR"])
+staging = Path(os.environ["STAGING_DIR"])
+out = Path(os.environ["OUT_DIR"])
+
+expected_host = {Path(path).name for path in release["host_tools"]}
+if not host_root.is_dir():
+    raise SystemExit(f"host tools directory missing: {host_root}")
+actual_host = {path.name for path in host_root.iterdir() if path.is_file()}
+if actual_host != expected_host:
+    raise SystemExit(
+        "host tool set drift: "
+        f"missing={sorted(expected_host - actual_host)} "
+        f"unexpected={sorted(actual_host - expected_host)}"
+    )
+
+generated_root = root / "configs/generated"
+expected_generated = {Path(path).name for path in release["generated_configs"]}
+actual_generated = {path.name for path in generated_root.iterdir() if path.is_file()}
+if actual_generated != expected_generated:
+    raise SystemExit(
+        "generated config release set drift: "
+        f"missing={sorted(expected_generated - actual_generated)} "
+        f"unexpected={sorted(actual_generated - expected_generated)}"
+    )
+
+source_keys = (
+    "public_documents",
+    "host_assets",
+    "operator_scripts",
+    "python_artifacts",
+    "trace_fixtures",
+    "transcript_fixtures",
+    "ui_assets",
+    "support_files",
+    "versioned_migrations",
+)
+for relative in (
+    path for key in source_keys for path in release[key]
+):
+    path = root / relative
+    if not path.is_file():
+        raise SystemExit(f"release source missing: {path}")
+
+image_sources = {
+    "image/elfloader": staging / "elfloader",
+    "image/kernel.elf": staging / "kernel.elf",
+    "image/rootserver": staging / "rootserver",
+    "image/cohesix-system.cpio": out / "cohesix-system.cpio",
+    "image/manifest.json": staging / "cohesix/manifest.json",
+}
+for destination in release["target_images"]:
+    if destination == "image/gic-version.txt":
+        continue
+    source = image_sources.get(destination)
+    if source is None or not source.is_file():
+        raise SystemExit(f"target image source missing for {destination}: {source}")
+
+for relative in release["forbidden_paths"]:
+    if relative in release["host_tools"] or relative in release["target_images"]:
+        raise SystemExit(f"forbidden release path is selected: {relative}")
+
+for binary in sorted(host_root / name for name in expected_host):
+    description = subprocess.run(
+        ["file", "-b", str(binary)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.lower()
+    if "arm64" not in description and "aarch64" not in description:
+        raise SystemExit(f"wrong host-tool architecture for {binary}: {description.strip()}")
+PY
+
+  local gic_config="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
+  require_file "$gic_config"
+  local gic_version
+  gic_version="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$gic_config")"
+  [[ "$gic_version" == "3" ]] || fail \
+    "runtime release requires QEMU GICv3; selected kernel reports GIC${gic_version}"
 }
 
 validate_release_sel4_profile() {
@@ -231,10 +532,6 @@ bundle_release() {
   local tarball="${RELEASES_DIR}/${tarball_name}.tar.gz"
 
   require_dir "$host_tools_dir"
-  if ! compgen -G "${host_tools_dir}/*" >/dev/null; then
-    fail "Host tools directory is empty: $host_tools_dir"
-  fi
-
   if [[ -e "$bundle_dir" || -e "$tarball" ]]; then
     if [[ "$FORCE" -eq 1 ]]; then
       rm -rf "$bundle_dir"
@@ -252,35 +549,90 @@ bundle_release() {
     "${bundle_dir}/out" \
     "${bundle_dir}/python" \
     "${bundle_dir}/qemu" \
-    "${bundle_dir}/resources/fixtures" \
+    "${bundle_dir}/resources/keys" \
     "${bundle_dir}/resources/systemd" \
     "${bundle_dir}/scripts" \
     "${bundle_dir}/traces" \
     "${bundle_dir}/ui/swarmui" \
     "${bundle_dir}/docs"
 
-  cp -p "${host_tools_dir}/"* "${bundle_dir}/bin/"
+  local selected_path
+  while IFS= read -r selected_path; do
+    cp -p "${host_tools_dir}/${selected_path#bin/}" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values host_tools)
   cp -p "${STAGING_DIR}/elfloader" "${bundle_dir}/image/elfloader"
   cp -p "${STAGING_DIR}/kernel.elf" "${bundle_dir}/image/kernel.elf"
   cp -p "${STAGING_DIR}/rootserver" "${bundle_dir}/image/rootserver"
   cp -p "${OUT_DIR}/cohesix-system.cpio" "${bundle_dir}/image/cohesix-system.cpio"
   cp -p "${STAGING_DIR}/cohesix/manifest.json" "${bundle_dir}/image/manifest.json"
-  cp -p "${ROOT_DIR}/configs/root_task.toml" "${bundle_dir}/configs/root_task.toml"
-  cp -p "${GENERATED_CONFIG_DIR}/"* "${bundle_dir}/configs/generated/"
-  cp -p "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex" "${bundle_dir}/resources/fixtures/cas_signing_key.hex"
-  if [[ -d "${ROOT_DIR}/resources/systemd" ]]; then
-    cp -p "${ROOT_DIR}/resources/systemd/"* "${bundle_dir}/resources/systemd/"
-  fi
+  while IFS= read -r selected_path; do
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values generated_configs)
+  while IFS= read -r selected_path; do
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values host_assets)
 
-  if [[ -x "${ROOT_DIR}/scripts/lib/detect_gic_version.py" ]]; then
-    GIC_CFG="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
-    if [[ -f "$GIC_CFG" ]]; then
-      GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG" || true)"
-      if [[ -n "$GIC_VER" ]]; then
-        printf "%s\n" "$GIC_VER" > "${bundle_dir}/image/gic-version.txt"
-      fi
+  while IFS= read -r selected_path; do
+    local destination="$selected_path"
+    if [[ "$selected_path" == "docs/QUICKSTART.md" ]]; then
+      destination="QUICKSTART.md"
     fi
-  fi
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values public_documents)
+
+  while IFS= read -r selected_path; do
+    mkdir -p "$(dirname "${bundle_dir}/${selected_path}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values operator_scripts)
+
+  while IFS= read -r selected_path; do
+    local destination="python/cohesix-py/${selected_path#tools/cohesix-py/}"
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values python_artifacts)
+  mkdir -p "${bundle_dir}/python/dist"
+  cp -p "$PYTHON_RELEASE_WHEEL" \
+    "${bundle_dir}/python/dist/$(basename "$PYTHON_RELEASE_WHEEL")"
+  cp -p "$PYTHON_PACKAGE_MANIFEST" \
+    "${bundle_dir}/python/m26e-python-package.json"
+
+  while IFS= read -r selected_path; do
+    local destination="traces/${selected_path#tests/fixtures/traces/}"
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values trace_fixtures)
+
+  while IFS= read -r selected_path; do
+    local destination="tests/fixtures/transcripts/${selected_path#tests/fixtures/transcripts/}"
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values transcript_fixtures)
+
+  while IFS= read -r selected_path; do
+    local destination="ui/swarmui/${selected_path#apps/swarmui/frontend/}"
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values ui_assets)
+
+  while IFS= read -r selected_path; do
+    local destination="$selected_path"
+    if [[ "$selected_path" == "releases/RELEASE_NOTES-${RELEASE_VERSION}.md" ]]; then
+      destination="RELEASE_NOTES.md"
+    fi
+    mkdir -p "$(dirname "${bundle_dir}/${destination}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${destination}"
+  done < <(release_inventory_values support_files)
+
+  while IFS= read -r selected_path; do
+    mkdir -p "$(dirname "${bundle_dir}/${selected_path}")"
+    cp -p "${ROOT_DIR}/${selected_path}" "${bundle_dir}/${selected_path}"
+  done < <(release_inventory_values versioned_migrations)
+
+  GIC_CFG="${SEL4_BUILD_DIR}/kernel/gen_config/kernel/gen_config.h"
+  GIC_VER="$("${ROOT_DIR}/scripts/lib/detect_gic_version.py" "$GIC_CFG")"
+  [[ "$GIC_VER" == "3" ]] || fail "release runner requires GICv3"
+  printf "%s\n" "$GIC_VER" > "${bundle_dir}/image/gic-version.txt"
 
   cat <<'EOF' > "${bundle_dir}/qemu/run.sh"
 #!/usr/bin/env bash
@@ -322,9 +674,14 @@ if [[ -z "${COHESIX_QEMU_ACCEL:-}" && -z "${QEMU_ACCEL:-}" && -n "$DEFAULT_QEMU_
   QEMU_ACCEL="$DEFAULT_QEMU_ACCEL"
 fi
 GIC_VER_FILE="${IMAGE_DIR}/gic-version.txt"
-GIC_VER="2"
-if [[ -f "${GIC_VER_FILE}" ]]; then
-  GIC_VER="$(tr -d '\n' < "${GIC_VER_FILE}")"
+if [[ ! -f "${GIC_VER_FILE}" ]]; then
+  echo "[qemu] missing compiler-selected GIC version: ${GIC_VER_FILE}" >&2
+  exit 1
+fi
+GIC_VER="$(tr -d '\n' < "${GIC_VER_FILE}")"
+if [[ "$GIC_VER" != "3" ]]; then
+  echo "[qemu] release requires GICv3; selected GIC${GIC_VER}" >&2
+  exit 1
 fi
 
 ELFLOADER="${IMAGE_DIR}/elfloader"
@@ -515,15 +872,7 @@ echo "[qemu] Using QEMU machine: ${QEMU_MACHINE_ARG}"
   -device "virtio-net-device,netdev=net0,mac=52:55:00:d1:55:01,bus=virtio-mmio-bus.0"
 EOF
   chmod +x "${bundle_dir}/qemu/run.sh"
-
-  cp -R "${ROOT_DIR}/scripts/cohsh" "${bundle_dir}/scripts/"
-  cp -p "${ROOT_DIR}/scripts/setup_environment.sh" "${bundle_dir}/scripts/setup_environment.sh"
   chmod +x "${bundle_dir}/scripts/setup_environment.sh"
-
-  cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace" "${bundle_dir}/traces/trace_v0.trace"
-  cp -p "${ROOT_DIR}/tests/fixtures/traces/trace_v0.hive.cbor" "${bundle_dir}/traces/trace_v0.hive.cbor"
-  mkdir -p "${bundle_dir}/tests/fixtures"
-  cp -R "${ROOT_DIR}/tests/fixtures/transcripts" "${bundle_dir}/tests/fixtures/"
   RELEASE_NAME="$bundle_name" python3 - <<'PY'
 import hashlib
 import os
@@ -538,55 +887,6 @@ hive_digest = hashlib.sha256(hive.read_bytes()).hexdigest()
 (hive.parent / "trace_v0.hive.cbor.sha256").write_text(hive_digest + "\n", encoding="utf-8")
 PY
 
-  cp -R "${ROOT_DIR}/apps/swarmui/frontend/." "${bundle_dir}/ui/swarmui/"
-
-  local PYTHON_SRC_DIR="${ROOT_DIR}/tools/cohesix-py"
-  local PYTHON_REQUIRED_FILES=(
-    "README.md"
-    "pyproject.toml"
-    "cohesix/__init__.py"
-    "cohesix/client.py"
-    "cohesix/orchestration.py"
-    "cohesix/integrations.py"
-    "cohesix/playbooks.py"
-    "cohesix/playbook_cli.py"
-    "examples/use_case_playbook.py"
-    "tests/test_orchestration.py"
-    "tests/test_integrations.py"
-    "tests/test_playbooks.py"
-  )
-  require_dir "${PYTHON_SRC_DIR}"
-  local rel_path
-  for rel_path in "${PYTHON_REQUIRED_FILES[@]}"; do
-    require_file "${PYTHON_SRC_DIR}/${rel_path}"
-  done
-  cp -R "${PYTHON_SRC_DIR}" "${bundle_dir}/python/cohesix-py"
-
-  DOCS_LIST=(
-    "ARCHITECTURE.md"
-    "GPU_NODES.md"
-    "HOST_TOOLS.md"
-    "INTERFACES.md"
-    "NETWORK_CONFIG.md"
-    "ROLES_AND_SCHEDULING.md"
-    "SECURE9P.md"
-    "SECURITY.md"
-    "PYTHON_SUPPORT.md"
-    "USERLAND_AND_CLI.md"
-    "USE_CASES.md"
-    "WORKER_TICKETS.md"
-  )
-  for doc in "${DOCS_LIST[@]}"; do
-    require_file "${ROOT_DIR}/docs/${doc}"
-    cp -p "${ROOT_DIR}/docs/${doc}" "${bundle_dir}/docs/"
-  done
-
-  cp -p "${ROOT_DIR}/docs/QUICKSTART.md" "${bundle_dir}/QUICKSTART.md"
-  require_file "${ROOT_DIR}/docs/COHESIX_LOGO.png"
-  cp -p "${ROOT_DIR}/docs/COHESIX_LOGO.png" "${bundle_dir}/docs/COHESIX_LOGO.png"
-  cp -p "${ROOT_DIR}/README.md" "${bundle_dir}/README.md"
-  cp -p "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md" "${bundle_dir}/RELEASE_NOTES.md"
-  cp -p "${ROOT_DIR}/LICENSE.txt" "${bundle_dir}/LICENSE.txt"
   printf "%s\n" "${RELEASE_VERSION}" > "${bundle_dir}/VERSION.txt"
 
   BUNDLE_DIR="${bundle_dir}" python3 - <<'PY'
@@ -638,11 +938,72 @@ if gpu_nodes.exists():
     gpu_nodes.write_text(text, encoding="utf-8")
 PY
 
+  BUNDLE_DIR="${bundle_dir}" \
+  INVENTORY_PATH="$(release_inventory_path)" \
+  python3 - <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+
+bundle = Path(os.environ["BUNDLE_DIR"])
+inventory = json.loads(
+    Path(os.environ["INVENTORY_PATH"]).read_text(encoding="utf-8")
+)
+release = inventory["release"]
+expected = set(release["expected_bundle_files"])
+manifest_relative = "MANIFEST.sha256"
+if manifest_relative not in expected:
+    raise SystemExit("compiler release inventory omits MANIFEST.sha256")
+
+actual_without_manifest = {
+    path.relative_to(bundle).as_posix()
+    for path in bundle.rglob("*")
+    if path.is_file() and path.relative_to(bundle).as_posix() != manifest_relative
+}
+expected_without_manifest = expected - {manifest_relative}
+if actual_without_manifest != expected_without_manifest:
+    raise SystemExit(
+        "release bundle file-set drift before manifest: "
+        f"missing={sorted(expected_without_manifest - actual_without_manifest)} "
+        f"unexpected={sorted(actual_without_manifest - expected_without_manifest)}"
+    )
+
+lines = []
+for relative in sorted(actual_without_manifest):
+    digest = hashlib.sha256((bundle / relative).read_bytes()).hexdigest()
+    lines.append(f"{digest}  {relative}")
+(bundle / manifest_relative).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+actual = {
+    path.relative_to(bundle).as_posix()
+    for path in bundle.rglob("*")
+    if path.is_file()
+}
+if actual != expected:
+    raise SystemExit(
+        "release bundle exact file-set drift: "
+        f"missing={sorted(expected - actual)} "
+        f"unexpected={sorted(actual - expected)}"
+    )
+
+for forbidden in release["forbidden_paths"]:
+    if forbidden in actual:
+        raise SystemExit(f"forbidden release path present: {forbidden}")
+PY
+
   tar -C "${RELEASES_DIR}" -czf "${tarball}" "${bundle_name}"
 
   echo "Release bundle ready: ${bundle_dir}"
   echo "Tarball: ${tarball}"
 }
+
+if [[ "$VERIFY_WORKER_ACCEPTANCE" -eq 1 ]]; then
+  [[ "$CHECK_MANIFEST" -eq 0 && "$LINUX_BUNDLE" -eq 0 && "$FORCE" -eq 0 ]] || fail \
+    "--verify-worker-acceptance is verification-only and cannot be combined with bundle mutation options"
+  verify_worker_acceptance
+  exit 0
+fi
 
 require_dir "$OUT_DIR"
 require_file "${STAGING_DIR}/elfloader"
@@ -655,7 +1016,6 @@ require_file "${ROOT_DIR}/README.md"
 require_file "${ROOT_DIR}/LICENSE.txt"
 require_file "${ROOT_DIR}/releases/RELEASE_NOTES-${RELEASE_VERSION}.md"
 require_file "${ROOT_DIR}/configs/root_task.toml"
-require_file "${ROOT_DIR}/resources/fixtures/cas_signing_key.hex"
 require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml"
 require_file "${GENERATED_CONFIG_DIR}/coh_policy.toml.sha256"
 require_file "${ROOT_DIR}/tests/fixtures/traces/trace_v0.trace"
@@ -666,6 +1026,12 @@ require_dir "${ROOT_DIR}/docs"
 require_dir "${ROOT_DIR}/scripts/cohsh"
 
 validate_release_sel4_profile
+validate_release_inventory_inputs
+
+if [[ "$CHECK_MANIFEST" -eq 1 ]]; then
+  echo "[release] Exact compiler-generated release manifest and inputs: PASS"
+  exit 0
+fi
 
 if [[ "$FORCE" -eq 1 ]]; then
   purge_release_paths

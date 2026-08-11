@@ -18,14 +18,17 @@ bench = false
 [features]
 default = ["offline-cache", "rest"]
 offline-cache = []
-rest = ["cohsh/rest"]
+rest = ["cohsh/rest", "dep:cohesix-rest"]
 
 [dependencies]
 cohsh = { path = "../cohsh", default-features = false, features = ["tcp"] }
 cohsh-core = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-rest = { path = "../../crates/cohesix-rest", optional = true }
 secure9p-codec = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
 ciborium = "0.2.2"
 toml = "1.1.4"
 log = "0.4.33"

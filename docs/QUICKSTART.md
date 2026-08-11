@@ -80,10 +80,14 @@ test -f "$SEL4_BUILD_DIR/kernel/autoconf/autoconf.h"
   --sel4-build "$SEL4_BUILD_DIR" \
   --out-dir out/cohesix \
   --profile release \
-  --root-task-features cohesix-dev \
+  --root-task-features release-qemu,bootstrap-trace \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
+
+The selected runtime profile is four-core SMP+MCS with GICv3. The build script
+validates that generated kernel truth and refuses forwarded machine or GIC
+overrides before it assembles or launches an image.
 
 Leave QEMU running. In a second terminal, enter the Queen console secret from
 the selected deployment manifest without placing it in shell history:

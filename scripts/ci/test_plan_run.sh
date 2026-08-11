@@ -12,7 +12,7 @@ source "${script_dir}/test_plan_common.sh"
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/ci/test_plan_run.sh [--target qemu|pi4] [--state-dir <path>] [--stage <1..5>] [--resume|--force] [--iteration] [--reuse-common-from <state-dir>] [--list]
+Usage: scripts/ci/test_plan_run.sh [--target qemu|pi4] [--state-dir <path>] [--stage <1..5>] [--resume|--force] [--iteration] [--reuse-common-from <state-dir>] [--m26e-evidence-kind component|root|system <explicit evidence inputs>] [--list]
 
 Runs the scripted test plan stages in order:
   1 common-hermetic (integrity plus host suites)
@@ -31,6 +31,21 @@ Options:
   --reuse-common-from <state-dir>
                       Import exact, verified common-stage evidence. Stage 01 only;
                       Stage 02 remains target-bound because it includes provisioned actions.
+  --m26e-evidence-kind <kind>
+                      After a complete five-stage target PASS, emit one explicit
+                      Milestone 26e component, root, or system record.
+  --m26e-target-session <file>
+                      Exact target-session JSON (component/root).
+  --m26e-observations <file>
+                      Direct target observations; never synthesized from launch
+                      output or stage markers (component/root/system).
+  --m26e-integration-dir <dir>
+                      Exact live role-required integration records (component).
+  --m26e-worker <file>
+                      Exact accepted Worker component (root/system).
+  --m26e-generated-inventory <file>
+                      Compiler-produced topology/inventory input (component/root).
+  --m26e-root <file>  Exact accepted root-TCB record (system).
   --list              Print stage map and exit.
   --help              Show this help.
 
@@ -43,6 +58,8 @@ Environment pass-through:
   TP_HOST_JOBS / TP_UI_WORKERS / TP_ALLOW_OVERSUBSCRIBE
   TEST_PLAN_ITERATION
   TEST_PLAN_FORCE
+  M26E_EVIDENCE_KIND / M26E_TARGET_SESSION / M26E_OBSERVATIONS
+  M26E_INTEGRATION_DIR / M26E_WORKER / M26E_GENERATED_INVENTORY / M26E_ROOT
   TP_SKIP_GENERATED_CHECK, TP_SKIP_PYTHON, TP_SKIP_FUSE, TP_WRITE_TRACE_FIXTURES
 
 Target contract:
@@ -59,6 +76,8 @@ Notes:
   - TP_SKIP_* options record an INCOMPLETE marker and the stage fails (they are for local iteration only).
   - --iteration is for focused debugging only; it never writes stage_XX.done or stage_XX.<target>.done.
   - Valid attestations resume by default. Stale evidence fails closed unless --force is used.
+  - M26e evidence emission requires a complete explicit input set and a full
+    target-qualified run. Without it, the runner emits no 26e acceptance PASS.
 USAGE
 }
 
@@ -95,6 +114,13 @@ iteration="${TEST_PLAN_ITERATION:-0}"
 force="${TEST_PLAN_FORCE:-0}"
 resume_explicit=0
 reuse_common_from=""
+m26e_evidence_kind="${M26E_EVIDENCE_KIND:-}"
+m26e_target_session="${M26E_TARGET_SESSION:-}"
+m26e_observations="${M26E_OBSERVATIONS:-}"
+m26e_integration_dir="${M26E_INTEGRATION_DIR:-}"
+m26e_worker="${M26E_WORKER:-}"
+m26e_generated_inventory="${M26E_GENERATED_INVENTORY:-}"
+m26e_root="${M26E_ROOT:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -138,6 +164,62 @@ while [[ $# -gt 0 ]]; do
         exit 2
       }
       reuse_common_from="$1"
+      ;;
+    --m26e-evidence-kind)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-evidence-kind requires a value" >&2
+        exit 2
+      }
+      m26e_evidence_kind="$1"
+      ;;
+    --m26e-target-session)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-target-session requires a value" >&2
+        exit 2
+      }
+      m26e_target_session="$1"
+      ;;
+    --m26e-observations)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-observations requires a value" >&2
+        exit 2
+      }
+      m26e_observations="$1"
+      ;;
+    --m26e-integration-dir)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-integration-dir requires a value" >&2
+        exit 2
+      }
+      m26e_integration_dir="$1"
+      ;;
+    --m26e-worker)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-worker requires a value" >&2
+        exit 2
+      }
+      m26e_worker="$1"
+      ;;
+    --m26e-generated-inventory)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-generated-inventory requires a value" >&2
+        exit 2
+      }
+      m26e_generated_inventory="$1"
+      ;;
+    --m26e-root)
+      shift
+      [[ $# -gt 0 ]] || {
+        echo "--m26e-root requires a value" >&2
+        exit 2
+      }
+      m26e_root="$1"
       ;;
     --list)
       list_stages
@@ -202,6 +284,107 @@ if [[ "${force}" == "1" && -n "${reuse_common_from}" ]]; then
   echo "--force and --reuse-common-from are mutually exclusive" >&2
   exit 2
 fi
+
+validate_m26e_evidence_request() {
+  local any_input=0
+  local value
+  for value in \
+    "${m26e_target_session}" \
+    "${m26e_observations}" \
+    "${m26e_integration_dir}" \
+    "${m26e_worker}" \
+    "${m26e_generated_inventory}" \
+    "${m26e_root}"
+  do
+    [[ -n "${value}" ]] && any_input=1
+  done
+
+  if [[ -z "${m26e_evidence_kind}" ]]; then
+    if [[ "${any_input}" == "1" ]]; then
+      echo "M26e evidence inputs require --m26e-evidence-kind" >&2
+      return 1
+    fi
+    local stale_output
+    for stale_output in \
+      "${state_dir}/worker-task-evidence.json" \
+      "${state_dir}/root-tcb-acceptance.json" \
+      "${state_dir}/system-acceptance.json"
+    do
+      if [[ -e "${stale_output}" ]]; then
+        echo "existing M26e acceptance output requires explicit evidence inputs: ${stale_output}" >&2
+        return 1
+      fi
+    done
+    return 0
+  fi
+  if [[ -n "${single_stage}" || "${iteration}" == "1" ]]; then
+    echo "M26e acceptance evidence requires one complete non-iteration five-stage run" >&2
+    return 1
+  fi
+  [[ -s "${m26e_observations}" ]] || {
+    echo "M26e evidence requires a non-empty explicit --m26e-observations file" >&2
+    return 1
+  }
+
+  case "${m26e_evidence_kind}" in
+    component)
+      [[ -s "${m26e_target_session}" ]] || {
+        echo "component evidence requires --m26e-target-session" >&2
+        return 1
+      }
+      [[ -d "${m26e_integration_dir}" ]] || {
+        echo "component evidence requires --m26e-integration-dir" >&2
+        return 1
+      }
+      [[ -s "${m26e_generated_inventory}" ]] || {
+        echo "component evidence requires --m26e-generated-inventory" >&2
+        return 1
+      }
+      if [[ -n "${m26e_worker}${m26e_root}" ]]; then
+        echo "component evidence received root/system-only inputs" >&2
+        return 1
+      fi
+      ;;
+    root)
+      [[ -s "${m26e_target_session}" ]] || {
+        echo "root evidence requires --m26e-target-session" >&2
+        return 1
+      }
+      [[ -s "${m26e_worker}" ]] || {
+        echo "root evidence requires --m26e-worker" >&2
+        return 1
+      }
+      [[ -s "${m26e_generated_inventory}" ]] || {
+        echo "root evidence requires --m26e-generated-inventory" >&2
+        return 1
+      }
+      if [[ -n "${m26e_integration_dir}${m26e_root}" ]]; then
+        echo "root evidence received component/system-only inputs" >&2
+        return 1
+      fi
+      ;;
+    system)
+      [[ -s "${m26e_worker}" ]] || {
+        echo "system evidence requires --m26e-worker" >&2
+        return 1
+      }
+      [[ -s "${m26e_root}" ]] || {
+        echo "system evidence requires --m26e-root" >&2
+        return 1
+      }
+      if [[ -n "${m26e_target_session}${m26e_integration_dir}${m26e_generated_inventory}" ]]; then
+        echo "system evidence received component/root-only inputs" >&2
+        return 1
+      fi
+      ;;
+    *)
+      echo "invalid --m26e-evidence-kind: ${m26e_evidence_kind}" >&2
+      return 1
+      ;;
+  esac
+}
+
+validate_m26e_evidence_request || exit 2
 
 stage_script_path() {
   local stage="$1"
@@ -556,6 +739,58 @@ assert_full_target_pass() {
   done
 }
 
+emit_m26e_evidence() {
+  [[ -n "${m26e_evidence_kind}" ]] || return 0
+  local evidence_python="python3"
+  if [[ -x "${repo_root}/.venv/bin/python" ]]; then
+    evidence_python="${repo_root}/.venv/bin/python"
+  fi
+  local output
+  case "${m26e_evidence_kind}" in
+    component)
+      output="${state_dir}/worker-task-evidence.json"
+      rm -f "${output}"
+      "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
+        emit-component \
+        --target "${target}" \
+        --target-session "${m26e_target_session}" \
+        --generated-inventory "${m26e_generated_inventory}" \
+        --observations "${m26e_observations}" \
+        --integration-dir "${m26e_integration_dir}" \
+        --out "${output}"
+      ;;
+    root)
+      output="${state_dir}/root-tcb-acceptance.json"
+      rm -f "${output}"
+      "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
+        emit-root \
+        --target "${target}" \
+        --target-session "${m26e_target_session}" \
+        --worker "${m26e_worker}" \
+        --generated-inventory "${m26e_generated_inventory}" \
+        --observations "${m26e_observations}" \
+        --out "${output}"
+      ;;
+    system)
+      output="${state_dir}/system-acceptance.json"
+      rm -f "${output}"
+      "${evidence_python}" "${repo_root}/scripts/worker_task_evidence.py" \
+        validate-system \
+        --target "${target}" \
+        --worker "${m26e_worker}" \
+        --root "${m26e_root}" \
+        --run "${state_dir}" \
+        --observations "${m26e_observations}" \
+        --out "${output}"
+      ;;
+  esac
+  [[ -s "${output}" ]] || {
+    echo "M26e evidence emitter returned without a non-empty record: ${output}" >&2
+    return 1
+  }
+  echo "[test-plan] m26e ${m26e_evidence_kind} evidence: ${output}"
+}
+
 stage_has_active_evidence() {
   local stage="$1"
   local candidate
@@ -806,6 +1041,7 @@ done
 
 if [[ -z "${single_stage}" ]]; then
   assert_full_target_pass
+  emit_m26e_evidence
 fi
 
 echo "[test-plan] completed stages: ${stages[*]}"

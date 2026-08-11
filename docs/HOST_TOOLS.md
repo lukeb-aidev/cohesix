@@ -16,6 +16,18 @@ belongs in [USERLAND_AND_CLI.md](USERLAND_AND_CLI.md), REST behavior in
 mount, ticket, federation, lifecycle, and PEFT procedures live in
 [OPERATOR_RECIPES.md](OPERATOR_RECIPES.md).
 
+## Generated integration truth
+
+`coh-rtc` compiles
+[`configs/host_integration_acceptance.toml`](../configs/host_integration_acceptance.toml)
+into the exact
+[`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
+graph. The generated [support table](snippets/host_integration_dependency.md)
+binds each advertised host binary, library API, use case, and built-in Python
+playbook to its required mode, package, evidence lane, and owning milestone.
+Executable-Worker proof, provider availability, package presence, mock or
+dry-run success, and use-case promotion are independent states.
+
 ## Choose one live topology
 
 The target TCP console is single-client. Use direct mode for one foreground tool or
@@ -95,6 +107,17 @@ select `--transport rest` and a running gateway. The current REST transport
 accepts only the local `queen` role and still inherits the gateway's upstream
 role and optional ticket.
 
+Direct-TCP `CAT` preserves ordinary lines up to 256 bytes unchanged. A longer
+canonical JSON line uses the existing response stream and the exact versioned
+wire form `C1:<seq4hex>:<count4hex>:<full_sha256>:<utf8_payload>`. Sequence and
+count are four lowercase hexadecimal digits, sequence starts at zero and is
+contiguous, count is in `1..=64`, every wire line remains at most 256 bytes,
+and every chunk repeats the full lowercase SHA-256 of the reconstructed line.
+The reconstructed line is bounded to 2,048 bytes. `cohsh` reassembles this
+format before returning `CAT` output and rejects partial, reordered, replayed,
+mixed-digest, oversized, or noncanonical groups. This does not add a verb,
+path, authority, or larger global console-output queue.
+
 ### `coh`
 
 Host integration CLI with these command families:
@@ -152,14 +175,20 @@ and optionally publishes it through `/gpu/bridge/ctl`.
 # Local inventory only; no target mutation.
 cargo run -p gpu-bridge-host -- --list
 
-# One REST publish; exits after the snapshot is sent.
-cargo run -p gpu-bridge-host -- --publish --rest-url "$COH_REST_URL"
+# One REST publish from a real registry; exits after the snapshot is sent.
+cargo run -p gpu-bridge-host -- --registry "$COH_GPU_REGISTRY" \
+  --publish --rest-url "$COH_REST_URL"
 ```
 
 `--list` does not publish. `--publish` without `--interval-ms` is one-shot;
 adding an interval runs continuously. A continuous direct-TCP publisher owns
-the console for its lifetime. `--mock` selects deterministic local inventory,
-but a separate mock client cannot observe that process's in-memory state.
+the console for its lifetime. Live publication resolves and rejects placeholder
+TCP or REST credentials before opening a connection/request. A missing registry
+publishes explicit empty/unavailable state; an invalid registry fails. There is
+no demo-catalog or first-active-model fallback. `--mock` selects deterministic
+fixture inventory and carries `source_mode=fixture`; the operational target
+rejects it, and it cannot satisfy integration, release, attestation, or use-case
+evidence.
 
 ### `host-sidecar-bridge`
 

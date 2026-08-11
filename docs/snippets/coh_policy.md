@@ -3,10 +3,26 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
-- `policy.sha256`: `d70352aab08c8d7e1f97d5709e85d85daaf45d0593f012e30ee19e3d35163a72`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
+- `policy.sha256`: `adf4d126f22315bae6a84c26bb81af2836f089a5dba516e1a8f322fa0db9574f`
+- `coh.worker.task_abi_schema`: `worker-task-abi/v1`
+- `coh.worker.task_abi_version`: `1`
+- `coh.worker.observation_schema`: `cohesix-worker-observation/v1`
+- `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`
+- `coh.worker.maximum_live_tasks`: `3`
+- `coh.worker.canonical_telemetry_template`: `/shard/<label>/worker/<id>/telemetry`
+- `coh.worker.shard_bits`: `8`
+- `coh.worker.legacy_worker_alias`: `true`
+- `coh.worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`
+- `coh.worker.receipt`: `none, pending, confirmed, rejected, stale`
+- `coh.worker.artifact`: `missing, verified, mismatch`
+- `coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`
+- `coh.worker.role.worker-heartbeat`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-gpu`: declaration=`executable`, executable_slots=`1`
+- `coh.worker.role.worker-bus`: declaration=`model-only`, executable_slots=`0`
+- `coh.worker.role.worker-lora`: declaration=`executable`, executable_slots=`1`
 - `coh.mount.root`: `/`
-- `coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `coh.telemetry.root`: `/queen/telemetry`
 - `coh.telemetry.max_devices`: `32`
 - `coh.telemetry.max_segments_per_device`: `4`

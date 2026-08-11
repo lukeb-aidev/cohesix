@@ -1,14 +1,28 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Persist relay write-ahead state for deterministic cross-hive ticket forwarding.
+// Purpose: Persist relay and receipt execution state with crash-safe local fencing.
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
-use std::fs;
-use std::path::Path;
+use std::collections::BTreeMap;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
+use fs2::FileExt;
 use serde::{Deserialize, Serialize};
+
+use crate::claim::{SpecSource, TicketKey};
+use crate::HostTicketSpec;
+
+/// Maximum durable bytes retained by the 26e receipt execution journal.
+pub const EXECUTION_JOURNAL_MAX_BYTES: usize = 1024 * 1024;
+/// Maximum version-2 operations retained in one journal.
+pub const EXECUTION_JOURNAL_MAX_ENTRIES: usize = 256;
+
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Relay WAL entry lifecycle state.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,15 +80,8 @@ impl RelayWal {
 
     /// Persist relay WAL to disk atomically.
     pub fn save(&self, path: &Path) -> Result<()> {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("create relay WAL dir {}", parent.display()))?;
-        }
         let payload = serde_json::to_vec_pretty(self).context("serialize relay WAL")?;
-        let tmp = path.with_extension("partial");
-        fs::write(&tmp, &payload).with_context(|| format!("write relay WAL {}", tmp.display()))?;
-        fs::rename(&tmp, path).with_context(|| format!("commit relay WAL {}", path.display()))?;
-        Ok(())
+        durable_atomic_write(path, &payload, usize::MAX, "relay WAL")
     }
 
     /// Return true if the key already exists in delivered state.
@@ -188,9 +195,463 @@ impl RelayWal {
     }
 }
 
+/// Crash-safe version-2 execution state.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExecutionJournalState {
+    /// Root-admitted request and immutable identity have been persisted.
+    Prepared,
+    /// Provider execution may have started and must never be blindly replayed.
+    Executing,
+    /// Provider outcome has been durably persisted locally.
+    ProviderResultPersisted,
+    /// The exact result was published, or an identical terminal result was observed.
+    ResultPublished,
+    /// Publication and cursor advancement have both completed.
+    Terminal,
+}
+
+/// Durable terminal provider outcome retained before VM result publication.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct JournalProviderResult {
+    /// Receipt projection selected from the durable provider outcome.
+    pub outcome: JournalProviderOutcome,
+    /// UTF-8-safe bounded provider detail.
+    pub message: String,
+    /// Whether this outcome was reconstructed by action-specific recovery.
+    pub reconciled: bool,
+}
+
+/// Durable receipt projection derived from provider execution or reconciliation.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JournalProviderOutcome {
+    /// Exact provider operation committed and maps to a confirmed Worker receipt.
+    Confirmed,
+    /// Provider operation was deterministically rejected.
+    Rejected,
+    /// The binding or observation window became stale without replaying the provider.
+    Stale,
+}
+
+/// One immutable receipt-bearing operation and its durable state.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionJournalEntry {
+    /// Stable length-prefixed ticket/idempotency key.
+    pub key: String,
+    /// Root-normalized admitted version-2 request.
+    pub spec: HostTicketSpec,
+    /// Current crash-safe execution phase.
+    pub state: ExecutionJournalState,
+    /// Provider result persisted before any VM result write.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_result: Option<JournalProviderResult>,
+    /// Exact canonical result destination.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_path: Option<String>,
+    /// Exact canonical result JSON line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub result_line: Option<String>,
+}
+
+/// Bounded durable journal for the seven version-2 receipt actions.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExecutionJournal {
+    schema: String,
+    entries: BTreeMap<String, ExecutionJournalEntry>,
+}
+
+impl Default for ExecutionJournal {
+    fn default() -> Self {
+        Self {
+            schema: "host-ticket-execution-journal/v2".to_owned(),
+            entries: BTreeMap::new(),
+        }
+    }
+}
+
+impl ExecutionJournal {
+    /// Load and validate a bounded journal; a missing file is empty state.
+    pub fn load(path: &Path) -> Result<Self> {
+        let payload = match fs::read(path) {
+            Ok(payload) => payload,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(err) => {
+                return Err(err)
+                    .with_context(|| format!("read execution journal {}", path.display()))
+            }
+        };
+        if payload.len() > EXECUTION_JOURNAL_MAX_BYTES {
+            return Err(anyhow!(
+                "execution journal {} exceeds {} bytes",
+                path.display(),
+                EXECUTION_JOURNAL_MAX_BYTES
+            ));
+        }
+        let journal: Self = serde_json::from_slice(&payload)
+            .with_context(|| format!("parse execution journal {}", path.display()))?;
+        journal.validate()?;
+        Ok(journal)
+    }
+
+    /// Durably persist the complete bounded journal.
+    pub fn save(&self, path: &Path) -> Result<()> {
+        self.validate()?;
+        let payload = serde_json::to_vec_pretty(self).context("serialize execution journal")?;
+        durable_atomic_write(
+            path,
+            &payload,
+            EXECUTION_JOURNAL_MAX_BYTES,
+            "execution journal",
+        )
+    }
+
+    /// Persist a root-admitted request, rejecting key reuse with different bytes.
+    pub fn prepare(&mut self, spec: &HostTicketSpec) -> Result<()> {
+        crate::claim::validate_spec(spec, SpecSource::AdmittedSnapshot)?;
+        let key = TicketKey::new(&spec.id, &spec.idempotency_key).journal_key();
+        if self.entries.contains_key(&key) {
+            let existing = self
+                .entries
+                .get(&key)
+                .ok_or_else(|| anyhow!("execution journal lookup failed"))?;
+            if existing.spec != *spec {
+                return Err(anyhow!(
+                    "execution journal key {key} was reused with a different admitted request"
+                ));
+            }
+            return Ok(());
+        }
+        if self.entries.len() >= EXECUTION_JOURNAL_MAX_ENTRIES {
+            return Err(anyhow!(
+                "execution journal reached {} entries",
+                EXECUTION_JOURNAL_MAX_ENTRIES
+            ));
+        }
+        self.entries.insert(
+            key.clone(),
+            ExecutionJournalEntry {
+                key: key.clone(),
+                spec: spec.clone(),
+                state: ExecutionJournalState::Prepared,
+                provider_result: None,
+                result_path: None,
+                result_line: None,
+            },
+        );
+        Ok(())
+    }
+
+    /// Borrow one entry by ticket key.
+    #[must_use]
+    pub fn get(&self, key: &TicketKey) -> Option<&ExecutionJournalEntry> {
+        self.entries.get(&key.journal_key())
+    }
+
+    /// Advance one entry to `executing` before provider dispatch.
+    pub fn mark_executing(&mut self, key: &TicketKey) -> Result<()> {
+        let entry = self.entry_mut(key)?;
+        match entry.state {
+            ExecutionJournalState::Prepared => {
+                entry.state = ExecutionJournalState::Executing;
+                Ok(())
+            }
+            ExecutionJournalState::Executing => Ok(()),
+            other => Err(anyhow!("cannot mark journal {other:?} as executing")),
+        }
+    }
+
+    /// Persist the provider result before attempting VM publication.
+    pub fn persist_provider_result(
+        &mut self,
+        key: &TicketKey,
+        result: JournalProviderResult,
+    ) -> Result<()> {
+        let entry = self.entry_mut(key)?;
+        if entry.state != ExecutionJournalState::Executing {
+            return Err(anyhow!(
+                "provider result requires executing state, got {:?}",
+                entry.state
+            ));
+        }
+        entry.provider_result = Some(result);
+        entry.state = ExecutionJournalState::ProviderResultPersisted;
+        Ok(())
+    }
+
+    /// Persist exact result bytes before attempting VM publication.
+    pub fn stage_result(&mut self, key: &TicketKey, path: &str, line: &str) -> Result<()> {
+        let entry = self.entry_mut(key)?;
+        if entry.state != ExecutionJournalState::ProviderResultPersisted {
+            return Err(anyhow!(
+                "result publication requires provider-result-persisted state, got {:?}",
+                entry.state
+            ));
+        }
+        entry.result_path = Some(path.to_owned());
+        entry.result_line = Some(line.to_owned());
+        Ok(())
+    }
+
+    /// Advance to `result-published` only after write success or exact observation.
+    pub fn mark_result_published(&mut self, key: &TicketKey) -> Result<()> {
+        let entry = self.entry_mut(key)?;
+        if entry.state != ExecutionJournalState::ProviderResultPersisted
+            || entry.result_path.is_none()
+            || entry.result_line.is_none()
+        {
+            return Err(anyhow!(
+                "result-published transition requires staged provider result"
+            ));
+        }
+        entry.state = ExecutionJournalState::ResultPublished;
+        Ok(())
+    }
+
+    /// Mark a published operation terminal after durable cursor advancement.
+    pub fn mark_terminal(&mut self, key: &TicketKey) -> Result<()> {
+        let entry = self.entry_mut(key)?;
+        if entry.state != ExecutionJournalState::ResultPublished {
+            return Err(anyhow!(
+                "terminal transition requires result-published state, got {:?}",
+                entry.state
+            ));
+        }
+        entry.state = ExecutionJournalState::Terminal;
+        Ok(())
+    }
+
+    fn entry_mut(&mut self, key: &TicketKey) -> Result<&mut ExecutionJournalEntry> {
+        self.entries
+            .get_mut(&key.journal_key())
+            .ok_or_else(|| anyhow!("execution journal entry not found"))
+    }
+
+    fn validate(&self) -> Result<()> {
+        if self.schema != "host-ticket-execution-journal/v2" {
+            return Err(anyhow!("unsupported execution journal schema"));
+        }
+        if self.entries.len() > EXECUTION_JOURNAL_MAX_ENTRIES {
+            return Err(anyhow!(
+                "execution journal exceeds {} entries",
+                EXECUTION_JOURNAL_MAX_ENTRIES
+            ));
+        }
+        for (key, entry) in &self.entries {
+            if key != &entry.key {
+                return Err(anyhow!("execution journal map/entry key mismatch"));
+            }
+            crate::claim::validate_spec(&entry.spec, SpecSource::AdmittedSnapshot)?;
+            let expected =
+                TicketKey::new(&entry.spec.id, &entry.spec.idempotency_key).journal_key();
+            if expected != *key {
+                return Err(anyhow!(
+                    "execution journal key does not match ticket identity"
+                ));
+            }
+            if entry.state >= ExecutionJournalState::ProviderResultPersisted
+                && entry.provider_result.is_none()
+            {
+                return Err(anyhow!("persisted journal state lacks provider result"));
+            }
+            if entry.state >= ExecutionJournalState::ResultPublished
+                && (entry.result_path.is_none() || entry.result_line.is_none())
+            {
+                return Err(anyhow!("published journal state lacks exact result bytes"));
+            }
+            if let Some(result) = &entry.provider_result {
+                if result.message.is_empty()
+                    || result.message.len() > 192
+                    || result.message.chars().any(char::is_control)
+                {
+                    return Err(anyhow!(
+                        "execution journal provider message must be control-free and 1..=192 bytes"
+                    ));
+                }
+            }
+            if let Some(path) = entry.result_path.as_deref() {
+                if !path.starts_with('/')
+                    || !(path.ends_with("/tickets/status") || path.ends_with("/tickets/deadletter"))
+                {
+                    return Err(anyhow!("execution journal result path is not canonical"));
+                }
+            }
+            if let Some(line) = entry.result_line.as_ref() {
+                let parsed = crate::claim::parse_result_lines_from(
+                    std::slice::from_ref(line),
+                    &[crate::HOST_TICKET_RESULT_V2_SCHEMA.to_owned()],
+                    8192,
+                )?;
+                let result = parsed
+                    .first()
+                    .ok_or_else(|| anyhow!("execution journal result line is empty"))?;
+                if result.id != entry.spec.id
+                    || result.idempotency_key != entry.spec.idempotency_key
+                    || result.action != entry.spec.action
+                    || result.operation_id != entry.spec.operation_id
+                    || result.subject_ref != entry.spec.subject_ref
+                    || result.receipt_worker_role != entry.spec.receipt_worker_role
+                    || result.receipt_worker_id != entry.spec.receipt_worker_id
+                    || result.receipt_supervisor_generation
+                        != entry.spec.receipt_supervisor_generation
+                    || result.receipt_cap_generation != entry.spec.receipt_cap_generation
+                    || result.resolved_worker_slot != entry.spec.resolved_worker_slot
+                    || result.resolved_lease_epoch != entry.spec.resolved_lease_epoch
+                    || result.admission_sequence != entry.spec.admission_sequence
+                {
+                    return Err(anyhow!(
+                        "execution journal result does not echo admitted Worker binding"
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+/// Process-lifetime exclusive fence for one local host-ticket agent state root.
+#[derive(Debug)]
+pub struct AgentFence {
+    file: File,
+}
+
+impl AgentFence {
+    /// Acquire a nonblocking exclusive fence and record the current process id.
+    pub fn acquire(path: &Path) -> Result<Self> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)
+                .with_context(|| format!("create agent lock dir {}", parent.display()))?;
+        }
+        if fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            return Err(anyhow!(
+                "agent lock {} must not be a symlink",
+                path.display()
+            ));
+        }
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .with_context(|| format!("open agent lock {}", path.display()))?;
+        if let Err(err) = file.try_lock_exclusive() {
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                return Err(anyhow!(
+                    "host-ticket-agent already owns execution fence {}",
+                    path.display()
+                ));
+            }
+            return Err(err).with_context(|| format!("lock agent fence {}", path.display()));
+        }
+        file.set_len(0)
+            .with_context(|| format!("truncate agent lock {}", path.display()))?;
+        writeln!(file, "pid={}", std::process::id())
+            .with_context(|| format!("write agent lock {}", path.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync agent lock {}", path.display()))?;
+        Ok(Self { file })
+    }
+}
+
+impl Drop for AgentFence {
+    fn drop(&mut self) {
+        let _ = fs2::FileExt::unlock(&self.file);
+    }
+}
+
+fn durable_atomic_write(path: &Path, payload: &[u8], max_bytes: usize, label: &str) -> Result<()> {
+    if payload.len() > max_bytes {
+        return Err(anyhow!(
+            "{label} payload {} exceeds bound {max_bytes}",
+            payload.len()
+        ));
+    }
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    fs::create_dir_all(parent)
+        .with_context(|| format!("create {label} dir {}", parent.display()))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| anyhow!("{label} path has no UTF-8 file name"))?;
+    let (temp, mut file) = create_unique_temp(parent, name, label)?;
+    let write_result = (|| -> Result<()> {
+        file.write_all(payload)
+            .with_context(|| format!("write {label} temp {}", temp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("sync {label} temp {}", temp.display()))?;
+        fs::rename(&temp, path).with_context(|| format!("commit {label} {}", path.display()))?;
+        File::open(parent)
+            .with_context(|| format!("open {label} parent {}", parent.display()))?
+            .sync_all()
+            .with_context(|| format!("sync {label} parent {}", parent.display()))?;
+        Ok(())
+    })();
+    if write_result.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    write_result
+}
+
+fn create_unique_temp(parent: &Path, name: &str, label: &str) -> Result<(PathBuf, File)> {
+    for _ in 0..32 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temp = parent.join(format!(
+            ".{name}.{}.{}.partial",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new().write(true).create_new(true).open(&temp) {
+            Ok(file) => return Ok((temp, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("create {label} temp {}", temp.display()));
+            }
+        }
+    }
+    Err(anyhow!(
+        "could not allocate a unique {label} temp file under {}",
+        parent.display()
+    ))
+}
+
+/// Persist the bounded cursor using the same file+directory durability protocol.
+pub(crate) fn save_cursor_durable(path: &Path, payload: &[u8]) -> Result<()> {
+    durable_atomic_write(path, payload, 4096, "ticket cursor")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ReceiptMode, HOST_TICKET_RESULT_V2_SCHEMA, HOST_TICKET_V2_SCHEMA};
+
+    fn admitted_v2_spec() -> HostTicketSpec {
+        HostTicketSpec {
+            schema: HOST_TICKET_V2_SCHEMA.to_owned(),
+            id: "ticket-v2".to_owned(),
+            idempotency_key: "idem-v2".to_owned(),
+            action: "gpu.lease.grant".to_owned(),
+            args: serde_json::json!({"ttl_s": 30}),
+            receipt_mode: Some(ReceiptMode::Worker),
+            operation_id: Some("lease-1".to_owned()),
+            subject_ref: Some("GPU-0".to_owned()),
+            receipt_worker_role: Some("worker-gpu".to_owned()),
+            receipt_worker_id: Some("worker-gpu-1".to_owned()),
+            receipt_supervisor_generation: Some(2),
+            receipt_cap_generation: Some(3),
+            resolved_worker_slot: Some(0),
+            resolved_lease_epoch: Some(4),
+            admission_sequence: Some(5),
+            ..HostTicketSpec::default()
+        }
+    }
 
     #[test]
     fn wal_roundtrip_and_limits() {
@@ -213,5 +674,86 @@ mod tests {
         mutable.enforce_limits(1, 1024);
         assert_eq!(mutable.entries.len(), 1);
         assert_eq!(mutable.pending_count(), 1);
+    }
+
+    #[test]
+    fn execution_journal_persists_every_v2_phase() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("execution.json");
+        let spec = admitted_v2_spec();
+        let key = TicketKey::new(&spec.id, &spec.idempotency_key);
+        let mut journal = ExecutionJournal::default();
+
+        journal.prepare(&spec).expect("prepare");
+        journal.save(&path).expect("save prepared");
+        journal = ExecutionJournal::load(&path).expect("load prepared");
+        assert_eq!(
+            journal.get(&key).map(|entry| entry.state),
+            Some(ExecutionJournalState::Prepared)
+        );
+
+        journal.mark_executing(&key).expect("executing");
+        journal.save(&path).expect("save executing");
+        journal
+            .persist_provider_result(
+                &key,
+                JournalProviderResult {
+                    outcome: JournalProviderOutcome::Confirmed,
+                    message: "provider committed".to_owned(),
+                    reconciled: false,
+                },
+            )
+            .expect("provider result");
+        let line = crate::status::build_result_line(
+            &spec,
+            HOST_TICKET_RESULT_V2_SCHEMA,
+            "succeeded",
+            Some("provider committed"),
+            2048,
+        )
+        .expect("result line");
+        journal
+            .stage_result(&key, "/host/tickets/status", &line)
+            .expect("stage result");
+        journal.save(&path).expect("save provider result");
+        journal.mark_result_published(&key).expect("published");
+        journal.save(&path).expect("save published");
+        journal.mark_terminal(&key).expect("terminal");
+        journal.save(&path).expect("save terminal");
+
+        let loaded = ExecutionJournal::load(&path).expect("load terminal");
+        assert_eq!(
+            loaded.get(&key).map(|entry| entry.state),
+            Some(ExecutionJournalState::Terminal)
+        );
+        assert!(temp.path().read_dir().expect("read dir").all(|entry| !entry
+            .expect("entry")
+            .file_name()
+            .to_string_lossy()
+            .contains("partial")));
+    }
+
+    #[test]
+    fn agent_fence_refuses_a_second_owner() {
+        let temp = tempfile::TempDir::new().expect("temp dir");
+        let path = temp.path().join("agent.lock");
+        let first = AgentFence::acquire(&path).expect("first fence");
+        let second = AgentFence::acquire(&path).expect_err("second owner must fail");
+        assert!(second.to_string().contains("already owns"));
+        drop(first);
+        AgentFence::acquire(&path).expect("lock released");
+    }
+
+    #[test]
+    fn execution_journal_rejects_reused_key_with_changed_binding() {
+        let mut journal = ExecutionJournal::default();
+        let spec = admitted_v2_spec();
+        journal.prepare(&spec).expect("prepare");
+        let mut changed = spec;
+        changed.resolved_lease_epoch = Some(99);
+        let err = journal
+            .prepare(&changed)
+            .expect_err("binding reuse must fail");
+        assert!(err.to_string().contains("different admitted request"));
     }
 }

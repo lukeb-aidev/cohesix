@@ -10,13 +10,46 @@ readonly service_name="AX88179B"
 readonly script_dir="${0:A:h}"
 readonly repo_root="${script_dir:h:h}"
 readonly config="${repo_root}/tools/host-bootpd/bootpd.plist"
-readonly runtime_dir="${repo_root}/out/host-bootpd"
+readonly expected_runtime_dir="/Users/lukasbower/cohesix/host-bootpd"
+readonly runtime_dir="${COHESIX_BOOTPD_RUNTIME_DIR-}"
+readonly legacy_runtime_dir="${repo_root}/out/host-bootpd"
 readonly log_file="${runtime_dir}/bootpd-supervisor.log"
 readonly pid_file="${runtime_dir}/bootpd-supervisor.pid"
 
 last_state=""
 
+fail() {
+	print -u2 -- "host-bootpd: $*"
+	exit 78
+}
+
+path_present() {
+	[[ -e "$1" || -L "$1" ]]
+}
+
+validate_runtime_dir() {
+	if [[ -z "${runtime_dir}" ]]; then
+		fail "COHESIX_BOOTPD_RUNTIME_DIR is required"
+	fi
+	if [[ "${runtime_dir}" != "${expected_runtime_dir}" ]]; then
+		fail "COHESIX_BOOTPD_RUNTIME_DIR must be ${expected_runtime_dir}"
+	fi
+	if path_present "${legacy_runtime_dir}" && path_present "${runtime_dir}"; then
+		fail "ambiguous runtime state: both ${legacy_runtime_dir} and ${runtime_dir} exist"
+	fi
+	if path_present "${legacy_runtime_dir}"; then
+		fail "legacy runtime exists at ${legacy_runtime_dir}; rerun install-root-bootpd.zsh"
+	fi
+	if [[ -L "${runtime_dir}" ]]; then
+		fail "runtime directory must not be a symlink: ${runtime_dir}"
+	fi
+	if [[ -e "${runtime_dir}" && ! -d "${runtime_dir}" ]]; then
+		fail "runtime path is not a directory: ${runtime_dir}"
+	fi
+}
+
 ensure_runtime_dir() {
+	validate_runtime_dir
 	mkdir -p "${runtime_dir}"
 	print "$$" > "${pid_file}"
 }

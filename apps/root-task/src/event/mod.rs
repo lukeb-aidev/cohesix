@@ -2375,19 +2375,24 @@ struct SmpActivityRates {
     drop_per_s: u64,
 }
 
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct SmpActivityScope {
+    authority: bool,
+    serial: bool,
+    usb: bool,
+    hdmi: bool,
+    net: bool,
+}
+
 impl SmpActivityRates {
     fn from_snapshots(
         previous: SmpActivitySnapshot,
         current: SmpActivitySnapshot,
         window_ms: u64,
-        include_authority: bool,
-        include_serial: bool,
-        include_usb: bool,
-        include_hdmi: bool,
-        include_net: bool,
+        scope: SmpActivityScope,
     ) -> Self {
         let mut rates = Self::default();
-        if include_authority {
+        if scope.authority {
             let previous_commands = previous
                 .metrics
                 .accepted_commands
@@ -2415,7 +2420,7 @@ impl SmpActivityRates {
                 window_ms,
             );
         }
-        if include_serial {
+        if scope.serial {
             rates.serial_drop_per_s = rate_per_second(
                 delta_u32(
                     current.serial.rx_backpressure,
@@ -2436,7 +2441,7 @@ impl SmpActivityRates {
                 window_ms,
             );
         }
-        if include_usb {
+        if scope.usb {
             let previous_local = previous.local_seat.unwrap_or_default();
             let current_local = current.local_seat.unwrap_or_default();
             rates.seat_poll_per_s = rate_per_second(
@@ -2470,7 +2475,7 @@ impl SmpActivityRates {
             );
             rates.drop_per_s = rates.drop_per_s.saturating_add(rates.seat_drop_per_s);
         }
-        if include_hdmi {
+        if scope.hdmi {
             let previous_local = previous.local_seat.unwrap_or_default();
             let current_local = current.local_seat.unwrap_or_default();
             rates.display_bytes_per_s = rate_per_second(
@@ -2497,7 +2502,7 @@ impl SmpActivityRates {
             );
             rates.drop_per_s = rates.drop_per_s.saturating_add(rates.hdmi_drop_per_s);
         }
-        if include_net {
+        if scope.net {
             #[cfg(feature = "net-console")]
             if let (Some(previous_net), Some(current_net)) = (previous.net, current.net) {
                 rates.net_rx_per_s = rate_per_second(
@@ -4245,6 +4250,87 @@ where
         self.net_unavailable_detail = None;
         self.network_service_quarantined = false;
         true
+    }
+
+    /// Consume and contain one terminal isolated console-network fault.
+    ///
+    /// Only the QEMU isolated adapter overrides this service-owner hook. The
+    /// existing physical-network pollers return `Ok(false)`, so this bounded
+    /// root-control turn neither inspects nor changes CYW43/SDIO behavior.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pub fn contain_faulted_console_network(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {
+        let outcome = match self.net.as_deref_mut() {
+            Some(net) => net.contain_faulted_console_service(hal),
+            None => return false,
+        };
+        match outcome {
+            Ok(false) => false,
+            Ok(true) => {
+                self.audit
+                    .denied("isolated console-network generation contained after terminal fault");
+                self.quarantine_network_service_after_cyw43_terminal_failure();
+                true
+            }
+            Err(error) => {
+                log::error!(
+                    "[console-network] terminal containment incomplete error={error} action=quarantine-no-replacement"
+                );
+                self.audit.denied(
+                    "isolated console-network containment incomplete; replacement prohibited",
+                );
+                self.quarantine_network_service_after_cyw43_terminal_failure();
+                true
+            }
+        }
+    }
+
+    /// Consume and contain one terminal isolated NineDoor service fault.
+    ///
+    /// Root-fault has already suspended the passive child and, when a Call was
+    /// outstanding, returned the one generated typed failure through its
+    /// dedicated recovery Reply. This root-control turn only scrubs mappings,
+    /// revokes the retained anchor, and fences the old transport generation.
+    #[cfg(all(
+        feature = "kernel",
+        target_arch = "aarch64",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
+    pub fn contain_faulted_ninedoor(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {
+        let outcome = match self.ninedoor.as_deref_mut() {
+            Some(bridge) => bridge.contain_target_service_if_faulted(hal),
+            None => return false,
+        };
+        match outcome {
+            Ok(None) => false,
+            Ok(Some(proof))
+                if proof.tcb_suspended
+                    && proof.mappings_scrubbed
+                    && proof.recovery_reply_revoked
+                    && proof.capabilities_revoked
+                    && proof.generation_fenced =>
+            {
+                self.audit
+                    .denied("isolated NineDoor generation contained after terminal fault");
+                true
+            }
+            Ok(Some(_)) => {
+                log::error!(
+                    "[ninedoor-service] terminal containment proof incomplete action=quarantine-no-replacement"
+                );
+                self.audit
+                    .denied("isolated NineDoor containment proof incomplete");
+                true
+            }
+            Err(error) => {
+                log::error!(
+                    "[ninedoor-service] terminal containment failed error={error} action=quarantine-no-replacement"
+                );
+                self.audit
+                    .denied("isolated NineDoor containment failed; replacement prohibited");
+                true
+            }
+        }
     }
 
     /// Quarantine an attached Wi-Fi stack after its single production
@@ -9512,7 +9598,16 @@ where
                 core,
             );
             let rates = SmpActivityRates::from_snapshots(
-                previous, current, window_ms, authority, serial, usb, hdmi, net,
+                previous,
+                current,
+                window_ms,
+                SmpActivityScope {
+                    authority,
+                    serial,
+                    usb,
+                    hdmi,
+                    net,
+                },
             );
             let line = format_message(format_args!(
                 "[smp] activity core c={} tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seat_drop_s={} seat_no_reply_s={} hdmi_drop_s={} net_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
@@ -9700,11 +9795,13 @@ where
             previous,
             current,
             window_ms,
-            true,
-            true,
-            current.local_seat.is_some(),
-            current.local_seat.is_some(),
-            true,
+            SmpActivityScope {
+                authority: true,
+                serial: true,
+                usb: current.local_seat.is_some(),
+                hdmi: current.local_seat.is_some(),
+                net: true,
+            },
         );
         let line = format_message(format_args!(
             "[smp] activity core c=n/a tasks={} win={} cmd_s={} line_s={} tick_s={} serial_drop_s={} seat_drop_s={} seat_no_reply_s={} hdmi_drop_s={} net_drop_s={} seatPoll_s={} kbdB_s={} hdmiB_s={} netRx_s={} netTx_s={} tcpB_s={} drop_s={}",
@@ -21733,7 +21830,7 @@ where
         }
     }
 
-    fn process_console_line(&mut self, line: &HeaplessString<LINE>) {
+    fn process_console_line<const N: usize>(&mut self, line: &HeaplessString<N>) {
         if line.as_str().trim().is_empty() {
             self.ignore_empty_console_line();
             return;
@@ -21837,7 +21934,10 @@ where
         true
     }
 
-    fn feed_parser(&mut self, line: &HeaplessString<LINE>) -> Result<(), ConsoleError> {
+    fn feed_parser<const N: usize>(
+        &mut self,
+        line: &HeaplessString<N>,
+    ) -> Result<(), ConsoleError> {
         for byte in line.as_bytes() {
             self.parser.push_byte(*byte)?;
         }
@@ -21856,18 +21956,12 @@ where
     }
 
     #[cfg(feature = "net-console")]
-    fn handle_network_line(&mut self, line: HeaplessString<DEFAULT_LINE_CAPACITY>) {
+    fn handle_network_line(&mut self, line: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>) {
         if self.network_service_quarantined {
             return;
         }
-        let mut converted: HeaplessString<LINE> = HeaplessString::new();
-        if converted.push_str(line.as_str()).is_err() {
-            self.audit
-                .denied("net console line exceeded maximum length");
-            return;
-        }
         self.last_input_source = ConsoleInputSource::Net;
-        self.process_console_line(&converted);
+        self.process_console_line(&line);
         self.schedule_net_post_dispatch_flush();
     }
 
@@ -30878,7 +30972,13 @@ mod tests {
         };
 
         let usb = SmpActivityRates::from_snapshots(
-            previous, current, 1_000, false, false, true, false, false,
+            previous,
+            current,
+            1_000,
+            SmpActivityScope {
+                usb: true,
+                ..SmpActivityScope::default()
+            },
         );
         assert_eq!(usb.seat_poll_per_s, 100);
         assert_eq!(usb.keyboard_bytes_per_s, 11);
@@ -30887,7 +30987,13 @@ mod tests {
         assert_eq!(usb.display_bytes_per_s, 0);
 
         let hdmi = SmpActivityRates::from_snapshots(
-            previous, current, 1_000, false, false, false, true, false,
+            previous,
+            current,
+            1_000,
+            SmpActivityScope {
+                hdmi: true,
+                ..SmpActivityScope::default()
+            },
         );
         assert_eq!(hdmi.seat_poll_per_s, 0);
         assert_eq!(hdmi.keyboard_bytes_per_s, 0);

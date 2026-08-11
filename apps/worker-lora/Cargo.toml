@@ -7,5 +7,15 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+qemu-evidence = ["worker-heart/qemu-evidence"]
+
 [dependencies]
 worker-heart = { path = "../worker-heart" }
+worker-task-abi = { workspace = true }
+
+[[bin]]
+name = "worker-lora"
+test = false
+bench = false

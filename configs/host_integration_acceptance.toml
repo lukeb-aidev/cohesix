@@ -1,0 +1,1177 @@
+# Author: Lukas Bower
+# Purpose: Define the compiler-owned Milestone 26e host-integration dependency and acceptance matrix.
+# Copyright 2026 Lukas Bower
+
+schema = "host-integration-dependency-source/v1"
+milestone = "Milestone 26e — generated host-integration and use-case dependency contract"
+graph_id = "m26e-host-integration"
+
+advertised_packages = [
+  "apps/cas-tool",
+  "apps/coh",
+  "apps/coh-status",
+  "apps/cohesix-proto",
+  "apps/cohsh",
+  "apps/gpu-bridge-host",
+  "apps/hive-gateway",
+  "apps/host-sidecar-bridge",
+  "apps/host-ticket-agent",
+  "apps/sidecar-bus",
+  "apps/swarmui",
+  "crates/cohesix-rest",
+  "crates/cohesix-worker-evidence",
+  "crates/cohsh-core",
+  "crates/host-cuda",
+]
+
+advertised_documents = [
+  "docs/GPU_NODES.md",
+  "docs/HOST_API.md",
+  "docs/HOST_TOOLS.md",
+  "docs/INTERFACES.md",
+  "docs/PYTHON_SUPPORT.md",
+  "docs/TEST_PLAN.md",
+  "docs/USE_CASES.md",
+  "tools/cohesix-py/README.md",
+  "tools/cohesix-py/pyproject.toml",
+]
+
+[[host_profiles]]
+id = "linux-x86-64"
+os = "linux"
+architectures = ["x86_64"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+
+[[host_profiles]]
+id = "macos-arm64"
+os = "macos"
+architectures = ["aarch64"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+
+# The first three rows are the only mandatory 26e target-session integration
+# rows. External providers remain independent observations.
+[[dependencies]]
+id = "gpu-receipt-path"
+owner = "worker-supervisor"
+owning_milestone = "m26e-host-worker-integration"
+class = "target-runtime"
+obligation = "role_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu"]
+use_cases = ["gpu-flight-deck", "model-rollout-flight-recorder"]
+playbooks = ["mixed-medical-edge-ai"]
+namespace_paths = ["/gpu", "/gpu/<id>/lease", "/shard/<label>/worker/<id>/telemetry"]
+actions = ["gpu.lease.grant", "gpu.lease.release", "gpu.lease.renew"]
+schemas = ["gpu-lease/v1", "host-ticket-result/v2", "host-ticket/v2"]
+dependencies = ["worker-control"]
+required_modes = ["live"]
+allowed_modes = ["live"]
+unavailable_owner = "worker-supervisor"
+auth_refs = []
+timeout_ms = 5000
+retry_limit = 0
+cancel = "bounded supervisor shutdown or revoke"
+idempotency = "receipt sequence plus Worker generation"
+fencing = "lease epoch supervisor generation and cap generation"
+readiness = "durable WorkerGpu READY precedes admitted work"
+degraded = "faulted or stale receipt is explicit and cannot become READY"
+package_requirements = ["cohesix-worker-images.cpio", "worker-gpu"]
+artifact_requirements = ["target transcript", "worker component evidence"]
+evidence_lane = "target-session"
+mandatory_target_session = true
+advertised_terms = ["GPU receipt", "WorkerGpu"]
+
+[[dependencies]]
+id = "peft-receipt-path"
+owner = "worker-supervisor"
+owning_milestone = "m26e-host-worker-integration"
+class = "target-runtime"
+obligation = "role_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-lora"]
+use_cases = ["model-rollout-flight-recorder", "private-lora-foundry"]
+playbooks = ["mac-private-peft-grid"]
+namespace_paths = ["/queen/export/ctl", "/shard/<label>/worker/<id>/telemetry"]
+actions = ["peft.activate", "peft.export", "peft.import", "peft.rollback"]
+schemas = ["host-ticket-result/v2", "host-ticket/v2"]
+dependencies = ["worker-control"]
+required_modes = ["live"]
+allowed_modes = ["live"]
+unavailable_owner = "worker-supervisor"
+auth_refs = []
+timeout_ms = 5000
+retry_limit = 0
+cancel = "bounded supervisor shutdown or revoke"
+idempotency = "receipt sequence plus Worker generation"
+fencing = "lease epoch supervisor generation and cap generation"
+readiness = "durable WorkerLora READY precedes admitted work"
+degraded = "faulted or stale receipt is explicit and cannot become READY"
+package_requirements = ["cohesix-worker-images.cpio", "worker-lora"]
+artifact_requirements = ["target transcript", "worker component evidence"]
+evidence_lane = "target-session"
+mandatory_target_session = true
+advertised_terms = ["LoRA receipt", "PEFT receipt", "WorkerLora"]
+
+[[dependencies]]
+id = "worker-control"
+owner = "worker-supervisor"
+owning_milestone = "m26e-host-worker-integration"
+class = "target-runtime"
+obligation = "role_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu", "worker-heartbeat", "worker-lora"]
+use_cases = ["agent-action-airlock", "gpu-flight-deck", "model-rollout-flight-recorder", "multi-hive-mission-control", "private-lora-foundry", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "jetson-manufacturing-safety", "jetson-traffic-safety", "mac-endpoint-compliance", "mac-private-peft-grid", "mac-release-factory", "mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin", "mixed-medical-edge-ai"]
+namespace_paths = ["/queen/ctl", "/shard/<label>/worker/<id>/telemetry"]
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["live"]
+allowed_modes = ["live"]
+unavailable_owner = "worker-supervisor"
+auth_refs = []
+timeout_ms = 5000
+retry_limit = 0
+cancel = "bounded shutdown then revoke"
+idempotency = "exact role slot lease epoch and generation"
+fencing = "compiler-owned capability generation"
+readiness = "control acknowledgement remains distinct from durable READY"
+degraded = "missing role or fault remains a typed blocker"
+package_requirements = ["cohesix-worker-images.cpio", "worker-gpu", "worker-heart", "worker-lora"]
+artifact_requirements = ["target transcript", "worker component evidence"]
+evidence_lane = "target-session"
+mandatory_target_session = true
+advertised_terms = ["Worker control", "Worker lifecycle"]
+
+[[dependencies]]
+id = "authenticated-console-projection"
+owner = "host-shell"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu", "worker-heartbeat", "worker-lora"]
+use_cases = ["agent-action-airlock", "self-healing-edge-swarm"]
+playbooks = ["mac-endpoint-compliance", "mac-release-factory"]
+namespace_paths = ["/queen/ctl"]
+actions = []
+schemas = []
+dependencies = ["worker-control"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live"]
+unavailable_owner = "host-shell"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "close one authenticated console session"
+idempotency = "command and target receipt correlation"
+fencing = "role-scoped capability ticket"
+readiness = "transport authentication does not imply Worker READY"
+degraded = "typed unavailable or connection failure"
+package_requirements = ["bin/coh", "bin/cohsh"]
+artifact_requirements = ["authenticated transcript"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["coh", "cohsh", "console"]
+
+[[dependencies]]
+id = "cas-artifact"
+owner = "cas-host-tool"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["model-rollout-flight-recorder", "private-lora-foundry"]
+playbooks = ["mac-private-peft-grid", "mixed-medical-edge-ai"]
+namespace_paths = ["/queen/export/ctl"]
+actions = ["peft.export", "peft.import"]
+schemas = ["host-ticket/v2"]
+dependencies = []
+required_modes = ["live"]
+allowed_modes = ["dry-run", "fixture", "live", "missing"]
+unavailable_owner = "cas-host-tool"
+auth_refs = []
+timeout_ms = 10000
+retry_limit = 1
+cancel = "abort before publish"
+idempotency = "content digest"
+fencing = "public verification key and manifest digest"
+readiness = "verified artifact is separate from Worker or provider readiness"
+degraded = "missing or mismatched artifact"
+package_requirements = ["bin/cas-tool", "resources/keys/cas_verification_key.hex"]
+artifact_requirements = ["CAS manifest hash", "public verification result"]
+evidence_lane = "artifact-compatibility"
+mandatory_target_session = false
+advertised_terms = ["artifact", "CAS"]
+
+[[dependencies]]
+id = "docker-provider"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["agent-action-airlock", "self-healing-edge-swarm"]
+playbooks = ["mac-endpoint-compliance", "mac-private-peft-grid", "mac-release-factory"]
+namespace_paths = ["/host"]
+actions = ["docker.restart", "docker.status-check", "docker.stop"]
+schemas = ["host-ticket-result/v1", "host-ticket/v1"]
+dependencies = ["host-ticket-executor"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment Docker provider"
+auth_refs = []
+timeout_ms = 30000
+retry_limit = 1
+cancel = "provider-specific bounded cancellation"
+idempotency = "ticket id and observed container state"
+fencing = "host-ticket agent fence"
+readiness = "Docker availability is not Worker READY"
+degraded = "explicit unavailable result"
+package_requirements = ["external Docker runtime"]
+artifact_requirements = ["provider version", "redacted action receipt"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["container", "Docker"]
+
+[[dependencies]]
+id = "federation-provider"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["multi-hive-mission-control"]
+playbooks = ["mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin"]
+namespace_paths = ["/host"]
+actions = ["gpu.lease.grant", "gpu.lease.release", "gpu.lease.renew"]
+schemas = ["host-ticket-result/v1", "host-ticket/v1"]
+dependencies = ["host-ticket-executor", "rest-gateway-projection"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment federation peer"
+auth_refs = ["env:COHESIX_RELAY_TOKEN"]
+timeout_ms = 30000
+retry_limit = 2
+cancel = "bounded relay deadline"
+idempotency = "ticket id peer and relay cursor"
+fencing = "local agent lock and remote auth reference"
+readiness = "peer connectivity does not imply Worker READY"
+degraded = "peer unavailable with retained local receipt"
+package_requirements = ["bin/host-ticket-agent", "external accepted peer"]
+artifact_requirements = ["relay receipt", "peer identity"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["federation", "multi-hive", "relay"]
+
+[[dependencies]]
+id = "fuse-mount-projection"
+owner = "host-cli"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["multi-hive-mission-control"]
+playbooks = ["mixed-logistics-digital-twin"]
+namespace_paths = ["/"]
+actions = []
+schemas = []
+dependencies = ["rest-gateway-projection"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "live", "missing"]
+unavailable_owner = "host FUSE environment"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "unmount and close gateway session"
+idempotency = "read path and bounded write request"
+fencing = "authenticated gateway identity"
+readiness = "mounted projection does not imply provider or Worker readiness"
+degraded = "typed unsupported or unavailable mount"
+package_requirements = ["bin/coh", "host FUSE support"]
+artifact_requirements = ["mount conformance transcript"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["filesystem mount", "FUSE", "mount"]
+
+[[dependencies]]
+id = "gpu-host-provider"
+owner = "gpu-host-bridge"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["gpu-flight-deck", "model-rollout-flight-recorder", "private-lora-foundry"]
+playbooks = ["mac-private-peft-grid", "mixed-medical-edge-ai"]
+namespace_paths = ["/gpu"]
+actions = ["gpu.lease.grant", "gpu.lease.release", "gpu.lease.renew"]
+schemas = ["gpu-lease/v1", "host-ticket-result/v1"]
+dependencies = ["host-ticket-executor"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment GPU provider"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 30000
+retry_limit = 1
+cancel = "provider result deadline"
+idempotency = "lease id and provider observation"
+fencing = "lease epoch and host ticket fence"
+readiness = "live NVML or CUDA inventory is separate from WorkerGpu READY"
+degraded = "zero-device and unavailable are explicit"
+package_requirements = ["bin/gpu-bridge-host", "external NVML or CUDA provider"]
+artifact_requirements = ["provider version", "redacted provider receipt"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["CUDA", "GPU provider", "NVIDIA", "NVML"]
+
+[[dependencies]]
+id = "host-ticket-executor"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["agent-action-airlock", "gpu-flight-deck", "model-rollout-flight-recorder", "multi-hive-mission-control", "private-lora-foundry", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "jetson-manufacturing-safety", "jetson-traffic-safety", "mac-endpoint-compliance", "mac-private-peft-grid", "mac-release-factory", "mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin", "mixed-medical-edge-ai"]
+namespace_paths = ["/host"]
+actions = ["docker.restart", "docker.status-check", "docker.stop", "gpu.lease.grant", "gpu.lease.release", "gpu.lease.renew", "k8s.cordon", "k8s.drain", "k8s.lease.sync", "peft.activate", "peft.export", "peft.import", "peft.rollback", "systemd.restart", "systemd.start", "systemd.status-check", "systemd.stop"]
+schemas = ["host-ticket-result/v2", "host-ticket/v2"]
+dependencies = ["authenticated-console-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "fixture", "live", "mock"]
+unavailable_owner = "host-ticket-agent"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 30000
+retry_limit = 1
+cancel = "bounded action deadline and terminal journal"
+idempotency = "ticket id action and provider observation"
+fencing = "single local agent lock and cursor"
+readiness = "admitted or executed ticket is not Worker READY"
+degraded = "typed dead-letter or provider-unavailable receipt"
+package_requirements = ["bin/host-ticket-agent"]
+artifact_requirements = ["bounded action receipt", "journal identity"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["host action", "host ticket", "host-ticket-agent"]
+
+[[dependencies]]
+id = "kubernetes-provider"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["agent-action-airlock", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "jetson-manufacturing-safety", "jetson-traffic-safety", "mac-private-peft-grid", "mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin", "mixed-medical-edge-ai"]
+namespace_paths = ["/host"]
+actions = ["k8s.cordon", "k8s.drain", "k8s.lease.sync"]
+schemas = ["host-ticket-result/v1", "host-ticket/v1"]
+dependencies = ["host-ticket-executor"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment Kubernetes provider"
+auth_refs = ["file-ref:kubeconfig"]
+timeout_ms = 60000
+retry_limit = 1
+cancel = "provider-specific bounded cancellation"
+idempotency = "ticket id and observed resource version"
+fencing = "host-ticket fence and provider resource version"
+readiness = "Kubernetes availability is not Worker READY"
+degraded = "explicit unavailable result"
+package_requirements = ["external Kubernetes client and cluster"]
+artifact_requirements = ["provider version", "redacted action receipt"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["cluster", "k8s", "Kubernetes"]
+
+[[dependencies]]
+id = "packaging"
+owner = "release-tooling"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "packaging"
+obligation = "release_required"
+host_profiles = ["macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = ["authenticated-console-projection", "cas-artifact", "host-ticket-executor", "python-sdk-projection", "rest-gateway-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live", "missing"]
+unavailable_owner = "release-tooling"
+auth_refs = []
+timeout_ms = 300000
+retry_limit = 0
+cancel = "atomic staging directory"
+idempotency = "exact release manifest file set"
+fencing = "version and artifact hashes"
+readiness = "package presence is separate from runtime acceptance"
+degraded = "missing or unexpected file fails closed"
+package_requirements = ["cohesix runtime release manifest"]
+artifact_requirements = ["exact bundle file set", "release hashes"]
+evidence_lane = "release-validation"
+mandatory_target_session = false
+advertised_terms = ["bundle", "package", "packaging", "release"]
+
+[[dependencies]]
+id = "peft-host-provider"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["model-rollout-flight-recorder", "private-lora-foundry"]
+playbooks = ["mac-private-peft-grid"]
+namespace_paths = ["/queen/export/ctl"]
+actions = ["peft.activate", "peft.export", "peft.import", "peft.rollback"]
+schemas = ["host-ticket-result/v2", "host-ticket/v2"]
+dependencies = ["cas-artifact", "host-ticket-executor"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment PEFT provider"
+auth_refs = []
+timeout_ms = 120000
+retry_limit = 1
+cancel = "provider result deadline"
+idempotency = "adapter digest and action receipt"
+fencing = "host-ticket fence and model generation"
+readiness = "provider result is separate from WorkerLora READY"
+degraded = "missing trainer or runtime is explicit"
+package_requirements = ["external PEFT trainer or runtime"]
+artifact_requirements = ["adapter digest", "redacted provider receipt"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["adapter training", "LoRA", "PEFT"]
+
+[[dependencies]]
+id = "python-sdk-projection"
+owner = "python-client"
+owning_milestone = "m26e-python-library-as-built-compatibility"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu", "worker-heartbeat", "worker-lora"]
+use_cases = ["agent-action-airlock", "gpu-flight-deck", "model-rollout-flight-recorder", "multi-hive-mission-control", "private-lora-foundry", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "jetson-manufacturing-safety", "jetson-traffic-safety", "mac-endpoint-compliance", "mac-private-peft-grid", "mac-release-factory", "mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin", "mixed-medical-edge-ai"]
+namespace_paths = ["/queen/ctl", "/shard/<label>/worker/<id>/telemetry"]
+actions = []
+schemas = []
+dependencies = ["authenticated-console-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live", "mock"]
+unavailable_owner = "python-client"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "close bounded client session"
+idempotency = "request and receipt id"
+fencing = "generated auth and namespace contract"
+readiness = "SDK object state cannot create Worker READY"
+degraded = "typed backend unavailable"
+package_requirements = ["python/cohesix-py"]
+artifact_requirements = ["Python parity report"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["cohesix-playbook", "Python", "SDK"]
+
+[[dependencies]]
+id = "rest-gateway-projection"
+owner = "host-gateway"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu", "worker-heartbeat", "worker-lora"]
+use_cases = ["agent-action-airlock", "multi-hive-mission-control"]
+playbooks = ["mixed-closed-loop-ai-factory", "mixed-logistics-digital-twin"]
+namespace_paths = ["/"]
+actions = []
+schemas = []
+dependencies = ["authenticated-console-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live"]
+unavailable_owner = "host-gateway"
+auth_refs = ["env:COHESIX_GATEWAY_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "close bounded gateway request and console session"
+idempotency = "HTTP request and Cohesix receipt id"
+fencing = "authenticated delegated caller identity"
+readiness = "HTTP success cannot imply Worker READY"
+degraded = "typed gateway or target unavailable"
+package_requirements = ["bin/hive-gateway", "resources/openapi/hive-gateway.yaml"]
+artifact_requirements = ["REST parity report", "OpenAPI hash"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["gateway", "OpenAPI", "REST"]
+
+[[dependencies]]
+id = "sidecar-provider"
+owner = "host-sidecar-bridge"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "optional"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra"]
+namespace_paths = ["/host"]
+actions = []
+schemas = []
+dependencies = ["authenticated-console-projection"]
+required_modes = ["disabled", "missing"]
+allowed_modes = ["disabled", "dry-run", "fixture", "missing", "mock"]
+unavailable_owner = "deployment sidecar adapter"
+auth_refs = ["env:COHESIX_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "close bridge session"
+idempotency = "adapter scope and sequence"
+fencing = "role-scoped ticket"
+readiness = "model or fixture sidecar cannot satisfy live evidence"
+degraded = "explicit unavailable"
+package_requirements = ["bin/host-sidecar-bridge when selected"]
+artifact_requirements = ["adapter classification"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["DNP3", "Modbus", "sidecar"]
+
+[[dependencies]]
+id = "siem-evidence-export"
+owner = "evidence-tooling"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = ["multi-hive-mission-control", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "mac-endpoint-compliance"]
+namespace_paths = ["/log/queen.log", "/worker"]
+actions = []
+schemas = []
+dependencies = ["python-sdk-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live", "missing"]
+unavailable_owner = "deployment SIEM sink"
+auth_refs = []
+timeout_ms = 10000
+retry_limit = 1
+cancel = "bounded export file or sink request"
+idempotency = "evidence record hash"
+fencing = "manifest and target identity"
+readiness = "export success cannot promote source evidence"
+degraded = "local redacted NDJSON remains distinct from accepted sink"
+package_requirements = ["python/cohesix-py"]
+artifact_requirements = ["redacted evidence hashes", "sink result"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["audit", "evidence", "SIEM"]
+
+[[dependencies]]
+id = "swarmui-projection"
+owner = "operator-ui"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "host-projection"
+obligation = "release_required"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = ["worker-gpu", "worker-heartbeat", "worker-lora"]
+use_cases = ["gpu-flight-deck", "self-healing-edge-swarm"]
+playbooks = []
+namespace_paths = ["/worker"]
+actions = []
+schemas = []
+dependencies = ["rest-gateway-projection"]
+required_modes = ["live"]
+allowed_modes = ["dry-run", "live"]
+unavailable_owner = "operator-ui"
+auth_refs = ["env:COHESIX_GATEWAY_TOKEN"]
+timeout_ms = 5000
+retry_limit = 1
+cancel = "close bounded UI polling session"
+idempotency = "generated row and evidence hash"
+fencing = "authenticated gateway caller"
+readiness = "UI labels cannot create Worker READY"
+degraded = "explicit stale or unavailable view"
+package_requirements = ["bin/swarmui", "ui assets"]
+artifact_requirements = ["UI parity report", "asset hashes"]
+evidence_lane = "projection-compatibility"
+mandatory_target_session = false
+advertised_terms = ["SwarmUI", "UI"]
+
+[[dependencies]]
+id = "systemd-provider"
+owner = "host-ticket-agent"
+owning_milestone = "m26e-host-integration-dependency-contract"
+class = "external-provider"
+obligation = "use_case_required"
+host_profiles = ["linux-x86-64"]
+worker_roles = []
+use_cases = ["agent-action-airlock", "self-healing-edge-swarm"]
+playbooks = ["jetson-critical-infra", "jetson-manufacturing-safety", "jetson-traffic-safety"]
+namespace_paths = ["/host"]
+actions = ["systemd.restart", "systemd.start", "systemd.status-check", "systemd.stop"]
+schemas = ["host-ticket-result/v1", "host-ticket/v1"]
+dependencies = ["host-ticket-executor"]
+required_modes = ["live"]
+allowed_modes = ["disabled", "dry-run", "fixture", "live", "missing", "mock"]
+unavailable_owner = "deployment systemd provider"
+auth_refs = []
+timeout_ms = 30000
+retry_limit = 1
+cancel = "provider-specific bounded cancellation"
+idempotency = "ticket id and observed unit state"
+fencing = "host-ticket agent fence"
+readiness = "systemd unit availability is not Worker READY"
+degraded = "explicit unsupported on non-systemd hosts"
+package_requirements = ["external systemd runtime"]
+artifact_requirements = ["provider version", "redacted action receipt"]
+evidence_lane = "external-provider"
+mandatory_target_session = false
+advertised_terms = ["service manager", "systemd"]
+
+# Future integrations are named and singly owned. They are unavailable in 26e
+# and cannot be selected as live.
+[[dependencies]]
+id = "a2a-gateway"
+owner = "future-a2a-gateway"
+owning_milestone = "m28f-a2a-policy-ir"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28f-a2a-policy-ir"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["A2A"]
+
+[[dependencies]]
+id = "general-inference-provider"
+owner = "future-inference-boundary"
+owning_milestone = "m28e-inference-ir-and-compatibility-contract"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28e-inference-ir-and-compatibility-contract"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["inference", "OpenAI-compatible"]
+
+[[dependencies]]
+id = "general-training-provider"
+owner = "future-ai-provider"
+owning_milestone = "m28d-live-peft-reference-paths"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28d-live-peft-reference-paths"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["general training", "training runtime"]
+
+[[dependencies]]
+id = "industry-provider-family"
+owner = "future-framework-adapters"
+owning_milestone = "m28d-framework-adapters"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28d-framework-adapters"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["industry provider"]
+
+[[dependencies]]
+id = "mcp-gateway"
+owner = "future-mcp-gateway"
+owning_milestone = "m28f-mcp-policy-ir"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28f-mcp-policy-ir"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["MCP", "Model Context Protocol"]
+
+[[dependencies]]
+id = "nemo-provider"
+owner = "future-nemo-provider"
+owning_milestone = "m28d-nemo-provider-family"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28d-nemo-provider-family"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["NeMo"]
+
+[[dependencies]]
+id = "production-worker-bundle"
+owner = "future-production-bundle"
+owning_milestone = "m28g-production-worker-ticket-driver-inventory"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28g-production-worker-ticket-driver-inventory"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["production Worker bundle"]
+
+[[dependencies]]
+id = "prometheus-otel-export"
+owner = "future-inference-telemetry"
+owning_milestone = "m28e-inference-receipts-otel-and-evidence"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28e-inference-receipts-otel-and-evidence"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["OpenTelemetry", "Prometheus"]
+
+[[dependencies]]
+id = "semantic-context"
+owner = "future-semantic-context"
+owning_milestone = "m28c-semantic-ir-and-object-contract"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28c-semantic-ir-and-object-contract"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["Context Capsule", "semantic object"]
+
+[[dependencies]]
+id = "swarmui-workbench"
+owner = "future-ui-workbench"
+owning_milestone = "m28h-integration-truth-model"
+class = "future-provider"
+obligation = "future"
+host_profiles = ["linux-x86-64", "macos-arm64"]
+worker_roles = []
+use_cases = []
+playbooks = []
+namespace_paths = []
+actions = []
+schemas = []
+dependencies = []
+required_modes = ["disabled"]
+allowed_modes = ["disabled", "missing"]
+unavailable_owner = "m28h-integration-truth-model"
+auth_refs = []
+timeout_ms = 1000
+retry_limit = 0
+cancel = "not implemented"
+idempotency = "not implemented"
+fencing = "not implemented"
+readiness = "unavailable"
+degraded = "typed future"
+package_requirements = []
+artifact_requirements = []
+evidence_lane = "future"
+mandatory_target_session = false
+advertised_terms = ["desktop workbench"]
+
+[[use_cases]]
+id = "agent-action-airlock"
+title = "The Agent Action Airlock"
+dependencies = ["authenticated-console-projection", "host-ticket-executor", "worker-control"]
+promotion = "requires a live Worker target session plus each selected external executor row"
+
+[[use_cases]]
+id = "gpu-flight-deck"
+title = "The GPU Flight Deck"
+dependencies = ["gpu-host-provider", "gpu-receipt-path", "host-ticket-executor", "swarmui-projection", "worker-control"]
+promotion = "requires live provider inventory and separate exact WorkerGpu receipt proof"
+
+[[use_cases]]
+id = "model-rollout-flight-recorder"
+title = "Model Rollout with a Flight Recorder"
+dependencies = ["cas-artifact", "gpu-host-provider", "gpu-receipt-path", "host-ticket-executor", "peft-host-provider", "peft-receipt-path", "worker-control"]
+promotion = "requires verified artifacts, live providers, and exact current-generation receipts"
+
+[[use_cases]]
+id = "multi-hive-mission-control"
+title = "Multi-Hive Mission Control"
+dependencies = ["federation-provider", "rest-gateway-projection", "siem-evidence-export", "worker-control"]
+promotion = "requires independently accepted peers and target-bound evidence"
+
+[[use_cases]]
+id = "private-lora-foundry"
+title = "The Private LoRA Foundry"
+dependencies = ["cas-artifact", "peft-host-provider", "peft-receipt-path", "worker-control"]
+promotion = "requires live host PEFT execution and a separate WorkerLora receipt"
+
+[[use_cases]]
+id = "self-healing-edge-swarm"
+title = "The Self-Healing Edge Swarm"
+dependencies = ["host-ticket-executor", "siem-evidence-export", "worker-control"]
+promotion = "requires target Worker proof and every selected remediation provider"
+
+[[playbooks]]
+id = "jetson-critical-infra"
+use_case = "agent-action-airlock"
+dependencies = ["host-ticket-executor", "kubernetes-provider", "systemd-provider", "worker-control"]
+
+[[playbooks]]
+id = "jetson-manufacturing-safety"
+use_case = "self-healing-edge-swarm"
+dependencies = ["host-ticket-executor", "kubernetes-provider", "systemd-provider", "worker-control"]
+
+[[playbooks]]
+id = "jetson-traffic-safety"
+use_case = "self-healing-edge-swarm"
+dependencies = ["host-ticket-executor", "kubernetes-provider", "systemd-provider", "worker-control"]
+
+[[playbooks]]
+id = "mac-endpoint-compliance"
+use_case = "agent-action-airlock"
+dependencies = ["docker-provider", "host-ticket-executor", "siem-evidence-export", "worker-control"]
+
+[[playbooks]]
+id = "mac-private-peft-grid"
+use_case = "private-lora-foundry"
+dependencies = ["cas-artifact", "docker-provider", "gpu-host-provider", "kubernetes-provider", "peft-host-provider", "peft-receipt-path", "worker-control"]
+
+[[playbooks]]
+id = "mac-release-factory"
+use_case = "self-healing-edge-swarm"
+dependencies = ["docker-provider", "host-ticket-executor", "worker-control"]
+
+[[playbooks]]
+id = "mixed-closed-loop-ai-factory"
+use_case = "multi-hive-mission-control"
+dependencies = ["federation-provider", "kubernetes-provider", "python-sdk-projection", "rest-gateway-projection", "worker-control"]
+
+[[playbooks]]
+id = "mixed-logistics-digital-twin"
+use_case = "multi-hive-mission-control"
+dependencies = ["federation-provider", "fuse-mount-projection", "kubernetes-provider", "rest-gateway-projection", "worker-control"]
+
+[[playbooks]]
+id = "mixed-medical-edge-ai"
+use_case = "gpu-flight-deck"
+dependencies = ["gpu-host-provider", "gpu-receipt-path", "kubernetes-provider", "worker-control"]
+
+# Every product-facing host binary/library/API and canonical host document is
+# explicitly bound. Compiler expansion adds every Cargo target for each package.
+[[surface_bindings]]
+path = "apps/cas-tool"
+dependencies = ["cas-artifact", "packaging"]
+[[surface_bindings]]
+path = "apps/coh"
+dependencies = ["authenticated-console-projection", "fuse-mount-projection", "packaging"]
+[[surface_bindings]]
+path = "apps/coh-status"
+dependencies = ["semantic-context"]
+[[surface_bindings]]
+path = "apps/cohesix-proto"
+dependencies = ["authenticated-console-projection"]
+[[surface_bindings]]
+path = "apps/cohsh"
+dependencies = ["authenticated-console-projection", "worker-control"]
+[[surface_bindings]]
+path = "apps/gpu-bridge-host"
+dependencies = ["gpu-host-provider", "gpu-receipt-path"]
+[[surface_bindings]]
+path = "apps/hive-gateway"
+dependencies = ["rest-gateway-projection"]
+[[surface_bindings]]
+path = "apps/host-sidecar-bridge"
+dependencies = ["sidecar-provider"]
+[[surface_bindings]]
+path = "apps/host-ticket-agent"
+dependencies = ["host-ticket-executor"]
+[[surface_bindings]]
+path = "apps/sidecar-bus"
+dependencies = ["sidecar-provider"]
+[[surface_bindings]]
+path = "apps/swarmui"
+dependencies = ["swarmui-projection", "swarmui-workbench"]
+[[surface_bindings]]
+path = "crates/cohesix-rest"
+dependencies = ["rest-gateway-projection"]
+[[surface_bindings]]
+path = "crates/cohesix-worker-evidence"
+dependencies = ["siem-evidence-export", "worker-control"]
+[[surface_bindings]]
+path = "crates/cohsh-core"
+dependencies = ["authenticated-console-projection"]
+[[surface_bindings]]
+path = "crates/host-cuda"
+dependencies = ["gpu-host-provider"]
+[[surface_bindings]]
+path = "docs/GPU_NODES.md"
+dependencies = ["gpu-host-provider", "gpu-receipt-path"]
+[[surface_bindings]]
+path = "docs/HOST_API.md"
+dependencies = ["host-ticket-executor", "rest-gateway-projection"]
+[[surface_bindings]]
+path = "docs/HOST_TOOLS.md"
+dependencies = ["authenticated-console-projection", "host-ticket-executor", "packaging"]
+[[surface_bindings]]
+path = "docs/INTERFACES.md"
+dependencies = ["authenticated-console-projection", "rest-gateway-projection", "worker-control"]
+[[surface_bindings]]
+path = "docs/PYTHON_SUPPORT.md"
+dependencies = ["python-sdk-projection"]
+[[surface_bindings]]
+path = "docs/TEST_PLAN.md"
+dependencies = ["packaging", "worker-control"]
+[[surface_bindings]]
+path = "docs/USE_CASES.md"
+dependencies = ["host-ticket-executor", "worker-control"]
+[[surface_bindings]]
+path = "tools/cohesix-py/README.md"
+dependencies = ["python-sdk-projection"]
+[[surface_bindings]]
+path = "tools/cohesix-py/pyproject.toml"
+dependencies = ["packaging", "python-sdk-projection"]
+
+[[lanes]]
+id = "dry-run-providers"
+mode = "dry-run"
+dependencies = ["docker-provider", "federation-provider", "gpu-host-provider", "host-ticket-executor", "kubernetes-provider", "peft-host-provider", "sidecar-provider", "systemd-provider"]
+expected_result = "provider-live obligations remain unsatisfied"
+
+[[lanes]]
+id = "fixture-contracts"
+mode = "fixture"
+dependencies = ["docker-provider", "gpu-host-provider", "host-ticket-executor", "kubernetes-provider", "peft-host-provider", "sidecar-provider", "systemd-provider"]
+expected_result = "fixtures remain non-promoting"
+
+[[lanes]]
+id = "mock-contracts"
+mode = "mock"
+dependencies = ["docker-provider", "federation-provider", "gpu-host-provider", "host-ticket-executor", "kubernetes-provider", "peft-host-provider", "sidecar-provider", "systemd-provider"]
+expected_result = "host models remain non-promoting"
+
+[[lanes]]
+id = "pi4-target-session"
+mode = "live"
+dependencies = ["gpu-receipt-path", "peft-receipt-path", "worker-control"]
+target = "pi4"
+expected_result = "fresh Pi target rows may pass only with exact current-session identity"
+
+[[lanes]]
+id = "qemu-target-session"
+mode = "live"
+dependencies = ["gpu-receipt-path", "peft-receipt-path", "worker-control"]
+target = "qemu"
+expected_result = "fresh QEMU target rows may pass only with exact current-session identity"
+
+[[conformance_vectors]]
+id = "circular-dependency"
+mutation = "make worker-control depend transitively on itself"
+expected_error = "circular host-integration dependency"
+[[conformance_vectors]]
+id = "future-live"
+mutation = "select a future provider as live"
+expected_error = "future dependency is selectable as current/live"
+[[conformance_vectors]]
+id = "missing-owner"
+mutation = "clear owner or select a nonexistent owning milestone"
+expected_error = "unknown owning milestone"
+[[conformance_vectors]]
+id = "mode-substitution"
+mutation = "use fixture mock or dry-run for a live-required row"
+expected_error = "observed mode does not satisfy required mode"
+[[conformance_vectors]]
+id = "secret-evidence"
+mutation = "include a credential value in observation evidence"
+expected_error = "sensitive material"
+[[conformance_vectors]]
+id = "stale-target"
+mutation = "bind a target session to a stale graph or manifest hash"
+expected_error = "target session identity mismatch"
+[[conformance_vectors]]
+id = "unknown-reference"
+mutation = "reference an unknown action path or schema"
+expected_error = "unknown generated reference"
+[[conformance_vectors]]
+id = "worker-ready-substitution"
+mutation = "treat provider or host readiness as Worker READY"
+expected_error = "provider state cannot become Worker READY"
+[[conformance_vectors]]
+id = "wrong-target"
+mutation = "submit a Pi target session to the QEMU lane"
+expected_error = "wrong target"

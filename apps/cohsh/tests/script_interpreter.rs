@@ -8,7 +8,7 @@ use std::io::Cursor;
 
 use anyhow::{anyhow, Result};
 use cohesix_ticket::Role;
-use cohsh::{validate_script, Session, Shell, Transport};
+use cohsh::{validate_script, NineDoorTransport, Session, Shell, Transport};
 use secure9p_codec::SessionId;
 
 #[derive(Default)]
@@ -233,4 +233,23 @@ fn script_allows_expect_after_err_ack() {
     shell
         .run_script(Cursor::new(script.as_bytes()))
         .expect("script should allow EXPECT after ERR ack");
+}
+
+#[test]
+fn worker_host_model_script_covers_lora_and_model_only_bus() {
+    let server =
+        nine_door::NineDoor::new_with_shard_layout(nine_door::ShardLayout::enabled(8, true));
+    let transport = NineDoorTransport::new(server);
+    let mut output = Vec::new();
+    let script = include_str!("../../../scripts/cohsh/worker_host_model.coh");
+    {
+        let mut shell = Shell::new(transport, &mut output);
+        shell
+            .run_script(Cursor::new(script.as_bytes()))
+            .expect("host-model Worker script should pass");
+    }
+    let rendered = String::from_utf8(output).expect("script output should be UTF-8");
+    assert!(rendered.contains("OK SPAWN"));
+    assert!(rendered.contains("OK KILL"));
+    assert!(rendered.contains("model-only"));
 }

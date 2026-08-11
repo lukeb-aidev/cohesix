@@ -22,8 +22,19 @@ pub fn lora_receipt_loop(identity: WorkerIdentity) -> Result<LoraReceiptLoop, Wo
 
 /// Build a LoRA worker identity for endpoint-badge modeling.
 #[must_use]
-pub const fn lora_identity(instance: u32, lease_epoch: u16, cap_generation: u16) -> WorkerIdentity {
-    WorkerIdentity::new(WorkerRole::Lora, instance, lease_epoch, cap_generation)
+pub const fn lora_identity(
+    slot: u32,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+) -> WorkerIdentity {
+    WorkerIdentity::new(
+        WorkerRole::Lora,
+        slot,
+        lease_epoch,
+        supervisor_generation,
+        cap_generation,
+    )
 }
 
 /// Build a LoRA control receipt event.
@@ -50,7 +61,7 @@ mod tests {
 
     #[test]
     fn lora_vm_loop_emits_receipts_without_training_execution() {
-        let identity = lora_identity(2, 3, 4);
+        let identity = lora_identity(2, 3, 4, 5);
         let mut loop_state = lora_receipt_loop(identity).expect("lora loop");
         loop_state.step(attach(identity, 0, 100)).expect("attach");
 
@@ -75,7 +86,7 @@ mod tests {
 
     #[test]
     fn lora_shutdown_is_terminal_for_late_receipts() {
-        let identity = lora_identity(8, 1, 1);
+        let identity = lora_identity(8, 1, 1, 1);
         let mut loop_state = lora_receipt_loop(identity).expect("lora loop");
         loop_state.step(attach(identity, 0, 100)).expect("attach");
         let shutdown = loop_state

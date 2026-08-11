@@ -33,6 +33,8 @@ pub mod run;
 pub mod telemetry;
 /// TCP transport wrapper for Secure9P.
 pub mod transport;
+/// Compiler-derived Worker contract and state projection helpers.
+pub mod worker;
 
 use anyhow::{anyhow, Context, Result};
 use cohsh::client::CohClient;

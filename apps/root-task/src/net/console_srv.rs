@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: TCP console session management shared between kernel and host stacks, including buffering and drop policy.
 // Author: Lukas Bower
@@ -416,7 +416,14 @@ impl TcpConsoleServer {
         match self.state {
             SessionState::WaitingAuth => self.process_auth(line),
             SessionState::Authenticated => {
-                let entry = ConsoleLine::new(line, now_ms);
+                let mut command = HeaplessString::new();
+                if command.push_str(line.as_str()).is_err() {
+                    self.ingest_metrics.record_backpressure();
+                    self.ingest_metrics.record_drop();
+                    self.enqueue_ingest_backpressure();
+                    return SessionEvent::None;
+                }
+                let entry = ConsoleLine::new(command, now_ms);
                 if self.inbound.push_back(entry).is_err() {
                     self.ingest_metrics.record_backpressure();
                     self.ingest_metrics.record_drop();
@@ -1155,8 +1162,7 @@ mod tests {
             .pop_outbound()
             .is_some_and(|line| line.as_str() == "ERR CONSOLE reason=ingest-backpressure"));
 
-        let mut first_batch: HeaplessVec<HeaplessString<DEFAULT_LINE_CAPACITY>, 3> =
-            HeaplessVec::new();
+        let mut first_batch: HeaplessVec<_, 3> = HeaplessVec::new();
         let drained = server.drain_console_lines_bounded(3, 3, &mut |line| {
             first_batch.push(line.text).unwrap();
         });
@@ -1168,10 +1174,7 @@ mod tests {
             CONSOLE_INGEST_QUEUE_DEPTH.saturating_sub(3) as u32
         );
 
-        let mut remaining: HeaplessVec<
-            HeaplessString<DEFAULT_LINE_CAPACITY>,
-            { CONSOLE_INGEST_QUEUE_DEPTH },
-        > = HeaplessVec::new();
+        let mut remaining: HeaplessVec<_, { CONSOLE_INGEST_QUEUE_DEPTH }> = HeaplessVec::new();
         let _ = server.drain_console_lines_bounded(4, usize::MAX, &mut |line| {
             remaining.push(line.text).unwrap();
         });

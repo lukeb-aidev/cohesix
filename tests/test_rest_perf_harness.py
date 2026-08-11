@@ -5,11 +5,15 @@
 """Tests for scripts/rest_perf_harness.py helpers."""
 
 import argparse
+import ast
 import importlib.util
 import json
+import os
 import pathlib
 import socket
+import subprocess
 import sys
+import tomllib
 from typing import Optional
 
 MODULE_PATH = (
@@ -17,6 +21,8 @@ MODULE_PATH = (
     / "scripts"
     / "rest_perf_harness.py"
 )
+REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+PRESSURE_RUNNER_PATH = REPO_ROOT / "scripts" / "m26e_qemu_pressure.sh"
 
 spec = importlib.util.spec_from_file_location("rest_perf_harness", MODULE_PATH)
 rest_perf = importlib.util.module_from_spec(spec)
@@ -1150,6 +1156,9 @@ def test_write_simulation_artifacts_includes_gateway_status(tmp_path: pathlib.Pa
     assert payload["report"]["workload"]["target_rps_max"] == 2.0
     assert payload["report"]["workload"]["seed"] == 123
     assert payload["report"]["workload"]["request_auth_enabled"]
+    assert payload["control_write_outcome"] == "admitted"
+    assert payload["report"]["workload"]["control_write_outcome"] == "admitted"
+    assert payload["report"]["population"]["proof_class"] == "host-model"
     assert payload["report"]["capacity_boundary"] == {
         "ramp_steps": 1,
         "worker_shape": "ramped",
@@ -1237,3 +1246,780 @@ def test_parse_args_accepts_gateway_broker_timeout_overrides() -> None:
         sys.argv = original_argv
     assert args.gateway_broker_control_response_timeout_ms == 120000
     assert args.gateway_broker_telemetry_response_timeout_ms == 180000
+
+
+def executable_bounds(maximum: int = 3) -> dict:
+    return {
+        "manifest_sha256": "f" * 64,
+        "console": {"max_id_len": 64},
+        "worker_runtime": {
+            "roles": [
+                {
+                    "role": "worker-heartbeat",
+                    "declaration": "executable",
+                    "executable_slots": 1,
+                },
+                {
+                    "role": "worker-gpu",
+                    "declaration": "executable",
+                    "executable_slots": 1,
+                },
+                {
+                    "role": "worker-lora",
+                    "declaration": "executable",
+                    "executable_slots": 1,
+                },
+                {
+                    "role": "worker-bus",
+                    "declaration": "model-only",
+                    "executable_slots": 0,
+                },
+            ],
+            "task_abi_schema": "worker-task-abi/v1",
+            "task_abi_version": 1,
+            "maximum_live_tasks": maximum,
+            "canonical_telemetry_template": (
+                "/shard/<label>/worker/<id>/telemetry"
+            ),
+            "shard_bits": 8,
+            "legacy_worker_alias": True,
+        },
+    }
+
+
+def acceptance_summary() -> dict:
+    inventory = {
+        "tcbs": 1,
+        "scheduling_contexts": 1,
+        "reply_objects": 0,
+        "vspaces": 1,
+        "cnodes": 1,
+        "page_tables": 8,
+        "asids": 1,
+        "frames": 16,
+        "endpoints": 0,
+        "notifications": 1,
+        "fault_caps": 1,
+        "timeout_fault_caps": 1,
+        "cspace_slots": 64,
+        "untyped_bytes": 1_048_576,
+    }
+    roles = ("worker-heartbeat", "worker-gpu", "worker-lora")
+    return {
+        "schema": "cohesix-worker-task-evidence/v1",
+        "record_kind": "target-component",
+        "evidence_sha256": "a" * 64,
+        "verdict": "PASS",
+        "target": "qemu",
+        "execution_proof": "qemu",
+        "target_session": {
+            "target_session_sha256": "b" * 64,
+            "manifest_sha256": "f" * 64,
+            "root_image_sha256": "c" * 64,
+            "worker_archive_sha256": "d" * 64,
+            "worker_image_manifest_sha256": "e" * 64,
+            "worker_abi_sha256": "1" * 64,
+        },
+        "topology_sha256": "2" * 64,
+        "workers": [
+            {
+                "role": role,
+                "lifecycle": "ready",
+                "artifact": "verified",
+                "receipt": "none" if role == "worker-heartbeat" else "confirmed",
+                "execution_proof": "qemu",
+                "slot": index,
+                "lease_epoch": 10 + index,
+                "supervisor_generation": 20 + index,
+                "cap_generation": 30 + index,
+                "image_sha256": str(index + 3) * 64,
+                "ready_sequence": 40 + index,
+                "completion_sequence": 50 + index,
+                "core": index,
+                "scheduling_context": {"budget_us": 100, "period_us": 1_000},
+                "object_inventory": inventory,
+            }
+            for index, role in enumerate(roles)
+        ],
+    }
+
+
+def write_fault_logs(tmp_path: pathlib.Path) -> tuple[pathlib.Path, pathlib.Path]:
+    acceptance = acceptance_summary()
+    uart_lines = [
+        "WORKER_TASK_READY role=worker-heartbeat",
+        "WORKER_TASK_RECEIPT role=worker-gpu",
+        "WORKER_TASK_COMPLETION role=worker-gpu",
+        "WORKER_TASK_FAULT role=worker-heartbeat",
+        "WORKER_TASK_TEARDOWN role=worker-heartbeat",
+        "GPU_BRIDGE_FIXTURE_ADMISSION source=qemu-fixture mode=fixture "
+        "profile=qemu gate=bootstrap-trace state=admitted",
+    ]
+    for worker in acceptance["workers"]:
+        uart_lines.append(
+            "WORKER_TASK_ADMISSION "
+            f"role={worker['role']} image_sha256={worker['image_sha256']}"
+        )
+    uart = tmp_path / "qemu.uart.log"
+    uart.write_text("\n".join(uart_lines) + "\n", encoding="utf-8")
+
+    target = acceptance["target_session"]
+    gdb_lines = [
+        "M26E_QEMU_SESSION target=qemu machine=virt gic_version=3 "
+        f"root_image_sha256={target['root_image_sha256']} "
+        f"worker_archive_sha256={target['worker_archive_sha256']} "
+        f"topology_sha256={acceptance['topology_sha256']}",
+    ]
+    for worker in acceptance["workers"]:
+        gdb_lines.append(
+            "M26E_GDB_ELF "
+            f"role={worker['role']} elf_sha256={'9' * 64} "
+            f"image_sha256={worker['image_sha256']}"
+        )
+    gdb_lines.extend(
+        (
+            "M26E_GDB_INJECTION role=worker-heartbeat phase=pre-ready "
+            "symbol=fault action=zero-x0 result=continued",
+            "M26E_GDB_INJECTION role=worker-heartbeat phase=during-ipc "
+            "symbol=fault action=redirect-standard-fault result=continued",
+            "M26E_GDB_INJECTION role=worker-heartbeat phase=budget-exhaustion "
+            "symbol=spin action=redirect-timeout-spin result=continued",
+        )
+    )
+    gdb = tmp_path / "qemu.gdb.log"
+    gdb.write_text("\n".join(gdb_lines) + "\n", encoding="utf-8")
+    return uart, gdb
+
+
+def test_worker_runtime_bounds_rejects_absence_and_inconsistent_slots() -> None:
+    try:
+        rest_perf.worker_runtime_bounds({})
+    except rest_perf.RestError as exc:
+        assert "absence means unknown" in str(exc)
+    else:
+        raise AssertionError("absent bounds must not default to model-only")
+
+    bounds = executable_bounds()
+    bounds["worker_runtime"]["maximum_live_tasks"] = 4
+    try:
+        rest_perf.worker_runtime_bounds(bounds)
+    except rest_perf.RestError as exc:
+        assert "maximum" in str(exc)
+    else:
+        raise AssertionError("inconsistent generated maximum must fail")
+
+
+def test_parse_worker_runtime_state_requires_structured_exact_role() -> None:
+    worker_id = "opaque-instance-7"
+    path = f"/shard/00/worker/{worker_id}/telemetry"
+    line = json.dumps(
+        {
+            "schema": "worker-runtime-state/v1",
+            "worker_id": worker_id,
+            "role": "worker-gpu",
+            "state": "ready",
+            "slot": 1,
+            "lease_epoch": 2,
+            "supervisor_generation": 3,
+            "cap_generation": 4,
+            "ready_sequence": 5,
+            "control_sequence": 6,
+            "receipt_sequence": 7,
+            "completion_sequence": 8,
+        }
+    )
+    instance = rest_perf.parse_worker_runtime_state([line], worker_id, path)
+    assert instance is not None
+    assert instance.role == "worker-gpu"
+    assert instance.lifecycle == "ready"
+
+    inferred = json.loads(line)
+    inferred["role"] = "worker"
+    try:
+        rest_perf.parse_worker_runtime_state(
+            [json.dumps(inferred)],
+            worker_id,
+            path,
+        )
+    except rest_perf.RestError as exc:
+        assert "malformed structured Worker state" in str(exc)
+    else:
+        raise AssertionError("generic ids must not default to Heartbeat")
+
+
+def test_executable_population_discovers_only_canonical_ready_workers() -> None:
+    worker_id = "opaque-instance-7"
+    label = rest_perf.expected_worker_shard_label(worker_id, 8)
+    telemetry_path = f"/shard/{label}/worker/{worker_id}/telemetry"
+    state_line = json.dumps(
+        {
+            "schema": "worker-runtime-state/v1",
+            "worker_id": worker_id,
+            "role": "worker-lora",
+            "state": "ready",
+            "slot": 2,
+            "lease_epoch": 8,
+            "supervisor_generation": 9,
+            "cap_generation": 10,
+            "ready_sequence": 11,
+            "control_sequence": 12,
+            "receipt_sequence": 13,
+            "completion_sequence": 14,
+        },
+        separators=(",", ":"),
+    )
+
+    class DummyClient:
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            lines = {
+                "/shard": [label],
+                f"/shard/{label}/worker": [worker_id],
+            }[path]
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, lines, None, None
+            )
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            assert path == telemetry_path
+            assert max_bytes == rest_perf.MAX_WORKER_STATE_TAIL_BYTES
+            return rest_perf.GatewayResponse(
+                "OK", "TAIL", path, True, [state_line], None, None
+            )
+
+        def status(self) -> dict:
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+                "worker_acceptance": acceptance_summary(),
+            }
+
+    instances, snapshot = rest_perf.executable_population_snapshot(
+        DummyClient(),
+        executable_bounds(),
+        1,
+    )
+    assert [instance.worker_id for instance in instances] == [worker_id]
+    assert instances[0].telemetry_path == telemetry_path
+    assert snapshot.requested == 1
+    assert snapshot.discovered == 1
+    assert snapshot.ready == 1
+    assert snapshot.backend_class == "console-projection"
+    assert snapshot.proof_class == "qemu"
+
+
+def test_executable_telemetry_operation_fails_closed_without_canonical_path() -> None:
+    worker_id = "opaque-instance-7"
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE,
+        maximum_live_tasks=3,
+    )
+    operation = next(
+        operation
+        for operation in rest_perf.build_operations(
+            state.bounds,
+            ["worker"],
+            [],
+            [],
+            state,
+        )
+        if operation.name == "tail_worker_telemetry"
+    )
+
+    class DummyClient:
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            raise AssertionError(f"unexpected telemetry request {path} {max_bytes}")
+
+    try:
+        operation.func(DummyClient(), worker_id, state)
+    except rest_perf.RestError as exc:
+        assert "no canonical telemetry path" in str(exc)
+    else:
+        raise AssertionError("executable mode must not fall back to /worker")
+
+
+def test_gateway_population_proof_requires_validated_acceptance_summary() -> None:
+    class ConnectedOnly:
+        def status(self) -> dict:
+            return {"connected": True, "backend_class": "console-projection"}
+
+    try:
+        rest_perf.gateway_population_axes(
+            ConnectedOnly(),
+            rest_perf.POPULATION_EXECUTABLE,
+            executable_bounds(),
+        )
+    except rest_perf.RestError as exc:
+        assert "validated Worker acceptance" in str(exc)
+    else:
+        raise AssertionError("connectivity alone must not create QEMU proof")
+
+    class Accepted:
+        def status(self) -> dict:
+            return {
+                "connected": True,
+                "backend_class": "console-projection",
+                "worker_acceptance": acceptance_summary(),
+            }
+
+    assert rest_perf.gateway_population_axes(
+        Accepted(), rest_perf.POPULATION_EXECUTABLE, executable_bounds()
+    ) == ("console-projection", "qemu")
+
+
+def test_executable_acceptance_rejects_backend_and_manifest_drift() -> None:
+    class DummyClient:
+        def __init__(self, backend: str, manifest: str):
+            self.backend = backend
+            self.manifest = manifest
+
+        def status(self) -> dict:
+            acceptance = acceptance_summary()
+            acceptance["target_session"]["manifest_sha256"] = self.manifest
+            return {
+                "connected": True,
+                "backend_class": self.backend,
+                "worker_acceptance": acceptance,
+            }
+
+    for client, expected in (
+        (DummyClient("host-model", "f" * 64), "console-projection"),
+        (DummyClient("console-projection", "e" * 64), "manifest"),
+    ):
+        try:
+            rest_perf.executable_qemu_acceptance_binding(
+                client,
+                executable_bounds(),
+            )
+        except rest_perf.RestError as exc:
+            assert expected in str(exc)
+        else:
+            raise AssertionError("executable acceptance drift must fail closed")
+
+
+def test_fault_artifacts_bind_exact_status_identities(tmp_path: pathlib.Path) -> None:
+    uart, gdb = write_fault_logs(tmp_path)
+    args = argparse.Namespace(qemu_uart_log=str(uart), qemu_gdb_log=str(gdb))
+    artifacts, markers = rest_perf.capture_fault_artifacts(
+        args,
+        acceptance_summary(),
+    )
+    assert set(artifacts) == {"uart", "gdb"}
+    assert artifacts["uart"]["bytes"] == uart.stat().st_size
+    assert artifacts["gdb"]["bytes"] == gdb.stat().st_size
+    assert "gdb:phase=budget-exhaustion" in markers
+
+    changed = acceptance_summary()
+    changed["target_session"]["root_image_sha256"] = "0" * 64
+    try:
+        rest_perf.capture_fault_artifacts(args, changed)
+    except rest_perf.RestError as exc:
+        assert "exact QEMU target session" in str(exc)
+    else:
+        raise AssertionError("fault transcript target drift must fail")
+
+
+def test_qemu_fixture_receipt_paths_require_explicit_fixture_mode() -> None:
+    class DummyClient:
+        def __init__(self, mode: str):
+            self.mode = mode
+
+        def cat(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            if path.startswith("/queen/export/lora_jobs/job-fixture/"):
+                assert max_bytes == 8192
+                return rest_perf.GatewayResponse(
+                    "OK", "CAT", path, True, ["fixture-bytes"], None, None
+                )
+            assert path == "/gpu/bridge/status"
+            assert max_bytes == 512
+            return rest_perf.GatewayResponse(
+                "OK",
+                "CAT",
+                path,
+                True,
+                [
+                    f"state=ok source=qemu-fixture mode={self.mode} "
+                    f"bytes=10 sha256={'a' * 64}"
+                ],
+                None,
+                None,
+            )
+
+        def ls(self, path: str) -> rest_perf.GatewayResponse:
+            lines = {
+                "/gpu": ["bridge", "models", "telemetry", "GPU-0"],
+                "/queen/export/lora_jobs": ["job-fixture"],
+            }[path]
+            return rest_perf.GatewayResponse(
+                "OK", "LS", path, True, lines, None, None
+            )
+
+        def tail(self, path: str, max_bytes: int) -> rest_perf.GatewayResponse:
+            assert path in {
+                "/host/tickets/spec",
+                "/host/tickets/spec.snapshot",
+                "/host/tickets/status",
+            }
+            assert max_bytes == 8192
+            return rest_perf.GatewayResponse("OK", "TAIL", path, True, [], None, None)
+
+    assert rest_perf.require_qemu_fixture_receipt_paths(
+        DummyClient("fixture")
+    ) == ("GPU-0", "job-fixture")
+    try:
+        rest_perf.require_qemu_fixture_receipt_paths(DummyClient("production"))
+    except rest_perf.RestError as exc:
+        assert "mode=fixture" in str(exc)
+    else:
+        raise AssertionError("production/provider mode must not replace QEMU fixture evidence")
+
+
+def test_executable_report_retains_exact_pre_post_and_identity_graph() -> None:
+    state = rest_perf.SimState(
+        bounds=executable_bounds(),
+        rest_url="http://127.0.0.1:8080",
+        rng=rest_perf.random.Random(0),
+        entropy=0.0,
+        tail_bytes=256,
+        policy_enabled=False,
+        actions_enabled=False,
+        telemetry_enabled=False,
+        include_lifecycle=False,
+        auto_approve=False,
+        transient_retries=False,
+        strict_control_errors=True,
+        population_mode=rest_perf.POPULATION_EXECUTABLE,
+        maximum_live_tasks=3,
+        acceptance_binding=acceptance_summary(),
+    )
+    pre_workers = []
+    post_workers = []
+    for worker in acceptance_summary()["workers"]:
+        base = {
+            "role": worker["role"],
+            "slot": worker["slot"],
+            "lease_epoch": worker["lease_epoch"],
+            "supervisor_generation": worker["supervisor_generation"],
+            "cap_generation": worker["cap_generation"],
+            "worker_id": f"before-{worker['role']}",
+            "receipt_sequence": 10,
+            "completion_sequence": 10,
+        }
+        after = dict(base)
+        if worker["role"] == "worker-heartbeat":
+            after["worker_id"] = "after-worker-heartbeat"
+            after["supervisor_generation"] += 1
+        else:
+            after["receipt_sequence"] += 1
+            after["completion_sequence"] += 1
+        pre_workers.append(base)
+        post_workers.append(after)
+    state.executable_pre_state = {"workers": pre_workers, "proc": {}}
+    state.executable_post_state = {"workers": post_workers, "proc": {}}
+    state.lifecycle_cycles = [{"role": "worker-heartbeat"}]
+    state.receipt_operations = [
+        {"action": "gpu.lease.grant", "role": "worker-gpu"},
+        {"action": "peft.export", "role": "worker-lora"},
+    ]
+    state.fault_artifacts = {
+        "uart": {"sha256": "a" * 64, "bytes": 1},
+        "gdb": {"sha256": "b" * 64, "bytes": 1},
+    }
+    rest_perf.validate_executable_post_state(state)
+    digest, report = rest_perf.build_executable_report_state(
+        state,
+        ["uart:WORKER_TASK_FAULT"],
+    )
+    assert digest == "b" * 64
+    assert set(report) == {
+        "topology_sha256",
+        "target_session",
+        "pre",
+        "post",
+        "lifecycle_cycles",
+        "receipt_operations",
+        "fault_artifacts",
+        "required_fault_markers",
+    }
+    assert set(report["target_session"]) == {
+        "manifest_sha256",
+        "root_image_sha256",
+        "worker_archive_sha256",
+        "worker_image_manifest_sha256",
+        "worker_abi_sha256",
+    }
+
+
+def test_build_telemetry_specs_uses_exact_canonical_paths() -> None:
+    specs = rest_perf.build_telemetry_specs(
+        ["opaque-instance-7"],
+        1,
+        512,
+        {"opaque-instance-7": "/shard/ab/worker/opaque-instance-7/telemetry"},
+    )
+    assert specs == [
+        rest_perf.RequestSpec(
+            "/shard/ab/worker/opaque-instance-7/telemetry",
+            512,
+            "tail",
+        )
+    ]
+
+
+def test_parse_args_executable_rejects_multi_hive_expansion() -> None:
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--auth-token",
+            "bootstrap",
+            "--population-mode",
+            "executable",
+            "--multi-hive",
+        ]
+        try:
+            rest_perf.parse_args()
+        except SystemExit as exc:
+            assert "does not permit synthetic multi-hive" in str(exc)
+        else:
+            raise AssertionError("executable multi-hive must fail")
+    finally:
+        sys.argv = original_argv
+
+
+def test_parse_args_external_gateway_does_not_require_console_secret(
+    monkeypatch,
+) -> None:
+    for name in ("COH_AUTH_TOKEN", "COHSH_AUTH_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    original_argv = list(sys.argv)
+    try:
+        sys.argv = [
+            "rest_perf_harness.py",
+            "--mode",
+            "simulate",
+            "--no-qemu",
+            "--no-gateway",
+            "--request-auth-token",
+            "gateway-secret",
+        ]
+        args = rest_perf.parse_args()
+        assert args.auth_token == ""
+        assert args.request_auth_token == "gateway-secret"
+    finally:
+        sys.argv = original_argv
+
+
+def pressure_runner_source() -> str:
+    return PRESSURE_RUNNER_PATH.read_text(encoding="utf-8")
+
+
+def embedded_python_blocks(source: str) -> list[str]:
+    blocks: list[str] = []
+    lines = source.splitlines()
+    index = 0
+    while index < len(lines):
+        if "<<'PY'" not in lines[index]:
+            index += 1
+            continue
+        index += 1
+        block: list[str] = []
+        while index < len(lines) and lines[index] != "PY":
+            block.append(lines[index])
+            index += 1
+        assert index < len(lines), "unterminated embedded Python block"
+        blocks.append("\n".join(block) + "\n")
+        index += 1
+    return blocks
+
+
+def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
+    source = pressure_runner_source()
+    assert os.access(PRESSURE_RUNNER_PATH, os.X_OK)
+    assert subprocess.run(
+        ["/bin/bash", "-n", str(PRESSURE_RUNNER_PATH)],
+        cwd=REPO_ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    ).returncode == 0
+
+    for literal in (
+        "umask 077",
+        'preserve_input "$SEL4_SOURCE"',
+        'preserve_input "$COMPILER_DIR"',
+        'preserve_input "$PROFILE_VENV"',
+        'preserve_input "$COMPILER_ARCHIVE"',
+        'find "$REPO_ROOT/target" -depth -mindepth 1 -delete',
+        'find "$REPO_ROOT/out" -depth -mindepth 1 -delete',
+        'COHESIX_QEMU_SMP_TOPO=4,cores=4,threads=1,sockets=1',
+        'exact_option("-machine", "virt,gic-version=3,virtualization=on,kernel-irqchip=off")',
+        '"$BUILD_RUN" --launch-existing',
+        'run_pressure_boot medium 4 1 16 2604',
+        'run_pressure_boot high 8 4 32 2608',
+        'qemu-critical-gdb',
+        'qemu-service-gdb',
+        'collect-qemu-preflight',
+        'collect-qemu',
+        '--preflight-service-gdb-log "$RUN_DIR/medium/ninedoor-service.gdb.log"',
+        '--preflight-service-gdb-log "$RUN_DIR/medium/console-network.gdb.log"',
+        '--preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log"',
+        '--pressure "$RUN_DIR/medium/pressure.summary.json"',
+        '--pressure "$RUN_DIR/high/pressure.summary.json"',
+        '--driver-archive "$DRIVER_ARCHIVE"',
+        '--run-dir "$TEST_PLAN_STATE_DIR"',
+        'M26E_SCAN_CONSOLE_TOKEN="$M26E_CONSOLE_AUTH_TOKEN"',
+        'M26E_SCAN_REST_TOKEN="$M26E_REST_AUTH_TOKEN"',
+        'unset M26E_CONSOLE_AUTH_TOKEN M26E_REST_AUTH_TOKEN',
+    ):
+        assert literal in source
+    assert source.count('"$BUILD_RUN" --launch-existing') == 2
+    assert "qemu-gdb-services" not in source
+    assert "staging/cohesix/artifacts/cohesix-driver-runtimes.cpio" not in source
+    assert "--auth-token" not in source
+    assert 'find "$REPO_ROOT"' not in source
+
+
+def test_m26e_qemu_pressure_quiescence_uses_actual_output_writers() -> None:
+    source = pressure_runner_source()
+    writer_guard = source[
+        source.index("require_no_repo_output_writers() {") : source.index(
+            "\nrequire_quiescent_host() {"
+        )
+    ]
+    quiescence = source[
+        source.index("require_quiescent_host() {") : source.index(
+            "\nvalidate_clean_ownership() {"
+        )
+    ]
+
+    assert '("lsof", "-nP", "-w", "-F", "pcan")' in writer_guard
+    assert 'access in {b"w", b"u"}' in writer_guard
+    assert 'value.startswith(root + b"/")' in writer_guard
+    assert "completed.returncode != 0" in writer_guard
+    assert "require_no_repo_output_writers" in quiescence
+    assert "host-bootpd" not in quiescence
+    assert "bootpd" not in quiescence
+
+
+def test_m26e_qemu_pressure_writer_guard_parses_lsof_access(
+    tmp_path: pathlib.Path,
+) -> None:
+    writer_guard = next(
+        block
+        for block in embedded_python_blocks(pressure_runner_source())
+        if "repository out/target has active writable descriptors" in block
+    )
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_lsof = fake_bin / "lsof"
+    fake_lsof.write_text(
+        "#!/bin/sh\n"
+        "printf 'p4242\\ncwriter\\nf7\\na%s\\nn%s\\n' "
+        '"${M26E_TEST_ACCESS}" "${M26E_TEST_PATH}"\n',
+        encoding="utf-8",
+    )
+    fake_lsof.chmod(0o755)
+    out_dir = (tmp_path / "out").resolve()
+    target_dir = (tmp_path / "target").resolve()
+    out_dir.mkdir()
+    target_dir.mkdir()
+
+    def inspect(access: str, path: pathlib.Path) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["PATH"] = str(fake_bin)
+        env["M26E_TEST_ACCESS"] = access
+        env["M26E_TEST_PATH"] = str(path)
+        return subprocess.run(
+            [sys.executable, "-", str(out_dir), str(target_dir)],
+            input=writer_guard,
+            cwd=REPO_ROOT,
+            env=env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    writable = inspect("w", out_dir / "held.log")
+    assert writable.returncode != 0
+    assert "pid=4242 command=writer fd=7 access=w" in writable.stderr
+    assert str(out_dir / "held.log") in writable.stderr
+    assert inspect("u", target_dir / "held.rw").returncode != 0
+    assert inspect("r", out_dir / "reader.log").returncode == 0
+    assert inspect("w", tmp_path / "out-other" / "sibling.log").returncode == 0
+
+
+def test_m26e_qemu_pressure_embedded_python_is_api_aligned() -> None:
+    blocks = embedded_python_blocks(pressure_runner_source())
+    assert blocks
+    for index, block in enumerate(blocks):
+        tree = ast.parse(block, filename=f"m26e_qemu_pressure.py[{index}]")
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Attribute):
+                assert node.func.attr != "bounds"
+                if node.func.attr == "RestClient":
+                    assert len(node.args) <= 3
+            elif isinstance(node.func, ast.Name) and node.func.id == "RestClient":
+                assert len(node.args) <= 3
+
+
+def test_m26e_qemu_pressure_rejects_hostile_path_overrides() -> None:
+    cases = (
+        (["--run-dir", "out/../escape"], "may not contain '..'"),
+        (["--run-dir", "out/toolchain/sel4-profile-venv/evidence"], "direct child"),
+        (["--sel4-source", "/"], "outside its required root"),
+        (["--profile-python", "/bin/python"], "canonical repository virtualenv"),
+    )
+    clean_env = dict(os.environ)
+    for name in (
+        "COH_AUTH_TOKEN",
+        "COHSH_AUTH_TOKEN",
+        "HIVE_GATEWAY_REQUEST_AUTH_TOKEN",
+    ):
+        clean_env.pop(name, None)
+    for arguments, expected in cases:
+        completed = subprocess.run(
+            [str(PRESSURE_RUNNER_PATH), "--check-only", *arguments],
+            cwd=REPO_ROOT,
+            env=clean_env,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        assert completed.returncode != 0
+        assert expected in completed.stderr
+
+
+def test_m26e_qemu_pressure_has_explicit_implementation_surface() -> None:
+    source = tomllib.loads(
+        (REPO_ROOT / "configs" / "implementation_surfaces.toml").read_text(
+            encoding="utf-8"
+        )
+    )
+    rows = [
+        row
+        for row in source["surfaces"]
+        if row["path"] == "scripts/m26e_qemu_pressure.sh"
+    ]
+    assert len(rows) == 1
+    assert rows[0]["id"] == "tool:m26e-qemu-pressure"
+    assert rows[0]["class"] == "diagnostic"
+    assert rows[0]["production_reachable"] is False

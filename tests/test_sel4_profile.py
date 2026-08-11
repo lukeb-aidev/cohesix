@@ -1251,7 +1251,7 @@ def test_configure_refuses_tracked_generated_tree() -> None:
         )
 
 
-def test_repo_managed_pi_profile_accepts_only_canonical_tracked_tree() -> None:
+def test_repo_managed_pi_profile_rejects_pre_m26e_tracked_tree() -> None:
     canonical_contract = sel4_profile.load_contract(
         sel4_profile.DEFAULT_CONTRACT
     )
@@ -1264,7 +1264,8 @@ def test_repo_managed_pi_profile_accepts_only_canonical_tracked_tree() -> None:
         for_runtime=True,
     )
 
-    assert evidence["valid"] is True
+    assert evidence["valid"] is False
+    assert "contract_values_sha256 mismatch" in _errors(evidence)
     assert evidence["build_mode"] == "repository-managed-artifacts"
     assert evidence["claim_eligibility"]["runtime"] is True
     assert evidence["claim_eligibility"]["artifact_set_shipping"] is False
@@ -1400,6 +1401,41 @@ def test_sel4_16_profiles_pin_virtual_timer_offset_updates_off(
     for profile_name, profile in contract["profiles"].items():
         assert profile["cmake"]["KernelArmVtimerUpdateVOffset"] == "OFF", profile_name
         assert profile["generated"]["VTIMER_UPDATE_VOFFSET"] is False, profile_name
+
+
+def test_operational_profiles_are_mcs_only_with_exact_virtual_counter_truth(
+    contract: dict[str, Any],
+) -> None:
+    expected_timer_hz = {
+        "qemu_smp_production": 62_500_000,
+        "qemu_smp_diagnostic": 62_500_000,
+        "pi4_production": 54_000_000,
+        "pi4_diagnostic": 54_000_000,
+    }
+
+    for profile_name, timer_hz in expected_timer_hz.items():
+        profile = contract["profiles"][profile_name]
+        assert profile["runtime_eligible"] is True, profile_name
+        assert profile["cmake"]["MCS"] == "ON", profile_name
+        assert profile["cmake"]["KernelIsMCS"] == "ON", profile_name
+        assert profile["generated"]["KERNEL_MCS"] is True, profile_name
+        assert profile["cmake"]["KernelArmExportVCNTUser"] == "ON", profile_name
+        assert profile["generated"]["EXPORT_VCNT_USER"] is True, profile_name
+        assert profile["cmake"]["KernelArmExportPCNTUser"] == "OFF", profile_name
+        assert profile["cmake"]["KernelArmExportPTMRUser"] == "OFF", profile_name
+        assert profile["cmake"]["KernelArmExportVTMRUser"] == "OFF", profile_name
+        assert profile["timer_clock_hz"] == timer_hz, profile_name
+
+    classic_runtime_profiles = [
+        name
+        for name, profile in contract["profiles"].items()
+        if profile["runtime_eligible"]
+        and (
+            profile["cmake"].get("KernelIsMCS") != "ON"
+            or profile["generated"].get("KERNEL_MCS") is not True
+        )
+    ]
+    assert classic_runtime_profiles == []
 
 
 def test_wrapper_preserves_profile_root_cnode_before_upstream_settings() -> None:
@@ -2743,6 +2779,10 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     assert 'SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-' in build_run
     assert "validate_selected_qemu_profile" in build_run
     assert "--for-runtime" in build_run
+    assert '[[ "$GIC_VER" == "3" ]]' in build_run
+    assert "validate_gicv3_override_safety" in build_run
+    assert "must not override the profile-owned virt,gic-version=3 machine" in build_run
+    assert 'virt,gic-version=${GIC_VER}' in build_run
 
     release = (sel4_profile.ROOT / entrypoints[1]).read_text(encoding="utf-8")
     assert "validate_release_sel4_profile" in release
@@ -2752,3 +2792,146 @@ def test_active_qemu_entrypoints_default_to_production_contract() -> None:
     for relative in entrypoints[5:]:
         source = (sel4_profile.ROOT / relative).read_text(encoding="utf-8")
         assert "qemu_smp_production" in source, relative
+
+
+def test_build_run_rejects_every_machine_or_gic_override() -> None:
+    script = sel4_profile.ROOT / "scripts/cohesix-build-run.sh"
+    prelude = (
+        'source "$1"; QEMU_MACHINE_EXTRA=""; COHSH_QEMU_ARGS=""; '
+        "EXTRA_QEMU_ARGS=(); "
+    )
+
+    accepted = subprocess.run(
+        ["bash", "-c", prelude + "validate_gicv3_override_safety", "bash", str(script)],
+        cwd=sel4_profile.ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    whitespace_cohsh_args = subprocess.run(
+        [
+            "bash",
+            "-c",
+            prelude
+            + 'COHSH_QEMU_ARGS="   "; '
+            + "validate_gicv3_override_safety",
+            "bash",
+            str(script),
+        ],
+        cwd=sel4_profile.ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert whitespace_cohsh_args.returncode == 0, whitespace_cohsh_args.stderr
+
+    rejected_setups = (
+        'QEMU_MACHINE_EXTRA="gic-version=2"; ',
+        'QEMU_MACHINE_EXTRA="type=virt"; ',
+        'EXTRA_QEMU_ARGS=(-machine virt); ',
+        'EXTRA_QEMU_ARGS=(--machine virt); ',
+        'EXTRA_QEMU_ARGS=(-Mvirt); ',
+        'EXTRA_QEMU_ARGS=("gic-version=2"); ',
+        'COHSH_QEMU_ARGS="-M virt"; ',
+        'COHSH_QEMU_ARGS="-machine virt,gic-version=2"; ',
+        'COHSH_QEMU_ARGS="--machine virt,gic-version=2"; ',
+    )
+    for setup in rejected_setups:
+        rejected = subprocess.run(
+            [
+                "bash",
+                "-c",
+                prelude + setup + "validate_gicv3_override_safety",
+                "bash",
+                str(script),
+            ],
+            cwd=sel4_profile.ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected.returncode != 0, setup
+        assert "profile-owned" in rejected.stderr, rejected.stderr
+
+
+def test_launch_existing_rejects_qemu_artifact_and_topology_overrides() -> None:
+    script = sel4_profile.ROOT / "scripts/cohesix-build-run.sh"
+    prelude = (
+        'source "$1"; QEMU_MACHINE_EXTRA=""; COHSH_QEMU_ARGS=""; '
+        "EXTRA_QEMU_ARGS=(); LAUNCH_EXISTING=1; "
+    )
+
+    accepted = subprocess.run(
+        [
+            "bash",
+            "-c",
+            prelude
+            + 'EXTRA_QEMU_ARGS=(-S -gdb tcp:127.0.0.1:1234); '
+            + "validate_gicv3_override_safety",
+            "bash",
+            str(script),
+        ],
+        cwd=sel4_profile.ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert accepted.returncode == 0, accepted.stderr
+
+    rejected_setups = (
+        'EXTRA_QEMU_ARGS=(--kernel other.elf); ',
+        'EXTRA_QEMU_ARGS=(--initrd=other.cpio); ',
+        'EXTRA_QEMU_ARGS=(--smp 1); ',
+        'EXTRA_QEMU_ARGS=(--cpu max); ',
+        'EXTRA_QEMU_ARGS=(--device loader,file=other.elf); ',
+        'EXTRA_QEMU_ARGS=(--device loader,addr=0x80000000,data=0); ',
+        'COHSH_QEMU_ARGS="--kernel other.elf"; ',
+        'COHSH_QEMU_ARGS="--initrd=other.cpio"; ',
+        'COHSH_QEMU_ARGS="--smp 1"; ',
+        'COHSH_QEMU_ARGS="--device loader,file=other.elf"; ',
+        'COHSH_QEMU_ARGS="--device loader,addr=0x80000000,data=0"; ',
+    )
+    for setup in rejected_setups:
+        rejected = subprocess.run(
+            [
+                "bash",
+                "-c",
+                prelude + setup + "validate_gicv3_override_safety",
+                "bash",
+                str(script),
+            ],
+            cwd=sel4_profile.ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        assert rejected.returncode != 0, setup
+        assert "immutable QEMU inputs or topology" in rejected.stderr
+
+
+def test_build_run_regenerates_complete_compiler_owned_surface() -> None:
+    source = (
+        sel4_profile.ROOT / "scripts/cohesix-build-run.sh"
+    ).read_text(encoding="utf-8")
+
+    for option in (
+        "--implementation-surface-inventory",
+        "--host-integration-graph",
+        "--host-integration-doc",
+        "--cohesix-py-defaults",
+        "--cohsh-client-rust",
+        "--coh-policy-rust",
+        "--swarmui-defaults-rust",
+    ):
+        assert option in source
+    assert source.count("--bin coh-rtc-python-profile") == 2
+    assert "cohesix_python_qemu_smp_production.json" in source
+    assert "cohesix_python_pi4_production.json" in source
+    assert "Selected-profile host tool is missing after its source build" in source
+    assert "Host tool not built" not in source
+    assert 'ROOT_TASK_FEATURES="release-qemu,bootstrap-trace"' in source
+    assert 'ROOT_TASK_FEATURES="cohesix-dev"' not in source
+    assert 'has_root_task_feature "release-qemu"' in source
+    assert 'NET_BACKEND="virtio"' in source

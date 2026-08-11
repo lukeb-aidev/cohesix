@@ -43,10 +43,19 @@ scheduler profile.
   and consumed-budget evidence are zero or false.
 - Root and driver paths use classic reply capabilities and do not allocate or
   configure SchedContext or Reply objects.
-- Linked-driver MCS cfg paths are nonfunctional stubs (`RuntimeWake::None` in
-  the runtime and an unsupported `wfe` trampoline in root), so an MCS-only
-  kernel requires an explicit shared driver scheduler/IPC port and a newly
-  hashed runtime archive; byte-identical payload preservation is impossible.
+- The Milestone 26e linked-driver source now uses active-SC MCS
+  `Recv`/explicit-Reply, notification-woken one-way progress, exact generated
+  SC/core/budget/period records, and an independent driver-supervisor
+  faulted-`Call` containment path for all seven images. QEMU target compile and
+  host/model checks are necessary evidence, not Pi acceptance.
+- The deterministic MCS driver archive pipeline consumes the immutable
+  `configs/driver_runtime_classic_comparator.toml` record. It binds the retired
+  26d source commit, kernel/root/elfloader/system-CPIO identities, all seven
+  classic linked-driver component hashes, and their canonical deterministic
+  newc digest `db2e353327cde2f91b37f40a7bf17905bb5f70cd27a999ba880a9fa7c2de9835`.
+  This removes local archive-metadata ambiguity without reclassifying the
+  comparator as MCS or target acceptance. The Worker archive remains a
+  distinct identity.
 - Cooperative service-turn limits bound root-task work but do not provide
   kernel-enforced CPU-time isolation.
 - General Worker roles are not currently launched target TCBs, so assigning

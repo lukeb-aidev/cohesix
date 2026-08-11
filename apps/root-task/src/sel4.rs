@@ -943,7 +943,10 @@ pub fn message_register(index: usize) -> seL4_Word {
     unsafe { sel4_sys::seL4_GetMR(reg_index) }
 }
 
-/// Issues an seL4 reply using the current thread's reply capability.
+/// Issues a classic seL4 reply using the current thread's implicit reply cap.
+///
+/// MCS callers must use [`reply_to`] with the explicit Reply object populated
+/// by the matching receive operation.
 #[cfg(feature = "kernel")]
 #[inline]
 pub fn reply(info: seL4_MessageInfo) {
@@ -952,11 +955,32 @@ pub fn reply(info: seL4_MessageInfo) {
     }
 }
 
+/// Issues an seL4 reply through an explicit single-use Reply capability.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn reply_to(reply_cap: seL4_CPtr, info: seL4_MessageInfo) {
+    unsafe {
+        syscall::reply_to(reply_cap, info);
+    }
+}
+
 #[cfg(feature = "kernel")]
 #[track_caller]
 #[inline]
 pub fn recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
     unsafe { syscall::recv(dest, badge) }
+}
+
+/// Receives a call and stores its reply authority in the supplied Reply object.
+#[cfg(feature = "kernel")]
+#[track_caller]
+#[inline]
+pub fn recv_with_reply(
+    dest: seL4_CPtr,
+    badge: *mut seL4_Word,
+    reply: seL4_CPtr,
+) -> seL4_MessageInfo {
+    unsafe { syscall::recv_with_reply(dest, badge, reply) }
 }
 
 #[cfg(feature = "kernel")]
@@ -970,6 +994,17 @@ pub fn wait(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
 #[inline]
 pub fn nb_recv(dest: seL4_CPtr, badge: *mut seL4_Word) -> seL4_MessageInfo {
     unsafe { syscall::nb_recv(dest, badge) }
+}
+
+/// Nonblockingly receives a call into an explicit Reply object.
+#[cfg(feature = "kernel")]
+#[inline]
+pub fn nb_recv_with_reply(
+    dest: seL4_CPtr,
+    badge: *mut seL4_Word,
+    reply: seL4_CPtr,
+) -> seL4_MessageInfo {
+    unsafe { syscall::nb_recv_with_reply(dest, badge, reply) }
 }
 
 /// Issues a non-blocking wait on the supplied notification object.
@@ -1237,6 +1272,21 @@ pub fn replyrecv_guarded(
     let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
 
     let message = unsafe { syscall::reply_recv(endpoint, info, badge_ptr) };
+    Ok(message)
+}
+
+/// Issues an explicit-Reply seL4 reply+receive cycle on the root endpoint.
+#[inline(never)]
+pub fn replyrecv_guarded_with_reply(
+    info: seL4_MessageInfo,
+    badge: Option<&mut seL4_Word>,
+    reply: seL4_CPtr,
+) -> Result<seL4_MessageInfo, IpcError> {
+    let endpoint = ensure_endpoint()?;
+    guard_ipc_destination("replyrecv_guarded_with_reply", endpoint);
+    let badge_ptr = badge.map_or(ptr::null_mut(), |b| b as *mut seL4_Word);
+
+    let message = unsafe { syscall::reply_recv_with_reply(endpoint, info, badge_ptr, reply) };
     Ok(message)
 }
 
@@ -1810,8 +1860,16 @@ fn set_tcb_affinity_impl(
         sel4_guard::uart_breadcrumb(guard_stage, "seL4_TCB_SetAffinity", breadcrumb.as_str());
     }
 
-    #[cfg(target_os = "none")]
+    #[cfg(all(target_os = "none", not(sel4_config_kernel_mcs)))]
     let result = unsafe { sel4_sys::seL4_TCB_SetAffinity(guarded_tcb, core as seL4_Word) };
+    #[cfg(all(target_os = "none", sel4_config_kernel_mcs))]
+    let result = {
+        let _ = (guarded_tcb, core);
+        // MCS core placement is established by the per-core SchedControl cap
+        // used to configure the TCB's scheduling context. SetAffinity is not
+        // part of the MCS object ABI.
+        sel4_sys::seL4_IllegalOperation
+    };
     #[cfg(not(target_os = "none"))]
     let result = {
         let _ = (guarded_tcb, core);
@@ -1888,7 +1946,10 @@ pub fn set_tcb_priority(
     }
 }
 
-/// Sets non-MCS TCB scheduling parameters through the seL4 kernel invocation shape.
+/// Sets classic TCB scheduling parameters through the seL4 kernel invocation shape.
+///
+/// MCS callers must use [`set_tcb_sched_params_mcs`] so the scheduling context
+/// and fault endpoint cannot be omitted.
 #[cfg(feature = "kernel")]
 pub fn set_tcb_sched_params(
     tcb_cap: seL4_CPtr,
@@ -1899,6 +1960,7 @@ pub fn set_tcb_sched_params(
     let guard_stage = "TCB.SetSchedParams";
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
     let guarded_authority = sel4_guard::guard_cptr(guard_stage, "authority_tcb", authority_tcb);
+    #[cfg(not(sel4_config_kernel_mcs))]
     // SAFETY: The guarded CPtrs are kernel capabilities supplied by bootstrap code; seL4
     // validates authority and scheduler bounds for the configured kernel.
     let result = unsafe {
@@ -1908,6 +1970,11 @@ pub fn set_tcb_sched_params(
             mcp as seL4_Word,
             priority as seL4_Word,
         )
+    };
+    #[cfg(sel4_config_kernel_mcs)]
+    let result = {
+        let _ = (guarded_tcb, guarded_authority, mcp, priority);
+        sel4_sys::seL4_IllegalOperation
     };
     if result == seL4_NoError {
         Ok(())
@@ -1919,6 +1986,186 @@ pub fn set_tcb_sched_params(
             err = result,
             name = error_name(result),
         );
+        Err(result)
+    }
+}
+
+/// Attaches an MCS scheduling context and fault endpoint while setting priority.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn set_tcb_sched_params_mcs(
+    tcb_cap: seL4_CPtr,
+    authority_tcb: seL4_CPtr,
+    mcp: u8,
+    priority: u8,
+    sched_context: seL4_CPtr,
+    fault_ep: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetSchedParamsMCS";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_authority = sel4_guard::guard_cptr(guard_stage, "authority_tcb", authority_tcb);
+    let guarded_sched_context = sel4_guard::guard_cptr(guard_stage, "sched_context", sched_context);
+    // SAFETY: Every CPtr is supplied by bootstrap capability allocation. The
+    // kernel validates authority, SC association, fault endpoint rights, and
+    // scheduler bounds before changing the TCB.
+    let result = unsafe {
+        sel4_sys::seL4_TCB_SetSchedParamsMcs(
+            guarded_tcb,
+            guarded_authority,
+            mcp as seL4_Word,
+            priority as seL4_Word,
+            guarded_sched_context,
+            fault_ep,
+        )
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] MCS set-sched-params failed tcb=0x{tcb:04x} authority=0x{authority:04x} sc=0x{sc:04x} fault_ep=0x{fault_ep:04x} mcp={mcp} priority={priority} err={err} ({name})",
+            tcb = guarded_tcb,
+            authority = guarded_authority,
+            sc = guarded_sched_context,
+            fault_ep = fault_ep,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Configure a passive MCS server with no bound scheduling context.
+///
+/// The null SC is intentional and compiler-validated: the server may execute
+/// only while an allowlisted synchronous caller donates its SC. The TCB still
+/// receives an explicit fault endpoint and bounded priority/MCP.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn set_passive_tcb_sched_params_mcs(
+    tcb_cap: seL4_CPtr,
+    authority_tcb: seL4_CPtr,
+    mcp: u8,
+    priority: u8,
+    fault_ep: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    let guard_stage = "TCB.SetPassiveSchedParamsMCS";
+    let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let guarded_authority = sel4_guard::guard_cptr(guard_stage, "authority_tcb", authority_tcb);
+    let guarded_fault = sel4_guard::guard_cptr(guard_stage, "fault_ep", fault_ep);
+    // SAFETY: The TCB, authority, and fault endpoint come from generated HAL
+    // construction. A null SC is the seL4 MCS passive-server contract and is
+    // not dereferenced; the kernel validates all remaining scheduler bounds.
+    let result = unsafe {
+        sel4_sys::seL4_TCB_SetSchedParamsMcs(
+            guarded_tcb,
+            guarded_authority,
+            mcp as seL4_Word,
+            priority as seL4_Word,
+            sel4_sys::seL4_CapNull,
+            guarded_fault,
+        )
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        ::log::error!(
+            "[tcb] MCS passive set-sched-params failed tcb=0x{tcb:04x} authority=0x{authority:04x} fault_ep=0x{fault_ep:04x} mcp={mcp} priority={priority} err={err} ({name})",
+            tcb = guarded_tcb,
+            authority = guarded_authority,
+            fault_ep = guarded_fault,
+            err = result,
+            name = error_name(result),
+        );
+        Err(result)
+    }
+}
+
+/// Installs the timeout-fault endpoint for an MCS TCB.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn set_tcb_timeout_endpoint(
+    tcb_cap: seL4_CPtr,
+    timeout_fault_ep: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    // SAFETY: The TCB and endpoint CPtrs come from bootstrap allocation. seL4
+    // validates the endpoint type and rights before installation.
+    let result = unsafe { sel4_sys::seL4_TCB_SetTimeoutEndpoint(tcb_cap, timeout_fault_ep) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        Err(result)
+    }
+}
+
+/// Configures an MCS scheduling context on the core owning `sched_control`.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn configure_sched_context(
+    sched_control: seL4_CPtr,
+    sched_context: seL4_CPtr,
+    budget_us: u64,
+    period_us: u64,
+    extra_refills: seL4_Word,
+    badge: seL4_Word,
+    flags: seL4_Word,
+) -> Result<(), seL4_Error> {
+    // SAFETY: The SchedControl and SC CPtrs are selected from generated
+    // BootInfo/untyped authority. seL4 validates budget, period, refill, and
+    // association constraints.
+    let result = unsafe {
+        sel4_sys::seL4_SchedControl_ConfigureFlags(
+            sched_control,
+            sched_context,
+            budget_us,
+            period_us,
+            extra_refills,
+            badge,
+            flags,
+        )
+    };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
+        Err(result)
+    }
+}
+
+/// Returns and resets the SC's consumed-time evidence.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn sched_context_consumed(sched_context: seL4_CPtr) -> Result<u64, seL4_Error> {
+    // SAFETY: The SC CPtr is owned by root bootstrap and the kernel validates
+    // the invoked object type.
+    let result = unsafe { sel4_sys::seL4_SchedContext_Consumed(sched_context) };
+    let error = result.error as seL4_Error;
+    if error == seL4_NoError {
+        Ok(result.consumed)
+    } else {
+        Err(error)
+    }
+}
+
+/// Yields to the TCB bound to an MCS scheduling context.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn yield_to_sched_context(sched_context: seL4_CPtr) -> Result<u64, seL4_Error> {
+    // SAFETY: The SC CPtr is owned by root bootstrap and the kernel validates
+    // that the object is bound to a runnable TCB.
+    let result = unsafe { sel4_sys::seL4_SchedContext_YieldTo(sched_context) };
+    let error = result.error as seL4_Error;
+    if error == seL4_NoError {
+        Ok(result.consumed)
+    } else {
+        Err(error)
+    }
+}
+
+/// Unbinds one exact TCB from its MCS scheduling context before generation revoke.
+#[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+pub fn unbind_sched_context_object(
+    sched_context: seL4_CPtr,
+    tcb_cap: seL4_CPtr,
+) -> Result<(), seL4_Error> {
+    // SAFETY: Both CPtrs are retained by the root supervisor for the same
+    // constructed generation. seL4 validates object type and association.
+    let result = unsafe { sel4_sys::seL4_SchedContext_UnbindObject(sched_context, tcb_cap) };
+    if result == seL4_NoError {
+        Ok(())
+    } else {
         Err(result)
     }
 }
@@ -3294,6 +3541,7 @@ pub struct SlotAllocator {
     next: seL4_CPtr,
     end: seL4_CPtr,
     cnode_size_bits: seL4_Word,
+    reserved_slots: Vec<seL4_CPtr, 32>,
 }
 
 /// Snapshot describing the init CNode empty-slot window.
@@ -3324,6 +3572,7 @@ impl SlotAllocator {
             next: region.start,
             end: region.end,
             cnode_size_bits,
+            reserved_slots: Vec::new(),
         }
     }
 
@@ -3365,7 +3614,9 @@ impl SlotAllocator {
             self.next = self.start;
         }
         while self.next < self.end {
-            while self.next < self.end && is_boot_reserved_slot(self.next) {
+            while self.next < self.end
+                && (is_boot_reserved_slot(self.next) || self.reserved_slots.contains(&self.next))
+            {
                 self.next += 1;
             }
             if self.next >= self.end {
@@ -3397,6 +3648,22 @@ impl SlotAllocator {
     #[must_use]
     pub fn try_alloc(&mut self) -> Option<seL4_CPtr> {
         self.alloc()
+    }
+
+    /// Excludes one exact empty slot from bump allocation for a retained anchor.
+    pub fn reserve_exact(&mut self, slot: seL4_CPtr) -> Result<(), seL4_Error> {
+        if slot < self.next
+            || slot < self.start
+            || slot >= self.end
+            || is_boot_reserved_slot(slot)
+            || self.reserved_slots.contains(&slot)
+            || debug_cap_identify(slot) != 0
+        {
+            return Err(sel4_sys::seL4_DeleteFirst);
+        }
+        self.reserved_slots
+            .push(slot)
+            .map_err(|_| seL4_NotEnoughMemory)
     }
 
     /// Marks the first `slots` entries in the bootinfo empty window as consumed.
@@ -4602,13 +4869,156 @@ impl<'a> KernelEnv<'a> {
         slot
     }
 
+    /// Allocates a CSpace slot without panicking when admission is exhausted.
+    pub fn try_allocate_slot(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        BOOTINFO_WINDOW_GUARD.check("try_allocate_slot");
+        let slot = self.slots.try_alloc().ok_or(seL4_NotEnoughMemory)?;
+        if slot < self.bootinfo.empty.start || slot >= self.bootinfo.empty.end {
+            self.dump_bootinfo_window_once("try_allocate_slot");
+            return Err(seL4_RangeError);
+        }
+        Ok(slot)
+    }
+
+    /// Reserves one compiler-selected empty init-CNode slot as a revoke anchor.
+    pub fn reserve_cspace_anchor_slot(&mut self, slot: seL4_CPtr) -> Result<(), seL4_Error> {
+        BOOTINFO_WINDOW_GUARD.check("reserve_cspace_anchor_slot");
+        self.slots.reserve_exact(slot)
+    }
+
+    /// Retypes one dedicated child untyped into an exact compiler-reserved slot.
+    ///
+    /// The returned cap is a real revoke anchor: every object subsequently
+    /// retyped from it is deleted by `CNode_Revoke(anchor)`, which also resets
+    /// the child-untyped watermark for deterministic generation reuse. The
+    /// parent BootInfo reservation remains consumed for the root lifetime.
+    pub fn create_revoke_anchor(
+        &mut self,
+        anchor_slot: seL4_CPtr,
+        size_bits: u8,
+    ) -> Result<seL4_CPtr, seL4_Error> {
+        if size_bits < PAGE_BITS as u8 || seL4_Word::from(size_bits) >= word_bits() {
+            return Err(seL4_RangeError);
+        }
+        self.reserve_cspace_anchor_slot(anchor_slot)?;
+        let reserved = self
+            .untyped
+            .reserve_ram(size_bits)
+            .ok_or(seL4_NotEnoughMemory)?;
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_UntypedObject as seL4_Word,
+            seL4_Word::from(size_bits),
+            anchor_slot,
+        ) {
+            Ok(()) => Ok(anchor_slot),
+            Err(error) => {
+                self.untyped.release(&reserved);
+                Err(error.into_sel4_error())
+            }
+        }
+    }
+
+    /// Retypes one generation object from a retained child-untyped anchor into
+    /// an already reserved empty init-CNode slot.
+    pub fn retype_from_revoke_anchor(
+        &self,
+        anchor: seL4_CPtr,
+        object_type: seL4_Word,
+        object_size_bits: seL4_Word,
+        destination_slot: seL4_CPtr,
+    ) -> Result<(), seL4_Error> {
+        if anchor == seL4_CapNull || destination_slot == seL4_CapNull {
+            return Err(sel4_sys::seL4_InvalidCapability);
+        }
+        cspace_sys::untyped_retype_into_init_root(
+            anchor,
+            object_type,
+            object_size_bits,
+            destination_slot,
+        )
+        .map_err(cspace_sys::RetypeCallError::into_sel4_error)
+    }
+
+    /// Maps one anchor-derived RAM frame into a fresh root-only virtual page.
+    ///
+    /// The caller may keep this alias for shared records or unmap/delete it
+    /// after copying immutable child bytes. The frame capability remains a
+    /// descendant of the supplied revoke anchor.
+    pub fn map_revoke_anchor_frame_in_root(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, seL4_Error> {
+        let range = self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "revoke-anchor-frame");
+        self.dma_cursor = range.end;
+        self.map_frame(frame_cap, range.start, attr, true)?;
+        let paddr = page_get_address(frame_cap)?;
+        Ok(RamFrame {
+            cap: frame_cap,
+            paddr,
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                .ok_or(seL4_RangeError)?,
+        })
+    }
+
+    /// Maps one already rights-reduced anchor-derived frame cap into a fresh
+    /// root-only virtual page with those exact rights.
+    pub fn map_revoke_anchor_frame_in_root_with_rights(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, seL4_Error> {
+        let range =
+            self.next_mapping_range(self.dma_cursor, PAGE_SIZE, "revoke-anchor-frame-rights");
+        self.dma_cursor = range.end;
+        self.map_frame_with_rights(frame_cap, range.start, rights, attr, true)?;
+        let paddr = page_get_address(frame_cap)?;
+        Ok(RamFrame {
+            cap: frame_cap,
+            paddr,
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(range.start))
+                .ok_or(seL4_RangeError)?,
+        })
+    }
+
+    /// Remaps a new anchor-derived frame into a previously established root
+    /// scratch page. The prior generation must already be revoked, so no old
+    /// frame mapping may remain at `vaddr`; existing root translation tables
+    /// are reused without consuming another virtual range.
+    pub fn remap_revoke_anchor_frame_in_root(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        vaddr: usize,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> Result<RamFrame, seL4_Error> {
+        if frame_cap == seL4_CapNull || vaddr == 0 || vaddr & (PAGE_SIZE - 1) != 0 {
+            return Err(seL4_RangeError);
+        }
+        self.map_frame(frame_cap, vaddr, attr, true)?;
+        let paddr = page_get_address(frame_cap)?;
+        Ok(RamFrame {
+            cap: frame_cap,
+            paddr,
+            ptr: NonNull::new(ptr::with_exposed_provenance_mut::<u8>(vaddr))
+                .ok_or(seL4_RangeError)?,
+        })
+    }
+
     /// Retypes and returns a notification object in the init CSpace.
     pub fn alloc_notification(&mut self) -> Result<seL4_CPtr, seL4_Error> {
         let reserved = self
             .untyped
             .reserve_ram(sel4_sys::seL4_NotificationBits as u8)
             .ok_or(seL4_NotEnoughMemory)?;
-        let slot = self.allocate_slot();
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         match cspace_sys::untyped_retype_into_init_root(
             reserved.cap() as seL4_CPtr,
             sel4_sys::seL4_NotificationObject as seL4_Word,
@@ -4629,7 +5039,13 @@ impl<'a> KernelEnv<'a> {
             .untyped
             .reserve_ram(sel4_sys::seL4_EndpointBits as u8)
             .ok_or(seL4_NotEnoughMemory)?;
-        let slot = self.allocate_slot();
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         match cspace_sys::untyped_retype_into_init_root(
             reserved.cap() as seL4_CPtr,
             sel4_sys::seL4_EndpointObject as seL4_Word,
@@ -4650,7 +5066,13 @@ impl<'a> KernelEnv<'a> {
             .untyped
             .reserve_ram(sel4_sys::seL4_TCBBits as u8)
             .ok_or(seL4_NotEnoughMemory)?;
-        let slot = self.allocate_slot();
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         match cspace_sys::untyped_retype_into_init_root(
             reserved.cap() as seL4_CPtr,
             sel4_sys::seL4_TCBObject as seL4_Word,
@@ -4665,6 +5087,87 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
+    /// Retypes an MCS scheduling context from BootInfo-owned RAM authority.
+    #[cfg(sel4_config_kernel_mcs)]
+    pub fn alloc_sched_context(&mut self, object_bits: u8) -> Result<seL4_CPtr, seL4_Error> {
+        let minimum =
+            u8::try_from(sel4_sys::SEL4_MCS_MIN_SCHED_CONTEXT_BITS).map_err(|_| seL4_RangeError)?;
+        if object_bits < minimum || u64::from(object_bits) >= sel4_sys::seL4_WordBits {
+            return Err(seL4_RangeError);
+        }
+        let reserved = self
+            .untyped
+            .reserve_ram(object_bits)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_SchedContextObject as seL4_Word,
+            seL4_Word::from(object_bits),
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(error) => {
+                self.untyped.release(&reserved);
+                Err(error.into_sel4_error())
+            }
+        }
+    }
+
+    /// Retypes one MCS Reply object from BootInfo-owned RAM authority.
+    #[cfg(sel4_config_kernel_mcs)]
+    pub fn alloc_reply(&mut self) -> Result<seL4_CPtr, seL4_Error> {
+        let object_bits =
+            u8::try_from(sel4_sys::SEL4_MCS_REPLY_BITS).map_err(|_| seL4_RangeError)?;
+        let reserved = self
+            .untyped
+            .reserve_ram(object_bits)
+            .ok_or(seL4_NotEnoughMemory)?;
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
+        match cspace_sys::untyped_retype_into_init_root(
+            reserved.cap() as seL4_CPtr,
+            sel4_sys::seL4_ReplyObject as seL4_Word,
+            0,
+            slot,
+        ) {
+            Ok(()) => Ok(slot),
+            Err(error) => {
+                self.untyped.release(&reserved);
+                Err(error.into_sel4_error())
+            }
+        }
+    }
+
+    /// Returns the BootInfo-provided SchedControl cap for one exact core.
+    #[cfg(sel4_config_kernel_mcs)]
+    pub fn sched_control_for_core(&self, core: u8) -> Result<seL4_CPtr, seL4_Error> {
+        if seL4_Word::from(core) >= self.bootinfo.numNodes {
+            return Err(seL4_RangeError);
+        }
+        let cap = self
+            .bootinfo
+            .schedcontrol
+            .start
+            .checked_add(seL4_CPtr::from(core))
+            .ok_or(seL4_RangeError)?;
+        if cap >= self.bootinfo.schedcontrol.end {
+            return Err(seL4_RangeError);
+        }
+        Ok(cap)
+    }
+
     /// Retypes and returns a CNode object with `radix_bits` slots.
     pub fn alloc_cnode(&mut self, radix_bits: u8) -> Result<seL4_CPtr, seL4_Error> {
         if radix_bits == 0 || seL4_Word::from(radix_bits) >= word_bits() {
@@ -4677,7 +5180,13 @@ impl<'a> KernelEnv<'a> {
             .untyped
             .reserve_ram(object_bits)
             .ok_or(seL4_NotEnoughMemory)?;
-        let slot = self.allocate_slot();
+        let slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         match cspace_sys::untyped_retype_into_init_root(
             reserved.cap() as seL4_CPtr,
             sel4_sys::seL4_CapTableObject as seL4_Word,
@@ -4753,6 +5262,185 @@ impl<'a> KernelEnv<'a> {
         } else {
             Err(err)
         }
+    }
+
+    /// Retype one child VSpace root (PGD) from a retained revoke anchor.
+    ///
+    /// `destination_slot` must be an empty init-CNode slot already owned by
+    /// the caller. A failed ASID assignment leaves the object below `anchor`,
+    /// so the caller can roll the partial generation back with
+    /// [`Self::revoke_anchor_descendants_and_reset_vspace`].
+    pub fn create_revoke_anchor_vspace_root(
+        &self,
+        anchor: seL4_CPtr,
+        destination_slot: seL4_CPtr,
+    ) -> Result<seL4_CPtr, RevokeAnchorVSpaceError> {
+        if anchor == seL4_CapNull || destination_slot == seL4_CapNull || anchor == destination_slot
+        {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        self.retype_from_revoke_anchor(
+            anchor,
+            sel4_sys::seL4_ARM_VSpaceObject as seL4_Word,
+            sel4_sys::seL4_VSpaceBits as seL4_Word,
+            destination_slot,
+        )?;
+        self.assign_vspace_asid_from_init_pool(destination_slot)?;
+        Ok(destination_slot)
+    }
+
+    /// Map one anchor-derived frame through anchor-derived PUD/PD/PT objects.
+    ///
+    /// The frame and VSpace root must have been retyped from `anchor`. Every
+    /// missing translation object consumes the next fixed caller-owned slot in
+    /// `tracker`; exhaustion is reported exactly and never falls back to the
+    /// general untyped or CSpace allocator.
+    pub fn map_page_cap_into_revoke_anchor_vspace<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        frame: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        if anchor == seL4_CapNull || frame == seL4_CapNull || vspace == seL4_CapNull {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        self.ensure_revoke_anchor_page_table(anchor, vspace, vaddr, tracker)?;
+        map_page_into_vspace(frame, vspace, vaddr, rights, attr)?;
+        Ok(())
+    }
+
+    /// Retype every unused tracker slot into an unmapped translation object.
+    ///
+    /// Exact resource inventories may reserve a fixed upper bound larger than
+    /// the set of tables needed by the initial mappings. Call this only after
+    /// all mappings for the generation are complete: the tracker is exhausted
+    /// deliberately and further mapping attempts fail at the exact bound.
+    pub fn seal_revoke_anchor_translation_reserve<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        if anchor == seL4_CapNull {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        while tracker.remaining_slots() != 0 {
+            let slot = tracker.take_destination_slot()?;
+            self.retype_from_revoke_anchor(
+                anchor,
+                seL4_ARM_PageTableObject as seL4_Word,
+                PAGE_TABLE_BITS as seL4_Word,
+                slot,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn ensure_revoke_anchor_page_table<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        self.ensure_revoke_anchor_page_directory(anchor, vspace, vaddr, tracker)?;
+        let base = PageTableBookkeeper::<MAX_DRIVER_VSPACE_PAGE_TABLES>::base_for(vaddr);
+        if tracker.tables.page_tables.contains_base(base) {
+            return Ok(());
+        }
+        let slot = tracker.take_destination_slot()?;
+        self.retype_from_revoke_anchor(
+            anchor,
+            seL4_ARM_PageTableObject as seL4_Word,
+            PAGE_TABLE_BITS as seL4_Word,
+            slot,
+        )?;
+        map_page_table_into_vspace(slot, vspace, base, seL4_ARM_Page_Default)?;
+        tracker
+            .tables
+            .page_tables
+            .remember_base(base)
+            .map_err(|_| RevokeAnchorVSpaceError::TranslationObjectBound)
+    }
+
+    fn ensure_revoke_anchor_page_directory<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        self.ensure_revoke_anchor_page_upper_directory(anchor, vspace, vaddr, tracker)?;
+        let base = PageDirectoryBookkeeper::<MAX_DRIVER_VSPACE_PAGE_DIRECTORIES>::base_for(vaddr);
+        if tracker.tables.page_directories.contains_base(base) {
+            return Ok(());
+        }
+        let slot = tracker.take_destination_slot()?;
+        self.retype_from_revoke_anchor(
+            anchor,
+            seL4_ARM_PageTableObject as seL4_Word,
+            PAGE_TABLE_BITS as seL4_Word,
+            slot,
+        )?;
+        map_page_table_into_vspace(slot, vspace, base, seL4_ARM_Page_Default)?;
+        tracker
+            .tables
+            .page_directories
+            .remember_base(base)
+            .map_err(|_| RevokeAnchorVSpaceError::TranslationObjectBound)
+    }
+
+    fn ensure_revoke_anchor_page_upper_directory<const N: usize>(
+        &self,
+        anchor: seL4_CPtr,
+        vspace: seL4_CPtr,
+        vaddr: usize,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        let base =
+            PageUpperDirectoryBookkeeper::<MAX_DRIVER_VSPACE_PAGE_UPPER_DIRECTORIES>::base_for(
+                vaddr,
+            );
+        if tracker.tables.page_upper_directories.contains_base(base) {
+            return Ok(());
+        }
+        let slot = tracker.take_destination_slot()?;
+        self.retype_from_revoke_anchor(
+            anchor,
+            seL4_ARM_PageTableObject as seL4_Word,
+            PAGE_TABLE_BITS as seL4_Word,
+            slot,
+        )?;
+        map_page_table_into_vspace(slot, vspace, base, seL4_ARM_Page_Default)?;
+        tracker
+            .tables
+            .page_upper_directories
+            .remember_base(base)
+            .map_err(|_| RevokeAnchorVSpaceError::TranslationObjectBound)
+    }
+
+    /// Revoke every anchor descendant and only then reset translation slots.
+    ///
+    /// The caller must suspend the child, unbind its SC, and close admission
+    /// first. A failed kernel revoke preserves tracker state and therefore
+    /// prevents unsafe destination-slot reuse.
+    pub fn revoke_anchor_descendants_and_reset_vspace<const N: usize>(
+        &mut self,
+        anchor: seL4_CPtr,
+        tracker: &mut RevokeAnchorVSpaceTracker<N>,
+    ) -> Result<(), RevokeAnchorVSpaceError> {
+        if anchor == seL4_CapNull {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        let error = cnode_revoke(self.init_cnode_cap(), anchor, word_bits() as u8);
+        if error != seL4_NoError {
+            return Err(RevokeAnchorVSpaceError::Sel4(error));
+        }
+        tracker.reset_after_revoke();
+        Ok(())
     }
 
     /// Maps a copied page capability into a non-root VSpace.
@@ -5222,7 +5910,13 @@ impl<'a> KernelEnv<'a> {
             self.untyped.release(&reserved);
             return Err(seL4_NotEnoughMemory);
         }
-        let frame_slot = self.allocate_slot();
+        let frame_slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         #[cfg(target_arch = "aarch64")]
         let page_obj: seL4_Word = SEL4_ARM_PAGE_OBJECT_WORD;
         #[cfg(target_arch = "aarch64")]
@@ -5515,6 +6209,38 @@ impl<'a> KernelEnv<'a> {
         }
     }
 
+    /// Installs an IPC buffer for a child TCB without changing root's libsel4 pointer.
+    ///
+    /// The frame remains mapped in root for bounded shared-record access, but
+    /// `__sel4_ipc_buffer` belongs to the calling TCB and must never be switched
+    /// while configuring a remote child.
+    pub fn bind_child_ipc_buffer(
+        &self,
+        tcb_cap: seL4_CPtr,
+        buffer_frame: seL4_CPtr,
+        buffer_vaddr: usize,
+    ) -> Result<IpcBufView, seL4_Error> {
+        if buffer_vaddr == 0 || buffer_vaddr & (IpcBufView::PAGE_LEN - 1) != 0 {
+            return Err(sel4_sys::seL4_AlignmentError);
+        }
+        let buffer_word = seL4_Word::try_from(buffer_vaddr).map_err(|_| seL4_RangeError)?;
+        let guarded_tcb = sel4_guard::guard_cptr("IPCInstall.bind_child", "tcb_cap", tcb_cap);
+        let guarded_frame =
+            sel4_guard::guard_cptr("IPCInstall.bind_child", "ipc_frame", buffer_frame);
+        // SAFETY: The guarded TCB and frame are bootstrap-owned kernel
+        // capabilities. The frame is page-aligned and mapped at `buffer_word`;
+        // seL4 validates the object types and target TCB configuration.
+        let result =
+            unsafe { sel4_sys::seL4_TCB_SetIPCBuffer(guarded_tcb, buffer_word, guarded_frame) };
+        if result != seL4_NoError {
+            return Err(result);
+        }
+        // SAFETY: `buffer_vaddr` names the still-live page mapping whose frame
+        // was installed above; the returned view does not mutate root's global
+        // libsel4 IPC-buffer pointer.
+        Ok(unsafe { IpcBufView::new(buffer_vaddr as *const u8, guarded_frame) })
+    }
+
     /// Allocates a DMA-capable frame of RAM and maps it into the DMA window.
     pub fn alloc_dma_frame(&mut self) -> Result<RamFrame, seL4_Error> {
         self.alloc_dma_frame_attr(seL4_ARM_Page_Default)
@@ -5589,7 +6315,13 @@ impl<'a> KernelEnv<'a> {
             self.untyped.reserve_ram(PAGE_BITS as u8)
         }
         .ok_or(seL4_NotEnoughMemory)?;
-        let frame_slot = self.allocate_slot();
+        let frame_slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         let mut trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
@@ -5686,7 +6418,13 @@ impl<'a> KernelEnv<'a> {
             );
             boot_log::force_uart_line(line.as_str());
         }
-        let frame_slot = self.allocate_slot();
+        let frame_slot = match self.try_allocate_slot() {
+            Ok(slot) => slot,
+            Err(error) => {
+                self.untyped.release(&reserved);
+                return Err(error);
+            }
+        };
         let mut trace = self.prepare_retype_trace(
             &reserved,
             frame_slot,
@@ -5999,6 +6737,17 @@ impl<'a> KernelEnv<'a> {
         attr: sel4_sys::seL4_ARM_VMAttributes,
         strict: bool,
     ) -> Result<(), seL4_Error> {
+        self.map_frame_with_rights(frame_cap, vaddr, seL4_CapRights_ReadWrite, attr, strict)
+    }
+
+    fn map_frame_with_rights(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+        strict: bool,
+    ) -> Result<(), seL4_Error> {
         Self::assert_page_aligned(vaddr);
 
         let end = vaddr
@@ -6006,7 +6755,7 @@ impl<'a> KernelEnv<'a> {
             .expect("virtual address calculation overflow");
         self.assert_reserved_clear(vaddr..end, "map_frame");
 
-        let mut result = self.attempt_page_map(frame_cap, vaddr, attr);
+        let mut result = self.attempt_page_map_with_rights(frame_cap, vaddr, rights, attr);
         if result == seL4_NoError {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.page.map.ok");
@@ -6026,7 +6775,7 @@ impl<'a> KernelEnv<'a> {
             if self.ipcbuf_trace {
                 crate::bp!("ipcbuf.page.map.retry");
             }
-            result = self.attempt_page_map(frame_cap, vaddr, attr);
+            result = self.attempt_page_map_with_rights(frame_cap, vaddr, rights, attr);
             if result == seL4_NoError {
                 if self.ipcbuf_trace {
                     crate::bp!("ipcbuf.page.map.ok");
@@ -6072,6 +6821,16 @@ impl<'a> KernelEnv<'a> {
         vaddr: usize,
         attr: sel4_sys::seL4_ARM_VMAttributes,
     ) -> seL4_Error {
+        self.attempt_page_map_with_rights(frame_cap, vaddr, seL4_CapRights_ReadWrite, attr)
+    }
+
+    fn attempt_page_map_with_rights(
+        &mut self,
+        frame_cap: seL4_CPtr,
+        vaddr: usize,
+        rights: sel4_sys::seL4_CapRights,
+        attr: sel4_sys::seL4_ARM_VMAttributes,
+    ) -> seL4_Error {
         if self.ipcbuf_trace {
             crate::bp!("ipcbuf.page.map.begin");
         }
@@ -6086,7 +6845,7 @@ impl<'a> KernelEnv<'a> {
                 frame_cap,
                 seL4_CapInitThreadVSpace,
                 vaddr_word,
-                seL4_CapRights_ReadWrite,
+                rights,
                 attr,
             )
         }
@@ -6679,6 +7438,91 @@ pub struct VSpaceTableTracker {
     page_upper_directories: PageUpperDirectoryBookkeeper<MAX_DRIVER_VSPACE_PAGE_UPPER_DIRECTORIES>,
 }
 
+/// Failure while building a generation-revocable child VSpace.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RevokeAnchorVSpaceError {
+    /// A caller-supplied destination slot is null or duplicated.
+    InvalidDestinationSlots,
+    /// The fixed translation-object destination-slot bound was exhausted.
+    TranslationObjectBound,
+    /// seL4 rejected a retype, ASID assignment, mapping, or revoke operation.
+    Sel4(seL4_Error),
+}
+
+impl From<seL4_Error> for RevokeAnchorVSpaceError {
+    fn from(error: seL4_Error) -> Self {
+        Self::Sel4(error)
+    }
+}
+
+/// Caller-owned translation slots and mappings for one revoke-anchor generation.
+///
+/// Every slot must already have been removed from the ordinary slot allocator.
+/// The same slots can be reused only through
+/// [`KernelEnv::revoke_anchor_descendants_and_reset_vspace`], which performs a
+/// successful kernel revoke before clearing this tracker's generation state.
+#[cfg(feature = "kernel")]
+#[derive(Clone)]
+pub struct RevokeAnchorVSpaceTracker<const N: usize> {
+    destination_slots: [seL4_CPtr; N],
+    used_slots: usize,
+    tables: VSpaceTableTracker,
+}
+
+#[cfg(feature = "kernel")]
+impl<const N: usize> RevokeAnchorVSpaceTracker<N> {
+    /// Bind an exact non-empty set of distinct caller-owned destination slots.
+    pub fn new(destination_slots: [seL4_CPtr; N]) -> Result<Self, RevokeAnchorVSpaceError> {
+        if N == 0 {
+            return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+        }
+        for (index, slot) in destination_slots.iter().copied().enumerate() {
+            if slot == seL4_CapNull || destination_slots[..index].contains(&slot) {
+                return Err(RevokeAnchorVSpaceError::InvalidDestinationSlots);
+            }
+        }
+        Ok(Self {
+            destination_slots,
+            used_slots: 0,
+            tables: VSpaceTableTracker::new(),
+        })
+    }
+
+    /// Number of anchor-derived PUD/PD/PT objects installed this generation.
+    #[must_use]
+    pub fn mapped_table_count(&self) -> usize {
+        self.tables.mapped_table_count()
+    }
+
+    /// Remaining exact translation-object capacity.
+    #[must_use]
+    pub const fn remaining_slots(&self) -> usize {
+        N.saturating_sub(self.used_slots)
+    }
+
+    /// The fixed destination-slot set retained across generations.
+    #[must_use]
+    pub const fn destination_slots(&self) -> &[seL4_CPtr; N] {
+        &self.destination_slots
+    }
+
+    fn take_destination_slot(&mut self) -> Result<seL4_CPtr, RevokeAnchorVSpaceError> {
+        let slot = self
+            .destination_slots
+            .get(self.used_slots)
+            .copied()
+            .ok_or(RevokeAnchorVSpaceError::TranslationObjectBound)?;
+        self.used_slots += 1;
+        Ok(slot)
+    }
+
+    fn reset_after_revoke(&mut self) {
+        self.used_slots = 0;
+        self.tables = VSpaceTableTracker::new();
+    }
+}
+
 #[cfg(feature = "kernel")]
 impl VSpaceTableTracker {
     /// Creates an empty tracker for one isolated target VSpace.
@@ -6710,6 +7554,24 @@ impl Default for VSpaceTableTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn revoke_anchor_vspace_tracker_rejects_aliases_and_bounds_slots() {
+        assert!(matches!(
+            RevokeAnchorVSpaceTracker::<2>::new([41, 41]),
+            Err(RevokeAnchorVSpaceError::InvalidDestinationSlots)
+        ));
+        let mut tracker = RevokeAnchorVSpaceTracker::new([41, 42])
+            .expect("distinct caller-owned translation slots");
+        assert_eq!(tracker.take_destination_slot(), Ok(41));
+        assert_eq!(tracker.take_destination_slot(), Ok(42));
+        assert_eq!(
+            tracker.take_destination_slot(),
+            Err(RevokeAnchorVSpaceError::TranslationObjectBound)
+        );
+        tracker.reset_after_revoke();
+        assert_eq!(tracker.take_destination_slot(), Ok(41));
+    }
 
     #[test]
     fn manual_initial_caps_marked_reserved() {

@@ -10,6 +10,9 @@
 pub mod proto;
 
 #[cfg(feature = "kernel")]
+use proto::{render_ack, AckLine, AckStatus};
+
+#[cfg(feature = "kernel")]
 mod io;
 #[cfg(feature = "kernel")]
 pub use io::Console;
@@ -108,6 +111,20 @@ impl CohesixConsole {
     fn emit_line(&mut self, text: &str) {
         self.emit(text);
         self.emit("\r\n");
+    }
+
+    fn emit_refusal(&mut self, verb: &str, detail: &str) {
+        let mut line = String::<{ crate::serial::DEFAULT_LINE_CAPACITY }>::new();
+        let ack = AckLine {
+            status: AckStatus::Err,
+            verb,
+            detail: Some(detail),
+        };
+        if render_ack(&mut line, &ack).is_err() {
+            self.emit_line("ERR PARSE reason=policy detail=ack-truncated");
+        } else {
+            self.emit_line(line.as_str());
+        }
     }
 
     fn prompt(&mut self) {
@@ -216,7 +233,10 @@ impl CohesixConsole {
             Command::Mem => self.print_mem(),
             Command::Ping => self.emit_line("pong"),
             Command::Test => self.emit_line("test not supported on root console"),
-            Command::Reboot => self.emit_line("reboot unavailable before authenticated event pump"),
+            Command::Reboot => self.emit_refusal(
+                "REBOOT",
+                "reason=unauthorized detail=authenticated-event-pump-required",
+            ),
             Command::Quit => self.emit_line("quit not supported on root console"),
             Command::Log => self.emit_line("log streaming unavailable"),
             Command::NetTest | Command::NetStats => {

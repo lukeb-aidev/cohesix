@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [root_task.affinity]
 enabled = true
@@ -210,7 +210,7 @@ enable = true
 
 [cas.signing]
 required = true
-key_path = "resources/fixtures/cas_signing_key.hex"
+verification_key_path = "resources/keys/cas_verification_key.hex"
 
 [cache]
 kernel_ops = true
@@ -225,24 +225,24 @@ protection_profile = "none"
 implementation_epoch = 26
 max_workers = 8
 ticket_subject_required = true
-cap_backed_authority = false
-notification_lifecycle = false
+cap_backed_authority = true
+notification_lifecycle = true
 
 [[worker_runtime.roles]]
 role = "worker-heartbeat"
-implemented = false
+implemented = true
 ticket_scope = "/worker"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = ""
-shutdown_policy = "deferred"
+shutdown_policy = "bounded-grace"
 
 [[worker_runtime.roles]]
 role = "worker-gpu"
-implemented = false
+implemented = true
 ticket_scope = "/gpu"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = "/gpu/<id>/lease"
-shutdown_policy = "deferred"
+shutdown_policy = "bounded-grace"
 
 [[worker_runtime.roles]]
 role = "worker-bus"
@@ -254,14 +254,14 @@ shutdown_policy = "deferred"
 
 [[worker_runtime.roles]]
 role = "worker-lora"
-implemented = false
+implemented = true
 ticket_scope = "/worker"
 telemetry_path_template = "/shard/<label>/worker/<id>/telemetry"
 lease_path_template = ""
-shutdown_policy = "deferred"
+shutdown_policy = "bounded-grace"
 
 [worker_runtime.endpoint_caps]
-required = false
+required = true
 attach_badge_base = 638324736
 telemetry_badge_base = 638328832
 lease_badge_base = 638332928
@@ -271,22 +271,698 @@ epoch_bits = 8
 role_bits = 4
 
 [worker_runtime.notifications]
-enabled = false
+enabled = true
 revoke_badge = 638345216
 shutdown_badge = 638349312
 lease_expiry_badge = 638353408
 telemetry_pressure_badge = 638357504
 irq_badge = 638361600
 
+[worker_runtime.task_abi]
+enabled = true
+version = 1
+shared_page_bytes = 4096
+ipc_buffer_vaddr = 1895825408
+shared_page_vaddr = 1895829504
+stack_bottom_vaddr = 1895837696
+stack_pages = 8
+child_cnode_radix_bits = 6
+lifecycle_notification_slot = 1
+supervisor_wake_notification_slot = 2
+lifecycle_control_bit = 1
+lifecycle_timeout_bit = 2
+lifecycle_shutdown_bit = 4
+lifecycle_revoke_bit = 8
+heartbeat_wake_bit = 256
+gpu_wake_bit = 512
+lora_wake_bit = 1024
+ready_timeout_ms = 5000
+shutdown_grace_ms = 1000
+max_control_inflight = 1
+
 [worker_runtime.scheduling]
-profile = "non-mcs"
+profile = "mcs"
 priority = 96
 domain = 0
 service_turn_budget = 64
-mcs_budget_us = 0
-mcs_period_us = 0
-timeout_endpoint_badge = 0
-consumed_budget_evidence = false
+mcs_budget_us = 400
+mcs_period_us = 10000
+timeout_endpoint_badge = 653132288
+consumed_budget_evidence = true
+
+[temporal_authority]
+enabled = true
+architecture = "smp-mcs"
+cores = 4
+domains = 1
+admission_window_us = 10000
+
+[[temporal_authority.core_admission]]
+core = 0
+capacity_us = 10000
+reserve_us = 1000
+
+[[temporal_authority.core_admission]]
+core = 1
+capacity_us = 10000
+reserve_us = 1000
+
+[[temporal_authority.core_admission]]
+core = 2
+capacity_us = 10000
+reserve_us = 1000
+
+[[temporal_authority.core_admission]]
+core = 3
+capacity_us = 10000
+reserve_us = 1000
+
+[[temporal_authority.tasks]]
+id = "root-control"
+kind = "root-control"
+execution = "active"
+core = 0
+scheduling_context_slot = 1
+scheduling_context_bits = 7
+sched_control_core = 0
+budget_us = 1500
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 1800
+admitted = true
+max_refills = 2
+priority = 200
+mcp = 200
+timeout_badge = 653131777
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 1200
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-fault"
+kind = "root-fault"
+execution = "active"
+core = 0
+scheduling_context_slot = 2
+scheduling_context_bits = 8
+sched_control_core = 0
+budget_us = 500
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 600
+admitted = true
+max_refills = 2
+priority = 252
+mcp = 252
+timeout_badge = 653131778
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 400
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-emergency"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-emergency"
+kind = "root-emergency"
+execution = "active"
+core = 0
+scheduling_context_slot = 3
+scheduling_context_bits = 8
+sched_control_core = 0
+budget_us = 250
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 200
+admitted = true
+max_refills = 2
+priority = 254
+mcp = 254
+timeout_badge = 653131779
+timeout_policy = "fail-stop"
+consumed_time_evidence = true
+wcet_us = 200
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = ""
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-worker-supervisor"
+kind = "worker-supervisor"
+execution = "active"
+core = 1
+scheduling_context_slot = 4
+scheduling_context_bits = 8
+sched_control_core = 1
+budget_us = 750
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 1400
+admitted = true
+max_refills = 2
+priority = 210
+mcp = 210
+timeout_badge = 653131780
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 600
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "root-driver-supervisor"
+kind = "driver-supervisor"
+execution = "active"
+core = 1
+scheduling_context_slot = 5
+scheduling_context_bits = 8
+sched_control_core = 1
+budget_us = 1000
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 800
+admitted = true
+max_refills = 2
+priority = 220
+mcp = 220
+timeout_badge = 653131781
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 800
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+critical_reserve = true
+
+[[temporal_authority.tasks]]
+id = "ninedoor-service"
+kind = "service"
+execution = "passive"
+core = 1
+priority = 128
+mcp = 200
+timeout_badge = 653131782
+timeout_policy = "return-error"
+wcet_provenance = "m26e-qemu-candidate-v1"
+allowed_donors = ["root-control"]
+reply_objects = 1
+max_donation_depth = 1
+fault_handler = "root-fault"
+
+[ninedoor_service]
+enabled = true
+abi_version = 1
+image_id = "nine-door-runtime"
+image_path = "cohesix/bin/nine-door-runtime"
+entry_symbol = "_start"
+child_cspace_slots = 16
+revoke_anchor_slot = 16137
+revoke_anchor_bits = 20
+endpoint_slot = 2
+reply_slot = 3
+root_fault_recovery_reply_slot = 10
+ipc_buffer_vaddr = 1895825408
+init_vaddr = 1895829504
+stack_vaddr = 1895890944
+stack_pages = 8
+request_vaddr = 1895956480
+response_vaddr = 1895964672
+shared_frame_bytes = 8192
+max_inflight = 1
+request_badge = 1
+fault_badge = 652476416
+timeout_badge = 653131782
+root_call_rights = 9
+child_receive_rights = 2
+root_request_rights = 3
+root_response_rights = 2
+child_request_rights = 2
+child_response_rights = 3
+core = 1
+priority = 128
+mcp = 200
+
+[ninedoor_service.objects]
+tcbs = 1
+cnodes = 1
+vspaces = 1
+page_tables = 8
+asids = 1
+frames = 49
+endpoints = 1
+notifications = 0
+fault_caps = 1
+timeout_fault_caps = 1
+reply_objects = 1
+scheduling_contexts = 0
+cspace_slots = 80
+untyped_bytes = 1048576
+
+[[temporal_authority.tasks]]
+id = "console-network-service"
+kind = "service"
+execution = "active"
+core = 0
+scheduling_context_slot = 6
+scheduling_context_bits = 8
+sched_control_core = 0
+budget_us = 1500
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 3000
+admitted = true
+max_refills = 2
+priority = 180
+mcp = 200
+timeout_badge = 653131783
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 1200
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+
+[console_network_service]
+enabled = true
+abi_version = 1
+image_id = "console-network-runtime"
+image_path = "cohesix/artifacts/console-network-runtime"
+entry_symbol = "_start"
+listener_port = 31337
+single_listener = true
+child_cspace_slots = 16
+revoke_anchor_slot = 16136
+revoke_anchor_bits = 20
+packet_rx_notification_slot = 2
+packet_tx_wake_notification_slot = 3
+supervisor_wake_notification_slot = 4
+fault_endpoint_slot = 5
+ipc_buffer_vaddr = 1912602624
+init_vaddr = 1912606720
+stack_vaddr = 1912668160
+stack_pages = 16
+packet_rx_vaddr = 1912733696
+packet_tx_vaddr = 1912737792
+command_vaddr = 1912741888
+event_vaddr = 1912745984
+shared_frame_bytes = 4096
+ethernet_frame_bytes = 1536
+max_packets_per_wake = 8
+max_commands_per_wake = 8
+max_control_inflight = 1
+packet_rx_badge = 1
+control_badge = 2
+shutdown_badge = 4
+revoke_badge = 8
+packet_tx_ready_badge = 16
+event_ready_badge = 32
+fault_badge = 652476417
+core = 0
+scheduling_context_slot = 6
+scheduling_context_bits = 8
+priority = 180
+mcp = 200
+budget_us = 1500
+period_us = 10000
+max_refills = 2
+timeout_badge = 653131783
+timer_clock_hz = 62500000
+auth_timeout_ms = 5000
+idle_timeout_ms = 300000
+
+[console_network_service.objects]
+tcbs = 1
+cnodes = 1
+vspaces = 1
+page_tables = 8
+asids = 1
+frames = 128
+endpoints = 0
+notifications = 2
+fault_caps = 1
+timeout_fault_caps = 1
+reply_objects = 0
+scheduling_contexts = 1
+cspace_slots = 160
+untyped_bytes = 1048576
+
+[[temporal_authority.tasks]]
+id = "worker-heartbeat-slot-0"
+kind = "worker"
+execution = "active"
+core = 3
+scheduling_context_slot = 7
+scheduling_context_bits = 8
+sched_control_core = 3
+budget_us = 300
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 200
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131784
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 200
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-gpu-slot-0"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 8
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 400
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 600
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131785
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+
+[[temporal_authority.tasks]]
+id = "worker-lora-slot-0"
+kind = "worker"
+execution = "active"
+core = 2
+scheduling_context_slot = 9
+scheduling_context_bits = 8
+sched_control_core = 2
+budget_us = 400
+period_us = 10000
+deadline_us = 10000
+blocking_us = 0
+jitter_us = 0
+response_time_us = 600
+admitted = true
+max_refills = 2
+priority = 96
+mcp = 128
+timeout_badge = 653131786
+timeout_policy = "terminal"
+consumed_time_evidence = true
+wcet_us = 300
+wcet_provenance = "m26e-qemu-candidate-v1"
+fault_handler = "root-fault"
+
+[worker_resource_admission]
+enabled = true
+selected_kernel = "sel4-16.0.0-aarch64-smp-mcs"
+
+[worker_resource_admission.object_bits]
+tcb = 11
+endpoint = 4
+notification = 6
+reply = 5
+sched_context_min = 7
+cnode_slot = 5
+page = 12
+page_table = 12
+vspace = 12
+
+[worker_resource_admission.capacity]
+tcbs = 64
+cnodes = 64
+vspaces = 64
+page_tables = 1024
+asids = 64
+frames = 8192
+endpoints = 128
+notifications = 128
+fault_caps = 64
+timeout_fault_caps = 64
+reply_objects = 64
+scheduling_contexts = 64
+cspace_slots = 16384
+untyped_bytes = 268435456
+
+[worker_resource_admission.post_construction_reserve]
+tcbs = 8
+cnodes = 8
+vspaces = 8
+page_tables = 64
+asids = 8
+frames = 512
+endpoints = 16
+notifications = 16
+fault_caps = 8
+timeout_fault_caps = 8
+reply_objects = 8
+scheduling_contexts = 8
+cspace_slots = 2048
+untyped_bytes = 33554432
+
+[worker_resource_admission.fixed_objects]
+tcbs = 7
+cnodes = 7
+vspaces = 7
+page_tables = 256
+asids = 7
+frames = 2048
+endpoints = 16
+notifications = 16
+fault_caps = 7
+timeout_fault_caps = 7
+reply_objects = 7
+scheduling_contexts = 6
+cspace_slots = 4096
+untyped_bytes = 67108864
+
+[[worker_resource_admission.executable_roles]]
+role = "worker-heartbeat"
+task_prefix = "worker-heartbeat-slot-"
+namespace_capacity = 8
+executable_slots = 1
+core = 3
+revoke_anchor_slot = 16133
+
+[worker_resource_admission.executable_roles.per_slot]
+tcbs = 1
+cnodes = 1
+vspaces = 1
+page_tables = 8
+asids = 1
+frames = 16
+endpoints = 0
+notifications = 1
+fault_caps = 1
+timeout_fault_caps = 1
+reply_objects = 0
+scheduling_contexts = 1
+cspace_slots = 64
+untyped_bytes = 1048576
+
+[[worker_resource_admission.executable_roles]]
+role = "worker-gpu"
+task_prefix = "worker-gpu-slot-"
+namespace_capacity = 8
+executable_slots = 1
+core = 2
+revoke_anchor_slot = 16134
+
+[worker_resource_admission.executable_roles.per_slot]
+tcbs = 1
+cnodes = 1
+vspaces = 1
+page_tables = 8
+asids = 1
+frames = 16
+endpoints = 0
+notifications = 1
+fault_caps = 1
+timeout_fault_caps = 1
+reply_objects = 0
+scheduling_contexts = 1
+cspace_slots = 64
+untyped_bytes = 1048576
+
+[[worker_resource_admission.executable_roles]]
+role = "worker-lora"
+task_prefix = "worker-lora-slot-"
+namespace_capacity = 8
+executable_slots = 1
+core = 2
+revoke_anchor_slot = 16135
+
+[worker_resource_admission.executable_roles.per_slot]
+tcbs = 1
+cnodes = 1
+vspaces = 1
+page_tables = 8
+asids = 1
+frames = 16
+endpoints = 0
+notifications = 1
+fault_caps = 1
+timeout_fault_caps = 1
+reply_objects = 0
+scheduling_contexts = 1
+cspace_slots = 64
+untyped_bytes = 1048576
+
+[[worker_resource_admission.allowed_role_mixes]]
+id = "maximum-three-role-mix"
+maximum = true
+
+[[worker_resource_admission.allowed_role_mixes.roles]]
+role = "worker-heartbeat"
+count = 1
+
+[[worker_resource_admission.allowed_role_mixes.roles]]
+role = "worker-gpu"
+count = 1
+
+[[worker_resource_admission.allowed_role_mixes.roles]]
+role = "worker-lora"
+count = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-control"
+cnode_radix_bits = 7
+cspace_cap_count = 32
+revoke_anchor_slot = 16128
+ipc_buffer_pages = 1
+stack_pages = 4
+fault_reply_lanes = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-fault"
+cnode_radix_bits = 6
+cspace_cap_count = 16
+revoke_anchor_slot = 16129
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 2
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-emergency"
+cnode_radix_bits = 5
+cspace_cap_count = 8
+revoke_anchor_slot = 16130
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-worker-supervisor"
+cnode_radix_bits = 6
+cspace_cap_count = 16
+revoke_anchor_slot = 16131
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
+[[worker_resource_admission.critical_tcbs]]
+id = "root-driver-supervisor"
+cnode_radix_bits = 6
+cspace_cap_count = 20
+revoke_anchor_slot = 16132
+ipc_buffer_pages = 1
+stack_pages = 2
+fault_reply_lanes = 1
+
+[worker_resource_admission.handoff]
+worker_control_queue_capacity = 8
+worker_fault_mailboxes = 3
+driver_fault_records = 0
+worker_wake_badge = 1
+driver_wake_badge = 2
+emergency_wake_badge = 4
+worker_control_saturation = "refuse-new"
+worker_fault_saturation = "fatal"
+service_fault_saturation = "fatal"
+driver_fault_saturation = "fatal"
+worker_drain_precedence = ["worker-fault", "worker-control"]
+driver_drain_precedence = ["driver-fault"]
+
+[worker_resource_admission.handoff.worker_fault_badges]
+base = 652279808
+count = 3
+stride = 1
+
+[worker_resource_admission.handoff.driver_fault_badges]
+base = 652345344
+count = 0
+stride = 1
+
+[worker_resource_admission.handoff.critical_fault_badges]
+base = 652410880
+count = 5
+stride = 1
+
+[worker_resource_admission.handoff.service_fault_badges]
+base = 652476416
+count = 2
+stride = 1
+
+[worker_resource_admission.handoff.timeout_fault_badges]
+base = 653131777
+count = 10
+stride = 1
+
+[worker_resource_admission.handoff.supervisor_signal_rights]
+read = false
+write = true
+grant = false
+grant_reply = false
+
+[worker_resource_admission.handoff.supervisor_wait_rights]
+read = true
+write = false
+grant = false
+grant_reply = false
+
+[worker_resource_admission.handoff.fault_sender_rights]
+read = false
+write = true
+grant = false
+grant_reply = true
+
+[worker_resource_admission.handoff.fault_receiver_rights]
+read = true
+write = false
+grant = false
+grant_reply = false
+
+[worker_resource_admission.fault_registry]
+critical_tcbs = 5
+service_tcbs = 2
+worker_tcbs = 3
+driver_tcbs = 0
+capacity = 10
+standard_reply_lanes = 1
+timeout_reply_lanes = 1
+recoverable_timeout_tasks = []
 
 [features]
 net_console = true
@@ -448,7 +1124,7 @@ k8s_poll_ms = 5000
 
 [client_policies.coh.mount]
 root = "/"
-allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+allowlist = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu", "/host"]
 
 [client_policies.coh.telemetry]
 root = "/queen/telemetry"
@@ -533,8 +1209,8 @@ degrade_pressure = 1.0
 [swarmui.paths]
 telemetry_root = "/worker"
 proc_ingest_root = "/proc/ingest"
-worker_root = "/worker"
-namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+worker_root = "/shard"
+namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
 
 [ticket_limits]
 max_scopes = 8
@@ -581,11 +1257,14 @@ mount_at = "/host"
 enable = true
 request_schema = "host-ticket/v1"
 result_schema = "host-ticket-result/v1"
+accepted_request_schemas = ["host-ticket/v1", "host-ticket/v2"]
+accepted_result_schemas = ["host-ticket-result/v1", "host-ticket-result/v2"]
 max_line_bytes = 2048
 action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "peft.export",
   "peft.import",
   "peft.activate",
   "peft.rollback",
@@ -600,6 +1279,15 @@ action_allowlist = [
   "k8s.drain",
   "k8s.lease.sync",
 ]
+receipt_action_allowlist = [
+  "gpu.lease.grant",
+  "gpu.lease.renew",
+  "gpu.lease.release",
+  "peft.export",
+  "peft.import",
+  "peft.activate",
+  "peft.rollback",
+]
 lifecycle = ["queued", "claimed", "running", "succeeded", "failed", "expired"]
 
 [ecosystem.host.federation]
@@ -609,6 +1297,7 @@ action_allowlist = [
   "gpu.lease.grant",
   "gpu.lease.renew",
   "gpu.lease.release",
+  "peft.export",
   "peft.import",
   "peft.activate",
   "peft.rollback",

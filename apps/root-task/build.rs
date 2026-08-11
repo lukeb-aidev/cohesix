@@ -16,6 +16,8 @@ use std::time::SystemTime;
 use cargo_build_directive::{emit_cargo_directive, rust_string_literal};
 use chrono::Utc;
 use regex::Regex;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 #[path = "build_support.rs"]
 mod build_support;
@@ -104,6 +106,7 @@ enum ArtifactDecision {
 }
 
 fn main() {
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if let Err(err) = emit_built_info() {
         panic!("failed to emit built_info.rs: {err}");
     }
@@ -115,6 +118,15 @@ fn main() {
     }
     if let Err(err) = emit_pi4_driver_runtime_payload() {
         panic!("failed to stage pi4 driver runtime payload: {err}");
+    }
+    if let Err(err) = emit_worker_image_identity(target_os == "none") {
+        panic!("failed to bind Worker image identity: {err}");
+    }
+    if let Err(err) = emit_console_network_image_identity(target_os == "none") {
+        panic!("failed to bind console-network runtime image identity: {err}");
+    }
+    if let Err(err) = emit_ninedoor_image_identity(target_os == "none") {
+        panic!("failed to bind NineDoor runtime image identity: {err}");
     }
 
     println!("cargo:rerun-if-env-changed=SEL4_LD");
@@ -130,7 +142,6 @@ fn main() {
         panic!("failed to scan `{IPC_GUARD_SOURCE}` for direct IPC syscalls: {error}");
     }
 
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os != "none" {
         return;
     }
@@ -184,6 +195,537 @@ fn main() {
     }
 
     emit_config_flags(&build_path, debug_syscalls_enabled);
+}
+
+fn sha256_bytes(bytes: &[u8]) -> [u8; 32] {
+    Sha256::digest(bytes).into()
+}
+
+fn parse_sha256(value: &str, label: &str) -> io::Result<[u8; 32]> {
+    if value.len() != 64 {
+        return Err(io::Error::other(format!(
+            "{label} must be exactly 64 lowercase hexadecimal characters"
+        )));
+    }
+    let mut output = [0u8; 32];
+    for (index, chunk) in value.as_bytes().chunks_exact(2).enumerate() {
+        let text = core::str::from_utf8(chunk).map_err(io::Error::other)?;
+        if !text
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(io::Error::other(format!(
+                "{label} is not lowercase hexadecimal"
+            )));
+        }
+        output[index] = u8::from_str_radix(text, 16).map_err(io::Error::other)?;
+    }
+    Ok(output)
+}
+
+fn rust_digest(value: [u8; 32]) -> String {
+    let bytes = value.map(|byte| format!("0x{byte:02x}"));
+    format!("[{}]", bytes.join(","))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConsoleNetworkElfIdentity {
+    entry_vaddr: u64,
+    load_base_vaddr: u64,
+    load_limit_vaddr: u64,
+    load_pages: u16,
+}
+
+fn elf_u16(bytes: &[u8], offset: usize) -> io::Result<u16> {
+    let raw: [u8; 2] = bytes
+        .get(offset..offset.saturating_add(2))
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(|| io::Error::other("console-network ELF u16 is truncated"))?;
+    Ok(u16::from_le_bytes(raw))
+}
+
+fn elf_u32(bytes: &[u8], offset: usize) -> io::Result<u32> {
+    let raw: [u8; 4] = bytes
+        .get(offset..offset.saturating_add(4))
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(|| io::Error::other("console-network ELF u32 is truncated"))?;
+    Ok(u32::from_le_bytes(raw))
+}
+
+fn elf_u64(bytes: &[u8], offset: usize) -> io::Result<u64> {
+    let raw: [u8; 8] = bytes
+        .get(offset..offset.saturating_add(8))
+        .and_then(|slice| slice.try_into().ok())
+        .ok_or_else(|| io::Error::other("console-network ELF u64 is truncated"))?;
+    Ok(u64::from_le_bytes(raw))
+}
+
+fn elf_table_offset(base: u64, index: usize, entry_bytes: usize) -> io::Result<usize> {
+    usize::try_from(base)
+        .ok()
+        .and_then(|base| {
+            index
+                .checked_mul(entry_bytes)
+                .and_then(|offset| base.checked_add(offset))
+        })
+        .ok_or_else(|| io::Error::other("console-network ELF table offset overflows"))
+}
+
+fn elf_string(table: &[u8], offset: usize) -> io::Result<&str> {
+    let tail = table
+        .get(offset..)
+        .ok_or_else(|| io::Error::other("console-network ELF symbol name offset is invalid"))?;
+    let length = tail
+        .iter()
+        .position(|byte| *byte == 0)
+        .ok_or_else(|| io::Error::other("console-network ELF symbol name is unterminated"))?;
+    core::str::from_utf8(&tail[..length]).map_err(io::Error::other)
+}
+
+fn console_network_has_exact_entry_symbol(bytes: &[u8], entry: u64) -> io::Result<bool> {
+    const SHT_SYMTAB: u32 = 2;
+    const SHT_DYNSYM: u32 = 11;
+    const SYMBOL_BYTES: usize = 24;
+
+    let section_offset = elf_u64(bytes, 40)?;
+    let section_entry_bytes = usize::from(elf_u16(bytes, 58)?);
+    let section_count = usize::from(elf_u16(bytes, 60)?);
+    if section_entry_bytes < 64 || section_count == 0 || section_count > 256 {
+        return Ok(false);
+    }
+    for index in 0..section_count {
+        let section = elf_table_offset(section_offset, index, section_entry_bytes)?;
+        let section_type = elf_u32(bytes, section.saturating_add(4))?;
+        if !matches!(section_type, SHT_SYMTAB | SHT_DYNSYM) {
+            continue;
+        }
+        let symbol_offset = elf_u64(bytes, section.saturating_add(24))?;
+        let symbol_bytes = usize::try_from(elf_u64(bytes, section.saturating_add(32))?)
+            .map_err(io::Error::other)?;
+        let linked_strings = usize::try_from(elf_u32(bytes, section.saturating_add(40))?)
+            .map_err(io::Error::other)?;
+        if linked_strings >= section_count {
+            return Ok(false);
+        }
+        let symbol_entry_bytes = usize::try_from(elf_u64(bytes, section.saturating_add(56))?)
+            .map_err(io::Error::other)?;
+        if symbol_entry_bytes < SYMBOL_BYTES || symbol_bytes % symbol_entry_bytes != 0 {
+            return Ok(false);
+        }
+        let strings_section =
+            elf_table_offset(section_offset, linked_strings, section_entry_bytes)?;
+        let strings_offset = usize::try_from(elf_u64(bytes, strings_section.saturating_add(24))?)
+            .map_err(io::Error::other)?;
+        let strings_bytes = usize::try_from(elf_u64(bytes, strings_section.saturating_add(32))?)
+            .map_err(io::Error::other)?;
+        let strings = bytes
+            .get(strings_offset..strings_offset.saturating_add(strings_bytes))
+            .ok_or_else(|| io::Error::other("console-network ELF string table is truncated"))?;
+        let symbol_count = symbol_bytes / symbol_entry_bytes;
+        for symbol_index in 0..symbol_count {
+            let symbol = elf_table_offset(symbol_offset, symbol_index, symbol_entry_bytes)?;
+            let name_offset = usize::try_from(elf_u32(bytes, symbol)?).map_err(io::Error::other)?;
+            let value = elf_u64(bytes, symbol.saturating_add(8))?;
+            if value == entry && elf_string(strings, name_offset)? == "_start" {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn validate_console_network_elf(bytes: &[u8]) -> io::Result<ConsoleNetworkElfIdentity> {
+    const MAX_IMAGE_BYTES: usize = 512 * 1024;
+    const ELF_HEADER_BYTES: usize = 64;
+    const PROGRAM_HEADER_BYTES: usize = 56;
+    const MAX_PROGRAM_HEADERS: usize = 16;
+    const PT_LOAD: u32 = 1;
+    const PF_X: u32 = 1;
+    const PF_W: u32 = 2;
+    const PF_R: u32 = 4;
+    const PAGE_BYTES: u64 = 4096;
+
+    if !(ELF_HEADER_BYTES..=MAX_IMAGE_BYTES).contains(&bytes.len())
+        || bytes.get(..7) != Some(b"\x7fELF\x02\x01\x01")
+        || elf_u16(bytes, 16)? != 2
+        || elf_u16(bytes, 18)? != 183
+        || elf_u32(bytes, 20)? != 1
+        || elf_u16(bytes, 52)? != ELF_HEADER_BYTES as u16
+    {
+        return Err(io::Error::other(
+            "console-network runtime must be a bounded ELF64-LE AArch64 ET_EXEC image",
+        ));
+    }
+    let entry = elf_u64(bytes, 24)?;
+    let program_offset = elf_u64(bytes, 32)?;
+    let program_entry_bytes = usize::from(elf_u16(bytes, 54)?);
+    let program_count = usize::from(elf_u16(bytes, 56)?);
+    if entry == 0
+        || program_entry_bytes < PROGRAM_HEADER_BYTES
+        || program_count == 0
+        || program_count > MAX_PROGRAM_HEADERS
+    {
+        return Err(io::Error::other(
+            "console-network ELF entry or program-header bound is invalid",
+        ));
+    }
+
+    let mut load_base = u64::MAX;
+    let mut load_limit = 0u64;
+    let mut entry_executable = false;
+    let mut load_count = 0usize;
+    let mut ranges = [(0u64, 0u64); MAX_PROGRAM_HEADERS];
+    for index in 0..program_count {
+        let header = elf_table_offset(program_offset, index, program_entry_bytes)?;
+        if header.saturating_add(PROGRAM_HEADER_BYTES) > bytes.len() {
+            return Err(io::Error::other(
+                "console-network ELF program headers are truncated",
+            ));
+        }
+        if elf_u32(bytes, header)? != PT_LOAD {
+            continue;
+        }
+        let flags = elf_u32(bytes, header.saturating_add(4))?;
+        let file_offset = elf_u64(bytes, header.saturating_add(8))?;
+        let vaddr = elf_u64(bytes, header.saturating_add(16))?;
+        let file_bytes = elf_u64(bytes, header.saturating_add(32))?;
+        let memory_bytes = elf_u64(bytes, header.saturating_add(40))?;
+        let file_limit = file_offset
+            .checked_add(file_bytes)
+            .ok_or_else(|| io::Error::other("console-network ELF file extent overflows"))?;
+        let memory_limit = vaddr
+            .checked_add(memory_bytes)
+            .ok_or_else(|| io::Error::other("console-network ELF memory extent overflows"))?;
+        if memory_bytes == 0
+            || file_bytes > memory_bytes
+            || file_limit > bytes.len() as u64
+            || flags & !(PF_R | PF_W | PF_X) != 0
+            || flags & PF_R == 0
+            || flags & (PF_W | PF_X) == (PF_W | PF_X)
+        {
+            return Err(io::Error::other(
+                "console-network ELF load segment violates bounds or W^X",
+            ));
+        }
+        for (seen_start, seen_limit) in ranges.iter().take(load_count).copied() {
+            if vaddr < seen_limit && seen_start < memory_limit {
+                return Err(io::Error::other(
+                    "console-network ELF load segments overlap",
+                ));
+            }
+        }
+        ranges[load_count] = (vaddr, memory_limit);
+        load_count += 1;
+        load_base = load_base.min(vaddr & !(PAGE_BYTES - 1));
+        load_limit = load_limit.max(
+            memory_limit
+                .checked_add(PAGE_BYTES - 1)
+                .ok_or_else(|| io::Error::other("console-network ELF page span overflows"))?
+                & !(PAGE_BYTES - 1),
+        );
+        entry_executable |= flags & PF_X != 0 && entry >= vaddr && entry < memory_limit;
+    }
+    if load_count == 0 || !entry_executable || load_limit <= load_base {
+        return Err(io::Error::other(
+            "console-network ELF entry is not in a bounded executable load segment",
+        ));
+    }
+    if !console_network_has_exact_entry_symbol(bytes, entry)? {
+        return Err(io::Error::other(
+            "console-network ELF _start symbol is missing or differs from e_entry",
+        ));
+    }
+    let load_pages = u16::try_from((load_limit - load_base) / PAGE_BYTES)
+        .map_err(|_| io::Error::other("console-network ELF load-page count overflows"))?;
+    Ok(ConsoleNetworkElfIdentity {
+        entry_vaddr: entry,
+        load_base_vaddr: load_base,
+        load_limit_vaddr: load_limit,
+        load_pages,
+    })
+}
+
+fn generated_service_image_pages(service_key: &str, label: &str) -> io::Result<u16> {
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").map_err(io::Error::other)?);
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| io::Error::other("unable to locate repository root"))?;
+    let resolved_path = repo_root.join("configs/generated/root_task_resolved.json");
+    let document: Value =
+        serde_json::from_slice(&fs::read(resolved_path)?).map_err(io::Error::other)?;
+    let service = document
+        .get(service_key)
+        .ok_or_else(|| io::Error::other(format!("resolved {label} service record is missing")))?;
+    let total_frames = service
+        .get("objects")
+        .and_then(|objects| objects.get("frames"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| io::Error::other(format!("resolved {label} frame inventory is missing")))?;
+    let stack_pages = service
+        .get("stack_pages")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| io::Error::other(format!("resolved {label} stack inventory is missing")))?;
+    let pages = total_frames
+        .checked_sub(stack_pages.saturating_add(6))
+        .and_then(|pages| u16::try_from(pages).ok())
+        .filter(|pages| *pages != 0)
+        .ok_or_else(|| {
+            io::Error::other(format!("resolved {label} image-page budget is invalid"))
+        })?;
+    Ok(pages)
+}
+
+fn generated_console_network_image_pages() -> io::Result<u16> {
+    generated_service_image_pages("console_network_service", "console-network")
+}
+
+fn emit_console_network_image_identity(required: bool) -> io::Result<()> {
+    const IMAGE_ENV: &str = "COHESIX_CONSOLE_NETWORK_RUNTIME_IMAGE";
+
+    println!("cargo:rerun-if-env-changed={IMAGE_ENV}");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
+    let output_path = out_dir.join("console_network_image_identity.rs");
+    let Some(image_path) = env::var_os(IMAGE_ENV).map(PathBuf::from) else {
+        if required {
+            return Err(io::Error::other(format!(
+                "target root-task builds require {IMAGE_ENV}"
+            )));
+        }
+        fs::write(
+            output_path,
+            "pub const CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND:bool=false;\n\
+             pub static CONSOLE_NETWORK_RUNTIME_IMAGE:&[u8]=&[];\n\
+             pub const CONSOLE_NETWORK_RUNTIME_SHA256:[u8;32]=[0;32];\n\
+             pub const CONSOLE_NETWORK_RUNTIME_BYTES:u64=0;\n\
+             pub const CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR:u64=0;\n\
+             pub const CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR:u64=0;\n\
+             pub const CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR:u64=0;\n\
+             pub const CONSOLE_NETWORK_RUNTIME_LOAD_PAGES:u16=0;\n",
+        )?;
+        return Ok(());
+    };
+    let image_path = fs::canonicalize(image_path)?;
+    println!("cargo:rerun-if-changed={}", image_path.display());
+    let image = fs::read(&image_path)?;
+    let identity = validate_console_network_elf(&image)?;
+    let expected_pages = generated_console_network_image_pages()?;
+    if identity.load_pages != expected_pages {
+        return Err(io::Error::other(format!(
+            "console-network ELF uses {} pages but generated object inventory admits exactly {expected_pages}",
+            identity.load_pages
+        )));
+    }
+    let include_path = rust_string_literal(&image_path.to_string_lossy());
+    let contents = format!(
+        "pub const CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND:bool=true;\n\
+         pub static CONSOLE_NETWORK_RUNTIME_IMAGE:&[u8]=include_bytes!({include_path});\n\
+         pub const CONSOLE_NETWORK_RUNTIME_SHA256:[u8;32]={};\n\
+         pub const CONSOLE_NETWORK_RUNTIME_BYTES:u64={};\n\
+         pub const CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR:u64={};\n\
+         pub const CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR:u64={};\n\
+         pub const CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR:u64={};\n\
+         pub const CONSOLE_NETWORK_RUNTIME_LOAD_PAGES:u16={};\n",
+        rust_digest(sha256_bytes(&image)),
+        image.len(),
+        identity.entry_vaddr,
+        identity.load_base_vaddr,
+        identity.load_limit_vaddr,
+        identity.load_pages,
+    );
+    fs::write(output_path, contents)
+}
+
+fn emit_ninedoor_image_identity(required: bool) -> io::Result<()> {
+    const IMAGE_ENV: &str = "COHESIX_NINEDOOR_RUNTIME_IMAGE";
+
+    println!("cargo:rerun-if-env-changed={IMAGE_ENV}");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
+    let output_path = out_dir.join("ninedoor_image_identity.rs");
+    let Some(image_path) = env::var_os(IMAGE_ENV).map(PathBuf::from) else {
+        if required {
+            return Err(io::Error::other(format!(
+                "target root-task builds require {IMAGE_ENV}"
+            )));
+        }
+        fs::write(
+            output_path,
+            "pub const NINEDOOR_IMAGE_IDENTITY_BOUND:bool=false;\n\
+             pub static NINEDOOR_RUNTIME_IMAGE:&[u8]=&[];\n\
+             pub const NINEDOOR_RUNTIME_SHA256:[u8;32]=[0;32];\n\
+             pub const NINEDOOR_RUNTIME_BYTES:u64=0;\n\
+             pub const NINEDOOR_RUNTIME_ENTRY_VADDR:u64=0;\n\
+             pub const NINEDOOR_RUNTIME_LOAD_BASE_VADDR:u64=0;\n\
+             pub const NINEDOOR_RUNTIME_LOAD_LIMIT_VADDR:u64=0;\n\
+             pub const NINEDOOR_RUNTIME_LOAD_PAGES:u16=0;\n",
+        )?;
+        return Ok(());
+    };
+    let image_path = fs::canonicalize(image_path)?;
+    println!("cargo:rerun-if-changed={}", image_path.display());
+    let image = fs::read(&image_path)?;
+    let identity = validate_console_network_elf(&image)?;
+    let expected_pages = generated_service_image_pages("ninedoor_service", "NineDoor")?;
+    if identity.load_pages != expected_pages {
+        return Err(io::Error::other(format!(
+            "NineDoor ELF uses {} pages but generated object inventory admits exactly {expected_pages}",
+            identity.load_pages
+        )));
+    }
+    let include_path = rust_string_literal(&image_path.to_string_lossy());
+    let contents = format!(
+        "pub const NINEDOOR_IMAGE_IDENTITY_BOUND:bool=true;\n\
+         pub static NINEDOOR_RUNTIME_IMAGE:&[u8]=include_bytes!({include_path});\n\
+         pub const NINEDOOR_RUNTIME_SHA256:[u8;32]={};\n\
+         pub const NINEDOOR_RUNTIME_BYTES:u64={};\n\
+         pub const NINEDOOR_RUNTIME_ENTRY_VADDR:u64={};\n\
+         pub const NINEDOOR_RUNTIME_LOAD_BASE_VADDR:u64={};\n\
+         pub const NINEDOOR_RUNTIME_LOAD_LIMIT_VADDR:u64={};\n\
+         pub const NINEDOOR_RUNTIME_LOAD_PAGES:u16={};\n",
+        rust_digest(sha256_bytes(&image)),
+        image.len(),
+        identity.entry_vaddr,
+        identity.load_base_vaddr,
+        identity.load_limit_vaddr,
+        identity.load_pages,
+    );
+    fs::write(output_path, contents)
+}
+
+fn manifest_string<'a>(object: &'a Value, key: &str) -> io::Result<&'a str> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| io::Error::other(format!("Worker manifest field {key} is invalid")))
+}
+
+fn manifest_u64(object: &Value, key: &str) -> io::Result<u64> {
+    object
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| io::Error::other(format!("Worker manifest field {key} is invalid")))
+}
+
+fn emit_worker_image_identity(required: bool) -> io::Result<()> {
+    const MANIFEST_ENV: &str = "COHESIX_WORKER_IMAGE_MANIFEST";
+    const ARCHIVE_ENV: &str = "COHESIX_WORKER_IMAGE_ARCHIVE";
+    const EXPECTED: [(&str, &str); 3] = [
+        ("worker-heart", "worker-heartbeat"),
+        ("worker-gpu", "worker-gpu"),
+        ("worker-lora", "worker-lora"),
+    ];
+
+    println!("cargo:rerun-if-env-changed={MANIFEST_ENV}");
+    println!("cargo:rerun-if-env-changed={ARCHIVE_ENV}");
+    let out_dir = PathBuf::from(env::var("OUT_DIR").map_err(io::Error::other)?);
+    let output_path = out_dir.join("worker_image_identity.rs");
+    let manifest_path = env::var_os(MANIFEST_ENV).map(PathBuf::from);
+    let archive_path = env::var_os(ARCHIVE_ENV).map(PathBuf::from);
+    let (Some(manifest_path), Some(archive_path)) = (manifest_path, archive_path) else {
+        if required {
+            return Err(io::Error::other(
+                "target root-task builds require COHESIX_WORKER_IMAGE_MANIFEST and COHESIX_WORKER_IMAGE_ARCHIVE",
+            ));
+        }
+        fs::write(
+            output_path,
+            "pub const WORKER_IMAGE_IDENTITY_BOUND:bool=false;\n\
+             pub const WORKER_ARCHIVE_SHA256:[u8;32]=[0;32];\n\
+             pub const WORKER_MANIFEST_SHA256:[u8;32]=[0;32];\n\
+             pub const WORKER_IMAGE_IDENTITIES:[super::ExpectedWorkerImage;0]=[];\n",
+        )?;
+        return Ok(());
+    };
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    println!("cargo:rerun-if-changed={}", archive_path.display());
+    let manifest_bytes = fs::read(&manifest_path)?;
+    let archive_bytes = fs::read(&archive_path)?;
+    let document: Value = serde_json::from_slice(&manifest_bytes).map_err(io::Error::other)?;
+    if manifest_string(&document, "schema")? != "cohesix-worker-image-manifest/v1"
+        || manifest_string(&document, "target")? != "aarch64-unknown-none"
+    {
+        return Err(io::Error::other(
+            "Worker manifest schema or target differs from the root contract",
+        ));
+    }
+    let archive = document
+        .get("archive")
+        .ok_or_else(|| io::Error::other("Worker manifest archive identity is missing"))?;
+    let declared_archive_bytes = manifest_u64(archive, "bytes")?;
+    let declared_archive_digest = parse_sha256(
+        manifest_string(archive, "sha256")?,
+        "Worker archive SHA-256",
+    )?;
+    let actual_archive_digest = sha256_bytes(&archive_bytes);
+    if declared_archive_bytes != archive_bytes.len() as u64
+        || declared_archive_digest != actual_archive_digest
+    {
+        return Err(io::Error::other(
+            "Worker archive bytes differ from the target-qualified manifest",
+        ));
+    }
+    let images = document
+        .get("images")
+        .and_then(Value::as_array)
+        .ok_or_else(|| io::Error::other("Worker manifest image matrix is missing"))?;
+    if images.len() != EXPECTED.len() {
+        return Err(io::Error::other(
+            "Worker manifest must bind exactly Heartbeat, GPU, and LoRA",
+        ));
+    }
+    let mut generated_rows = String::new();
+    for (index, ((expected_name, expected_role), image)) in
+        EXPECTED.iter().zip(images.iter()).enumerate()
+    {
+        let name = manifest_string(image, "name")?;
+        let role = manifest_string(image, "role")?;
+        if name != *expected_name || role != *expected_role {
+            return Err(io::Error::other(format!(
+                "Worker image row {index} is not the required {expected_name}/{expected_role} binding"
+            )));
+        }
+        if manifest_u64(image, "abi_version")? != 1
+            || manifest_u64(image, "entry_version")? != 1
+            || manifest_string(image, "entry_symbol")? != "_start"
+        {
+            return Err(io::Error::other(format!(
+                "Worker image row {index} has an incompatible ABI entry contract"
+            )));
+        }
+        let digest = parse_sha256(
+            manifest_string(image, "image_sha256")?,
+            "Worker image SHA-256",
+        )?;
+        let metadata_digest = parse_sha256(
+            manifest_string(image, "metadata_sha256")?,
+            "Worker metadata SHA-256",
+        )?;
+        let name = rust_string_literal(name);
+        let role = rust_string_literal(role);
+        let archive_path = rust_string_literal(manifest_string(image, "archive_path")?);
+        generated_rows.push_str(&format!(
+            "super::ExpectedWorkerImage{{name:{name},role:{role},archive_path:{archive_path},\
+             image_sha256:{},image_bytes:{},entry_vaddr:{},load_base_vaddr:{},\
+             load_limit_vaddr:{},metadata_vaddr:{},metadata_sha256:{}}},\n",
+            rust_digest(digest),
+            manifest_u64(image, "image_bytes")?,
+            manifest_u64(image, "entry_vaddr")?,
+            manifest_u64(image, "load_base_vaddr")?,
+            manifest_u64(image, "load_limit_vaddr")?,
+            manifest_u64(image, "metadata_vaddr")?,
+            rust_digest(metadata_digest),
+        ));
+    }
+    let contents = format!(
+        "pub const WORKER_IMAGE_IDENTITY_BOUND:bool=true;\n\
+         pub const WORKER_ARCHIVE_SHA256:[u8;32]={};\n\
+         pub const WORKER_MANIFEST_SHA256:[u8;32]={};\n\
+         pub const WORKER_IMAGE_IDENTITIES:[super::ExpectedWorkerImage;3]=[\n{}];\n",
+        rust_digest(actual_archive_digest),
+        rust_digest(sha256_bytes(&manifest_bytes)),
+        generated_rows,
+    );
+    fs::write(output_path, contents)
 }
 
 fn emit_built_info() -> io::Result<()> {
@@ -972,7 +1514,7 @@ fn validate_arch_counter_config(build_root: &Path, timer_clock_hz: u64) {
         panic!(
             "feature `timers-arch-counter` requires the selected seL4 build to expose \
              CNTVCT_EL0/CNTFRQ_EL0 to EL0 (KernelArmExportVCNTUser=ON or \
-             CONFIG_EXPORT_VCNT_USER=y). Reconfigure the Pi build instead of falling \
+             CONFIG_EXPORT_VCNT_USER=y). Reconfigure the selected target build instead of falling \
              back to the dummy timer."
         );
     }
@@ -984,7 +1526,7 @@ fn validate_arch_counter_config(build_root: &Path, timer_clock_hz: u64) {
     ] {
         if probe_any_config_flag(build_root, &[flag.0, flag.1]) == Some(true) {
             panic!(
-                "feature `timers-arch-counter` expects the Pi profile to export only \
+                "feature `timers-arch-counter` expects the selected target profile to export only \
                  the read-only virtual counter; disable {} / {}",
                 flag.0, flag.1
             );

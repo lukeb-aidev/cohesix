@@ -5,7 +5,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.6`
+- `root_task.schema`: `1.8`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
 - `root_task.affinity.authority_core`: `0`
@@ -52,19 +52,19 @@
 - `cas.store.chunk_bytes`: `128`
 - `cas.delta.enable`: `true`
 - `cas.signing.required`: `true`
-- `cas.signing.key_path`: `resources/fixtures/cas_signing_key.hex`
+- `cas.signing.verification_key_path`: `resources/keys/cas_verification_key.hex`
 - `telemetry.ring_bytes_per_worker`: `1024`
 - `telemetry.frame_schema`: `legacy-plaintext`
 - `telemetry.cursor.retain_on_boot`: `false`
 - `worker_runtime.implementation_epoch`: `26`
-- `worker_runtime.cap_backed_authority`: `false`
-- `worker_runtime.notification_lifecycle`: `false`
-- `worker_runtime.scheduling.profile`: `non-mcs`
+- `worker_runtime.cap_backed_authority`: `true`
+- `worker_runtime.notification_lifecycle`: `true`
+- `worker_runtime.scheduling.profile`: `mcs`
 - `worker_runtime.scheduling.service_turn_budget`: `64`
-- `worker_runtime.roles.worker-heartbeat`: `implemented=false ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
-- `worker_runtime.roles.worker-gpu`: `implemented=false ticket_scope=/gpu telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-heartbeat`: `implemented=true ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-gpu`: `implemented=true ticket_scope=/gpu telemetry=/shard/<label>/worker/<id>/telemetry`
 - `worker_runtime.roles.worker-bus`: `implemented=false ticket_scope=/bus telemetry=/shard/<label>/worker/<id>/telemetry`
-- `worker_runtime.roles.worker-lora`: `implemented=false ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
+- `worker_runtime.roles.worker-lora`: `implemented=true ticket_scope=/worker telemetry=/shard/<label>/worker/<id>/telemetry`
 - `telemetry_ingest.max_segments_per_device`: `4`
 - `telemetry_ingest.max_bytes_per_segment`: `131072`
 - `telemetry_ingest.max_total_bytes_per_device`: `524288`
@@ -158,7 +158,7 @@
 - `client_policies.cohsh.host_telemetry.docker_poll_ms`: `2000`
 - `client_policies.cohsh.host_telemetry.k8s_poll_ms`: `5000`
 - `client_policies.coh.mount.root`: `/`
-- `client_policies.coh.mount.allowlist`: `/proc, /queen, /worker, /log, /gpu, /host`
+- `client_policies.coh.mount.allowlist`: `/proc, /queen, /shard, /worker, /log, /gpu, /host`
 - `client_policies.coh.telemetry.root`: `/queen/telemetry`
 - `client_policies.coh.telemetry.max_devices`: `32`
 - `client_policies.coh.telemetry.max_segments_per_device`: `4`
@@ -192,8 +192,8 @@
 - `swarmui.hive.per_worker_bytes`: `2048`
 - `swarmui.paths.telemetry_root`: `/worker`
 - `swarmui.paths.proc_ingest_root`: `/proc/ingest`
-- `swarmui.paths.worker_root`: `/worker`
-- `swarmui.paths.namespace_roots`: `/proc, /queen, /worker, /log, /gpu`
+- `swarmui.paths.worker_root`: `/shard`
+- `swarmui.paths.namespace_roots`: `/proc, /queen, /shard, /worker, /log, /gpu`
 - `cache.kernel_ops`: `true`
 - `cache.dma_clean`: `true`
 - `cache.dma_invalidate`: `true`
@@ -231,7 +231,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`
+- `manifest.sha256`: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -260,7 +260,7 @@
 - `ecosystem.host.tickets.request_schema`: `host-ticket/v1`
 - `ecosystem.host.tickets.result_schema`: `host-ticket-result/v1`
 - `ecosystem.host.tickets.max_line_bytes`: `2048`
-- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
+- `ecosystem.host.tickets.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
 - `ecosystem.host.tickets.lifecycle`: `queued`, `claimed`, `running`, `succeeded`, `failed`, `expired`
 - `ecosystem.host.federation.enable`: `true`
 - `ecosystem.host.federation.local_hive`: `hive-a`
@@ -271,7 +271,7 @@
 - `ecosystem.host.federation.relay_timeout_ms`: `2000`
 - `ecosystem.host.federation.peers`: `hive-b` -> `http://127.0.0.1:8081` (`auth_ref=COHESIX_RELAY_HIVE_B_TOKEN`)
 - `ecosystem.host.federation.peers`: `hive-c` -> `http://127.0.0.1:8082` (`auth_ref=COHESIX_RELAY_HIVE_C_TOKEN`)
-- `ecosystem.host.federation.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
+- `ecosystem.host.federation.action_allowlist`: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`, `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`, `systemd.start`, `systemd.stop`, `systemd.restart`, `systemd.status-check`, `docker.restart`, `docker.stop`, `docker.status-check`, `k8s.cordon`, `k8s.drain`, `k8s.lease.sync`
 - `/host` namespace mounted at `/host` when enabled.
 - `ecosystem.audit.enable`: `false`
 - `ecosystem.audit.journal_max_bytes`: `8192`
@@ -290,4 +290,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `2f840b864656017ba036810ff61bf3ff4abe2974bc95666b41be6cac01150054`)._
+_Generated from `configs/root_task.toml` (sha256: `8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7`)._

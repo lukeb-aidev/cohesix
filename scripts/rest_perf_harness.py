@@ -22,9 +22,11 @@ import hashlib
 import json
 import math
 import os
+import pathlib
 import random
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import threading
@@ -122,6 +124,47 @@ TELEMETRY_SCENARIO_BYTES = {
     "telemetry-1gb": 1024 * 1024 * 1024,
 }
 TELEMETRY_REFERENCE_SCHEMA = "coh-ref-c/v1"
+POPULATION_HOST_MODEL = "host-model"
+POPULATION_EXECUTABLE = "executable"
+EXECUTABLE_WORKER_ROLES = (
+    "worker-heartbeat",
+    "worker-gpu",
+    "worker-lora",
+)
+WORKER_LIFECYCLE_STATES = frozenset(
+    ("absent", "queued", "starting", "ready", "closing", "faulted", "terminal")
+)
+WORKER_RUNTIME_STATE_SCHEMA = "worker-runtime-state/v1"
+MAX_DISCOVERED_SHARDS = 256
+MAX_DISCOVERED_WORKERS = 64
+MAX_WORKER_STATE_TAIL_BYTES = 8192
+EXECUTABLE_UART_MARKERS = (
+    "WORKER_TASK_ADMISSION",
+    "WORKER_TASK_READY",
+    "WORKER_TASK_RECEIPT",
+    "WORKER_TASK_COMPLETION",
+    "WORKER_TASK_FAULT",
+    "WORKER_TASK_TEARDOWN",
+    "GPU_BRIDGE_FIXTURE_ADMISSION",
+)
+EXECUTABLE_GDB_MARKERS = (
+    "M26E_QEMU_SESSION target=qemu machine=virt gic_version=3",
+    "M26E_GDB_ELF role=worker-heartbeat",
+    "M26E_GDB_ELF role=worker-gpu",
+    "M26E_GDB_ELF role=worker-lora",
+    "M26E_GDB_INJECTION",
+    "phase=pre-ready",
+    "phase=during-ipc",
+    "phase=budget-exhaustion",
+)
+SHA256_HEX_LENGTH = 64
+EXECUTABLE_PROC_PATHS = (
+    "/proc/schedule/summary",
+    "/proc/schedule/queue",
+    "/proc/lease/summary",
+    "/proc/lease/active",
+    "/proc/lease/preemptions",
+)
 
 
 @dataclass(frozen=True)
@@ -155,6 +198,54 @@ class GatewayResponse:
     lines: List[str]
     bytes: Optional[int]
     error: Optional[str]
+
+
+@dataclass(frozen=True)
+class WorkerInstance:
+    """One structured Worker instance discovered through canonical `/shard`."""
+
+    worker_id: str
+    role: str
+    lifecycle: str
+    telemetry_path: str
+    slot: int
+    lease_epoch: int
+    supervisor_generation: int
+    cap_generation: int
+    ready_sequence: int
+    control_sequence: int
+    receipt_sequence: int
+    completion_sequence: int
+
+    def identity_dict(self) -> Dict[str, object]:
+        """Return the public five-part identity used by evidence correlation."""
+        return {
+            "role": self.role,
+            "slot": self.slot,
+            "lease_epoch": self.lease_epoch,
+            "supervisor_generation": self.supervisor_generation,
+            "cap_generation": self.cap_generation,
+        }
+
+
+@dataclass(frozen=True)
+class PopulationSnapshot:
+    """Bounded population observation kept separate from target proof."""
+
+    requested: int
+    discovered: int
+    ready: int
+    backend_class: str
+    proof_class: str
+
+    def as_dict(self) -> Dict[str, object]:
+        return {
+            "requested": self.requested,
+            "discovered": self.discovered,
+            "ready": self.ready,
+            "backend_class": self.backend_class,
+            "proof_class": self.proof_class,
+        }
 
 
 class RestError(RuntimeError):
@@ -410,6 +501,25 @@ class SimState:
     telemetry_scenario: Optional[TelemetryScenario] = None
     telemetry_reference_chunk_bytes: int = DEFAULT_TELEMETRY_REFERENCE_CHUNK_BYTES
     telemetry_reference_records: Optional[List[str]] = None
+    population_mode: str = POPULATION_HOST_MODEL
+    maximum_live_tasks: Optional[int] = None
+    worker_telemetry_paths: Dict[str, str] = field(default_factory=dict)
+    population_observations: List[PopulationSnapshot] = field(default_factory=list)
+    acceptance_binding: Optional[Dict[str, object]] = None
+    executable_pre_state: Optional[Dict[str, object]] = None
+    executable_post_state: Optional[Dict[str, object]] = None
+    lifecycle_cycles: List[Dict[str, object]] = field(default_factory=list)
+    receipt_operations: List[Dict[str, object]] = field(default_factory=list)
+    fault_artifacts: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    current_workers_by_role: Dict[str, WorkerInstance] = field(default_factory=dict)
+    ticket_lock: threading.Lock = field(default_factory=threading.Lock)
+    next_ticket_seq: int = 0
+
+    def record_population(self, snapshot: PopulationSnapshot) -> None:
+        """Retain a bounded population history for report provenance."""
+        self.population_observations.append(snapshot)
+        if len(self.population_observations) > 128:
+            self.population_observations.pop(0)
 
 
 def should_tolerate_buffer_full(response: GatewayResponse, state: SimState) -> bool:
@@ -612,7 +722,7 @@ def build_status_specs(bounds: dict) -> List[RequestSpec]:
 
 
 def list_workers(client: RestClient) -> List[str]:
-    """Fetch worker IDs from the gateway."""
+    """Fetch legacy host-model worker IDs from the gateway."""
     response = client.ls("/worker")
     if response.status != "OK":
         raise RestError(
@@ -620,6 +730,837 @@ def list_workers(client: RestClient) -> List[str]:
             response,
         )
     return [line.strip() for line in response.lines if line.strip()]
+
+
+def worker_runtime_bounds(bounds: dict) -> dict:
+    """Return and validate the optional generated Worker runtime bounds."""
+    runtime = bounds.get("worker_runtime")
+    if not isinstance(runtime, dict):
+        raise RestError(
+            "executable population requires gateway worker_runtime bounds; "
+            "absence means unknown"
+        )
+    maximum = runtime.get("maximum_live_tasks")
+    shard_bits = runtime.get("shard_bits")
+    template = runtime.get("canonical_telemetry_template")
+    roles = runtime.get("roles")
+    if (
+        not isinstance(maximum, int)
+        or isinstance(maximum, bool)
+        or maximum <= 0
+        or not isinstance(shard_bits, int)
+        or isinstance(shard_bits, bool)
+        or shard_bits < 1
+        or shard_bits > 8
+        or template != "/shard/<label>/worker/<id>/telemetry"
+        or not isinstance(roles, list)
+        or not roles
+    ):
+        raise RestError("gateway worker_runtime bounds are malformed")
+    seen = set()
+    executable_slots = 0
+    for row in roles:
+        if not isinstance(row, dict):
+            raise RestError("gateway Worker role row is malformed")
+        role = row.get("role")
+        declaration = row.get("declaration")
+        slots = row.get("executable_slots")
+        if (
+            not isinstance(role, str)
+            or role in seen
+            or declaration not in ("executable", "model-only")
+            or not isinstance(slots, int)
+            or isinstance(slots, bool)
+            or slots < 0
+            or (declaration == "model-only" and slots != 0)
+        ):
+            raise RestError("gateway Worker role matrix is inconsistent")
+        seen.add(role)
+        executable_slots += slots
+    if executable_slots != maximum:
+        raise RestError("gateway Worker maximum does not match executable slots")
+    return runtime
+
+
+def expected_worker_shard_label(worker_id: str, shard_bits: int) -> str:
+    """Compute the compiler-defined two-digit shard label."""
+    shard = hashlib.sha256(worker_id.encode("utf-8")).digest()[0]
+    if shard_bits < 8:
+        shard >>= 8 - shard_bits
+    return f"{shard:02x}"
+
+
+def valid_worker_id(worker_id: str, max_bytes: int) -> bool:
+    """Validate a public Worker id before composing a canonical path."""
+    encoded = worker_id.encode("utf-8")
+    return (
+        bool(worker_id)
+        and len(encoded) <= max_bytes
+        and all(ch.isalnum() or ch in "-_." for ch in worker_id)
+    )
+
+
+def positive_json_int(value: object) -> Optional[int]:
+    """Return a positive JSON integer while rejecting booleans."""
+    if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+        return None
+    return value
+
+
+def parse_worker_runtime_state(
+    lines: Sequence[str],
+    worker_id: str,
+    telemetry_path: str,
+) -> Optional[WorkerInstance]:
+    """Parse the latest strict target Worker state record from telemetry."""
+    latest: Optional[WorkerInstance] = None
+    for line in lines:
+        try:
+            value = json.loads(line.strip())
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(value, dict) or value.get("schema") != WORKER_RUNTIME_STATE_SCHEMA:
+            continue
+        role = value.get("role")
+        lifecycle = value.get("state")
+        slot = value.get("slot")
+        ready_sequence = value.get("ready_sequence")
+        control_sequence = value.get("control_sequence")
+        receipt_sequence = value.get("receipt_sequence")
+        completion_sequence = value.get("completion_sequence")
+        identity = (
+            positive_json_int(value.get("lease_epoch")),
+            positive_json_int(value.get("supervisor_generation")),
+            positive_json_int(value.get("cap_generation")),
+        )
+        if (
+            value.get("worker_id") != worker_id
+            or role not in EXECUTABLE_WORKER_ROLES
+            or lifecycle not in WORKER_LIFECYCLE_STATES
+            or not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or slot < 0
+            or not isinstance(ready_sequence, int)
+            or isinstance(ready_sequence, bool)
+            or ready_sequence < 0
+            or not isinstance(control_sequence, int)
+            or isinstance(control_sequence, bool)
+            or control_sequence < 0
+            or not isinstance(receipt_sequence, int)
+            or isinstance(receipt_sequence, bool)
+            or receipt_sequence < 0
+            or not isinstance(completion_sequence, int)
+            or isinstance(completion_sequence, bool)
+            or completion_sequence < 0
+            or any(part is None for part in identity)
+            or (lifecycle == "ready" and ready_sequence == 0)
+        ):
+            raise RestError(
+                f"malformed structured Worker state at {telemetry_path}"
+            )
+        latest = WorkerInstance(
+            worker_id=worker_id,
+            role=role,
+            lifecycle=lifecycle,
+            telemetry_path=telemetry_path,
+            slot=slot,
+            lease_epoch=identity[0],
+            supervisor_generation=identity[1],
+            cap_generation=identity[2],
+            ready_sequence=ready_sequence,
+            control_sequence=control_sequence,
+            receipt_sequence=receipt_sequence,
+            completion_sequence=completion_sequence,
+        )
+    return latest
+
+
+def discover_executable_workers(
+    client: RestClient,
+    bounds: dict,
+) -> Tuple[List[WorkerInstance], int]:
+    """Discover structured real Worker instances only through canonical shards."""
+    runtime = worker_runtime_bounds(bounds)
+    shard_bits = int(runtime["shard_bits"])
+    max_id_bytes = int(bounds.get("console", {}).get("max_id_len", 32))
+    shard_response = client.ls("/shard")
+    if shard_response.status != "OK":
+        raise RestError(f"LS /shard failed: {shard_response.error}", shard_response)
+    labels = sorted({line.strip() for line in shard_response.lines if line.strip()})
+    if len(labels) > MAX_DISCOVERED_SHARDS:
+        raise RestError("canonical /shard listing exceeds discovery bound")
+    instances: List[WorkerInstance] = []
+    discovered_ids = set()
+    for label in labels:
+        if len(label) != 2 or any(ch not in "0123456789abcdef" for ch in label):
+            raise RestError("canonical /shard listing contains an invalid label")
+        worker_root = f"/shard/{label}/worker"
+        response = client.ls(worker_root)
+        if response.status != "OK":
+            raise RestError(f"LS {worker_root} failed: {response.error}", response)
+        for raw_id in response.lines:
+            worker_id = raw_id.strip()
+            if not valid_worker_id(worker_id, max_id_bytes):
+                raise RestError(f"invalid Worker id in {worker_root}")
+            if worker_id in discovered_ids:
+                raise RestError(f"duplicate Worker id across canonical shards: {worker_id}")
+            if expected_worker_shard_label(worker_id, shard_bits) != label:
+                raise RestError(f"Worker {worker_id} is published under the wrong shard")
+            discovered_ids.add(worker_id)
+            if len(discovered_ids) > MAX_DISCOVERED_WORKERS:
+                raise RestError("canonical Worker discovery exceeds harness bound")
+            telemetry_path = f"{worker_root}/{worker_id}/telemetry"
+            tail = client.tail(telemetry_path, MAX_WORKER_STATE_TAIL_BYTES)
+            if tail.status != "OK":
+                raise RestError(f"TAIL {telemetry_path} failed: {tail.error}", tail)
+            instance = parse_worker_runtime_state(
+                tail.lines,
+                worker_id,
+                telemetry_path,
+            )
+            if instance is not None:
+                instances.append(instance)
+    instances.sort(key=lambda item: (item.role, item.worker_id))
+    return instances, len(discovered_ids)
+
+
+def valid_sha256(value: object) -> bool:
+    """Return true only for canonical lowercase SHA-256 hexadecimal."""
+    return (
+        isinstance(value, str)
+        and len(value) == SHA256_HEX_LENGTH
+        and all(ch in "0123456789abcdef" for ch in value)
+    )
+
+
+def executable_qemu_acceptance_binding(
+    client: RestClient,
+    bounds: dict,
+) -> Dict[str, object]:
+    """Validate current-session-bound QEMU component evidence before load."""
+    status = client.status()
+    if status.get("connected") is not True:
+        raise RestError("executable population requires a connected target")
+    if status.get("backend_class") != "console-projection":
+        raise RestError(
+            "executable population requires backend_class=console-projection"
+        )
+    acceptance = status.get("worker_acceptance")
+    if not isinstance(acceptance, dict):
+        raise RestError("executable population requires validated Worker acceptance")
+    if (
+        acceptance.get("schema") != "cohesix-worker-task-evidence/v1"
+        or acceptance.get("record_kind") != "target-component"
+        or acceptance.get("verdict") != "PASS"
+        or acceptance.get("target") != "qemu"
+        or acceptance.get("execution_proof") != "qemu"
+        or not valid_sha256(acceptance.get("evidence_sha256"))
+        or not valid_sha256(acceptance.get("topology_sha256"))
+    ):
+        raise RestError("executable population requires exact PASS QEMU component evidence")
+
+    target_session = acceptance.get("target_session")
+    session_fields = (
+        "target_session_sha256",
+        "manifest_sha256",
+        "root_image_sha256",
+        "worker_archive_sha256",
+        "worker_image_manifest_sha256",
+        "worker_abi_sha256",
+    )
+    if not isinstance(target_session, dict) or any(
+        not valid_sha256(target_session.get(field)) for field in session_fields
+    ):
+        raise RestError("QEMU acceptance lacks a bounded current target-session binding")
+    if target_session["manifest_sha256"] != bounds.get("manifest_sha256"):
+        raise RestError("QEMU acceptance manifest does not match gateway bounds")
+
+    workers = acceptance.get("workers")
+    if not isinstance(workers, list) or len(workers) != len(EXECUTABLE_WORKER_ROLES):
+        raise RestError("QEMU acceptance requires the exact executable role matrix")
+    required_inventory = {
+        "tcbs",
+        "scheduling_contexts",
+        "reply_objects",
+        "vspaces",
+        "cnodes",
+        "page_tables",
+        "asids",
+        "frames",
+        "endpoints",
+        "notifications",
+        "fault_caps",
+        "timeout_fault_caps",
+        "cspace_slots",
+        "untyped_bytes",
+    }
+    seen_roles = set()
+    for worker in workers:
+        if not isinstance(worker, dict):
+            raise RestError("QEMU acceptance contains a malformed Worker row")
+        role = worker.get("role")
+        expected_receipt = "none" if role == "worker-heartbeat" else "confirmed"
+        if (
+            role not in EXECUTABLE_WORKER_ROLES
+            or role in seen_roles
+            or worker.get("lifecycle") != "ready"
+            or worker.get("artifact") != "verified"
+            or worker.get("receipt") != expected_receipt
+            or worker.get("execution_proof") != "qemu"
+            or not valid_sha256(worker.get("image_sha256"))
+        ):
+            raise RestError("QEMU acceptance Worker state is incomplete")
+        seen_roles.add(role)
+        for field in (
+            "lease_epoch",
+            "supervisor_generation",
+            "cap_generation",
+            "ready_sequence",
+            "completion_sequence",
+        ):
+            if positive_json_int(worker.get(field)) is None:
+                raise RestError(f"QEMU acceptance Worker {field} is invalid")
+        slot = worker.get("slot")
+        core = worker.get("core")
+        if (
+            not isinstance(slot, int)
+            or isinstance(slot, bool)
+            or slot < 0
+            or not isinstance(core, int)
+            or isinstance(core, bool)
+            or core < 0
+            or core > 3
+        ):
+            raise RestError("QEMU acceptance Worker slot/core is invalid")
+        scheduling_context = worker.get("scheduling_context")
+        if not isinstance(scheduling_context, dict):
+            raise RestError("QEMU acceptance Worker SC is absent")
+        budget = positive_json_int(scheduling_context.get("budget_us"))
+        period = positive_json_int(scheduling_context.get("period_us"))
+        if budget is None or period is None or budget > period:
+            raise RestError("QEMU acceptance Worker SC is invalid")
+        inventory = worker.get("object_inventory")
+        if not isinstance(inventory, dict) or set(inventory) != required_inventory:
+            raise RestError("QEMU acceptance Worker object inventory is invalid")
+        for field, value in inventory.items():
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or (field not in ("endpoints", "reply_objects") and value == 0)
+            ):
+                raise RestError("QEMU acceptance Worker object inventory is invalid")
+    if seen_roles != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("QEMU acceptance omits an executable role")
+    return json.loads(json.dumps(acceptance))
+
+
+def gateway_population_axes(
+    client: RestClient,
+    population_mode: str,
+    bounds: Optional[dict] = None,
+) -> Tuple[str, str]:
+    """Return backend and proof axes without deriving proof from connectivity."""
+    try:
+        status = client.status()
+    except Exception:
+        status = {}
+    backend_class = status.get("backend_class", "unknown")
+    if backend_class not in ("host-model", "console-projection", "unknown"):
+        backend_class = "unknown"
+    if population_mode == POPULATION_HOST_MODEL:
+        return str(backend_class), "host-model"
+    if bounds is None:
+        raise RestError("executable population requires generated bounds")
+    executable_qemu_acceptance_binding(client, bounds)
+    return "console-projection", "qemu"
+
+
+def executable_population_snapshot(
+    client: RestClient,
+    bounds: dict,
+    requested: int,
+) -> Tuple[List[WorkerInstance], PopulationSnapshot]:
+    """Select an exact READY population without spawning or synthetic expansion."""
+    runtime = worker_runtime_bounds(bounds)
+    maximum = int(runtime["maximum_live_tasks"])
+    if requested < 1 or requested > maximum:
+        raise RestError(
+            f"requested executable population {requested} exceeds generated "
+            f"maximum_live_tasks={maximum}"
+        )
+    instances, discovered = discover_executable_workers(client, bounds)
+    ready = [instance for instance in instances if instance.lifecycle == "ready"]
+    backend_class, proof_class = gateway_population_axes(
+        client,
+        POPULATION_EXECUTABLE,
+        bounds,
+    )
+    snapshot = PopulationSnapshot(
+        requested=requested,
+        discovered=discovered,
+        ready=len(ready),
+        backend_class=backend_class,
+        proof_class=proof_class,
+    )
+    if len(ready) < requested:
+        raise RestError(
+            "executable population is not READY: "
+            f"requested={requested} discovered={discovered} ready={len(ready)}"
+        )
+    return ready[:requested], snapshot
+
+
+def acceptance_workers_by_role(binding: Dict[str, object]) -> Dict[str, dict]:
+    """Index the already validated acceptance projection by executable role."""
+    workers = binding.get("workers")
+    if not isinstance(workers, list):
+        raise RestError("QEMU acceptance Worker rows are absent")
+    indexed = {
+        str(worker["role"]): worker
+        for worker in workers
+        if isinstance(worker, dict) and isinstance(worker.get("role"), str)
+    }
+    if set(indexed) != set(EXECUTABLE_WORKER_ROLES):
+        raise RestError("QEMU acceptance Worker role index is incomplete")
+    return indexed
+
+
+def capture_proc_pressure_state(client: RestClient, bounds: dict) -> Dict[str, object]:
+    """Capture bounded scheduler/lease projections without interpreting them as proof."""
+    observations: Dict[str, object] = {}
+    for spec in build_status_specs(bounds):
+        if spec.path not in EXECUTABLE_PROC_PATHS:
+            continue
+        response = client.cat(spec.path, spec.max_bytes)
+        if response.status != "OK":
+            raise RestError(f"CAT {spec.path} failed: {response.error}", response)
+        encoded = "\n".join(response.lines).encode("utf-8")
+        observations[spec.path] = {
+            "lines": list(response.lines),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "bytes": len(encoded),
+        }
+    if set(observations) != set(EXECUTABLE_PROC_PATHS):
+        missing = sorted(set(EXECUTABLE_PROC_PATHS) - set(observations))
+        raise RestError(
+            "executable pressure lacks required bounded /proc MCS observations: "
+            + ",".join(missing)
+        )
+    return observations
+
+
+def capture_executable_state(
+    client: RestClient,
+    state: SimState,
+    *,
+    require_accepted_identity: bool,
+) -> Dict[str, object]:
+    """Capture exact READY identities plus accepted SC/object topology."""
+    if state.acceptance_binding is None:
+        raise RestError("executable state capture requires acceptance binding")
+    accepted = acceptance_workers_by_role(state.acceptance_binding)
+    instances, _ = discover_executable_workers(client, state.bounds)
+    ready = [instance for instance in instances if instance.lifecycle == "ready"]
+    ready_by_role = {instance.role: instance for instance in ready}
+    if len(ready) != len(EXECUTABLE_WORKER_ROLES) or set(ready_by_role) != set(
+        EXECUTABLE_WORKER_ROLES
+    ):
+        raise RestError("executable pressure requires exactly one READY Worker per role")
+
+    workers: List[Dict[str, object]] = []
+    for role in EXECUTABLE_WORKER_ROLES:
+        instance = ready_by_role[role]
+        accepted_worker = accepted[role]
+        if instance.slot != accepted_worker.get("slot"):
+            raise RestError(f"live {role} slot differs from accepted topology")
+        if require_accepted_identity:
+            for field in (
+                "lease_epoch",
+                "supervisor_generation",
+                "cap_generation",
+                "ready_sequence",
+            ):
+                if getattr(instance, field) != accepted_worker.get(field):
+                    raise RestError(f"live {role} {field} differs from accepted identity")
+        workers.append(
+            {
+                **instance.identity_dict(),
+                "worker_id": instance.worker_id,
+                "lifecycle": instance.lifecycle,
+                "telemetry_path": instance.telemetry_path,
+                "ready_sequence": instance.ready_sequence,
+                "control_sequence": instance.control_sequence,
+                "receipt_sequence": instance.receipt_sequence,
+                "completion_sequence": instance.completion_sequence,
+                "image_sha256": accepted_worker["image_sha256"],
+                "core": accepted_worker["core"],
+                "scheduling_context": accepted_worker["scheduling_context"],
+                "object_inventory": accepted_worker["object_inventory"],
+            }
+        )
+    state.current_workers_by_role = ready_by_role
+    state.worker_telemetry_paths = {
+        instance.worker_id: instance.telemetry_path for instance in ready
+    }
+    return {
+        "workers": workers,
+        "proc": capture_proc_pressure_state(client, state.bounds),
+    }
+
+
+def hash_required_fault_artifact(
+    path_value: Optional[str],
+    label: str,
+    markers: Sequence[str],
+) -> Tuple[Dict[str, object], str]:
+    """Hash one bounded regular artifact and require its frozen marker index."""
+    if not path_value:
+        raise RestError(f"executable pressure requires --qemu-{label}-log")
+    path = pathlib.Path(path_value)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise RestError(f"cannot open {label} artifact safely: {exc}") from exc
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size <= 0:
+            raise RestError(f"{label} artifact must be a non-empty regular file")
+        if metadata.st_size > 64 * 1024 * 1024:
+            raise RestError(f"{label} artifact exceeds the 64 MiB pressure bound")
+        chunks: List[bytes] = []
+        remaining = metadata.st_size
+        while remaining:
+            chunk = os.read(descriptor, min(remaining, 1024 * 1024))
+            if not chunk:
+                raise RestError(f"{label} artifact changed during bounded read")
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        if os.read(descriptor, 1):
+            raise RestError(f"{label} artifact grew during bounded read")
+        data = b"".join(chunks)
+    finally:
+        os.close(descriptor)
+    text_value = data.decode("utf-8", errors="replace")
+    missing = [marker for marker in markers if marker not in text_value]
+    if missing:
+        raise RestError(f"{label} artifact lacks required markers: {','.join(missing)}")
+    return (
+        {
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "bytes": len(data),
+        },
+        text_value,
+    )
+
+
+def marker_fields(line: str, marker: str) -> Optional[Dict[str, str]]:
+    """Parse one exact space-delimited target observation marker."""
+    if not line.startswith(f"{marker} "):
+        return None
+    fields: Dict[str, str] = {}
+    for token in line[len(marker) + 1 :].split():
+        key, separator, value = token.partition("=")
+        if not separator or not key or not value or key in fields:
+            raise RestError(f"malformed {marker} field token")
+        fields[key] = value
+    return fields
+
+
+def validate_fault_session_binding(
+    uart_text: str,
+    gdb_text: str,
+    acceptance: Dict[str, object],
+) -> None:
+    """Bind immutable fault transcripts to the shared-validator status record."""
+    target_session = acceptance["target_session"]
+    if not isinstance(target_session, dict):
+        raise RestError("fault transcript validation lacks a target session")
+    expected_session = {
+        "target": "qemu",
+        "machine": "virt",
+        "gic_version": "3",
+        "root_image_sha256": str(target_session["root_image_sha256"]),
+        "worker_archive_sha256": str(target_session["worker_archive_sha256"]),
+        "topology_sha256": str(acceptance["topology_sha256"]),
+    }
+    sessions = [
+        fields
+        for line in gdb_text.splitlines()
+        if (fields := marker_fields(line.strip(), "M26E_QEMU_SESSION")) is not None
+    ]
+    if sessions != [expected_session]:
+        raise RestError("GDB transcript does not bind the exact QEMU target session")
+
+    accepted_workers = acceptance_workers_by_role(acceptance)
+    for role, worker in accepted_workers.items():
+        image_sha256 = str(worker["image_sha256"])
+        admission_match = any(
+            fields.get("role") == role
+            and fields.get("image_sha256") == image_sha256
+            for line in uart_text.splitlines()
+            if (fields := marker_fields(line.strip(), "WORKER_TASK_ADMISSION"))
+            is not None
+        )
+        elf_match = any(
+            fields.get("role") == role
+            and fields.get("image_sha256") == image_sha256
+            and valid_sha256(fields.get("elf_sha256"))
+            for line in gdb_text.splitlines()
+            if (fields := marker_fields(line.strip(), "M26E_GDB_ELF")) is not None
+        )
+        if not admission_match or not elf_match:
+            raise RestError(f"fault transcripts do not bind accepted {role} image identity")
+
+
+def capture_fault_artifacts(
+    args: argparse.Namespace,
+    acceptance: Dict[str, object],
+) -> Tuple[Dict[str, Dict[str, object]], List[str]]:
+    """Retain exact UART/GDB inputs; semantic acceptance remains collector-owned."""
+    uart_artifact, uart_text = hash_required_fault_artifact(
+        args.qemu_uart_log,
+        "uart",
+        EXECUTABLE_UART_MARKERS,
+    )
+    gdb_artifact, gdb_text = hash_required_fault_artifact(
+        args.qemu_gdb_log,
+        "gdb",
+        EXECUTABLE_GDB_MARKERS,
+    )
+    validate_fault_session_binding(uart_text, gdb_text, acceptance)
+    artifacts = {"uart": uart_artifact, "gdb": gdb_artifact}
+    markers = [
+        *(f"uart:{marker}" for marker in EXECUTABLE_UART_MARKERS),
+        *(f"gdb:{marker}" for marker in EXECUTABLE_GDB_MARKERS),
+    ]
+    return artifacts, markers
+
+
+def require_qemu_fixture_receipt_paths(client: RestClient) -> Tuple[str, str]:
+    """Return exact fixture GPU/job subjects after validating live projections."""
+    bridge = client.cat("/gpu/bridge/status", 512)
+    if bridge.status != "OK" or len(bridge.lines) != 1:
+        raise RestError("QEMU receipt pressure requires one GPU bridge status line", bridge)
+    fields: Dict[str, str] = {}
+    for token in bridge.lines[0].split():
+        key, separator, value = token.partition("=")
+        if separator and key and value:
+            if key in fields:
+                raise RestError("GPU bridge status contains a duplicate field")
+            fields[key] = value
+    if (
+        fields.get("state") != "ok"
+        or fields.get("mode") != "fixture"
+        or fields.get("source") in (None, "", "none")
+        or not valid_sha256(fields.get("sha256"))
+    ):
+        raise RestError(
+            "QEMU receipt pressure requires state=ok mode=fixture GPU bridge status"
+        )
+    for path in (
+        "/host/tickets/spec",
+        "/host/tickets/spec.snapshot",
+        "/host/tickets/status",
+    ):
+        response = client.tail(path, 8192)
+        if response.status != "OK":
+            raise RestError(
+                f"QEMU receipt pressure requires {path}: {response.error}",
+                response,
+            )
+
+    gpu_root = client.ls("/gpu")
+    if gpu_root.status != "OK":
+        raise RestError("QEMU receipt pressure cannot list /gpu", gpu_root)
+    gpu_ids = sorted(
+        {
+            entry.strip()
+            for entry in gpu_root.lines
+            if entry.strip() not in {"bridge", "models", "telemetry"}
+        }
+    )
+    if not gpu_ids or len(gpu_ids) > 64 or any(
+        not valid_worker_id(gpu_id, 64) for gpu_id in gpu_ids
+    ):
+        raise RestError("QEMU fixture exposes no bounded GPU subject")
+
+    jobs = client.ls("/queen/export/lora_jobs")
+    if jobs.status != "OK":
+        raise RestError("QEMU receipt pressure cannot list fixture LoRA jobs", jobs)
+    job_ids = sorted({entry.strip() for entry in jobs.lines if entry.strip()})
+    if len(job_ids) != 1 or not valid_worker_id(job_ids[0], 64):
+        raise RestError("QEMU fixture must expose exactly one bounded LoRA export job")
+    job_id = job_ids[0]
+    for name in ("telemetry.cbor", "base_model.ref", "policy.toml"):
+        path = f"/queen/export/lora_jobs/{job_id}/{name}"
+        response = client.cat(path, 8192)
+        if response.status != "OK" or not response.lines:
+            raise RestError(f"QEMU fixture LoRA job lacks {name}", response)
+    return gpu_ids[0], job_id
+
+
+def bounded_heartbeat_lifecycle_cycle(
+    client: RestClient,
+    state: SimState,
+    timeout_s: float,
+) -> List[str]:
+    """Kill, observe terminal teardown, and recreate Heartbeat through `/queen/ctl`."""
+    before = state.current_workers_by_role.get("worker-heartbeat")
+    if before is None:
+        raise RestError("lifecycle pressure requires a READY Heartbeat Worker")
+    kill_worker(client, state, before.worker_id)
+    deadline = time.time() + timeout_s
+    terminal_observed = False
+    while time.time() < deadline:
+        instances, _ = discover_executable_workers(client, state.bounds)
+        old = next(
+            (instance for instance in instances if instance.worker_id == before.worker_id),
+            None,
+        )
+        if old is not None and old.lifecycle == "terminal":
+            terminal_observed = True
+            break
+        time.sleep(0.1)
+    if not terminal_observed:
+        raise RestError("Heartbeat teardown did not reach terminal within the bound")
+
+    spawn_line = json.dumps(
+        {
+            "spawn": "heartbeat",
+            "ticks": 120,
+            "budget": {"ttl_s": 300, "ops": 500},
+        },
+        separators=(",", ":"),
+    )
+    echo_with_policy_retry(client, "/queen/ctl", spawn_line, state)
+    deadline = time.time() + timeout_s
+    after: Optional[WorkerInstance] = None
+    while time.time() < deadline:
+        instances, _ = discover_executable_workers(client, state.bounds)
+        after = next(
+            (
+                instance
+                for instance in instances
+                if instance.role == "worker-heartbeat"
+                and instance.worker_id != before.worker_id
+                and instance.lifecycle == "ready"
+            ),
+            None,
+        )
+        if after is not None:
+            break
+        time.sleep(0.1)
+    if after is None or after.supervisor_generation <= before.supervisor_generation:
+        raise RestError("Heartbeat recreation did not publish a fresh READY generation")
+    state.lifecycle_cycles.append(
+        {
+            "role": "worker-heartbeat",
+            "before": before.identity_dict(),
+            "after": after.identity_dict(),
+            "kill_admitted": True,
+            "recreate_admitted": True,
+            "terminal_observed": True,
+            "ready_observed": True,
+        }
+    )
+    post = capture_executable_state(
+        client,
+        state,
+        require_accepted_identity=False,
+    )
+    return [str(worker["worker_id"]) for worker in post["workers"]]
+
+
+def build_executable_report_state(
+    state: SimState,
+    required_fault_markers: Sequence[str],
+) -> Tuple[str, Dict[str, object]]:
+    """Build the exact collector-facing executable pressure state."""
+    if (
+        state.acceptance_binding is None
+        or state.executable_pre_state is None
+        or state.executable_post_state is None
+        or set(state.fault_artifacts) != {"uart", "gdb"}
+        or not state.lifecycle_cycles
+        or not state.receipt_operations
+    ):
+        raise RestError("executable pressure state is incomplete")
+    target_session = state.acceptance_binding.get("target_session")
+    if not isinstance(target_session, dict):
+        raise RestError("executable pressure lacks a target-session summary")
+    driven = {
+        (operation.get("action"), operation.get("role"))
+        for operation in state.receipt_operations
+    }
+    required_driven = {
+        ("gpu.lease.grant", "worker-gpu"),
+        ("peft.export", "worker-lora"),
+    }
+    if not required_driven.issubset(driven):
+        raise RestError("executable pressure did not drive both GPU and LoRA receipt paths")
+    target_session_sha256 = str(target_session["target_session_sha256"])
+    executable_state = {
+        "topology_sha256": state.acceptance_binding["topology_sha256"],
+        "target_session": {
+            field: target_session[field]
+            for field in (
+                "manifest_sha256",
+                "root_image_sha256",
+                "worker_archive_sha256",
+                "worker_image_manifest_sha256",
+                "worker_abi_sha256",
+            )
+        },
+        "pre": state.executable_pre_state,
+        "post": state.executable_post_state,
+        "lifecycle_cycles": list(state.lifecycle_cycles),
+        "receipt_operations": list(state.receipt_operations),
+        "fault_artifacts": dict(state.fault_artifacts),
+        "required_fault_markers": list(required_fault_markers),
+    }
+    return target_session_sha256, executable_state
+
+
+def validate_executable_post_state(state: SimState) -> None:
+    """Require one bounded recreation and monotonic receipt state after pressure."""
+    if state.executable_pre_state is None or state.executable_post_state is None:
+        raise RestError("executable pre/post state is absent")
+    pre_rows = state.executable_pre_state.get("workers")
+    post_rows = state.executable_post_state.get("workers")
+    if not isinstance(pre_rows, list) or not isinstance(post_rows, list):
+        raise RestError("executable pre/post Worker rows are malformed")
+    pre = {row.get("role"): row for row in pre_rows if isinstance(row, dict)}
+    post = {row.get("role"): row for row in post_rows if isinstance(row, dict)}
+    if set(pre) != set(EXECUTABLE_WORKER_ROLES) or set(post) != set(
+        EXECUTABLE_WORKER_ROLES
+    ):
+        raise RestError("executable pre/post Worker role matrix is incomplete")
+    identity_fields = (
+        "role",
+        "slot",
+        "lease_epoch",
+        "supervisor_generation",
+        "cap_generation",
+    )
+    heartbeat_pre = pre["worker-heartbeat"]
+    heartbeat_post = post["worker-heartbeat"]
+    if (
+        heartbeat_post["supervisor_generation"]
+        <= heartbeat_pre["supervisor_generation"]
+        or heartbeat_post["worker_id"] == heartbeat_pre["worker_id"]
+    ):
+        raise RestError("Heartbeat pressure did not retain a fresh generation")
+    for role in ("worker-gpu", "worker-lora"):
+        if any(pre[role][field] != post[role][field] for field in identity_fields):
+            raise RestError(f"{role} identity changed during receipt pressure")
+        if (
+            post[role]["receipt_sequence"] <= pre[role]["receipt_sequence"]
+            or post[role]["completion_sequence"]
+            <= pre[role]["completion_sequence"]
+        ):
+            raise RestError(f"{role} did not advance receipt/completion sequences")
 
 
 def parse_worker_seq(worker_id: str) -> Optional[int]:
@@ -722,11 +1663,19 @@ def build_telemetry_specs(
     workers: Sequence[str],
     max_workers: int,
     max_bytes: int,
+    telemetry_paths: Optional[Dict[str, str]] = None,
 ) -> List[RequestSpec]:
     """Build telemetry tail request list for a subset of workers."""
     specs: List[RequestSpec] = []
     for worker_id in workers[:max_workers]:
-        specs.append(RequestSpec(f"/worker/{worker_id}/telemetry", max_bytes, "tail"))
+        path = (
+            telemetry_paths.get(worker_id)
+            if telemetry_paths is not None
+            else None
+        )
+        specs.append(
+            RequestSpec(path or f"/worker/{worker_id}/telemetry", max_bytes, "tail")
+        )
     return specs
 
 
@@ -966,6 +1915,15 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable stdout logging (file only).",
     )
+    parser.add_argument(
+        "--population-mode",
+        choices=(POPULATION_HOST_MODEL, POPULATION_EXECUTABLE),
+        default=POPULATION_HOST_MODEL,
+        help=(
+            "Population authority: synthetic host model or real structured READY "
+            "Workers discovered through canonical /shard paths."
+        ),
+    )
 
     perf = parser.add_argument_group("perf")
     perf.add_argument(
@@ -1026,6 +1984,16 @@ def parse_args() -> argparse.Namespace:
         help="Path to write QEMU log output.",
     )
     launch.add_argument(
+        "--qemu-uart-log",
+        default=None,
+        help="Immutable live QEMU UART transcript used by executable pressure.",
+    )
+    launch.add_argument(
+        "--qemu-gdb-log",
+        default=None,
+        help="Immutable qemu-gdb fault transcript used by executable pressure.",
+    )
+    launch.add_argument(
         "--no-qemu",
         action="store_true",
         help="Skip launching QEMU (assume already running).",
@@ -1044,6 +2012,21 @@ def parse_args() -> argparse.Namespace:
         "--gateway-log",
         default=None,
         help="Path to write hive-gateway log output.",
+    )
+    launch.add_argument(
+        "--worker-acceptance-root",
+        default=os.environ.get("HIVE_GATEWAY_WORKER_ACCEPTANCE_ROOT"),
+        help="Gateway trust root for bounded Worker component evidence.",
+    )
+    launch.add_argument(
+        "--worker-acceptance-evidence",
+        default=os.environ.get("HIVE_GATEWAY_WORKER_ACCEPTANCE_EVIDENCE"),
+        help="Validated QEMU target-component record supplied to the gateway.",
+    )
+    launch.add_argument(
+        "--target-session",
+        default=os.environ.get("HIVE_GATEWAY_TARGET_SESSION"),
+        help="Exact current target-session record supplied to the gateway.",
     )
     launch.add_argument(
         "--ready-timeout-secs",
@@ -1306,7 +2289,7 @@ def parse_args() -> argparse.Namespace:
             args.no_transient_retries = True
         args.auto_approve = not args.no_auto_approve
         args.transient_retries = not args.no_transient_retries
-        if not args.auth_token.strip():
+        if not args.auth_token.strip() and not (args.no_qemu and args.no_gateway):
             raise SystemExit(
                 "simulate mode requires --auth-token (or COH_AUTH_TOKEN/COHSH_AUTH_TOKEN)"
             )
@@ -1318,6 +2301,27 @@ def parse_args() -> argparse.Namespace:
         )
         apply_fast_ramp_defaults(args)
         apply_multi_hive_defaults(args, argv_tokens)
+        if args.population_mode == POPULATION_EXECUTABLE and args.multi_hive:
+            raise SystemExit(
+                "executable population mode does not permit synthetic multi-hive expansion"
+            )
+        if args.population_mode == POPULATION_EXECUTABLE:
+            args.qemu_uart_log = args.qemu_uart_log or args.qemu_log
+            if not args.qemu_uart_log or not args.qemu_gdb_log:
+                raise SystemExit(
+                    "executable population requires --qemu-uart-log and --qemu-gdb-log"
+                )
+            if not args.no_gateway and not all(
+                (
+                    args.worker_acceptance_root,
+                    args.worker_acceptance_evidence,
+                    args.target_session,
+                )
+            ):
+                raise SystemExit(
+                    "executable gateway launch requires --worker-acceptance-root, "
+                    "--worker-acceptance-evidence, and --target-session"
+                )
         args.duration_mins = clamp_int(args.duration_mins, 1, 60, "duration-mins")
         workers_upper_bound = 1500 if not args.multi_hive else 15000
         args.workers_min = clamp_int(
@@ -1802,13 +2806,13 @@ def _echo_with_policy_retry_inner(
             or "buffer-full" in err_lower
         )
 
-    accepted_response: Optional[GatewayResponse] = None
+    admitted_response: Optional[GatewayResponse] = None
 
     def attempt() -> None:
-        nonlocal accepted_response
+        nonlocal admitted_response
         response = client.echo(path, line)
         if response.status == "OK":
-            accepted_response = response
+            admitted_response = response
             return
         if (
             path == "/queen/ctl"
@@ -1824,7 +2828,7 @@ def _echo_with_policy_retry_inner(
                     queue_approval(client, path, state)
                     response_retry = client.echo(path, line)
                     if response_retry.status == "OK":
-                        accepted_response = response_retry
+                        admitted_response = response_retry
                         return
                     response = response_retry
                     if not is_policy_retryable(response_retry.error):
@@ -1843,9 +2847,9 @@ def _echo_with_policy_retry_inner(
         timeout_s=10.0,
         label=f"echo {path}",
     )
-    if accepted_response is None:
-        raise RestError(f"ECHO {path} completed without an accepted response")
-    return accepted_response
+    if admitted_response is None:
+        raise RestError(f"ECHO {path} completed without an admitted response")
+    return admitted_response
 
 
 def spawn_worker(
@@ -1929,6 +2933,125 @@ def kill_worker(client: RestClient, state: SimState, worker_id: str) -> None:
     echo_with_policy_retry(client, "/queen/ctl", line, state)
 
 
+def latest_worker_instance(
+    client: RestClient,
+    state: SimState,
+    role: str,
+) -> WorkerInstance:
+    """Return the exact current READY instance for one executable role."""
+    instances, _ = discover_executable_workers(client, state.bounds)
+    matches = [
+        instance
+        for instance in instances
+        if instance.role == role and instance.lifecycle == "ready"
+    ]
+    if len(matches) != 1:
+        raise RestError(f"receipt pressure requires exactly one READY {role}")
+    return matches[0]
+
+
+def terminal_ticket_state(lines: Sequence[str], ticket_id: str) -> Optional[str]:
+    """Return the terminal v2 result state for one exact ticket id."""
+    terminal = {"succeeded", "failed", "expired"}
+    found: Optional[str] = None
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if (
+            isinstance(value, dict)
+            and value.get("schema") == "host-ticket-result/v2"
+            and value.get("id") == ticket_id
+            and value.get("state") in terminal
+        ):
+            found = str(value["state"])
+    return found
+
+
+def run_v2_receipt_operation(
+    client: RestClient,
+    state: SimState,
+    action: str,
+    role: str,
+    args_value: Dict[str, object],
+    subject_ref: str,
+) -> None:
+    """Submit and observe one root-admitted v2 Worker receipt operation."""
+    with state.ticket_lock:
+        before = latest_worker_instance(client, state, role)
+        state.next_ticket_seq += 1
+        sequence = state.next_ticket_seq
+        ticket_id = f"bench-{state.run_token}-{sequence:06d}"
+        operation_id = f"op-{state.run_token}-{sequence:06d}"
+        payload = {
+            "schema": "host-ticket/v2",
+            "id": ticket_id,
+            "idempotency_key": f"idem-{state.run_token}-{sequence:06d}",
+            "action": action,
+            "args": args_value,
+            "receipt_mode": "worker",
+            "operation_id": operation_id,
+            "subject_ref": subject_ref,
+            "receipt_worker_role": role,
+            "receipt_worker_id": before.worker_id,
+            "receipt_supervisor_generation": before.supervisor_generation,
+            "receipt_cap_generation": before.cap_generation,
+        }
+        response = client.echo(
+            "/host/tickets/spec",
+            json.dumps(payload, separators=(",", ":")),
+        )
+        if response.status != "OK":
+            raise RestError(f"v2 ticket admission failed: {response.error}", response)
+
+        deadline = time.time() + 15.0
+        terminal_state: Optional[str] = None
+        after: Optional[WorkerInstance] = None
+        while time.time() < deadline:
+            status = client.tail("/host/tickets/status", 8192)
+            if status.status != "OK":
+                raise RestError(f"TAIL /host/tickets/status failed: {status.error}", status)
+            terminal_state = terminal_ticket_state(status.lines, ticket_id)
+            candidate = latest_worker_instance(client, state, role)
+            if (
+                terminal_state is not None
+                and candidate.worker_id == before.worker_id
+                and candidate.supervisor_generation == before.supervisor_generation
+                and candidate.cap_generation == before.cap_generation
+                and candidate.receipt_sequence > before.receipt_sequence
+                and candidate.completion_sequence > before.completion_sequence
+            ):
+                after = candidate
+                break
+            time.sleep(0.1)
+        if terminal_state is None or after is None:
+            raise RestError(f"v2 {action} lacked a correlated terminal Worker receipt")
+        if terminal_state != "succeeded":
+            raise RestError(
+                f"v2 {action} pressure operation ended {terminal_state}, not succeeded"
+            )
+        state.current_workers_by_role[role] = after
+        state.receipt_operations.append(
+            {
+                "action": action,
+                "role": role,
+                "worker_id": before.worker_id,
+                "sequence_before": {
+                    "receipt": before.receipt_sequence,
+                    "completion": before.completion_sequence,
+                },
+                "sequence_after": {
+                    "receipt": after.receipt_sequence,
+                    "completion": after.completion_sequence,
+                },
+                "status": terminal_state,
+            }
+        )
+        if len(state.receipt_operations) > 256:
+            state.receipt_operations.pop(0)
+
+
 def build_operations(
     bounds: dict,
     root_entries: List[str],
@@ -1976,8 +3099,16 @@ def build_operations(
     def op_tail(path_builder: Callable[[str], str], max_bytes: int) -> Callable[
         [RestClient, str, SimState], None
     ]:
-        def _run(client: RestClient, worker: str, _state: SimState) -> None:
-            path = path_builder(worker)
+        def _run(client: RestClient, worker: str, sim_state: SimState) -> None:
+            if sim_state.population_mode == POPULATION_EXECUTABLE:
+                path = sim_state.worker_telemetry_paths.get(worker)
+                if path is None:
+                    raise RestError(
+                        f"executable Worker {worker} has no canonical telemetry path"
+                    )
+            else:
+                path = path_builder(worker)
+
             def attempt() -> None:
                 response = client.tail(path, max_bytes)
                 if response.status != "OK":
@@ -2177,7 +3308,7 @@ def build_operations(
 
     ops.append(Operation("meta_bounds", 0.4, "meta", op_meta_bounds()))
 
-    for entry in ("/", "/proc", "/queen", "/worker", "/gpu", "/host"):
+    for entry in ("/", "/proc", "/queen", "/shard", "/worker", "/gpu", "/host"):
         if entry == "/" or entry.strip("/") in root_entries:
             ops.append(Operation(f"ls_{entry.strip('/') or 'root'}", 1.0, "ls", op_ls(entry)))
 
@@ -2195,7 +3326,7 @@ def build_operations(
             )
         )
 
-    if "worker" in root_entries:
+    if "worker" in root_entries or "shard" in root_entries:
         ops.append(
             Operation(
                 "tail_worker_telemetry",
@@ -2210,6 +3341,38 @@ def build_operations(
 
     for path in gpu_paths:
         ops.append(Operation(f"cat_{path}", 0.5, "gpu", op_cat(path, 2048)))
+
+    if state.population_mode == POPULATION_EXECUTABLE:
+        ops.append(
+            Operation(
+                "worker_gpu_v2_receipt",
+                0.15,
+                "worker-receipt",
+                lambda client, _worker, sim_state: run_v2_receipt_operation(
+                    client,
+                    sim_state,
+                    "gpu.lease.grant",
+                    "worker-gpu",
+                    {"ttl_s": 30, "priority": 1},
+                    "gpu",
+                ),
+            )
+        )
+        ops.append(
+            Operation(
+                "worker_lora_v2_receipt",
+                0.15,
+                "worker-receipt",
+                lambda client, _worker, sim_state: run_v2_receipt_operation(
+                    client,
+                    sim_state,
+                    "peft.export",
+                    "worker-lora",
+                    {},
+                    "bench-lora",
+                ),
+            )
+        )
 
     if "queen" in root_entries:
         ops.append(
@@ -2585,6 +3748,19 @@ def ensure_workers(
     state: SimState,
     target: int,
 ) -> Tuple[List[str], List[str]]:
+    if state.population_mode == POPULATION_EXECUTABLE:
+        instances, snapshot = executable_population_snapshot(
+            client,
+            state.bounds,
+            target,
+        )
+        state.record_population(snapshot)
+        state.worker_cap = state.maximum_live_tasks
+        state.worker_telemetry_paths = {
+            instance.worker_id: instance.telemetry_path for instance in instances
+        }
+        return [instance.worker_id for instance in instances], []
+
     current = expand_bounded_worker_listing(list_workers(client), target)
     seed_next_worker_seq(state, current)
     spawned: List[str] = []
@@ -2615,6 +3791,19 @@ def ensure_workers(
             spawned,
             "ensure",
         )
+    backend_class, proof_class = gateway_population_axes(
+        client,
+        POPULATION_HOST_MODEL,
+    )
+    state.record_population(
+        PopulationSnapshot(
+            requested=target,
+            discovered=len(current),
+            ready=0,
+            backend_class=backend_class,
+            proof_class=proof_class,
+        )
+    )
     return current, spawned
 
 
@@ -2625,6 +3814,18 @@ def adjust_workers(
     spawned: List[str],
     target: int,
 ) -> Tuple[List[str], List[str]]:
+    if state.population_mode == POPULATION_EXECUTABLE:
+        instances, snapshot = executable_population_snapshot(
+            client,
+            state.bounds,
+            target,
+        )
+        state.record_population(snapshot)
+        state.worker_telemetry_paths = {
+            instance.worker_id: instance.telemetry_path for instance in instances
+        }
+        return [instance.worker_id for instance in instances], []
+
     current = list(worker_ids)
     capacity_limited = False
     if len(current) < target:
@@ -2660,6 +3861,19 @@ def adjust_workers(
             kill_worker(client, state, victim)
             if victim in current:
                 current.remove(victim)
+    backend_class, proof_class = gateway_population_axes(
+        client,
+        POPULATION_HOST_MODEL,
+    )
+    state.record_population(
+        PopulationSnapshot(
+            requested=target,
+            discovered=len(current),
+            ready=0,
+            backend_class=backend_class,
+            proof_class=proof_class,
+        )
+    )
     return current, spawned
 
 
@@ -2731,6 +3945,19 @@ def run_simulation(args: argparse.Namespace) -> int:
             env["COH_ROLE"] = args.role
             env["HIVE_GATEWAY_BIND"] = args.gateway_bind
             gateway_cmd = [gateway_bin, "--bind", args.gateway_bind]
+            if args.worker_acceptance_root is not None:
+                gateway_cmd.extend(
+                    ["--worker-acceptance-root", args.worker_acceptance_root]
+                )
+            if args.worker_acceptance_evidence is not None:
+                gateway_cmd.extend(
+                    [
+                        "--worker-acceptance-evidence",
+                        args.worker_acceptance_evidence,
+                    ]
+                )
+            if args.target_session is not None:
+                gateway_cmd.extend(["--target-session", args.target_session])
             if args.gateway_pool_control_sessions is not None:
                 gateway_cmd.extend(
                     [
@@ -2783,6 +4010,24 @@ def run_simulation(args: argparse.Namespace) -> int:
 
         client = RestClient(rest_url, args.timeout, args.request_auth_token)
         bounds = wait_for_gateway(client, args.ready_timeout_secs)
+        maximum_live_tasks: Optional[int] = None
+        acceptance_binding: Optional[Dict[str, object]] = None
+        if args.population_mode == POPULATION_EXECUTABLE:
+            runtime = worker_runtime_bounds(bounds)
+            maximum_live_tasks = int(runtime["maximum_live_tasks"])
+            if args.workers_max > maximum_live_tasks:
+                raise SystemExit(
+                    "executable workers-max exceeds generated maximum_live_tasks: "
+                    f"{args.workers_max} > {maximum_live_tasks}"
+                )
+            acceptance_binding = executable_qemu_acceptance_binding(client, bounds)
+            fixture_gpu_id, fixture_lora_job = require_qemu_fixture_receipt_paths(
+                client
+            )
+            # Validate the complete marker and identity binding before issuing
+            # any benchmark traffic. The exact hashes are captured again after
+            # the workload for the retained report.
+            capture_fault_artifacts(args, acceptance_binding)
 
         root_entries = discover_root_entries(client)
         host_paths = discover_host_paths(client)
@@ -2814,6 +4059,9 @@ def run_simulation(args: argparse.Namespace) -> int:
             logger=args.logger,
             telemetry_scenario=scenario,
             telemetry_reference_chunk_bytes=args.telemetry_reference_chunk_bytes,
+            population_mode=args.population_mode,
+            maximum_live_tasks=maximum_live_tasks,
+            acceptance_binding=acceptance_binding,
         )
         emit_benchmark_marker(
             client,
@@ -2825,6 +4073,33 @@ def run_simulation(args: argparse.Namespace) -> int:
         )
 
         worker_ids, spawned = ensure_workers(client, state, args.workers_min)
+        if args.population_mode == POPULATION_EXECUTABLE:
+            state.executable_pre_state = capture_executable_state(
+                client,
+                state,
+                require_accepted_identity=True,
+            )
+            worker_ids = bounded_heartbeat_lifecycle_cycle(
+                client,
+                state,
+                float(args.ready_timeout_secs),
+            )
+            run_v2_receipt_operation(
+                client,
+                state,
+                "gpu.lease.grant",
+                "worker-gpu",
+                {"ttl_s": 30, "priority": 1},
+                fixture_gpu_id,
+            )
+            run_v2_receipt_operation(
+                client,
+                state,
+                "peft.export",
+                "worker-lora",
+                {},
+                fixture_lora_job,
+            )
 
         operations = build_operations(
             bounds,
@@ -2860,6 +4135,7 @@ def run_simulation(args: argparse.Namespace) -> int:
         args.logger.log(
             f"[simulate] duration={args.duration_mins}m "
             f"workers={args.workers_min}-{args.workers_max} "
+            f"population_mode={args.population_mode} "
             f"multi_hive={'on' if args.multi_hive else 'off'} "
             f"hives={args.hives if args.multi_hive else 1} "
             f"workers_per_hive={args.workers_per_hive if args.multi_hive else args.workers_max} "
@@ -3019,36 +4295,20 @@ def run_simulation(args: argparse.Namespace) -> int:
             f"budget={args.error_budget_rate if args.error_budget_rate is not None else 'none'} "
             f"pass={'yes' if error_budget_pass else 'no'}"
         )
-        gateway_status_end = fetch_gateway_status_snapshot(client, args.logger, "end")
-        gateway_status_diff = gateway_status_delta(
-            gateway_status_start,
-            gateway_status_end,
-        )
-        if gateway_status_diff is not None:
-            broker_delta = gateway_status_diff.get("broker", {})
-            if broker_delta:
-                args.logger.log(
-                    "[gateway] status_delta "
-                    + " ".join(
-                        f"{key}={value}" for key, value in sorted(broker_delta.items())
-                    )
+        target_session_sha256: Optional[str] = None
+        executable_state: Optional[Dict[str, object]] = None
+        required_fault_markers: List[str] = []
+        if args.population_mode == POPULATION_EXECUTABLE:
+            try:
+                state.executable_post_state = capture_executable_state(
+                    client,
+                    state,
+                    require_accepted_identity=False,
                 )
-        artifacts = write_simulation_artifacts(
-            args,
-            args.logger,
-            overall,
-            stats,
-            ramp_rows,
-            state.worker_cap,
-            overall_err_rate,
-            error_budget_pass,
-            gateway_status_start,
-            gateway_status_end,
-            gateway_status_diff,
-            concurrency.snapshot(args.max_inflight),
-        )
-        for label, path in artifacts.items():
-            args.logger.log(f"[artifact] {label}={path}")
+                validate_executable_post_state(state)
+            except Exception as exc:
+                if run_error is None:
+                    run_error = exc
 
         final_status = "ok"
         if run_error is not None:
@@ -3063,6 +4323,91 @@ def run_simulation(args: argparse.Namespace) -> int:
             run_token=state.run_token,
             status=final_status,
         )
+
+        if args.population_mode == POPULATION_EXECUTABLE and run_error is None:
+            try:
+                assert state.acceptance_binding is not None
+                state.fault_artifacts, required_fault_markers = capture_fault_artifacts(
+                    args,
+                    state.acceptance_binding,
+                )
+                target_session_sha256, executable_state = build_executable_report_state(
+                    state,
+                    required_fault_markers,
+                )
+            except Exception as exc:
+                run_error = exc
+
+        gateway_status_end = fetch_gateway_status_snapshot(client, args.logger, "end")
+        gateway_status_diff = gateway_status_delta(
+            gateway_status_start,
+            gateway_status_end,
+        )
+        if gateway_status_diff is not None:
+            broker_delta = gateway_status_diff.get("broker", {})
+            if broker_delta:
+                args.logger.log(
+                    "[gateway] status_delta "
+                    + " ".join(
+                        f"{key}={value}" for key, value in sorted(broker_delta.items())
+                    )
+                )
+        latest_population = (
+            (
+                state.population_observations[0]
+                if args.population_mode == POPULATION_EXECUTABLE
+                else state.population_observations[-1]
+            )
+            if state.population_observations
+            else PopulationSnapshot(
+                requested=0,
+                discovered=0,
+                ready=0,
+                backend_class="unknown",
+                proof_class=(
+                    "host-model"
+                    if args.population_mode == POPULATION_HOST_MODEL
+                    else "none"
+                ),
+            )
+        )
+        population_report = {
+            "mode": args.population_mode,
+            "maximum_live_tasks": state.maximum_live_tasks,
+            **latest_population.as_dict(),
+            "observations": [
+                snapshot.as_dict()
+                for snapshot in state.population_observations
+            ],
+        }
+        args.logger.log(
+            "[population] "
+            f"mode={args.population_mode} "
+            f"requested={latest_population.requested} "
+            f"discovered={latest_population.discovered} "
+            f"ready={latest_population.ready} "
+            f"backend_class={latest_population.backend_class} "
+            f"proof_class={latest_population.proof_class}"
+        )
+        artifacts = write_simulation_artifacts(
+            args,
+            args.logger,
+            overall,
+            stats,
+            ramp_rows,
+            state.worker_cap,
+            overall_err_rate,
+            error_budget_pass,
+            gateway_status_start,
+            gateway_status_end,
+            gateway_status_diff,
+            concurrency.snapshot(args.max_inflight),
+            population_report,
+            target_session_sha256,
+            executable_state,
+        )
+        for label, path in artifacts.items():
+            args.logger.log(f"[artifact] {label}={path}")
 
         if not args.no_cleanup and args.no_qemu:
             for worker_id in list(spawned):
@@ -3443,14 +4788,19 @@ def benchmark_report_payload(
     error_budget_pass: bool,
     gateway_status_diff: Optional[Dict[str, Dict[str, object]]],
     concurrency: Dict[str, object],
+    population: Optional[Dict[str, object]] = None,
+    executable_state: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     duration_s = max(float(args.duration_mins) * 60.0, 1e-9)
+    population_mode = getattr(args, "population_mode", POPULATION_HOST_MODEL)
     target_rps_min, target_rps_max = target_rps_bounds(args)
     latency = latency_summary(overall)
-    return {
+    payload: Dict[str, object] = {
         "schema": "cohesix-benchmark-report/v1",
         "workload": {
             "mode": "simulate",
+            "population_mode": population_mode,
+            "control_write_outcome": "admitted",
             "scenario": args.scenario or "mixed",
             "seed": args.seed,
             "entropy": args.entropy,
@@ -3505,6 +4855,14 @@ def benchmark_report_payload(
         "retained_state": retained_state_summary(stats),
         "concurrency": concurrency,
         "backpressure": benchmark_backpressure_summary(gateway_status_diff),
+        "population": population or {
+            "mode": population_mode,
+            "requested": 0,
+            "discovered": 0,
+            "ready": 0,
+            "backend_class": "unknown",
+            "proof_class": "host-model" if population_mode == POPULATION_HOST_MODEL else "none",
+        },
         "top_operations_by_p95": top_operations_by(stats, "p95_s"),
         "top_operations_by_error_rate": top_operations_by(stats, "error_rate"),
         "visualization": {
@@ -3525,6 +4883,9 @@ def benchmark_report_payload(
             ],
         },
     }
+    if executable_state is not None:
+        payload["executable_state"] = executable_state
+    return payload
 
 
 def write_ramp_svg(ramp_rows: List[Dict[str, object]], svg_path: str) -> None:
@@ -3578,6 +4939,9 @@ def write_simulation_artifacts(
     gateway_status_end: Optional[Dict[str, object]] = None,
     gateway_status_diff: Optional[Dict[str, Dict[str, object]]] = None,
     concurrency: Optional[Dict[str, object]] = None,
+    population: Optional[Dict[str, object]] = None,
+    target_session_sha256: Optional[str] = None,
+    executable_state: Optional[Dict[str, object]] = None,
 ) -> Dict[str, str]:
     base_path = logger.path.rsplit(".", 1)[0]
     summary_json = f"{base_path}.summary.json"
@@ -3591,9 +4955,12 @@ def write_simulation_artifacts(
         "submitted": 0,
         "completed": 0,
     }
+    population_mode = getattr(args, "population_mode", POPULATION_HOST_MODEL)
 
     summary_payload = {
         "mode": "simulate",
+        "population_mode": population_mode,
+        "control_write_outcome": "admitted",
         "seed": args.seed,
         "rest_url": args.rest_url,
         "workers_min": args.workers_min,
@@ -3632,6 +4999,7 @@ def write_simulation_artifacts(
         "gateway_status_end": gateway_status_end,
         "gateway_status_delta": gateway_status_diff,
         "concurrency": concurrency_summary,
+        "population": population,
         "report": benchmark_report_payload(
             args,
             overall,
@@ -3642,6 +5010,8 @@ def write_simulation_artifacts(
             error_budget_pass,
             gateway_status_diff,
             concurrency_summary,
+            population,
+            executable_state,
         ),
         "overall": operation_summary(overall, args.summary_max_error_lines),
         "operations": {
@@ -3650,6 +5020,8 @@ def write_simulation_artifacts(
         },
         "ramp": ramp_rows,
     }
+    if target_session_sha256 is not None:
+        summary_payload["target_session_sha256"] = target_session_sha256
     with open(summary_json, "w", encoding="utf-8") as handle:
         json.dump(summary_payload, handle, indent=2, sort_keys=True)
 
@@ -3736,6 +5108,39 @@ def run_perf(args: argparse.Namespace) -> int:
     except Exception as exc:  # pragma: no cover - CLI error reporting
         args.logger.log(f"Failed to fetch bounds: {exc}")
         return 1
+    perf_population: Dict[str, object]
+    executable_workers: Optional[List[WorkerInstance]] = None
+    if args.population_mode == POPULATION_EXECUTABLE:
+        try:
+            runtime = worker_runtime_bounds(bounds)
+            requested = min(args.max_workers, int(runtime["maximum_live_tasks"]))
+            executable_workers, population = executable_population_snapshot(
+                client,
+                bounds,
+                requested,
+            )
+        except Exception as exc:
+            args.logger.log(f"Executable Worker discovery failed: {exc}")
+            return 1
+        perf_population = {
+            "mode": POPULATION_EXECUTABLE,
+            "maximum_live_tasks": int(runtime["maximum_live_tasks"]),
+            **population.as_dict(),
+        }
+    else:
+        backend_class, proof_class = gateway_population_axes(
+            client,
+            POPULATION_HOST_MODEL,
+        )
+        perf_population = {
+            "mode": POPULATION_HOST_MODEL,
+            "maximum_live_tasks": None,
+            "requested": args.max_workers,
+            "discovered": 0,
+            "ready": 0,
+            "backend_class": backend_class,
+            "proof_class": proof_class,
+        }
     emit_benchmark_marker(
         client,
         args.logger,
@@ -3765,19 +5170,28 @@ def run_perf(args: argparse.Namespace) -> int:
         }
 
     if args.suite in ("telemetry", "all"):
-        try:
-            workers = list_workers(client)
-        except Exception as exc:  # pragma: no cover - CLI error reporting
-            args.logger.log(f"Failed to list workers: {exc}")
-            emit_benchmark_marker(
-                client,
-                args.logger,
-                mode="perf",
-                phase="end",
-                run_token=run_token,
-                status="error",
-            )
-            return 1
+        telemetry_paths: Optional[Dict[str, str]] = None
+        if executable_workers is not None:
+            workers = [instance.worker_id for instance in executable_workers]
+            telemetry_paths = {
+                instance.worker_id: instance.telemetry_path
+                for instance in executable_workers
+            }
+        else:
+            try:
+                workers = list_workers(client)
+            except Exception as exc:  # pragma: no cover - CLI error reporting
+                args.logger.log(f"Failed to list workers: {exc}")
+                emit_benchmark_marker(
+                    client,
+                    args.logger,
+                    mode="perf",
+                    phase="end",
+                    run_token=run_token,
+                    status="error",
+                )
+                return 1
+            perf_population["discovered"] = len(workers)
         if not workers:
             args.logger.log("telemetry: no workers found; skipping telemetry suite.")
             emit_benchmark_marker(
@@ -3790,7 +5204,10 @@ def run_perf(args: argparse.Namespace) -> int:
             )
             return 0
         telemetry_specs = build_telemetry_specs(
-            workers, args.max_workers, args.tail_bytes
+            workers,
+            args.max_workers,
+            args.tail_bytes,
+            telemetry_paths,
         )
         if not telemetry_specs:
             args.logger.log("telemetry: no telemetry specs; skipping telemetry suite.")
@@ -3843,6 +5260,8 @@ def run_perf(args: argparse.Namespace) -> int:
             json.dump(
                 {
                     "mode": "perf",
+                    "population_mode": args.population_mode,
+                    "population": perf_population,
                     "rest_url": args.rest_url,
                     "runs": args.runs,
                     "suite": args.suite,

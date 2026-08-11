@@ -54,8 +54,8 @@ fn swarmui_rest_projection_is_default_but_feature_scoped() {
     );
     assert_eq!(
         rest_features,
-        vec!["cohsh/rest"],
-        "REST projection must stay feature-scoped through cohsh/rest"
+        vec!["cohsh/rest", "dep:cohesix-rest"],
+        "REST projection and status schema must stay feature-scoped"
     );
     assert_eq!(
         cohsh["default-features"].as_bool(),

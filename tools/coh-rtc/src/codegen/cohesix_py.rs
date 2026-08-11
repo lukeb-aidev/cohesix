@@ -5,13 +5,32 @@
 
 use crate::codegen::hash_bytes;
 use crate::ir::{Manifest, TelemetryIngestEvictionPolicy};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use cohsh_core::{
     MAX_ECHO_LEN, MAX_ID_LEN, MAX_JSON_LEN, MAX_LINE_LEN, MAX_PATH_LEN, MAX_TICKET_LEN,
 };
 use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
+
+/// Versioned schema for one target-qualified Cohesix Python profile contract.
+pub const PYTHON_PROFILE_SCHEMA: &str = "cohesix-python-profile/v1";
+/// Accepted host-ticket request schemas. Version 1 remains a compatibility
+/// input; version 2 is the generation-bound Worker receipt path.
+pub const HOST_TICKET_REQUEST_SCHEMAS: [&str; 2] = ["host-ticket/v1", "host-ticket/v2"];
+/// Accepted host-ticket result schemas corresponding to the request schemas.
+pub const HOST_TICKET_RESULT_SCHEMAS: [&str; 2] =
+    ["host-ticket-result/v1", "host-ticket-result/v2"];
+/// Exact GPU actions that can produce a WorkerGpu receipt.
+pub const GPU_RECEIPT_ACTIONS: [&str; 3] =
+    ["gpu.lease.grant", "gpu.lease.renew", "gpu.lease.release"];
+/// Exact PEFT actions that can produce a WorkerLora receipt.
+pub const PEFT_RECEIPT_ACTIONS: [&str; 4] = [
+    "peft.export",
+    "peft.import",
+    "peft.activate",
+    "peft.rollback",
+];
 
 fn py_bool(value: bool) -> &'static str {
     if value {
@@ -46,7 +65,23 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     writeln!(contents, "# Copyright 2026 Lukas Bower").ok();
     writeln!(contents).ok();
     writeln!(contents, "DEFAULTS = {{").ok();
-    writeln!(contents, "    \"manifest_sha256\": \"{}\",", manifest_hash).ok();
+    // The wheel is shared by every target. Its built-in values are bounded
+    // fallback expectations and deliberately cannot identify a live target.
+    // Keep the compiler input hash under a non-authoritative provenance key so
+    // generated drift remains reviewable without presenting it as evidence.
+    writeln!(
+        contents,
+        "    \"contract_kind\": \"target-neutral-fallback\","
+    )
+    .ok();
+    writeln!(contents, "    \"manifest_sha256\": None,").ok();
+    writeln!(
+        contents,
+        "    \"generation_source_sha256\": \"{}\",",
+        manifest_hash
+    )
+    .ok();
+    writeln!(contents, "    \"execution_proof\": \"none\",").ok();
     writeln!(
         contents,
         "    \"secure9p\": {{\"msize\": {}, \"walk_depth\": {}}},",
@@ -579,12 +614,206 @@ pub fn render_defaults(manifest: &Manifest, manifest_hash: &str) -> CohesixPyDef
     writeln!(contents, "        \"output_root\": \"out/examples\",").ok();
     writeln!(contents, "    }},").ok();
     writeln!(contents, "}}").ok();
+    writeln!(contents).ok();
+    writeln!(contents, "PROFILE_SCHEMA = \"{}\"", PYTHON_PROFILE_SCHEMA).ok();
+    writeln!(
+        contents,
+        "HOST_TICKET_REQUEST_SCHEMAS = (\"{}\", \"{}\")",
+        HOST_TICKET_REQUEST_SCHEMAS[0], HOST_TICKET_REQUEST_SCHEMAS[1]
+    )
+    .ok();
+    writeln!(
+        contents,
+        "HOST_TICKET_RESULT_SCHEMAS = (\"{}\", \"{}\")",
+        HOST_TICKET_RESULT_SCHEMAS[0], HOST_TICKET_RESULT_SCHEMAS[1]
+    )
+    .ok();
+    writeln!(
+        contents,
+        "GPU_RECEIPT_ACTIONS = (\"{}\", \"{}\", \"{}\")",
+        GPU_RECEIPT_ACTIONS[0], GPU_RECEIPT_ACTIONS[1], GPU_RECEIPT_ACTIONS[2]
+    )
+    .ok();
+    writeln!(
+        contents,
+        "PEFT_RECEIPT_ACTIONS = (\"{}\", \"{}\", \"{}\", \"{}\")",
+        PEFT_RECEIPT_ACTIONS[0],
+        PEFT_RECEIPT_ACTIONS[1],
+        PEFT_RECEIPT_ACTIONS[2],
+        PEFT_RECEIPT_ACTIONS[3]
+    )
+    .ok();
 
     let hash = hash_bytes(contents.as_bytes());
     CohesixPyDefaults {
         python: contents,
         hash,
     }
+}
+
+/// Render one target-qualified Python contract from the selected resolved
+/// manifest and seL4 production profile. The emitted JSON is data consumed by
+/// the shared wheel; it is never embedded into that wheel.
+pub fn render_profile_contract(
+    manifest: &Manifest,
+    manifest_hash: &str,
+    sel4_profile: &str,
+    target: &str,
+) -> Result<Vec<u8>> {
+    let expected_manifest_profile = match target {
+        "qemu" => "virt-aarch64",
+        "pi4" => "pi4-uboot-aarch64",
+        _ => bail!("unsupported Cohesix Python target {target}"),
+    };
+    if manifest.profile.name != expected_manifest_profile {
+        bail!(
+            "target {target} requires manifest profile {expected_manifest_profile}, got {}",
+            manifest.profile.name
+        );
+    }
+    let expected_sel4_profile = match target {
+        "qemu" => "qemu_smp_production",
+        "pi4" => "pi4_production",
+        _ => unreachable!("target was validated above"),
+    };
+    if sel4_profile != expected_sel4_profile {
+        bail!("target {target} requires seL4 profile {expected_sel4_profile}, got {sel4_profile}");
+    }
+    if !manifest.worker_runtime.task_abi.enabled
+        || manifest.worker_runtime.task_abi.version != 1
+        || manifest.worker_runtime.scheduling.profile.as_str() != "mcs"
+    {
+        bail!("target-qualified Python contracts require the executable Worker ABI v1 MCS profile");
+    }
+
+    let configured_actions = manifest
+        .ecosystem
+        .host
+        .tickets
+        .action_allowlist
+        .iter()
+        .map(|action| action.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    for action in GPU_RECEIPT_ACTIONS
+        .iter()
+        .chain(PEFT_RECEIPT_ACTIONS.iter())
+    {
+        if !configured_actions.contains(action) {
+            bail!("host ticket action allowlist is missing receipt action {action}");
+        }
+    }
+
+    let role_records = manifest
+        .worker_runtime
+        .roles
+        .iter()
+        .map(|role| {
+            let executable_slots = manifest
+                .worker_resource_admission
+                .executable_roles
+                .iter()
+                .find(|entry| entry.role == role.role.as_str())
+                .map_or(0, |entry| entry.executable_slots);
+            serde_json::json!({
+                "role": role.role.as_str(),
+                "declaration": if role.implemented { "executable" } else { "model-only" },
+                "executable_slots": executable_slots,
+                "ticket_scope": role.ticket_scope,
+                "telemetry_path_template": role.telemetry_path_template,
+                "lease_path_template": role.lease_path_template,
+            })
+        })
+        .collect::<Vec<_>>();
+    let maximum_live_tasks = manifest
+        .worker_resource_admission
+        .executable_roles
+        .iter()
+        .try_fold(0u16, |total, role| total.checked_add(role.executable_slots))
+        .context("maximum live Worker task count overflowed")?;
+
+    let value = serde_json::json!({
+        "schema": PYTHON_PROFILE_SCHEMA,
+        "meta": {
+            "author": "Lukas Bower",
+            "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest.",
+        },
+        "target_profile": sel4_profile,
+        "target": target,
+        "manifest_profile": manifest.profile.name,
+        "manifest_sha256": manifest_hash,
+        "worker": {
+            "implementation_epoch": manifest.worker_runtime.implementation_epoch,
+            "maximum_live_tasks": maximum_live_tasks,
+            "namespace_capacity_per_role": manifest.worker_runtime.max_workers,
+            "roles": role_records,
+            "task_abi_schema": "worker-task-abi/v1",
+            "task_abi_version": manifest.worker_runtime.task_abi.version,
+            "scheduling_profile": manifest.worker_runtime.scheduling.profile.as_str(),
+        },
+        "schemas": {
+            "host_ticket_accepted": HOST_TICKET_REQUEST_SCHEMAS,
+            "host_ticket_result_accepted": HOST_TICKET_RESULT_SCHEMAS,
+            "worker_observation": "cohesix-worker-observation/v1",
+            "worker_integration_evidence": "cohesix-worker-integration-evidence/v1",
+            "worker_gpu_receipt": "worker-gpu-receipt/v1",
+            "worker_lora_receipt": "worker-lora-receipt/v1",
+        },
+        "namespace": {
+            "sharding_enabled": manifest.sharding.enabled,
+            "shard_bits": manifest.sharding.shard_bits,
+            "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+            "legacy_worker_alias": manifest.sharding.legacy_worker_alias,
+            "legacy_telemetry_path_template": "/worker/<id>/telemetry",
+        },
+        "vocabularies": {
+            "lifecycle": ["absent", "queued", "starting", "ready", "closing", "faulted", "terminal"],
+            "receipt": ["none", "pending", "confirmed", "rejected", "stale"],
+            "artifact": ["missing", "verified", "mismatch"],
+            "execution_proof": ["none", "host-model", "qemu", "fresh-pi"],
+            "integration_obligation": ["role_required", "release_required", "use_case_required", "optional", "future"],
+            "integration_observed_mode": ["unknown", "missing", "disabled", "fixture", "mock", "dry-run", "live"],
+        },
+        "receipts": {
+            "gpu_actions": GPU_RECEIPT_ACTIONS,
+            "peft_actions": PEFT_RECEIPT_ACTIONS,
+            "max_control_inflight": manifest.worker_runtime.task_abi.max_control_inflight,
+        },
+        "bounds": {
+            "secure9p_msize": manifest.secure9p.msize,
+            "secure9p_walk_depth": manifest.secure9p.walk_depth,
+            "console_max_line_bytes": MAX_LINE_LEN,
+            "console_max_path_bytes": MAX_PATH_LEN,
+            "console_max_json_bytes": MAX_JSON_LEN,
+            "worker_ready_timeout_ms": manifest.worker_runtime.task_abi.ready_timeout_ms,
+            "worker_shutdown_grace_ms": manifest.worker_runtime.task_abi.shutdown_grace_ms,
+            "worker_shared_page_bytes": manifest.worker_runtime.task_abi.shared_page_bytes,
+            "worker_receipt_label_bytes": 24,
+        },
+        "host_integration": {
+            "schema": "host-integration-dependency/v1",
+            "modes": ["unknown", "missing", "disabled", "fixture", "mock", "dry-run", "live"],
+            "python_dependency_id": "python-sdk-projection",
+        },
+        "proof_boundary": {
+            "profile_contract_establishes_target_identity": true,
+            "profile_contract_establishes_execution_proof": false,
+            "static_defaults_establish_execution_proof": false,
+            "python_projection_is_authority": false,
+        },
+    });
+    let mut bytes = serde_json::to_vec_pretty(&value)?;
+    bytes.push(b'\n');
+    Ok(bytes)
+}
+
+/// Emit one target-qualified Python profile contract.
+pub fn emit_profile_contract(bytes: &[u8], path: &Path) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    fs::write(path, bytes)
+        .with_context(|| format!("failed to write Python profile contract {}", path.display()))
 }
 
 /// Write the generated defaults module to disk.

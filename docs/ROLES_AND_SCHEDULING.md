@@ -20,11 +20,12 @@ default-profile values are summarized in
 [the generated manifest snippet](snippets/root_task_manifest.md). Do not copy
 generated badge bases or quotas into client code or hand-maintained prose.
 
-All checked-in profiles currently mark every target Worker role
-`implemented = false`, with cap-backed authority and lifecycle notifications
-disabled. The role enum, a recognized ticket label, a reserved badge range, a
-Worker crate, or a host namespace view is not proof that a target Worker image
-was loaded or resumed.
+The default QEMU and Pi 4 profiles admit one executable slot each for
+WorkerHeartbeat, WorkerGpu, and WorkerLora. Cap-backed authority and lifecycle
+notifications are enabled for those three roles. WorkerBus remains a
+model/session-only role. A generated executable record proves configured
+admission; a QEMU or Pi claim still requires target evidence for the exact
+kernel, resolved manifest, root image, Worker archive, and ABI version.
 
 ## Role support matrix
 
@@ -33,30 +34,18 @@ The checked-in default and Pi 4 profiles currently declare the following:
 | Role | Ticket and host policy | Target worker in selected profiles | Authority scope |
 | --- | --- | --- | --- |
 | Queen | Implemented | Root-task authority, not a separate worker image | Hive-wide access to enabled control and observability providers. |
-| WorkerHeartbeat | Model/session only | **Not executable** | Own telemetry and the minimal worker observability view. |
-| WorkerGpu | Model/session only | **Not executable** | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
+| WorkerHeartbeat | Implemented | One admitted executable slot | Own telemetry and the minimal worker observability view. |
+| WorkerGpu | Implemented | One admitted executable slot | Worker view plus its generated GPU lease scope. GPU hardware remains host-side. |
 | WorkerBus | Recognized | **Not executable; session/model only** | Host/sidecar policy can describe a bus scope, but the selected target profiles must reject it as target-task authority. |
-| WorkerLora | Model/session only | **Not executable** | Own Worker view plus bounded AI LoRA model receipts. It has no live target endpoint, separate root namespace, or file-backed LoRA lease. |
+| WorkerLora | Implemented | One admitted executable slot | Own Worker view plus bounded AI LoRA model receipts. It receives no local GPU authority; PEFT execution remains host-side. |
 
-No Worker role may be presented as an active target task until compiler IR is
-extended with a complete task-object contract and accepts
-`implemented = true` for the selected manifest. That value means the role is a
-statically configured executable candidate; it does not assert that a later
-target run has already passed. Operational and release claims additionally
-require separate exact-image QEMU and Pi acceptance records binding the kernel,
-resolved manifest, root image, Worker image, ABI version, and evidence pack.
-Current validation rejects `implemented = true`, and all current profiles
-therefore remain model/session-only.
-
-Pending Milestone 26e is the implementation owner that changes this as-built
-state: Heartbeat, GPU, and LoRA become mandatory executable roles with separate
-QEMU/Pi acceptance records, while WorkerBus alone remains model/session-only.
-Its planned receipt contract binds a specifically selected READY WorkerGpu to
-GPU lease grant/renew/release results and a specifically selected READY
-WorkerLora to PEFT export/import/activate/rollback results through versioned
-records on the existing host-ticket paths; all GPU and PEFT execution remains
-host-side. This paragraph is a plan reference, not evidence that the pending
-binaries or task objects already exist.
+`implemented = true` means that the role has a compiler-owned task ABI,
+executable slot, object budget, temporal record, selected child image, and
+bounded supervisor lifecycle. It does not by itself assert that a target run
+passed. Operational and release claims require separate exact-image QEMU and Pi
+acceptance records. WorkerGpu lease receipts and WorkerLora PEFT receipts stay
+on their existing host-ticket paths; CUDA, NVML, and PEFT execution remain
+host-side.
 
 ## Namespace views
 
@@ -140,9 +129,9 @@ their secret material.
   checked before authority is granted.
 - A successful application attach binds a role-scoped control-plane session; it
   does not start or prove a target Worker task.
-- Any future target-task attach additionally requires the role to be marked
-  implemented and live cap-backed endpoint authority to match its role and
-  epoch.
+- A target-task attach additionally requires the role to be marked implemented
+  and live cap-backed endpoint authority to match its role, slot, lease epoch,
+  supervisor generation, and cap generation.
 
 Host NineDoor verifies tickets against registered role keys. The target console
 performs transport authentication first for TCP, then validates the
@@ -170,37 +159,55 @@ Worker authority has two distinct layers:
 
 1. **Session authority.** A valid role, subject, ticket, lifecycle gate, and
    namespace scope authorize an operation at the control-plane layer.
-2. **seL4 invocation authority.** A future executable target role must receive
-   a live Write-only output endpoint cap whose immutable badge identifies
+2. **seL4 invocation authority.** An executable target role receives a live
+   Write-only output endpoint cap whose immutable badge identifies
    `(role, slot, logical lease epoch, supervisor generation, cap generation)`
-   and a Read-only lifecycle
-   notification cap whose one-hot badges identify wake events. ABI action is a
-   validated message label, while sequence, generation, TTL, pressure, and
-   other structured data live in bounded control/completion records; badges do
-   not carry that data. The Worker's active scheduling context binds only to
-   its TCB, never to the notification.
+   and a Read-only lifecycle notification cap whose one-hot badges identify
+   control, timeout, shutdown, and revoke. ABI action is a validated message
+   label, while sequence and generation data live in bounded shared records;
+   badges do not carry structured data. The Worker's active scheduling context
+   binds only to its TCB, never to a notification.
 
-Current checked-in profiles implement only the first layer. They disable
-endpoint-cap and notification authority for every target Worker role. The
-badge values retained in generated records are reserved schema ranges; they are
-not minted caps, delivered notifications, or live seL4 authority.
-[`worker_authority.rs`](../apps/root-task/src/worker_authority.rs) reports the
-roles as non-executable and rejects those reserved ranges as inactive.
+The root Worker supervisor owns construction, READY admission, one-in-flight
+control publication, bounded shutdown, fault teardown, revocation, and fresh
+generation. A bound supervisor-wake notification coalesces the generated
+heartbeat/GPU/LoRA completion bits with the critical handoff bit. The
+supervisor validates the entire received mask, drains durable child records,
+then drains fault records before root-control records when the critical bit is
+present. The three fault mailboxes are keyed by the generated temporal Worker
+ordinal, not the role-local ABI slot: the current Heartbeat, GPU, and LoRA
+identities each use role-local slot zero and therefore cannot safely index a
+shared mailbox array by `identity.slot`.
+
+The fixed `worker-task-abi/v1` outcome field has the exact values
+`NotApplicable=0`, `Confirmed=1`, `Rejected=2`, and `Stale=8`. The explicit
+stale value extends the existing fixed layout without changing its record
+sizes, magic values, or ABI version, and both GPU and LoRA receipt/completion
+runtimes preserve it without aliasing it to rejection. For host-ticket/v2,
+root maps `succeeded` to `Confirmed` and both `failed` and `expired` to
+`Rejected`. `Stale` is reserved for an otherwise valid terminal result whose
+pinned Worker identity changed or was torn down after admission. Root retains
+the admitted result with an internal stale disposition and never sends that old
+result to a replacement generation. A stale control or completion that does
+exist is accepted only when its complete identity, action, sequence, and receipt
+digests match the exact current one-in-flight record.
 
 Revocation is bounded and explicit:
 
 1. Policy denial, ticket expiry, budget exhaustion, lease expiry, or a valid
    Queen lifecycle operation selects the authority to close.
 2. The session or worker record is marked closed/revoked with a reason.
-3. Current root/host model state records the transition; no Worker notification
-   is delivered because no Worker task or notification cap exists.
-4. Subsequent namespace and console operations fail rather than
-   silently continuing.
-5. Logs and enabled observability providers record the transition.
+3. Root publishes the generated one-hot lifecycle cause and waits only for the
+   bounded completion/timeout window.
+4. The supervisor suspends the exact TCB generation, unbinds its active SC,
+   clears mappings, and revokes the role's grouped child-untyped derivations
+   before returning the executable slot to the pool.
+5. Subsequent namespace and console operations fail rather than silently
+   continuing; logs and enabled observability providers record the transition.
 
-A future enabled notification record would prove only configured topology.
-Target acceptance additionally requires evidence that the selected image
-created, delivered, and handled the notification correctly.
+Generated records prove topology and offline admission. Target acceptance
+additionally proves that the selected image created, delivered, handled, and
+revoked the capabilities on the named profile.
 
 ## Scheduling layers
 
@@ -209,22 +216,128 @@ claim.
 
 ### 1. Kernel and target-task scheduling
 
-The selected manifest carries Worker scheduling metadata. Current checked-in
-profiles select a non-MCS record with a generated priority, domain, and bounded
-service-turn budget; MCS budget/period fields are zero and consumed-budget
-evidence is disabled. Because no Worker TCB exists, these values are not applied
-target-task scheduling evidence. Affinity is also profile-generated metadata.
+The default QEMU and Pi 4 profiles select four-core, one-domain seL4 SMP+MCS.
+Every active temporal record owns a distinct SC, uses the SchedControl cap for
+its declared core, and declares budget, period, deadline, refill bound,
+priority, MCP, blocking, release jitter, WCET provenance, response time, and
+admission result. `max_refills` is the total refill bound; root passes
+`max_refills - 2` as the seL4 `extra_refills` argument. NineDoor is the one
+passive service in this inventory and may run only on its generated bounded
+donor/Reply chain.
 
-These values are target execution policy. Claims about applied affinity,
-priority, scheduling contexts, or consumed budget require the selected seL4
-build and target evidence, not just generated metadata.
+The init TCB and initial SC are the real `root-control` domain because that
+thread retains bootstrap and HAL admission authority. There is no duplicate or
+idle root-control child. Four restricted root-resident children have separate
+TCBs, active SCs, CSpaces, IPC buffers, stacks, timeout caps, and named duties:
+
+- `root-fault` owns the standard and timeout receive lanes and their distinct
+  Reply objects;
+- `root-emergency` is the terminal fail-stop path;
+- `root-worker-supervisor` owns Worker lifecycle and teardown; and
+- `root-driver-supervisor` owns driver faulted-call failure and containment.
+
+For an isolated service fault, `root-fault` suspends the exact registered TCB.
+For passive NineDoor only, it then consumes the dedicated
+compiler-selected recovery Reply association: an outstanding `root-control`
+Call receives exactly one typed `Closed` failure, while a between-call fault
+issues no Reply. The atomic ready-to-replied transition prevents double Reply,
+and the active console service is rejected by the recovery-contract validator.
+Root-fault next publishes one durable record into that service's generated
+temporal-index mailbox. Root-control can take only the named record and perform
+scrub, unmap, and retained-anchor revoke. A full or aliased service mailbox is
+fail-stop; it is never treated as a dropped notification.
+
+Critical-domain manifest slots retain permanent CNode caps so root can account
+for and retain those permanent objects. They are not grouped child-untyped
+reclamation anchors and must not be reported as reusable Worker or driver
+donors. Worker slot anchors are separately derived from the grouped child
+untyped used for that generation.
+
+Claims about applied affinity, priority, SC consumption, or bounded response on
+a target still require selected-kernel QEMU or Pi evidence, not just generated
+metadata.
+
+#### Offline response-time admission
+
+For active task `i`, the compiler iterates the fixed-priority recurrence
+
+`w(0) = WCET(i) + blocking(i)`
+
+`w(n+1) = WCET(i) + blocking(i) + sum(ceil((w(n) + jitter(j)) / period(j)) * WCET(j))`
+
+over every other same-core task `j` with priority greater than or equal to
+`i`. Equal-priority peers interfere because seL4 FIFO ordering may place each
+peer ahead of the task being checked. The result is `w + jitter(i)`. Compilation
+fails on overflow, non-convergence after 128 iterations, a stale declared
+result, or a result beyond the declared deadline.
+
+All active tasks in both selected profiles use a 10,000 us period/deadline,
+zero declared blocking/jitter, and a 1,000 us per-core reserve. The generated
+QEMU budget demand and largest admitted response by core are:
+
+| Core | Active duties | Budget demand / 10,000 us | Largest response |
+| --- | --- | ---: | ---: |
+| 0 | emergency, fault, control, console-network | 3,750 us | 3,000 us |
+| 1 | driver supervisor, Worker supervisor | 1,750 us | 1,400 us |
+| 2 | Worker GPU, Worker LoRA | 800 us | 600 us |
+| 3 | Worker heartbeat | 300 us | 200 us |
+
+The Pi profile adds only its seven admitted linked-driver tasks:
+
+| Core | Added Pi duties | Total budget demand / 10,000 us | Largest response |
+| --- | --- | ---: | ---: |
+| 0 | none | 3,750 us | 3,000 us |
+| 1 | serial, USB | 3,250 us | 2,600 us |
+| 2 | HDMI, PCIe | 1,600 us | 1,200 us |
+| 3 | GENET, CYW43, SDIO | 4,300 us | 3,400 us |
+
+Every total remains below the 9,000 us usable per-core window. The Pi row is
+offline admission only until the separate linked-driver MCS and hardware gates
+pass.
+
+#### Executable-slot resource arithmetic
+
+Namespace/model capacity is eight identities per executable Worker role, but
+the maximum live mix is exactly one heartbeat, one GPU, and one LoRA slot. Each
+slot costs one TCB, CNode, VSpace, ASID, notification, standard-fault cap,
+timeout-fault cap, and active SC; eight page tables, sixteen frames, 64 CSpace
+slots, and 1 MiB of child untyped. No namespace count multiplies these kernel
+objects.
+
+The compiler checks `fixed + maximum live role mix + post-construction reserve`
+against the selected capacity. The exact admitted totals are:
+
+The selected seL4 16 AArch64 SMP+MCS object-size record is TCB 11 bits,
+endpoint 4, notification 6, Reply 5, minimum scheduling context 7, CNode slot
+5, and page/page-table/VSpace 12. Compiler admission rejects stale classic
+notification or Reply sizes rather than understating MCS object memory.
+
+| Resource | QEMU total | Pi total | Capacity |
+| --- | ---: | ---: | ---: |
+| TCBs / CNodes / VSpaces / ASIDs | 18 each | 25 each | 64 each |
+| Page tables | 344 | 600 | 1,024 |
+| Frames | 2,608 | 4,656 | 8,192 |
+| Endpoints | 32 | 48 | 128 |
+| Notifications | 35 | 51 | 128 |
+| Standard / timeout fault caps | 18 each | 25 each | 64 each |
+| Reply objects | 15 | 22 | 64 |
+| Scheduling contexts | 17 | 24 | 64 |
+| CSpace slots | 6,336 | 11,240 | 16,384 |
+| Untyped bytes | 103,809,024 | 137,363,456 | 268,435,456 |
+
+Allocation is fail-closed: an invalid maximum mix, aliased retention/Worker
+slot, object or byte overflow, missing per-core SchedControl, partial child
+construction, duplicate fault registration, or incomplete registry prevents
+activation.
 
 ### 2. Root-task service turns
 
-The event pump gives the root-owned Worker model, consoles, timers, and driver
-clients bounded service opportunities. A service-turn budget limits cooperative
-work performed before yielding. It does not create a Worker TCB, a new kernel
-scheduler, CPU isolation, or real-time latency evidence.
+The event pump gives the root-owned namespace model, consoles, timers, and
+driver clients bounded service opportunities. A service-turn budget limits
+cooperative root work performed before yielding. It does not itself create a
+Worker TCB or prove CPU isolation or real-time latency; executable
+Heartbeat/GPU/LoRA tasks instead use their compiler-declared MCS TCB/SC bundles
+and require target-qualified evidence.
 
 Physical operator input and an authenticated TCP console follow the bounded
 priority rules in `AGENTS.md`; nonessential mirroring and verbose output may be

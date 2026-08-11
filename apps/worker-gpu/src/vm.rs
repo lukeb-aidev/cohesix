@@ -22,8 +22,19 @@ pub fn gpu_receipt_loop(identity: WorkerIdentity) -> Result<GpuReceiptLoop, Work
 
 /// Build a GPU worker identity for endpoint-badge modeling.
 #[must_use]
-pub const fn gpu_identity(instance: u32, lease_epoch: u16, cap_generation: u16) -> WorkerIdentity {
-    WorkerIdentity::new(WorkerRole::Gpu, instance, lease_epoch, cap_generation)
+pub const fn gpu_identity(
+    slot: u32,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+) -> WorkerIdentity {
+    WorkerIdentity::new(
+        WorkerRole::Gpu,
+        slot,
+        lease_epoch,
+        supervisor_generation,
+        cap_generation,
+    )
 }
 
 /// Build a GPU control receipt event.
@@ -50,7 +61,7 @@ mod tests {
 
     #[test]
     fn gpu_vm_loop_emits_control_receipt_only() {
-        let identity = gpu_identity(3, 4, 5);
+        let identity = gpu_identity(3, 4, 5, 6);
         let mut loop_state = gpu_receipt_loop(identity).expect("gpu loop");
         let attached = loop_state.step(attach(identity, 10, 100)).expect("attach");
         assert_eq!(attached.progress, WorkerProgress::Attached);
@@ -85,7 +96,7 @@ mod tests {
 
     #[test]
     fn gpu_vm_loop_records_pressure_without_running_hardware() {
-        let identity = gpu_identity(9, 1, 1);
+        let identity = gpu_identity(9, 1, 1, 1);
         let mut loop_state = gpu_receipt_loop(identity).expect("gpu loop");
         loop_state.step(attach(identity, 0, 50)).expect("attach");
         let pressure = loop_state

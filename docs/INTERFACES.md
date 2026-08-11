@@ -114,6 +114,44 @@ Secure9P messages are not transported through the target TCP console. A
 console command such as `CAT` or `ECHO` invokes the target namespace adapter; it
 does not synthesize a 9P frame on the wire.
 
+### Internal target namespace-service ABI
+
+`nine-door-runtime` uses `namespace-service/v1` only inside the target. It is
+not an operator transport, a host RPC, or a second policy plane. The
+pointer-free 32-byte request header carries exact ABI/header versions,
+operation, zero flags, sequence, supervisor generation, bounded path/payload
+lengths, and zero reserved bytes. Path and payload bytes occupy a distinct
+shared frame bounded to 256 and 4096 bytes respectively. The child accepts only
+`attach`, `tail`, `spawn`, `kill`, `echo`, `cat`, `list`, and `log`; absolute
+paths have at most eight components and reject `.` and `..`.
+
+The child response repeats the operation, exact sequence and generation, typed
+status, and bounded prepared path/payload. The root-side client contract exposes
+exact response validation that must succeed before ticket/Queen policy or
+authoritative mutation. Its call cap is exactly Write + GrantReply, without
+Read or Grant; the child receive cap is Read-only. Root maps the request window
+read-write and response window read-only; the child receives the complementary
+read-only and read-write mappings. Each direction is exactly two 4 KiB pages,
+uses distinct frame capabilities and physical pages, and carries no pointers in
+the shared record. The target adapter sends only sequence and encoded length in
+two message registers and rejects extra or unwrapped caps, unknown labels,
+short replies, stale identities, mismatched prepared bytes, and unknown error
+codes. The QEMU constructor binds the exact selected ELF digest and entry/load
+span, maps image pages W^X, and creates the child from generated revoke anchor
+16137 without allocator fallback. The child owns one receive-loop Reply object
+but no scheduling context; only `root-control` donates on the single-inflight,
+one-deep Call chain. Root-fault retains a copy in its generated CSpace slot 10
+solely to return `NAMESPACE_REJECTED` with typed `Closed` once when a fault
+interrupts an outstanding Call. It then publishes the owner mailbox for scrub,
+unmap, and anchor revoke. No Reply is issued between calls, and the active
+console-network service cannot use this path. Queue-full, partial-frame, close,
+cancellation, stale-generation, and revoke outcomes are explicit and bounded.
+The ABI supplies no target TCP listener, namespace-wide capability, device
+capability, `SchedControl`, ticket-execution authority, or root CSpace access.
+`apps/nine-door` remains a host library/fixture provider and has no target or
+print-and-exit binary. A live QEMU boot is still required to promote these
+constructed interfaces to target execution evidence.
+
 ## Target TCP console sequence
 
 ```mermaid
@@ -165,7 +203,11 @@ line with a four-byte little-endian total length that includes the header.
 
 - Declared total length must be at least 4 and no greater than the Secure9P
   implementation cap of 8192 bytes.
-- The console payload itself is limited to 256 bytes.
+- The isolated QEMU console admits at most 2304 bytes for one authenticated
+  command frame. The existing `echo` grammar permits at most 2048 payload
+  bytes so one compiler-bounded host-ticket record fits with its verb and path;
+  every other command retains its narrower field-specific bound. Physical
+  serial/local-seat lines remain bounded independently at 256 bytes.
 - Oversized unauthenticated frames terminate authentication. An authenticated
   session receives `ERR FRAME reason=invalid-length` and the declared payload
   is drained before the next frame.
@@ -178,18 +220,20 @@ roles require a valid ticket and subject identity. Failed application login
 attempts use the current bounded limiter: three failures within 60 seconds
 produce a 90-second cooldown.
 
-`ATTACH` binds an application session to a role-scoped namespace. Current
-profiles mark every target Worker role non-executable, so a successful Worker
-role attach does not load an image, start a TCB, or install endpoint or
-notification capabilities.
+`ATTACH` binds an application session to a role-scoped namespace; it never
+creates or resumes a task. The selected profiles separately admit executable
+Heartbeat, GPU, and LoRA roles, but only an authorized `/queen/ctl` lifecycle
+operation can select one of their already constructed suspended children. The
+child's durable READY record, not `ATTACH` or the control acknowledgement,
+publishes its exact namespace identity.
 
 ### Command grammar
 
 The compiler-owned command inventory is generated in
 [cohsh_grammar.md](snippets/cohsh_grammar.md). The parser applies per-field
 bounds from [`cohsh-core`](../crates/cohsh-core/src/command.rs), including the
-256-byte line limit, bounded paths/tickets/JSON payloads, and a maximum of 256
-requested tail lines.
+2304-byte authenticated network-command limit, 2048-byte `echo` payload limit,
+bounded paths/tickets/JSON payloads, and a maximum of 256 requested tail lines.
 
 Commands are case-insensitive at the verb parser where implemented; arguments
 remain subject to their command-specific grammar. Unknown verbs, missing
@@ -260,7 +304,7 @@ federated delivery still execute in host agents.
 | --- | --- | --- |
 | `/log/queen.log` | Client read stream; system append | Bounded retained Queen/root log. Console `log`, `tail`, and `cat` are projections over this path. |
 | `/proc/*` | Read-only unless a generated node explicitly says otherwise | Bounded session, lifecycle, pressure, ingest, scheduling, lease, and root-reachability observations. |
-| `/queen/ctl` | Queen control, JSONL | Root-owned Worker model lifecycle, bind, mount, and GPU-worker requests accepted by the implemented parser; current profiles do not launch Worker tasks. |
+| `/queen/ctl` | Queen control, JSONL | Root-owned lifecycle control for compiler-selected executable Heartbeat, GPU, and LoRA children plus model-only WorkerBus. A successful spawn/admit write means accepted or queued, never READY; only the exact child's durable READY record publishes its canonical `/shard/<label>/worker/<id>` paths. Kill/teardown is generation-fenced and removes stale authority before recreation. |
 | `/queen/lifecycle/ctl` | Queen control, token line | Node lifecycle transitions. |
 | `/queen/schedule/ctl` | Queen control, JSONL | Bounded orchestration queue; not a direct seL4 scheduler interface. |
 | `/queen/lease/ctl` | Queen control, JSONL | Grant, renew, preempt, and quota state for bounded control-plane leases. |
@@ -291,17 +335,21 @@ include:
 {"bind":{"from":"/shard","to":"/shadow"}}
 {"mount":{"service":"gpu-bridge","at":"/gpu"}}
 {"spawn":"gpu","lease":{"gpu_id":"GPU-0","mem_mb":4096,"streams":2,"ttl_s":120}}
+{"spawn":"lora","budget":{"ttl_s":120,"ops":64}}
 ```
 
 A successful parse is not permission by itself. Role, ticket, lifecycle,
-provider presence, supported parser/model-session shape, and queue capacity
-remain mandatory. Target-role implementation is a separate requirement only
-for a future executable-Worker profile.
+provider presence, compiler-selected executable contract, queue capacity, and
+available task slot remain mandatory. WorkerBus requests remain model/session
+only and cannot acquire target-task authority.
 
-For current profiles an accepted `spawn` record creates bounded root-owned
-Worker model/session state only. It does not load or resume a Worker TCB. A
-future executable profile requires a separately packaged image and live seL4
-capability, notification, and fault-handling evidence.
+For the selected executable roles an accepted `spawn`/admit record targets one
+preconstructed suspended child and returns before READY. Publication occurs
+only after the exact child commits READY and signals its generated completion
+notification. Kill is generation-fenced, contains and revokes the complete
+instance bundle, and prevents stale records or caps from affecting a later
+fresh-generation reconstruction. Configuration, an ACK, or a host/model
+projection is not target execution evidence.
 
 ### Lifecycle control
 

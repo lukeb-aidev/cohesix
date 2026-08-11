@@ -25,7 +25,9 @@ pub use hive::{
     SwarmUiHiveLeasePreemption, SwarmUiHiveLeaseSnapshot, SwarmUiHiveLeaseSummary,
     SwarmUiHiveOverlay, SwarmUiHivePressureCounters, SwarmUiHiveRootStatus,
     SwarmUiHiveScheduleEntry, SwarmUiHiveScheduleSnapshot, SwarmUiHiveScheduleSummary,
-    SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot,
+    SwarmUiHiveSessionSummary, SwarmUiHiveSnapshot, SwarmUiWorkerAcceptanceRole,
+    SwarmUiWorkerAcceptanceSummary, SwarmUiWorkerArtifact, SwarmUiWorkerDeclaration,
+    SwarmUiWorkerExecutionProof, SwarmUiWorkerLifecycle, SwarmUiWorkerReceipt, SwarmUiWorkerState,
 };
 pub use transport::{TcpTransport, TcpTransportError, TcpTransportFactory, TraceTransportFactory};
 
@@ -43,7 +45,9 @@ use cohsh::{
     tcp_debug_enabled, CohshPolicy, Session as CohshSession, TcpTransport as CohshTcpTransport,
     Transport as CohshTransport,
 };
-use cohsh_core::command::{Command as ConsoleCommand, CommandParser, ConsoleError, MAX_LINE_LEN};
+use cohsh_core::command::{
+    Command as ConsoleCommand, CommandParser, ConsoleError, MAX_ID_LEN, MAX_LINE_LEN,
+};
 use cohsh_core::wire::{render_ack, AckLine, AckStatus, END_LINE};
 use cohsh_core::{
     normalize_ticket, parse_role, role_label, ConsoleVerb, RoleParseMode, TailPollPolicy,
@@ -51,6 +55,7 @@ use cohsh_core::{
 };
 use secure9p_codec::OpenMode;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 #[cfg(feature = "rest")]
 use std::thread;
 
@@ -355,6 +360,8 @@ fn gateway_status_from_snapshot(
 
     SwarmUiHiveGatewayStatus {
         connected,
+        backend_class: None,
+        worker_acceptance: None,
         pressure,
         control_pressure,
         telemetry_pressure,
@@ -372,6 +379,79 @@ fn gateway_status_from_snapshot(
         control_write_retry_exhaustions_delta,
         relay_queue_depth: current.relay_queue_depth,
         relay_remote_write_failures_delta,
+    }
+}
+
+#[cfg(feature = "rest")]
+fn map_worker_acceptance(
+    summary: &cohesix_rest::WorkerAcceptanceSummary,
+) -> Option<SwarmUiWorkerAcceptanceSummary> {
+    let execution_proof = parse_worker_execution_proof(&summary.execution_proof)?;
+    let mut workers = Vec::with_capacity(summary.workers.len());
+    for worker in &summary.workers {
+        workers.push(SwarmUiWorkerAcceptanceRole {
+            role: worker.role.clone(),
+            lifecycle: parse_worker_lifecycle(&worker.lifecycle)?,
+            artifact: parse_worker_artifact(&worker.artifact)?,
+            receipt: parse_worker_receipt(&worker.receipt)?,
+            execution_proof: parse_worker_execution_proof(&worker.execution_proof)?,
+        });
+    }
+    Some(SwarmUiWorkerAcceptanceSummary {
+        schema: summary.schema.clone(),
+        record_kind: summary.record_kind.clone(),
+        evidence_sha256: summary.evidence_sha256.clone(),
+        verdict: summary.verdict.clone(),
+        target: summary.target.clone(),
+        execution_proof,
+        workers,
+    })
+}
+
+#[cfg(feature = "rest")]
+fn parse_worker_lifecycle(value: &str) -> Option<SwarmUiWorkerLifecycle> {
+    match value {
+        "absent" => Some(SwarmUiWorkerLifecycle::Absent),
+        "queued" => Some(SwarmUiWorkerLifecycle::Queued),
+        "starting" => Some(SwarmUiWorkerLifecycle::Starting),
+        "ready" => Some(SwarmUiWorkerLifecycle::Ready),
+        "closing" => Some(SwarmUiWorkerLifecycle::Closing),
+        "faulted" => Some(SwarmUiWorkerLifecycle::Faulted),
+        "terminal" => Some(SwarmUiWorkerLifecycle::Terminal),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "rest")]
+fn parse_worker_artifact(value: &str) -> Option<SwarmUiWorkerArtifact> {
+    match value {
+        "missing" => Some(SwarmUiWorkerArtifact::Missing),
+        "verified" => Some(SwarmUiWorkerArtifact::Verified),
+        "mismatch" => Some(SwarmUiWorkerArtifact::Mismatch),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "rest")]
+fn parse_worker_receipt(value: &str) -> Option<SwarmUiWorkerReceipt> {
+    match value {
+        "none" => Some(SwarmUiWorkerReceipt::None),
+        "pending" => Some(SwarmUiWorkerReceipt::Pending),
+        "confirmed" => Some(SwarmUiWorkerReceipt::Confirmed),
+        "rejected" => Some(SwarmUiWorkerReceipt::Rejected),
+        "stale" => Some(SwarmUiWorkerReceipt::Stale),
+        _ => None,
+    }
+}
+
+#[cfg(feature = "rest")]
+fn parse_worker_execution_proof(value: &str) -> Option<SwarmUiWorkerExecutionProof> {
+    match value {
+        "none" => Some(SwarmUiWorkerExecutionProof::None),
+        "host-model" => Some(SwarmUiWorkerExecutionProof::HostModel),
+        "qemu" => Some(SwarmUiWorkerExecutionProof::Qemu),
+        "fresh-pi" => Some(SwarmUiWorkerExecutionProof::FreshPi),
+        _ => None,
     }
 }
 
@@ -800,7 +880,7 @@ where
         worker_id: &str,
     ) -> SwarmUiTranscript {
         let mut lines = Vec::new();
-        let path = match telemetry_path(&self.config.paths.worker_root, worker_id) {
+        let path = match canonical_worker_telemetry_path(worker_id) {
             Ok(path) => path,
             Err(err) => {
                 lines.push(render_ack_line(
@@ -1064,10 +1144,13 @@ where
                 }
             }
         }
-        match read_lines(&mut session.client, &worker_root) {
+        match discover_workers(&mut session.client, &worker_root) {
             Ok(workers) => {
                 for worker in workers {
-                    lines.push(format!("worker={worker}"));
+                    lines.push(format!(
+                        "worker={} role={} namespace={}",
+                        worker.id, worker.role, worker.namespace
+                    ));
                 }
             }
             Err(err) => {
@@ -1145,7 +1228,7 @@ where
                 .ok_or_else(|| {
                     SwarmUiError::Permission("ticket subject identity missing".to_owned())
                 })?;
-            let path = telemetry_path(&worker_root, subject)?;
+            let path = canonical_worker_telemetry_path(subject)?;
             ensure_role_allowed(role, claims.as_ref(), &path)?;
             Some(subject.to_owned())
         };
@@ -1159,52 +1242,46 @@ where
         for fid in fids {
             let _ = session.client.clunk(fid);
         }
-        let workers = if role == Role::Queen {
-            let mut workers = list_workers(&mut session.client, &worker_root)?;
-            workers.sort();
-            workers
+        let worker_agents = if role == Role::Queen {
+            discover_workers(&mut session.client, &worker_root)?
         } else {
-            vec![subject.expect("subject already validated")]
+            let worker_id = subject.expect("subject already validated");
+            let namespace = canonical_worker_telemetry_path(&worker_id)?;
+            let lines = read_lines(&mut session.client, &namespace)?;
+            vec![worker_agent_from_telemetry(&worker_id, &namespace, &lines)?]
         };
-        let gpu_workers = if role == Role::Queen {
-            discover_gpu_workers(&mut session.client)?
-        } else {
-            HashSet::new()
-        };
-        let mut roles = HashMap::new();
-        for worker in &workers {
-            let inferred = hive::role_for_agent_id(worker);
-            let role = if inferred == "worker" {
-                DEFAULT_WORKER_ROLE
-            } else {
-                inferred
-            };
-            roles.insert(worker.clone(), role.to_owned());
-        }
-        for worker in gpu_workers {
-            roles.insert(worker, "worker-gpu".to_owned());
-        }
-
-        let mut agents = Vec::new();
-        agents.push(SwarmUiHiveAgent {
+        let mut agents = vec![SwarmUiHiveAgent {
             id: "queen".to_owned(),
             role: "queen".to_owned(),
             namespace: "/queen".to_owned(),
-        });
-        for worker in &workers {
-            agents.push(SwarmUiHiveAgent {
-                id: worker.to_owned(),
-                role: roles
-                    .get(worker)
-                    .cloned()
-                    .unwrap_or_else(|| DEFAULT_WORKER_ROLE.to_owned()),
-                namespace: format!("{}/{}", worker_root, worker),
-            });
-        }
+            worker: None,
+        }];
+        agents.extend(worker_agents);
+        let workers = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| agent.id.clone())
+            .collect::<Vec<_>>();
+        let roles = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| (agent.id.clone(), agent.role.clone()))
+            .collect::<HashMap<_, _>>();
+        let namespaces = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| (agent.id.clone(), agent.namespace.clone()))
+            .collect::<HashMap<_, _>>();
 
         self.hive_states.insert(
             key,
-            hive::HiveSessionState::new(workers, roles, self.tail_policy),
+            hive::HiveSessionState::new(
+                workers,
+                roles,
+                namespaces,
+                agents.clone(),
+                self.tail_policy,
+            ),
         );
         self.hive_replay = None;
 
@@ -1234,7 +1311,6 @@ where
         if self.config.offline {
             return Err(SwarmUiError::Offline);
         }
-        let worker_root = self.config.paths.worker_root.clone();
         let hive_config = self.config.hive.clone();
         let key = self.session_key(role, ticket);
         let mut state = self
@@ -1243,30 +1319,37 @@ where
             .ok_or_else(|| SwarmUiError::Hive("hive not bootstrapped".to_owned()))?;
         let ingest_result = {
             let session = self.session_for(role, ticket)?;
-            state.ingest(
-                &mut session.client,
-                &worker_root,
-                SECURE9P_MSIZE,
-                &hive_config,
-            )
+            state.ingest(&mut session.client, SECURE9P_MSIZE, &hive_config)
         };
         self.hive_states.insert(key.clone(), state);
         ingest_result?;
-        let state = self.hive_states.get_mut(&key).expect("hive state");
-        let max_events = hive_config.lod_event_budget as usize;
-        let events = state.drain(max_events);
-        let overlays = state.overlays(hive_config.overlay_lines as usize);
-        let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
-        let backlog = state.queue_len();
-        let pressure = if hive_config.lod_event_budget == 0 {
-            0.0
-        } else {
-            backlog as f32 / hive_config.lod_event_budget as f32
+        let (events, overlays, detail, backlog, pressure, dropped) = {
+            let state = self.hive_states.get_mut(&key).expect("hive state");
+            let max_events = hive_config.lod_event_budget as usize;
+            let events = state.drain(max_events);
+            let overlays = state.overlays(hive_config.overlay_lines as usize);
+            let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
+            let backlog = state.queue_len();
+            let pressure = if hive_config.lod_event_budget == 0 {
+                0.0
+            } else {
+                backlog as f32 / hive_config.lod_event_budget as f32
+            };
+            (events, overlays, detail, backlog, pressure, state.dropped())
         };
-        let dropped = state.dropped();
         let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status_cached(role, ticket, hive_config.status_poll_ms);
+        let agents = {
+            let state = self.hive_states.get_mut(&key).expect("hive state");
+            state.apply_acceptance(
+                gateway
+                    .as_ref()
+                    .and_then(|status| status.worker_acceptance.as_ref()),
+            );
+            state.agents()
+        };
         Ok(SwarmUiHiveBatch {
+            agents,
             events,
             pressure,
             backlog,
@@ -2282,7 +2365,7 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         worker_id: &str,
     ) -> SwarmUiTranscript {
         let mut lines = Vec::new();
-        let path = match telemetry_path(&self.config.paths.worker_root, worker_id) {
+        let path = match canonical_worker_telemetry_path(worker_id) {
             Ok(path) => path,
             Err(err) => {
                 lines.push(render_ack_line(
@@ -2538,10 +2621,13 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 }
             }
         }
-        match list_workers_console(&mut self.transport, &session.session, &worker_root) {
+        match discover_workers_console(&mut self.transport, &session.session, &worker_root) {
             Ok(workers) => {
                 for worker in workers {
-                    lines.push(format!("worker={worker}"));
+                    lines.push(format!(
+                        "worker={} role={} namespace={}",
+                        worker.id, worker.role, worker.namespace
+                    ));
                 }
             }
             Err(err) => {
@@ -2619,59 +2705,56 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 .ok_or_else(|| {
                     SwarmUiError::Permission("ticket subject identity missing".to_owned())
                 })?;
-            let path = telemetry_path(&worker_root, subject)?;
+            let path = canonical_worker_telemetry_path(subject)?;
             ensure_role_allowed(role, claims.as_ref(), &path)?;
             Some(subject.to_owned())
         };
 
         let session = self.session_for(role, ticket)?;
-        let workers = if role == Role::Queen {
-            let mut workers =
-                list_workers_console(&mut self.transport, &session.session, &worker_root)?;
-            workers.sort();
-            workers
+        let worker_agents = if role == Role::Queen {
+            discover_workers_console(&mut self.transport, &session.session, &worker_root)?
         } else {
-            vec![subject.expect("subject already validated")]
+            let worker_id = subject.expect("subject already validated");
+            let namespace = canonical_worker_telemetry_path(&worker_id)?;
+            let lines = self
+                .transport
+                .tail(&session.session, &namespace, None)
+                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+            let _ = self.transport.drain_acknowledgements();
+            vec![worker_agent_from_telemetry(&worker_id, &namespace, &lines)?]
         };
-        let gpu_workers = if role == Role::Queen {
-            discover_gpu_workers_console(&mut self.transport, &session.session)?
-        } else {
-            HashSet::new()
-        };
-        let mut roles = HashMap::new();
-        for worker in &workers {
-            let inferred = hive::role_for_agent_id(worker);
-            let role = if inferred == "worker" {
-                DEFAULT_WORKER_ROLE
-            } else {
-                inferred
-            };
-            roles.insert(worker.clone(), role.to_owned());
-        }
-        for worker in gpu_workers {
-            roles.insert(worker, "worker-gpu".to_owned());
-        }
-
-        let mut agents = Vec::new();
-        agents.push(SwarmUiHiveAgent {
+        let mut agents = vec![SwarmUiHiveAgent {
             id: "queen".to_owned(),
             role: "queen".to_owned(),
             namespace: "/queen".to_owned(),
-        });
-        for worker in &workers {
-            agents.push(SwarmUiHiveAgent {
-                id: worker.to_owned(),
-                role: roles
-                    .get(worker)
-                    .cloned()
-                    .unwrap_or_else(|| DEFAULT_WORKER_ROLE.to_owned()),
-                namespace: format!("{}/{}", worker_root, worker),
-            });
-        }
+            worker: None,
+        }];
+        agents.extend(worker_agents);
+        let workers = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| agent.id.clone())
+            .collect::<Vec<_>>();
+        let roles = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| (agent.id.clone(), agent.role.clone()))
+            .collect::<HashMap<_, _>>();
+        let namespaces = agents
+            .iter()
+            .filter(|agent| agent.role != "queen")
+            .map(|agent| (agent.id.clone(), agent.namespace.clone()))
+            .collect::<HashMap<_, _>>();
 
         self.hive_states.insert(
             key,
-            hive::ConsoleHiveSessionState::new(workers, roles, self.tail_policy),
+            hive::ConsoleHiveSessionState::new(
+                workers,
+                roles,
+                namespaces,
+                agents.clone(),
+                self.tail_policy,
+            ),
         );
         self.hive_replay = None;
 
@@ -2701,7 +2784,6 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         if self.config.offline {
             return Err(SwarmUiError::Offline);
         }
-        let worker_root = self.config.paths.worker_root.clone();
         let hive_config = self.config.hive.clone();
         let key = self.session_key(role, ticket);
         let mut state = self
@@ -2712,7 +2794,6 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         #[cfg(feature = "rest")]
         let ingest_result = if let Some(rest_parallel) = self.rest_parallel.as_ref() {
             state.ingest_rest_parallel(
-                &worker_root,
                 &hive_config,
                 rest_parallel.base_url.as_str(),
                 rest_parallel.request_auth_token.as_deref(),
@@ -2721,34 +2802,26 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
                 ticket,
             )
         } else {
-            state.ingest(
-                &mut self.transport,
-                &session.session,
-                &worker_root,
-                &hive_config,
-            )
+            state.ingest(&mut self.transport, &session.session, &hive_config)
         };
         #[cfg(not(feature = "rest"))]
-        let ingest_result = state.ingest(
-            &mut self.transport,
-            &session.session,
-            &worker_root,
-            &hive_config,
-        );
+        let ingest_result = state.ingest(&mut self.transport, &session.session, &hive_config);
         self.hive_states.insert(key.clone(), state);
         ingest_result?;
-        let state = self.hive_states.get_mut(&key).expect("hive state");
-        let max_events = hive_config.lod_event_budget as usize;
-        let events = state.drain(max_events);
-        let overlays = state.overlays(hive_config.overlay_lines as usize);
-        let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
-        let backlog = state.queue_len();
-        let pressure = if hive_config.lod_event_budget == 0 {
-            0.0
-        } else {
-            backlog as f32 / hive_config.lod_event_budget as f32
+        let (events, overlays, detail, backlog, pressure, dropped) = {
+            let state = self.hive_states.get_mut(&key).expect("hive state");
+            let max_events = hive_config.lod_event_budget as usize;
+            let events = state.drain(max_events);
+            let overlays = state.overlays(hive_config.overlay_lines as usize);
+            let detail = state.detail(detail_agent, hive_config.detail_lines as usize);
+            let backlog = state.queue_len();
+            let pressure = if hive_config.lod_event_budget == 0 {
+                0.0
+            } else {
+                backlog as f32 / hive_config.lod_event_budget as f32
+            };
+            (events, overlays, detail, backlog, pressure, state.dropped())
         };
-        let dropped = state.dropped();
         #[cfg(feature = "rest")]
         let (root, sessions, pressure_counters, gateway, schedule, lease) =
             if self.rest_parallel.is_some() {
@@ -2759,7 +2832,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         #[cfg(not(feature = "rest"))]
         let (root, sessions, pressure_counters, gateway, schedule, lease) =
             self.read_hive_status(role, ticket);
+        let agents = {
+            let state = self.hive_states.get_mut(&key).expect("hive state");
+            state.apply_acceptance(
+                gateway
+                    .as_ref()
+                    .and_then(|status| status.worker_acceptance.as_ref()),
+            );
+            state.agents()
+        };
         Ok(SwarmUiHiveBatch {
+            agents,
             events,
             pressure,
             backlog,
@@ -3296,11 +3379,17 @@ impl<T: CohshTransport> SwarmUiConsoleBackend<T> {
         let previous = self
             .hive_gateway_snapshots
             .insert(key.clone(), current.clone());
-        Some(gateway_status_from_snapshot(
-            connected,
-            &current,
-            previous.as_ref(),
-        ))
+        let mut projected = gateway_status_from_snapshot(connected, &current, previous.as_ref());
+        projected.backend_class = status.backend_class.map(|class| match class {
+            cohesix_rest::BackendClass::HostModel => "host-model".to_owned(),
+            cohesix_rest::BackendClass::ConsoleProjection => "console-projection".to_owned(),
+            cohesix_rest::BackendClass::Unknown => "unknown".to_owned(),
+        });
+        projected.worker_acceptance = status
+            .worker_acceptance
+            .as_ref()
+            .and_then(map_worker_acceptance);
+        Some(projected)
     }
 
     fn record_audit(&mut self, entry: String) {
@@ -3384,14 +3473,22 @@ pub fn parse_role_label(input: &str) -> Result<Role, SwarmUiError> {
         .ok_or_else(|| SwarmUiError::Role(format!("unknown role '{input}'")))
 }
 
-fn telemetry_path(root: &str, worker_id: &str) -> Result<String, SwarmUiError> {
+fn canonical_worker_telemetry_path(worker_id: &str) -> Result<String, SwarmUiError> {
     let trimmed = worker_id.trim();
-    if trimmed.is_empty() || trimmed.contains('/') || trimmed == "." || trimmed == ".." {
+    if !valid_worker_component(trimmed) {
         return Err(SwarmUiError::InvalidPath(format!(
             "invalid worker id '{worker_id}'"
         )));
     }
-    Ok(format!("{root}/{trimmed}/telemetry"))
+    if crate::generated::SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE
+        != "/shard/<label>/worker/<id>/telemetry"
+    {
+        return Err(SwarmUiError::Hive(
+            "unsupported generated Worker telemetry template".to_owned(),
+        ));
+    }
+    let label = worker_shard_label(trimmed);
+    Ok(format!("/shard/{label}/worker/{trimmed}/telemetry"))
 }
 
 fn cache_key_for_path(prefix: &str, path: &str) -> String {
@@ -3628,6 +3725,77 @@ mod tests {
             status.pressure,
             status.control_pressure.max(status.telemetry_pressure)
         );
+    }
+
+    #[test]
+    fn canonical_worker_discovery_uses_structured_state_without_id_inference() {
+        let worker_id = "worker-gpu-looking";
+        let shard = worker_shard_label(worker_id);
+        let shard_root = format!("/shard/{shard}/worker");
+        let telemetry_path = canonical_worker_telemetry_path(worker_id).expect("canonical path");
+        let state = serde_json::json!({
+            "schema": "worker-runtime-state/v1",
+            "worker_id": worker_id,
+            "role": "worker-lora",
+            "state": "ready",
+            "slot": 2,
+            "lease_epoch": 7,
+            "supervisor_generation": 3,
+            "cap_generation": 4,
+            "ready_sequence": 9
+        })
+        .to_string();
+
+        let agents = discover_workers_with(
+            "/shard",
+            |path| match path {
+                "/shard" => Ok(vec![shard.clone()]),
+                path if path == shard_root => Ok(vec![worker_id.to_owned()]),
+                other => Err(SwarmUiError::Hive(format!(
+                    "unexpected discovery path {other}"
+                ))),
+            },
+            |path| {
+                assert_eq!(path, telemetry_path);
+                Ok(vec![state.clone()])
+            },
+        )
+        .expect("canonical discovery");
+
+        assert_eq!(agents.len(), 1);
+        let agent = &agents[0];
+        assert_eq!(agent.id, worker_id);
+        assert_eq!(agent.role, "worker-lora");
+        assert_eq!(agent.namespace, telemetry_path);
+        let worker = agent.worker.as_ref().expect("structured Worker state");
+        assert_eq!(
+            worker.declaration,
+            Some(SwarmUiWorkerDeclaration::Executable)
+        );
+        assert_eq!(worker.lifecycle, Some(SwarmUiWorkerLifecycle::Ready));
+        assert_eq!(worker.receipt, None);
+        assert_eq!(worker.artifact, None);
+        assert_eq!(worker.execution_proof, None);
+    }
+
+    #[test]
+    fn role_looking_id_and_provider_ready_remain_structurally_unknown() {
+        let worker_id = "worker-gpu-looking";
+        let namespace = canonical_worker_telemetry_path(worker_id).expect("canonical path");
+        let agent = worker_agent_from_telemetry(
+            worker_id,
+            &namespace,
+            &["provider state=ready".to_owned()],
+        )
+        .expect("unstructured telemetry stays representable");
+
+        assert_eq!(agent.role, "worker");
+        let worker = agent.worker.as_ref().expect("unknown Worker axes");
+        assert_eq!(worker.declaration, None);
+        assert_eq!(worker.lifecycle, None);
+        assert_eq!(worker.receipt, None);
+        assert_eq!(worker.artifact, None);
+        assert_eq!(worker.execution_proof, None);
     }
 
     #[cfg(feature = "rest")]
@@ -3927,101 +4095,186 @@ fn list_entries_console<T: CohshTransport + ?Sized>(
     Ok(entries)
 }
 
-fn list_workers<T: cohsh_core::Secure9pTransport>(
+fn discover_workers<T: cohsh_core::Secure9pTransport>(
     client: &mut CohClient<T>,
     worker_root: &str,
-) -> Result<Vec<String>, SwarmUiError> {
-    let entries = read_lines(client, worker_root)?;
-    let mut workers = Vec::new();
-    for entry in entries {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
+) -> Result<Vec<SwarmUiHiveAgent>, SwarmUiError> {
+    let mut listings = HashMap::new();
+    let shards = read_lines(client, worker_root)?;
+    listings.insert(worker_root.to_owned(), shards.clone());
+    for label in shards {
+        let label = label.trim();
+        if valid_shard_label(label) {
+            let path = format!("{worker_root}/{label}/worker");
+            let entries = read_lines(client, &path)?;
+            listings.insert(path, entries);
         }
-        workers.push(trimmed.to_owned());
     }
-    Ok(workers)
+    discover_workers_with(
+        worker_root,
+        |path| {
+            listings
+                .get(path)
+                .cloned()
+                .ok_or_else(|| SwarmUiError::Hive(format!("missing listing for {path}")))
+        },
+        |path| read_lines(client, path),
+    )
 }
 
-const DEFAULT_WORKER_ROLE: &str = "worker-heartbeat";
+fn discover_workers_console<T: CohshTransport + ?Sized>(
+    transport: &mut T,
+    session: &CohshSession,
+    worker_root: &str,
+) -> Result<Vec<SwarmUiHiveAgent>, SwarmUiError> {
+    let mut listings = HashMap::new();
+    let shards = list_entries_console(transport, session, worker_root)?;
+    listings.insert(worker_root.to_owned(), shards);
+    let shard_labels = listings.get(worker_root).cloned().unwrap_or_default();
+    for label in shard_labels {
+        let label = label.trim();
+        if valid_shard_label(label) {
+            let path = format!("{worker_root}/{label}/worker");
+            let entries = list_entries_console(transport, session, &path)?;
+            listings.insert(path, entries);
+        }
+    }
+    discover_workers_with(
+        worker_root,
+        |path| {
+            listings
+                .get(path)
+                .cloned()
+                .ok_or_else(|| SwarmUiError::Hive(format!("missing listing for {path}")))
+        },
+        |path| {
+            let lines = transport
+                .tail(session, path, None)
+                .map_err(|err| SwarmUiError::Transport(err.to_string()))?;
+            let _ = transport.drain_acknowledgements();
+            Ok(lines)
+        },
+    )
+}
 
-fn parse_worker_id_from_lease(line: &str) -> Option<String> {
-    let needle = "\"worker_id\":\"";
-    let start = line.find(needle)? + needle.len();
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    let value = &rest[..end];
-    if value.is_empty() {
-        None
+fn discover_workers_with<L, R>(
+    worker_root: &str,
+    mut list: L,
+    mut read: R,
+) -> Result<Vec<SwarmUiHiveAgent>, SwarmUiError>
+where
+    L: FnMut(&str) -> Result<Vec<String>, SwarmUiError>,
+    R: FnMut(&str) -> Result<Vec<String>, SwarmUiError>,
+{
+    if worker_root != "/shard" {
+        return Err(SwarmUiError::Hive(
+            "generated Worker discovery root is not canonical /shard".to_owned(),
+        ));
+    }
+    let mut agents = Vec::new();
+    let mut seen_labels = HashSet::new();
+    let mut seen_workers = HashSet::new();
+    for label in list(worker_root)? {
+        let label = label.trim();
+        if !valid_shard_label(label) || !seen_labels.insert(label.to_owned()) {
+            return Err(SwarmUiError::Hive(format!(
+                "invalid or duplicate Worker shard label {label:?}"
+            )));
+        }
+        let shard_root = format!("{worker_root}/{label}/worker");
+        for worker_id in list(&shard_root)? {
+            let worker_id = worker_id.trim();
+            if !valid_worker_component(worker_id)
+                || worker_shard_label(worker_id) != label
+                || !seen_workers.insert(worker_id.to_owned())
+            {
+                return Err(SwarmUiError::Hive(format!(
+                    "invalid, misplaced, or duplicate Worker id {worker_id:?}"
+                )));
+            }
+            if agents.len() >= usize::from(generated::SWARMUI_WORKER_MAXIMUM_LIVE_TASKS) {
+                return Err(SwarmUiError::Hive(
+                    "canonical Worker discovery exceeds generated maximum_live_tasks".to_owned(),
+                ));
+            }
+            let namespace = canonical_worker_telemetry_path(worker_id)?;
+            let lines = read(&namespace)?;
+            agents.push(worker_agent_from_telemetry(worker_id, &namespace, &lines)?);
+        }
+    }
+    agents.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(agents)
+}
+
+fn worker_agent_from_telemetry(
+    worker_id: &str,
+    namespace: &str,
+    lines: &[String],
+) -> Result<SwarmUiHiveAgent, SwarmUiError> {
+    let mut observation = None;
+    for line in lines.iter().rev() {
+        if let Some(parsed) = hive::parse_worker_runtime_state(line, worker_id)? {
+            observation = Some(parsed);
+            break;
+        }
+    }
+    let (role, worker) = if let Some(observation) = observation {
+        let declaration = worker_declaration(&observation.role).ok_or_else(|| {
+            SwarmUiError::Hive("Worker role is absent from generated declarations".to_owned())
+        })?;
+        (
+            observation.role,
+            Some(SwarmUiWorkerState {
+                declaration: Some(declaration),
+                lifecycle: Some(observation.lifecycle),
+                ..SwarmUiWorkerState::default()
+            }),
+        )
     } else {
-        Some(value.to_owned())
-    }
-}
-
-fn discover_gpu_workers<T: cohsh_core::Secure9pTransport>(
-    client: &mut CohClient<T>,
-) -> Result<HashSet<String>, SwarmUiError> {
-    let mut workers = HashSet::new();
-    let entries = match read_lines(client, "/gpu") {
-        Ok(entries) => entries,
-        Err(_) => return Ok(workers),
+        ("worker".to_owned(), Some(SwarmUiWorkerState::default()))
     };
-    for entry in entries {
-        let trimmed = entry.trim();
-        if !trimmed.starts_with("GPU-") {
-            continue;
-        }
-        let path = format!("/gpu/{trimmed}/lease");
-        let lines = read_lines(client, &path)?;
-        for line in lines {
-            if let Some(worker_id) = parse_worker_id_from_lease(&line) {
-                workers.insert(worker_id);
-            }
-        }
-    }
-    Ok(workers)
+    Ok(SwarmUiHiveAgent {
+        id: worker_id.to_owned(),
+        role,
+        namespace: namespace.to_owned(),
+        worker,
+    })
 }
 
-fn list_workers_console<T: CohshTransport + ?Sized>(
-    transport: &mut T,
-    session: &CohshSession,
-    worker_root: &str,
-) -> Result<Vec<String>, SwarmUiError> {
-    let entries = list_entries_console(transport, session, worker_root)?;
-    let mut workers = Vec::new();
-    for entry in entries {
-        let trimmed = entry.trim();
-        if trimmed.is_empty() {
-            continue;
-        }
-        workers.push(trimmed.to_owned());
-    }
-    Ok(workers)
+fn worker_declaration(role: &str) -> Option<SwarmUiWorkerDeclaration> {
+    generated::SWARMUI_WORKER_ROLE_BOUNDS
+        .iter()
+        .find(|(generated_role, _, _)| *generated_role == role)
+        .and_then(|(_, declaration, _)| match *declaration {
+            "executable" => Some(SwarmUiWorkerDeclaration::Executable),
+            "model-only" => Some(SwarmUiWorkerDeclaration::ModelOnly),
+            _ => None,
+        })
 }
 
-fn discover_gpu_workers_console<T: CohshTransport + ?Sized>(
-    transport: &mut T,
-    session: &CohshSession,
-) -> Result<HashSet<String>, SwarmUiError> {
-    let mut workers = HashSet::new();
-    let entries = match list_entries_console(transport, session, "/gpu") {
-        Ok(entries) => entries,
-        Err(_) => return Ok(workers),
-    };
-    for entry in entries {
-        let trimmed = entry.trim();
-        if !trimmed.starts_with("GPU-") {
-            continue;
-        }
-        let path = format!("/gpu/{trimmed}/lease");
-        let lines = read_lines_console(transport, session, &path)?;
-        for line in lines {
-            if let Some(worker_id) = parse_worker_id_from_lease(&line) {
-                workers.insert(worker_id);
-            }
-        }
+fn valid_worker_component(worker_id: &str) -> bool {
+    !worker_id.is_empty()
+        && worker_id.len() <= MAX_ID_LEN
+        && worker_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+}
+
+fn valid_shard_label(label: &str) -> bool {
+    label.len() == 2
+        && label
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn worker_shard_label(worker_id: &str) -> String {
+    let digest = Sha256::digest(worker_id.as_bytes());
+    let mut shard = digest[0];
+    let bits = generated::SWARMUI_WORKER_SHARD_BITS;
+    if bits < 8 {
+        shard >>= 8 - bits;
     }
-    Ok(workers)
+    format!("{shard:02x}")
 }
 
 fn ensure_role_allowed(
@@ -4049,6 +4302,9 @@ fn ensure_role_allowed(
             .as_slice()
         {
             ["worker", worker_id, "telemetry"] => *worker_id == subject,
+            ["shard", label, "worker", worker_id, "telemetry"] => {
+                *worker_id == subject && *label == worker_shard_label(subject)
+            }
             _ => false,
         };
     if allowed {

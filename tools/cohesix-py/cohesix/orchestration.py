@@ -15,7 +15,8 @@ import json
 import os
 import re
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Iterable, List, Optional, Sequence
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 
 from .audit import CohesixAudit
 from .auth import resolve_tcp_auth_token
@@ -24,6 +25,7 @@ from .client import CohesixClient
 from .defaults import DEFAULTS
 from .errors import CohesixError
 from .paths import validate_path
+from .worker import TargetProfileContract
 
 _TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9._-]+$")
 _TOKEN_PATTERN_WITH_COLON = re.compile(r"^[A-Za-z0-9._:-]+$")
@@ -471,10 +473,21 @@ class CohesixOrchestrator:
     with the same bounds and semantics as existing Cohesix host tools.
     """
 
-    def __init__(self, backend: Backend, defaults: Optional[Dict[str, object]] = None) -> None:
+    def __init__(
+        self,
+        backend: Backend,
+        defaults: Optional[Dict[str, object]] = None,
+        profile_contract: Optional[
+            str | Path | Mapping[str, Any] | TargetProfileContract
+        ] = None,
+    ) -> None:
         self.backend = backend
         self.defaults = defaults or DEFAULTS
-        self.client = CohesixClient(backend=backend, defaults=self.defaults)
+        self.client = CohesixClient(
+            backend=backend,
+            defaults=self.defaults,
+            profile_contract=profile_contract,
+        )
         self.console = self.defaults.get("console", {})
         self.paths = self.defaults.get("paths", {})
         self.control_plane = self.defaults.get("control_plane", {})
@@ -486,6 +499,9 @@ class CohesixOrchestrator:
         cls,
         include_mig: bool = False,
         defaults: Optional[Dict[str, object]] = None,
+        profile_contract: Optional[
+            str | Path | Mapping[str, Any] | TargetProfileContract
+        ] = None,
     ) -> "CohesixOrchestrator":
         """Construct an orchestrator using environment-driven backend selection.
 
@@ -501,11 +517,18 @@ class CohesixOrchestrator:
             return cls(
                 MockBackend(root=root, include_mig=include_mig),
                 defaults=defaults,
+                profile_contract=profile_contract
+                or os.environ.get("COHESIX_PROFILE_CONTRACT"),
             )
 
         mount_root = os.environ.get("COHESIX_MOUNT_ROOT")
         if mount_root:
-            return cls(FilesystemBackend(mount_root), defaults=defaults)
+            return cls(
+                FilesystemBackend(mount_root),
+                defaults=defaults,
+                profile_contract=profile_contract
+                or os.environ.get("COHESIX_PROFILE_CONTRACT"),
+            )
 
         rest_url = (
             os.environ.get("COH_REST_URL")
@@ -514,7 +537,12 @@ class CohesixOrchestrator:
         )
         timeout_s = _env_float("COHESIX_TIMEOUT_S", 2.0)
         if rest_url:
-            return cls(RestBackend(rest_url, timeout_s=timeout_s), defaults=defaults)
+            return cls(
+                RestBackend(rest_url, timeout_s=timeout_s),
+                defaults=defaults,
+                profile_contract=profile_contract
+                or os.environ.get("COHESIX_PROFILE_CONTRACT"),
+            )
 
         host = os.environ.get("COH_TCP_HOST") or os.environ.get("COHSH_TCP_HOST") or "127.0.0.1"
         port = _env_int("COH_TCP_PORT", _env_int("COHSH_TCP_PORT", 31337))
@@ -537,6 +565,8 @@ class CohesixOrchestrator:
                 max_retries=max_retries,
             ),
             defaults=defaults,
+            profile_contract=profile_contract
+            or os.environ.get("COHESIX_PROFILE_CONTRACT"),
         )
 
     def close(self) -> None:
@@ -636,17 +666,14 @@ class CohesixOrchestrator:
             payload = request.to_payload(schema=schema)
             payload_text = json.dumps(payload, separators=(",", ":"))
             payload_bytes = len(payload_text.encode("utf-8"))
-            if max_bytes > 0 and payload_bytes + 1 > max_bytes:
-                raise CohesixError(
-                    f"host ticket payload for {request.ticket_id} exceeds bound {max_bytes} bytes"
-                )
-            if (
-                transport_bound is not None
-                and payload_bytes > transport_bound
-            ):
+            if transport_bound is not None and payload_bytes > transport_bound:
                 raise CohesixError(
                     f"host ticket payload for {request.ticket_id} exceeds transport payload bound "
                     f"{transport_bound} bytes for {path}"
+                )
+            if max_bytes > 0 and payload_bytes + 1 > max_bytes:
+                raise CohesixError(
+                    f"host ticket payload for {request.ticket_id} exceeds bound {max_bytes} bytes"
                 )
             payloads.append(payload_text)
         return self._append_json_lines(path, payloads, max_bytes, audit)

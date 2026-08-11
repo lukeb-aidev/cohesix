@@ -117,6 +117,43 @@ fn generated_doc_snippets_match_codegen() {
 }
 
 #[test]
+fn generated_swarmui_defaults_expose_worker_runtime_bounds() {
+    let temp_dir = TempDir::new().expect("tempdir");
+    compile_manifest_docs(&temp_dir);
+    let rust = fs::read_to_string(temp_dir.path().join("swarmui_defaults.rs"))
+        .expect("read generated SwarmUI Rust defaults");
+    let toml = fs::read_to_string(temp_dir.path().join("swarmui_defaults.toml"))
+        .expect("read generated SwarmUI TOML defaults");
+
+    for expected in [
+        "SWARMUI_WORKER_MAXIMUM_LIVE_TASKS: u16 = 3",
+        "SWARMUI_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str",
+        "\"/shard/<label>/worker/<id>/telemetry\"",
+        "SWARMUI_WORKER_SHARD_BITS: u8 = 8",
+        "SWARMUI_WORKER_LEGACY_ALIAS: bool = true",
+        "(\"worker-bus\", \"model-only\", 0)",
+        "(\"worker-lora\", \"executable\", 1)",
+    ] {
+        assert!(
+            rust.contains(expected),
+            "missing generated Rust row: {expected}"
+        );
+    }
+    for expected in [
+        "worker_root = \"/shard\"",
+        "[swarmui.worker_runtime]",
+        "maximum_live_tasks = 3",
+        "canonical_telemetry_template = \"/shard/<label>/worker/<id>/telemetry\"",
+        "legacy_worker_alias = true",
+    ] {
+        assert!(
+            toml.contains(expected),
+            "missing generated TOML row: {expected}"
+        );
+    }
+}
+
+#[test]
 fn userland_generated_snippets_match_repo() {
     let userland_path = repo_path("docs/USERLAND_AND_CLI.md");
     let contents = fs::read_to_string(&userland_path).expect("read userland docs");

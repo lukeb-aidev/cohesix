@@ -12,7 +12,11 @@ use heapless::String;
 use crate::verb::ConsoleVerb;
 
 /// Maximum length accepted for a single console line.
-pub const MAX_LINE_LEN: usize = 256;
+///
+/// This includes the command verb and path. The bound therefore leaves room
+/// for one compiler-bounded 2 KiB host-ticket record on the existing `echo`
+/// grammar without introducing a second transport or fragment protocol.
+pub const MAX_LINE_LEN: usize = 2304;
 
 /// Maximum number of characters permitted in a role identifier when parsing `attach`.
 pub const MAX_ROLE_LEN: usize = 16;
@@ -25,7 +29,7 @@ pub const MAX_JSON_LEN: usize = 192;
 /// Maximum number of characters accepted for worker identifiers.
 pub const MAX_ID_LEN: usize = 32;
 /// Maximum number of characters accepted for echo payloads.
-pub const MAX_ECHO_LEN: usize = 224;
+pub const MAX_ECHO_LEN: usize = 2048;
 /// Maximum line count accepted by the `tail <path> [lines]` command.
 pub const MAX_TAIL_LINES: u16 = 256;
 
@@ -54,7 +58,14 @@ const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
 const COOLDOWN_MS: u64 = 90_000;
 
 /// Console command variants supported by the parser.
+///
+/// `Echo` deliberately carries the compiler-bounded 2 KiB host-ticket record
+/// inline. The command is moved through the synchronous parser/dispatcher and
+/// is never queued or recursively retained, so keeping the no-allocation
+/// representation is preferable to introducing a second authority path. The
+/// target stack budget is checked by the Milestone 26e QEMU pressure gate.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
 #[allow(missing_docs)]
 pub enum Command {
     Help,
@@ -667,6 +678,27 @@ mod tests {
             }
             other => panic!("unexpected command {other:?}"),
         }
+    }
+
+    #[test]
+    fn echo_carries_one_exact_host_ticket_record_and_rejects_overflow() {
+        let payload = "x".repeat(MAX_ECHO_LEN);
+        let line = alloc::format!("echo /host/tickets/status {payload}");
+        assert!(line.len() < MAX_LINE_LEN);
+        match parse(line.as_str()).unwrap() {
+            Command::Echo { path, payload } => {
+                assert_eq!(path.as_str(), "/host/tickets/status");
+                assert_eq!(payload.len(), MAX_ECHO_LEN);
+            }
+            other => panic!("unexpected command {other:?}"),
+        }
+
+        let oversized = "x".repeat(MAX_ECHO_LEN + 1);
+        let line = alloc::format!("echo /host/tickets/status {oversized}");
+        assert_eq!(
+            parse(line.as_str()).unwrap_err(),
+            ConsoleError::ValueTooLong("payload")
+        );
     }
 
     #[test]

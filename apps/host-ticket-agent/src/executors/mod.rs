@@ -4,6 +4,7 @@
 // Author: Lukas Bower
 #![forbid(unsafe_code)]
 
+use std::fmt;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Result};
@@ -31,6 +32,56 @@ pub struct ExecutorConfig {
     pub mount: String,
     /// Default PEFT registry root.
     pub registry_root: PathBuf,
+    /// Host root containing bounded exported LoRA job records.
+    pub export_root: PathBuf,
+    /// Host root containing provider-produced adapter bundles.
+    pub adapter_root: PathBuf,
+}
+
+impl Default for ExecutorConfig {
+    fn default() -> Self {
+        Self {
+            mount: "/host".to_owned(),
+            registry_root: PathBuf::from("out/model_registry"),
+            export_root: PathBuf::from("out/peft_exports"),
+            adapter_root: PathBuf::from("out/peft_adapters"),
+        }
+    }
+}
+
+/// Action-specific restart observation for an operation left in `executing`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReconcileOutcome {
+    /// The exact operation is observed committed and may publish success.
+    Committed(String),
+    /// The exact operation is observed rejected or terminally failed.
+    Rejected(String),
+    /// State is insufficient to decide; provider execution must not be repeated.
+    Ambiguous,
+}
+
+#[derive(Debug)]
+pub(crate) struct ProviderPending {
+    detail: String,
+}
+
+impl fmt::Display for ProviderPending {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for ProviderPending {}
+
+pub(crate) fn provider_pending(detail: impl Into<String>) -> anyhow::Error {
+    ProviderPending {
+        detail: detail.into(),
+    }
+    .into()
+}
+
+pub(crate) fn is_provider_pending(error: &anyhow::Error) -> bool {
+    error.downcast_ref::<ProviderPending>().is_some()
 }
 
 /// Execute one host ticket action.
@@ -40,6 +91,9 @@ pub fn execute_action(
     spec: &HostTicketSpec,
     config: &ExecutorConfig,
 ) -> Result<String> {
+    if spec.schema == crate::HOST_TICKET_V2_SCHEMA {
+        crate::claim::validate_v2_action_args(spec)?;
+    }
     if spec.action.starts_with("gpu.lease.") {
         return gpu::execute(transport, session, spec, config);
     }
@@ -56,6 +110,22 @@ pub fn execute_action(
         return k8s::execute(transport, session, spec, config);
     }
     Err(anyhow!("unsupported ticket action {}", spec.action))
+}
+
+/// Observe/reconcile an action left in `executing` without blindly replaying it.
+pub fn reconcile_action(
+    transport: &mut dyn Transport,
+    session: &Session,
+    spec: &HostTicketSpec,
+    config: &ExecutorConfig,
+) -> Result<ReconcileOutcome> {
+    if spec.action.starts_with("gpu.lease.") {
+        return gpu::reconcile(transport, session, spec, config);
+    }
+    if spec.action.starts_with("peft.") {
+        return peft::reconcile(transport, session, spec, config);
+    }
+    Ok(ReconcileOutcome::Ambiguous)
 }
 
 /// Adapter allowing `coh::peft` helpers to operate on a `cohsh::Transport` session.

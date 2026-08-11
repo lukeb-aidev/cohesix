@@ -11,7 +11,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use cohesix_ticket::Role;
 use cohsh_core::command::MAX_LINE_LEN;
 use cohsh_core::trace::{TraceError, TraceLog, TracePolicy};
 use swarmui::{
@@ -65,15 +64,18 @@ fn trace_replay_matches_fixture() -> Result<()> {
     let factory = TraceTransportFactory::new(trace.frames);
     let mut backend = SwarmUiBackend::new(config, factory);
 
+    // This frozen version-1 transport fixture exercises the generated legacy
+    // alias gate through the public shell. Canonical sharded discovery is
+    // covered independently by the structured Worker discovery tests.
     let mut transcript = Vec::new();
-    let attach = backend.attach(Role::Queen, None);
-    transcript.extend(attach.lines);
-
-    let list = backend.list_namespace(Role::Queen, None, "/worker");
-    transcript.extend(list.lines);
-
-    let tail = backend.tail_telemetry(Role::Queen, None, WORKER_ID);
-    transcript.extend(tail.lines);
+    for command in [
+        "attach queen".to_owned(),
+        "ls /worker".to_owned(),
+        format!("tail /worker/{WORKER_ID}/telemetry"),
+    ] {
+        let result = backend.console_command(command.as_str());
+        transcript.extend(result.lines);
+    }
     assert_eq!(backend.active_tails(), 0);
 
     transcript_support::compare_transcript("swarmui", SCENARIO, "swarmui.txt", &transcript);
@@ -165,47 +167,56 @@ fn trace_hive_snapshot() -> SwarmUiHiveSnapshot {
         id: "queen".to_owned(),
         role: "queen".to_owned(),
         namespace: "/queen".to_owned(),
+        worker: None,
     };
     let workers = vec![
         SwarmUiHiveAgent {
             id: "worker-heart-1".to_owned(),
             role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-1".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-heart-2".to_owned(),
             role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-2".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-heart-3".to_owned(),
             role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-3".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-1".to_owned(),
             role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-1".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-2".to_owned(),
             role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-2".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-gpu-3".to_owned(),
             role: "worker-gpu".to_owned(),
             namespace: "/worker/worker-gpu-3".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-heart-4".to_owned(),
             role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-4".to_owned(),
+            worker: None,
         },
         SwarmUiHiveAgent {
             id: "worker-heart-5".to_owned(),
             role: "worker-heartbeat".to_owned(),
             namespace: "/worker/worker-heart-5".to_owned(),
+            worker: None,
         },
     ];
 

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Validate telemetry ring quota enforcement and cursor resumption.
 // Author: Lukas Bower
@@ -56,7 +56,7 @@ fn worker_telemetry_path(worker_id: &str) -> Vec<String> {
 #[test]
 fn telemetry_ring_enforces_quota_and_resumes_cursor() {
     let telemetry = TelemetryConfig {
-        ring_bytes_per_worker: 64,
+        ring_bytes_per_worker: 1024,
         frame_schema: TelemetryFrameSchema::LegacyPlaintext,
         cursor: TelemetryCursorConfig {
             retain_on_boot: true,
@@ -67,7 +67,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
     let payload_one = b"one\n";
     let payload_two = b"two\n";
     let payload_three = b"three\n";
-    let resume_offset = (payload_one.len() + payload_two.len()) as u64;
+    let resume_offset: u64;
     let mut latencies_ms = Vec::new();
 
     {
@@ -133,6 +133,10 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         assert!(combined_text.contains("one"));
         assert!(combined_text.contains("two"));
         assert!(combined_text.find("one").unwrap() < combined_text.find("two").unwrap());
+        let payload_start = combined_text
+            .rfind("one\ntwo\n")
+            .expect("Worker payload follows the host-model observation");
+        resume_offset = (payload_start + payload_one.len() + payload_two.len()) as u64;
     }
 
     let server = NineDoor::new_with_limits_and_telemetry_manifest(
@@ -195,7 +199,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
     let resumed_text = String::from_utf8(resumed).expect("resume utf8");
     assert!(resumed_text.contains("three"));
 
-    let oversize = vec![b'X'; 128];
+    let oversize = vec![b'X'; 2048];
     let err = worker.write(2, &oversize).expect_err("reject oversize");
     match err {
         nine_door::NineDoorError::Protocol { code, .. } => {
@@ -204,7 +208,7 @@ fn telemetry_ring_enforces_quota_and_resumes_cursor() {
         other => panic!("unexpected error: {other:?}"),
     }
 
-    let wrap_payload = vec![b'W'; 48];
+    let wrap_payload = vec![b'W'; 768];
     for _ in 0..4 {
         let start = std::time::Instant::now();
         worker.write(2, &wrap_payload).expect("wrap write");

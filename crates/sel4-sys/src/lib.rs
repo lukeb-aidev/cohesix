@@ -712,6 +712,350 @@ mod imp {
         info
     }
 
+    /// Reply through an explicit MCS Reply capability.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_MCS_Reply(reply: seL4_CPtr, msg_info: seL4_MessageInfo) {
+        seL4_Send(reply, msg_info);
+    }
+
+    /// Reply through an explicit MCS Reply capability using caller-owned MRs.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_MCS_ReplyWithMRs(
+        reply: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        mr0: *const seL4_Word,
+        mr1: *const seL4_Word,
+        mr2: *const seL4_Word,
+        mr3: *const seL4_Word,
+    ) {
+        seL4_SendWithMRs(reply, msg_info, mr0, mr1, mr2, mr3);
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_ReplyRecv(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        reply_recv_with_cap(src, msg_info, sender_badge, reply)
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_ReplyRecv(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        reply_recv_with_cap(src, msg_info, sender_badge, 0)
+    }
+
+    #[inline(always)]
+    unsafe fn reply_recv_with_cap(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut badge = src as seL4_Word;
+        let mut mr0 = seL4_GetMR(0);
+        let mut mr1 = seL4_GetMR(1);
+        let mut mr2 = seL4_GetMR(2);
+        let mut mr3 = seL4_GetMR(3);
+
+        arm_sys_send_recv(
+            seL4_SysReplyRecv,
+            src as seL4_Word,
+            &mut badge,
+            info.words[0],
+            &mut info.words[0],
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+            reply as seL4_Word,
+        );
+
+        seL4_SetMR(0, mr0);
+        seL4_SetMR(1, mr1);
+        seL4_SetMR(2, mr2);
+        seL4_SetMR(3, mr3);
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+        info
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_ReplyRecvWithMRs(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        reply_recv_with_cap_and_mrs(src, msg_info, sender_badge, mr0, mr1, mr2, mr3, reply)
+    }
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    #[inline(always)]
+    pub unsafe fn seL4_ReplyRecvWithMRs(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        reply_recv_with_cap_and_mrs(src, msg_info, sender_badge, mr0, mr1, mr2, mr3, 0)
+    }
+
+    #[inline(always)]
+    unsafe fn reply_recv_with_cap_and_mrs(
+        src: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut badge = 0;
+        let mut msg0 = load_message_register(mr0, info.length(), 0);
+        let mut msg1 = load_message_register(mr1, info.length(), 1);
+        let mut msg2 = load_message_register(mr2, info.length(), 2);
+        let mut msg3 = load_message_register(mr3, info.length(), 3);
+
+        arm_sys_send_recv(
+            seL4_SysReplyRecv,
+            src as seL4_Word,
+            &mut badge,
+            info.words[0],
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            reply as seL4_Word,
+        );
+
+        store_message_register(mr0, msg0);
+        store_message_register(mr1, msg1);
+        store_message_register(mr2, msg2);
+        store_message_register(mr3, msg3);
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+        info
+    }
+
+    #[inline(always)]
+    unsafe fn load_message_register(
+        register: *mut seL4_Word,
+        length: seL4_Word,
+        index: seL4_Word,
+    ) -> seL4_Word {
+        if !register.is_null() && length > index {
+            *register
+        } else {
+            0
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn store_message_register(register: *mut seL4_Word, value: seL4_Word) {
+        if !register.is_null() {
+            *register = value;
+        }
+    }
+
+    /// Atomically perform an MCS nonblocking send and receive with a Reply object.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBSendRecv(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut badge = 0;
+        let mut mr0 = seL4_GetMR(0);
+        let mut mr1 = seL4_GetMR(1);
+        let mut mr2 = seL4_GetMR(2);
+        let mut mr3 = seL4_GetMR(3);
+        arm_sys_nbsend_recv(
+            seL4_SysNBSendRecv,
+            dest as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            info.words[0],
+            &mut info.words[0],
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+            reply as seL4_Word,
+        );
+        seL4_SetMR(0, mr0);
+        seL4_SetMR(1, mr1);
+        seL4_SetMR(2, mr2);
+        seL4_SetMR(3, mr3);
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+        info
+    }
+
+    /// Atomically perform an MCS nonblocking send and receive using caller-owned MRs.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBSendRecvWithMRs(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        mcs_nbsend_recv_with_mrs(
+            seL4_SysNBSendRecv,
+            dest,
+            msg_info,
+            src,
+            sender_badge,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+            reply,
+        )
+    }
+
+    /// Invoke a Reply cap nonblockingly, then wait without allocating a Reply object.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBSendWait(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut badge = 0;
+        let mut mr0 = seL4_GetMR(0);
+        let mut mr1 = seL4_GetMR(1);
+        let mut mr2 = seL4_GetMR(2);
+        let mut mr3 = seL4_GetMR(3);
+        arm_sys_nbsend_recv(
+            seL4_SysNBSendWait,
+            0,
+            src as seL4_Word,
+            &mut badge,
+            info.words[0],
+            &mut info.words[0],
+            &mut mr0,
+            &mut mr1,
+            &mut mr2,
+            &mut mr3,
+            dest as seL4_Word,
+        );
+        seL4_SetMR(0, mr0);
+        seL4_SetMR(1, mr1);
+        seL4_SetMR(2, mr2);
+        seL4_SetMR(3, mr3);
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+        info
+    }
+
+    /// Invoke a Reply cap nonblockingly, then wait using caller-owned MRs.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_NBSendWaitWithMRs(
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+    ) -> seL4_MessageInfo {
+        mcs_nbsend_recv_with_mrs(
+            seL4_SysNBSendWait,
+            0,
+            msg_info,
+            src,
+            sender_badge,
+            mr0,
+            mr1,
+            mr2,
+            mr3,
+            dest,
+        )
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    unsafe fn mcs_nbsend_recv_with_mrs(
+        syscall: seL4_Word,
+        dest: seL4_CPtr,
+        msg_info: seL4_MessageInfo,
+        src: seL4_CPtr,
+        sender_badge: *mut seL4_Word,
+        mr0: *mut seL4_Word,
+        mr1: *mut seL4_Word,
+        mr2: *mut seL4_Word,
+        mr3: *mut seL4_Word,
+        reply: seL4_CPtr,
+    ) -> seL4_MessageInfo {
+        let mut info = msg_info;
+        let mut badge = 0;
+        let mut msg0 = load_message_register(mr0, info.length(), 0);
+        let mut msg1 = load_message_register(mr1, info.length(), 1);
+        let mut msg2 = load_message_register(mr2, info.length(), 2);
+        let mut msg3 = load_message_register(mr3, info.length(), 3);
+        arm_sys_nbsend_recv(
+            syscall,
+            dest as seL4_Word,
+            src as seL4_Word,
+            &mut badge,
+            info.words[0],
+            &mut info.words[0],
+            &mut msg0,
+            &mut msg1,
+            &mut msg2,
+            &mut msg3,
+            reply as seL4_Word,
+        );
+        store_message_register(mr0, msg0);
+        store_message_register(mr1, msg1);
+        store_message_register(mr2, msg2);
+        store_message_register(mr3, msg3);
+        if !sender_badge.is_null() {
+            *sender_badge = badge;
+        }
+        info
+    }
+
     #[cfg(sel4_config_kernel_mcs)]
     #[inline(always)]
     pub unsafe fn seL4_Recv(
@@ -1562,6 +1906,7 @@ mod imp {
         result
     }
 
+    #[cfg(not(sel4_config_kernel_mcs))]
     #[inline(always)]
     pub unsafe fn seL4_TCB_SetSchedParams(
         service: seL4_TCB,
@@ -1569,34 +1914,229 @@ mod imp {
         mcp: seL4_Word,
         priority: seL4_Word,
     ) -> seL4_Error {
-        #[cfg(sel4_config_kernel_mcs)]
-        {
-            let _ = (service, authority, mcp, priority);
-            seL4_IllegalOperation
+        seL4_SetCap(0, authority);
+
+        let mut mr0: seL4_Word = mcp;
+        let mut mr1: seL4_Word = priority;
+        let mut mr2: seL4_Word = 0;
+        let mut mr3: seL4_Word = 0;
+
+        let tag = seL4_MessageInfo::new(invocation_label_TCBSetSchedParams as seL4_Word, 0, 1, 2);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+
+        if result != seL4_NoError {
+            seL4_SetMR(0, mr0);
+            seL4_SetMR(1, mr1);
+            seL4_SetMR(2, mr2);
+            seL4_SetMR(3, mr3);
         }
 
-        #[cfg(not(sel4_config_kernel_mcs))]
-        {
-            seL4_SetCap(0, authority);
+        result
+    }
 
-            let mut mr0: seL4_Word = mcp;
-            let mut mr1: seL4_Word = priority;
-            let mut mr2: seL4_Word = 0;
-            let mut mr3: seL4_Word = 0;
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSchedParams(
+        service: seL4_TCB,
+        authority: seL4_TCB,
+        mcp: seL4_Word,
+        priority: seL4_Word,
+        sched_context: seL4_SchedContext,
+        fault_ep: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_TCB_SetSchedParamsMcs(service, authority, mcp, priority, sched_context, fault_ep)
+    }
 
-            let tag =
-                seL4_MessageInfo::new(invocation_label_TCBSetSchedParams as seL4_Word, 0, 1, 2);
-            let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
-            let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+    /// Invoke the seL4 16 MCS `TCB_SetSchedParams` ABI.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSchedParamsMcs(
+        service: seL4_TCB,
+        authority: seL4_TCB,
+        mcp: seL4_Word,
+        priority: seL4_Word,
+        sched_context: seL4_SchedContext,
+        fault_ep: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, authority);
+        seL4_SetCap(1, sched_context);
+        seL4_SetCap(2, fault_ep);
 
-            if result != seL4_NoError {
-                seL4_SetMR(0, mr0);
-                seL4_SetMR(1, mr1);
-                seL4_SetMR(2, mr2);
-                seL4_SetMR(3, mr3);
-            }
+        let mut mr0 = mcp;
+        let mut mr1 = priority;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+        let tag = seL4_MessageInfo::new(invocation_label_TCBSetSchedParams as seL4_Word, 0, 3, 2);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+        result
+    }
 
-            result
+    /// Set the endpoint that receives timeout faults for an MCS TCB.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetTimeoutEndpoint(
+        service: seL4_TCB,
+        timeout_fault_ep: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, timeout_fault_ep);
+        invoke_mcs_object(
+            service,
+            invocation_label_TCBSetTimeoutEndpoint as seL4_Word,
+            1,
+            0,
+        )
+    }
+
+    /// Configure budget, period, replenishment, badge, and flags for an MCS SC.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedControl_ConfigureFlags(
+        service: seL4_SchedControl,
+        sched_context: seL4_SchedContext,
+        budget: seL4_Time,
+        period: seL4_Time,
+        extra_refills: seL4_Word,
+        badge: seL4_Word,
+        flags: seL4_Word,
+    ) -> seL4_Error {
+        seL4_SetCap(0, sched_context);
+        seL4_SetMR(4, flags);
+        invoke_mcs_object_with_mrs(
+            service,
+            invocation_label_SchedControlConfigureFlags as seL4_Word,
+            1,
+            5,
+            budget,
+            period,
+            extra_refills,
+            badge,
+        )
+    }
+
+    /// Bind an MCS scheduling context to a TCB or notification.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Bind(service: seL4_SchedContext, cap: seL4_CPtr) -> seL4_Error {
+        seL4_SetCap(0, cap);
+        invoke_mcs_object(
+            service,
+            invocation_label_SchedContextBind as seL4_Word,
+            1,
+            0,
+        )
+    }
+
+    /// Unbind both object associations from an MCS scheduling context.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Unbind(service: seL4_SchedContext) -> seL4_Error {
+        invoke_mcs_object(
+            service,
+            invocation_label_SchedContextUnbind as seL4_Word,
+            0,
+            0,
+        )
+    }
+
+    /// Unbind one TCB or notification from an MCS scheduling context.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_UnbindObject(
+        service: seL4_SchedContext,
+        cap: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, cap);
+        invoke_mcs_object(
+            service,
+            invocation_label_SchedContextUnbindObject as seL4_Word,
+            1,
+            0,
+        )
+    }
+
+    /// Read and reset the consumed-time counter for an MCS scheduling context.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Consumed(
+        service: seL4_SchedContext,
+    ) -> seL4_SchedContext_Consumed_t {
+        let (error, consumed) =
+            invoke_mcs_consumed(service, invocation_label_SchedContextConsumed as seL4_Word);
+        seL4_SchedContext_Consumed {
+            error: error as core::ffi::c_int,
+            consumed,
+        }
+    }
+
+    /// Yield to the TCB currently bound to an MCS scheduling context.
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_YieldTo(
+        service: seL4_SchedContext,
+    ) -> seL4_SchedContext_YieldTo_t {
+        let (error, consumed) =
+            invoke_mcs_consumed(service, invocation_label_SchedContextYieldTo as seL4_Word);
+        seL4_SchedContext_YieldTo {
+            error: error as core::ffi::c_int,
+            consumed,
+        }
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    unsafe fn invoke_mcs_object(
+        service: seL4_CPtr,
+        label: seL4_Word,
+        extra_caps: seL4_Word,
+        length: seL4_Word,
+    ) -> seL4_Error {
+        invoke_mcs_object_with_mrs(service, label, extra_caps, length, 0, 0, 0, 0)
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    unsafe fn invoke_mcs_object_with_mrs(
+        service: seL4_CPtr,
+        label: seL4_Word,
+        extra_caps: seL4_Word,
+        length: seL4_Word,
+        mut mr0: seL4_Word,
+        mut mr1: seL4_Word,
+        mut mr2: seL4_Word,
+        mut mr3: seL4_Word,
+    ) -> seL4_Error {
+        let tag = seL4_MessageInfo::new(label, 0, extra_caps, length);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+        }
+        result
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    #[inline(always)]
+    unsafe fn invoke_mcs_consumed(
+        service: seL4_SchedContext,
+        label: seL4_Word,
+    ) -> (seL4_Error, seL4_Time) {
+        let mut mr0 = 0;
+        let mut mr1 = 0;
+        let mut mr2 = 0;
+        let mut mr3 = 0;
+        let tag = seL4_MessageInfo::new(label, 0, 0, 0);
+        let output_tag = seL4_CallWithMRs(service, tag, &mut mr0, &mut mr1, &mut mr2, &mut mr3);
+        let result = seL4_MessageInfo_get_label(output_tag) as seL4_Error;
+        if result != seL4_NoError {
+            set_error_mrs(mr0, mr1, mr2, mr3);
+            (result, 0)
+        } else {
+            (result, mr0 as seL4_Time)
         }
     }
 
@@ -1752,6 +2292,15 @@ mod imp {
     pub const seL4_SysNBSend: seL4_Word = seL4_Syscall_ID_seL4_SysNBSend as seL4_Word;
     pub const seL4_SysRecv: seL4_Word = seL4_Syscall_ID_seL4_SysRecv as seL4_Word;
     pub const seL4_SysNBRecv: seL4_Word = seL4_Syscall_ID_seL4_SysNBRecv as seL4_Word;
+    pub const seL4_SysReplyRecv: seL4_Word = seL4_Syscall_ID_seL4_SysReplyRecv as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SysNBSendRecv: seL4_Word = seL4_Syscall_ID_seL4_SysNBSendRecv as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SysNBSendWait: seL4_Word = seL4_Syscall_ID_seL4_SysNBSendWait as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SysWait: seL4_Word = seL4_Syscall_ID_seL4_SysWait as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SysNBWait: seL4_Word = seL4_Syscall_ID_seL4_SysNBWait as seL4_Word;
     #[cfg(not(sel4_config_kernel_mcs))]
     pub const seL4_SysReply: seL4_Word = seL4_Syscall_ID_seL4_SysReply as seL4_Word;
     pub const seL4_SysCall: seL4_Word = seL4_Syscall_ID_seL4_SysCall as seL4_Word;
@@ -1762,6 +2311,10 @@ mod imp {
     pub const seL4_EndpointObject: seL4_ObjectType = api_object_seL4_EndpointObject;
     pub const seL4_NotificationObject: seL4_ObjectType = api_object_seL4_NotificationObject;
     pub const seL4_CapTableObject: seL4_ObjectType = api_object_seL4_CapTableObject;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SchedContextObject: seL4_ObjectType = api_object_seL4_SchedContextObject;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_ReplyObject: seL4_ObjectType = api_object_seL4_ReplyObject;
 
     pub const seL4_ARM_Page: seL4_ObjectType = _object_seL4_ARM_SmallPageObject as seL4_ObjectType;
     pub const seL4_ARM_LargePage: seL4_ObjectType =
@@ -1776,6 +2329,10 @@ mod imp {
     pub const seL4_EndpointObjectType: seL4_ObjectType = seL4_EndpointObject;
     pub const seL4_NotificationObjectType: seL4_ObjectType = seL4_NotificationObject;
     pub const seL4_CapTableObjectType: seL4_ObjectType = seL4_CapTableObject;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_SchedContextObjectType: seL4_ObjectType = seL4_SchedContextObject;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const seL4_ReplyObjectType: seL4_ObjectType = seL4_ReplyObject;
     pub const seL4_ARM_PageObjectType: seL4_ObjectType = seL4_ARM_Page;
     pub const seL4_ARM_LargePageObjectType: seL4_ObjectType = seL4_ARM_LargePage;
     pub const seL4_ARM_PageTableObjectType: seL4_ObjectType = seL4_ARM_PageTableObject;
@@ -1811,6 +2368,41 @@ mod imp {
         seL4_RootCNodeCapSlots_seL4_CapInitThreadSC as seL4_CPtr;
     pub const seL4_CapSMC: seL4_CPtr = seL4_RootCNodeCapSlots_seL4_CapSMC as seL4_CPtr;
     pub const seL4_NumInitialCaps: seL4_CPtr = seL4_CapSMC + 1;
+
+    /// Fault labels emitted by the selected generated seL4 headers.
+    pub const SEL4_FAULT_NULL_LABEL: seL4_Word = seL4_Fault_tag_seL4_Fault_NullFault as seL4_Word;
+    pub const SEL4_FAULT_CAP_LABEL: seL4_Word = seL4_Fault_tag_seL4_Fault_CapFault as seL4_Word;
+    pub const SEL4_FAULT_UNKNOWN_SYSCALL_LABEL: seL4_Word =
+        seL4_Fault_tag_seL4_Fault_UnknownSyscall as seL4_Word;
+    pub const SEL4_FAULT_USER_EXCEPTION_LABEL: seL4_Word =
+        seL4_Fault_tag_seL4_Fault_UserException as seL4_Word;
+
+    /// seL4 16 AArch64 MCS object and timeout-message contract.
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_MIN_SCHED_CONTEXT_BITS: seL4_Word = seL4_MinSchedContextBits as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_REPLY_BITS: seL4_Word = seL4_ReplyBits as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_NOTIFICATION_BITS: seL4_Word = seL4_NotificationBits as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_TIMEOUT_DATA: seL4_Word = seL4_Timeout_Msg_seL4_Timeout_Data as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_TIMEOUT_CONSUMED: seL4_Word =
+        seL4_Timeout_Msg_seL4_Timeout_Consumed as seL4_Word;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_TIMEOUT_LENGTH: seL4_Word =
+        seL4_Timeout_Msg_seL4_Timeout_Length as seL4_Word;
+    #[cfg(not(sel4_config_kernel_mcs))]
+    pub const SEL4_MCS_TIMEOUT_LENGTH: seL4_Word = 2;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_FAULT_TIMEOUT_LABEL: seL4_Word =
+        seL4_Fault_tag_seL4_Fault_Timeout as seL4_Word;
+    #[cfg(not(sel4_config_kernel_mcs))]
+    pub const SEL4_MCS_FAULT_TIMEOUT_LABEL: seL4_Word = 5;
+    #[cfg(sel4_config_kernel_mcs)]
+    pub const SEL4_MCS_FAULT_VM_LABEL: seL4_Word = seL4_Fault_tag_seL4_Fault_VMFault as seL4_Word;
+    #[cfg(not(sel4_config_kernel_mcs))]
+    pub const SEL4_MCS_FAULT_VM_LABEL: seL4_Word = 6;
 
     pub const seL4_WordBits: seL4_Word = (core::mem::size_of::<seL4_Word>() * 8) as seL4_Word;
 
@@ -2032,6 +2624,9 @@ mod imp {
     pub type seL4_ARM_ASIDPool = seL4_CPtr;
     pub type seL4_ARM_Page = seL4_CPtr;
     pub type seL4_ARM_PageTable = seL4_CPtr;
+    pub type seL4_SchedContext = seL4_CPtr;
+    pub type seL4_SchedControl = seL4_CPtr;
+    pub type seL4_Time = u64;
 
     /// Number of machine words in an AArch64 `seL4_UserContext`.
     pub const SEL4_AARCH64_USER_CONTEXT_REGISTER_COUNT: seL4_Word = 36;
@@ -2068,6 +2663,25 @@ mod imp {
     pub const invocation_label_TCBResume: seL4_Word = 12;
     pub const invocation_label_TCBBindNotification: seL4_Word = 13;
     pub const invocation_label_TCBUnbindNotification: seL4_Word = 14;
+    pub const MCS_INVOCATION_LABEL_TCB_SET_TIMEOUT_ENDPOINT: seL4_Word = 9;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTROL_CONFIGURE_FLAGS: seL4_Word = 33;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_BIND: seL4_Word = 34;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND: seL4_Word = 35;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND_OBJECT: seL4_Word = 36;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_CONSUMED: seL4_Word = 37;
+    pub const MCS_INVOCATION_LABEL_SCHED_CONTEXT_YIELD_TO: seL4_Word = 38;
+    pub const MCS_INVOCATION_LABEL_COUNT: seL4_Word = 39;
+    pub const SEL4_MCS_SYS_CALL: i32 = -1;
+    pub const SEL4_MCS_SYS_REPLY_RECV: i32 = -2;
+    pub const SEL4_MCS_SYS_NB_SEND_RECV: i32 = -3;
+    pub const SEL4_MCS_SYS_NB_SEND_WAIT: i32 = -4;
+    pub const SEL4_MCS_SYS_SEND: i32 = -5;
+    pub const SEL4_MCS_SYS_NB_SEND: i32 = -6;
+    pub const SEL4_MCS_SYS_RECV: i32 = -7;
+    pub const SEL4_MCS_SYS_NB_RECV: i32 = -8;
+    pub const SEL4_MCS_SYS_WAIT: i32 = -9;
+    pub const SEL4_MCS_SYS_NB_WAIT: i32 = -10;
+    pub const SEL4_MCS_SYS_YIELD: i32 = -11;
     pub const arch_invocation_label_ARMPageTableMap: seL4_Word = 37;
     pub const arch_invocation_label_ARMPageTableUnmap: seL4_Word = 38;
     pub const arch_invocation_label_ARMPageMap: seL4_Word = 39;
@@ -2094,6 +2708,20 @@ mod imp {
     pub const seL4_NotificationBits: seL4_Word = 5;
     pub const seL4_VSpaceBits: seL4_Word = 12;
     pub const seL4_ASIDPoolBits: seL4_Word = 12;
+    pub const SEL4_FAULT_NULL_LABEL: seL4_Word = 0;
+    pub const SEL4_FAULT_CAP_LABEL: seL4_Word = 1;
+    pub const SEL4_FAULT_UNKNOWN_SYSCALL_LABEL: seL4_Word = 2;
+    pub const SEL4_FAULT_USER_EXCEPTION_LABEL: seL4_Word = 3;
+    pub const SEL4_MCS_SCHED_CONTEXT_OBJECT: seL4_Word = 5;
+    pub const SEL4_MCS_REPLY_OBJECT: seL4_Word = 6;
+    pub const SEL4_MCS_MIN_SCHED_CONTEXT_BITS: seL4_Word = 7;
+    pub const SEL4_MCS_REPLY_BITS: seL4_Word = 5;
+    pub const SEL4_MCS_NOTIFICATION_BITS: seL4_Word = 6;
+    pub const SEL4_MCS_TIMEOUT_DATA: seL4_Word = 0;
+    pub const SEL4_MCS_TIMEOUT_CONSUMED: seL4_Word = 1;
+    pub const SEL4_MCS_TIMEOUT_LENGTH: seL4_Word = 2;
+    pub const SEL4_MCS_FAULT_TIMEOUT_LABEL: seL4_Word = 5;
+    pub const SEL4_MCS_FAULT_VM_LABEL: seL4_Word = 6;
 
     #[repr(usize)]
     #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -2154,6 +2782,24 @@ mod imp {
     pub type seL4_Bool = i8;
     pub type seL4_Uint8 = u8;
     pub type seL4_Uint32 = u32;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct seL4_SchedContext_Consumed {
+        pub error: core::ffi::c_int,
+        pub consumed: seL4_Time,
+    }
+
+    pub type seL4_SchedContext_Consumed_t = seL4_SchedContext_Consumed;
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct seL4_SchedContext_YieldTo {
+        pub error: core::ffi::c_int,
+        pub consumed: seL4_Time,
+    }
+
+    pub type seL4_SchedContext_YieldTo_t = seL4_SchedContext_YieldTo;
 
     #[repr(C)]
     #[derive(Clone, Copy)]
@@ -2822,6 +3468,117 @@ mod imp {
         seL4_NoError
     }
 
+    /// Host-side recorder for the seL4 16 MCS `TCB_SetSchedParams` shape.
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetSchedParamsMcs(
+        _service: seL4_TCB,
+        authority: seL4_TCB,
+        mcp: seL4_Word,
+        priority: seL4_Word,
+        sched_context: seL4_SchedContext,
+        fault_ep: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, authority);
+        seL4_SetCap(1, sched_context);
+        seL4_SetCap(2, fault_ep);
+        host_record_mcs_invocation(invocation_label_TCBSetSchedParams, 3, &[mcp, priority]);
+        seL4_NoError
+    }
+
+    /// Host-side recorder for MCS timeout-endpoint configuration.
+    #[inline(always)]
+    pub unsafe fn seL4_TCB_SetTimeoutEndpoint(
+        _service: seL4_TCB,
+        timeout_fault_ep: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, timeout_fault_ep);
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_TCB_SET_TIMEOUT_ENDPOINT, 1, &[]);
+        seL4_NoError
+    }
+
+    /// Host-side recorder for MCS scheduling-context configuration.
+    #[inline(always)]
+    pub unsafe fn seL4_SchedControl_ConfigureFlags(
+        _service: seL4_SchedControl,
+        sched_context: seL4_SchedContext,
+        budget: seL4_Time,
+        period: seL4_Time,
+        extra_refills: seL4_Word,
+        badge: seL4_Word,
+        flags: seL4_Word,
+    ) -> seL4_Error {
+        seL4_SetCap(0, sched_context);
+        host_record_mcs_invocation(
+            MCS_INVOCATION_LABEL_SCHED_CONTROL_CONFIGURE_FLAGS,
+            1,
+            &[budget, period, extra_refills, badge, flags],
+        );
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Bind(
+        _service: seL4_SchedContext,
+        cap: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, cap);
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_BIND, 1, &[]);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Unbind(_service: seL4_SchedContext) -> seL4_Error {
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND, 0, &[]);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_UnbindObject(
+        _service: seL4_SchedContext,
+        cap: seL4_CPtr,
+    ) -> seL4_Error {
+        seL4_SetCap(0, cap);
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND_OBJECT, 1, &[]);
+        seL4_NoError
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_Consumed(
+        _service: seL4_SchedContext,
+    ) -> seL4_SchedContext_Consumed_t {
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_CONSUMED, 0, &[]);
+        seL4_SchedContext_Consumed {
+            error: seL4_NoError as core::ffi::c_int,
+            consumed: 0,
+        }
+    }
+
+    #[inline(always)]
+    pub unsafe fn seL4_SchedContext_YieldTo(
+        _service: seL4_SchedContext,
+    ) -> seL4_SchedContext_YieldTo_t {
+        host_record_mcs_invocation(MCS_INVOCATION_LABEL_SCHED_CONTEXT_YIELD_TO, 0, &[]);
+        seL4_SchedContext_YieldTo {
+            error: seL4_NoError as core::ffi::c_int,
+            consumed: 0,
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn host_record_mcs_invocation(
+        label: seL4_Word,
+        extra_caps: seL4_Word,
+        message: &[seL4_Word],
+    ) {
+        let ipc = ensure_ipc_buffer();
+        (*ipc).tag = seL4_MessageInfo::new(label, 0, extra_caps, message.len() as seL4_Word);
+        for (index, value) in message.iter().copied().enumerate() {
+            if let Some(slot) = (*ipc).msg.get_mut(index) {
+                *slot = value;
+            }
+        }
+    }
+
     #[inline(always)]
     pub unsafe fn seL4_TCB_Suspend(_service: seL4_TCB) -> seL4_Error {
         let ipc = ensure_ipc_buffer();
@@ -3121,6 +3878,154 @@ mod tests {
         assert_eq!(host_cap(0), 0x01);
         assert_eq!(host_mr(0), 220);
         assert_eq!(host_mr(1), 200);
+    }
+
+    #[test]
+    fn mcs_contract_matches_sel4_16_aarch64_layout() {
+        assert_eq!(invocation_label_TCBSetSchedParams, 8);
+        assert_eq!(MCS_INVOCATION_LABEL_TCB_SET_TIMEOUT_ENDPOINT, 9);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTROL_CONFIGURE_FLAGS, 33);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTEXT_BIND, 34);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND, 35);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND_OBJECT, 36);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTEXT_CONSUMED, 37);
+        assert_eq!(MCS_INVOCATION_LABEL_SCHED_CONTEXT_YIELD_TO, 38);
+        assert_eq!(MCS_INVOCATION_LABEL_COUNT, 39);
+
+        assert_eq!(SEL4_MCS_SCHED_CONTEXT_OBJECT, 5);
+        assert_eq!(SEL4_MCS_REPLY_OBJECT, 6);
+        assert_eq!(SEL4_MCS_MIN_SCHED_CONTEXT_BITS, 7);
+        assert_eq!(SEL4_MCS_REPLY_BITS, 5);
+        assert_eq!(SEL4_MCS_NOTIFICATION_BITS, 6);
+        assert_eq!(SEL4_MCS_TIMEOUT_DATA, 0);
+        assert_eq!(SEL4_MCS_TIMEOUT_CONSUMED, 1);
+        assert_eq!(SEL4_MCS_TIMEOUT_LENGTH, 2);
+        assert_eq!(SEL4_MCS_FAULT_TIMEOUT_LABEL, 5);
+        assert_eq!(SEL4_MCS_FAULT_VM_LABEL, 6);
+
+        let core_sched_context_bytes = 128usize;
+        let refill_bytes = 16usize;
+        assert_eq!(((1usize << 7) - core_sched_context_bytes) / refill_bytes, 0);
+        assert_eq!(((1usize << 8) - core_sched_context_bytes) / refill_bytes, 8);
+        assert_eq!(core::mem::size_of::<seL4_SchedContext_Consumed>(), 16);
+        assert_eq!(core::mem::size_of::<seL4_SchedContext_YieldTo>(), 16);
+    }
+
+    #[test]
+    fn mcs_syscall_ids_match_sel4_16_aarch64_order() {
+        assert_eq!(SEL4_MCS_SYS_CALL, -1);
+        assert_eq!(SEL4_MCS_SYS_REPLY_RECV, -2);
+        assert_eq!(SEL4_MCS_SYS_NB_SEND_RECV, -3);
+        assert_eq!(SEL4_MCS_SYS_NB_SEND_WAIT, -4);
+        assert_eq!(SEL4_MCS_SYS_SEND, -5);
+        assert_eq!(SEL4_MCS_SYS_NB_SEND, -6);
+        assert_eq!(SEL4_MCS_SYS_RECV, -7);
+        assert_eq!(SEL4_MCS_SYS_NB_RECV, -8);
+        assert_eq!(SEL4_MCS_SYS_WAIT, -9);
+        assert_eq!(SEL4_MCS_SYS_NB_WAIT, -10);
+        assert_eq!(SEL4_MCS_SYS_YIELD, -11);
+    }
+
+    #[test]
+    fn mcs_tcb_setup_uses_explicit_sched_context_and_fault_caps() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs only record the exact invocation shape.
+        let result = unsafe { seL4_TCB_SetSchedParamsMcs(0x44, 0x01, 220, 200, 0x90, 0x91) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), invocation_label_TCBSetSchedParams);
+        assert_eq!(tag.extra_caps(), 3);
+        assert_eq!(tag.length(), 2);
+        assert_eq!(host_cap(0), 0x01);
+        assert_eq!(host_cap(1), 0x90);
+        assert_eq!(host_cap(2), 0x91);
+        assert_eq!(host_mr(0), 220);
+        assert_eq!(host_mr(1), 200);
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        let result = unsafe { seL4_TCB_SetTimeoutEndpoint(0x44, 0x92) };
+        assert_eq!(result, seL4_NoError);
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), MCS_INVOCATION_LABEL_TCB_SET_TIMEOUT_ENDPOINT);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x92);
+    }
+
+    #[test]
+    fn mcs_sched_control_configure_flags_preserves_fifth_mr() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+        // SAFETY: Host stubs only record the exact invocation shape.
+        let result =
+            unsafe { seL4_SchedControl_ConfigureFlags(0x80, 0x90, 2_000, 10_000, 4, 0xa5, 0x5a) };
+        assert_eq!(result, seL4_NoError);
+
+        let tag = host_ipc_tag();
+        assert_eq!(
+            tag.label(),
+            MCS_INVOCATION_LABEL_SCHED_CONTROL_CONFIGURE_FLAGS
+        );
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 5);
+        assert_eq!(host_cap(0), 0x90);
+        assert_eq!(host_mr(0), 2_000);
+        assert_eq!(host_mr(1), 10_000);
+        assert_eq!(host_mr(2), 4);
+        assert_eq!(host_mr(3), 0xa5);
+        assert_eq!(host_mr(4), 0x5a);
+    }
+
+    #[test]
+    fn mcs_sched_context_object_invocations_use_exact_caps_and_lengths() {
+        let _guard = HOST_IPC_TEST_LOCK.lock().unwrap();
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        assert_eq!(unsafe { seL4_SchedContext_Bind(0x90, 0x44) }, seL4_NoError);
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), MCS_INVOCATION_LABEL_SCHED_CONTEXT_BIND);
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x44);
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        assert_eq!(unsafe { seL4_SchedContext_Unbind(0x90) }, seL4_NoError);
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        assert_eq!(
+            unsafe { seL4_SchedContext_UnbindObject(0x90, 0x44) },
+            seL4_NoError
+        );
+        let tag = host_ipc_tag();
+        assert_eq!(
+            tag.label(),
+            MCS_INVOCATION_LABEL_SCHED_CONTEXT_UNBIND_OBJECT
+        );
+        assert_eq!(tag.extra_caps(), 1);
+        assert_eq!(tag.length(), 0);
+        assert_eq!(host_cap(0), 0x44);
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        let consumed = unsafe { seL4_SchedContext_Consumed(0x90) };
+        assert_eq!(consumed.error, seL4_NoError as core::ffi::c_int);
+        assert_eq!(consumed.consumed, 0);
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), MCS_INVOCATION_LABEL_SCHED_CONTEXT_CONSUMED);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
+
+        // SAFETY: Host stubs only record the exact invocation shape.
+        let yielded = unsafe { seL4_SchedContext_YieldTo(0x90) };
+        assert_eq!(yielded.error, seL4_NoError as core::ffi::c_int);
+        assert_eq!(yielded.consumed, 0);
+        let tag = host_ipc_tag();
+        assert_eq!(tag.label(), MCS_INVOCATION_LABEL_SCHED_CONTEXT_YIELD_TO);
+        assert_eq!(tag.extra_caps(), 0);
+        assert_eq!(tag.length(), 0);
     }
 
     #[test]

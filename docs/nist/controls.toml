@@ -38,7 +38,7 @@ id = "AC-5"
 title = "Separation of Duties"
 family = "AC"
 status = "Implemented"
-rationale = "Queen orchestration and Worker-session telemetry duties are separated at the application policy layer by namespaces and tickets; current profiles do not claim separate Worker TCBs."
+rationale = "Queen orchestration and Worker-session telemetry duties are separated by namespaces and tickets; selected Milestone 26e profiles additionally declare restricted TCB/SC bundles for executable Heartbeat, GPU, and LoRA Workers, with target execution proved separately."
 evidence = [
   { type = "doc", ref = "docs/ROLES_AND_SCHEDULING.md", note = "Distinct Queen and Worker-session policy scopes and namespaces." },
   { type = "doc", ref = "docs/INTERFACES.md", note = "Role-specific control surfaces and mounts." },

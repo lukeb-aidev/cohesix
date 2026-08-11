@@ -8,5 +8,4 @@ license = "MIT"
 publish = false
 
 [dependencies]
-secure9p-core = { path = "../secure9p-core" }
-secure9p-codec = { path = "../secure9p-codec" }
+heapless = "0.9.3"

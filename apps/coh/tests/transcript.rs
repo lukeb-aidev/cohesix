@@ -152,7 +152,7 @@ fn coh_peft_transcript_matches_cohsh_baseline() -> Result<()> {
         .join("vision-base-v1");
     write_file(
         registry_available.join("manifest.toml").as_path(),
-        b"[model]\nid = \"vision-base-v1\"\n",
+        b"[model]\nid = \"vision-base-v1\"\ncas_sha256 = \"c8a5d3a4b77a641011355372491893a492d81e570ddd2d1dbca05e573d3052bd\"\nformat = \"gguf\"\n",
     )?;
     write_file(
         registry_root.path().join("active").as_path(),

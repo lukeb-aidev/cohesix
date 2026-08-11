@@ -285,11 +285,13 @@ const hiveLeasePreemptions = document.getElementById("hive-lease-preemptions");
 const hiveFallback = document.getElementById("hive-fallback");
 const hiveOverlays = document.getElementById("hive-overlays");
 const hiveDetailTitle = document.getElementById("hive-detail-title");
+const hiveDetailState = document.getElementById("hive-detail-state");
 const hiveDetailLines = document.getElementById("hive-detail-lines");
 const hiveDetailClear = document.getElementById("hive-detail-clear");
 let hiveController = null;
 let hiveInitError = null;
 let lastHiveBatch = null;
+const hiveAgents = new Map();
 
 const selectChips = (root) => {
   const chips = {};
@@ -335,6 +337,13 @@ let hiveInteractionTimer = null;
 let hiveInteractionActive = false;
 const applyHiveBatch = (batch) => {
   lastHiveBatch = batch;
+  if (Array.isArray(batch.agents)) {
+    batch.agents.forEach((agent) => {
+      if (agent?.id) {
+        hiveAgents.set(agent.id, agent);
+      }
+    });
+  }
   hiveController?.ingest(batch);
   updateHivePressure(batch);
   updateHiveRoot(batch);
@@ -526,6 +535,10 @@ const resetHiveDetail = () => {
   if (hiveDetailTitle) {
     hiveDetailTitle.textContent = "Select worker";
   }
+  if (hiveDetailState) {
+    hiveDetailState.textContent =
+      "declaration=unknown lifecycle=unknown receipt=unknown artifact=unknown proof=unknown";
+  }
   if (hiveDetailLines) {
     renderPlaceholder(hiveDetailLines, "No telemetry loaded.");
   }
@@ -688,14 +701,27 @@ const renderHiveDetail = (batch) => {
     return;
   }
   const detail = batch.detail;
+  const selectedAgent = hiveDetailAgent ? hiveAgents.get(hiveDetailAgent) : null;
+  const worker = selectedAgent?.worker || {};
+  const stateText = [
+    `declaration=${worker.declaration ?? "unknown"}`,
+    `lifecycle=${worker.lifecycle ?? "unknown"}`,
+    `receipt=${worker.receipt ?? "unknown"}`,
+    `artifact=${worker.artifact ?? "unknown"}`,
+    `proof=${worker.execution_proof ?? "unknown"}`,
+  ].join(" ");
   const detailLines = detail && Array.isArray(detail.lines) ? detail.lines.join("\n") : "";
   const detailSignature =
     `selected:${hiveDetailAgent || ""}|` +
+    `state:${stateText}|` +
     `detail:${detail?.agent || ""}:${detailLines}`;
   if (detailSignature === hiveDetailSignature) {
     return;
   }
   hiveDetailSignature = detailSignature;
+  if (hiveDetailState) {
+    hiveDetailState.textContent = stateText;
+  }
   if (detail && Array.isArray(detail.lines) && detail.lines.length) {
     if (hiveDetailTitle) {
       hiveDetailTitle.textContent = detail.agent;
@@ -1152,6 +1178,14 @@ const startHive = async () => {
     return;
   }
   hiveController.bootstrap(res.result);
+  hiveAgents.clear();
+  if (Array.isArray(res.result.agents)) {
+    res.result.agents.forEach((agent) => {
+      if (agent?.id) {
+        hiveAgents.set(agent.id, agent);
+      }
+    });
+  }
   hiveController.start();
   hiveUiNeedsFlush = false;
   setHiveScrollActive(false);

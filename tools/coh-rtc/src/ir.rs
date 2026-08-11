@@ -11,7 +11,12 @@ use std::fs;
 use std::net::Ipv4Addr;
 use std::path::{Path, PathBuf};
 
-const SCHEMA_VERSION: &str = "1.6";
+use crate::resource_admission::{KernelObjectBudget, WorkerResourceAdmissionConfig};
+use crate::temporal::{
+    SchedulerArchitecture, TemporalAuthorityConfig, TemporalExecution, TemporalTaskKind,
+};
+
+const SCHEMA_VERSION: &str = "1.8";
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
@@ -125,6 +130,15 @@ const REQUIRED_PI4_DRIVER_RUNTIME_HOT_PATHS: [&str; 7] = [
     "pcie-root",
 ];
 
+const fn ranges_overlap(
+    first_start: u64,
+    first_limit: u64,
+    second_start: u64,
+    second_limit: u64,
+) -> bool {
+    first_start < second_limit && second_start < first_limit
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
@@ -160,6 +174,14 @@ pub struct Manifest {
     pub lifecycle: LifecycleConfig,
     #[serde(default)]
     pub worker_runtime: WorkerRuntimeConfig,
+    #[serde(default)]
+    pub temporal_authority: TemporalAuthorityConfig,
+    #[serde(default)]
+    pub worker_resource_admission: WorkerResourceAdmissionConfig,
+    #[serde(default)]
+    pub ninedoor_service: NineDoorServiceConfig,
+    #[serde(default)]
+    pub console_network_service: ConsoleNetworkServiceConfig,
     #[serde(default)]
     pub control_plane: ControlPlaneConfig,
     #[serde(default)]
@@ -229,6 +251,11 @@ impl Manifest {
         self.validate_telemetry()?;
         self.validate_lifecycle()?;
         self.validate_worker_runtime()?;
+        self.temporal_authority.validate()?;
+        self.worker_resource_admission
+            .validate(&self.temporal_authority)?;
+        self.validate_ninedoor_service()?;
+        self.validate_console_network_service()?;
         self.validate_control_plane()?;
         self.validate_observability()?;
         self.validate_ui_providers()?;
@@ -1165,6 +1192,34 @@ impl Manifest {
                 MAX_COH_SCHEMA_LEN
             );
         }
+        let expected_request_schemas = ["host-ticket/v1", "host-ticket/v2"];
+        let expected_result_schemas = ["host-ticket-result/v1", "host-ticket-result/v2"];
+        if tickets
+            .accepted_request_schemas
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            != expected_request_schemas
+            || tickets
+                .accepted_result_schemas
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                != expected_result_schemas
+        {
+            bail!("ecosystem.host.tickets accepted schema matrices must be exact v1/v2 compatibility sets");
+        }
+        if !tickets
+            .accepted_request_schemas
+            .iter()
+            .any(|schema| schema == request_schema)
+            || !tickets
+                .accepted_result_schemas
+                .iter()
+                .any(|schema| schema == result_schema)
+        {
+            bail!("ecosystem.host.tickets selected schemas must belong to their accepted matrices");
+        }
         if tickets.max_line_bytes == 0 {
             bail!("ecosystem.host.tickets.max_line_bytes must be >= 1");
         }
@@ -1189,6 +1244,25 @@ impl Manifest {
             if !seen_actions.insert(*action) {
                 bail!("ecosystem.host.tickets.action_allowlist has duplicates");
             }
+        }
+        let expected_receipt_actions = [
+            HostTicketAction::GpuLeaseGrant,
+            HostTicketAction::GpuLeaseRenew,
+            HostTicketAction::GpuLeaseRelease,
+            HostTicketAction::PeftExport,
+            HostTicketAction::PeftImport,
+            HostTicketAction::PeftActivate,
+            HostTicketAction::PeftRollback,
+        ];
+        if tickets.receipt_action_allowlist.as_slice() != expected_receipt_actions {
+            bail!("ecosystem.host.tickets.receipt_action_allowlist must contain exactly three GPU and four PEFT actions");
+        }
+        if tickets
+            .receipt_action_allowlist
+            .iter()
+            .any(|action| !seen_actions.contains(action))
+        {
+            bail!("ecosystem.host.tickets receipt actions must also be generally allowed");
         }
         if tickets.lifecycle.is_empty() {
             bail!("ecosystem.host.tickets.lifecycle must not be empty");
@@ -1417,10 +1491,282 @@ impl Manifest {
                 );
             }
         }
-        if self.worker_runtime.has_implemented_roles() {
+        if !self.worker_runtime.has_implemented_roles() {
+            return Ok(());
+        }
+        if self
+            .worker_runtime
+            .role(Role::WorkerBus)
+            .is_some_and(|role| role.implemented)
+        {
+            bail!("worker-bus is model-only and cannot be an executable Worker role");
+        }
+        for role in REQUIRED_WORKER_ROLE_RECORDS {
+            if !self
+                .worker_runtime
+                .role(role)
+                .is_some_and(|record| record.implemented)
+            {
+                bail!(
+                    "worker_runtime executable contract requires implemented role {}",
+                    role.as_str()
+                );
+            }
+        }
+        if self.worker_runtime.scheduling.profile != WorkerSchedulingProfile::Mcs {
+            bail!("executable Worker roles require worker_runtime.scheduling.profile=mcs");
+        }
+        if !self.temporal_authority.enabled
+            || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
+        {
+            bail!("executable Worker roles require enabled SMP+MCS temporal_authority");
+        }
+        for task_id in [
+            "worker-heartbeat-slot-0",
+            "worker-gpu-slot-0",
+            "worker-lora-slot-0",
+        ] {
+            let task = self
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .ok_or_else(|| anyhow::anyhow!("missing executable Worker task {task_id}"))?;
+            if task.kind != TemporalTaskKind::Worker
+                || task.execution != TemporalExecution::Active
+                || !task.allowed_donors.is_empty()
+                || task.reply_objects != 0
+                || task.max_donation_depth != 0
+            {
+                bail!(
+                    "executable Worker task {} requires a dedicated active SC and zero donation",
+                    task_id
+                );
+            }
+        }
+        if self
+            .temporal_authority
+            .tasks
+            .iter()
+            .any(|task| task.timeout_badge == self.worker_runtime.scheduling.timeout_endpoint_badge)
+        {
+            bail!("Worker scheduling timeout badge overlaps a temporal task badge");
+        }
+        for role in REQUIRED_WORKER_ROLE_RECORDS {
+            let admission = self
+                .worker_resource_admission
+                .executable_roles
+                .iter()
+                .find(|entry| entry.role == role.as_str())
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "worker_resource_admission missing executable role {}",
+                        role.as_str()
+                    )
+                })?;
+            if admission.executable_slots == 0
+                || admission.namespace_capacity != self.worker_runtime.max_workers
+            {
+                bail!(
+                    "worker_resource_admission role {} must separate the configured namespace capacity from a non-zero executable bound",
+                    role.as_str()
+                );
+            }
+        }
+        for admission in &self.worker_resource_admission.executable_roles {
+            let runtime_role = self
+                .worker_runtime
+                .roles
+                .iter()
+                .find(|entry| entry.role.as_str() == admission.role)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "worker_resource_admission contains unknown Worker role {}",
+                        admission.role
+                    )
+                })?;
+            if !runtime_role.implemented || runtime_role.role == Role::WorkerBus {
+                bail!(
+                    "worker_resource_admission role {} is not an executable target Worker",
+                    admission.role
+                );
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_console_network_service(&self) -> Result<()> {
+        let service = &self.console_network_service;
+        if !service.enabled {
+            return Ok(());
+        }
+        service.validate()?;
+        if !self.features.net_console {
+            bail!("console_network_service.enabled requires features.net_console=true");
+        }
+        if !self.profile.kernel {
+            bail!("console_network_service.enabled requires profile.kernel=true");
+        }
+        if !self.temporal_authority.enabled
+            || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
+        {
+            bail!("console_network_service requires enabled SMP+MCS temporal_authority");
+        }
+        let task = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "console-network-service")
+            .ok_or_else(|| anyhow::anyhow!("missing temporal task console-network-service"))?;
+        if task.kind != TemporalTaskKind::Service
+            || task.execution != TemporalExecution::Active
+            || task.scheduling_context_slot != service.scheduling_context_slot
+            || task.scheduling_context_bits != service.scheduling_context_bits
+            || task.core != service.core
+            || task.sched_control_core != service.core
+            || task.priority != service.priority
+            || task.mcp != service.mcp
+            || task.budget_us != service.budget_us
+            || task.period_us != service.period_us
+            || task.max_refills != service.max_refills
+            || task.timeout_badge != service.timeout_badge
+            || !task.allowed_donors.is_empty()
+            || task.reply_objects != 0
+            || task.max_donation_depth != 0
+        {
+            bail!("console_network_service object/SC inventory disagrees with temporal task console-network-service");
+        }
+        let service_index = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    candidate.kind,
+                    TemporalTaskKind::Service | TemporalTaskKind::Drain
+                )
+            })
+            .position(|candidate| candidate.id == task.id)
+            .ok_or_else(|| anyhow::anyhow!("console-network service fault index is missing"))?;
+        let service_faults = self.worker_resource_admission.handoff.service_fault_badges;
+        let expected_fault_badge = u64::try_from(service_index)
+            .ok()
+            .and_then(|index| index.checked_mul(u64::from(service_faults.stride)))
+            .and_then(|offset| service_faults.base.checked_add(offset))
+            .filter(|_| service_index < usize::from(service_faults.count))
+            .ok_or_else(|| anyhow::anyhow!("console-network service fault range is exhausted"))?;
+        if service.fault_badge != expected_fault_badge {
+            bail!("console_network_service.fault_badge differs from generated service fault range");
+        }
+        if self
+            .worker_resource_admission
+            .critical_tcbs
+            .iter()
+            .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+            || self
+                .worker_resource_admission
+                .executable_roles
+                .iter()
+                .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+        {
+            bail!("console_network_service.revoke_anchor_slot collides with another retained child anchor");
+        }
+        if service.revoke_anchor_slot >= self.worker_resource_admission.capacity.cspace_slots {
             bail!(
-                "worker_runtime executable roles are unsupported until the generated contract includes image, TCB, CSpace, VSpace, IPC-buffer, stack, fault, and revocation state"
+                "console_network_service.revoke_anchor_slot exceeds the generated CSpace capacity"
             );
+        }
+        Ok(())
+    }
+
+    fn validate_ninedoor_service(&self) -> Result<()> {
+        let service = &self.ninedoor_service;
+        if !service.enabled {
+            return Ok(());
+        }
+        service.validate()?;
+        if !self.profile.kernel {
+            bail!("ninedoor_service.enabled requires profile.kernel=true");
+        }
+        if !self.temporal_authority.enabled
+            || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
+        {
+            bail!("ninedoor_service requires enabled SMP+MCS temporal_authority");
+        }
+        let task = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "ninedoor-service")
+            .ok_or_else(|| anyhow::anyhow!("missing temporal task ninedoor-service"))?;
+        if task.kind != TemporalTaskKind::Service
+            || task.execution != TemporalExecution::Passive
+            || task.core != service.core
+            || task.priority != service.priority
+            || task.mcp != service.mcp
+            || task.timeout_badge != service.timeout_badge
+            || task.timeout_policy != crate::temporal::TimeoutPolicy::ReturnError
+            || task.allowed_donors.as_slice() != ["root-control"]
+            || task.reply_objects != 1
+            || task.max_donation_depth != 1
+            || task.scheduling_context_slot != 0
+            || task.scheduling_context_bits != 0
+        {
+            bail!("ninedoor_service object/donation inventory disagrees with temporal task ninedoor-service");
+        }
+        let service_index = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .filter(|candidate| {
+                matches!(
+                    candidate.kind,
+                    TemporalTaskKind::Service | TemporalTaskKind::Drain
+                )
+            })
+            .position(|candidate| candidate.id == task.id)
+            .ok_or_else(|| anyhow::anyhow!("NineDoor service fault index is missing"))?;
+        let service_faults = self.worker_resource_admission.handoff.service_fault_badges;
+        let expected_fault_badge = u64::try_from(service_index)
+            .ok()
+            .and_then(|index| index.checked_mul(u64::from(service_faults.stride)))
+            .and_then(|offset| service_faults.base.checked_add(offset))
+            .filter(|_| service_index < usize::from(service_faults.count))
+            .ok_or_else(|| anyhow::anyhow!("NineDoor service fault range is exhausted"))?;
+        if service.fault_badge != expected_fault_badge {
+            bail!("ninedoor_service.fault_badge differs from generated service fault range");
+        }
+        let root_fault = self
+            .worker_resource_admission
+            .critical_tcbs
+            .iter()
+            .find(|entry| entry.id == "root-fault")
+            .ok_or_else(|| anyhow::anyhow!("root-fault resource record is missing"))?;
+        let root_fault_slots = 1u32
+            .checked_shl(u32::from(root_fault.cnode_radix_bits))
+            .ok_or_else(|| anyhow::anyhow!("root-fault CSpace cardinality overflows"))?;
+        if service.root_fault_recovery_reply_slot >= root_fault_slots {
+            bail!("ninedoor_service recovery Reply slot exceeds root-fault CSpace");
+        }
+        if self
+            .worker_resource_admission
+            .critical_tcbs
+            .iter()
+            .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+            || self
+                .worker_resource_admission
+                .executable_roles
+                .iter()
+                .any(|entry| entry.revoke_anchor_slot == service.revoke_anchor_slot)
+            || (self.console_network_service.enabled
+                && self.console_network_service.revoke_anchor_slot == service.revoke_anchor_slot)
+        {
+            bail!(
+                "ninedoor_service.revoke_anchor_slot collides with another retained child anchor"
+            );
+        }
+        if service.revoke_anchor_slot >= self.worker_resource_admission.capacity.cspace_slots {
+            bail!("ninedoor_service.revoke_anchor_slot exceeds the generated CSpace capacity");
         }
         Ok(())
     }
@@ -2339,6 +2685,30 @@ impl Manifest {
             let label = format!("swarmui.paths.namespace_roots[{idx}]");
             self.validate_client_path(&label, path)?;
         }
+        if self.sharding.enabled {
+            if swarmui.paths.worker_root != "/shard" {
+                bail!("swarmui.paths.worker_root must be /shard when sharding is enabled");
+            }
+            if !swarmui
+                .paths
+                .namespace_roots
+                .iter()
+                .any(|path| path == "/shard")
+            {
+                bail!("swarmui.paths.namespace_roots must include /shard when sharding is enabled");
+            }
+            if swarmui.paths.telemetry_root == "/worker" {
+                if !self.sharding.legacy_worker_alias {
+                    bail!(
+                        "swarmui.paths.telemetry_root may use /worker only when sharding.legacy_worker_alias=true"
+                    );
+                }
+            } else if swarmui.paths.telemetry_root != "/shard" {
+                bail!(
+                    "swarmui.paths.telemetry_root must be /shard or the enabled legacy /worker alias"
+                );
+            }
+        }
         Ok(())
     }
 
@@ -2404,38 +2774,66 @@ impl Manifest {
             anyhow::anyhow!("cas.signing section required when cas.enable = true")
         })?;
         if signing.required {
-            let key_path = signing
-                .key_path
+            let verification_key_path = signing
+                .verification_key_path
                 .as_deref()
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
-                    anyhow::anyhow!("cas.signing.key_path required when signing.required = true")
+                    anyhow::anyhow!(
+                        "cas.signing.verification_key_path required when signing.required = true"
+                    )
                 })?;
-            let resolved = resolve_manifest_relative_path(base_dir, key_path);
-            let key_bytes = fs::read(&resolved).with_context(|| {
-                format!("failed to read cas signing key {}", resolved.display())
-            })?;
-            let key_text = std::str::from_utf8(&key_bytes).with_context(|| {
-                format!("cas signing key {} is not valid UTF-8", resolved.display())
-            })?;
-            let key_text = key_text.trim();
-            if key_text.is_empty() {
-                bail!("cas signing key {} is empty", resolved.display());
-            }
-            let raw = hex::decode(key_text).map_err(|err| {
-                anyhow::anyhow!("cas signing key {} must be hex: {err}", resolved.display())
-            })?;
-            if raw.len() != 32 {
+            let lower_path = verification_key_path.to_ascii_lowercase();
+            if lower_path.contains("signing_key")
+                || lower_path.contains("private_key")
+                || lower_path.contains("secret")
+            {
                 bail!(
-                    "cas signing key {} must be 32 bytes (got {})",
-                    resolved.display(),
-                    raw.len()
+                    "cas.signing.verification_key_path must name public verification material, not a signing/private/secret key: {verification_key_path}"
                 );
             }
+            let resolved = resolve_manifest_relative_path(base_dir, verification_key_path);
+            let key = read_hex_key_file(&resolved, "CAS verification key")?;
+            ed25519_dalek::VerifyingKey::from_bytes(&key).with_context(|| {
+                format!(
+                    "CAS verification key {} is not a valid Ed25519 public key",
+                    resolved.display()
+                )
+            })?;
         }
         Ok(())
     }
+}
+
+pub(crate) fn read_hex_key_file(path: &Path, label: &str) -> Result<[u8; 32]> {
+    let key_bytes =
+        fs::read(path).with_context(|| format!("failed to read {label} {}", path.display()))?;
+    let key_text = std::str::from_utf8(&key_bytes)
+        .with_context(|| format!("{label} {} is not valid UTF-8", path.display()))?;
+    let data_lines = key_text
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect::<Vec<_>>();
+    if data_lines.len() != 1 {
+        bail!(
+            "{label} {} must contain exactly one non-comment hex line",
+            path.display()
+        );
+    }
+    let raw = hex::decode(data_lines[0])
+        .map_err(|err| anyhow::anyhow!("{label} {} must be hex: {err}", path.display()))?;
+    if raw.len() != 32 {
+        bail!(
+            "{label} {} must be 32 bytes (got {})",
+            path.display(),
+            raw.len()
+        );
+    }
+    let mut key = [0u8; 32];
+    key.copy_from_slice(&raw);
+    Ok(key)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -3522,12 +3920,141 @@ mod tests {
         );
     }
 
+    #[test]
+    fn console_network_service_rejects_object_budget_drift() {
+        let mut service = super::ConsoleNetworkServiceConfig::default();
+        service
+            .validate()
+            .expect("default console-network object inventory");
+        service.objects.frames = service.objects.frames.saturating_sub(1);
+        let error = service
+            .validate()
+            .expect_err("undersized child frame budget must fail closed");
+        assert!(
+            error.to_string().contains("exact child constructor"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn console_network_service_rejects_revoke_anchor_collision() {
+        let manifest_path = repo_root()
+            .join("configs/root_task.toml")
+            .canonicalize()
+            .expect("fixture manifest path");
+        let mut manifest = load_manifest(&manifest_path).expect("load fixture manifest");
+        manifest.console_network_service.revoke_anchor_slot = manifest
+            .worker_resource_admission
+            .executable_roles
+            .first()
+            .expect("generated executable role")
+            .revoke_anchor_slot;
+        let error = manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("shared retained anchor must fail closed");
+        assert!(
+            error.to_string().contains("collides"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn ninedoor_service_requires_exact_passive_object_and_rights_inventory() {
+        let service = super::NineDoorServiceConfig::default();
+        service
+            .validate()
+            .expect("default NineDoor passive-service inventory");
+        let mut objects = service.objects;
+        objects.scheduling_contexts = 1;
+        let service = super::NineDoorServiceConfig {
+            objects,
+            ..super::NineDoorServiceConfig::default()
+        };
+        assert!(service
+            .validate()
+            .expect_err("a passive child must not own an SC")
+            .to_string()
+            .contains("exact passive child constructor"));
+
+        let service = super::NineDoorServiceConfig {
+            root_call_rights: 0b1111,
+            ..super::NineDoorServiceConfig::default()
+        };
+        assert!(service
+            .validate()
+            .expect_err("root Call must not gain Grant or Read")
+            .to_string()
+            .contains("least-authority rights"));
+    }
+
+    #[test]
+    fn ninedoor_service_rejects_anchor_and_donation_drift() {
+        let manifest_path = repo_root()
+            .join("configs/root_task.toml")
+            .canonicalize()
+            .expect("fixture manifest path");
+        let mut manifest = load_manifest(&manifest_path).expect("load fixture manifest");
+        manifest.ninedoor_service.revoke_anchor_slot =
+            manifest.console_network_service.revoke_anchor_slot;
+        assert!(manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("service anchors must remain disjoint")
+            .to_string()
+            .contains("collides"));
+
+        let mut manifest = load_manifest(&manifest_path).expect("reload fixture manifest");
+        manifest
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "ninedoor-service")
+            .expect("NineDoor temporal task")
+            .allowed_donors = vec!["root-driver-supervisor".to_owned()];
+        assert!(manifest
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("unapproved donor must fail")
+            .to_string()
+            .contains("donation inventory"));
+    }
+
     fn fixture_manifest() -> super::Manifest {
         let manifest_path = repo_root()
             .join("configs/root_task.toml")
             .canonicalize()
             .expect("fixture manifest path");
-        load_manifest(&manifest_path).expect("load fixture manifest")
+        let mut manifest = load_manifest(&manifest_path).expect("load fixture manifest");
+        manifest.worker_runtime = super::WorkerRuntimeConfig::default();
+        manifest.temporal_authority = crate::temporal::TemporalAuthorityConfig::default();
+        manifest.worker_resource_admission =
+            crate::resource_admission::WorkerResourceAdmissionConfig::default();
+        manifest.ninedoor_service = super::NineDoorServiceConfig::default();
+        manifest.console_network_service = super::ConsoleNetworkServiceConfig::default();
+        manifest
+    }
+
+    #[test]
+    fn swarmui_paths_require_canonical_shard_discovery_and_gate_legacy_tail() {
+        let manifest_path = repo_root()
+            .join("configs/root_task.toml")
+            .canonicalize()
+            .expect("fixture manifest path");
+        let mut manifest = load_manifest(&manifest_path).expect("load fixture manifest");
+        manifest
+            .validate_swarmui()
+            .expect("canonical shard discovery with gated legacy tail");
+
+        manifest.swarmui.paths.worker_root = "/worker".to_owned();
+        let error = manifest
+            .validate_swarmui()
+            .expect_err("legacy root must not replace canonical discovery");
+        assert!(error.to_string().contains("worker_root must be /shard"));
+
+        manifest.swarmui.paths.worker_root = "/shard".to_owned();
+        manifest.sharding.legacy_worker_alias = false;
+        let error = manifest
+            .validate_swarmui()
+            .expect_err("disabled alias must reject the compatibility tail root");
+        assert!(error.to_string().contains("legacy_worker_alias=true"));
     }
 
     fn repo_root() -> PathBuf {
@@ -3652,7 +4179,7 @@ mod tests {
             .expect_err("metadata-only implementation must not become executable authority");
         assert!(
             err.to_string()
-                .contains("executable roles are unsupported until the generated contract"),
+                .contains("require cap-backed endpoint authority"),
             "unexpected error: {err}"
         );
     }
@@ -3665,15 +4192,101 @@ mod tests {
         manifest.worker_runtime.endpoint_caps.required = true;
         manifest.worker_runtime.notification_lifecycle = true;
         manifest.worker_runtime.notifications.enabled = true;
+        manifest.worker_runtime.task_abi.enabled = true;
         let err = manifest
             .validate_with_base(Some(repo_root().as_path()))
             .expect_err("executable workers require a generated task-object contract");
         assert!(
-            err.to_string().contains(
-                "executable roles are unsupported until the generated contract includes image"
-            ),
+            err.to_string()
+                .contains("requires implemented role worker-gpu"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn qemu_worker_runtime_accepts_exact_mcs_task_contract() {
+        let path = repo_root().join("configs/root_task.toml");
+        let manifest = load_manifest(&path).expect("load checked-in QEMU manifest");
+        manifest
+            .validate_with_base(path.parent())
+            .expect("QEMU executable Worker topology is compiler-admitted");
+        assert!(manifest
+            .worker_runtime
+            .roles
+            .iter()
+            .filter(|role| role.implemented)
+            .all(|role| role.role != super::Role::WorkerBus));
+        assert!(manifest
+            .temporal_authority
+            .tasks
+            .iter()
+            .all(|task| task.kind != super::TemporalTaskKind::Driver));
+        assert_eq!(
+            manifest.worker_resource_admission.fault_registry.capacity,
+            10
+        );
+        assert_eq!(
+            manifest
+                .worker_resource_admission
+                .fault_registry
+                .driver_tcbs,
+            0
+        );
+    }
+
+    #[test]
+    fn pi_worker_runtime_retains_exact_linked_driver_temporal_contract() {
+        let path = repo_root().join("configs/root_task_pi4_uboot_aarch64.toml");
+        let manifest = load_manifest(&path).expect("load checked-in Pi manifest");
+        manifest
+            .validate_with_base(path.parent())
+            .expect("Pi executable Worker and linked-driver topology is compiler-admitted");
+        assert_eq!(
+            manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .filter(|task| task.kind == super::TemporalTaskKind::Driver)
+                .count(),
+            7
+        );
+        assert_eq!(
+            manifest.worker_resource_admission.fault_registry.capacity,
+            17
+        );
+    }
+
+    #[test]
+    fn worker_task_abi_rejects_badge_alias_and_multiple_inflight_controls() {
+        let path = repo_root().join("configs/root_task.toml");
+        let mut manifest = load_manifest(&path).expect("load checked-in QEMU manifest");
+        manifest.worker_runtime.task_abi.gpu_wake_bit =
+            manifest.worker_runtime.task_abi.lifecycle_shutdown_bit;
+        let err = manifest
+            .validate_with_base(path.parent())
+            .expect_err("Worker notification aliases must fail");
+        assert!(err.to_string().contains("one-hot and disjoint"));
+
+        let mut manifest = load_manifest(&path).expect("reload checked-in QEMU manifest");
+        manifest.worker_runtime.task_abi.max_control_inflight = 2;
+        let err = manifest
+            .validate_with_base(path.parent())
+            .expect_err("more than one in-flight Worker control must fail");
+        assert!(err.to_string().contains("exactly one"));
+    }
+
+    #[test]
+    fn worker_task_abi_rejects_overlapping_child_layout() {
+        let path = repo_root().join("configs/root_task.toml");
+        let mut manifest = load_manifest(&path).expect("load checked-in QEMU manifest");
+        manifest.worker_runtime.task_abi.stack_bottom_vaddr =
+            manifest.worker_runtime.task_abi.shared_page_vaddr;
+        let error = manifest
+            .validate_with_base(path.parent())
+            .expect_err("overlapping Worker layout");
+        assert!(error
+            .to_string()
+            .contains("IPC/shared/stack mappings overlap"));
     }
 
     #[test]
@@ -4393,6 +5006,7 @@ pub struct WorkerRuntimeConfig {
     pub roles: Vec<WorkerRoleRuntime>,
     pub endpoint_caps: WorkerEndpointCapConfig,
     pub notifications: WorkerNotificationConfig,
+    pub task_abi: WorkerTaskAbiConfig,
     pub scheduling: WorkerSchedulingConfig,
 }
 
@@ -4442,6 +5056,12 @@ impl WorkerRuntimeConfig {
             }
             return Ok(());
         }
+        if !self.cap_backed_authority || !self.endpoint_caps.required {
+            bail!("worker_runtime executable roles require cap-backed endpoint authority");
+        }
+        if !self.notification_lifecycle || !self.notifications.enabled {
+            bail!("worker_runtime executable roles require notification lifecycle authority");
+        }
         self.endpoint_caps.validate()?;
         self.notifications.validate()?;
         let mut badges = BTreeSet::new();
@@ -4489,6 +5109,7 @@ impl WorkerRuntimeConfig {
                 }
             }
         }
+        self.task_abi.validate()?;
         Ok(())
     }
 
@@ -4512,7 +5133,453 @@ impl Default for WorkerRuntimeConfig {
             roles: default_worker_roles(),
             endpoint_caps: WorkerEndpointCapConfig::default(),
             notifications: WorkerNotificationConfig::default(),
+            task_abi: WorkerTaskAbiConfig::default(),
             scheduling: WorkerSchedulingConfig::default(),
+        }
+    }
+}
+
+/// Compiler-owned image, object, capability, shared-frame, and passive MCS
+/// donation inventory for the restricted target NineDoor parser child.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct NineDoorServiceConfig {
+    pub enabled: bool,
+    pub abi_version: u16,
+    pub image_id: String,
+    pub image_path: String,
+    pub entry_symbol: String,
+    pub child_cspace_slots: u16,
+    pub revoke_anchor_slot: u32,
+    pub revoke_anchor_bits: u8,
+    pub objects: KernelObjectBudget,
+    pub endpoint_slot: u32,
+    pub reply_slot: u32,
+    pub root_fault_recovery_reply_slot: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub init_vaddr: u64,
+    pub stack_vaddr: u64,
+    pub stack_pages: u16,
+    pub request_vaddr: u64,
+    pub response_vaddr: u64,
+    pub shared_frame_bytes: u32,
+    pub max_inflight: u8,
+    pub request_badge: u64,
+    pub fault_badge: u64,
+    pub timeout_badge: u64,
+    pub root_call_rights: u8,
+    pub child_receive_rights: u8,
+    pub root_request_rights: u8,
+    pub root_response_rights: u8,
+    pub child_request_rights: u8,
+    pub child_response_rights: u8,
+    pub core: u8,
+    pub priority: u8,
+    pub mcp: u8,
+}
+
+impl NineDoorServiceConfig {
+    fn validate(&self) -> Result<()> {
+        if self.abi_version != 1
+            || self.image_id != "nine-door-runtime"
+            || self.image_path != "cohesix/bin/nine-door-runtime"
+            || self.entry_symbol != "_start"
+        {
+            bail!("ninedoor_service requires the selected nine-door-runtime image and namespace-service/v1 entry");
+        }
+        if self.child_cspace_slots != 16
+            || self.endpoint_slot != 2
+            || self.reply_slot != 3
+            || self.endpoint_slot == self.reply_slot
+            || self.root_fault_recovery_reply_slot < 10
+        {
+            bail!("ninedoor_service CSpace and Reply slots differ from the fixed ABI");
+        }
+        let expected_objects = KernelObjectBudget {
+            tcbs: 1,
+            cnodes: 1,
+            vspaces: 1,
+            page_tables: 8,
+            asids: 1,
+            frames: 49,
+            endpoints: 1,
+            notifications: 0,
+            fault_caps: 1,
+            timeout_fault_caps: 1,
+            reply_objects: 1,
+            scheduling_contexts: 0,
+            cspace_slots: 80,
+            untyped_bytes: 1_048_576,
+        };
+        if self.revoke_anchor_slot == 0
+            || self.revoke_anchor_bits != 20
+            || self.objects != expected_objects
+        {
+            bail!("ninedoor_service retained anchor/object budget differs from the exact passive child constructor");
+        }
+        let mappings = [
+            self.ipc_buffer_vaddr,
+            self.init_vaddr,
+            self.stack_vaddr,
+            self.request_vaddr,
+            self.response_vaddr,
+        ];
+        let mut observed = BTreeSet::new();
+        for address in mappings {
+            if address == 0 || !address.is_multiple_of(4096) || !observed.insert(address) {
+                bail!("ninedoor_service mappings must be non-zero, page-aligned, and distinct");
+            }
+        }
+        let stack_limit = self
+            .stack_vaddr
+            .checked_add(u64::from(self.stack_pages) * 4096)
+            .ok_or_else(|| anyhow::anyhow!("ninedoor_service stack extent overflows"))?;
+        let request_limit = self
+            .request_vaddr
+            .checked_add(u64::from(self.shared_frame_bytes))
+            .ok_or_else(|| anyhow::anyhow!("ninedoor_service request extent overflows"))?;
+        let response_limit = self
+            .response_vaddr
+            .checked_add(u64::from(self.shared_frame_bytes))
+            .ok_or_else(|| anyhow::anyhow!("ninedoor_service response extent overflows"))?;
+        if self.stack_pages != 8
+            || self.shared_frame_bytes != 8192
+            || self.max_inflight != 1
+            || ranges_overlap(
+                self.stack_vaddr,
+                stack_limit,
+                self.request_vaddr,
+                request_limit,
+            )
+            || ranges_overlap(
+                self.stack_vaddr,
+                stack_limit,
+                self.response_vaddr,
+                response_limit,
+            )
+            || ranges_overlap(
+                self.request_vaddr,
+                request_limit,
+                self.response_vaddr,
+                response_limit,
+            )
+        {
+            bail!("ninedoor_service requires an eight-page stack and two disjoint two-page shared windows");
+        }
+        if self.request_badge == 0
+            || self.fault_badge < 0x1000
+            || self.timeout_badge == 0
+            || self.root_call_rights != 0b1001
+            || self.child_receive_rights != 0b0010
+            || self.root_request_rights != 0b0011
+            || self.root_response_rights != 0b0010
+            || self.child_request_rights != 0b0010
+            || self.child_response_rights != 0b0011
+        {
+            bail!("ninedoor_service badge or least-authority rights record is invalid");
+        }
+        if self.priority == 0 || self.mcp < self.priority {
+            bail!("ninedoor_service requires a bounded passive priority/MCP record");
+        }
+        Ok(())
+    }
+}
+
+impl Default for NineDoorServiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            abi_version: 1,
+            image_id: "nine-door-runtime".to_owned(),
+            image_path: "cohesix/bin/nine-door-runtime".to_owned(),
+            entry_symbol: "_start".to_owned(),
+            child_cspace_slots: 16,
+            revoke_anchor_slot: 16_137,
+            revoke_anchor_bits: 20,
+            objects: KernelObjectBudget {
+                tcbs: 1,
+                cnodes: 1,
+                vspaces: 1,
+                page_tables: 8,
+                asids: 1,
+                frames: 49,
+                endpoints: 1,
+                notifications: 0,
+                fault_caps: 1,
+                timeout_fault_caps: 1,
+                reply_objects: 1,
+                scheduling_contexts: 0,
+                cspace_slots: 80,
+                untyped_bytes: 1_048_576,
+            },
+            endpoint_slot: 2,
+            reply_slot: 3,
+            root_fault_recovery_reply_slot: 10,
+            ipc_buffer_vaddr: 0x7100_0000,
+            init_vaddr: 0x7100_1000,
+            stack_vaddr: 0x7101_0000,
+            stack_pages: 8,
+            request_vaddr: 0x7102_0000,
+            response_vaddr: 0x7102_2000,
+            shared_frame_bytes: 8192,
+            max_inflight: 1,
+            request_badge: 1,
+            fault_badge: 0x26e4_0000,
+            timeout_badge: 0x26ee_0006,
+            root_call_rights: 0b1001,
+            child_receive_rights: 0b0010,
+            root_request_rights: 0b0011,
+            root_response_rights: 0b0010,
+            child_request_rights: 0b0010,
+            child_response_rights: 0b0011,
+            core: 1,
+            priority: 128,
+            mcp: 200,
+        }
+    }
+}
+
+/// Compiler-owned object, capability, shared-frame, and temporal inventory for
+/// the restricted TCP console/network service child.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct ConsoleNetworkServiceConfig {
+    pub enabled: bool,
+    pub abi_version: u16,
+    pub image_id: String,
+    pub image_path: String,
+    pub entry_symbol: String,
+    pub listener_port: u16,
+    pub single_listener: bool,
+    pub child_cspace_slots: u16,
+    pub revoke_anchor_slot: u32,
+    pub revoke_anchor_bits: u8,
+    pub objects: KernelObjectBudget,
+    pub packet_rx_notification_slot: u32,
+    pub packet_tx_wake_notification_slot: u32,
+    pub supervisor_wake_notification_slot: u32,
+    pub fault_endpoint_slot: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub init_vaddr: u64,
+    pub stack_vaddr: u64,
+    pub stack_pages: u16,
+    pub packet_rx_vaddr: u64,
+    pub packet_tx_vaddr: u64,
+    pub command_vaddr: u64,
+    pub event_vaddr: u64,
+    pub shared_frame_bytes: u32,
+    pub ethernet_frame_bytes: u16,
+    pub max_packets_per_wake: u16,
+    pub max_commands_per_wake: u16,
+    pub max_control_inflight: u8,
+    pub packet_rx_badge: u64,
+    pub control_badge: u64,
+    pub shutdown_badge: u64,
+    pub revoke_badge: u64,
+    pub packet_tx_ready_badge: u64,
+    pub event_ready_badge: u64,
+    pub fault_badge: u64,
+    pub core: u8,
+    pub scheduling_context_slot: u32,
+    pub scheduling_context_bits: u8,
+    pub priority: u8,
+    pub mcp: u8,
+    pub budget_us: u32,
+    pub period_us: u32,
+    pub max_refills: u8,
+    pub timeout_badge: u64,
+    pub timer_clock_hz: u64,
+    pub auth_timeout_ms: u32,
+    pub idle_timeout_ms: u32,
+}
+
+impl ConsoleNetworkServiceConfig {
+    fn validate(&self) -> Result<()> {
+        if self.abi_version != 1 {
+            bail!("console_network_service.abi_version must be 1");
+        }
+        if self.image_id != "console-network-runtime"
+            || self.image_path != "cohesix/artifacts/console-network-runtime"
+            || self.entry_symbol != "_start"
+        {
+            bail!("console_network_service requires the selected console-network-runtime image and _start entry");
+        }
+        if self.listener_port != 31_337 || !self.single_listener {
+            bail!("console_network_service must retain the sole listener on TCP port 31337");
+        }
+        if self.child_cspace_slots != 16 {
+            bail!("console_network_service.child_cspace_slots must be exactly 16");
+        }
+        let expected_objects = KernelObjectBudget {
+            tcbs: 1,
+            cnodes: 1,
+            vspaces: 1,
+            page_tables: 8,
+            asids: 1,
+            frames: 128,
+            endpoints: 0,
+            notifications: 2,
+            fault_caps: 1,
+            timeout_fault_caps: 1,
+            reply_objects: 0,
+            scheduling_contexts: 1,
+            cspace_slots: 160,
+            untyped_bytes: 1_048_576,
+        };
+        if self.revoke_anchor_slot == 0
+            || self.revoke_anchor_bits != 20
+            || self.objects != expected_objects
+        {
+            bail!("console_network_service retained anchor/object budget differs from the exact child constructor");
+        }
+        let slots = [
+            self.packet_rx_notification_slot,
+            self.packet_tx_wake_notification_slot,
+            self.supervisor_wake_notification_slot,
+            self.fault_endpoint_slot,
+        ];
+        let mut observed_slots = BTreeSet::new();
+        for slot in slots {
+            if slot == 0
+                || slot >= u32::from(self.child_cspace_slots)
+                || !observed_slots.insert(slot)
+            {
+                bail!("console_network_service cap slots must be non-zero, in-range, and distinct");
+            }
+        }
+        let mappings = [
+            self.ipc_buffer_vaddr,
+            self.init_vaddr,
+            self.packet_rx_vaddr,
+            self.packet_tx_vaddr,
+            self.command_vaddr,
+            self.event_vaddr,
+        ];
+        let mut observed_mappings = BTreeSet::new();
+        for address in mappings {
+            if address == 0 || !address.is_multiple_of(4096) || !observed_mappings.insert(address) {
+                bail!("console_network_service mapped pages must be non-zero, page-aligned, and distinct");
+            }
+        }
+        if self.stack_vaddr == 0 || !self.stack_vaddr.is_multiple_of(4096) || self.stack_pages < 2 {
+            bail!("console_network_service requires an aligned stack with at least two pages");
+        }
+        if self.shared_frame_bytes != 4096 || self.ethernet_frame_bytes != 1536 {
+            bail!(
+                "console_network_service requires 4096-byte frames and a 1536-byte Ethernet bound"
+            );
+        }
+        if self.max_packets_per_wake == 0
+            || self.max_packets_per_wake > 16
+            || self.max_commands_per_wake == 0
+            || self.max_commands_per_wake > 16
+            || self.max_control_inflight != 1
+        {
+            bail!("console_network_service work bounds must be in 1..=16 with one control request in flight");
+        }
+        let bits = [
+            self.packet_rx_badge,
+            self.control_badge,
+            self.shutdown_badge,
+            self.revoke_badge,
+            self.packet_tx_ready_badge,
+            self.event_ready_badge,
+        ];
+        let mut combined = 0u64;
+        for bit in bits {
+            if bit == 0 || !bit.is_power_of_two() || combined & bit != 0 {
+                bail!("console_network_service badges must be one-hot and disjoint");
+            }
+            combined |= bit;
+        }
+        if self.fault_badge < 0x1000 || bits.contains(&self.fault_badge) {
+            bail!("console_network_service fault badge must occupy a distinct reserved domain");
+        }
+        if self.scheduling_context_slot == 0
+            || self.scheduling_context_bits < 7
+            || self.budget_us == 0
+            || self.period_us == 0
+            || self.budget_us > self.period_us
+            || self.max_refills < 2
+            || self.priority == 0
+            || self.mcp < self.priority
+            || self.timeout_badge == 0
+            || self.timer_clock_hz == 0
+        {
+            bail!("console_network_service requires a bounded active MCS scheduling context");
+        }
+        if self.auth_timeout_ms == 0 || self.idle_timeout_ms <= self.auth_timeout_ms {
+            bail!("console_network_service requires non-zero auth timeout below idle timeout");
+        }
+        Ok(())
+    }
+}
+
+impl Default for ConsoleNetworkServiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            abi_version: 1,
+            image_id: "console-network-runtime".to_owned(),
+            image_path: "cohesix/artifacts/console-network-runtime".to_owned(),
+            entry_symbol: "_start".to_owned(),
+            listener_port: 31_337,
+            single_listener: true,
+            child_cspace_slots: 16,
+            revoke_anchor_slot: 16_136,
+            revoke_anchor_bits: 20,
+            objects: KernelObjectBudget {
+                tcbs: 1,
+                cnodes: 1,
+                vspaces: 1,
+                page_tables: 8,
+                asids: 1,
+                frames: 128,
+                endpoints: 0,
+                notifications: 2,
+                fault_caps: 1,
+                timeout_fault_caps: 1,
+                reply_objects: 0,
+                scheduling_contexts: 1,
+                cspace_slots: 160,
+                untyped_bytes: 1_048_576,
+            },
+            packet_rx_notification_slot: 2,
+            packet_tx_wake_notification_slot: 3,
+            supervisor_wake_notification_slot: 4,
+            fault_endpoint_slot: 5,
+            ipc_buffer_vaddr: 0x7200_0000,
+            init_vaddr: 0x7200_1000,
+            stack_vaddr: 0x7201_0000,
+            stack_pages: 16,
+            packet_rx_vaddr: 0x7202_0000,
+            packet_tx_vaddr: 0x7202_1000,
+            command_vaddr: 0x7202_2000,
+            event_vaddr: 0x7202_3000,
+            shared_frame_bytes: 4096,
+            ethernet_frame_bytes: 1536,
+            max_packets_per_wake: 8,
+            max_commands_per_wake: 8,
+            max_control_inflight: 1,
+            packet_rx_badge: 1,
+            control_badge: 2,
+            shutdown_badge: 4,
+            revoke_badge: 8,
+            packet_tx_ready_badge: 16,
+            event_ready_badge: 32,
+            fault_badge: 0x26e4_0001,
+            core: 0,
+            scheduling_context_slot: 6,
+            scheduling_context_bits: 8,
+            priority: 180,
+            mcp: 200,
+            budget_us: 1500,
+            period_us: 10_000,
+            max_refills: 2,
+            timeout_badge: 653_131_783,
+            timer_clock_hz: 62_500_000,
+            auth_timeout_ms: 5000,
+            idle_timeout_ms: 300_000,
         }
     }
 }
@@ -4660,6 +5727,156 @@ impl Default for WorkerNotificationConfig {
             lease_expiry_badge: 0x260c_8000,
             telemetry_pressure_badge: 0x260c_9000,
             irq_badge: 0x260c_a000,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct WorkerTaskAbiConfig {
+    pub enabled: bool,
+    pub version: u16,
+    pub shared_page_bytes: u32,
+    pub ipc_buffer_vaddr: u64,
+    pub shared_page_vaddr: u64,
+    pub stack_bottom_vaddr: u64,
+    pub stack_pages: u16,
+    pub child_cnode_radix_bits: u8,
+    pub lifecycle_notification_slot: u32,
+    pub supervisor_wake_notification_slot: u32,
+    pub lifecycle_control_bit: u64,
+    pub lifecycle_timeout_bit: u64,
+    pub lifecycle_shutdown_bit: u64,
+    pub lifecycle_revoke_bit: u64,
+    pub heartbeat_wake_bit: u64,
+    pub gpu_wake_bit: u64,
+    pub lora_wake_bit: u64,
+    pub ready_timeout_ms: u32,
+    pub shutdown_grace_ms: u32,
+    pub max_control_inflight: u8,
+}
+
+impl WorkerTaskAbiConfig {
+    fn validate(&self) -> Result<()> {
+        if !self.enabled {
+            bail!("worker_runtime.task_abi.enabled must be true for executable Workers");
+        }
+        if self.version != 1 || self.shared_page_bytes != 4096 {
+            bail!("worker_runtime.task_abi requires ABI v1 and one 4096-byte shared page");
+        }
+        if self.ipc_buffer_vaddr == 0 || !self.ipc_buffer_vaddr.is_multiple_of(4096) {
+            bail!("worker_runtime.task_abi.ipc_buffer_vaddr must be non-zero and page aligned");
+        }
+        if self.shared_page_vaddr == 0
+            || !self.shared_page_vaddr.is_multiple_of(4096)
+            || self.shared_page_vaddr == self.ipc_buffer_vaddr
+            || self.stack_bottom_vaddr == 0
+            || !self.stack_bottom_vaddr.is_multiple_of(4096)
+            || self.stack_pages == 0
+            || self.stack_pages > 64
+            || !(6..=12).contains(&self.child_cnode_radix_bits)
+        {
+            bail!(
+                "worker_runtime.task_abi requires disjoint page-aligned IPC/shared/stack layout, 1..=64 stack pages, and child CNode radix 6..=12"
+            );
+        }
+        let stack_bytes = u64::from(self.stack_pages)
+            .checked_mul(4096)
+            .ok_or_else(|| anyhow::anyhow!("worker_runtime.task_abi stack extent overflow"))?;
+        let stack_limit = self
+            .stack_bottom_vaddr
+            .checked_add(stack_bytes)
+            .ok_or_else(|| anyhow::anyhow!("worker_runtime.task_abi stack extent overflow"))?;
+        let ipc_limit = self
+            .ipc_buffer_vaddr
+            .checked_add(4096)
+            .ok_or_else(|| anyhow::anyhow!("worker_runtime.task_abi IPC extent overflow"))?;
+        let shared_limit = self
+            .shared_page_vaddr
+            .checked_add(u64::from(self.shared_page_bytes))
+            .ok_or_else(|| anyhow::anyhow!("worker_runtime.task_abi shared extent overflow"))?;
+        if half_open_ranges_overlap(
+            self.ipc_buffer_vaddr,
+            ipc_limit,
+            self.shared_page_vaddr,
+            shared_limit,
+        ) || half_open_ranges_overlap(
+            self.ipc_buffer_vaddr,
+            ipc_limit,
+            self.stack_bottom_vaddr,
+            stack_limit,
+        ) || half_open_ranges_overlap(
+            self.shared_page_vaddr,
+            shared_limit,
+            self.stack_bottom_vaddr,
+            stack_limit,
+        ) {
+            bail!("worker_runtime.task_abi IPC/shared/stack mappings overlap");
+        }
+        if self.lifecycle_notification_slot == 0
+            || self.supervisor_wake_notification_slot == 0
+            || self.lifecycle_notification_slot == self.supervisor_wake_notification_slot
+        {
+            bail!("worker_runtime.task_abi notification slots must be non-zero and distinct");
+        }
+        let bits = [
+            ("lifecycle_control_bit", self.lifecycle_control_bit),
+            ("lifecycle_timeout_bit", self.lifecycle_timeout_bit),
+            ("lifecycle_shutdown_bit", self.lifecycle_shutdown_bit),
+            ("lifecycle_revoke_bit", self.lifecycle_revoke_bit),
+            ("heartbeat_wake_bit", self.heartbeat_wake_bit),
+            ("gpu_wake_bit", self.gpu_wake_bit),
+            ("lora_wake_bit", self.lora_wake_bit),
+        ];
+        let mut combined = 0u64;
+        for (name, bit) in bits {
+            if bit == 0 || !bit.is_power_of_two() || combined & bit != 0 {
+                bail!("worker_runtime.task_abi.{name} must be one-hot and disjoint");
+            }
+            combined |= bit;
+        }
+        if self.ready_timeout_ms == 0 || self.shutdown_grace_ms == 0 {
+            bail!("worker_runtime.task_abi READY and shutdown bounds must be non-zero");
+        }
+        if self.max_control_inflight != 1 {
+            bail!("worker_runtime.task_abi.max_control_inflight must be exactly one");
+        }
+        Ok(())
+    }
+}
+
+const fn half_open_ranges_overlap(
+    left_start: u64,
+    left_end: u64,
+    right_start: u64,
+    right_end: u64,
+) -> bool {
+    left_start < right_end && right_start < left_end
+}
+
+impl Default for WorkerTaskAbiConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            version: 1,
+            shared_page_bytes: 4096,
+            ipc_buffer_vaddr: 0x7100_0000,
+            shared_page_vaddr: 0x7100_1000,
+            stack_bottom_vaddr: 0x7100_3000,
+            stack_pages: 8,
+            child_cnode_radix_bits: 6,
+            lifecycle_notification_slot: 1,
+            supervisor_wake_notification_slot: 2,
+            lifecycle_control_bit: 1,
+            lifecycle_timeout_bit: 2,
+            lifecycle_shutdown_bit: 4,
+            lifecycle_revoke_bit: 8,
+            heartbeat_wake_bit: 0x100,
+            gpu_wake_bit: 0x200,
+            lora_wake_bit: 0x400,
+            ready_timeout_ms: 5000,
+            shutdown_grace_ms: 1000,
+            max_control_inflight: 1,
         }
     }
 }
@@ -5592,10 +6809,11 @@ impl Default for SwarmUiPathsConfig {
         Self {
             telemetry_root: "/worker".to_owned(),
             proc_ingest_root: "/proc/ingest".to_owned(),
-            worker_root: "/worker".to_owned(),
+            worker_root: "/shard".to_owned(),
             namespace_roots: vec![
                 "/proc".to_owned(),
                 "/queen".to_owned(),
+                "/shard".to_owned(),
                 "/worker".to_owned(),
                 "/log".to_owned(),
                 "/gpu".to_owned(),
@@ -5737,7 +6955,7 @@ pub struct CasDeltaConfig {
 #[serde(deny_unknown_fields)]
 pub struct CasSigningConfig {
     pub required: bool,
-    pub key_path: Option<String>,
+    pub verification_key_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -5805,9 +7023,15 @@ pub struct HostTicketConfig {
     pub request_schema: String,
     #[serde(default = "default_host_ticket_result_schema")]
     pub result_schema: String,
+    #[serde(default = "default_host_ticket_request_schemas")]
+    pub accepted_request_schemas: Vec<String>,
+    #[serde(default = "default_host_ticket_result_schemas")]
+    pub accepted_result_schemas: Vec<String>,
     pub max_line_bytes: u32,
     #[serde(default = "default_host_ticket_action_allowlist")]
     pub action_allowlist: Vec<HostTicketAction>,
+    #[serde(default = "default_host_ticket_receipt_actions")]
+    pub receipt_action_allowlist: Vec<HostTicketAction>,
     #[serde(default = "default_host_ticket_lifecycle")]
     pub lifecycle: Vec<HostTicketLifecycleState>,
 }
@@ -5818,8 +7042,11 @@ impl Default for HostTicketConfig {
             enable: false,
             request_schema: default_host_ticket_request_schema(),
             result_schema: default_host_ticket_result_schema(),
+            accepted_request_schemas: default_host_ticket_request_schemas(),
+            accepted_result_schemas: default_host_ticket_result_schemas(),
             max_line_bytes: 2048,
             action_allowlist: default_host_ticket_action_allowlist(),
+            receipt_action_allowlist: default_host_ticket_receipt_actions(),
             lifecycle: default_host_ticket_lifecycle(),
         }
     }
@@ -5874,6 +7101,8 @@ pub enum HostTicketAction {
     GpuLeaseRenew,
     #[serde(rename = "gpu.lease.release")]
     GpuLeaseRelease,
+    #[serde(rename = "peft.export")]
+    PeftExport,
     #[serde(rename = "peft.import")]
     PeftImport,
     #[serde(rename = "peft.activate")]
@@ -5908,6 +7137,7 @@ impl HostTicketAction {
             Self::GpuLeaseGrant => "gpu.lease.grant",
             Self::GpuLeaseRenew => "gpu.lease.renew",
             Self::GpuLeaseRelease => "gpu.lease.release",
+            Self::PeftExport => "peft.export",
             Self::PeftImport => "peft.import",
             Self::PeftActivate => "peft.activate",
             Self::PeftRollback => "peft.rollback",
@@ -6051,11 +7281,35 @@ fn default_host_ticket_result_schema() -> String {
     "host-ticket-result/v1".to_owned()
 }
 
+fn default_host_ticket_request_schemas() -> Vec<String> {
+    vec!["host-ticket/v1".to_owned(), "host-ticket/v2".to_owned()]
+}
+
+fn default_host_ticket_result_schemas() -> Vec<String> {
+    vec![
+        "host-ticket-result/v1".to_owned(),
+        "host-ticket-result/v2".to_owned(),
+    ]
+}
+
+fn default_host_ticket_receipt_actions() -> Vec<HostTicketAction> {
+    vec![
+        HostTicketAction::GpuLeaseGrant,
+        HostTicketAction::GpuLeaseRenew,
+        HostTicketAction::GpuLeaseRelease,
+        HostTicketAction::PeftExport,
+        HostTicketAction::PeftImport,
+        HostTicketAction::PeftActivate,
+        HostTicketAction::PeftRollback,
+    ]
+}
+
 fn default_host_ticket_action_allowlist() -> Vec<HostTicketAction> {
     vec![
         HostTicketAction::GpuLeaseGrant,
         HostTicketAction::GpuLeaseRenew,
         HostTicketAction::GpuLeaseRelease,
+        HostTicketAction::PeftExport,
         HostTicketAction::PeftImport,
         HostTicketAction::PeftActivate,
         HostTicketAction::PeftRollback,

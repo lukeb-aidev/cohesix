@@ -71,7 +71,7 @@ flowchart LR
 | Target | Manifest | seL4 build truth |
 | --- | --- | --- |
 | QEMU `aarch64/virt` | `configs/root_task.toml` | Canonical validated `SEL4_BUILD_DIR` at `out/sel4/profile-v2/qemu-smp-production`; explicit alternatives are diagnostic unless a named profile contract passes. |
-| Raspberry Pi 4 | `configs/root_task_pi4_uboot_aarch64.toml` | Immutable repo-managed `seL4/build_UBOOT` artifacts for the `pi4_diagnostic` image lane. `out/` contains only disposable composition, staging, and evidence outputs; it is never a required Pi seL4 source or build input. |
+| Raspberry Pi 4 | `configs/root_task_pi4_uboot_aarch64.toml` | Deferred during Milestone 26e QEMU-first qualification. The immutable repo-managed `seL4/build_UBOOT` tree is still the pre-26e classic-scheduler reference and current MCS profile validation rejects it; a later fresh-Pi phase must rebuild and deliberately refresh the tracked diagnostic input before composition or hardware claims. |
 
 The Pi 4 baseline is `Pi firmware -> U-Boot -> seL4 binary image -> root-task`.
 `configs/root_task_uefi_aarch64.toml` is a separate profile and is not Pi 4
@@ -86,16 +86,64 @@ authoritative for each build.
 
 ### Build and Boot
 
+Milestone 26e QEMU images require the separately reviewed classic linked-driver
+archive as comparison evidence. The canonical
+`configs/driver_runtime_classic_comparator.toml` record removes archive-metadata
+ambiguity by binding the retired 26d source and component identities to one
+deterministic newc digest. A build may point
+`COHESIX_DRIVER_CLASSIC_COMPARATOR_RECORD` at a copied record for an isolated
+workspace, but malformed or identity-incomplete records fail before root is
+compiled.
+
 ```bash
 SEL4_BUILD_DIR="$PWD/out/sel4/profile-v2/qemu-smp-production" \
 ./scripts/cohesix-build-run.sh \
   --sel4-build "$PWD/out/sel4/profile-v2/qemu-smp-production" \
   --out-dir out/cohesix \
   --profile release \
-  --root-task-features cohesix-dev \
+  --root-task-features release-qemu,bootstrap-trace \
   --cargo-target aarch64-unknown-none \
   --transport tcp
 ```
+
+The build creates deterministic, distinct
+`driver-runtimes/cohesix-driver-runtimes.cpio` and
+`worker-images/cohesix-worker-images.cpio` artifacts. The driver manifest binds
+all seven component hashes, runtime-init ABI 9, the MCS active-SC scheduler
+class, the new archive hash, and the supplied classic comparator. The driver
+archive is embedded into the root image and also recorded separately in the
+system payload manifest. The rootfs does not duplicate that multi-megabyte
+archive; its manifest names the exact build-output path and states that the
+bytes are embedded in the rootserver. The seven images are not copied as loose
+system CPIO binaries, preserving the mandatory rootfs size bound.
+
+The launcher resolves paths from the repository root, requires the Cargo target
+directory to be the literal in-repository `target/`, and accepts build output
+only beneath `out/`; symlinked or external output roots fail before cleanup.
+Its `--clean` option clears only the selected build-output child (normally
+`out/cohesix`). A full evidence rebuild must separately preserve the immutable
+seL4 source and pinned toolchain inputs, clear the literal repository `target/`
+and disposable `out/` contents, restore those inputs at their exact paths, and
+then rebuild the selected seL4 profile before invoking this launcher.
+
+The first build writes `out/cohesix/cohesix-qemu-launch-artifacts.json`, which
+binds the exact staged elfloader, kernel, rootserver, and system CPIO plus the
+seL4 build, Cargo target/profile, root feature set, and GICv3 truth. Repeated
+fault-injection or pressure boots must launch that same set without rebuilding
+or repacking it:
+
+```bash
+scripts/cohesix-build-run.sh \
+  --launch-existing \
+  --cargo-target aarch64-unknown-none \
+  --profile release \
+  --root-task-features release-qemu,bootstrap-trace \
+  --raw-qemu
+```
+
+`--launch-existing` verifies every bound byte before QEMU starts and rejects
+`--clean`, DTB substitution, and kernel/initrd/topology overrides. This avoids
+mistaking a newly repacked newc archive for a same-artifact repeat boot.
 
 In another terminal, set the live secret outside source control and attach with
 the built `cohsh` binary as described in [QUICKSTART.md](QUICKSTART.md). Do not
@@ -648,10 +696,11 @@ from the generation-matched poisoned RX queue record and names the exact
 is passive evidence and zero for non-queue recovery causes. A `no` value means only that the named exact
 proof was absent at capture, not that the edge did not happen or that the fault
 has been localized. `evidence=exact-only` separates this immutable frontier
-from derived gates, breadcrumbs, and post-recovery progress. On the non-MCS Pi
-profile, a successful persistent-op11 signal crosses from authority core 0 to
-the linked-runtime driver core 3. Root-core `seL4_Yield` is not a child-dispatch
-operation and cannot be treated as proof of CYW43 intake. The trace normalizer treats a
+from derived gates, breadcrumbs, and post-recovery progress. On the captured
+pre-26e non-MCS Pi profile, a successful persistent-op11 signal crosses from
+authority core 0 to the linked-runtime driver core 3. Root-core `seL4_Yield` is
+not a child-dispatch operation and cannot be treated as proof of CYW43 intake.
+The trace normalizer treats a
 dependency-aware Gate 8
 `evidence=exact=<association-blocker>` plus its matching evidence boundary as
 authoritative over later generic replay/recovery progress. That cache is

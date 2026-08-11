@@ -14,6 +14,15 @@ semantics are defined in [API_GUIDELINES.md](API_GUIDELINES.md), control schemas
 in [INTERFACES.md](INTERFACES.md), and live topology in
 [HOST_TOOLS.md](HOST_TOOLS.md).
 
+Python support consumes the compiler-owned
+[`host-integration-dependency/v1`](../configs/generated/host_integration_dependency.json)
+graph. Its `python-sdk-projection` row is release-required, while each external
+systemd, Docker, Kubernetes, GPU, or PEFT provider remains an independent row.
+The generated [support table](snippets/host_integration_dependency.md) is the
+shared vocabulary: a Python object, successful dry run, mock probe, or package
+install cannot create Worker READY, live-provider status, or use-case
+acceptance.
+
 ## Requirements and installation
 
 Python 3.11 or later is required. Use an isolated environment:
@@ -196,7 +205,102 @@ The package exports these primary surfaces from `cohesix`:
 | `ExportRequest` | Validated `/queen/export/ctl` record |
 | `HostTicketRequest`, `K8sRbacIntent` | Manifest-bounded host ticket records and Kubernetes intent conversion |
 | `CohesixAudit` | Bounded client-side acknowledgement and breadcrumb collection |
+| `TargetProfileContract`, `load_profile_contract` | Strict loader for one compiler-generated QEMU or Pi Python profile contract |
+| `WorkerClient` and `CohesixClient.worker_*` | Existing `/queen/ctl` and canonical `/shard` Heartbeat, GPU, and LoRA lifecycle projection |
+| `WorkerReceipt`, `CompatibilityReceipt`, `parse_receipt` | Version-1 compatibility and local-admitted version-2-correlated Worker receipt projection |
+| `WorkerAcceptanceAxes` | Keeps admission, READY, provider, receipt, artifact, proof, release, and use-case state separate |
 | `CohesixError` | Package error type for validation, transport, and server refusals |
+
+## Milestone 26e target contracts and Worker API
+
+The wheel is target-neutral. Its generated `DEFAULTS` object contains bounded
+fallback expectations, `manifest_sha256=None`, and `execution_proof="none"`.
+It cannot identify a running target. Live Worker calls require one explicit,
+regular, non-symlink compiler output:
+
+- `configs/generated/cohesix_python_qemu_smp_production.json` for
+  `qemu_smp_production`;
+- `configs/generated/cohesix_python_pi4_production.json` for
+  `pi4_production`.
+
+Both use `cohesix-python-profile/v1`, but each binds its own resolved-manifest
+hash. They are generated independently; one target contract must never be
+copied, renamed, or inferred from the other. A parsed in-memory mapping is
+useful for validation tests but is marked `source="mapping"` and does not
+establish target identity.
+
+```python
+from cohesix import CohesixClient, MockBackend, load_profile_contract
+
+profile = load_profile_contract(
+    "configs/generated/cohesix_python_qemu_smp_production.json",
+    expected_target="qemu",
+)
+client = CohesixClient(
+    MockBackend("out/examples/worker-model"),
+    profile_contract=profile,
+)
+
+admission = client.worker_spawn("heartbeat", "heartbeat-1")
+assert admission.lifecycle == "queued"  # the control write was admitted
+ready = client.worker_wait_ready("heartbeat", "heartbeat-1")
+assert ready.state.lifecycle == "ready"  # separately observed telemetry
+client.worker_teardown("heartbeat", "heartbeat-1")
+```
+
+The mock in this example reports `execution_proof="host-model"`. It exercises
+the API but is never QEMU or Pi proof. The three executable roles are
+`worker-heartbeat`, `worker-gpu`, and `worker-lora`; their combined generated
+maximum is three live tasks. `worker-bus` remains model-only, and spawn or
+teardown returns a deterministic `CohesixError` before any backend write.
+
+Worker telemetry uses
+`/shard/<sha256(worker_id)[0]:02x>/worker/<id>/telemetry` in the checked-in
+eight-bit profiles. The legacy `/worker/<id>/telemetry` path is returned only
+when the selected contract enables `legacy_worker_alias`. No client should
+infer a role from an instance-id prefix.
+
+### Lifecycle, receipt, and proof boundaries
+
+The API preserves these independent axes:
+
+| Axis | Python meaning | Does not establish |
+| --- | --- | --- |
+| request admission | `/queen/ctl` append completed | Worker READY |
+| lifecycle | newest bounded Worker observation | provider completion or target proof |
+| provider completion | host provider reported terminal work | Worker receipt or artifact verification |
+| receipt | confirmed, rejected, or stale generation-correlated projection | Python authority or execution proof |
+| artifact | missing, verified, or mismatch | runtime release acceptance |
+| execution proof | none, host-model, or a reference to accepted QEMU/fresh-Pi evidence | production use-case acceptance |
+| Python projection compatibility | both shipped interpreters passed against the wheel/contract | target, provider, or runtime acceptance |
+| runtime release / production use case | later evidence-graph promotions | inferred success from any Python object |
+
+`cohesix-receipt-v1` remains a non-authoritative compatibility wrapper.
+Receipt-bearing host-ticket work uses the accepted
+`host-ticket/v2`/`host-ticket-result/v2` pair and the bounded
+`worker-gpu-receipt/v1` or `worker-lora-receipt/v1` telemetry encoding. Python
+requires the caller to classify such bytes as `source="local-admitted"`;
+remote or unclassified version-2 data is rejected. Parsing still sets
+`authoritative=False`: only root admission and matching target evidence can
+establish authority outside the Python object.
+
+The exact receipt actions are:
+
+- GPU: `gpu.lease.grant`, `gpu.lease.renew`, `gpu.lease.release`;
+- PEFT: `peft.export`, `peft.import`, `peft.activate`, `peft.rollback`.
+
+The receipt identity is the full role, slot, lease epoch, supervisor
+generation, and capability generation. A mismatch with the expected identity
+or public instance is `stale`; it is never rebound to a newer Worker.
+
+### Backend compatibility
+
+All four backends use the same Worker payload validation and canonical paths.
+Mock returns `host-model`; direct TCP reports `console-projection` as a backend
+class but not target proof; filesystem is `unknown` unless separately bound;
+REST treats absent optional `worker_runtime_bounds` or `backend_class` metadata
+as `None`/`unknown`. Metadata is declaration-only. A connected gateway, mount,
+or console is not READY and cannot create QEMU or Pi proof.
 
 ### Typed control example
 
@@ -264,10 +368,12 @@ The package imports generated client policy from
 a `coh-rtc` output and must not be edited by hand. The default-profile summary
 is in [snippets/cohesix_py_defaults.md](snippets/cohesix_py_defaults.md).
 
-Generated defaults provide offline and non-REST bounds. A REST client can read
-the gateway's `/v1/meta/bounds`; evidence should retain its `manifest_sha256`.
-That response describes the gateway's compiled generated policy, not a manifest
-queried from the target. Match it to `/proc/boot` or equivalent image build
+Generated defaults provide target-neutral offline fallback bounds. Worker APIs
+instead require the explicit target-qualified contract described above. A REST
+client can read the gateway's `/v1/meta/bounds`; evidence should retain its
+`manifest_sha256`. That response describes the gateway's compiled generated
+policy, not a manifest queried from the target. Optional Worker runtime bounds
+are declarations only. Match all identities to `/proc/boot` and accepted target
 evidence before claiming gateway-target manifest parity.
 
 The package validates absolute paths, rejects `..`, enforces component and
@@ -315,7 +421,41 @@ Run the package tests from the repository root:
 ```bash
 python3 -m pytest tools/cohesix-py/tests
 python3 -m pytest -k cohesix_parity tools/cohesix-py/tests/test_parity.py
+python3 -m pip wheel --no-deps --wheel-dir out/python-wheels tools/cohesix-py
+scripts/ci/python_compat_run.sh \
+  --wheel-smoke \
+  --wheel-dir out/python-wheels \
+  --package-manifest out/python-compat/m26e-python-package.json \
+  --state-dir out/python-compat/m26e-wheel
 ```
+
+The wheel gate requires both CPython 3.11 and 3.13, installs the same wheel
+without dependencies into isolated environments, checks the public entry
+point, verifies the declared `integrations`, `ml`, and `dev` extras, and emits
+`cohesix-python-package/v1`. That manifest binds the wheel hash and both target
+contract hashes. `dev` remains test-only. Missing optional providers return a
+typed skipped/degraded probe and never select `MockBackend` implicitly.
+
+After a direct target runner has emitted an accepted `worker-control`,
+`gpu-receipt-path`, or `peft-receipt-path` record, the matrix mode consumes that
+record by reference and emits `python-sdk-projection.json`:
+
+```bash
+scripts/ci/python_compat_run.sh \
+  --python-matrix 3.11,3.13 \
+  --target qemu \
+  --profile-contract configs/generated/cohesix_python_qemu_smp_production.json \
+  --package-manifest out/python-compat/m26e-python-package.json \
+  --wheel-dir out/python-wheels \
+  --matrix configs/host_integration_acceptance.toml \
+  --target-session out/host-integration/m26e-qemu/integration/worker-control.json \
+  --state-dir out/python-compat/m26e-qemu
+```
+
+The result is release-required projection evidence. It references the direct
+target session, exact wheel, graph, source matrix, manifest, contract, host, and
+interpreter hashes; it does not replace target evidence or promote any external
+CUDA/NVML, PEFT, FUSE, systemd, Docker, Kubernetes, federation, or use-case row.
 
 Changes to a backend or public helper require tests for successful use,
 validation failure, server refusal, and relevant retry/authentication behavior.

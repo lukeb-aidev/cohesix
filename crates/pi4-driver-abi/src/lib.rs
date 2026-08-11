@@ -8,7 +8,26 @@
 /// Magic value for a pointer-free driver runtime initialization descriptor.
 pub const DRIVER_RUNTIME_INIT_MAGIC: u32 = 0x4452_4934;
 /// Runtime descriptor layout and shared-protocol version.
-pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 8;
+pub const DRIVER_RUNTIME_INIT_VERSION: u16 = 9;
+/// Magic identifying the only Milestone 26e runtime scheduler contract.
+pub const DRIVER_RUNTIME_MCS_MAGIC: u32 = 0x4d43_5331;
+/// Version of the scheduler/capability inventory embedded in runtime init.
+pub const DRIVER_RUNTIME_MCS_VERSION: u16 = 1;
+/// The driver owns one active scheduling context bound only to its TCB.
+pub const DRIVER_RUNTIME_MCS_FLAG_ACTIVE_SC: u16 = 1 << 0;
+/// A dedicated Reply object receives one command association at a time.
+pub const DRIVER_RUNTIME_MCS_FLAG_COMMAND_REPLY: u16 = 1 << 1;
+/// Standard and timeout faults use independent supervisor Reply lanes.
+pub const DRIVER_RUNTIME_MCS_FLAG_SPLIT_FAULT_REPLIES: u16 = 1 << 2;
+/// The root supervisor admits at most one synchronous command per runtime.
+pub const DRIVER_RUNTIME_MCS_FLAG_ONE_INFLIGHT: u16 = 1 << 3;
+/// All scheduler flags required by the accepted MCS driver ABI.
+pub const DRIVER_RUNTIME_MCS_REQUIRED_FLAGS: u16 = DRIVER_RUNTIME_MCS_FLAG_ACTIVE_SC
+    | DRIVER_RUNTIME_MCS_FLAG_COMMAND_REPLY
+    | DRIVER_RUNTIME_MCS_FLAG_SPLIT_FAULT_REPLIES
+    | DRIVER_RUNTIME_MCS_FLAG_ONE_INFLIGHT;
+/// Typed synchronous result returned when the driver supervisor contains a faulted Call.
+pub const DRIVER_RUNTIME_MCS_FAULTED_CALL_RESULT: u32 = 0x4d43_5346;
 /// Magic value for a sealed runtime identity inside an init descriptor.
 pub const DRIVER_RUNTIME_IDENTITY_MAGIC: u32 = 0x4452_4944;
 const DRIVER_RUNTIME_IDENTITY_HASH_SEED: u32 = 0x811c_9dc5;
@@ -2021,8 +2040,61 @@ pub const DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT: u32 = 4;
 /// acknowledged exactly after their badges coalesce on the local notification.
 pub const DRIVER_TASK_CHILD_SDIO_DMA_IRQ_HANDLER_SLOT: u32 =
     DRIVER_TASK_CHILD_IRQ_HANDLER_BASE_SLOT + 1;
+/// Child CSpace slot containing the explicit MCS command Reply object.
+pub const DRIVER_RUNTIME_COMMAND_REPLY_SLOT: u32 = 6;
+/// Child CSpace slot containing a send-only completion-wake notification cap.
+pub const DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT: u32 = 7;
 /// Child CSpace slot containing each runtime's local notification receive cap.
 pub const DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT: u32 = 3;
+/// Fixed child CSpace slot containing the read-only command endpoint cap.
+pub const DRIVER_RUNTIME_COMMAND_ENDPOINT_SLOT: u32 = 2;
+/// Maximum synchronous commands associated with one runtime Reply object.
+pub const DRIVER_RUNTIME_MAX_INFLIGHT_COMMANDS: u16 = 1;
+/// Logical supervisor lane retaining standard-fault Reply authority.
+pub const DRIVER_RUNTIME_STANDARD_FAULT_REPLY_LANE: u16 = 1;
+/// Logical supervisor lane retaining timeout-fault Reply authority.
+pub const DRIVER_RUNTIME_TIMEOUT_FAULT_REPLY_LANE: u16 = 2;
+/// High badge-domain discriminator for root-to-driver command Calls.
+pub const DRIVER_RUNTIME_COMMAND_BADGE_DOMAIN: u64 = 0x1000_0000_0000_0000;
+/// High badge-domain discriminator for driver-to-root completion wakes.
+pub const DRIVER_RUNTIME_COMPLETION_BADGE_DOMAIN: u64 = 0x2000_0000_0000_0000;
+/// Legacy task-key badge-domain discriminator for nonselected model fixtures.
+///
+/// Active MCS descriptors use the compiler-owned temporal fault range instead.
+pub const DRIVER_RUNTIME_STANDARD_FAULT_BADGE_DOMAIN: u64 = 0x4000_0000_0000_0000;
+/// Mask selecting the scheduler-owned high badge domain.
+pub const DRIVER_RUNTIME_BADGE_DOMAIN_MASK: u64 = 0xf000_0000_0000_0000;
+
+/// Exact command badge for one stable driver task key.
+#[must_use]
+pub const fn driver_runtime_command_badge(task_key: u32) -> u64 {
+    DRIVER_RUNTIME_COMMAND_BADGE_DOMAIN | task_key as u64
+}
+
+/// Returns true only for a root-to-driver command endpoint badge.
+///
+/// Driver-local IRQ/DPC notification badges occupy the low 32 bits. Keeping
+/// this discriminator in the ABI lets a bound-notification `Recv` distinguish
+/// a synchronous command from a scheduling wake without inspecting ring data.
+#[must_use]
+pub const fn driver_runtime_badge_is_command(badge: u64) -> bool {
+    badge & DRIVER_RUNTIME_BADGE_DOMAIN_MASK == DRIVER_RUNTIME_COMMAND_BADGE_DOMAIN
+}
+
+/// Exact one-way completion badge for one stable driver task key.
+#[must_use]
+pub const fn driver_runtime_completion_badge(task_key: u32) -> u64 {
+    DRIVER_RUNTIME_COMPLETION_BADGE_DOMAIN | task_key as u64
+}
+
+/// Legacy standard-fault badge for a task-key-only compatibility fixture.
+///
+/// Root must not advertise this value in an active MCS descriptor. The
+/// selected temporal manifest supplies the actual standard-fault badge.
+#[must_use]
+pub const fn driver_runtime_standard_fault_badge(task_key: u32) -> u64 {
+    DRIVER_RUNTIME_STANDARD_FAULT_BADGE_DOMAIN | task_key as u64
+}
 /// BCM2711 auxiliary mini-UART interrupt used by the isolated serial runtime.
 pub const DRIVER_RUNTIME_SERIAL_IRQ: u32 = 125;
 /// Nonzero notification badge bound to [`DRIVER_RUNTIME_SERIAL_IRQ`].
@@ -6101,6 +6173,50 @@ pub struct DriverRuntimeInitDescriptor {
     pub artifact_hash: u32,
     /// Sealed token over task key, artifact hash, hot path, and role bit.
     pub identity_token: u32,
+    /// [`DRIVER_RUNTIME_MCS_MAGIC`].
+    pub scheduler_magic: u32,
+    /// [`DRIVER_RUNTIME_MCS_VERSION`].
+    pub scheduler_version: u16,
+    /// Required `DRIVER_RUNTIME_MCS_FLAG_*` set.
+    pub scheduler_flags: u16,
+    /// Generated logical scheduling-context slot for this active runtime.
+    pub scheduling_context_slot: u32,
+    /// Size bits of the admitted MCS scheduling context.
+    pub scheduling_context_bits: u8,
+    /// Core whose SchedControl configured the active scheduling context.
+    pub sched_control_core: u8,
+    /// Generated maximum refill count.
+    pub max_refills: u8,
+    /// Generated core affinity for the driver TCB.
+    pub affinity_core: u8,
+    /// Generated active scheduling-context budget in microseconds.
+    pub budget_us: u32,
+    /// Generated active scheduling-context period in microseconds.
+    pub period_us: u32,
+    /// Fixed child slot holding the read-only command endpoint.
+    pub command_endpoint_slot: u32,
+    /// Fixed child slot holding the explicit command Reply object.
+    pub command_reply_slot: u32,
+    /// Fixed child slot holding the read-only local notification.
+    pub irq_notification_slot: u32,
+    /// Fixed child slot holding the send-only completion wake cap.
+    pub completion_notification_slot: u32,
+    /// Exact badge on the root's Write + GrantReply command cap.
+    pub command_badge: u64,
+    /// Exact badge on the child's one-way completion notification cap.
+    pub completion_badge: u64,
+    /// Exact badge delivered for a standard fault from this runtime.
+    pub standard_fault_badge: u64,
+    /// Exact generated MCS timeout-fault badge for this runtime.
+    pub timeout_fault_badge: u64,
+    /// Supervisor-owned standard-fault Reply lane identifier.
+    pub standard_fault_reply_lane: u16,
+    /// Supervisor-owned timeout-fault Reply lane identifier.
+    pub timeout_fault_reply_lane: u16,
+    /// Exact synchronous command cardinality admitted for this runtime.
+    pub max_inflight_commands: u16,
+    /// Reserved; must be zero.
+    pub scheduler_reserved: u16,
     /// Device bus alias OR mask, or zero when physical addresses are direct.
     pub bus_alias_or: u64,
     /// Device bus alias AND mask, or all ones when physical addresses are direct.
@@ -6152,6 +6268,28 @@ impl DriverRuntimeInitDescriptor {
             task_key: 0,
             artifact_hash: 0,
             identity_token: 0,
+            scheduler_magic: 0,
+            scheduler_version: 0,
+            scheduler_flags: 0,
+            scheduling_context_slot: 0,
+            scheduling_context_bits: 0,
+            sched_control_core: 0,
+            max_refills: 0,
+            affinity_core: 0,
+            budget_us: 0,
+            period_us: 0,
+            command_endpoint_slot: 0,
+            command_reply_slot: 0,
+            irq_notification_slot: 0,
+            completion_notification_slot: 0,
+            command_badge: 0,
+            completion_badge: 0,
+            standard_fault_badge: 0,
+            timeout_fault_badge: 0,
+            standard_fault_reply_lane: 0,
+            timeout_fault_reply_lane: 0,
+            max_inflight_commands: 0,
+            scheduler_reserved: 0,
             bus_alias_or: 0,
             bus_alias_and: u64::MAX,
             mmio_vaddr_base: 0,
@@ -6177,12 +6315,60 @@ impl DriverRuntimeInitDescriptor {
         self.artifact_hash = artifact_hash;
         self.identity_token =
             driver_runtime_identity_token(task_key, artifact_hash, self.hot_path, self.role_bit);
+        if self.scheduler_magic == DRIVER_RUNTIME_MCS_MAGIC {
+            self.command_badge = driver_runtime_command_badge(task_key);
+            self.completion_badge = driver_runtime_completion_badge(task_key);
+        }
         let mut index = 0usize;
         while index < self.bus_link_count as usize {
             self.bus_links[index] =
                 self.bus_links[index].with_sealed_identity(task_key, self.hot_path);
             index += 1;
         }
+        self
+    }
+
+    /// Bind this descriptor to one compiler-admitted active MCS runtime.
+    #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the fixed MCS inventory is copied directly from generated temporal truth"
+    )]
+    pub const fn with_mcs_scheduler(
+        mut self,
+        task_key: u32,
+        scheduling_context_slot: u32,
+        scheduling_context_bits: u8,
+        sched_control_core: u8,
+        max_refills: u8,
+        affinity_core: u8,
+        budget_us: u32,
+        period_us: u32,
+        standard_fault_badge: u64,
+        timeout_fault_badge: u64,
+    ) -> Self {
+        self.scheduler_magic = DRIVER_RUNTIME_MCS_MAGIC;
+        self.scheduler_version = DRIVER_RUNTIME_MCS_VERSION;
+        self.scheduler_flags = DRIVER_RUNTIME_MCS_REQUIRED_FLAGS;
+        self.scheduling_context_slot = scheduling_context_slot;
+        self.scheduling_context_bits = scheduling_context_bits;
+        self.sched_control_core = sched_control_core;
+        self.max_refills = max_refills;
+        self.affinity_core = affinity_core;
+        self.budget_us = budget_us;
+        self.period_us = period_us;
+        self.command_endpoint_slot = DRIVER_RUNTIME_COMMAND_ENDPOINT_SLOT;
+        self.command_reply_slot = DRIVER_RUNTIME_COMMAND_REPLY_SLOT;
+        self.irq_notification_slot = DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT;
+        self.completion_notification_slot = DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT;
+        self.command_badge = driver_runtime_command_badge(task_key);
+        self.completion_badge = driver_runtime_completion_badge(task_key);
+        self.standard_fault_badge = standard_fault_badge;
+        self.timeout_fault_badge = timeout_fault_badge;
+        self.standard_fault_reply_lane = DRIVER_RUNTIME_STANDARD_FAULT_REPLY_LANE;
+        self.timeout_fault_reply_lane = DRIVER_RUNTIME_TIMEOUT_FAULT_REPLY_LANE;
+        self.max_inflight_commands = DRIVER_RUNTIME_MAX_INFLIGHT_COMMANDS;
+        self.scheduler_reserved = 0;
         self
     }
 
@@ -6242,6 +6428,7 @@ impl DriverRuntimeInitDescriptor {
             && (self.bus_link_count as usize) <= DRIVER_RUNTIME_INIT_MAX_BUS_LINKS
             && (self.resource_range_count as usize) <= DRIVER_RUNTIME_INIT_MAX_RESOURCE_RANGES
             && self.root_wake_notification_valid()
+            && self.mcs_scheduler_valid()
             && if self.irq_count == 0 {
                 (self.flags & DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY) != 0
             } else {
@@ -6255,6 +6442,42 @@ impl DriverRuntimeInitDescriptor {
             && self.valid_resource_ranges()
             && self.valid_irqs()
             && self.valid_bus_links()
+    }
+
+    /// Returns true when the scheduler inventory is exact and least-authority.
+    #[must_use]
+    pub const fn mcs_scheduler_valid(self) -> bool {
+        self.scheduler_magic == DRIVER_RUNTIME_MCS_MAGIC
+            && self.scheduler_version == DRIVER_RUNTIME_MCS_VERSION
+            && self.scheduler_flags == DRIVER_RUNTIME_MCS_REQUIRED_FLAGS
+            && self.scheduling_context_slot != 0
+            && self.scheduling_context_bits != 0
+            && self.sched_control_core < 4
+            && self.affinity_core == self.sched_control_core
+            && self.max_refills >= 2
+            && self.budget_us != 0
+            && self.period_us != 0
+            && self.budget_us <= self.period_us
+            && self.command_endpoint_slot == DRIVER_RUNTIME_COMMAND_ENDPOINT_SLOT
+            && self.command_reply_slot == DRIVER_RUNTIME_COMMAND_REPLY_SLOT
+            && self.irq_notification_slot == DRIVER_RUNTIME_LOCAL_NOTIFICATION_SLOT
+            && self.completion_notification_slot == DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT
+            && self.command_badge == driver_runtime_command_badge(self.task_key)
+            && self.completion_badge == driver_runtime_completion_badge(self.task_key)
+            && self.standard_fault_badge != 0
+            && self.standard_fault_badge != driver_runtime_standard_fault_badge(self.task_key)
+            && self.timeout_fault_badge != 0
+            && self.command_badge != self.completion_badge
+            && self.command_badge != self.standard_fault_badge
+            && self.command_badge != self.timeout_fault_badge
+            && self.completion_badge != self.standard_fault_badge
+            && self.completion_badge != self.timeout_fault_badge
+            && self.standard_fault_badge != self.timeout_fault_badge
+            && self.standard_fault_reply_lane == DRIVER_RUNTIME_STANDARD_FAULT_REPLY_LANE
+            && self.timeout_fault_reply_lane == DRIVER_RUNTIME_TIMEOUT_FAULT_REPLY_LANE
+            && self.standard_fault_reply_lane != self.timeout_fault_reply_lane
+            && self.max_inflight_commands == DRIVER_RUNTIME_MAX_INFLIGHT_COMMANDS
+            && self.scheduler_reserved == 0
     }
 
     /// Returns true when the optional child-to-root wake authority is absent or exact.
@@ -6501,9 +6724,28 @@ impl DriverRuntimeInitDescriptor {
 mod tests {
     use super::*;
 
+    fn mcs_descriptor() -> DriverRuntimeInitDescriptor {
+        DriverRuntimeInitDescriptor::empty().with_mcs_scheduler(
+            0,
+            10,
+            8,
+            1,
+            2,
+            1,
+            500,
+            10_000,
+            0x26e2_0000,
+            0x26ed_000b,
+        )
+    }
+
     #[test]
     fn init_descriptor_is_bounded_for_ring_payload() {
-        assert!(core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 1536);
+        assert!(
+            core::mem::size_of::<DriverRuntimeInitDescriptor>() <= 2048,
+            "descriptor bytes={}",
+            core::mem::size_of::<DriverRuntimeInitDescriptor>()
+        );
         assert_eq!(core::mem::align_of::<DriverRuntimeInitDescriptor>(), 8);
         assert!(DRIVER_RUNTIME_INIT_MAX_DMA_PAGES >= 80);
     }
@@ -7808,7 +8050,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventEntry>(), 16);
         assert_eq!(core::mem::size_of::<DriverRuntimeDpcEventRing>(), 96);
         assert_eq!(DRIVER_RUNTIME_DPC_EVENT_RING_VERSION, 3);
-        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 8);
+        assert_eq!(DRIVER_RUNTIME_INIT_VERSION, 9);
         assert_eq!(
             DRIVER_RUNTIME_DPC_EVENT_RING_OFFSET + DRIVER_RUNTIME_DPC_EVENT_RING_BYTES,
             DRIVER_RUNTIME_RING_FRAME_OFFSET
@@ -8086,11 +8328,40 @@ mod tests {
         assert!(!descriptor.valid());
         assert_eq!(descriptor.magic, DRIVER_RUNTIME_INIT_MAGIC);
         assert_eq!(descriptor.version, DRIVER_RUNTIME_INIT_VERSION);
+        assert!(!descriptor.mcs_scheduler_valid());
+    }
+
+    #[test]
+    fn mcs_scheduler_inventory_is_exact_and_badge_domains_are_disjoint() {
+        let descriptor = mcs_descriptor();
+        assert!(descriptor.mcs_scheduler_valid());
+        assert_eq!(
+            descriptor.command_reply_slot,
+            DRIVER_RUNTIME_COMMAND_REPLY_SLOT
+        );
+        assert_eq!(
+            descriptor.completion_notification_slot,
+            DRIVER_RUNTIME_COMPLETION_NOTIFICATION_SLOT
+        );
+        assert_eq!(descriptor.max_inflight_commands, 1);
+        assert_ne!(descriptor.command_badge, descriptor.completion_badge);
+        assert_ne!(descriptor.command_badge, descriptor.standard_fault_badge);
+        assert_ne!(descriptor.command_badge, descriptor.timeout_fault_badge);
+
+        let mut invalid = descriptor;
+        invalid.command_reply_slot = DRIVER_RUNTIME_COMMAND_REPLY_SLOT + 1;
+        assert!(!invalid.mcs_scheduler_valid());
+        invalid = descriptor;
+        invalid.scheduler_flags &= !DRIVER_RUNTIME_MCS_FLAG_ONE_INFLIGHT;
+        assert!(!invalid.mcs_scheduler_valid());
+        invalid = descriptor;
+        invalid.completion_badge = invalid.command_badge;
+        assert!(!invalid.mcs_scheduler_valid());
     }
 
     #[test]
     fn valid_descriptor_requires_pointer_free_shared_and_bus_flags() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_GENET_NIC;
         descriptor.role_bit = 1 << 3;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
@@ -8104,7 +8375,7 @@ mod tests {
 
     #[test]
     fn root_wake_notification_is_optional_exact_and_cyw43_only() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_CYW43_WIFI;
         descriptor.role_bit = 1 << 4;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
@@ -8137,7 +8408,7 @@ mod tests {
 
     #[test]
     fn runtime_irq_descriptors_require_distinct_handler_slots_and_badge_bits() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.irq_count = 2;
         descriptor.irqs[0] = DriverRuntimeIrqDescriptor {
             irq: DRIVER_RUNTIME_SDIO_IRQ,
@@ -8170,7 +8441,7 @@ mod tests {
 
     #[test]
     fn valid_for_resources_rejects_count_mismatch() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_PCIE_ROOT;
         descriptor.role_bit = 1 << 5;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;
@@ -8186,7 +8457,7 @@ mod tests {
 
     #[test]
     fn resource_ranges_can_describe_large_mmio_without_page_array_growth() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_USB_KEYBOARD;
         descriptor.role_bit = 1 << 1;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
@@ -8229,7 +8500,7 @@ mod tests {
 
     #[test]
     fn resource_ranges_can_describe_large_dma_and_shared_budgets() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_GENET_NIC;
         descriptor.role_bit = 1 << 3;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
@@ -8302,7 +8573,7 @@ mod tests {
 
     #[test]
     fn bus_links_are_pointer_free_and_owner_checked() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_CYW43_WIFI;
         descriptor.role_bit = 1 << 3;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS
@@ -8536,7 +8807,7 @@ mod tests {
 
     #[test]
     fn hdmi_ready_requires_framebuffer_flag_and_geometry() {
-        let mut descriptor = DriverRuntimeInitDescriptor::empty();
+        let mut descriptor = mcs_descriptor();
         descriptor.hot_path = HOT_PATH_HDMI_TEXT;
         descriptor.role_bit = 1 << 2;
         descriptor.flags = DRIVER_RUNTIME_INIT_REQUIRED_FLAGS | DRIVER_RUNTIME_INIT_FLAG_POLL_ONLY;

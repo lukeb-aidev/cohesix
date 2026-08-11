@@ -20,7 +20,7 @@ fn base_manifest(extra: &str) -> String {
 # Author: Lukas Bower
 # Purpose: CAS validation test manifest.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -94,7 +94,7 @@ fn compile_error(manifest: &str) -> String {
         swarmui_defaults_doc_out: temp_dir.path().join("swarmui_defaults.md"),
     };
     let err = compile(&options).expect_err("manifest should be rejected");
-    err.to_string()
+    format!("{err:#}")
 }
 
 #[test]
@@ -141,7 +141,7 @@ required = false
 }
 
 #[test]
-fn cas_signing_key_required_when_signing_required() {
+fn cas_verification_key_required_when_signing_required() {
     let manifest = cas_manifest(
         r#"
 [cas]
@@ -158,7 +158,51 @@ required = true
 "#,
     );
     let err = compile_error(&manifest);
-    assert!(err.contains("cas.signing.key_path"));
+    assert!(err.contains("cas.signing.verification_key_path"));
+}
+
+#[test]
+fn cas_private_key_named_path_is_rejected() {
+    let manifest = cas_manifest(
+        r#"
+[cas]
+enable = true
+
+[cas.store]
+chunk_bytes = 128
+
+[cas.delta]
+enable = false
+
+[cas.signing]
+required = true
+verification_key_path = "resources/fixtures/cas_signing_key.hex"
+"#,
+    );
+    let err = compile_error(&manifest);
+    assert!(err.contains("public verification material"));
+}
+
+#[test]
+fn legacy_cas_key_path_is_rejected() {
+    let manifest = cas_manifest(
+        r#"
+[cas]
+enable = true
+
+[cas.store]
+chunk_bytes = 128
+
+[cas.delta]
+enable = false
+
+[cas.signing]
+required = true
+key_path = "resources/fixtures/cas_signing_key.hex"
+"#,
+    );
+    let err = compile_error(&manifest);
+    assert!(err.contains("unknown field") || err.contains("key_path"));
 }
 
 #[test]

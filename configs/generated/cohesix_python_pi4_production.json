@@ -1,0 +1,163 @@
+{
+  "bounds": {
+    "console_max_json_bytes": 192,
+    "console_max_line_bytes": 2304,
+    "console_max_path_bytes": 96,
+    "secure9p_msize": 8192,
+    "secure9p_walk_depth": 8,
+    "worker_ready_timeout_ms": 5000,
+    "worker_receipt_label_bytes": 24,
+    "worker_shared_page_bytes": 4096,
+    "worker_shutdown_grace_ms": 1000
+  },
+  "host_integration": {
+    "modes": [
+      "unknown",
+      "missing",
+      "disabled",
+      "fixture",
+      "mock",
+      "dry-run",
+      "live"
+    ],
+    "python_dependency_id": "python-sdk-projection",
+    "schema": "host-integration-dependency/v1"
+  },
+  "manifest_profile": "pi4-uboot-aarch64",
+  "manifest_sha256": "94f39b5e0b6266d682b8337f37b586fddc7a32569f7c90de14e8001e1c6e7763",
+  "meta": {
+    "author": "Lukas Bower",
+    "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."
+  },
+  "namespace": {
+    "legacy_telemetry_path_template": "/worker/<id>/telemetry",
+    "legacy_worker_alias": true,
+    "shard_bits": 8,
+    "sharding_enabled": true,
+    "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry"
+  },
+  "proof_boundary": {
+    "profile_contract_establishes_execution_proof": false,
+    "profile_contract_establishes_target_identity": true,
+    "python_projection_is_authority": false,
+    "static_defaults_establish_execution_proof": false
+  },
+  "receipts": {
+    "gpu_actions": [
+      "gpu.lease.grant",
+      "gpu.lease.renew",
+      "gpu.lease.release"
+    ],
+    "max_control_inflight": 1,
+    "peft_actions": [
+      "peft.export",
+      "peft.import",
+      "peft.activate",
+      "peft.rollback"
+    ]
+  },
+  "schema": "cohesix-python-profile/v1",
+  "schemas": {
+    "host_ticket_accepted": [
+      "host-ticket/v1",
+      "host-ticket/v2"
+    ],
+    "host_ticket_result_accepted": [
+      "host-ticket-result/v1",
+      "host-ticket-result/v2"
+    ],
+    "worker_gpu_receipt": "worker-gpu-receipt/v1",
+    "worker_integration_evidence": "cohesix-worker-integration-evidence/v1",
+    "worker_lora_receipt": "worker-lora-receipt/v1",
+    "worker_observation": "cohesix-worker-observation/v1"
+  },
+  "target": "pi4",
+  "target_profile": "pi4_production",
+  "vocabularies": {
+    "artifact": [
+      "missing",
+      "verified",
+      "mismatch"
+    ],
+    "execution_proof": [
+      "none",
+      "host-model",
+      "qemu",
+      "fresh-pi"
+    ],
+    "integration_obligation": [
+      "role_required",
+      "release_required",
+      "use_case_required",
+      "optional",
+      "future"
+    ],
+    "integration_observed_mode": [
+      "unknown",
+      "missing",
+      "disabled",
+      "fixture",
+      "mock",
+      "dry-run",
+      "live"
+    ],
+    "lifecycle": [
+      "absent",
+      "queued",
+      "starting",
+      "ready",
+      "closing",
+      "faulted",
+      "terminal"
+    ],
+    "receipt": [
+      "none",
+      "pending",
+      "confirmed",
+      "rejected",
+      "stale"
+    ]
+  },
+  "worker": {
+    "implementation_epoch": 26,
+    "maximum_live_tasks": 3,
+    "namespace_capacity_per_role": 8,
+    "roles": [
+      {
+        "declaration": "executable",
+        "executable_slots": 1,
+        "lease_path_template": "",
+        "role": "worker-heartbeat",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/worker"
+      },
+      {
+        "declaration": "executable",
+        "executable_slots": 1,
+        "lease_path_template": "/gpu/<id>/lease",
+        "role": "worker-gpu",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/gpu"
+      },
+      {
+        "declaration": "model-only",
+        "executable_slots": 0,
+        "lease_path_template": "",
+        "role": "worker-bus",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/bus"
+      },
+      {
+        "declaration": "executable",
+        "executable_slots": 1,
+        "lease_path_template": "",
+        "role": "worker-lora",
+        "telemetry_path_template": "/shard/<label>/worker/<id>/telemetry",
+        "ticket_scope": "/worker"
+      }
+    ],
+    "scheduling_profile": "mcs",
+    "task_abi_schema": "worker-task-abi/v1",
+    "task_abi_version": 1
+  }
+}

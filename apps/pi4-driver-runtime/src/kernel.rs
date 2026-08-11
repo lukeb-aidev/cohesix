@@ -21,10 +21,15 @@ pub extern "C" fn _start(task_key: usize) -> ! {
     cohesix_pi4_driver_runtime_entry(task_key)
 }
 
-/// Panic handler that traps execution until root revokes the driver task.
+/// Panic handler that enters the generated standard-fault containment lane.
+#[allow(unsafe_code)]
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
-    loop {
-        core::hint::spin_loop();
+    // SAFETY: `brk` deliberately raises an AArch64 user exception without
+    // reading or writing memory. The generated standard-fault cap routes this
+    // TCB to root-fault, which suspends it and hands exact-generation
+    // containment to the driver supervisor.
+    unsafe {
+        core::arch::asm!("brk #0", options(noreturn, nostack, nomem));
     }
 }

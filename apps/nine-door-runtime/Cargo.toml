@@ -1,0 +1,24 @@
+# Author: Lukas Bower
+# Purpose: Configure the isolated no_std NineDoor namespace parser runtime.
+# Copyright 2026 Lukas Bower
+
+[package]
+name = "nine-door-runtime"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[features]
+default = []
+qemu-evidence = []
+
+[dependencies]
+secure9p-transport = { workspace = true }
+
+[target.'cfg(target_os = "none")'.dependencies]
+sel4-sys = { path = "../../crates/sel4-sys" }
+
+[[bin]]
+name = "nine-door-runtime"
+test = false
+bench = false

@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Parse queen control payloads and host control audit metadata.
 // Author: Lukas Bower
@@ -303,6 +303,10 @@ pub enum SpawnTarget {
     Heartbeat,
     /// GPU worker that proxies host GPU leases.
     Gpu,
+    /// LoRA worker that projects host-side PEFT receipts.
+    Lora,
+    /// Model/session-only field-bus role; it is never executable.
+    Bus,
 }
 
 impl SpawnCommand {
@@ -338,6 +342,19 @@ impl SpawnCommand {
                     .map(|fields| fields.apply(ops_budget))
                     .unwrap_or(ops_budget))
             }
+            SpawnTarget::Lora => {
+                if self.ticks.is_some() || self.budget.is_some() || self.lease.is_some() {
+                    return Err(NineDoorError::protocol(
+                        secure9p_codec::ErrorCode::Invalid,
+                        "lora spawn does not accept heartbeat or GPU options",
+                    ));
+                }
+                Ok(defaults)
+            }
+            SpawnTarget::Bus => Err(NineDoorError::protocol(
+                secure9p_codec::ErrorCode::Invalid,
+                "worker-bus is model-only and cannot be spawned",
+            )),
         }
     }
 

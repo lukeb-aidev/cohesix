@@ -1,0 +1,1570 @@
+# Author: Lukas Bower
+# Purpose: Classify every Cohesix implementation surface and runtime/package disposition.
+# Copyright 2026 Lukas Bower
+
+schema = "cohesix-implementation-surface-source/v1"
+milestone = "Milestone 26e — production surface truth and mock-stub retirement"
+fixture_features = [
+  "in-process",
+  "mock",
+  "mock-sel4",
+  "nine-door",
+  "test-support",
+  "bypass-timers",
+  "bypass-timers-ipc",
+]
+diagnostic_features = [
+  "bootstrap-debug",
+  "bootstrap-early-exit",
+  "bootstrap-minimal",
+  "bootstrap-trace",
+  "cache-trace",
+  "cap-probes",
+  "cohesix-dev",
+  "control-trace",
+  "debug-input",
+  "dev-virt",
+  "driver-tests-pi4",
+  "driver-tests-qemu",
+  "net-diag",
+  "net-outbound-probe",
+  "net-selftest",
+  "net-trace-31337",
+  "panic-backtrace",
+  "qemu-evidence",
+  "qemu-driver-task-smoke",
+  "scale-tests",
+  "sel4-debug",
+  "tcp-echo-31337",
+  "timer-trace",
+  "trace-heavy-init",
+  "untyped-debug",
+  "virtio-mmio-legacy",
+  "virtio_guard_queue",
+]
+forbidden_runtime_features = [
+  "bootstrap-early-exit",
+  "bootstrap-minimal",
+  "bypass-timers",
+  "bypass-timers-ipc",
+  "dev-virt",
+  "ffi_shim",
+  "mock",
+  "mock-sel4",
+  "qemu-driver-task-smoke",
+  "tcp-echo-31337",
+  "test-support",
+]
+
+[[packages]]
+path = "apps/cohesix-proto"
+class = "contract"
+owner = "control-plane-protocol"
+production_reachable = true
+selection_source = "Cargo workspace and generated protocol consumers"
+package_disposition = "linked_library"
+evidence_requirement = "protocol tests plus consuming target evidence"
+current_observed_mode = "typed_protocol_contract"
+
+[[packages]]
+path = "apps/console-ack-wire"
+class = "contract"
+owner = "console-protocol"
+production_reachable = true
+selection_source = "Cargo workspace and console ACK/ERR/END consumers"
+package_disposition = "linked_library"
+evidence_requirement = "wire fixtures plus consuming target evidence"
+current_observed_mode = "typed_wire_contract"
+
+[[packages]]
+path = "apps/coh"
+class = "production_live"
+owner = "host-cli"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "authenticated host integration receipt"
+current_observed_mode = "live_host_cli"
+
+[[packages]]
+path = "apps/cohsh"
+class = "production_live"
+owner = "host-shell"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "authenticated QEMU console transcript"
+current_observed_mode = "live_host_shell"
+
+[[packages]]
+path = "apps/coh-status"
+class = "deferred"
+owner = "field-status"
+production_reachable = false
+selection_source = "Milestone 29"
+package_disposition = "not_packaged"
+evidence_requirement = "cannot satisfy current evidence"
+current_observed_mode = "library_fixture_only_no_cli"
+
+[[packages]]
+path = "apps/cas-tool"
+class = "production_live"
+owner = "cas-host-tool"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "CAS integrity tests and release hash"
+current_observed_mode = "live_host_tool"
+
+[[packages]]
+path = "apps/swarmui"
+class = "production_live"
+owner = "operator-ui"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "authenticated parity and integration tests"
+current_observed_mode = "live_host_ui"
+
+[[packages]]
+path = "apps/root-task"
+class = "production_live"
+owner = "root-control"
+production_reachable = true
+selection_source = "root_task manifest and release-qemu/release-pi4 features"
+package_disposition = "target_rootserver"
+evidence_requirement = "fresh selected-target boot and target receipts"
+current_observed_mode = "mcs_root_control_runtime"
+
+[[packages]]
+path = "apps/pi4-driver-runtime"
+class = "production_live"
+owner = "driver-supervisor"
+production_reachable = true
+selection_source = "root_task.driver_images generated manifest"
+package_disposition = "target_child_images"
+evidence_requirement = "QEMU comparator plus later fresh Pi hardware proof"
+current_observed_mode = "mcs_isolated_driver_runtime"
+
+[[packages]]
+path = "apps/nine-door"
+class = "host_model"
+owner = "secure9p-host-model"
+production_reachable = false
+selection_source = "host tests only; target selects nine-door-runtime"
+package_disposition = "library_only_not_staged"
+evidence_requirement = "host model cannot satisfy target evidence"
+current_observed_mode = "bounded_host_library_and_fixture_provider"
+
+[[packages]]
+path = "apps/nine-door-runtime"
+class = "production_live"
+owner = "namespace-service"
+production_reachable = true
+selection_source = "M26e target runtime closure"
+package_disposition = "target_child_image"
+evidence_requirement = "real target Call/Reply and fault-containment receipts"
+current_observed_mode = "mcs_isolated_namespace_runtime"
+
+[[packages]]
+path = "apps/console-network-runtime"
+class = "production_live"
+owner = "console-network-service"
+production_reachable = true
+selection_source = "M26e target runtime closure"
+package_disposition = "target_child_image"
+evidence_requirement = "authenticated TCP console isolation receipts"
+current_observed_mode = "mcs_isolated_console_network_runtime"
+
+[[packages]]
+path = "apps/worker-heart"
+class = "production_live"
+owner = "worker-supervisor"
+production_reachable = true
+selection_source = "worker_runtime.roles generated manifest"
+package_disposition = "target_worker_image"
+evidence_requirement = "spawn-ready-work-stop-revoke target receipts"
+current_observed_mode = "isolated_worker_heartbeat_runtime"
+
+[[packages]]
+path = "apps/worker-gpu"
+class = "production_live"
+owner = "worker-supervisor"
+production_reachable = true
+selection_source = "worker_runtime.roles generated manifest"
+package_disposition = "target_worker_image"
+evidence_requirement = "spawn-ready-work-stop-revoke target receipts"
+current_observed_mode = "isolated_worker_gpu_contract_runtime"
+
+[[packages]]
+path = "apps/worker-bus"
+class = "model_only"
+owner = "worker-model"
+production_reachable = false
+selection_source = "worker_runtime.roles executable=false"
+package_disposition = "not_packaged"
+evidence_requirement = "cannot satisfy target or use-case evidence"
+current_observed_mode = "namespace_model_only"
+
+[[packages]]
+path = "apps/worker-lora"
+class = "production_live"
+owner = "worker-supervisor"
+production_reachable = true
+selection_source = "worker_runtime.roles generated manifest"
+package_disposition = "target_worker_image"
+evidence_requirement = "spawn-ready-receipt-stop-revoke target receipts"
+current_observed_mode = "isolated_worker_lora_receipt_runtime"
+
+[[packages]]
+path = "apps/sidecar-bus"
+class = "host_model"
+owner = "sidecar-model"
+production_reachable = false
+selection_source = "host adapter tests and explicit feature selection"
+package_disposition = "library_only_not_staged"
+evidence_requirement = "cannot satisfy target evidence"
+current_observed_mode = "host_protocol_model"
+
+[[packages]]
+path = "apps/gpu-bridge-host"
+class = "production_live"
+owner = "gpu-host-bridge"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "real backend identity plus registry and activation receipt"
+current_observed_mode = "live_host_gpu_bridge_with_explicit_fixture_mode"
+
+[[packages]]
+path = "apps/host-sidecar-bridge"
+class = "host_model"
+owner = "host-sidecar"
+production_reachable = false
+selection_source = "explicit host adapter invocation"
+package_disposition = "release_host_tool_non_evidence"
+evidence_requirement = "cannot satisfy target or release acceptance evidence"
+current_observed_mode = "explicit_host_model_and_mock_provider"
+
+[[packages]]
+path = "apps/host-ticket-agent"
+class = "production_live"
+owner = "host-ticket-agent"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "versioned host-ticket receipt and target acknowledgement"
+current_observed_mode = "live_host_ticket_agent"
+
+[[packages]]
+path = "apps/hive-gateway"
+class = "production_live"
+owner = "host-gateway"
+production_reachable = true
+selection_source = "runtime release host-tool manifest"
+package_disposition = "release_host_tool"
+evidence_requirement = "authenticated protocol-faithful host integration"
+current_observed_mode = "live_host_gateway"
+
+[[packages]]
+path = "crates/cargo-build-directive"
+class = "contract"
+owner = "build-tooling"
+production_reachable = true
+selection_source = "Cargo build-script dependency graph"
+package_disposition = "build_dependency"
+evidence_requirement = "consumer build checks"
+current_observed_mode = "build_contract"
+
+[[packages]]
+path = "crates/cohesix-cas"
+class = "contract"
+owner = "cas-core"
+production_reachable = true
+selection_source = "Cargo dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "CAS tests plus consuming host integration"
+current_observed_mode = "cas_contract_and_validation"
+
+[[packages]]
+path = "crates/cohesix-rest"
+class = "contract"
+owner = "host-rest-adapter"
+production_reachable = true
+selection_source = "explicit host REST features"
+package_disposition = "linked_host_library"
+evidence_requirement = "protocol-faithful host integration"
+current_observed_mode = "host_adapter_contract"
+
+[[packages]]
+path = "crates/cohesix-ticket"
+class = "contract"
+owner = "ticket-authority"
+production_reachable = true
+selection_source = "Cargo dependency graph and generated ticket policy"
+package_disposition = "linked_library"
+evidence_requirement = "ticket verification tests plus target receipt"
+current_observed_mode = "ticket_contract"
+
+[[packages]]
+path = "crates/cohesix-worker-evidence"
+class = "contract"
+owner = "worker-evidence"
+production_reachable = true
+selection_source = "M26e host integration evidence graph"
+package_disposition = "linked_host_library"
+evidence_requirement = "cross-layer evidence validation"
+current_observed_mode = "typed_evidence_contract"
+
+[[packages]]
+path = "crates/cohsh-core"
+class = "contract"
+owner = "host-shell-core"
+production_reachable = true
+selection_source = "Cargo dependency graph"
+package_disposition = "linked_host_library"
+evidence_requirement = "wire parity and authenticated integration"
+current_observed_mode = "host_protocol_contract"
+
+[[packages]]
+path = "crates/pi4-driver-abi"
+class = "contract"
+owner = "driver-abi"
+production_reachable = true
+selection_source = "generated driver runtime contract"
+package_disposition = "linked_target_library"
+evidence_requirement = "ABI layout tests plus target driver receipts"
+current_observed_mode = "pointer_free_mcs_driver_contract"
+
+[[packages]]
+path = "crates/worker-task-abi"
+class = "contract"
+owner = "worker-abi"
+production_reachable = true
+selection_source = "generated worker runtime contract"
+package_disposition = "linked_target_library"
+evidence_requirement = "ABI layout tests plus target worker receipts"
+current_observed_mode = "pointer_free_worker_contract"
+
+[[packages]]
+path = "crates/console-network-abi"
+class = "contract"
+owner = "console-network-abi"
+production_reachable = true
+selection_source = "generated console network service contract"
+package_disposition = "linked_target_library"
+evidence_requirement = "ABI tests plus authenticated target transcript"
+current_observed_mode = "pointer_free_network_contract"
+
+[[packages]]
+path = "crates/host-cuda"
+class = "production_live"
+owner = "gpu-host-bridge"
+production_reachable = true
+selection_source = "gpu-bridge-host cuda feature"
+package_disposition = "linked_host_library"
+evidence_requirement = "real CUDA discovery identity"
+current_observed_mode = "live_host_cuda_adapter"
+
+[[packages]]
+path = "crates/secure9p-codec"
+class = "contract"
+owner = "secure9p"
+production_reachable = true
+selection_source = "Secure9P dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "codec negative tests plus target call receipts"
+current_observed_mode = "bounded_protocol_codec"
+
+[[packages]]
+path = "crates/secure9p-core"
+class = "contract"
+owner = "secure9p"
+production_reachable = true
+selection_source = "Secure9P dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "session bounds tests plus target call receipts"
+current_observed_mode = "bounded_session_contract"
+
+[[packages]]
+path = "crates/secure9p-transport"
+class = "contract"
+owner = "secure9p"
+production_reachable = true
+selection_source = "NineDoor target and host transport graph"
+package_disposition = "linked_library"
+evidence_requirement = "transport bounds tests plus target call receipts"
+current_observed_mode = "bounded_transport_contract"
+
+[[packages]]
+path = "crates/boot/uefi-elfloader-shim"
+class = "not_enabled"
+owner = "future-uefi-profile"
+production_reachable = false
+selection_source = "future profile only; excluded from QEMU/Pi runtime closure"
+package_disposition = "not_packaged"
+evidence_requirement = "cannot satisfy M26e evidence"
+current_observed_mode = "disabled_future_profile_contract"
+
+[[packages]]
+path = "crates/trace-model"
+class = "contract"
+owner = "trace-core"
+production_reachable = true
+selection_source = "Cargo dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "trace parity tests plus current-source identity"
+current_observed_mode = "trace_record_contract"
+
+[[packages]]
+path = "crates/sel4-panicking"
+class = "contract"
+owner = "sel4-runtime"
+production_reachable = true
+selection_source = "target runtime dependency graph"
+package_disposition = "linked_target_library"
+evidence_requirement = "target fatal-path diagnostics"
+current_observed_mode = "bounded_target_panic_sink"
+
+[[packages]]
+path = "crates/sel4-runtime"
+class = "contract"
+owner = "sel4-runtime"
+production_reachable = true
+selection_source = "target runtime dependency graph"
+package_disposition = "linked_target_library"
+evidence_requirement = "selected seL4 ABI and target execution"
+current_observed_mode = "aarch64_sel4_start_contract"
+
+[[packages]]
+path = "crates/sel4-sys"
+class = "contract"
+owner = "sel4-bindings"
+production_reachable = true
+selection_source = "selected generated seL4 headers"
+package_disposition = "linked_target_library"
+evidence_requirement = "ABI negative tests and selected-profile target execution"
+current_observed_mode = "sel4_16_mcs_bindings"
+
+[[packages]]
+path = "crates/net-constants"
+class = "contract"
+owner = "network-contract"
+production_reachable = true
+selection_source = "Cargo dependency graph"
+package_disposition = "linked_library"
+evidence_requirement = "consumer parity tests"
+current_observed_mode = "network_constant_contract"
+
+[[packages]]
+path = "tools/coh-rtc"
+class = "production_live"
+owner = "manifest-compiler"
+production_reachable = true
+selection_source = "generated-artifact drift guard"
+package_disposition = "build_host_tool"
+evidence_requirement = "compiler tests and generated drift guard"
+current_observed_mode = "live_manifest_compiler"
+
+[[packages]]
+path = "tools/rust-risk-audit"
+class = "diagnostic"
+owner = "rust-audit"
+production_reachable = false
+selection_source = "CI audit gate"
+package_disposition = "ci_tool_not_runtime"
+evidence_requirement = "audit result only"
+current_observed_mode = "static_audit_tool"
+
+[[packages]]
+path = "tools/security-nist"
+class = "diagnostic"
+owner = "security-audit"
+production_reachable = false
+selection_source = "CI security gate"
+package_disposition = "ci_tool_not_runtime"
+evidence_requirement = "audit result only"
+current_observed_mode = "static_security_tool"
+
+[[packages]]
+path = "tests"
+class = "fixture"
+owner = "test-harness"
+production_reachable = false
+selection_source = "Cargo test targets"
+package_disposition = "not_packaged"
+evidence_requirement = "fixture results cannot substitute for target proof"
+current_observed_mode = "integration_fixture_harness"
+
+[[surfaces]]
+id = "retired:domain-intents"
+kind = "retired_workspace_member"
+path = "crates/domain-intents"
+class = "retired"
+owner = "workspace-governance"
+production_reachable = false
+selection_source = "M26e explicit retirement"
+package_disposition = "outside_workspace_and_release"
+evidence_requirement = "cannot satisfy any evidence"
+current_observed_mode = "source_retained_only_as_unselected_historical_fixture"
+
+[[surfaces]]
+id = "profile:qemu_smp_production"
+kind = "sel4_profile"
+path = "configs/sel4/profiles.toml#profiles.qemu_smp_production"
+class = "production_live"
+owner = "sel4-profile"
+production_reachable = true
+selection_source = "canonical QEMU build/run profile"
+package_disposition = "qemu_runtime"
+evidence_requirement = "fresh four-core MCS GICv3 QEMU run"
+current_observed_mode = "qemu_aarch64_virt_gicv3_mcs"
+
+[[surfaces]]
+id = "profile:qemu_smp_diagnostic"
+kind = "sel4_profile"
+path = "configs/sel4/profiles.toml#profiles.qemu_smp_diagnostic"
+class = "diagnostic"
+owner = "sel4-profile"
+production_reachable = false
+selection_source = "explicit diagnostic selection"
+package_disposition = "not_release_eligible"
+evidence_requirement = "diagnostic only"
+current_observed_mode = "qemu_diagnostic_mcs"
+
+[[surfaces]]
+id = "profile:pi4_production"
+kind = "sel4_profile"
+path = "configs/sel4/profiles.toml#profiles.pi4_production"
+class = "production_live"
+owner = "sel4-profile"
+production_reachable = true
+selection_source = "canonical Pi 4 image profile"
+package_disposition = "pi4_runtime"
+evidence_requirement = "later fresh Pi 4 hardware run"
+current_observed_mode = "pi4_aarch64_mcs"
+
+[[surfaces]]
+id = "profile:pi4_diagnostic"
+kind = "sel4_profile"
+path = "configs/sel4/profiles.toml#profiles.pi4_diagnostic"
+class = "diagnostic"
+owner = "sel4-profile"
+production_reachable = false
+selection_source = "explicit diagnostic selection"
+package_disposition = "not_release_eligible"
+evidence_requirement = "diagnostic only"
+current_observed_mode = "pi4_diagnostic_mcs"
+
+[[surfaces]]
+id = "profile:bcm2711_proof_eligibility"
+kind = "sel4_profile"
+path = "configs/sel4/profiles.toml#profiles.bcm2711_proof_eligibility"
+class = "diagnostic"
+owner = "pi4-evidence"
+production_reachable = false
+selection_source = "explicit proof-eligibility comparison"
+package_disposition = "not_runtime_eligible"
+evidence_requirement = "cannot replace fresh Pi 4 proof"
+current_observed_mode = "proof_eligibility_comparator"
+
+[[surfaces]]
+id = "namespace:generated-seeds"
+kind = "namespace_seed"
+path = "configs/root_task.toml#namespaces"
+class = "contract"
+owner = "namespace-service"
+production_reachable = true
+selection_source = "coh-rtc generated namespace table"
+package_disposition = "compiled_manifest_contract"
+evidence_requirement = "target NineDoor Call/Reply path proof"
+current_observed_mode = "generated_namespace_seed"
+
+[[surfaces]]
+id = "provider:target-ninedoor"
+kind = "provider_action"
+path = "apps/root-task/src/ninedoor.rs"
+class = "production_live"
+owner = "namespace-service"
+production_reachable = true
+selection_source = "generated namespace and ticket policies"
+package_disposition = "target_runtime"
+evidence_requirement = "authenticated target provider receipts"
+current_observed_mode = "unavailable_until_versioned_host_snapshot"
+
+[[surfaces]]
+id = "provider:gpu-host-snapshot"
+kind = "host_adapter"
+path = "apps/gpu-bridge-host"
+class = "production_live"
+owner = "gpu-host-bridge"
+production_reachable = true
+selection_source = "explicit real backend and registry source"
+package_disposition = "release_host_tool"
+evidence_requirement = "source identity sequence epoch TTL manifest and receipt"
+current_observed_mode = "empty_unavailable_without_real_source"
+
+[[surfaces]]
+id = "tool:host-bootpd-supervisor"
+kind = "host_service_supervisor"
+path = "tools/host-bootpd/start-en8-bootpd.zsh"
+class = "production_live"
+owner = "pi4-host-networking"
+production_reachable = true
+selection_source = "installed root LaunchDaemon ProgramArguments"
+package_disposition = "macos_host_service_source_not_release_bundled"
+evidence_requirement = "installed plist identity external runtime isolation and live direct-link DHCP"
+current_observed_mode = "root_launchdaemon_supervised_en8_bootpd"
+
+[[surfaces]]
+id = "tool:host-bootpd-installer"
+kind = "host_service_installer"
+path = "tools/host-bootpd/install-root-bootpd.zsh"
+class = "production_live"
+owner = "pi4-host-networking"
+production_reachable = true
+selection_source = "explicit sudo installation of the managed root LaunchDaemon"
+package_disposition = "macos_operator_install_tool_not_release_bundled"
+evidence_requirement = "bounded bootout install plist validation bootstrap and process identity"
+current_observed_mode = "managed_root_launchdaemon_installer"
+
+[[surfaces]]
+id = "contract:host-bootpd-config"
+kind = "host_service_config"
+path = "tools/host-bootpd/bootpd.plist"
+class = "contract"
+owner = "pi4-host-networking"
+production_reachable = true
+selection_source = "root bootpd supervisor fixed config argument"
+package_disposition = "macos_host_service_config_not_release_bundled"
+evidence_requirement = "plist validation en8 binding bounded lease pool and installed supervisor identity"
+current_observed_mode = "managed_en8_direct_link_dhcp_contract"
+
+[[surfaces]]
+id = "contract:host-bootpd-launchd-template"
+kind = "host_service_template"
+path = "tools/host-bootpd/com.lukasbower.cohesix.en8-bootpd.plist"
+class = "contract"
+owner = "pi4-host-networking"
+production_reachable = true
+selection_source = "tracked managed LaunchDaemon compatibility template"
+package_disposition = "macos_launchd_template_not_release_bundled"
+evidence_requirement = "plist validation exact supervisor identity and external runtime binding"
+current_observed_mode = "managed_en8_launchdaemon_template"
+
+[[surfaces]]
+id = "proof:qemu-m26e-target"
+kind = "proof_source"
+path = "out/test-plan/m26e-qemu"
+class = "diagnostic"
+owner = "m26e-auditor"
+production_reachable = false
+selection_source = "fresh test-plan run only"
+package_disposition = "evidence_output_not_packaged"
+evidence_requirement = "source/image/profile-bound receipts"
+current_observed_mode = "not_yet_generated"
+
+[[surfaces]]
+id = "release:m26e-runtime"
+kind = "package_release_asset"
+path = "scripts/release_bundle.sh"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "cohesix-runtime-release-manifest/v1 below"
+package_disposition = "exact_manifest_only"
+evidence_requirement = "kind architecture hash and unexpected-file checks"
+current_observed_mode = "manifest_validated_release_builder"
+
+[[surfaces]]
+id = "contract:driver-runtime-classic-comparator"
+kind = "evidence_input_contract"
+path = "configs/driver_runtime_classic_comparator.toml"
+class = "contract"
+owner = "driver-supervisor"
+production_reachable = true
+selection_source = "M26e immutable classic driver comparator input"
+package_disposition = "source_contract_not_acceptance_proof"
+evidence_requirement = "hash binding only; cannot replace QEMU or Pi target evidence"
+current_observed_mode = "immutable_comparator_reference"
+
+[[surfaces]]
+id = "contract:host-integration-graph"
+kind = "generated_dependency_contract"
+path = "configs/generated/host_integration_dependency.json"
+class = "contract"
+owner = "host-integration-compiler"
+production_reachable = true
+selection_source = "coh-rtc host-integration-dependency/v1 output"
+package_disposition = "release_generated_config"
+evidence_requirement = "generated drift guard and per-row evidence hashes"
+current_observed_mode = "compiler_owned_dependency_graph"
+
+[[surfaces]]
+id = "contract:host-integration-matrix"
+kind = "compiler_input"
+path = "configs/host_integration_acceptance.toml"
+class = "contract"
+owner = "host-integration-compiler"
+production_reachable = true
+selection_source = "M26e host-integration compiler source"
+package_disposition = "source_contract"
+evidence_requirement = "coh-rtc validation and generated graph hash"
+current_observed_mode = "strict_acceptance_matrix"
+
+[[surfaces]]
+id = "fixture:host-integration-run-tests"
+kind = "test_source"
+path = "tests/test_host_integration_run.py"
+class = "fixture"
+owner = "host-integration-tests"
+production_reachable = false
+selection_source = "M26e host-integration test suite"
+package_disposition = "test_only"
+evidence_requirement = "fixture cannot satisfy an integration row"
+current_observed_mode = "tamper_and_mode_substitution_fixture"
+
+[[surfaces]]
+id = "fixture:worker-task-evidence-tests"
+kind = "test_source"
+path = "tests/test_worker_task_evidence.py"
+class = "fixture"
+owner = "worker-evidence-tests"
+production_reachable = false
+selection_source = "M26e Worker evidence test suite"
+package_disposition = "test_only"
+evidence_requirement = "fixture cannot satisfy target acceptance"
+current_observed_mode = "evidence_tamper_fixture"
+
+[[surfaces]]
+id = "tool:host-integration-inventory"
+kind = "acceptance_checker"
+path = "scripts/ci/check_host_integration_inventory.py"
+class = "production_live"
+owner = "host-integration-auditor"
+production_reachable = true
+selection_source = "M26e generated dependency contract"
+package_disposition = "ci_acceptance_tool"
+evidence_requirement = "exact graph manifest inventory and advertised-surface hashes"
+current_observed_mode = "strict_inventory_and_evidence_validator"
+
+[[surfaces]]
+id = "tool:host-integration-runner"
+kind = "acceptance_runner"
+path = "scripts/ci/host_integration_run.sh"
+class = "production_live"
+owner = "host-integration-auditor"
+production_reachable = true
+selection_source = "M26e host-integration acceptance matrix"
+package_disposition = "ci_acceptance_tool"
+evidence_requirement = "fresh bounded row observations and exact optional target session"
+current_observed_mode = "matrix_and_target_session_runner"
+
+[[surfaces]]
+id = "tool:python-compatibility-runner"
+kind = "acceptance_runner"
+path = "scripts/ci/python_compat_run.sh"
+class = "production_live"
+owner = "python-client"
+production_reachable = true
+selection_source = "M26e target-neutral wheel and generated target contracts"
+package_disposition = "release_acceptance_tool"
+evidence_requirement = "Python 3.11 and 3.13 wheel smoke plus referenced target session"
+current_observed_mode = "projection_compatibility_runner"
+
+[[surfaces]]
+id = "tool:worker-task-evidence"
+kind = "acceptance_checker"
+path = "scripts/worker_task_evidence.py"
+class = "production_live"
+owner = "worker-evidence-auditor"
+production_reachable = true
+selection_source = "M26e Worker evidence schemas and generated graph"
+package_disposition = "ci_acceptance_tool"
+evidence_requirement = "hash-bound component root-TCB and full-system records"
+current_observed_mode = "strict_target_evidence_validator"
+
+[[surfaces]]
+id = "tool:qemu-gdb-evidence-runner"
+kind = "diagnostic_runner"
+path = "scripts/worker_task_evidence.py"
+class = "diagnostic"
+owner = "worker-evidence-auditor"
+production_reachable = false
+selection_source = "explicit qemu-gdb, qemu-service-gdb, and qemu-critical-gdb commands"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "immutable external-GDB transcript bound to exact target session topology and ELF bytes"
+current_observed_mode = "bounded_loopback_external_gdb_injection_and_observation"
+
+[[surfaces]]
+id = "tool:m26e-qemu-pressure"
+kind = "acceptance_runner"
+path = "scripts/m26e_qemu_pressure.sh"
+class = "diagnostic"
+owner = "worker-evidence-auditor"
+production_reachable = false
+selection_source = "explicit Milestone 26e clean QEMU pressure invocation"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "same-artifact GICv3 staged preflight plus medium and high executable pressure"
+current_observed_mode = "fail_closed_clean_qemu_worker_mcs_pressure_orchestrator"
+
+[[surfaces]]
+id = "tool:qemu-launch-artifact-identity"
+kind = "build_identity_checker"
+path = "scripts/lib/qemu_launch_artifacts.py"
+class = "production_live"
+owner = "qemu-build-tooling"
+production_reachable = true
+selection_source = "canonical cohesix-build-run immutable launch mode"
+package_disposition = "build_support_tool"
+evidence_requirement = "exact GICv3 elfloader kernel rootserver and initrd hashes"
+current_observed_mode = "same_artifact_multi_boot_verifier"
+
+[[surfaces]]
+id = "fixture:qemu-launch-artifact-tests"
+kind = "test_source"
+path = "tests/test_qemu_launch_artifacts.py"
+class = "fixture"
+owner = "qemu-build-tests"
+production_reachable = false
+selection_source = "M26e immutable repeated-launch tests"
+package_disposition = "test_only"
+evidence_requirement = "fixture cannot satisfy live QEMU acceptance"
+current_observed_mode = "identity_context_and_symlink_tamper_fixture"
+
+[[surfaces]]
+id = "runtime:worker-task-target-evidence"
+kind = "target_source"
+path = "apps/root-task/src/hal/worker_task.rs"
+class = "production_live"
+owner = "worker-supervisor"
+production_reachable = true
+selection_source = "generated Worker runtime and temporal/resource admission contracts"
+package_disposition = "target_rootserver_source"
+evidence_requirement = "live UART admission READY fault timeout teardown and recreation receipts"
+current_observed_mode = "capability_backed_worker_lifecycle_with_bounded_evidence_markers"
+
+[[surfaces]]
+id = "runtime:worker-qemu-gdb-hooks"
+kind = "target_source"
+path = "apps/worker-heart/src/target_runtime.rs"
+class = "diagnostic"
+owner = "worker-supervisor"
+production_reachable = false
+selection_source = "qemu-evidence feature nested under release-qemu plus bootstrap-trace"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "external GDB transcript plus exact unstripped ELF and packaged image hashes"
+current_observed_mode = "non_authoritative_hardware_breakpoint_targets"
+
+[[surfaces]]
+id = "runtime:ninedoor-qemu-gdb-hooks"
+kind = "target_source"
+path = "apps/nine-door-runtime/src/kernel.rs"
+class = "diagnostic"
+owner = "namespace-service"
+production_reachable = false
+selection_source = "qemu-evidence feature nested under release-qemu plus bootstrap-trace"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "external GDB transcript plus exact service ELF and root image hashes"
+current_observed_mode = "request_bound_standard_fault_target"
+
+[[surfaces]]
+id = "runtime:console-network-qemu-gdb-hooks"
+kind = "target_source"
+path = "apps/console-network-runtime/src/kernel.rs"
+class = "diagnostic"
+owner = "console-network-service"
+production_reachable = false
+selection_source = "qemu-evidence feature nested under release-qemu plus bootstrap-trace"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "external GDB transcript plus exact service ELF and root image hashes"
+current_observed_mode = "control_bound_standard_and_timeout_fault_targets"
+
+[[surfaces]]
+id = "runtime:critical-root-qemu-gdb-hooks"
+kind = "target_source"
+path = "apps/root-task/src/hal/critical_tcb.rs"
+class = "diagnostic"
+owner = "root-control"
+production_reachable = false
+selection_source = "release-qemu plus bootstrap-trace target-evidence gate"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "external GDB transcript binding all four duty symbols and root ELF/image"
+current_observed_mode = "non_authoritative_live_duty_observation_points"
+
+[[surfaces]]
+id = "runtime:root-tcb-live-evidence"
+kind = "target_source"
+path = "apps/root-task/src/kernel.rs"
+class = "production_live"
+owner = "root-control"
+production_reachable = true
+selection_source = "generated root TCB inventory and sealed fault registry"
+package_disposition = "target_rootserver_source"
+evidence_requirement = "live GICv3 QEMU admitted-maximum budget plus constructed-actual critical objects and independent progress markers"
+current_observed_mode = "sealed_admitted_maximum_and_constructed_actual_projection"
+
+[[surfaces]]
+id = "runtime:ninedoor-service-live-evidence"
+kind = "target_source"
+path = "apps/root-task/src/hal/ninedoor_service.rs"
+class = "production_live"
+owner = "namespace-service"
+production_reachable = true
+selection_source = "generated passive NineDoor service topology"
+package_disposition = "target_rootserver_source"
+evidence_requirement = "live fault and exact teardown receipt"
+current_observed_mode = "isolated_service_terminal_containment"
+
+[[surfaces]]
+id = "runtime:console-network-live-evidence"
+kind = "target_source"
+path = "apps/root-task/src/hal/console_network.rs"
+class = "production_live"
+owner = "console-network-service"
+production_reachable = true
+selection_source = "generated active console-network service topology"
+package_disposition = "target_rootserver_source"
+evidence_requirement = "live fault MCS unbind and exact teardown receipt"
+current_observed_mode = "isolated_service_terminal_containment"
+
+[[surfaces]]
+id = "runtime:qemu-gpu-fixture-gate"
+kind = "target_source"
+path = "apps/root-task/src/ninedoor.rs"
+class = "diagnostic"
+owner = "gpu-bridge"
+production_reachable = false
+selection_source = "release-qemu plus bootstrap-trace target-evidence gate"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "fixture-labeled UART admission and exact target-session collection"
+current_observed_mode = "fixture_mock_never_provider_live"
+
+[[surfaces]]
+id = "runtime:qemu-lora-export-fixture-gate"
+kind = "target_source"
+path = "apps/root-task/src/ninedoor.rs"
+class = "diagnostic"
+owner = "peft-host-integration"
+production_reachable = false
+selection_source = "admitted fixture GPU bridge snapshot under release-qemu plus bootstrap-trace"
+package_disposition = "qemu_target_evidence_only"
+evidence_requirement = "fixture-labeled read-only three-file export job and exact target-session receipts"
+current_observed_mode = "single_bounded_read_only_export_fixture_never_provider_live"
+
+[[surfaces]]
+id = "fixture:implementation-surface-gpu-gate-tests"
+kind = "test_source"
+path = "scripts/ci/test_check_implementation_surfaces.py"
+class = "fixture"
+owner = "implementation-surface-auditor"
+production_reachable = false
+selection_source = "M26e scanner negative tests"
+package_disposition = "test_only"
+evidence_requirement = "cannot satisfy target evidence"
+current_observed_mode = "broad_fixture_gate_rejection_fixture"
+
+[[tracked_rules]]
+id = "root-readme"
+exact = "README.md"
+class = "contract"
+owner = "documentation"
+production_reachable = false
+selection_source = "tracked current public documentation"
+package_disposition = "release_document"
+evidence_requirement = "docs-as-built drift review"
+current_observed_mode = "public_claim_source"
+
+[[tracked_rules]]
+id = "current-docs"
+prefix = "docs/"
+suffix = ".md"
+class = "contract"
+owner = "documentation"
+production_reachable = false
+selection_source = "tracked current documentation"
+package_disposition = "selected_release_subset_or_source_only"
+evidence_requirement = "docs-as-built drift review"
+current_observed_mode = "documentation_or_generated_claim"
+
+[[tracked_rules]]
+id = "app-readmes"
+prefix = "apps/"
+suffix = "/README.md"
+class = "contract"
+owner = "component-owner"
+production_reachable = false
+selection_source = "tracked nested crate documentation"
+package_disposition = "source_document"
+evidence_requirement = "component as-built review"
+current_observed_mode = "nested_component_claim"
+
+[[tracked_rules]]
+id = "crate-readmes"
+prefix = "crates/"
+suffix = "/README.md"
+class = "contract"
+owner = "component-owner"
+production_reachable = false
+selection_source = "tracked nested crate documentation"
+package_disposition = "source_document"
+evidence_requirement = "component as-built review"
+current_observed_mode = "nested_component_claim"
+
+[[tracked_rules]]
+id = "tool-readmes"
+prefix = "tools/"
+suffix = "/README.md"
+class = "contract"
+owner = "host-tool-owner"
+production_reachable = false
+selection_source = "tracked host-tool documentation"
+package_disposition = "source_document"
+evidence_requirement = "host-tool as-built review"
+current_observed_mode = "host_tool_claim"
+
+[[tracked_rules]]
+id = "cohesix-python-library"
+prefix = "tools/cohesix-py/cohesix/"
+suffix = ".py"
+class = "production_live"
+owner = "python-client"
+production_reachable = true
+selection_source = "Python package manifest"
+package_disposition = "release_python_library"
+evidence_requirement = "authenticated host integration and typed receipts"
+current_observed_mode = "live_host_adapter"
+
+[[tracked_rules]]
+id = "cohesix-python-examples"
+prefix = "tools/cohesix-py/examples/"
+suffix = ".py"
+class = "diagnostic"
+owner = "python-client"
+production_reachable = false
+selection_source = "explicit examples directory"
+package_disposition = "example_not_evidence"
+evidence_requirement = "cannot satisfy target or release acceptance"
+current_observed_mode = "example_playbook"
+
+[[tracked_rules]]
+id = "coh-scripts"
+prefix = "scripts/cohsh/"
+suffix = ".coh"
+exclude_exact = ["scripts/cohsh/host_sidecar_mock.coh"]
+class = "diagnostic"
+owner = "host-shell"
+production_reachable = false
+selection_source = "explicit script invocation"
+package_disposition = "diagnostic_script"
+evidence_requirement = "script result requires target-bound receipt"
+current_observed_mode = "operator_playbook"
+
+[[tracked_rules]]
+id = "coh-mock-script"
+exact = "scripts/cohsh/host_sidecar_mock.coh"
+class = "fixture"
+owner = "host-shell"
+production_reachable = false
+selection_source = "explicitly named mock fixture"
+package_disposition = "fixture_not_packaged_as_live"
+evidence_requirement = "fixture only"
+current_observed_mode = "mock_playbook"
+
+[[tracked_rules]]
+id = "coh-shell-runner-scripts"
+prefix = "scripts/cohsh/"
+suffix = ".sh"
+class = "diagnostic"
+owner = "host-shell"
+production_reachable = false
+selection_source = "exact release operator-script list"
+package_disposition = "diagnostic_script"
+evidence_requirement = "script result requires target-bound receipt"
+current_observed_mode = "operator_test_runner"
+
+[[tracked_rules]]
+id = "coh-shell-fixture-inputs"
+prefix = "scripts/cohsh/fixtures/"
+class = "fixture"
+owner = "host-shell"
+production_reachable = false
+selection_source = "explicit fixtures directory"
+package_disposition = "release_fixture_input"
+evidence_requirement = "fixture only"
+current_observed_mode = "registered_fixture"
+
+[[tracked_rules]]
+id = "cohesix-python-package-manifest"
+exact = "tools/cohesix-py/pyproject.toml"
+class = "contract"
+owner = "python-client"
+production_reachable = true
+selection_source = "exact release Python artifact list"
+package_disposition = "release_python_manifest"
+evidence_requirement = "package metadata and exact file-set validation"
+current_observed_mode = "python_package_contract"
+
+[[tracked_rules]]
+id = "cohesix-python-tests"
+prefix = "tools/cohesix-py/tests/"
+suffix = ".py"
+class = "fixture"
+owner = "python-client"
+production_reachable = false
+selection_source = "explicit package test directory"
+package_disposition = "release_test_fixture"
+evidence_requirement = "fixture only; cannot satisfy target evidence"
+current_observed_mode = "python_test_fixture"
+
+[[tracked_rules]]
+id = "swarmui-release-assets"
+prefix = "apps/swarmui/frontend/"
+class = "production_live"
+owner = "swarmui"
+production_reachable = true
+selection_source = "exact release UI asset list"
+package_disposition = "release_ui_asset"
+evidence_requirement = "asset hash and authenticated gateway integration"
+current_observed_mode = "live_host_ui"
+
+[[tracked_rules]]
+id = "release-trace-fixtures"
+prefix = "tests/fixtures/traces/"
+class = "fixture"
+owner = "trace-tests"
+production_reachable = false
+selection_source = "exact release trace-fixture list"
+package_disposition = "release_fixture"
+evidence_requirement = "fixture only; historical trace is not current proof"
+current_observed_mode = "registered_trace_fixture"
+
+[[tracked_rules]]
+id = "release-transcript-fixtures"
+prefix = "tests/fixtures/transcripts/"
+class = "fixture"
+owner = "console-tests"
+production_reachable = false
+selection_source = "exact release transcript-fixture list"
+package_disposition = "release_fixture"
+evidence_requirement = "fixture only; transcript is not current proof"
+current_observed_mode = "registered_transcript_fixture"
+
+[[tracked_rules]]
+id = "release-root-config"
+exact = "configs/root_task.toml"
+class = "contract"
+owner = "coh-rtc"
+production_reachable = true
+selection_source = "default operational QEMU manifest"
+package_disposition = "release_source_config"
+evidence_requirement = "generated fingerprint and schema validation"
+current_observed_mode = "operational_manifest"
+
+[[tracked_rules]]
+id = "release-setup-script"
+exact = "scripts/setup_environment.sh"
+class = "production_live"
+owner = "release-tooling"
+production_reachable = true
+selection_source = "exact release support-file list"
+package_disposition = "release_host_setup"
+evidence_requirement = "shell validation and exact output hash"
+current_observed_mode = "host_setup_entrypoint"
+
+[[tracked_rules]]
+id = "python-compatibility-runner-release"
+exact = "scripts/ci/python_compat_run.sh"
+class = "production_live"
+owner = "python-client"
+production_reachable = true
+selection_source = "exact release support-file list"
+package_disposition = "release_acceptance_tool"
+evidence_requirement = "Python 3.11 and 3.13 wheel smoke plus referenced target session"
+current_observed_mode = "projection_compatibility_runner"
+
+[[tracked_rules]]
+id = "release-license"
+exact = "LICENSE.txt"
+class = "contract"
+owner = "release-tooling"
+production_reachable = false
+selection_source = "exact release support-file list"
+package_disposition = "release_legal_document"
+evidence_requirement = "exact output hash"
+current_observed_mode = "license_contract"
+
+[[tracked_rules]]
+id = "release-current-notes"
+exact = "releases/RELEASE_NOTES-0.1.0-alpha1.md"
+class = "contract"
+owner = "release-tooling"
+production_reachable = false
+selection_source = "release.version"
+package_disposition = "versioned_release_document"
+evidence_requirement = "version and exact output hash must agree"
+current_observed_mode = "current_release_notes"
+
+[[tracked_rules]]
+id = "release-logo"
+exact = "docs/COHESIX_LOGO.png"
+class = "contract"
+owner = "documentation"
+production_reachable = false
+selection_source = "exact release host-asset list"
+package_disposition = "release_brand_asset"
+evidence_requirement = "exact output hash"
+current_observed_mode = "public_brand_asset"
+
+[[tracked_rules]]
+id = "resource-fixtures"
+prefix = "resources/fixtures/"
+class = "fixture"
+owner = "test-fixtures"
+production_reachable = false
+selection_source = "explicit fixtures directory"
+package_disposition = "forbidden_from_runtime_release"
+evidence_requirement = "fixture only; historical captures are not current proof"
+current_observed_mode = "registered_fixture"
+
+[[tracked_rules]]
+id = "public-verification-keys"
+prefix = "resources/keys/"
+class = "contract"
+owner = "cas-trust-policy"
+production_reachable = true
+selection_source = "operational root-task manifest"
+package_disposition = "release_public_trust_material"
+evidence_requirement = "generated root key bytes and release source hash must agree"
+current_observed_mode = "public_verification_key_only"
+
+[[tracked_rules]]
+id = "openapi-contract"
+prefix = "resources/openapi/"
+class = "contract"
+owner = "host-api"
+production_reachable = true
+selection_source = "host gateway protocol contract"
+package_disposition = "release_contract"
+evidence_requirement = "protocol parity and auth tests"
+current_observed_mode = "host_api_contract"
+
+[[tracked_rules]]
+id = "systemd-assets"
+prefix = "resources/systemd/"
+class = "production_live"
+owner = "host-gateway"
+production_reachable = true
+selection_source = "exact release manifest"
+package_disposition = "release_host_asset"
+evidence_requirement = "release file hash and service validation"
+current_observed_mode = "host_service_unit"
+
+[[tracked_rules]]
+id = "historical-release-readmes"
+prefix = "releases/"
+suffix = "/README.md"
+class = "retired"
+owner = "release-history"
+production_reachable = false
+selection_source = "immutable historical release tree"
+package_disposition = "historical_release_only"
+evidence_requirement = "cannot satisfy current evidence"
+current_observed_mode = "historical_release_document"
+
+[[tracked_rules]]
+id = "sel4-upstream-readme"
+exact = "seL4/README.md"
+class = "contract"
+owner = "upstream-kernel-source"
+production_reachable = false
+selection_source = "upstream source checkout"
+package_disposition = "source_reference_only"
+evidence_requirement = "selected generated kernel artefacts remain authoritative"
+current_observed_mode = "upstream_reference_document"
+
+[[tracked_rules]]
+id = "integration-test-readme"
+exact = "tests/integration/README.md"
+class = "diagnostic"
+owner = "integration-tests"
+production_reachable = false
+selection_source = "explicit test invocation"
+package_disposition = "test_document_only"
+evidence_requirement = "test output requires target-bound receipt"
+current_observed_mode = "integration_test_guide"
+
+[[tracked_rules]]
+id = "third-party-readmes"
+prefix = "third_party/"
+suffix = "/README.md"
+class = "contract"
+owner = "upstream-source"
+production_reachable = false
+selection_source = "third-party source checkout"
+package_disposition = "source_reference_only"
+evidence_requirement = "cannot replace Cohesix target evidence"
+current_observed_mode = "upstream_reference_document"
+
+[[runtime_closures]]
+name = "qemu-aarch64-gicv3-mcs"
+target = "aarch64-unknown-none"
+package = "root-task"
+features = ["release-qemu"]
+selected_entrypoints = [
+  "root-task:sel4_start",
+  "nine-door-runtime:_start",
+  "console-network-runtime:_start",
+  "worker-heart:_start",
+  "worker-gpu:_start",
+  "worker-lora:_start",
+]
+expected_artifacts = [
+  "elfloader",
+  "kernel.elf",
+  "rootserver",
+  "cohesix-system.cpio",
+  "cohesix-worker-images.cpio",
+  "cohesix-driver-images.cpio",
+]
+
+[[runtime_closures]]
+name = "pi4-aarch64-mcs"
+target = "aarch64-unknown-none"
+package = "root-task"
+features = ["release-pi4"]
+selected_entrypoints = [
+  "root-task:sel4_start",
+  "nine-door-runtime:_start",
+  "console-network-runtime:_start",
+  "pi4-driver-runtime:cohesix_pi4_driver_runtime_entry",
+  "worker-heart:_start",
+  "worker-gpu:_start",
+  "worker-lora:_start",
+]
+expected_artifacts = [
+  "kernel8.img",
+  "cohesix-system.cpio",
+  "cohesix-worker-images.cpio",
+  "cohesix-driver-images.cpio",
+]
+
+[release]
+schema = "cohesix-runtime-release-manifest/v1"
+version = "0.1.0-alpha1"
+host_tools = [
+  "bin/cas-tool",
+  "bin/coh",
+  "bin/cohsh",
+  "bin/gpu-bridge-host",
+  "bin/hive-gateway",
+  "bin/host-sidecar-bridge",
+  "bin/host-ticket-agent",
+  "bin/swarmui",
+]
+target_images = [
+  "image/cohesix-system.cpio",
+  "image/elfloader",
+  "image/gic-version.txt",
+  "image/kernel.elf",
+  "image/manifest.json",
+  "image/rootserver",
+]
+generated_configs = [
+  "configs/generated/cas_manifest_template.json",
+  "configs/generated/cas_manifest_template.json.sha256",
+  "configs/generated/coh_policy.toml",
+  "configs/generated/coh_policy.toml.sha256",
+  "configs/generated/cohesix_python_pi4_production.json",
+  "configs/generated/cohesix_python_qemu_smp_production.json",
+  "configs/generated/cohsh_policy.toml",
+  "configs/generated/cohsh_policy.toml.sha256",
+  "configs/generated/host_integration_dependency.json",
+  "configs/generated/implementation_surface_inventory.json",
+  "configs/generated/root_task_resolved.json",
+  "configs/generated/root_task_resolved.json.sha256",
+  "configs/generated/swarmui_defaults.toml",
+  "configs/generated/swarmui_defaults.toml.sha256",
+]
+public_documents = [
+  "README.md",
+  "docs/ARCHITECTURE.md",
+  "docs/GPU_NODES.md",
+  "docs/HOST_TOOLS.md",
+  "docs/INTERFACES.md",
+  "docs/NETWORK_CONFIG.md",
+  "docs/PYTHON_SUPPORT.md",
+  "docs/QUICKSTART.md",
+  "docs/ROLES_AND_SCHEDULING.md",
+  "docs/SECURE9P.md",
+  "docs/SECURITY.md",
+  "docs/USERLAND_AND_CLI.md",
+  "docs/USE_CASES.md",
+  "docs/WORKER_TICKETS.md",
+]
+host_assets = [
+  "docs/COHESIX_LOGO.png",
+  "resources/keys/cas_verification_key.hex",
+  "resources/systemd/hive-gateway.service",
+]
+operator_scripts = [
+  "scripts/cohsh/9p_batch.coh",
+  "scripts/cohsh/REST_regression_batch.sh",
+  "scripts/cohsh/boot_v0.coh",
+  "scripts/cohsh/busy_backpressure.coh",
+  "scripts/cohsh/cas_roundtrip.coh",
+  "scripts/cohsh/fixtures/telemetry_push_oversize.txt",
+  "scripts/cohsh/fixtures/telemetry_push_small.txt",
+  "scripts/cohsh/host_absent.coh",
+  "scripts/cohsh/host_sidecar_mock.coh",
+  "scripts/cohsh/lifecycle_basic.coh",
+  "scripts/cohsh/lifecycle_drain_spool.coh",
+  "scripts/cohsh/lifecycle_reboot_resume.coh",
+  "scripts/cohsh/model_cas_bind.coh",
+  "scripts/cohsh/observe_watch.coh",
+  "scripts/cohsh/peft_roundtrip.coh",
+  "scripts/cohsh/policy_gate.coh",
+  "scripts/cohsh/replay_journal.coh",
+  "scripts/cohsh/rest_control_plane_smoke.coh",
+  "scripts/cohsh/root_cut_basic.coh",
+  "scripts/cohsh/run_demo.coh",
+  "scripts/cohsh/run_regression_batch.sh",
+  "scripts/cohsh/session_lifecycle.coh",
+  "scripts/cohsh/session_pool.coh",
+  "scripts/cohsh/shard_1k.coh",
+  "scripts/cohsh/sidecar_integration.coh",
+  "scripts/cohsh/smp_parity.coh",
+  "scripts/cohsh/tcp_basic.coh",
+  "scripts/cohsh/telemetry_push_create.coh",
+  "scripts/cohsh/telemetry_ring.coh",
+  "scripts/cohsh/worker_host_model.coh",
+]
+
+python_artifacts = [
+  "tools/cohesix-py/README.md",
+  "tools/cohesix-py/cohesix/__init__.py",
+  "tools/cohesix-py/cohesix/audit.py",
+  "tools/cohesix-py/cohesix/auth.py",
+  "tools/cohesix-py/cohesix/backends.py",
+  "tools/cohesix-py/cohesix/client.py",
+  "tools/cohesix-py/cohesix/defaults.py",
+  "tools/cohesix-py/cohesix/errors.py",
+  "tools/cohesix-py/cohesix/evidence.py",
+  "tools/cohesix-py/cohesix/generated.py",
+  "tools/cohesix-py/cohesix/integrations.py",
+  "tools/cohesix-py/cohesix/orchestration.py",
+  "tools/cohesix-py/cohesix/paths.py",
+  "tools/cohesix-py/cohesix/playbook_cli.py",
+  "tools/cohesix-py/cohesix/playbooks.py",
+  "tools/cohesix-py/cohesix/receipts.py",
+  "tools/cohesix-py/cohesix/ticket.py",
+  "tools/cohesix-py/cohesix/worker.py",
+  "tools/cohesix-py/examples/ci_evidence_pack.py",
+  "tools/cohesix-py/examples/common.py",
+  "tools/cohesix-py/examples/lease_run.py",
+  "tools/cohesix-py/examples/peft_roundtrip.py",
+  "tools/cohesix-py/examples/siem_export_ndjson.py",
+  "tools/cohesix-py/examples/telemetry_write_pull.py",
+  "tools/cohesix-py/examples/use_case_playbook.py",
+  "tools/cohesix-py/pyproject.toml",
+  "tools/cohesix-py/tests/test_auth.py",
+  "tools/cohesix-py/tests/test_evidence_receipts.py",
+  "tools/cohesix-py/tests/test_examples_ci_siem.py",
+  "tools/cohesix-py/tests/test_generated_contract.py",
+  "tools/cohesix-py/tests/test_integrations.py",
+  "tools/cohesix-py/tests/test_orchestration.py",
+  "tools/cohesix-py/tests/test_parity.py",
+  "tools/cohesix-py/tests/test_playbooks.py",
+  "tools/cohesix-py/tests/test_python_compat_runner.py",
+  "tools/cohesix-py/tests/test_rest_backend_auth.py",
+  "tools/cohesix-py/tests/test_tcp_backend_auth.py",
+  "tools/cohesix-py/tests/test_worker_compatibility.py",
+]
+
+trace_fixtures = [
+  "tests/fixtures/traces/trace_v0.hive.cbor",
+  "tests/fixtures/traces/trace_v0.trace",
+]
+
+transcript_fixtures = [
+  "tests/fixtures/transcripts/abuse/core.txt",
+  "tests/fixtures/transcripts/abuse/serial.txt",
+  "tests/fixtures/transcripts/abuse/tcp.txt",
+  "tests/fixtures/transcripts/boot_v0/core.txt",
+  "tests/fixtures/transcripts/boot_v0/serial.txt",
+  "tests/fixtures/transcripts/boot_v0/tcp.txt",
+  "tests/fixtures/transcripts/control_plane_v0/cohsh.txt",
+  "tests/fixtures/transcripts/converge_v0/coh-status.txt",
+  "tests/fixtures/transcripts/converge_v0/coh.txt",
+  "tests/fixtures/transcripts/converge_v0/cohsh.txt",
+  "tests/fixtures/transcripts/converge_v0/core.txt",
+  "tests/fixtures/transcripts/converge_v0/serial.txt",
+  "tests/fixtures/transcripts/converge_v0/swarmui.txt",
+  "tests/fixtures/transcripts/converge_v0/tcp.txt",
+  "tests/fixtures/transcripts/peft_roundtrip_v0/cohsh.txt",
+  "tests/fixtures/transcripts/run_demo_v0/cohsh.txt",
+  "tests/fixtures/transcripts/support.rs",
+  "tests/fixtures/transcripts/trace_v0/coh-status.txt",
+  "tests/fixtures/transcripts/trace_v0/cohsh.txt",
+  "tests/fixtures/transcripts/trace_v0/swarmui.txt",
+]
+
+ui_assets = [
+  "apps/swarmui/frontend/app.js",
+  "apps/swarmui/frontend/assets/fonts/INTER_LICENSE.txt",
+  "apps/swarmui/frontend/assets/fonts/Inter-Variable.woff2",
+  "apps/swarmui/frontend/assets/fonts/JETBRAINS_MONO_OFL.txt",
+  "apps/swarmui/frontend/assets/fonts/JetBrainsMono-Variable.woff2",
+  "apps/swarmui/frontend/assets/icons/LICENSE.txt",
+  "apps/swarmui/frontend/assets/icons/cohesix-header.svg",
+  "apps/swarmui/frontend/assets/icons/cohesix-icon.svg",
+  "apps/swarmui/frontend/assets/icons/sprite.svg",
+  "apps/swarmui/frontend/components/console.js",
+  "apps/swarmui/frontend/components/icon.js",
+  "apps/swarmui/frontend/events.js",
+  "apps/swarmui/frontend/hive/index.js",
+  "apps/swarmui/frontend/hive/palette.js",
+  "apps/swarmui/frontend/hive/renderer.js",
+  "apps/swarmui/frontend/hive/style.js",
+  "apps/swarmui/frontend/hive/tokens.js",
+  "apps/swarmui/frontend/hive/world.js",
+  "apps/swarmui/frontend/index.html",
+  "apps/swarmui/frontend/styles.css",
+  "apps/swarmui/frontend/styles/colors.css",
+  "apps/swarmui/frontend/styles/console.css",
+  "apps/swarmui/frontend/styles/fonts.css",
+  "apps/swarmui/frontend/styles/hive.css",
+  "apps/swarmui/frontend/styles/layout.css",
+  "apps/swarmui/frontend/styles/tokens.css",
+  "apps/swarmui/frontend/vendor/PIXIJSLICENSE.txt",
+  "apps/swarmui/frontend/vendor/pixi.min.js",
+  "apps/swarmui/frontend/vendor/spectrum.bundle.entry.js",
+  "apps/swarmui/frontend/vendor/spectrum.bundle.js",
+]
+
+support_files = [
+  "LICENSE.txt",
+  "configs/root_task.toml",
+  "releases/RELEASE_NOTES-0.1.0-alpha1.md",
+  "scripts/ci/python_compat_run.sh",
+  "scripts/setup_environment.sh",
+]
+
+versioned_migrations = []
+
+generated_bundle_files = [
+  "MANIFEST.sha256",
+  "VERSION.txt",
+  "python/dist/cohesix-0.2.0a2-py3-none-any.whl",
+  "python/m26e-python-package.json",
+  "qemu/run.sh",
+  "traces/trace_v0.hive.cbor.sha256",
+  "traces/trace_v0.trace.sha256",
+]
+
+forbidden_paths = [
+  "bin/coh-status",
+  "bin/nine-door",
+  "crates/domain-intents",
+  "resources/fixtures/cas_signing_key.hex",
+]

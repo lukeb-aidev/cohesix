@@ -6,6 +6,7 @@ name = "coh-rtc"
 version = "0.1.0"
 edition = "2021"
 publish = false
+default-run = "coh-rtc"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -19,6 +20,7 @@ toml = "1.1.4"
 cohesix-cas = { workspace = true }
 cohsh-core = { workspace = true }
 cohesix-ticket = { workspace = true }
+ed25519-dalek = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

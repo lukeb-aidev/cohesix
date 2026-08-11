@@ -86,6 +86,17 @@ fn manifest_codegen_is_deterministic() {
 
     let first = compile(&options).expect("compile manifest");
     let baseline = snapshot_dir(&out_dir);
+    let generated_mod = fs::read_to_string(out_dir.join("mod.rs")).expect("generated mod.rs");
+    let generated_bootstrap =
+        fs::read_to_string(out_dir.join("bootstrap.rs")).expect("generated bootstrap.rs");
+    assert!(generated_mod.contains("pub verification_key: Option<[u8; 32]>,"));
+    assert!(!generated_mod.contains("pub signing_key:"));
+    assert!(generated_bootstrap.contains("verification_key: Some(["));
+    assert!(!generated_bootstrap.contains("signing_key:"));
+    assert!(
+        !generated_bootstrap.contains("0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef"),
+        "generated target bootstrap must not embed the registered private fixture seed"
+    );
     let baseline_manifest = fs::read(&manifest_out).expect("manifest json");
     let baseline_cas_template = fs::read(&cas_manifest_template).expect("cas template json");
     let baseline_cli = fs::read(&cli_script).expect("cli script");
@@ -193,7 +204,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -283,7 +294,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -365,7 +376,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -446,7 +457,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -534,7 +545,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"

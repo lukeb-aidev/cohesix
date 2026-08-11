@@ -31,6 +31,8 @@ boot the system under QEMU. The script expects an existing seL4 build tree that
 already produced `elfloader`, `kernel.elf`, and support artefacts. By default it
 uses the validated `qemu_smp_production` contract at
 `$PROJECT_ROOT/out/sel4/profile-v2/qemu-smp-production`.
+That contract must report GICv3; launch always uses `virt,gic-version=3` and
+rejects command-line or environment attempts to replace the machine/GIC truth.
 
 Options:
   --sel4-build <dir>    Path to the seL4 build output
@@ -41,7 +43,7 @@ Options:
   --cargo-target <triple>  Target triple used for seL4 component builds (required)
   --root-task-features <list>
                         Comma-separated feature set used for the root-task seL4 build
-                        (default: cohesix-dev for tcp, kernel,bootstrap-trace,serial-console for qemu)
+                        (default: release-qemu,bootstrap-trace for both transports)
   --features <name>      Enable additional root-task feature (bootstrap-trace|serial-console|cohesix-dev).
                          May be specified multiple times.
   --qemu <path>         QEMU binary to execute (default: qemu-system-aarch64)
@@ -52,6 +54,8 @@ Options:
                               TCP console is exposed to the host by default.
   --tcp-port <port>     TCP port exposed by QEMU for the remote console (default: 31337)
   --raw-qemu            Launch QEMU directly in this terminal after building (bypasses cohsh)
+  --launch-existing     Validate and launch the immutable artefacts from one prior build;
+                        do not rebuild, restage, or repack the QEMU inputs
   --no-run              Skip launching QEMU after building the artefacts
   --dtb <path>          Override the device tree blob passed to QEMU
   -h, --help            Show this help message
@@ -65,8 +69,11 @@ Env overrides:
   COHESIX_QEMU_VIRT / QEMU_VIRT (on|off; default: on)
   COHESIX_QEMU_ACCEL / QEMU_ACCEL (auto; default tcg on macOS, kvm/tcg on Linux)
   COHESIX_QEMU_MACHINE_EXTRA / QEMU_MACHINE_EXTRA (appended to -machine)
+                        (must not override machine type or gic-version)
   COHESIX_SEL4_PROFILE (qemu_smp_production|qemu_smp_diagnostic; validates an
                         explicitly selected build tree against that contract)
+  COHESIX_DRIVER_CLASSIC_COMPARATOR_RECORD (immutable comparator record;
+                        defaults to configs/driver_runtime_classic_comparator.toml)
 USAGE
 }
 
@@ -498,7 +505,178 @@ detect_gic_version() {
     echo "$result"
 }
 
+qemu_arg_replaces_immutable_input() {
+    local arg="$1"
+    case "$arg" in
+        -kernel|--kernel|-initrd|--initrd|-bios|--bios|-dtb|--dtb|-append|--append|-smp|--smp|-cpu|--cpu|-m|--m)
+            return 0
+            ;;
+        -kernel=*|--kernel=*|-initrd=*|--initrd=*|-bios=*|--bios=*|-dtb=*|--dtb=*|-append=*|--append=*|-smp=*|--smp=*|-cpu=*|--cpu=*|-m=*|--m=*|loader,*|-device=loader,*|--device=loader,*)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+validate_gicv3_override_safety() {
+    local arg
+    local -a cohsh_args=()
+    if [[ "$QEMU_MACHINE_EXTRA" == *"gic-version"* \
+        || "$QEMU_MACHINE_EXTRA" == *"virt,"* \
+        || "$QEMU_MACHINE_EXTRA" == *"machine="* \
+        || "$QEMU_MACHINE_EXTRA" == *"type="* ]]; then
+        fail "QEMU machine extras must not override virt or gic-version; GICv3 is profile-owned"
+    fi
+    # Bash 3.2 on macOS treats an empty array as unset under `set -u`; the
+    # `+` expansion preserves zero iterations while retaining argument bounds.
+    for arg in "${EXTRA_QEMU_ARGS[@]+"${EXTRA_QEMU_ARGS[@]}"}"; do
+        case "$arg" in
+            -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*)
+                fail "extra QEMU arguments must not override the profile-owned virt,gic-version=3 machine"
+                ;;
+        esac
+        if [[ "${LAUNCH_EXISTING:-0}" -eq 1 ]] && \
+            qemu_arg_replaces_immutable_input "$arg"; then
+            fail "--launch-existing extra arguments must not replace immutable QEMU inputs or topology"
+        fi
+    done
+    if [[ -n "${COHSH_QEMU_ARGS:-}" ]]; then
+        read -r -a cohsh_args <<< "${COHSH_QEMU_ARGS}"
+        for arg in "${cohsh_args[@]+"${cohsh_args[@]}"}"; do
+            case "$arg" in
+                -machine|--machine|-machine=*|--machine=*|-M|-M*|*gic-version*)
+                    fail "COHSH_QEMU_ARGS must not override the profile-owned virt,gic-version=3 machine"
+                    ;;
+            esac
+            if [[ "${LAUNCH_EXISTING:-0}" -eq 1 ]] && \
+                qemu_arg_replaces_immutable_input "$arg"; then
+                fail "--launch-existing COHSH_QEMU_ARGS must not replace immutable QEMU inputs or topology"
+            fi
+        done
+    fi
+}
+
+launch_qemu_artifacts() {
+    local size_guard_path="$PROJECT_ROOT/scripts/ci/size_guard.sh"
+    [[ -x "$size_guard_path" ]] || fail \
+        "Mandatory payload size guard is missing or not executable: $size_guard_path"
+    "$size_guard_path" "$CPIO_PATH"
+
+    KERNEL_LOAD_ADDR=0x70000000
+    ROOTSERVER_LOAD_ADDR=0x80000000
+    [[ "$GIC_VER" == "3" ]] || fail \
+        "selected operational QEMU build must use GICv3, detected gic-version=$GIC_VER"
+    validate_gicv3_override_safety
+    log "Validated immutable QEMU launch record: $LAUNCH_ARTIFACT_RECORD"
+    log "Auto-detected GIC version: gic-version=$GIC_VER"
+    log "Using QEMU SMP: $QEMU_SMP_ARG"
+    log "Using QEMU virtualization: ${QEMU_VIRT_ARG}"
+    local machine_arg="virt,gic-version=${GIC_VER},virtualization=${QEMU_VIRT_ARG}"
+    if [[ -n "$QEMU_MACHINE_EXTRA" ]]; then
+        machine_arg="${machine_arg},${QEMU_MACHINE_EXTRA}"
+    fi
+    log "Using QEMU machine: ${machine_arg}"
+
+    # Serial output from the PL011 console and root-task logger is expected on
+    # stdio via -serial mon:stdio; keep this wiring intact for every launch.
+    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
+
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        if [[ "$NET_BACKEND" == "virtio" ]]; then
+            log "Wiring virtio-net MMIO NIC for TCP console"
+            BASE_QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
+        else
+            log "Wiring RTL8139 NIC for TCP console"
+        fi
+    fi
+
+    if [[ "$RUN_QEMU" -eq 0 ]]; then
+        log "--no-run supplied; immutable build artefacts verified at $OUT_DIR"
+        return 0
+    fi
+
+    if [[ "$DIRECT_QEMU" -eq 1 ]]; then
+        QEMU_ARGS=("${BASE_QEMU_ARGS[@]}")
+        if [[ "$TRANSPORT" == "tcp" ]]; then
+            build_network_args "$TCP_SMOKE_PORT"
+            QEMU_ARGS+=("${NETWORK_ARGS[@]}")
+        fi
+        if [[ -n "$DTB_OVERRIDE" ]]; then
+            [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
+            describe_file "DTB override" "$DTB_OVERRIDE"
+            QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
+        fi
+        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+            QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
+        fi
+        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
+    fi
+
+    if [[ "$TRANSPORT" == "tcp" ]]; then
+        local local_log
+        local_log="$(mktemp -t cohesix-qemu.log)"
+        if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
+            if grep -q "Could not set up host forwarding rule" "$local_log" && grep -q "31339" "$local_log"; then
+                log "Retrying QEMU with fallback smoke port ${HOST_SMOKE_PORT_FALLBACK}"
+                TCP_SMOKE_PORT="$HOST_SMOKE_PORT_FALLBACK"
+                local_log="$(mktemp -t cohesix-qemu.log)"
+                if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
+                    log "QEMU failed to start after retry; last log lines:"
+                    tail -n 50 "$local_log" >&2 || true
+                    return 1
+                fi
+            else
+                log "QEMU failed to start; last log lines:"
+                tail -n 50 "$local_log" >&2 || true
+                return 1
+            fi
+        fi
+
+        print_tcp_summary "$TCP_SMOKE_PORT"
+        log "QEMU is running with serial console and TCP console on port $TCP_PORT"
+        log "Run: ./cohsh --transport tcp --tcp-port $TCP_PORT    in another terminal."
+
+        wait "$QEMU_PID"
+        trap - EXIT
+        return 0
+    fi
+
+    if [[ "$TRANSPORT" == "qemu" ]]; then
+        log "Launching cohsh (QEMU transport) for interactive session"
+        COHSH_BIN="$HOST_TOOLS_DIR/cohsh"
+        if [[ ! -x "$COHSH_BIN" ]]; then
+            fail "cohsh CLI not found: $COHSH_BIN"
+        fi
+
+        CLI_CMD=(
+            "$COHSH_BIN"
+            --transport qemu
+            --qemu-bin "$QEMU_BIN"
+            --qemu-out-dir "$OUT_DIR"
+            --qemu-gic-version "$GIC_VER"
+            --role queen
+        )
+
+        if [[ ${#ACCEL_ARGS[@]} -gt 0 ]]; then
+            for arg in "${ACCEL_ARGS[@]}"; do
+                CLI_CMD+=(--qemu-arg "$arg")
+            done
+        fi
+
+        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
+            for arg in "${EXTRA_QEMU_ARGS[@]}"; do
+                CLI_CMD+=(--qemu-arg "$arg")
+            done
+        fi
+
+        exec "${CLI_CMD[@]}"
+    fi
+}
+
 main() {
+    cd "$PROJECT_ROOT" || fail "cannot enter repository root: $PROJECT_ROOT"
     SEL4_BUILD_DIR="${SEL4_BUILD_DIR:-${SEL4_BUILD:-$CANONICAL_QEMU_BUILD_DIR}}"
     SEL4_PROFILE="${COHESIX_SEL4_PROFILE:-}"
     OUT_DIR="out/cohesix"
@@ -507,6 +685,7 @@ main() {
     QEMU_BIN="qemu-system-aarch64"
     RUN_QEMU=1
     DIRECT_QEMU=0
+    LAUNCH_EXISTING=0
     declare -a EXTRA_QEMU_ARGS=()
     declare -a ACCEL_ARGS=()
     CLEAN_OUT_DIR=0
@@ -586,6 +765,10 @@ main() {
                 DIRECT_QEMU=1
                 shift
                 ;;
+            --launch-existing)
+                LAUNCH_EXISTING=1
+                shift
+                ;;
             --transport)
                 [[ $# -ge 2 ]] || fail "--transport requires a value (tcp|qemu)"
                 case "$2" in
@@ -625,16 +808,53 @@ main() {
         esac
     done
 
+    if [[ "$LAUNCH_EXISTING" -eq 1 && "$CLEAN_OUT_DIR" -eq 1 ]]; then
+        fail "--launch-existing cannot be combined with --clean"
+    fi
+    if [[ "$LAUNCH_EXISTING" -eq 1 && -n "$DTB_OVERRIDE" ]]; then
+        fail "--launch-existing does not permit an unbound DTB override"
+    fi
+
+    command -v python3 >/dev/null 2>&1 || fail "Required command not found in PATH: python3"
+    if [[ -L "$OUT_DIR" ]]; then
+        fail "output directory must not be a symlink: $OUT_DIR"
+    fi
+    OUT_DIR="$(python3 - "$OUT_DIR" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).resolve(strict=False))
+PY
+)"
+    case "$OUT_DIR" in
+        "$PROJECT_ROOT"/out/*)
+            ;;
+        *)
+            fail "output directory must be a resolved child of $PROJECT_ROOT/out: $OUT_DIR"
+            ;;
+    esac
+
+    CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
+    if [[ -L "$CARGO_TARGET_DIR" ]]; then
+        fail "Cargo target directory must not be a symlink: $CARGO_TARGET_DIR"
+    fi
+    CARGO_TARGET_DIR="$(python3 - "$CARGO_TARGET_DIR" <<'PY'
+import pathlib
+import sys
+
+print(pathlib.Path(sys.argv[1]).resolve(strict=False))
+PY
+)"
+    [[ "$CARGO_TARGET_DIR" == "$PROJECT_ROOT/target" ]] || fail \
+        "CARGO_TARGET_DIR must resolve to the repository target directory: $PROJECT_ROOT/target"
+    export CARGO_TARGET_DIR
+
     if [[ "$ROOT_TASK_FEATURES" == "none" ]]; then
         ROOT_TASK_FEATURES=""
     fi
 
     if [[ "$ROOT_TASK_FEATURES_OVERRIDE" -eq 0 ]]; then
-        if [[ "$TRANSPORT" == "tcp" ]]; then
-            ROOT_TASK_FEATURES="cohesix-dev"
-        else
-            ROOT_TASK_FEATURES="kernel,bootstrap-trace,serial-console"
-        fi
+        ROOT_TASK_FEATURES="release-qemu,bootstrap-trace"
     else
         # Preserve explicit --root-task-features verbatim so hardware profile
         # parity checks (e.g. Pi4 no-NIC baselines) are not transport-mutated.
@@ -650,7 +870,12 @@ main() {
     remove_root_task_feature "dtb-dump"
 
     NET_BACKEND="rtl8139"
-    if has_root_task_feature "net-backend-virtio" \
+    # Feature selection here drives the matching QEMU device model. Cargo
+    # expands `release-qemu` to `net-backend-virtio`, but this shell script sees
+    # only the operator's top-level feature names, so account for that bundle
+    # explicitly and never pair a virtio-enabled root task with an RTL8139.
+    if has_root_task_feature "release-qemu" \
+        || has_root_task_feature "net-backend-virtio" \
         || has_root_task_feature "dev-virt" \
         || has_root_task_feature "cohesix-dev"; then
         NET_BACKEND="virtio"
@@ -710,15 +935,15 @@ main() {
         fi
     fi
 
-    for cmd in cargo cpio python3 "$QEMU_BIN"; do
-        if ! command -v "$cmd" >/dev/null 2>&1; then
-            if [[ "$cmd" == "$QEMU_BIN" && "$RUN_QEMU" -eq 0 ]]; then
-                log "Skipping QEMU availability check because --no-run was provided"
-                break
-            fi
-            fail "Required command not found in PATH: $cmd"
-        fi
-        [[ "$cmd" == "$QEMU_BIN" ]] && break
+    declare -a REQUIRED_COMMANDS=(python3)
+    if [[ "$LAUNCH_EXISTING" -eq 0 ]]; then
+        REQUIRED_COMMANDS+=(cargo cpio)
+    fi
+    if [[ "$RUN_QEMU" -eq 1 ]]; then
+        REQUIRED_COMMANDS+=("$QEMU_BIN")
+    fi
+    for cmd in "${REQUIRED_COMMANDS[@]}"; do
+        command -v "$cmd" >/dev/null 2>&1 || fail "Required command not found in PATH: $cmd"
     done
 
     if command -v "$QEMU_BIN" >/dev/null 2>&1; then
@@ -776,9 +1001,38 @@ main() {
         fail "--cargo-target must be provided to build seL4 components"
     fi
 
+    OUT_DIR_ABS="$OUT_DIR"
+    STAGING_DIR="$OUT_DIR_ABS/staging"
+    HOST_OUT_DIR="$OUT_DIR_ABS/host-tools"
+    HOST_TOOLS_DIR="$HOST_OUT_DIR"
+    ELFLOADER_STAGE_PATH="$STAGING_DIR/elfloader"
+    KERNEL_STAGE_PATH="$STAGING_DIR/kernel.elf"
+    ROOTSERVER_STAGE_PATH="$STAGING_DIR/rootserver"
+    CPIO_PATH="$OUT_DIR_ABS/cohesix-system.cpio"
+    LAUNCH_ARTIFACT_TOOL="$SCRIPT_DIR/lib/qemu_launch_artifacts.py"
+    LAUNCH_ARTIFACT_RECORD="$OUT_DIR_ABS/cohesix-qemu-launch-artifacts.json"
+    [[ -f "$LAUNCH_ARTIFACT_TOOL" ]] || fail \
+        "QEMU launch artifact helper is missing: $LAUNCH_ARTIFACT_TOOL"
+
+    if [[ "$LAUNCH_EXISTING" -eq 1 ]]; then
+        [[ -d "$OUT_DIR_ABS" ]] || fail \
+            "--launch-existing output directory is missing: $OUT_DIR_ABS"
+        GIC_VER="$(detect_gic_version)"
+        python3 "$LAUNCH_ARTIFACT_TOOL" verify \
+            --out-dir "$OUT_DIR_ABS" \
+            --sel4-build "$SEL4_BUILD_DIR" \
+            --profile "$PROFILE_DIR" \
+            --cargo-target "$CARGO_TARGET" \
+            --root-task-features "$ROOT_TASK_FEATURES" \
+            --gic-version "$GIC_VER" >/dev/null || \
+            fail "immutable QEMU launch artifact verification failed"
+        launch_qemu_artifacts
+        return $?
+    fi
+
     RTC_MANIFEST="${COH_RTC_MANIFEST:-$PROJECT_ROOT/configs/root_task.toml}"
     mkdir -p "$GENERATED_CONFIG_DIR"
-    log "Regenerating coh-rtc artefacts via: cargo run -p coh-rtc -- ${RTC_MANIFEST} --out apps/root-task/src/generated --manifest configs/generated/root_task_resolved.json --cas-manifest-template configs/generated/cas_manifest_template.json --cli-script scripts/cohsh/boot_v0.coh --doc-snippet docs/snippets/root_task_manifest.md --gpu-breadcrumbs-snippet docs/snippets/gpu_breadcrumbs.md --observability-interfaces-snippet docs/snippets/observability_interfaces.md --observability-security-snippet docs/snippets/observability_security.md --ticket-quotas-snippet docs/snippets/ticket_quotas.md --trace-policy-snippet docs/snippets/trace_policy.md --cas-interfaces-snippet docs/snippets/cas_interfaces.md --cas-security-snippet docs/snippets/cas_security.md --cohsh-grammar-doc docs/snippets/cohsh_grammar.md --cohsh-ticket-policy-doc docs/snippets/cohsh_ticket_policy.md"
+    log "Regenerating the complete canonical coh-rtc output set from ${RTC_MANIFEST}"
     cargo run -p coh-rtc -- \
         "$RTC_MANIFEST" \
         --out "$PROJECT_ROOT/apps/root-task/src/generated" \
@@ -793,14 +1047,43 @@ main() {
         --trace-policy-snippet "$PROJECT_ROOT/docs/snippets/trace_policy.md" \
         --cas-interfaces-snippet "$PROJECT_ROOT/docs/snippets/cas_interfaces.md" \
         --cas-security-snippet "$PROJECT_ROOT/docs/snippets/cas_security.md" \
+        --cbor-snippet "$PROJECT_ROOT/docs/snippets/telemetry_cbor_schema.md" \
+        --cohsh-policy "$GENERATED_CONFIG_DIR/cohsh_policy.toml" \
+        --cohsh-policy-rust "$PROJECT_ROOT/apps/cohsh/src/generated/policy.rs" \
+        --cohsh-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_policy.md" \
+        --cohsh-client-rust "$PROJECT_ROOT/apps/cohsh/src/generated/client.rs" \
+        --cohsh-client-doc "$PROJECT_ROOT/docs/snippets/cohsh_client.md" \
         --cohsh-grammar-doc "$PROJECT_ROOT/docs/snippets/cohsh_grammar.md" \
-        --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md"
+        --cohsh-ticket-policy-doc "$PROJECT_ROOT/docs/snippets/cohsh_ticket_policy.md" \
+        --coh-policy "$GENERATED_CONFIG_DIR/coh_policy.toml" \
+        --coh-policy-rust "$PROJECT_ROOT/apps/coh/src/generated/policy.rs" \
+        --coh-policy-doc "$PROJECT_ROOT/docs/snippets/coh_policy.md" \
+        --swarmui-defaults "$GENERATED_CONFIG_DIR/swarmui_defaults.toml" \
+        --swarmui-defaults-rust "$PROJECT_ROOT/apps/swarmui/src/generated.rs" \
+        --swarmui-defaults-doc "$PROJECT_ROOT/docs/snippets/swarmui_defaults.md" \
+        --implementation-surfaces "$PROJECT_ROOT/configs/implementation_surfaces.toml" \
+        --implementation-surface-inventory "$GENERATED_CONFIG_DIR/implementation_surface_inventory.json" \
+        --host-integration-source "$PROJECT_ROOT/configs/host_integration_acceptance.toml" \
+        --host-integration-graph "$GENERATED_CONFIG_DIR/host_integration_dependency.json" \
+        --host-integration-doc "$PROJECT_ROOT/docs/snippets/host_integration_dependency.md" \
+        --cohesix-py-defaults "$PROJECT_ROOT/tools/cohesix-py/cohesix/generated.py" \
+        --cohesix-py-doc "$PROJECT_ROOT/docs/snippets/cohesix_py_defaults.md" \
+        --coh-doctor-doc "$PROJECT_ROOT/docs/snippets/coh_doctor_checks.md"
 
-    SEL4_COMPONENT_PACKAGES=(nine-door worker-heart worker-gpu pi4-driver-runtime)
-    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool hive-gateway)
-    if has_root_task_feature "cohesix-dev"; then
-        HOST_TOOL_PACKAGES+=(swarmui)
-    fi
+    log "Regenerating target-qualified Python projection contracts"
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        "$PROJECT_ROOT/configs/root_task.toml" \
+        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
+        --profile qemu_smp_production \
+        --out "$GENERATED_CONFIG_DIR/cohesix_python_qemu_smp_production.json"
+    cargo run -p coh-rtc --bin coh-rtc-python-profile -- \
+        "$PROJECT_ROOT/configs/root_task_pi4_uboot_aarch64.toml" \
+        --sel4-profiles "$PROJECT_ROOT/configs/sel4/profiles.toml" \
+        --profile pi4_production \
+        --out "$GENERATED_CONFIG_DIR/cohesix_python_pi4_production.json"
+
+    SEL4_COMPONENT_PACKAGES=(nine-door-runtime console-network-runtime worker-heart worker-gpu worker-lora pi4-driver-runtime)
+    HOST_TOOL_PACKAGES=(gpu-bridge-host cas-tool hive-gateway host-ticket-agent swarmui)
 
     HOST_BUILD_ARGS=(build)
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -849,6 +1132,10 @@ main() {
     for pkg in "${SEL4_COMPONENT_PACKAGES[@]}"; do
         SEL4_BUILD_ARGS+=(-p "$pkg")
     done
+    if has_root_task_feature release-qemu && has_root_task_feature bootstrap-trace; then
+        SEL4_BUILD_ARGS+=(--features "nine-door-runtime/qemu-evidence,console-network-runtime/qemu-evidence,worker-heart/qemu-evidence,worker-gpu/qemu-evidence,worker-lora/qemu-evidence")
+        log "Enabling external QEMU/GDB service and Worker evidence symbols"
+    fi
 
     ROOT_TASK_BUILD_ARGS=(build --target "$CARGO_TARGET")
     if (( ${#PROFILE_ARGS[@]} > 0 )); then
@@ -869,46 +1156,76 @@ main() {
     fi
 
     log "Using root-task linker script: $ROOT_TASK_LINKER_SCRIPT"
-    log "Building root-task via: cargo ${ROOT_TASK_BUILD_ARGS[*]}"
-    SEL4_LD="$ROOT_TASK_LINKER_SCRIPT" cargo "${ROOT_TASK_BUILD_ARGS[@]}"
-
     log "Building seL4 components via: cargo ${SEL4_BUILD_ARGS[*]}"
     cargo "${SEL4_BUILD_ARGS[@]}"
 
-    HOST_ARTIFACT_DIR="target/$PROFILE_DIR"
-    SEL4_ARTIFACT_DIR="target/$CARGO_TARGET/$PROFILE_DIR"
+    HOST_ARTIFACT_DIR="$CARGO_TARGET_DIR/$PROFILE_DIR"
+    SEL4_ARTIFACT_DIR="$CARGO_TARGET_DIR/$CARGO_TARGET/$PROFILE_DIR"
 
     [[ -d "$HOST_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $HOST_ARTIFACT_DIR"
     [[ -d "$SEL4_ARTIFACT_DIR" ]] || fail "Cargo artefact directory not found: $SEL4_ARTIFACT_DIR"
 
+    mkdir -p "$OUT_DIR"
+    OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
+    WORKER_OUTPUT_DIR="$OUT_DIR_ABS/worker-images"
+    WORKER_CANONICAL_DIR="$WORKER_OUTPUT_DIR/canonical"
+    WORKER_ARCHIVE_PATH="$WORKER_OUTPUT_DIR/cohesix-worker-images.cpio"
+    WORKER_MANIFEST_PATH="$WORKER_OUTPUT_DIR/cohesix-worker-image-manifest.json"
+    WORKER_MANIFEST_TOOL="$SCRIPT_DIR/worker_image_manifest.py"
+    [[ -f "$WORKER_MANIFEST_TOOL" ]] || fail "Worker image manifest tool is missing: $WORKER_MANIFEST_TOOL"
+    log "Validating and packaging target Worker images before root compilation"
+    python3 "$WORKER_MANIFEST_TOOL" build \
+        --image-dir "$SEL4_ARTIFACT_DIR" \
+        --output-dir "$WORKER_CANONICAL_DIR" \
+        --archive "$WORKER_ARCHIVE_PATH" \
+        --manifest "$WORKER_MANIFEST_PATH" \
+        --target "$CARGO_TARGET" \
+        --profile "$PROFILE_DIR"
+
+    DRIVER_OUTPUT_DIR="$OUT_DIR_ABS/driver-runtimes"
+    DRIVER_ARCHIVE_PATH="$DRIVER_OUTPUT_DIR/cohesix-driver-runtimes.cpio"
+    DRIVER_MANIFEST_PATH="$DRIVER_OUTPUT_DIR/cohesix-driver-runtime-manifest.json"
+    DRIVER_MANIFEST_TOOL="$SCRIPT_DIR/driver_runtime_manifest.py"
+    DRIVER_CLASSIC_COMPARATOR_RECORD="${COHESIX_DRIVER_CLASSIC_COMPARATOR_RECORD:-$PROJECT_ROOT/configs/driver_runtime_classic_comparator.toml}"
+    [[ -f "$DRIVER_MANIFEST_TOOL" ]] || fail \
+        "Driver runtime manifest tool is missing: $DRIVER_MANIFEST_TOOL"
+    [[ -f "$DRIVER_CLASSIC_COMPARATOR_RECORD" ]] || fail \
+        "Immutable classic driver comparator record is missing: $DRIVER_CLASSIC_COMPARATOR_RECORD"
+    log "Packaging deterministic MCS linked-driver archive before root compilation"
+    python3 "$DRIVER_MANIFEST_TOOL" build \
+        --image-dir "$SEL4_ARTIFACT_DIR" \
+        --archive "$DRIVER_ARCHIVE_PATH" \
+        --manifest "$DRIVER_MANIFEST_PATH" \
+        --target "$CARGO_TARGET" \
+        --profile "$PROFILE_DIR" \
+        --classic-comparator-record "$DRIVER_CLASSIC_COMPARATOR_RECORD"
+
+    log "Building root-task against separate target-qualified Worker and driver identities"
+    COHESIX_PI4_DRIVER_RUNTIME_PAYLOAD="$DRIVER_ARCHIVE_PATH" \
+        COHESIX_CONSOLE_NETWORK_RUNTIME_IMAGE="$SEL4_ARTIFACT_DIR/console-network-runtime" \
+        COHESIX_NINEDOOR_RUNTIME_IMAGE="$SEL4_ARTIFACT_DIR/nine-door-runtime" \
+        COHESIX_WORKER_IMAGE_ARCHIVE="$WORKER_ARCHIVE_PATH" \
+        COHESIX_WORKER_IMAGE_MANIFEST="$WORKER_MANIFEST_PATH" \
+        SEL4_LD="$ROOT_TASK_LINKER_SCRIPT" \
+        cargo "${ROOT_TASK_BUILD_ARGS[@]}"
+
     describe_file "Built root-task" "$SEL4_ARTIFACT_DIR/root-task"
 
     ROOTFS_COMPONENT_BINS=(
-        nine-door
-        worker-heart
-        worker-gpu
-        pi4-driver-serial
-        pi4-driver-usb
-        pi4-driver-hdmi
-        pi4-driver-genet
-        pi4-driver-cyw43
-        pi4-driver-sdio
-        pi4-driver-pcie
+        nine-door-runtime
     )
-    HOST_ONLY_BINS=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool hive-gateway)
-    if has_root_task_feature "cohesix-dev"; then
-        HOST_ONLY_BINS+=(swarmui)
-    fi
+    HOST_ONLY_BINS=(cohsh coh gpu-bridge-host host-sidecar-bridge cas-tool hive-gateway host-ticket-agent swarmui)
 
-    mkdir -p "$OUT_DIR"
-    OUT_DIR_ABS="$(cd "$OUT_DIR" && pwd)"
     STAGING_DIR="$OUT_DIR/staging"
     ROOTFS_DIR="$STAGING_DIR/cohesix/bin"
+    ARTIFACTS_DIR="$STAGING_DIR/cohesix/artifacts"
     HOST_OUT_DIR="$OUT_DIR/host-tools"
     CPIO_PATH="$OUT_DIR_ABS/cohesix-system.cpio"
 
-    rm -rf "$STAGING_DIR"
-    mkdir -p "$ROOTFS_DIR" "$HOST_OUT_DIR"
+    if [[ -d "$STAGING_DIR" ]]; then
+        find "$STAGING_DIR" -depth -mindepth 1 -delete
+    fi
+    mkdir -p "$ROOTFS_DIR" "$ARTIFACTS_DIR" "$HOST_OUT_DIR"
     HOST_TOOLS_DIR="$(cd "$HOST_OUT_DIR" && pwd)"
     HOST_TOOLS="$HOST_TOOLS_DIR"
 
@@ -929,14 +1246,35 @@ main() {
         log "Packaged component binary: $ROOTFS_DIR/$bin"
     done
 
+    CONSOLE_NETWORK_RUNTIME_PATH="$ARTIFACTS_DIR/console-network-runtime"
+    install -m 0644 \
+        "$SEL4_ARTIFACT_DIR/console-network-runtime" \
+        "$CONSOLE_NETWORK_RUNTIME_PATH"
+    cmp -s \
+        "$SEL4_ARTIFACT_DIR/console-network-runtime" \
+        "$CONSOLE_NETWORK_RUNTIME_PATH" || \
+        fail "Packaged console-network runtime differs from the target artifact"
+    log "Packaged exact console-network runtime: $CONSOLE_NETWORK_RUNTIME_PATH"
+
+    install -m 0644 "$WORKER_ARCHIVE_PATH" "$ARTIFACTS_DIR/cohesix-worker-images.cpio"
+    install -m 0644 "$WORKER_MANIFEST_PATH" "$ARTIFACTS_DIR/cohesix-worker-image-manifest.json"
+    python3 "$WORKER_MANIFEST_TOOL" verify \
+        --archive "$ARTIFACTS_DIR/cohesix-worker-images.cpio" \
+        --manifest "$ARTIFACTS_DIR/cohesix-worker-image-manifest.json"
+    log "Packaged target-qualified Worker archive and manifest under cohesix/artifacts"
+
+    install -m 0644 "$DRIVER_MANIFEST_PATH" "$ARTIFACTS_DIR/cohesix-driver-runtime-manifest.json"
+    python3 "$DRIVER_MANIFEST_TOOL" verify \
+        --archive "$DRIVER_ARCHIVE_PATH" \
+        --manifest "$ARTIFACTS_DIR/cohesix-driver-runtime-manifest.json"
+    log "Recorded the rootserver-embedded MCS driver archive without duplicating it in the rootfs"
+
     for bin in "${HOST_ONLY_BINS[@]}"; do
         SRC="$HOST_ARTIFACT_DIR/$bin"
-        if [[ -f "$SRC" ]]; then
-            install -m 0755 "$SRC" "$HOST_OUT_DIR/$bin"
-            log "Copied host-side tool: $HOST_OUT_DIR/$bin"
-        else
-            log "Host tool not built for target $HOST_ARTIFACT_DIR: $bin (skipping)"
-        fi
+        [[ -f "$SRC" ]] || fail \
+            "Selected-profile host tool is missing after its source build: $SRC"
+        install -m 0755 "$SRC" "$HOST_OUT_DIR/$bin"
+        log "Copied host-side tool: $HOST_OUT_DIR/$bin"
     done
 
     PROC_TESTS_DIR="$STAGING_DIR/cohesix/proc/tests"
@@ -981,23 +1319,31 @@ PY
     for bin in "${ROOTFS_COMPONENT_BINS[@]}"; do
         MANIFEST_INPUTS+=("cohesix/bin/$bin")
     done
+    MANIFEST_INPUTS+=("cohesix/artifacts/console-network-runtime")
 
-    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "$SEL4_ARTIFACT_DIR" "${MANIFEST_INPUTS[@]}" <<'PY'
+    python3 - "$STAGING_DIR" "$PROFILE" "$RESOLVED_TARGET" "$SEL4_ARTIFACT_DIR" \
+        "$WORKER_MANIFEST_PATH" "$WORKER_ARCHIVE_PATH" \
+        "$DRIVER_MANIFEST_PATH" "$DRIVER_ARCHIVE_PATH" "${MANIFEST_INPUTS[@]}" <<'PY'
 import hashlib
 import json
 import pathlib
 import sys
 
-if len(sys.argv) < 6:
+if len(sys.argv) < 10:
     raise SystemExit(
         "manifest generation requires staging dir, profile, target, "
-        "artifact dir, and at least one binary"
+        "artifact dir, Worker manifest/archive, driver manifest/archive, "
+        "and at least one binary"
     )
 
 staging = pathlib.Path(sys.argv[1])
 profile = sys.argv[2]
 target = sys.argv[3]
 artifact_dir = pathlib.Path(sys.argv[4])
+worker_manifest_source = pathlib.Path(sys.argv[5])
+worker_archive_source = pathlib.Path(sys.argv[6])
+driver_manifest_source = pathlib.Path(sys.argv[7])
+driver_archive_source = pathlib.Path(sys.argv[8])
 rootserver = staging / "rootserver"
 root_task = artifact_dir / "root-task"
 if rootserver.read_bytes() != root_task.read_bytes():
@@ -1006,7 +1352,7 @@ if (staging / "cohesix" / "bin" / "root-task").exists():
     raise SystemExit("root-task must not be duplicated inside the CPIO payload")
 
 entries = []
-for rel_path in sys.argv[5:]:
+for rel_path in sys.argv[9:]:
     path = staging / rel_path
     data = path.read_bytes()
     target_path = artifact_dir / path.name
@@ -1018,10 +1364,60 @@ for rel_path in sys.argv[5:]:
         "size": path.stat().st_size,
         "sha256": hashlib.sha256(data).hexdigest(),
     })
+worker_manifest_path = staging / "cohesix" / "artifacts" / "cohesix-worker-image-manifest.json"
+worker_archive_path = staging / "cohesix" / "artifacts" / "cohesix-worker-images.cpio"
+if worker_manifest_path.read_bytes() != worker_manifest_source.read_bytes():
+    raise SystemExit("staged Worker manifest differs from its validated source")
+if worker_archive_path.read_bytes() != worker_archive_source.read_bytes():
+    raise SystemExit("staged Worker archive differs from its validated source")
+worker_manifest = json.loads(worker_manifest_path.read_text(encoding="utf-8"))
+driver_manifest_path = staging / "cohesix" / "artifacts" / "cohesix-driver-runtime-manifest.json"
+if driver_manifest_path.read_bytes() != driver_manifest_source.read_bytes():
+    raise SystemExit("staged driver manifest differs from its validated source")
+driver_archive_path = driver_archive_source
+driver_archive_bytes = driver_archive_path.read_bytes()
+if not driver_archive_bytes:
+    raise SystemExit("validated driver archive is empty")
+if driver_archive_bytes not in rootserver.read_bytes():
+    raise SystemExit("rootserver does not embed the exact validated driver archive")
+if (staging / "cohesix" / "artifacts" / "cohesix-driver-runtimes.cpio").exists():
+    raise SystemExit("rootfs must not duplicate the rootserver-embedded driver archive")
+driver_manifest = json.loads(driver_manifest_path.read_text(encoding="utf-8"))
+console_runtime = next(
+    (entry for entry in entries if entry["path"] == "cohesix/artifacts/console-network-runtime"),
+    None,
+)
+if console_runtime is None:
+    raise SystemExit("payload inventory omitted the compiler-declared console-network runtime")
 manifest = {
     "profile": profile,
     "target": target,
     "binaries": entries,
+    "console_network_runtime": {
+        "image_id": "console-network-runtime",
+        "path": console_runtime["path"],
+        "size": console_runtime["size"],
+        "sha256": console_runtime["sha256"],
+        "entry_symbol": "_start",
+        "listener_port": 31337,
+    },
+    "worker_images": {
+        "archive_path": "cohesix/artifacts/cohesix-worker-images.cpio",
+        "archive_sha256": hashlib.sha256(worker_archive_path.read_bytes()).hexdigest(),
+        "manifest_path": "cohesix/artifacts/cohesix-worker-image-manifest.json",
+        "manifest_sha256": hashlib.sha256(worker_manifest_path.read_bytes()).hexdigest(),
+        "images": worker_manifest["images"],
+    },
+    "driver_runtimes": {
+        "archive_path": "driver-runtimes/cohesix-driver-runtimes.cpio",
+        "archive_path_scope": "build-output",
+        "archive_sha256": hashlib.sha256(driver_archive_bytes).hexdigest(),
+        "embedded_in_rootserver": True,
+        "manifest_path": "cohesix/artifacts/cohesix-driver-runtime-manifest.json",
+        "manifest_sha256": hashlib.sha256(driver_manifest_path.read_bytes()).hexdigest(),
+        "classic_comparator": driver_manifest["classic_comparator"],
+        "components": driver_manifest["components"],
+    },
 }
 manifest_path = staging / "cohesix" / "manifest.json"
 manifest_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1044,116 +1440,20 @@ PY
 
     describe_file "Payload CPIO" "$CPIO_PATH"
 
-    local size_guard_path="$PROJECT_ROOT/scripts/ci/size_guard.sh"
-    if [[ ! -x "$size_guard_path" ]]; then
-        fail "Mandatory payload size guard is missing or not executable: $size_guard_path"
-    fi
-    "$size_guard_path" "$CPIO_PATH"
-
-    KERNEL_LOAD_ADDR=0x70000000
-    ROOTSERVER_LOAD_ADDR=0x80000000
     GIC_VER="$(detect_gic_version)"
-    log "Auto-detected GIC version: gic-version=$GIC_VER"
-    log "Using QEMU SMP: $QEMU_SMP_ARG"
-    log "Using QEMU virtualization: ${QEMU_VIRT_ARG}"
-    local machine_arg="virt,gic-version=${GIC_VER},virtualization=${QEMU_VIRT_ARG}"
-    if [[ -n "$QEMU_MACHINE_EXTRA" ]]; then
-        machine_arg="${machine_arg},${QEMU_MACHINE_EXTRA}"
-    fi
-    log "Using QEMU machine: ${machine_arg}"
+    [[ "$GIC_VER" == "3" ]] || fail \
+        "selected operational QEMU build must use GICv3, detected gic-version=$GIC_VER"
+    python3 "$LAUNCH_ARTIFACT_TOOL" write \
+        --out-dir "$OUT_DIR_ABS" \
+        --sel4-build "$SEL4_BUILD_DIR" \
+        --profile "$PROFILE_DIR" \
+        --cargo-target "$CARGO_TARGET" \
+        --root-task-features "$ROOT_TASK_FEATURES" \
+        --gic-version "$GIC_VER" >/dev/null || \
+        fail "could not bind immutable QEMU launch artifacts"
+    log "Bound immutable QEMU launch artifacts: $LAUNCH_ARTIFACT_RECORD"
 
-    # Serial output from the PL011 console and root-task logger is expected on stdio via -serial mon:stdio; keep this wiring intact when adjusting runtime flags.
-    BASE_QEMU_ARGS=("${ACCEL_ARGS[@]}" -machine "${machine_arg}" -cpu cortex-a57 -m 1024 -smp "$QEMU_SMP_ARG" -serial mon:stdio -display none -kernel "$ELFLOADER_STAGE_PATH" -initrd "$CPIO_PATH" -device loader,file="$KERNEL_STAGE_PATH",addr=$KERNEL_LOAD_ADDR,force-raw=on -device loader,file="$ROOTSERVER_STAGE_PATH",addr=$ROOTSERVER_LOAD_ADDR,force-raw=on)
-
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        if [[ "$NET_BACKEND" == "virtio" ]]; then
-            log "Wiring virtio-net MMIO NIC for TCP console"
-            BASE_QEMU_ARGS+=(-global virtio-mmio.force-legacy=off)
-        else
-            log "Wiring RTL8139 NIC for TCP console"
-        fi
-    fi
-
-    if [[ "$RUN_QEMU" -eq 0 ]]; then
-        log "--no-run supplied; build artefacts ready at $OUT_DIR"
-        return 0
-    fi
-
-    if [[ "$DIRECT_QEMU" -eq 1 ]]; then
-        QEMU_ARGS=("${BASE_QEMU_ARGS[@]}")
-        if [[ "$TRANSPORT" == "tcp" ]]; then
-            build_network_args "$TCP_SMOKE_PORT"
-            QEMU_ARGS+=("${NETWORK_ARGS[@]}")
-        fi
-        if [[ -n "$DTB_OVERRIDE" ]]; then
-            [[ -f "$DTB_OVERRIDE" ]] || fail "Specified DTB override not found: $DTB_OVERRIDE"
-            describe_file "DTB override" "$DTB_OVERRIDE"
-            QEMU_ARGS+=(-dtb "$DTB_OVERRIDE")
-        fi
-        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
-            QEMU_ARGS+=("${EXTRA_QEMU_ARGS[@]}")
-        fi
-        exec "$QEMU_BIN" "${QEMU_ARGS[@]}"
-    fi
-
-    if [[ "$TRANSPORT" == "tcp" ]]; then
-        local_log="$(mktemp -t cohesix-qemu.log)"
-        if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
-            if grep -q "Could not set up host forwarding rule" "$local_log" && grep -q "31339" "$local_log"; then
-                log "Retrying QEMU with fallback smoke port ${HOST_SMOKE_PORT_FALLBACK}"
-                TCP_SMOKE_PORT="$HOST_SMOKE_PORT_FALLBACK"
-                local_log="$(mktemp -t cohesix-qemu.log)"
-                if ! run_qemu_attempt "$TCP_SMOKE_PORT" "$local_log"; then
-                    log "QEMU failed to start after retry; last log lines:"
-                    tail -n 50 "$local_log" >&2 || true
-                    exit 1
-                fi
-            else
-                log "QEMU failed to start; last log lines:"
-                tail -n 50 "$local_log" >&2 || true
-                exit 1
-            fi
-        fi
-
-        print_tcp_summary "$TCP_SMOKE_PORT"
-        log "QEMU is running with serial console and TCP console on port $TCP_PORT"
-        log "Run: ./cohsh --transport tcp --tcp-port $TCP_PORT    in another terminal."
-
-        wait "$QEMU_PID"
-        trap - EXIT
-        return 0
-    fi
-
-    if [[ "$TRANSPORT" == "qemu" ]]; then
-        log "Launching cohsh (QEMU transport) for interactive session"
-        COHSH_BIN="$HOST_TOOLS_DIR/cohsh"
-        if [[ ! -x "$COHSH_BIN" ]]; then
-            fail "cohsh CLI not found: $COHSH_BIN"
-        fi
-
-        CLI_CMD=(
-            "$COHSH_BIN"
-            --transport qemu
-            --qemu-bin "$QEMU_BIN"
-            --qemu-out-dir "$OUT_DIR"
-            --qemu-gic-version "$GIC_VER"
-            --role queen
-        )
-
-        if [[ ${#ACCEL_ARGS[@]} -gt 0 ]]; then
-            for arg in "${ACCEL_ARGS[@]}"; do
-                CLI_CMD+=(--qemu-arg "$arg")
-            done
-        fi
-
-        if [[ ${#EXTRA_QEMU_ARGS[@]} -gt 0 ]]; then
-            for arg in "${EXTRA_QEMU_ARGS[@]}"; do
-                CLI_CMD+=(--qemu-arg "$arg")
-            done
-        fi
-
-        exec "${CLI_CMD[@]}"
-    fi
+    launch_qemu_artifacts
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

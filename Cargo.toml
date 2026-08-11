@@ -14,6 +14,8 @@ members = [
     "apps/root-task",
     "apps/pi4-driver-runtime",
     "apps/nine-door",
+    "apps/nine-door-runtime",
+    "apps/console-network-runtime",
     "apps/worker-heart",
     "apps/worker-gpu",
     "apps/worker-bus",
@@ -27,13 +29,15 @@ members = [
     "crates/cohesix-cas",
     "crates/cohesix-rest",
     "crates/cohesix-ticket",
+    "crates/cohesix-worker-evidence",
     "crates/cohsh-core",
     "crates/pi4-driver-abi",
+    "crates/worker-task-abi",
+    "crates/console-network-abi",
     "crates/host-cuda",
     "crates/secure9p-codec",
     "crates/secure9p-core",
     "crates/secure9p-transport",
-    "crates/domain-intents",
     "crates/boot/uefi-elfloader-shim",
     "crates/trace-model",
     "crates/sel4-panicking",
@@ -83,7 +87,10 @@ console-ack-wire = { path = "apps/console-ack-wire" }
 ed25519-dalek = { version = "3.0.0", default-features = false, features = ["alloc"] }
 signature = { version = "3.0.0", default-features = false }
 cohesix-cas = { path = "crates/cohesix-cas" }
+cohesix-worker-evidence = { path = "crates/cohesix-worker-evidence" }
 pi4-driver-abi = { path = "crates/pi4-driver-abi" }
+worker-task-abi = { path = "crates/worker-task-abi" }
+console-network-abi = { path = "crates/console-network-abi" }
 
 [patch.crates-io]
 sel4-sys = { path = "crates/sel4-sys" }

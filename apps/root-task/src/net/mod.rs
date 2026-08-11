@@ -22,7 +22,6 @@ use core::ops::Range;
 #[cfg(feature = "net-console")]
 use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError};
 use crate::observe::IngestSnapshot;
-use crate::serial::DEFAULT_LINE_CAPACITY;
 #[cfg(feature = "kernel")]
 use cohesix_ticket::Role;
 #[cfg(feature = "net-console")]
@@ -510,7 +509,7 @@ pub struct NetTelemetry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConsoleLine {
     /// Raw line text (without trailing newline).
-    pub text: HeaplessString<DEFAULT_LINE_CAPACITY>,
+    pub text: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>,
     /// Monotonic ingest timestamp in milliseconds.
     pub ingest_ms: u64,
 }
@@ -518,7 +517,7 @@ pub struct ConsoleLine {
 impl ConsoleLine {
     /// Construct a console line with the supplied ingest timestamp.
     #[must_use]
-    pub fn new(text: HeaplessString<DEFAULT_LINE_CAPACITY>, ingest_ms: u64) -> Self {
+    pub fn new(text: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>, ingest_ms: u64) -> Self {
         Self { text, ingest_ms }
     }
 }
@@ -1446,6 +1445,15 @@ pub trait NetPoller {
     fn status_report(&self) -> NetStatusReport {
         NetStatusReport::default()
     }
+
+    /// Consume and contain a terminal isolated-service fault, when supported.
+    #[cfg(feature = "kernel")]
+    fn contain_faulted_console_service(
+        &mut self,
+        _hal: &mut crate::hal::KernelHal<'_>,
+    ) -> Result<bool, crate::hal::HalError> {
+        Ok(false)
+    }
 }
 
 /// Connection lifecycle notifications surfaced by TCP console transports.
@@ -1498,6 +1506,19 @@ impl NetConsoleDisconnectReason {
 }
 
 mod console_srv;
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    feature = "net-backend-virtio"
+))]
+mod isolated_console;
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    feature = "net-backend-virtio"
+))]
+pub use isolated_console::{IsolatedConsoleInitError, IsolatedVirtioConsole};
 
 #[cfg(feature = "kernel")]
 mod stack;

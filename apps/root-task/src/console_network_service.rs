@@ -1,0 +1,807 @@
+// Copyright 2026 Lukas Bower
+// SPDX-License-Identifier: Apache-2.0
+// Purpose: Supervise the isolated console-network child from root policy authority.
+// Author: Lukas Bower
+
+//! Root-owned boundary for the isolated TCP console/network child.
+
+use console_network_abi::{
+    AbiError, ExchangeKind, ExchangePage, PacketDirection, PacketPage, RuntimeInitDescriptor,
+    ABI_VERSION, AUTH_TOKEN_BYTES, CHILD_CSPACE_SLOTS, CHILD_WAKE_MASK,
+    CHILD_WAKE_NOTIFICATION_SLOT, COMMAND_LINE_BYTES, ETHERNET_FRAME_BYTES, FAULT_ENDPOINT_SLOT,
+    PACKET_TX_WAKE_NOTIFICATION_SLOT, REQUIRED_INIT_FLAGS, ROOT_WAKE_MASK, RUNTIME_INIT_MAGIC,
+    SHARED_PAGE_BYTES, SUPERVISOR_WAKE_NOTIFICATION_SLOT,
+};
+use heapless::Vec as HeaplessVec;
+
+/// Compiler-selected service task ID.
+pub const SERVICE_TASK_ID: &str = "console-network-service";
+/// Runtime READY identity accepted before packet or console admission.
+pub const READY_IDENTITY: &str = "console-network-service/v1";
+
+mod generated_image_identity {
+    ::core::include!(::core::concat!(
+        ::core::env!("OUT_DIR"),
+        "/console_network_image_identity.rs"
+    ));
+}
+
+pub use generated_image_identity::{
+    CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_BYTES,
+    CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR, CONSOLE_NETWORK_RUNTIME_IMAGE,
+    CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR,
+    CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, CONSOLE_NETWORK_RUNTIME_SHA256,
+};
+
+/// Return the compiler-owned console-network service record.
+#[must_use]
+pub const fn generated_config() -> crate::generated::ConsoleNetworkServiceConfig {
+    crate::generated::console_network_service_config()
+}
+
+/// Validated subset of generated truth consumed by construction and service.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleNetworkContract {
+    /// Child image ID.
+    pub image_id: &'static str,
+    /// Target package path in the system archive.
+    pub image_path: &'static str,
+    /// Exact ELF entry symbol.
+    pub entry_symbol: &'static str,
+    /// Sole TCP listener port.
+    pub listener_port: u16,
+    /// Child CSpace cardinality.
+    pub child_cspace_slots: u16,
+    /// Retained init-CNode slot containing the child-untyped revoke anchor.
+    pub revoke_anchor_slot: u32,
+    /// Size of the dedicated child untyped.
+    pub revoke_anchor_bits: u8,
+    /// Exact object and memory inventory retyped below the retained anchor.
+    pub objects: crate::generated::KernelObjectBudget,
+    /// Child wait notification slot.
+    pub child_wake_slot: u32,
+    /// Child packet-TX signal slot.
+    pub packet_tx_wake_slot: u32,
+    /// Child console-event signal slot.
+    pub supervisor_wake_slot: u32,
+    /// Standard fault endpoint slot.
+    pub fault_endpoint_slot: u32,
+    /// Child IPC-buffer address.
+    pub ipc_buffer_vaddr: u64,
+    /// Read-only sealed runtime-init descriptor mapping.
+    pub init_vaddr: u64,
+    /// Bottom of the child stack mapping.
+    pub stack_vaddr: u64,
+    /// Exact stack page count.
+    pub stack_pages: u16,
+    /// Child ingress packet page address.
+    pub packet_rx_vaddr: u64,
+    /// Child egress packet page address.
+    pub packet_tx_vaddr: u64,
+    /// Child root-control page address.
+    pub command_vaddr: u64,
+    /// Child event page address.
+    pub event_vaddr: u64,
+    /// Active service core.
+    pub core: u8,
+    /// Active scheduling-context slot identity.
+    pub scheduling_context_slot: u32,
+    /// Scheduling-context object bits.
+    pub scheduling_context_bits: u8,
+    /// Child priority.
+    pub priority: u8,
+    /// Child maximum controlled priority.
+    pub mcp: u8,
+    /// MCS budget in microseconds.
+    pub budget_us: u32,
+    /// MCS period in microseconds.
+    pub period_us: u32,
+    /// Total seL4 replenishment bound.
+    pub max_refills: u8,
+    /// Compiler-owned timeout fault badge.
+    pub timeout_badge: u64,
+    /// Compiler-owned standard fault badge.
+    pub standard_fault_badge: u64,
+    /// Selected virtual-counter frequency.
+    pub timer_clock_hz: u64,
+    /// Transport-authentication deadline.
+    pub auth_timeout_ms: u32,
+    /// Authenticated idle deadline.
+    pub idle_timeout_ms: u32,
+}
+
+impl ConsoleNetworkContract {
+    /// Validate generated object and temporal records as one construction unit.
+    pub fn from_generated() -> Result<Self, BoundaryError> {
+        let config = generated_config();
+        if !config.enabled
+            || config.abi_version != ABI_VERSION
+            || config.image_id != "console-network-runtime"
+            || config.image_path != "cohesix/artifacts/console-network-runtime"
+            || config.entry_symbol != "_start"
+            || config.listener_port != cohesix_net_constants::COHESIX_TCP_CONSOLE_PORT
+            || !config.single_listener
+            || config.child_cspace_slots != CHILD_CSPACE_SLOTS as u16
+            || COMMAND_LINE_BYTES != cohsh_core::MAX_LINE_LEN
+            || config.revoke_anchor_slot != 16_136
+            || config.revoke_anchor_bits != 20
+            || config.objects.tcbs != 1
+            || config.objects.cnodes != 1
+            || config.objects.vspaces != 1
+            || config.objects.page_tables != 8
+            || config.objects.asids != 1
+            || config.objects.frames != 128
+            || config.objects.endpoints != 0
+            || config.objects.notifications != 2
+            || config.objects.fault_caps != 1
+            || config.objects.timeout_fault_caps != 1
+            || config.objects.reply_objects != 0
+            || config.objects.scheduling_contexts != 1
+            || config.objects.cspace_slots != 160
+            || config.objects.untyped_bytes != 1_048_576
+            || config.packet_rx_notification_slot != CHILD_WAKE_NOTIFICATION_SLOT
+            || config.packet_tx_wake_notification_slot != PACKET_TX_WAKE_NOTIFICATION_SLOT
+            || config.supervisor_wake_notification_slot != SUPERVISOR_WAKE_NOTIFICATION_SLOT
+            || config.fault_endpoint_slot != FAULT_ENDPOINT_SLOT
+            || config.shared_frame_bytes as usize != SHARED_PAGE_BYTES
+            || config.ethernet_frame_bytes as usize != ETHERNET_FRAME_BYTES
+            || config.max_packets_per_wake == 0
+            || config.max_packets_per_wake > 16
+            || config.max_commands_per_wake == 0
+            || config.max_commands_per_wake > 16
+            || config.max_control_inflight != 1
+            || config.packet_rx_badge != console_network_abi::WAKE_PACKET_RX
+            || config.control_badge != console_network_abi::WAKE_CONTROL
+            || config.shutdown_badge != console_network_abi::WAKE_SHUTDOWN
+            || config.revoke_badge != console_network_abi::WAKE_REVOKE
+            || config.packet_tx_ready_badge != console_network_abi::WAKE_PACKET_TX_READY
+            || config.event_ready_badge != console_network_abi::WAKE_EVENT_READY
+            || config.fault_badge == 0
+            || config.timer_clock_hz == 0
+        {
+            return Err(BoundaryError::GeneratedDrift);
+        }
+        let temporal = crate::generated::temporal_tasks()
+            .iter()
+            .find(|task| task.id == SERVICE_TASK_ID)
+            .ok_or(BoundaryError::GeneratedDrift)?;
+        if temporal.execution != crate::generated::TemporalExecution::Active
+            || temporal.kind != crate::generated::TemporalTaskKind::Service
+            || temporal.core != config.core
+            || temporal.sched_control_core != config.core
+            || temporal.scheduling_context_slot != config.scheduling_context_slot
+            || temporal.scheduling_context_bits != config.scheduling_context_bits
+            || temporal.priority != config.priority
+            || temporal.mcp != config.mcp
+            || temporal.budget_us != config.budget_us
+            || temporal.period_us != config.period_us
+            || temporal.max_refills != config.max_refills
+            || temporal.timeout_badge != config.timeout_badge
+            || !temporal.allowed_donors.is_empty()
+            || temporal.reply_objects != 0
+            || temporal.max_donation_depth != 0
+        {
+            return Err(BoundaryError::TemporalDrift);
+        }
+        Ok(Self {
+            image_id: config.image_id,
+            image_path: config.image_path,
+            entry_symbol: config.entry_symbol,
+            listener_port: config.listener_port,
+            child_cspace_slots: config.child_cspace_slots,
+            revoke_anchor_slot: config.revoke_anchor_slot,
+            revoke_anchor_bits: config.revoke_anchor_bits,
+            objects: config.objects,
+            child_wake_slot: config.packet_rx_notification_slot,
+            packet_tx_wake_slot: config.packet_tx_wake_notification_slot,
+            supervisor_wake_slot: config.supervisor_wake_notification_slot,
+            fault_endpoint_slot: config.fault_endpoint_slot,
+            ipc_buffer_vaddr: config.ipc_buffer_vaddr,
+            init_vaddr: config.init_vaddr,
+            stack_vaddr: config.stack_vaddr,
+            stack_pages: config.stack_pages,
+            packet_rx_vaddr: config.packet_rx_vaddr,
+            packet_tx_vaddr: config.packet_tx_vaddr,
+            command_vaddr: config.command_vaddr,
+            event_vaddr: config.event_vaddr,
+            core: config.core,
+            scheduling_context_slot: config.scheduling_context_slot,
+            scheduling_context_bits: config.scheduling_context_bits,
+            priority: config.priority,
+            mcp: config.mcp,
+            budget_us: config.budget_us,
+            period_us: config.period_us,
+            max_refills: config.max_refills,
+            timeout_badge: config.timeout_badge,
+            standard_fault_badge: config.fault_badge,
+            timer_clock_hz: config.timer_clock_hz,
+            auth_timeout_ms: config.auth_timeout_ms,
+            idle_timeout_ms: config.idle_timeout_ms,
+        })
+    }
+
+    /// Build the sealed descriptor installed before the child is resumed.
+    pub fn runtime_init(
+        self,
+        generation: u64,
+        mac: [u8; 6],
+        ipv4: [u8; 4],
+        prefix_len: u8,
+        gateway: [u8; 4],
+        auth_token: &str,
+    ) -> Result<RuntimeInitDescriptor, BoundaryError> {
+        if generation == 0
+            || auth_token.is_empty()
+            || auth_token.len() > AUTH_TOKEN_BYTES
+            || prefix_len == 0
+            || prefix_len > 32
+            || ipv4 == [0; 4]
+        {
+            return Err(BoundaryError::InvalidInput);
+        }
+        let mut token = [0; AUTH_TOKEN_BYTES];
+        token[..auth_token.len()].copy_from_slice(auth_token.as_bytes());
+        let descriptor = RuntimeInitDescriptor {
+            magic: RUNTIME_INIT_MAGIC,
+            abi_version: ABI_VERSION,
+            descriptor_bytes: core::mem::size_of::<RuntimeInitDescriptor>() as u16,
+            flags: REQUIRED_INIT_FLAGS,
+            reserved0: 0,
+            generation,
+            child_wake_notification_slot: self.child_wake_slot,
+            packet_tx_wake_notification_slot: self.packet_tx_wake_slot,
+            supervisor_wake_notification_slot: self.supervisor_wake_slot,
+            fault_endpoint_slot: self.fault_endpoint_slot,
+            child_cspace_slots: u32::from(self.child_cspace_slots),
+            root_wake_mask: ROOT_WAKE_MASK,
+            child_wake_mask: CHILD_WAKE_MASK,
+            ipc_buffer_vaddr: self.ipc_buffer_vaddr,
+            packet_rx_vaddr: self.packet_rx_vaddr,
+            packet_tx_vaddr: self.packet_tx_vaddr,
+            command_vaddr: self.command_vaddr,
+            event_vaddr: self.event_vaddr,
+            shared_frame_bytes: SHARED_PAGE_BYTES as u32,
+            ethernet_frame_bytes: ETHERNET_FRAME_BYTES as u16,
+            listener_port: self.listener_port,
+            max_packets_per_wake: generated_config().max_packets_per_wake,
+            max_commands_per_wake: generated_config().max_commands_per_wake,
+            max_control_inflight: 1,
+            prefix_len,
+            auth_token_len: auth_token.len() as u8,
+            reserved1: 0,
+            mac,
+            ipv4,
+            gateway,
+            reserved2: [0; 2],
+            auth_timeout_ms: self.auth_timeout_ms,
+            idle_timeout_ms: self.idle_timeout_ms,
+            timer_clock_hz: self.timer_clock_hz,
+            auth_token: token,
+            seal: 0,
+        }
+        .sealed();
+        descriptor
+            .validate()
+            .map_err(|_| BoundaryError::InvalidInit)?;
+        Ok(descriptor)
+    }
+}
+
+/// Exact fixed-object footprint reserved before constructing the child.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleNetworkObjectPlan {
+    /// Exact retained init-CNode slot.
+    pub revoke_anchor_slot: u32,
+    /// Exact child-untyped size.
+    pub revoke_anchor_bits: u8,
+    /// Complete compiler-owned kernel-object inventory.
+    pub objects: crate::generated::KernelObjectBudget,
+    /// ELF pages remaining after stack, IPC, init, and transport frames.
+    pub image_pages: u16,
+}
+
+impl ConsoleNetworkObjectPlan {
+    /// Derive the exact fixed footprint from compiler truth.
+    pub fn from_generated() -> Result<Self, BoundaryError> {
+        let contract = ConsoleNetworkContract::from_generated()?;
+        let fixed_frames = u32::from(contract.stack_pages).saturating_add(6);
+        let image_pages = contract
+            .objects
+            .frames
+            .checked_sub(fixed_frames)
+            .and_then(|pages| u16::try_from(pages).ok())
+            .ok_or(BoundaryError::GeneratedDrift)?;
+        if image_pages == 0 {
+            return Err(BoundaryError::GeneratedDrift);
+        }
+        Ok(Self {
+            revoke_anchor_slot: contract.revoke_anchor_slot,
+            revoke_anchor_bits: contract.revoke_anchor_bits,
+            objects: contract.objects,
+            image_pages,
+        })
+    }
+}
+
+/// Root-side lifecycle of one exact child generation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServiceState {
+    /// Objects exist but the child has not published READY.
+    Constructing,
+    /// READY is durable; exactly one listener is waiting.
+    Listening,
+    /// TCP accepted, but authentication is not complete.
+    Authenticating,
+    /// Transport authentication completed; root may execute typed commands.
+    Authenticated,
+    /// No new packet/control work is accepted while shutdown drains.
+    Closing,
+    /// A timeout or child fault requires supervisor containment.
+    Faulted,
+    /// Old authority is completely torn down.
+    Terminal,
+}
+
+/// Root-boundary failures.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BoundaryError {
+    /// Generated constants disagree with ABI truth.
+    GeneratedDrift,
+    /// Generated temporal and object records disagree.
+    TemporalDrift,
+    /// Dynamic network/authentication input is invalid.
+    InvalidInput,
+    /// Runtime-init validation failed.
+    InvalidInit,
+    /// A shared-page record is malformed.
+    InvalidRecord,
+    /// The record is stale, replayed, or acknowledges the wrong input.
+    StaleIdentity,
+    /// The current lifecycle cannot admit the requested transition.
+    InvalidState,
+    /// One bounded packet or control is already in flight.
+    Backpressure,
+    /// Child containment evidence is incomplete.
+    IncompleteContainment,
+}
+
+impl From<AbiError> for BoundaryError {
+    fn from(value: AbiError) -> Self {
+        match value {
+            AbiError::StaleGeneration | AbiError::InvalidSequence => Self::StaleIdentity,
+            _ => Self::InvalidRecord,
+        }
+    }
+}
+
+/// One validated child event copied out of the untrusted shared page.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConsoleNetworkEvent {
+    kind: ExchangeKind,
+    connection_id: u64,
+    now_ms: u64,
+    related_sequence: u64,
+    payload: HeaplessVec<u8, { console_network_abi::CONSOLE_PAYLOAD_BYTES }>,
+}
+
+impl ConsoleNetworkEvent {
+    /// Typed event kind.
+    #[must_use]
+    pub const fn kind(&self) -> ExchangeKind {
+        self.kind
+    }
+
+    /// Exact child connection identity.
+    #[must_use]
+    pub const fn connection_id(&self) -> u64 {
+        self.connection_id
+    }
+
+    /// Child observation time.
+    #[must_use]
+    pub const fn now_ms(&self) -> u64 {
+        self.now_ms
+    }
+
+    /// Exact packet/control sequence acknowledged by a completion event.
+    #[must_use]
+    pub const fn related_sequence(&self) -> u64 {
+        self.related_sequence
+    }
+
+    /// Validated UTF-8 payload.
+    pub fn payload(&self) -> Result<&str, BoundaryError> {
+        core::str::from_utf8(self.payload.as_slice()).map_err(|_| BoundaryError::InvalidRecord)
+    }
+}
+
+/// Proof required before any old-generation cap slot may be reused.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConsoleNetworkContainmentProof {
+    /// Child TCB was suspended.
+    pub tcb_suspended: bool,
+    /// Active scheduling context was unbound.
+    pub scheduling_context_unbound: bool,
+    /// Four shared mappings and IPC/stack mappings were scrubbed.
+    pub mappings_scrubbed: bool,
+    /// Root and child notification/fault caps were revoked.
+    pub capabilities_revoked: bool,
+    /// TCB, CNode, VSpace, SC, frames, and translation objects were deleted.
+    pub objects_deleted: bool,
+    /// Next generation was durably fenced before reuse.
+    pub generation_fenced: bool,
+}
+
+impl ConsoleNetworkContainmentProof {
+    /// Whether complete teardown has been proven.
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.tcb_suspended
+            && self.scheduling_context_unbound
+            && self.mappings_scrubbed
+            && self.capabilities_revoked
+            && self.objects_deleted
+            && self.generation_fenced
+    }
+}
+
+/// Transactional root-side boundary for one isolated child generation.
+pub struct ConsoleNetworkBoundary {
+    contract: ConsoleNetworkContract,
+    generation: u64,
+    state: ServiceState,
+    next_packet_sequence: u64,
+    next_control_sequence: u64,
+    last_event_sequence: u64,
+    last_egress_sequence: u64,
+    packet_inflight: Option<u64>,
+    control_inflight: Option<u64>,
+    connection_id: Option<u64>,
+    last_control_issued: u64,
+    last_control_connection_id: Option<u64>,
+    last_output_drained_sequence: u64,
+    last_output_drained_connection_id: Option<u64>,
+}
+
+impl ConsoleNetworkBoundary {
+    /// Begin construction of one nonzero generation.
+    pub fn new(generation: u64) -> Result<Self, BoundaryError> {
+        if generation == 0 {
+            return Err(BoundaryError::InvalidInput);
+        }
+        Ok(Self {
+            contract: ConsoleNetworkContract::from_generated()?,
+            generation,
+            state: ServiceState::Constructing,
+            next_packet_sequence: 1,
+            next_control_sequence: 1,
+            last_event_sequence: 0,
+            last_egress_sequence: 0,
+            packet_inflight: None,
+            control_inflight: None,
+            connection_id: None,
+            last_control_issued: 0,
+            last_control_connection_id: None,
+            last_output_drained_sequence: 0,
+            last_output_drained_connection_id: None,
+        })
+    }
+
+    /// Compiler-validated construction contract.
+    #[must_use]
+    pub const fn contract(&self) -> ConsoleNetworkContract {
+        self.contract
+    }
+
+    /// Current lifecycle state.
+    #[must_use]
+    pub const fn state(&self) -> ServiceState {
+        self.state
+    }
+
+    /// Exact current generation.
+    #[must_use]
+    pub const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// Whether the root may execute a child-delivered command.
+    #[must_use]
+    pub const fn authenticated_connection(&self) -> Option<u64> {
+        if matches!(self.state, ServiceState::Authenticated) {
+            self.connection_id
+        } else {
+            None
+        }
+    }
+
+    /// Whether the one-slot packet ingress record may be published.
+    #[must_use]
+    pub const fn ingress_available(&self) -> bool {
+        matches!(
+            self.state,
+            ServiceState::Listening | ServiceState::Authenticating | ServiceState::Authenticated
+        ) && self.packet_inflight.is_none()
+    }
+
+    /// Whether the one-slot root-control record may be published.
+    #[must_use]
+    pub const fn control_available(&self) -> bool {
+        !matches!(self.state, ServiceState::Terminal | ServiceState::Faulted)
+            && self.control_inflight.is_none()
+    }
+
+    /// Publish one copied NIC packet, preserving one-slot backpressure.
+    pub fn stage_ingress(
+        &mut self,
+        packet: &[u8],
+        output_page: &mut [u8],
+    ) -> Result<u64, BoundaryError> {
+        if !matches!(
+            self.state,
+            ServiceState::Listening | ServiceState::Authenticating | ServiceState::Authenticated
+        ) {
+            return Err(BoundaryError::InvalidState);
+        }
+        if self.packet_inflight.is_some() {
+            return Err(BoundaryError::Backpressure);
+        }
+        let sequence = self.next_packet_sequence;
+        let mut page = PacketPage::empty(PacketDirection::Ingress, self.generation);
+        page.publish(sequence, packet)?;
+        page.encode(output_page)?;
+        self.packet_inflight = Some(sequence);
+        self.next_packet_sequence = next_sequence(sequence);
+        Ok(sequence)
+    }
+
+    /// Publish one root-authorized output line.
+    pub fn stage_authorized_line(
+        &mut self,
+        line: &str,
+        now_ms: u64,
+        output_page: &mut [u8],
+    ) -> Result<u64, BoundaryError> {
+        let connection_id = self
+            .authenticated_connection()
+            .ok_or(BoundaryError::InvalidState)?;
+        self.stage_control(
+            ExchangeKind::SendLine,
+            connection_id,
+            now_ms,
+            line.as_bytes(),
+            output_page,
+        )
+    }
+
+    /// Publish a close-after-flush request for the active connection.
+    pub fn stage_disconnect(
+        &mut self,
+        now_ms: u64,
+        output_page: &mut [u8],
+    ) -> Result<u64, BoundaryError> {
+        let connection_id = self.connection_id.ok_or(BoundaryError::InvalidState)?;
+        self.stage_control(
+            ExchangeKind::Disconnect,
+            connection_id,
+            now_ms,
+            &[],
+            output_page,
+        )
+    }
+
+    fn stage_control(
+        &mut self,
+        kind: ExchangeKind,
+        connection_id: u64,
+        now_ms: u64,
+        payload: &[u8],
+        output_page: &mut [u8],
+    ) -> Result<u64, BoundaryError> {
+        if self.control_inflight.is_some() {
+            return Err(BoundaryError::Backpressure);
+        }
+        let sequence = self.next_control_sequence;
+        let mut page = ExchangePage::empty(self.generation);
+        page.publish(kind, sequence, connection_id, now_ms, payload)?;
+        page.encode(output_page)?;
+        self.control_inflight = Some(sequence);
+        self.last_control_issued = sequence;
+        self.last_control_connection_id = Some(connection_id);
+        self.next_control_sequence = next_sequence(sequence);
+        Ok(sequence)
+    }
+
+    /// Validate one child event and apply its exact lifecycle transition.
+    pub fn accept_event(
+        &mut self,
+        input_page: &[u8],
+    ) -> Result<ConsoleNetworkEvent, BoundaryError> {
+        let page = ExchangePage::decode(input_page)?;
+        let (kind, payload) = page.validate(self.generation, self.last_event_sequence, false)?;
+        let mut owned_payload = HeaplessVec::new();
+        owned_payload
+            .extend_from_slice(payload)
+            .map_err(|_| BoundaryError::InvalidRecord)?;
+        match kind {
+            ExchangeKind::Ready => {
+                if self.state != ServiceState::Constructing || payload != READY_IDENTITY.as_bytes()
+                {
+                    return Err(BoundaryError::InvalidState);
+                }
+                self.state = ServiceState::Listening;
+            }
+            ExchangeKind::Connected => {
+                if self.state != ServiceState::Listening || page.connection_id == 0 {
+                    return Err(BoundaryError::InvalidState);
+                }
+                self.connection_id = Some(page.connection_id);
+                self.last_control_connection_id = None;
+                self.last_output_drained_sequence = 0;
+                self.last_output_drained_connection_id = None;
+                self.state = ServiceState::Authenticating;
+            }
+            ExchangeKind::Authenticated => {
+                if self.state != ServiceState::Authenticating
+                    || self.connection_id != Some(page.connection_id)
+                {
+                    return Err(BoundaryError::InvalidState);
+                }
+                self.state = ServiceState::Authenticated;
+            }
+            ExchangeKind::Command => {
+                if self.state != ServiceState::Authenticated
+                    || self.connection_id != Some(page.connection_id)
+                {
+                    return Err(BoundaryError::InvalidState);
+                }
+            }
+            ExchangeKind::Disconnected => {
+                if self.connection_id != Some(page.connection_id) {
+                    return Err(BoundaryError::StaleIdentity);
+                }
+                self.connection_id = None;
+                self.last_control_connection_id = None;
+                self.last_output_drained_sequence = 0;
+                self.last_output_drained_connection_id = None;
+                if self.state != ServiceState::Closing {
+                    self.state = ServiceState::Listening;
+                }
+            }
+            ExchangeKind::Rejected | ExchangeKind::Backpressure => {
+                if self.connection_id != Some(page.connection_id) {
+                    return Err(BoundaryError::StaleIdentity);
+                }
+            }
+            ExchangeKind::PacketConsumed => {
+                if self.packet_inflight != Some(page.related_sequence) {
+                    return Err(BoundaryError::StaleIdentity);
+                }
+                self.packet_inflight = None;
+            }
+            ExchangeKind::ControlCompleted => {
+                if self.control_inflight != Some(page.related_sequence) {
+                    return Err(BoundaryError::StaleIdentity);
+                }
+                self.control_inflight = None;
+            }
+            ExchangeKind::OutputDrained => {
+                if self.connection_id != Some(page.connection_id)
+                    || self.last_control_connection_id != Some(page.connection_id)
+                    || page.related_sequence > self.last_control_issued
+                    || page.related_sequence <= self.last_output_drained_sequence
+                {
+                    return Err(BoundaryError::StaleIdentity);
+                }
+                self.last_output_drained_sequence = page.related_sequence;
+                self.last_output_drained_connection_id = Some(page.connection_id);
+            }
+            ExchangeKind::ShutdownComplete => {
+                if !matches!(self.state, ServiceState::Closing | ServiceState::Faulted) {
+                    return Err(BoundaryError::InvalidState);
+                }
+                self.state = ServiceState::Terminal;
+                self.connection_id = None;
+            }
+            ExchangeKind::SendLine | ExchangeKind::Disconnect => {
+                return Err(BoundaryError::InvalidRecord)
+            }
+        }
+        self.last_event_sequence = page.sequence;
+        Ok(ConsoleNetworkEvent {
+            kind,
+            connection_id: page.connection_id,
+            now_ms: page.now_ms,
+            related_sequence: page.related_sequence,
+            payload: owned_payload,
+        })
+    }
+
+    /// Validate and copy one child-generated Ethernet packet.
+    pub fn accept_egress(
+        &mut self,
+        input_page: &[u8],
+    ) -> Result<HeaplessVec<u8, ETHERNET_FRAME_BYTES>, BoundaryError> {
+        let page = PacketPage::decode(input_page)?;
+        let (direction, packet) = page.validate(self.generation, self.last_egress_sequence)?;
+        if direction != PacketDirection::Egress {
+            return Err(BoundaryError::InvalidRecord);
+        }
+        let mut copied = HeaplessVec::new();
+        copied
+            .extend_from_slice(packet)
+            .map_err(|_| BoundaryError::InvalidRecord)?;
+        self.last_egress_sequence = page.sequence;
+        Ok(copied)
+    }
+
+    /// Stop admission before sending the generated shutdown badge.
+    pub fn begin_shutdown(&mut self) -> Result<(), BoundaryError> {
+        if matches!(self.state, ServiceState::Terminal | ServiceState::Faulted) {
+            return Err(BoundaryError::InvalidState);
+        }
+        self.state = ServiceState::Closing;
+        Ok(())
+    }
+
+    /// Record timeout or standard child fault and stop all new work.
+    pub fn record_fault(&mut self) {
+        if self.state != ServiceState::Terminal {
+            self.state = ServiceState::Faulted;
+        }
+    }
+
+    /// Fence the old generation only after complete kernel containment.
+    pub fn reconstruct(
+        &mut self,
+        proof: ConsoleNetworkContainmentProof,
+    ) -> Result<u64, BoundaryError> {
+        if !matches!(self.state, ServiceState::Faulted | ServiceState::Terminal)
+            || !proof.complete()
+        {
+            return Err(BoundaryError::IncompleteContainment);
+        }
+        self.generation = next_sequence(self.generation);
+        self.state = ServiceState::Constructing;
+        self.next_packet_sequence = 1;
+        self.next_control_sequence = 1;
+        self.last_event_sequence = 0;
+        self.last_egress_sequence = 0;
+        self.packet_inflight = None;
+        self.control_inflight = None;
+        self.connection_id = None;
+        self.last_control_issued = 0;
+        self.last_control_connection_id = None;
+        self.last_output_drained_sequence = 0;
+        self.last_output_drained_connection_id = None;
+        Ok(self.generation)
+    }
+
+    /// Whether network work can consume another root or emergency SC.
+    #[must_use]
+    pub const fn borrows_root_scheduling_context(&self) -> bool {
+        false
+    }
+
+    /// Whether another target TCP listener is permitted.
+    #[must_use]
+    pub const fn permits_second_listener(&self) -> bool {
+        false
+    }
+
+    /// Whether the newest control for this connection has left smoltcp's send queue.
+    #[must_use]
+    pub fn console_output_drained(&self, connection_id: u64) -> bool {
+        connection_id != 0
+            && self.connection_id == Some(connection_id)
+            && self.control_inflight.is_none()
+            && self.last_control_connection_id == Some(connection_id)
+            && self.last_output_drained_connection_id == Some(connection_id)
+            && self.last_control_issued != 0
+            && self.last_output_drained_sequence == self.last_control_issued
+    }
+}
+
+fn next_sequence(sequence: u64) -> u64 {
+    sequence.saturating_add(1).max(1)
+}

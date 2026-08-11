@@ -317,6 +317,81 @@ fn render_policy_doc(manifest: &Manifest, manifest_hash: &str, policy_hash: &str
     writeln!(contents, "- `policy.sha256`: `{}`", policy_hash).ok();
     writeln!(
         contents,
+        "- `coh.worker.task_abi_schema`: `worker-task-abi/v1`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.task_abi_version`: `{}`",
+        manifest.worker_runtime.task_abi.version
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.observation_schema`: `cohesix-worker-observation/v1`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.integration_evidence_schema`: `cohesix-worker-integration-evidence/v1`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.maximum_live_tasks`: `{}`",
+        worker_maximum_live_tasks(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.canonical_telemetry_template`: `{}`",
+        worker_canonical_telemetry_template(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.shard_bits`: `{}`",
+        manifest.sharding.shard_bits
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.legacy_worker_alias`: `{}`",
+        manifest.sharding.legacy_worker_alias
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.lifecycle`: `absent, queued, starting, ready, closing, faulted, terminal`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.receipt`: `none, pending, confirmed, rejected, stale`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.artifact`: `missing, verified, mismatch`"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "- `coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`"
+    )
+    .ok();
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            contents,
+            "- `coh.worker.role.{}`: declaration=`{}`, executable_slots=`{}`",
+            role.role.as_str(),
+            worker_declaration(role.implemented),
+            worker_executable_slots(manifest, role.role.as_str())
+        )
+        .ok();
+    }
+    writeln!(
+        contents,
         "- `coh.mount.root`: `{}`",
         manifest.client_policies.coh.mount.root
     )
@@ -535,6 +610,106 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     writeln!(contents).ok();
     writeln!(
         contents,
+        "/// Compiler-owned declaration and executable-slot contract for one Worker role."
+    )
+    .ok();
+    writeln!(contents, "#[derive(Clone, Copy, Debug, Eq, PartialEq)]").ok();
+    writeln!(contents, "pub struct CohWorkerRoleContract {{").ok();
+    writeln!(contents, "    pub role: &'static str,").ok();
+    writeln!(contents, "    pub declaration: &'static str,").ok();
+    writeln!(contents, "    pub executable_slots: u16,").ok();
+    writeln!(contents, "    pub ticket_scope: &'static str,").ok();
+    writeln!(contents, "    pub telemetry_path_template: &'static str,").ok();
+    writeln!(contents, "    pub lease_path_template: &'static str,").ok();
+    writeln!(contents, "}}").ok();
+    writeln!(contents).ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_TASK_ABI_SCHEMA: &str = \"worker-task-abi/v1\";"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_TASK_ABI_VERSION: u16 = {};",
+        manifest.worker_runtime.task_abi.version
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_OBSERVATION_SCHEMA: &str = \"cohesix-worker-observation/v1\";"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_INTEGRATION_EVIDENCE_SCHEMA: &str = \"cohesix-worker-integration-evidence/v1\";"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_MAXIMUM_LIVE_TASKS: u16 = {};",
+        worker_maximum_live_tasks(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = {:?};",
+        worker_canonical_telemetry_template(manifest)
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_SHARD_BITS: u8 = {};",
+        manifest.sharding.shard_bits
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_LEGACY_ALIAS: bool = {};",
+        manifest.sharding.legacy_worker_alias
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_LIFECYCLE_VOCABULARY: &[&str] = &[\"absent\", \"queued\", \"starting\", \"ready\", \"closing\", \"faulted\", \"terminal\"];"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_RECEIPT_VOCABULARY: &[&str] = &[\"none\", \"pending\", \"confirmed\", \"rejected\", \"stale\"];"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_ARTIFACT_VOCABULARY: &[&str] = &[\"missing\", \"verified\", \"mismatch\"];"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_EXECUTION_PROOF_VOCABULARY: &[&str] = &[\"none\", \"host-model\", \"qemu\", \"fresh-pi\"];"
+    )
+    .ok();
+    writeln!(
+        contents,
+        "pub const COH_WORKER_ROLE_CONTRACTS: &[CohWorkerRoleContract] = &["
+    )
+    .ok();
+    for role in &manifest.worker_runtime.roles {
+        writeln!(
+            contents,
+            "    CohWorkerRoleContract {{ role: {:?}, declaration: {:?}, executable_slots: {}, ticket_scope: {:?}, telemetry_path_template: {:?}, lease_path_template: {:?} }},",
+            role.role.as_str(),
+            worker_declaration(role.implemented),
+            worker_executable_slots(manifest, role.role.as_str()),
+            role.ticket_scope,
+            role.telemetry_path_template,
+            role.lease_path_template
+        )
+        .ok();
+    }
+    writeln!(contents, "];").ok();
+    writeln!(contents).ok();
+    writeln!(
+        contents,
         "pub const COH_MOUNT_ROOT: &str = \"{}\";",
         manifest.client_policies.coh.mount.root
     )
@@ -728,4 +903,79 @@ fn render_policy_rust(manifest: &Manifest, manifest_hash: &str, policy_hash: &st
     )
     .ok();
     contents
+}
+
+fn worker_declaration(implemented: bool) -> &'static str {
+    if implemented {
+        "executable"
+    } else {
+        "model-only"
+    }
+}
+
+fn worker_executable_slots(manifest: &Manifest, role: &str) -> u16 {
+    manifest
+        .worker_resource_admission
+        .executable_roles
+        .iter()
+        .find(|entry| entry.role == role)
+        .map_or(0, |entry| entry.executable_slots)
+}
+
+fn worker_maximum_live_tasks(manifest: &Manifest) -> u16 {
+    manifest
+        .worker_resource_admission
+        .executable_roles
+        .iter()
+        .fold(0u16, |total, role| {
+            total.saturating_add(role.executable_slots)
+        })
+}
+
+fn worker_canonical_telemetry_template(manifest: &Manifest) -> &str {
+    manifest
+        .worker_runtime
+        .roles
+        .first()
+        .map_or("", |role| role.telemetry_path_template.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn production_manifest() -> Manifest {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("configs/root_task.toml");
+        crate::ir::load_manifest(&path).expect("load production manifest")
+    }
+
+    #[test]
+    fn policy_contract_projects_worker_roles_axes_and_canonical_mounts() {
+        let manifest = production_manifest();
+        let toml = render_policy_toml(&manifest, "manifest-hash");
+        let rust = render_policy_rust(&manifest, "manifest-hash", "policy-hash");
+        let doc = render_policy_doc(&manifest, "manifest-hash", "policy-hash");
+
+        assert!(toml.contains("  \"/shard\","));
+        assert!(toml.contains("  \"/worker\","));
+        for expected in [
+            "role: \"worker-heartbeat\", declaration: \"executable\", executable_slots: 1",
+            "role: \"worker-gpu\", declaration: \"executable\", executable_slots: 1",
+            "role: \"worker-bus\", declaration: \"model-only\", executable_slots: 0",
+            "role: \"worker-lora\", declaration: \"executable\", executable_slots: 1",
+            "pub const COH_WORKER_MAXIMUM_LIVE_TASKS: u16 = 3;",
+            "pub const COH_WORKER_CANONICAL_TELEMETRY_TEMPLATE: &str = \"/shard/<label>/worker/<id>/telemetry\";",
+            "pub const COH_WORKER_SHARD_BITS: u8 = 8;",
+            "pub const COH_WORKER_LEGACY_ALIAS: bool = true;",
+            "cohesix-worker-observation/v1",
+            "cohesix-worker-integration-evidence/v1",
+        ] {
+            assert!(rust.contains(expected), "missing Rust contract: {expected}");
+        }
+        assert!(doc.contains("`coh.worker.role.worker-bus`: declaration=`model-only`"));
+        assert!(doc.contains("`coh.worker.maximum_live_tasks`: `3`"));
+        assert!(doc.contains("`coh.worker.execution_proof`: `none, host-model, qemu, fresh-pi`"));
+    }
 }

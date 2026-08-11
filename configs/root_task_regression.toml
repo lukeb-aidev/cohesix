@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.6"
+schema = "1.8"
 
 [profile]
 name = "virt-aarch64"
@@ -35,7 +35,7 @@ enable = true
 
 [cas.signing]
 required = true
-key_path = "resources/fixtures/cas_signing_key.hex"
+verification_key_path = "resources/fixtures/cas_verification_key.hex"
 
 [cache]
 kernel_ops = true
@@ -214,7 +214,7 @@ telemetry_sessions = 4
 
 [client_policies.coh.mount]
 root = "/"
-allowlist = ["/proc", "/queen", "/worker", "/log", "/gpu", "/host"]
+allowlist = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu", "/host"]
 
 [client_policies.coh.telemetry]
 root = "/queen/telemetry"
@@ -281,8 +281,8 @@ per_worker_bytes = 2048
 [swarmui.paths]
 telemetry_root = "/worker"
 proc_ingest_root = "/proc/ingest"
-worker_root = "/worker"
-namespace_roots = ["/proc", "/queen", "/worker", "/log", "/gpu"]
+worker_root = "/shard"
+namespace_roots = ["/proc", "/queen", "/shard", "/worker", "/log", "/gpu"]
 
 [ticket_limits]
 max_scopes = 8

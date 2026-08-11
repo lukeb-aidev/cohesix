@@ -1,5 +1,6 @@
 # Author: Lukas Bower
 # Purpose: Configure the Cohesix status tool crate.
+# Copyright 2026 Lukas Bower
 [package]
 name = "coh-status"
 version = "0.1.0"
@@ -11,6 +12,7 @@ description = "Cohesix status tool (host-side)"
 [dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
+cohesix-worker-evidence = { workspace = true }
 cohsh = { path = "../cohsh" }
 cohsh-core = { workspace = true }
 

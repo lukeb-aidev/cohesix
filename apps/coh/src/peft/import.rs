@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Coh peft import helpers for adapter staging.
 // Author: Lukas Bower
@@ -12,11 +12,14 @@ use anyhow::{anyhow, Context, Result};
 use sha2::{Digest, Sha256};
 
 use crate::peft::{
-    write_atomic, EXPORT_BASE_MODEL_FILE, EXPORT_POLICY_FILE, EXPORT_TELEMETRY_FILE,
-    IMPORT_ADAPTER_FILE, IMPORT_LORA_FILE, IMPORT_METRICS_FILE, REGISTRY_AVAILABLE_DIR,
+    commit_atomic_temp, open_unique_atomic_temp, write_atomic, EXPORT_BASE_MODEL_FILE,
+    EXPORT_POLICY_FILE, EXPORT_TELEMETRY_FILE, IMPORT_ADAPTER_FILE, IMPORT_LORA_FILE,
+    IMPORT_METRICS_FILE, REGISTRY_AVAILABLE_DIR,
 };
 use crate::policy::{CohPeftExportPolicy, CohPolicy};
 use crate::{validate_component, CohAudit};
+
+const PEFT_MODEL_FORMAT: &str = "safetensors+lora";
 
 /// PEFT import request parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -70,6 +73,8 @@ pub fn import_adapter(
 
     let base_model_path = export_dir.join(EXPORT_BASE_MODEL_FILE);
     let base_model_ref = read_base_model(&base_model_path, export_policy)?;
+    validate_component(&base_model_ref)?;
+    enforce_id_bytes(&base_model_ref, policy.peft.activate.max_model_id_bytes)?;
 
     let policy_path = export_dir.join(EXPORT_POLICY_FILE);
     let policy_hash = hash_file(&policy_path, export_policy.max_policy_bytes as u64)?;
@@ -162,6 +167,7 @@ struct FileHash {
 }
 
 fn hash_file(path: &Path, max_bytes: u64) -> Result<FileHash> {
+    ensure_regular_file(path)?;
     let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];
@@ -191,40 +197,42 @@ fn hash_file(path: &Path, max_bytes: u64) -> Result<FileHash> {
 }
 
 fn copy_with_hash(path: &Path, dest: &Path, max_bytes: u64) -> Result<FileHash> {
+    ensure_regular_file(path)?;
     let mut input = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
-    if let Some(parent) = dest.parent() {
-        fs::create_dir_all(parent).with_context(|| format!("create dir {}", parent.display()))?;
-    }
-    let tmp = dest.with_extension("partial");
-    let mut output = fs::File::create(&tmp).with_context(|| format!("create {}", tmp.display()))?;
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 8192];
-    let mut total = 0u64;
-    loop {
-        let read = input.read(&mut buf)?;
-        if read == 0 {
-            break;
+    let (temp, mut output) = open_unique_atomic_temp(dest)?;
+    let result = (|| -> Result<FileHash> {
+        let mut hasher = Sha256::new();
+        let mut buf = [0u8; 8192];
+        let mut total = 0u64;
+        loop {
+            let read = input.read(&mut buf)?;
+            if read == 0 {
+                break;
+            }
+            total = total.saturating_add(read as u64);
+            if total > max_bytes {
+                return Err(anyhow!(
+                    "{} exceeds max bytes {}",
+                    path.display(),
+                    max_bytes
+                ));
+            }
+            hasher.update(&buf[..read]);
+            output.write_all(&buf[..read])?;
         }
-        total = total.saturating_add(read as u64);
-        if total > max_bytes {
-            return Err(anyhow!(
-                "{} exceeds max bytes {}",
-                path.display(),
-                max_bytes
-            ));
+        if total == 0 {
+            return Err(anyhow!("{} is empty", path.display()));
         }
-        hasher.update(&buf[..read]);
-        output.write_all(&buf[..read])?;
+        commit_atomic_temp(&temp, dest, output)?;
+        Ok(FileHash {
+            sha256: hex::encode(hasher.finalize()),
+            bytes: total,
+        })
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temp);
     }
-    if total == 0 {
-        return Err(anyhow!("{} is empty", path.display()));
-    }
-    output.sync_all().ok();
-    fs::rename(&tmp, dest).with_context(|| format!("commit {}", dest.display()))?;
-    Ok(FileHash {
-        sha256: hex::encode(hasher.finalize()),
-        bytes: total,
-    })
+    result
 }
 
 fn read_base_model(path: &Path, policy: &CohPeftExportPolicy) -> Result<String> {
@@ -273,7 +281,10 @@ fn render_manifest(
     let mut out = String::new();
     out.push_str("[model]\n");
     out.push_str(&format!("id = \"{}\"\n", model_id));
+    out.push_str(&format!("cas_sha256 = \"{}\"\n", adapter.sha256));
     out.push_str(&format!("base = \"{}\"\n", base_model));
+    out.push_str(&format!("adapter_sha256 = \"{}\"\n", adapter.sha256));
+    out.push_str(&format!("format = \"{}\"\n", PEFT_MODEL_FORMAT));
     out.push_str(&format!("adapter = \"{}\"\n", IMPORT_ADAPTER_FILE));
     out.push_str(&format!("lora = \"{}\"\n", IMPORT_LORA_FILE));
     if metrics.is_some() {
@@ -302,8 +313,22 @@ fn render_manifest(
 }
 
 fn ensure_dir(path: &Path, label: &str) -> Result<()> {
-    if !path.is_dir() {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("stat {} {}", label, path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
         return Err(anyhow!("{} {} does not exist", label, path.display()));
+    }
+    Ok(())
+}
+
+fn ensure_regular_file(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)
+        .with_context(|| format!("stat import file {}", path.display()))?;
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return Err(anyhow!(
+            "import file {} is not a regular file",
+            path.display()
+        ));
     }
     Ok(())
 }

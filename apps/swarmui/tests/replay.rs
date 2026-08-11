@@ -14,7 +14,7 @@ use tempfile::TempDir;
 use cohesix_ticket::Role;
 use swarmui::{
     SwarmUiBackend, SwarmUiConfig, SwarmUiHiveAgent, SwarmUiHiveEvent, SwarmUiHiveEventKind,
-    SwarmUiHiveSnapshot, SwarmUiTransportFactory,
+    SwarmUiHiveSnapshot, SwarmUiTransportFactory, SwarmUiWorkerDeclaration,
 };
 
 mod support;
@@ -68,6 +68,32 @@ fn demo_snapshot_replay_is_deterministic() -> Result<()> {
     let payload = fs::read(demo_snapshot_path()).context("read demo fixture")?;
     let digest = replay_digest(&payload)?;
     assert_eq!(digest, DEMO_DIGEST, "demo digest mismatch");
+    Ok(())
+}
+
+#[test]
+fn legacy_model_snapshot_migrates_without_ready_or_proof_inference() -> Result<()> {
+    let payload = fs::read(demo_snapshot_path()).context("read demo fixture")?;
+    let temp_dir = TempDir::new().context("tempdir")?;
+    let config = SwarmUiConfig::from_generated(temp_dir.path().to_path_buf());
+    let calls = Arc::new(Mutex::new(0usize));
+    let factory = NoConnectFactory { calls };
+    let mut backend = SwarmUiBackend::new(config, factory);
+    backend.load_hive_replay(&payload)?;
+
+    let bootstrap = backend.hive_bootstrap(Role::Queen, None, None)?;
+    assert!(bootstrap.replay);
+    for agent in bootstrap.agents.iter().filter(|agent| agent.id != "queen") {
+        let worker = agent.worker.as_ref().expect("legacy Worker model state");
+        assert_eq!(
+            worker.declaration,
+            Some(SwarmUiWorkerDeclaration::ModelOnly)
+        );
+        assert_eq!(worker.lifecycle, None);
+        assert_eq!(worker.receipt, None);
+        assert_eq!(worker.artifact, None);
+        assert_eq!(worker.execution_proof, None);
+    }
     Ok(())
 }
 
@@ -153,16 +179,19 @@ fn demo_snapshot() -> SwarmUiHiveSnapshot {
         id: "queen".to_owned(),
         role: "queen".to_owned(),
         namespace: "/queen".to_owned(),
+        worker: None,
     };
     let worker = SwarmUiHiveAgent {
         id: "worker-1".to_owned(),
         role: "worker-heartbeat".to_owned(),
         namespace: "/worker/worker-1".to_owned(),
+        worker: None,
     };
     let gpu = SwarmUiHiveAgent {
         id: "worker-gpu-1".to_owned(),
         role: "worker-gpu".to_owned(),
         namespace: "/worker/worker-gpu-1".to_owned(),
+        worker: None,
     };
     let events = vec![
         event(0, SwarmUiHiveEventKind::Telemetry, &worker, "tick 1"),

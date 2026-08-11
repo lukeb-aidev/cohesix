@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines the arch/aarch64/timer module for root-task.
 // Author: Lukas Bower
@@ -10,20 +10,31 @@
 #[cfg(feature = "timers-arch-counter")]
 use core::arch::asm;
 
-const FALLBACK_QEMU_VIRT_TIMER_HZ: u64 = 62_500_000;
-
 /// Return the architected timer frequency configured by the seL4 kernel for
 /// the selected platform.
 ///
 /// The value is emitted by `build.rs` from the active `SEL4_BUILD_DIR`
-/// generated `platform_gen.h`. Host-side tests that do not select a seL4 build
-/// keep the historical QEMU fallback, but hardware images must get this value
-/// from the generated seL4 artifacts.
+/// generated `platform_gen.h`. Runtime-eligible QEMU and Pi feature closures
+/// select `timers-arch-counter`, so missing, malformed, or zero generated truth
+/// is fatal instead of degrading to a platform constant.
 #[must_use]
 pub fn timer_freq_hz() -> u64 {
-    option_env!("SEL4_TIMER_CLOCK_HZ")
-        .and_then(parse_u64)
-        .unwrap_or(FALLBACK_QEMU_VIRT_TIMER_HZ)
+    #[cfg(feature = "timers-arch-counter")]
+    {
+        let frequency = option_env!("SEL4_TIMER_CLOCK_HZ")
+            .and_then(parse_u64)
+            .expect("architected-counter builds require generated SEL4_TIMER_CLOCK_HZ");
+        assert!(
+            frequency != 0,
+            "architected-counter builds require nonzero SEL4_TIMER_CLOCK_HZ"
+        );
+        frequency
+    }
+
+    #[cfg(not(feature = "timers-arch-counter"))]
+    {
+        0
+    }
 }
 
 /// Return the selected EL0 counter kind for diagnostics.
@@ -77,7 +88,14 @@ fn read_cntvct() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::timer_period_cycles;
+    use super::{parse_u64, timer_period_cycles};
+
+    #[test]
+    fn generated_frequency_parser_distinguishes_zero_and_invalid_truth() {
+        assert_eq!(parse_u64("62500000"), Some(62_500_000));
+        assert_eq!(parse_u64("0"), Some(0));
+        assert_eq!(parse_u64("not-a-clock"), None);
+    }
 
     #[test]
     fn pi4_five_ms_period_uses_sel4_uboot_clock() {

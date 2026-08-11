@@ -1,6 +1,6 @@
 // Copyright 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
-// Purpose: Verify disabled Worker execution metadata does not become live authority.
+// Purpose: Verify generated executable Worker authority remains badge- and MCS-bound.
 // Author: Lukas Bower
 
 use cohesix_ticket::Role;
@@ -12,52 +12,53 @@ use root_task::worker_authority::{
 };
 
 #[test]
-fn modeled_worker_roles_are_not_executable() {
-    for role in [
-        Role::WorkerHeartbeat,
-        Role::WorkerGpu,
-        Role::WorkerBus,
-        Role::WorkerLora,
-    ] {
-        assert!(!role_is_implemented(role));
-        assert_eq!(endpoint_badge(WorkerEndpointAction::Attach, role, 0), None);
+fn exact_worker_roles_are_executable_but_worker_bus_is_not() {
+    for role in [Role::WorkerHeartbeat, Role::WorkerGpu, Role::WorkerLora] {
+        assert!(role_is_implemented(role));
+        assert!(endpoint_badge(WorkerEndpointAction::Attach, role, 0).is_some());
     }
+    assert!(!role_is_implemented(Role::WorkerBus));
+    assert_eq!(
+        endpoint_badge(WorkerEndpointAction::Attach, Role::WorkerBus, 0),
+        None
+    );
     let err =
         require_endpoint_invocation(WorkerEndpointAction::Attach, Role::WorkerHeartbeat, 0, None)
-            .expect_err("modeled worker attach must be rejected");
-    assert_eq!(err, WorkerAuthorityError::RoleNotImplemented);
+            .expect_err("cap-free worker attach must be rejected");
+    assert_eq!(err, WorkerAuthorityError::MetadataOnly);
 }
 
 #[test]
 fn reserved_endpoint_badge_is_not_live_authority() {
-    let err = require_endpoint_invocation(
+    let badge = endpoint_badge(WorkerEndpointAction::Attach, Role::WorkerHeartbeat, 0)
+        .expect("generated badge");
+    let observation = require_endpoint_invocation(
         WorkerEndpointAction::Attach,
         Role::WorkerHeartbeat,
         0,
-        Some(0x260c_1000),
+        Some(badge),
     )
-    .expect_err("reserved endpoint range must not grant authority");
-    assert_eq!(err, WorkerAuthorityError::RoleNotImplemented);
+    .expect("generated endpoint range grants exact authority");
+    assert_eq!(observation.badge, badge);
 }
 
 #[test]
-fn worker_notification_badges_are_disabled() {
+fn worker_notification_badges_are_enabled_and_exact() {
+    let badge =
+        notification_badge(WorkerNotificationEvent::LeaseExpiry).expect("lease expiry badge");
     assert_eq!(
-        notification_badge(WorkerNotificationEvent::LeaseExpiry),
-        None
+        verify_notification_badge(WorkerNotificationEvent::LeaseExpiry, badge),
+        Ok(())
     );
-    let err = verify_notification_badge(WorkerNotificationEvent::LeaseExpiry, 0x260c_8000)
-        .expect_err("reserved notification badge must not be active");
-    assert_eq!(err, WorkerAuthorityError::NotificationDisabled);
 }
 
 #[test]
-fn worker_scheduling_record_is_non_mcs_metadata_only() {
+fn worker_scheduling_record_is_mcs_and_consumed_time_bound() {
     let evidence = scheduling_evidence();
-    assert_eq!(evidence.profile, WorkerSchedulingProfile::NonMcs);
+    assert_eq!(evidence.profile, WorkerSchedulingProfile::Mcs);
     assert!(evidence.service_turn_budget > 0);
-    assert_eq!(evidence.mcs_budget_us, 0);
-    assert_eq!(evidence.mcs_period_us, 0);
-    assert_eq!(evidence.timeout_endpoint_badge, 0);
-    assert!(!evidence.consumed_budget_evidence);
+    assert!(evidence.mcs_budget_us > 0);
+    assert!(evidence.mcs_period_us >= evidence.mcs_budget_us);
+    assert_ne!(evidence.timeout_endpoint_badge, 0);
+    assert!(evidence.consumed_budget_evidence);
 }

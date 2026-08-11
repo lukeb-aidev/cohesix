@@ -37,6 +37,8 @@ pub mod audit;
 /// Authority queue for serializing control-plane mutations.
 pub mod authority;
 pub mod console;
+/// Generated critical root-duty admission, handoff, and fault ownership.
+pub mod critical_tcb;
 pub mod event;
 /// Compile-time feature manifest and guard rails.
 pub mod features;
@@ -147,12 +149,19 @@ pub mod sel4_view;
 #[path = "generated/mod.rs"]
 pub mod generated;
 
+/// Root policy boundary for the isolated TCP console/network child.
+pub mod console_network_service;
 /// Generated worker endpoint, notification, and scheduling evidence helpers.
 pub mod worker_authority;
+/// Transactional construction, lifecycle, and containment for Worker children.
+pub mod worker_supervisor;
 
 #[cfg(feature = "kernel")]
 /// NineDoor 9P bridge exposed inside the VM environment.
 pub mod ninedoor;
+
+/// Typed root-side boundary for the isolated NineDoor namespace child.
+pub mod ninedoor_service;
 
 #[cfg(feature = "kernel")]
 /// Guard helpers for validating indirect call targets at runtime.

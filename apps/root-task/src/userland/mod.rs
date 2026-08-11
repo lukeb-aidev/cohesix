@@ -118,13 +118,11 @@ pub fn main(ctx: BootContext) -> ! {
         let now_ms = crate::hal::timebase().now_ms();
         let _ = lifecycle::init(now_ms);
     }
-    let serial = ctx.serial.borrow_mut().take().unwrap_or_else(|| {
-        log::warn!(
-            target: "userland",
-            "[userland] serial driver missing from BootContext; using no-op serial backend"
-        );
-        crate::serial::SerialPort::new(crate::serial::kernel_uart::KernelSerialDriver::null())
-    });
+    let serial = ctx
+        .serial
+        .borrow_mut()
+        .take()
+        .expect("operational serial driver missing from validated BootContext");
     let timer = ctx
         .timer
         .borrow_mut()
@@ -300,7 +298,7 @@ pub fn main(ctx: BootContext) -> ! {
                     );
                 }
             }
-            enter_root_console_loop(&mut pump);
+            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
         } else if let Some(mut active_net_stack) = net_stack.take() {
             #[cfg(feature = "net-console")]
             {
@@ -320,14 +318,14 @@ pub fn main(ctx: BootContext) -> ! {
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             wait_for_net_console_before_root_console(&mut pump);
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(&mut pump);
+            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
         } else {
             #[cfg(feature = "net-console")]
             {
                 attach_network(&mut pump, None, net_unavailable_detail.take());
             }
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(&mut pump);
+            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
         }
     }
 
@@ -406,6 +404,7 @@ fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, c
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 fn enter_root_console_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
+    hal_ptr: usize,
 ) -> !
 where
     D: crate::serial::SerialDriver,
@@ -427,7 +426,24 @@ where
     } else {
         announce_root_console_loop_start();
     }
-    run_root_console_pump(pump);
+    loop {
+        pump.poll();
+        #[cfg(feature = "net-console")]
+        if hal_ptr != 0 {
+            let _ =
+                with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_console_network(hal));
+        }
+        #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
+        if hal_ptr != 0 {
+            let _ = with_deferred_root_hal(hal_ptr, |hal| pump.contain_faulted_ninedoor(hal));
+        }
+        #[cfg(not(any(
+            feature = "net-console",
+            all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs)
+        )))]
+        let _ = hal_ptr;
+        sel4::yield_now();
+    }
 }
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -1767,20 +1783,17 @@ fn format_deferred_net_runtime_service_ready(
     Some(line)
 }
 
-#[cfg(all(
-    feature = "serial-console",
-    feature = "kernel",
-    feature = "net-console"
-))]
-fn with_deferred_net_hal<R>(
+#[cfg(all(feature = "serial-console", feature = "kernel"))]
+fn with_deferred_root_hal<R>(
     hal_ptr: usize,
     operation: impl FnOnce(&mut KernelHal<'static>) -> R,
 ) -> Option<R> {
     let hal_ptr = core::ptr::NonNull::new(hal_ptr as *mut KernelHal<'static>)?;
     // SAFETY: kernel bootstrap leaks this `KernelHal` for the root-task
-    // lifetime. The deferred supervisor is single-threaded and calls this
-    // helper only after its prior operation and the EventPump operator turn
-    // have returned, so each mutable borrow is bounded to this closure.
+    // lifetime. Root-control is single-threaded and invokes service-owner
+    // containment or deferred bootstrap only after the EventPump turn and any
+    // prior HAL operation have returned, so each mutable borrow is bounded to
+    // this closure and never overlaps a child backend operation.
     Some(unsafe { operation(&mut *hal_ptr.as_ptr()) })
 }
 
@@ -2402,7 +2415,7 @@ where
         crate::drivers::driver_task_net::begin_cyw43_outer_event_turn();
         let _cyw43_outer_event_turn =
             crate::drivers::driver_task_net::cyw43_outer_event_turn_finalizer();
-        let Some(turn) = with_deferred_net_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
+        let Some(turn) = with_deferred_root_hal(hal_ptr, |hal| bootstrap.service_turn(hal)) else {
             // The entry check above proves this unreachable unless the
             // retained bootstrap pointer was corrupted after validation.
             run_root_console_pump(pump);
@@ -2427,7 +2440,7 @@ where
                         "CYW43_BOOTSTRAP_TURN attempt={} turn={} stage={} operation={} repeat={}",
                         attempt, turn_id, stage, operation_executed, repeat,
                     );
-                    // `with_deferred_net_hal` has returned, so this only queues
+                    // `with_deferred_root_hal` has returned, so this only queues
                     // bytes for the independent linked serial runtime. The next
                     // outer EventPump turn performs the actual flush.
                     if stage == "cyw43-pair-recovery-signalled" {
@@ -2505,7 +2518,7 @@ where
                     sel4::yield_now();
                     continue;
                 }
-                let Some(stack_result) = with_deferred_net_hal(hal_ptr, |hal| {
+                let Some(stack_result) = with_deferred_root_hal(hal_ptr, |hal| {
                     crate::net::finish_cyw43_net_console_after_bootstrap(hal, bootstrap.config())
                 }) else {
                     // The same validated leaked pointer is reused only after

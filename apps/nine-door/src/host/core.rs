@@ -80,6 +80,35 @@ struct GpuLeaseEntry<'a> {
     priority: u8,
 }
 
+#[derive(Serialize)]
+struct HostModelWorkerObservation<'a> {
+    schema: &'static str,
+    public_instance_id: &'a str,
+    identity: HostModelWorkerIdentity<'a>,
+    state: HostModelWorkerState,
+    request_admitted: bool,
+    provider_completed: bool,
+    receipt_sequence: u64,
+}
+
+#[derive(Serialize)]
+struct HostModelWorkerIdentity<'a> {
+    role: &'a str,
+    slot: u16,
+    lease_epoch: u64,
+    supervisor_generation: u64,
+    cap_generation: u64,
+}
+
+#[derive(Serialize)]
+struct HostModelWorkerState {
+    declaration: &'static str,
+    lifecycle: &'static str,
+    artifact: &'static str,
+    receipt: &'static str,
+    execution_proof: &'static str,
+}
+
 fn gpu_lease_entry_bytes(
     lease: &WorkerGpuLease,
     state: &'static str,
@@ -1012,6 +1041,12 @@ impl ServerCore {
                             "worker-heartbeat role does not match GPU worker",
                         ));
                     }
+                    WorkerKind::Lora => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "worker-heartbeat role does not match LoRA worker",
+                        ));
+                    }
                 }
             }
             Role::WorkerGpu => {
@@ -1047,6 +1082,12 @@ impl ServerCore {
                             "worker-gpu identity is not bound to a GPU lease",
                         ));
                     }
+                    WorkerKind::Lora => {
+                        return Err(NineDoorError::protocol(
+                            ErrorCode::Invalid,
+                            "worker-gpu identity is bound to a LoRA worker",
+                        ));
+                    }
                 }
             }
             Role::WorkerBus => {
@@ -1072,7 +1113,23 @@ impl ServerCore {
                         "worker-lora attach requires identity",
                     )
                 })?;
-                let budget = budget_override.unwrap_or_else(BudgetSpec::default_heartbeat);
+                let budget = if let Some(record) = self.control.worker_record(&worker_id) {
+                    match record.kind() {
+                        WorkerKind::Lora => budget_override
+                            .map(|override_budget| clamp_budget(record.budget(), override_budget))
+                            .unwrap_or_else(|| record.budget()),
+                        WorkerKind::Heartbeat | WorkerKind::Gpu(_) => {
+                            return Err(NineDoorError::protocol(
+                                ErrorCode::Invalid,
+                                "worker-lora role does not match the spawned Worker",
+                            ));
+                        }
+                    }
+                } else {
+                    // Preserve the version-1 model/session attachment path. It
+                    // supplies no target task, READY record, or execution proof.
+                    budget_override.unwrap_or_else(BudgetSpec::default_heartbeat)
+                };
                 state.configure_role(role, Some(worker_id), None, None, budget, now);
             }
         }
@@ -2146,7 +2203,7 @@ enum GpuBridgeUpdate {
     Complete {
         bytes: usize,
         sha256: String,
-        snapshot: GpuNamespaceSnapshot,
+        snapshot: Box<GpuNamespaceSnapshot>,
     },
 }
 
@@ -2209,7 +2266,7 @@ impl GpuBridgeReceiver {
             return Ok(GpuBridgeUpdate::Complete {
                 bytes: pending.expected_bytes,
                 sha256,
-                snapshot,
+                snapshot: Box::new(snapshot),
             });
         }
         if let Some(rest) = trimmed.strip_prefix("b64:") {
@@ -3297,6 +3354,13 @@ impl ControlPlane {
         let defaults = match spec.spawn {
             SpawnTarget::Heartbeat => self.default_budget,
             SpawnTarget::Gpu => BudgetSpec::default_gpu(),
+            SpawnTarget::Lora => BudgetSpec::default_heartbeat(),
+            SpawnTarget::Bus => {
+                return Err(NineDoorError::protocol(
+                    ErrorCode::Invalid,
+                    "worker-bus is model-only and cannot be spawned",
+                ));
+            }
         };
         let budget = spec.budget_spec(defaults)?;
         let worker_id = format!("worker-{}", self.next_worker_id);
@@ -3366,9 +3430,66 @@ impl ControlPlane {
                 )?;
                 WorkerRecord::gpu(budget, lease)
             }
+            SpawnTarget::Lora => {
+                self.log_event(
+                    "worker",
+                    TraceLevel::Info,
+                    Some(&worker_id),
+                    &format!("spawned {worker_id} role=worker-lora mode=host-model"),
+                )?;
+                WorkerRecord::lora(budget)
+            }
+            SpawnTarget::Bus => unreachable!("WorkerBus is rejected before allocation"),
         };
+        self.append_host_model_worker_observation(&worker_id, record.kind())?;
         self.workers.insert(worker_id.clone(), record);
         Ok(worker_id)
+    }
+
+    fn append_host_model_worker_observation(
+        &mut self,
+        worker_id: &str,
+        kind: &WorkerKind,
+    ) -> Result<(), NineDoorError> {
+        let role = match kind {
+            WorkerKind::Heartbeat => "worker-heartbeat",
+            WorkerKind::Gpu(_) => "worker-gpu",
+            WorkerKind::Lora => "worker-lora",
+        };
+        let observation = HostModelWorkerObservation {
+            schema: "cohesix-worker-observation/v1",
+            public_instance_id: worker_id,
+            identity: HostModelWorkerIdentity {
+                role,
+                slot: 0,
+                lease_epoch: 1,
+                supervisor_generation: 1,
+                cap_generation: 1,
+            },
+            state: HostModelWorkerState {
+                declaration: "executable",
+                lifecycle: "ready",
+                artifact: "missing",
+                receipt: "none",
+                execution_proof: "host-model",
+            },
+            request_admitted: true,
+            provider_completed: false,
+            receipt_sequence: 0,
+        };
+        let mut payload = serde_json::to_vec(&observation).map_err(|error| {
+            NineDoorError::protocol(
+                ErrorCode::Invalid,
+                format!("host-model Worker observation serialization failed: {error}"),
+            )
+        })?;
+        payload.push(b'\n');
+        let path = self
+            .namespace
+            .shard_layout()
+            .worker_telemetry_path(worker_id);
+        self.namespace.write_append(&path, u64::MAX, &payload)?;
+        Ok(())
     }
 
     fn kill_worker(&mut self, worker_id: &str) -> Result<(), NineDoorError> {
@@ -3633,6 +3754,13 @@ impl WorkerRecord {
         }
     }
 
+    fn lora(budget: BudgetSpec) -> Self {
+        Self {
+            budget,
+            kind: WorkerKind::Lora,
+        }
+    }
+
     fn kind(&self) -> &WorkerKind {
         &self.kind
     }
@@ -3646,6 +3774,7 @@ impl WorkerRecord {
 enum WorkerKind {
     Heartbeat,
     Gpu(GpuWorkerRecord),
+    Lora,
 }
 
 #[derive(Clone)]
@@ -4887,8 +5016,55 @@ mod tests {
         let worker_path = worker_telemetry_path("worker-1");
         queen.walk(1, 3, &worker_path).unwrap();
         queen.open(3, OpenMode::read_only()).unwrap();
-        let data = queen.read(3, 0, 128).unwrap();
-        assert!(data.is_empty());
+        let data = queen.read(3, 0, 2048).unwrap();
+        let observation: serde_json::Value =
+            serde_json::from_slice(&data).expect("host-model Worker observation");
+        assert_eq!(observation["schema"], "cohesix-worker-observation/v1");
+        assert_eq!(observation["state"]["lifecycle"], "ready");
+        assert_eq!(observation["state"]["execution_proof"], "host-model");
+        assert_eq!(observation["state"]["artifact"], "missing");
+    }
+
+    #[test]
+    fn queen_spawn_lora_creates_host_model_observation_without_target_proof() {
+        let server = NineDoor::new_with_shard_layout(ShardLayout::enabled(8, true));
+        let mut queen = attach_queen(&server);
+        write_queen_command(&mut queen, "{\"spawn\":\"lora\"}\n");
+        let worker_path = ShardLayout::enabled(8, true).worker_telemetry_path("worker-1");
+        queen.walk(1, 3, &worker_path).unwrap();
+        queen.open(3, OpenMode::read_only()).unwrap();
+        let data = queen.read(3, 0, 2048).unwrap();
+        let observation: serde_json::Value =
+            serde_json::from_slice(&data).expect("LoRA host-model observation");
+        assert_eq!(observation["identity"]["role"], "worker-lora");
+        assert_eq!(observation["state"]["declaration"], "executable");
+        assert_eq!(observation["state"]["lifecycle"], "ready");
+        assert_eq!(observation["state"]["execution_proof"], "host-model");
+        assert_ne!(observation["state"]["execution_proof"], "qemu");
+        assert_ne!(observation["state"]["execution_proof"], "fresh-pi");
+    }
+
+    #[test]
+    fn queen_spawn_worker_bus_is_deterministically_model_only() {
+        let server = NineDoor::new();
+        let mut queen = attach_queen(&server);
+        let path = vec!["queen".to_owned(), "ctl".to_owned()];
+        queen.walk(1, 3, &path).unwrap();
+        queen.open(3, OpenMode::write_append()).unwrap();
+        let error = queen
+            .write(3, b"{\"spawn\":\"bus\"}\n")
+            .expect_err("WorkerBus target spawn must fail");
+        assert!(matches!(
+            error,
+            NineDoorError::Protocol {
+                code: ErrorCode::Invalid,
+                ref message,
+            } if message == "worker-bus is model-only and cannot be spawned"
+        ));
+
+        write_queen_command(&mut queen, "{\"spawn\":\"heartbeat\",\"ticks\":1}\n");
+        let worker_path = worker_telemetry_path("worker-1");
+        queen.walk(1, 4, &worker_path).unwrap();
     }
 
     #[test]

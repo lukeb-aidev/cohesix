@@ -1,14 +1,28 @@
 # Author: Lukas Bower
 # Purpose: Configure the worker-heart crate dependencies and metadata.
+# Copyright 2026 Lukas Bower
 [package]
 name = "worker-heart"
 version = "0.1.0"
 edition = "2021"
 publish = false
 
+[features]
+default = []
+qemu-evidence = []
+
 [dependencies]
+worker-task-abi = { workspace = true }
+
+[target.'cfg(target_os = "none")'.dependencies]
+sel4-sys = { path = "../../crates/sel4-sys" }
 
 [target.'cfg(not(target_os = "none"))'.dependencies]
 anyhow = { workspace = true }
 cohesix-ticket = { workspace = true }
 secure9p-codec = { workspace = true }
+
+[[bin]]
+name = "worker-heart"
+test = false
+bench = false
