@@ -534,10 +534,13 @@ preserve_input "$PROFILE_VENV"
 preserve_input "$COMPILER_ARCHIVE"
 
 log "cleaning validated repository target/ and out/"
-cargo clean --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "$REPO_ROOT/target"
-mkdir -p "$REPO_ROOT/target" "$REPO_ROOT/out"
+if [[ -e "$REPO_ROOT/target/CACHEDIR.TAG" ]]; then
+    cargo clean --manifest-path "$REPO_ROOT/Cargo.toml" --target-dir "$REPO_ROOT/target"
+fi
 find "$REPO_ROOT/target" -depth -mindepth 1 -delete
 find "$REPO_ROOT/out" -depth -mindepth 1 -delete
+rmdir "$REPO_ROOT/target"
+mkdir -p "$REPO_ROOT/out"
 restore_preserved_inputs
 PRESERVED_ORIGINALS=()
 PRESERVED_TEMP=()
