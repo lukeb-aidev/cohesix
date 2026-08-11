@@ -4609,13 +4609,16 @@ where
             return;
         }
         #[cfg(all(feature = "kernel", feature = "net-console"))]
-        let split_ordinary_virtio_turn = !self.network_service_quarantined
-            && self.net.as_ref().is_some_and(|net| {
-                net.driver_task_contract()
-                    == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
-            });
+        let ordinary_virtio_contract_attached = self.net.as_ref().is_some_and(|net| {
+            net.driver_task_contract() == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+        });
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let split_ordinary_virtio_turn =
+            !self.network_service_quarantined && ordinary_virtio_contract_attached;
         #[cfg(not(all(feature = "kernel", feature = "net-console")))]
         let split_ordinary_virtio_turn = false;
+        #[cfg(not(all(feature = "kernel", feature = "net-console")))]
+        let ordinary_virtio_contract_attached = false;
         #[cfg(all(feature = "kernel", feature = "net-console"))]
         if split_ordinary_virtio_turn {
             let phase = self.ordinary_service_phase;
@@ -4730,6 +4733,7 @@ where
                     || followup_serial_input
                     || local_input
                     || post_runtime_local_input,
+                ordinary_virtio_contract_attached,
             );
             return;
         }
@@ -4746,6 +4750,7 @@ where
         );
         self.maybe_emit_serial_input_idle_trace(
             serial_rx_activity || serial_input || local_input || post_runtime_local_input,
+            ordinary_virtio_contract_attached,
         );
     }
 
@@ -4867,6 +4872,7 @@ where
                 };
                 self.maybe_emit_serial_input_idle_trace(
                     serial_input || local_input || network_input,
+                    false,
                 );
             }
             LinkedRuntimeServicePhase::Network => {
@@ -8275,7 +8281,18 @@ where
     }
 
     #[cfg(feature = "kernel")]
-    fn maybe_emit_serial_input_idle_trace(&mut self, physical_input_active: bool) {
+    fn maybe_emit_serial_input_idle_trace(
+        &mut self,
+        physical_input_active: bool,
+        suppress_ordinary_virtio_trace: bool,
+    ) {
+        // The raw idle trace is retained for the Pi/GENET bring-up scripts that
+        // consume it. QEMU's isolated VirtIO path has no such consumer, and
+        // emitting the record there would execute one synchronous debug
+        // syscall per byte inside root-control's admitted Operator phase.
+        if suppress_ordinary_virtio_trace {
+            return;
+        }
         if crate::serial::serial_linked_runtime_transport_active() {
             return;
         }
@@ -8320,7 +8337,12 @@ where
     }
 
     #[cfg(not(feature = "kernel"))]
-    fn maybe_emit_serial_input_idle_trace(&mut self, _physical_input_active: bool) {}
+    fn maybe_emit_serial_input_idle_trace(
+        &mut self,
+        _physical_input_active: bool,
+        _suppress_ordinary_virtio_trace: bool,
+    ) {
+    }
 
     fn mirror_local_seat_line_if_ready(&mut self, line: &str) {
         if self.local_seat_mirror_suppressed {
@@ -30459,6 +30481,7 @@ mod tests {
         {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.banner_emitted = true;
             pump.poll();
             assert_eq!(
                 polls.get(),
@@ -30469,6 +30492,73 @@ mod tests {
                 pump.ordinary_service_phase,
                 OrdinaryServicePhase::Operator,
                 "the QEMU-only phase state must not advance for GENET"
+            );
+            assert_eq!(
+                pump.serial_input_idle_trace_count, 1,
+                "the Pi/GENET idle trace contract must remain unchanged"
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_operator_suppresses_pi_only_raw_idle_trace() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.banner_emitted = true;
+
+            pump.poll();
+
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            assert_eq!(
+                pump.serial_input_idle_trace_count, 0,
+                "VirtIO Operator must not enter the synchronous raw-UART idle trace"
+            );
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn quarantined_virtio_still_suppresses_pi_only_raw_idle_trace() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent {
+            tick: 1,
+            now_ms: SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS,
+        });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.banner_emitted = true;
+            pump.network_service_quarantined = true;
+
+            pump.poll();
+
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Operator,
+                "quarantine must fence the phase split"
+            );
+            assert_eq!(
+                pump.serial_input_idle_trace_count, 0,
+                "a quarantined VirtIO adapter must not re-admit raw UART work"
             );
         }
     }
@@ -33920,7 +34010,7 @@ mod tests {
         pump.now_ms = SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS;
         pump.serial.enqueue_tx(b"busy");
 
-        pump.maybe_emit_serial_input_idle_trace(false);
+        pump.maybe_emit_serial_input_idle_trace(false, false);
 
         assert_eq!(pump.serial_input_idle_trace_count, 0);
         assert_eq!(
@@ -33931,7 +34021,7 @@ mod tests {
         pump.serial.flush_tx();
         pump.serial.driver_mut().drain_tx();
         pump.now_ms = pump.serial_input_idle_trace_next_ms;
-        pump.maybe_emit_serial_input_idle_trace(false);
+        pump.maybe_emit_serial_input_idle_trace(false, false);
 
         assert_eq!(pump.serial_input_idle_trace_count, 0);
     }

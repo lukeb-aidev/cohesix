@@ -4825,6 +4825,12 @@ candidate because the v2 whole-turn interpretation exhausted the complete
 per-phase scheduler admission, not end-to-end host/TCP latency. They must also assert the derived
 core-0 demand of `9000 us` and the console-network response bound of `7500 us`;
 stale pre-live values fail closed.
+The ordinary EventPump regression must also prove that an attached VirtIO
+contract suppresses the Pi/GENET-only synchronous
+`SERIAL_INPUT_TRACE stage=idle` path before and after console-network
+quarantine, while an attached GENET contract retains the existing trace
+cadence. A complete idle line immediately before a root-control timeout at the
+outer yield is a failed QEMU phase, not qualification evidence.
 The source-order regression must additionally prove that the bounded
 synchronous bootstrap IPC trace completes after registry seal and before any
 restricted child activation. It must reject root-control temporal activation

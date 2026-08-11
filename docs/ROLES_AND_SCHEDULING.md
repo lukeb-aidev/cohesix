@@ -260,8 +260,11 @@ The isolated VirtIO path therefore alternates an Operator/Dispatch phase and a
 Network phase on separate outer EventPump calls. Each call returns to the
 userland loop's existing `seL4_Yield` replenishment boundary; no internal yield,
 extra SC, notification omission, or cache-semantic exception implements the
-cut. Fresh canonical QEMU boot, console, regression, and pressure evidence
-remain required; compiler admission alone is not target qualification.
+cut. The attached VirtIO contract suppresses the Pi/GENET-only synchronous
+raw-UART idle-input trace in both live and quarantined states; it has no QEMU
+consumer and cannot consume an admitted Operator phase. Fresh canonical QEMU
+boot, console, regression, and pressure evidence remain required; compiler
+admission alone is not target qualification.
 
 During NineDoor construction, root configures and binds the schema-1.10
 bootstrap candidate (8 object bits, `3000 us / 10000 us`, `max_refills = 2`)
