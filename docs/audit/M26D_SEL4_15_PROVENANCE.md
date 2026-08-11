@@ -133,8 +133,8 @@ ELF, passed the rootfs size guard, selected GICv3, and completed its `--no-run`
 packaging path successfully.
 
 Milestone 26e retains the exact 4,393,984-byte MCS driver archive inside the
-rootserver. The current QEMU policy therefore reserves 6 MiB and requires a
-7 MiB minimum elfloader archive; replacement and rootfs guards remain separate
+rootserver. The current QEMU policy therefore reserves 7 MiB and requires an
+8 MiB minimum elfloader archive; replacement and rootfs guards remain separate
 and fail closed.
 
 ## Current canonical QEMU runtime evidence
