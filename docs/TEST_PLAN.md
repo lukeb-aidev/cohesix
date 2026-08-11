@@ -4247,12 +4247,17 @@ All runs are required unless explicitly marked `NA` by platform constraints.
 Run the canonical `scripts/m26e_qemu_pressure.sh` command in
 [BENCHMARKS.md](BENCHMARKS.md). It cleans repository `target/` and `out/`,
 rebuilds the selected SMP+MCS seL4 profile, and uses
-`scripts/cohesix-build-run.sh` for one canonical post-gate artifact build. A
-dedicated `-S` critical-duty observation and the separate medium/high
-four-core AArch64 `virt` boots then use `--launch-existing`, which verifies and
-launches the same locked elfloader, kernel, rootserver, system CPIO, GICv3
-topology, and build context without rebuilding or repackaging. Retries remain
-disabled, control errors remain strict, and in-flight work remains bounded.
+`scripts/cohesix-build-run.sh` for one canonical artifact build. The runner
+hash-binds frozen collector copies, then a dedicated `-S` critical-duty
+observation and the separate medium/high four-core AArch64 `virt` boots use
+`--launch-existing`, which verifies and launches the same locked elfloader,
+kernel, rootserver, system CPIO, GICv3 topology, and build context without
+rebuilding or repackaging. The complete staged QEMU plan runs only after those
+QEMU transcripts and pressure reports are immutable. Final acceptance is not
+emitted unless that plan passes, and its collector consumes the frozen target
+session, topology, ELFs, archives, and image manifest rather than any shared
+build output the staged plan may update. Retries remain disabled, control
+errors remain strict, and in-flight work remains bounded.
 The runner derives and revalidates the compiler-owned Queen console token from
 the source and resolved manifests; an optional `COH_AUTH_TOKEN` must match it.
 The separately supplied REST mutation bearer must be a fresh 64-character

@@ -563,12 +563,17 @@ unset HIVE_GATEWAY_REQUEST_AUTH_TOKEN
 ```
 
 The orchestrator cleans repository `target/` and `out/`, rebuilds the selected
-SMP+MCS seL4 profile, runs the staged QEMU plan, and performs one canonical
-`scripts/cohesix-build-run.sh --no-run` artifact build. The critical-duty,
-medium, and high QEMU processes then use `--launch-existing`; each verifies and
-launches the same locked elfloader, kernel, rootserver, system CPIO, GICv3
-topology, and build context without regeneration or repackaging. It retains the
-actual QEMU command, pidfile,
+SMP+MCS seL4 profile, and performs one canonical
+`scripts/cohesix-build-run.sh --no-run` artifact build. It hash-binds immutable
+collector copies before the critical-duty, medium, and high QEMU processes use
+`--launch-existing`; each verifies and launches the same locked elfloader,
+kernel, rootserver, system CPIO, GICv3 topology, and build context without
+regeneration or repackaging. Only after those QEMU transcripts and pressure
+reports are immutable does the runner execute the complete staged QEMU plan.
+Final acceptance requires that plan to pass and consumes the frozen collector
+copies, so later host or regression builds cannot replace the ELFs, archives,
+manifest, topology, or target session that produced the pressure evidence. It
+retains the actual QEMU command, pidfile,
 flushed UART, three role-specific GDB injection transcripts, GPU fixture status,
 cohsh and host-agent transcripts, staged component, and exact target-session
 and image/archive manifests. The driver hash always comes from

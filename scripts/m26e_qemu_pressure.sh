@@ -480,7 +480,7 @@ if (( CHECK_ONLY == 1 )); then
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu-preflight --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu --help >/dev/null
     log "check-only PASS: inputs are present; no files or processes were changed"
-    log "plan: clean target/out, run staged QEMU gates, rebuild release-qemu,bootstrap-trace, collect medium/high"
+    log "plan: clean target/out, build release-qemu,bootstrap-trace once, collect critical/medium/high QEMU evidence, run staged QEMU gates, emit final acceptance"
     exit 0
 fi
 
@@ -664,17 +664,6 @@ log "building canonical release-qemu,bootstrap-trace artifacts"
 validate_resolved_console_token
 
 TEST_PLAN_STATE_DIR="$RUN_DIR/test-plan"
-log "running the canonical five-stage QEMU test plan"
-COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
-HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
-scripts/ci/test_plan_run.sh \
-    --target qemu \
-    --state-dir "$TEST_PLAN_STATE_DIR"
-
-require_quiescent_host
-log "rebuilding the exact pressure artifact set after staged QEMU validation"
-"$BUILD_RUN" --clean --no-run "${BUILD_ARGS[@]}"
-validate_resolved_console_token
 
 OUT_ROOT="$REPO_ROOT/out/cohesix"
 HOST_TOOLS="$OUT_ROOT/host-tools"
@@ -870,6 +859,7 @@ python3 - "$ARTIFACT_BINDINGS" \
     driver-manifest="$DRIVER_MANIFEST" \
     worker-archive="$WORKER_ARCHIVE" \
     worker-manifest="$WORKER_MANIFEST" \
+    target-session="$TARGET_SESSION" \
     root-elf="$ROOT_ELF" \
     ninedoor-elf="$NINEDOOR_ELF" \
     console-network-elf="$CONSOLE_NETWORK_ELF" \
@@ -914,6 +904,202 @@ if len(rows) != len({row["id"] for row in rows}):
 payload = {"schema": "cohesix-qemu-artifact-bindings/v1", "artifacts": sorted(rows, key=lambda row: row["id"])}
 out.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 PY
+
+FROZEN_COLLECTOR_DIR="$RUN_DIR/session/frozen-collector-inputs"
+FROZEN_COLLECTOR_BINDINGS="$RUN_DIR/session/frozen-collector-bindings.json"
+python3 - "$ARTIFACT_BINDINGS" "$FROZEN_COLLECTOR_BINDINGS" \
+    "$FROZEN_COLLECTOR_DIR" \
+    target-session=target-session.json \
+    generated-topology=generated-topology.json \
+    worker-archive=worker-images.cpio \
+    driver-archive=driver-runtimes.cpio \
+    worker-manifest=worker-image-manifest.json \
+    worker-heartbeat-elf=worker-heart.elf \
+    worker-gpu-elf=worker-gpu.elf \
+    worker-lora-elf=worker-lora.elf \
+    ninedoor-elf=nine-door-runtime.elf \
+    console-network-elf=console-network-runtime.elf \
+    root-elf=root-task.elf <<'PY'
+import hashlib
+import json
+import os
+from pathlib import Path
+import stat
+import sys
+
+binding_path = Path(sys.argv[1])
+out_path = Path(sys.argv[2])
+frozen_root = Path(sys.argv[3])
+binding_raw = binding_path.read_bytes()
+binding = json.loads(binding_raw)
+if binding.get("schema") != "cohesix-qemu-artifact-bindings/v1":
+    raise SystemExit("source artifact binding schema is invalid")
+source_rows = binding.get("artifacts")
+if not isinstance(source_rows, list) or not source_rows:
+    raise SystemExit("source artifact binding is empty")
+sources = {}
+for row in source_rows:
+    if set(row) != {"id", "path", "sha256", "bytes"} or row["id"] in sources:
+        raise SystemExit("source artifact binding row is malformed")
+    sources[row["id"]] = row
+
+selections = []
+for item in sys.argv[4:]:
+    identifier, separator, filename = item.partition("=")
+    if (
+        not identifier
+        or separator != "="
+        or not filename
+        or Path(filename).name != filename
+        or identifier not in sources
+    ):
+        raise SystemExit("frozen collector selection is malformed")
+    selections.append((identifier, filename))
+if len(selections) != len({identifier for identifier, _ in selections}):
+    raise SystemExit("frozen collector selection ids are not unique")
+if len(selections) != len({filename for _, filename in selections}):
+    raise SystemExit("frozen collector filenames are not unique")
+if frozen_root.exists() or frozen_root.is_symlink():
+    raise SystemExit("frozen collector directory must be absent")
+frozen_root.mkdir(mode=0o700)
+
+
+def exclusive_write(path: Path, raw: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+frozen_rows = []
+for identifier, filename in selections:
+    source_row = sources[identifier]
+    source = Path(source_row["path"])
+    source_info = source.lstat()
+    if not stat.S_ISREG(source_info.st_mode) or stat.S_ISLNK(source_info.st_mode):
+        raise SystemExit(f"collector source is not a regular non-symlink file: {source}")
+    raw = source.read_bytes()
+    digest = hashlib.sha256(raw).hexdigest()
+    if not raw or len(raw) != source_row["bytes"] or digest != source_row["sha256"]:
+        raise SystemExit(f"collector source differs from its artifact binding: {identifier}")
+    destination = frozen_root / filename
+    exclusive_write(destination, raw)
+    destination_info = destination.lstat()
+    frozen_raw = destination.read_bytes()
+    if (
+        not stat.S_ISREG(destination_info.st_mode)
+        or stat.S_ISLNK(destination_info.st_mode)
+        or frozen_raw != raw
+    ):
+        raise SystemExit(f"frozen collector copy differs from its source: {identifier}")
+    frozen_rows.append(
+        {
+            "id": identifier,
+            "path": str(destination),
+            "sha256": digest,
+            "bytes": len(raw),
+        }
+    )
+payload = {
+    "schema": "cohesix-qemu-frozen-collector-bindings/v1",
+    "source_artifact_bindings_sha256": hashlib.sha256(binding_raw).hexdigest(),
+    "artifacts": sorted(frozen_rows, key=lambda row: row["id"]),
+}
+exclusive_write(
+    out_path,
+    (json.dumps(payload, indent=2, sort_keys=True) + "\n").encode("utf-8"),
+)
+PY
+
+FROZEN_TARGET_SESSION="$FROZEN_COLLECTOR_DIR/target-session.json"
+FROZEN_GENERATED_INVENTORY="$FROZEN_COLLECTOR_DIR/generated-topology.json"
+FROZEN_WORKER_ARCHIVE="$FROZEN_COLLECTOR_DIR/worker-images.cpio"
+FROZEN_DRIVER_ARCHIVE="$FROZEN_COLLECTOR_DIR/driver-runtimes.cpio"
+FROZEN_WORKER_MANIFEST="$FROZEN_COLLECTOR_DIR/worker-image-manifest.json"
+FROZEN_WORKER_HEART_ELF="$FROZEN_COLLECTOR_DIR/worker-heart.elf"
+FROZEN_WORKER_GPU_ELF="$FROZEN_COLLECTOR_DIR/worker-gpu.elf"
+FROZEN_WORKER_LORA_ELF="$FROZEN_COLLECTOR_DIR/worker-lora.elf"
+FROZEN_NINEDOOR_ELF="$FROZEN_COLLECTOR_DIR/nine-door-runtime.elf"
+FROZEN_CONSOLE_NETWORK_ELF="$FROZEN_COLLECTOR_DIR/console-network-runtime.elf"
+FROZEN_ROOT_ELF="$FROZEN_COLLECTOR_DIR/root-task.elf"
+
+verify_frozen_collector_artifacts() {
+    python3 - "$ARTIFACT_BINDINGS" "$FROZEN_COLLECTOR_BINDINGS" \
+        "$FROZEN_COLLECTOR_DIR" <<'PY'
+import hashlib
+import json
+from pathlib import Path
+import stat
+import sys
+
+source_binding_path, frozen_binding_path, frozen_root_raw = map(Path, sys.argv[1:])
+source_binding_raw = source_binding_path.read_bytes()
+frozen_binding = json.loads(frozen_binding_path.read_bytes())
+frozen_root_info = frozen_root_raw.lstat()
+frozen_root = frozen_root_raw.resolve(strict=True)
+if (
+    not stat.S_ISDIR(frozen_root_info.st_mode)
+    or stat.S_ISLNK(frozen_root_info.st_mode)
+    or frozen_root != frozen_root_raw
+):
+    raise SystemExit("frozen collector directory is aliased or invalid")
+expected = {
+    "target-session": "target-session.json",
+    "generated-topology": "generated-topology.json",
+    "worker-archive": "worker-images.cpio",
+    "driver-archive": "driver-runtimes.cpio",
+    "worker-manifest": "worker-image-manifest.json",
+    "worker-heartbeat-elf": "worker-heart.elf",
+    "worker-gpu-elf": "worker-gpu.elf",
+    "worker-lora-elf": "worker-lora.elf",
+    "ninedoor-elf": "nine-door-runtime.elf",
+    "console-network-elf": "console-network-runtime.elf",
+    "root-elf": "root-task.elf",
+}
+if (
+    frozen_binding.get("schema")
+    != "cohesix-qemu-frozen-collector-bindings/v1"
+    or frozen_binding.get("source_artifact_bindings_sha256")
+    != hashlib.sha256(source_binding_raw).hexdigest()
+):
+    raise SystemExit("frozen collector binding identity is invalid")
+rows = frozen_binding.get("artifacts")
+if not isinstance(rows, list) or len(rows) != len(expected):
+    raise SystemExit("frozen collector binding row count is invalid")
+observed = set()
+for row in rows:
+    if set(row) != {"id", "path", "sha256", "bytes"} or row["id"] in observed:
+        raise SystemExit("frozen collector binding row is malformed")
+    identifier = row["id"]
+    if identifier not in expected:
+        raise SystemExit(f"unexpected frozen collector artifact: {identifier}")
+    path = Path(row["path"])
+    if path != frozen_root / expected[identifier]:
+        raise SystemExit(f"frozen collector artifact path differs: {identifier}")
+    info = path.lstat()
+    raw = path.read_bytes()
+    if (
+        not stat.S_ISREG(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or not raw
+        or len(raw) != row["bytes"]
+        or hashlib.sha256(raw).hexdigest() != row["sha256"]
+    ):
+        raise SystemExit(f"frozen collector artifact bytes differ: {identifier}")
+    observed.add(identifier)
+if observed != set(expected):
+    raise SystemExit("frozen collector artifact set is incomplete")
+PY
+}
+
+verify_frozen_collector_artifacts
 
 SYSTEM_CPIO_BYTES="$(stat -f '%z' "$SYSTEM_CPIO")"
 [[ "$SYSTEM_CPIO_BYTES" =~ ^[0-9]+$ ]] && (( SYSTEM_CPIO_BYTES < 4 * 1024 * 1024 )) || \
@@ -2085,12 +2271,24 @@ PY
 run_pressure_boot medium 4 1 16 2604
 run_pressure_boot high 8 4 32 2608
 
+verify_live_artifacts
+verify_frozen_collector_artifacts
+require_quiescent_host
+log "running the canonical five-stage QEMU test plan after immutable pressure capture"
+COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+HIVE_GATEWAY_REQUEST_AUTH_TOKEN="$M26E_REST_AUTH_TOKEN" \
+scripts/ci/test_plan_run.sh \
+    --target qemu \
+    --state-dir "$TEST_PLAN_STATE_DIR"
+require_quiescent_host
+validate_resolved_console_token
+verify_frozen_collector_artifacts
+
 FINAL_DIR="$RUN_DIR/final"
 mkdir -p "$FINAL_DIR"
-verify_live_artifacts
 "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu \
-    --target-session "$TARGET_SESSION" \
-    --generated-inventory "$GENERATED_INVENTORY" \
+    --target-session "$FROZEN_TARGET_SESSION" \
+    --generated-inventory "$FROZEN_GENERATED_INVENTORY" \
     --preflight-uart "$RUN_DIR/medium/preflight.uart.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-heartbeat.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-gpu.gdb.log" \
@@ -2105,15 +2303,15 @@ verify_live_artifacts
     --gdb-log "$RUN_DIR/high/pressure.gdb.log" \
     --pressure "$RUN_DIR/high/pressure.summary.json" \
     --cohsh "$RUN_DIR/high/preflight.cohsh.log" \
-    --worker-elf "worker-heartbeat=$WORKER_HEART_ELF" \
-    --worker-elf "worker-gpu=$WORKER_GPU_ELF" \
-    --worker-elf "worker-lora=$WORKER_LORA_ELF" \
-    --service-elf "ninedoor-service=$NINEDOOR_ELF" \
-    --service-elf "console-network=$CONSOLE_NETWORK_ELF" \
-    --root-elf "$ROOT_ELF" \
-    --worker-archive "$WORKER_ARCHIVE" \
-    --driver-archive "$DRIVER_ARCHIVE" \
-    --worker-image-manifest "$WORKER_MANIFEST" \
+    --worker-elf "worker-heartbeat=$FROZEN_WORKER_HEART_ELF" \
+    --worker-elf "worker-gpu=$FROZEN_WORKER_GPU_ELF" \
+    --worker-elf "worker-lora=$FROZEN_WORKER_LORA_ELF" \
+    --service-elf "ninedoor-service=$FROZEN_NINEDOOR_ELF" \
+    --service-elf "console-network=$FROZEN_CONSOLE_NETWORK_ELF" \
+    --root-elf "$FROZEN_ROOT_ELF" \
+    --worker-archive "$FROZEN_WORKER_ARCHIVE" \
+    --driver-archive "$FROZEN_DRIVER_ARCHIVE" \
+    --worker-image-manifest "$FROZEN_WORKER_MANIFEST" \
     --integration-dir "$RUN_DIR/high/host-integration/integration" \
     --run-dir "$TEST_PLAN_STATE_DIR" \
     --out-dir "$FINAL_DIR"

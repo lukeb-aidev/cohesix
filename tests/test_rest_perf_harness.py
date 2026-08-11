@@ -6,6 +6,7 @@
 
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -1874,6 +1875,12 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         '"$BUILD_RUN" --launch-existing',
         'run_pressure_boot medium 4 1 16 2604',
         'run_pressure_boot high 8 4 32 2608',
+        'cohesix-qemu-frozen-collector-bindings/v1',
+        'verify_frozen_collector_artifacts',
+        (
+            "running the canonical five-stage QEMU test plan after immutable "
+            "pressure capture"
+        ),
         'qemu-critical-gdb',
         'qemu-service-gdb',
         'collect-qemu-preflight',
@@ -1885,6 +1892,12 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         '--pressure "$RUN_DIR/high/pressure.summary.json"',
         '--driver-archive "$DRIVER_ARCHIVE"',
         '--run-dir "$TEST_PLAN_STATE_DIR"',
+        '--target-session "$FROZEN_TARGET_SESSION"',
+        '--generated-inventory "$FROZEN_GENERATED_INVENTORY"',
+        '--root-elf "$FROZEN_ROOT_ELF"',
+        '--worker-archive "$FROZEN_WORKER_ARCHIVE"',
+        '--driver-archive "$FROZEN_DRIVER_ARCHIVE"',
+        '--worker-image-manifest "$FROZEN_WORKER_MANIFEST"',
         'M26E_SCAN_CONSOLE_TOKEN="$M26E_CONSOLE_AUTH_TOKEN"',
         'M26E_SCAN_REST_TOKEN="$M26E_REST_AUTH_TOKEN"',
         'M26E_CONSOLE_AUTH_TOKEN="$(queen_console_token "$SOURCE_MANIFEST" toml)"',
@@ -1897,6 +1910,21 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     ):
         assert literal in source
     assert source.count('"$BUILD_RUN" --launch-existing') == 2
+    assert source.count('"$BUILD_RUN" --clean --no-run') == 1
+    canonical_build = source.index(
+        'log "building canonical release-qemu,bootstrap-trace artifacts"'
+    )
+    medium_boot = source.index("run_pressure_boot medium 4 1 16 2604")
+    high_boot = source.index("run_pressure_boot high 8 4 32 2608")
+    staged_plan = source.index(
+        'log "running the canonical five-stage QEMU test plan after immutable '
+        'pressure capture"'
+    )
+    final_collection = source.index(
+        '"$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu \\\n'
+    )
+    assert canonical_build < medium_boot < high_boot < staged_plan < final_collection
+    assert "rebuilding the exact pressure artifact set" not in source
     assert "qemu-gdb-services" not in source
     assert "staging/cohesix/artifacts/cohesix-driver-runtimes.cpio" not in source
     assert "--auth-token" not in source
@@ -1906,6 +1934,103 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     preserve = source.index('PRESERVE_ROOT="$(mktemp -d ')
     assert source.index("COH_AUTH_TOKEN differs from the compiler-selected") < preserve
     assert source.index("gateway request secret must be 64 lowercase") < preserve
+
+
+def test_m26e_qemu_pressure_freezes_collector_inputs_by_hash(
+    tmp_path: pathlib.Path,
+) -> None:
+    blocks = embedded_python_blocks(pressure_runner_source())
+    freezer = next(
+        block
+        for block in blocks
+        if "collector source differs from its artifact binding" in block
+    )
+    verifier = next(
+        block
+        for block in blocks
+        if "frozen collector binding identity is invalid" in block
+    )
+    filenames = {
+        "target-session": "target-session.json",
+        "generated-topology": "generated-topology.json",
+        "worker-archive": "worker-images.cpio",
+        "driver-archive": "driver-runtimes.cpio",
+        "worker-manifest": "worker-image-manifest.json",
+        "worker-heartbeat-elf": "worker-heart.elf",
+        "worker-gpu-elf": "worker-gpu.elf",
+        "worker-lora-elf": "worker-lora.elf",
+        "ninedoor-elf": "nine-door-runtime.elf",
+        "console-network-elf": "console-network-runtime.elf",
+        "root-elf": "root-task.elf",
+    }
+    source_dir = tmp_path / "source"
+    source_dir.mkdir()
+    rows = []
+    for ordinal, identifier in enumerate(filenames, start=1):
+        path = source_dir / identifier
+        raw = f"{identifier}-{ordinal}\n".encode()
+        path.write_bytes(raw)
+        rows.append(
+            {
+                "id": identifier,
+                "path": str(path),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "bytes": len(raw),
+            }
+        )
+    source_binding = tmp_path / "artifact-bindings.json"
+    source_binding.write_text(
+        json.dumps(
+            {
+                "schema": "cohesix-qemu-artifact-bindings/v1",
+                "artifacts": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    frozen_binding = tmp_path / "frozen-bindings.json"
+    frozen_dir = tmp_path / "frozen"
+    freeze = subprocess.run(
+        [
+            sys.executable,
+            "-",
+            str(source_binding),
+            str(frozen_binding),
+            str(frozen_dir),
+            *(
+                f"{identifier}={filename}"
+                for identifier, filename in filenames.items()
+            ),
+        ],
+        input=freezer,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert freeze.returncode == 0, freeze.stderr
+
+    def verify() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-",
+                str(source_binding),
+                str(frozen_binding),
+                str(frozen_dir),
+            ],
+            input=verifier,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+    assert verify().returncode == 0
+    (frozen_dir / "root-task.elf").write_bytes(b"tampered\n")
+    tampered = verify()
+    assert tampered.returncode != 0
+    assert "frozen collector artifact bytes differ: root-elf" in tampered.stderr
 
 
 def test_m26e_qemu_pressure_derives_exact_manifest_queen_token(
