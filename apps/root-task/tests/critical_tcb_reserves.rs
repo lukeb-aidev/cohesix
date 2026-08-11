@@ -46,6 +46,25 @@ fn bootstrap_shared_untyped_is_quarantined_before_mcs_allocation() {
 }
 
 #[test]
+fn child_set_space_resolves_fault_endpoint_in_root_cspace() {
+    let source = include_str!("../src/hal/critical_tcb.rs");
+    let call_start = source
+        .find("sel4::set_tcb_space(")
+        .expect("critical child SetSpace call must remain explicit");
+    let call = &source[call_start..call_start + 220];
+
+    assert!(
+        call.contains("tcb,\n        root_fault_cap,"),
+        "SetSpace fault_ep must be the retained root-Cspace endpoint cap",
+    );
+    assert!(
+        !call.contains("CHILD_STANDARD_FAULT_SLOT"),
+        "a child-CNode slot is not resolvable by the root SetSpace caller",
+    );
+    assert!(source.contains("CHILD_STANDARD_FAULT_SLOT,\n            root_cnode,"));
+}
+
+#[test]
 fn all_five_named_duties_finish_with_distinct_kernel_objects() {
     validate_critical_temporal_graph().expect("critical temporal graph");
     let resources = generated::worker_resource_admission_config().critical_tcbs;

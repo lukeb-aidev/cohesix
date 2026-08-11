@@ -1358,14 +1358,12 @@ fn construct_restricted_child(
 
     let guard_bits = sel4::word_bits().saturating_sub(seL4_Word::from(child_depth));
     let cspace_root_data = sel4::cap_data_guard(0, guard_bits);
-    let child_fault_slot = if task.id == ROOT_EMERGENCY_ID {
-        sel4_sys::seL4_CapNull
-    } else {
-        CHILD_STANDARD_FAULT_SLOT
-    };
+    // SetSpace resolves the fault endpoint in the calling root CSpace, not in
+    // the child CNode being installed. The root-emergency lane deliberately
+    // supplies CapNull; every other lane supplies its retained badged root cap.
     sel4::set_tcb_space(
         tcb,
-        child_fault_slot,
+        root_fault_cap,
         cnode,
         cspace_root_data,
         sel4_sys::seL4_CapInitThreadVSpace,
