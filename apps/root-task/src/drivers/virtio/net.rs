@@ -212,7 +212,6 @@ static USED_RING_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_LEN_ZERO_VISIBILITY_LOGGED: AtomicBool = AtomicBool::new(false);
 static USED_POP_INVARIANT_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_LAYOUT_LOGGED: AtomicBool = AtomicBool::new(false);
-static DMA_FORCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static VQ_ADDRESS_LOGGED: [AtomicBool; virtio_mmio::VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; virtio_mmio::VIRTIO_MMIO_SLOTS];
 static RING_SLOT_CANARY_LOGGED: [AtomicBool; virtio_mmio::VIRTIO_MMIO_SLOTS] =
@@ -6369,7 +6368,7 @@ impl VirtioNet {
         if !cacheable && !RX_CACHE_POLICY_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             log::info!(
                 target: "virtio-net",
-                "[virtio-net][dma] rx buffers mapped non-cacheable; cache clean should be redundant"
+                "[virtio-net][dma] rx buffers mapped non-cacheable; cache maintenance skipped; barriers retained"
             );
         }
         let header_ptr = buffer.ptr().as_ptr();
@@ -10530,27 +10529,29 @@ impl VirtQueue {
             debug_assert_eq!(verify.flags, desc.flags, "descriptor flags mismatch");
             debug_assert_eq!(verify.next, desc.next, "descriptor next mismatch");
         }
-        // AArch64 QEMU virtio is non-coherent here; barriers are insufficient; must clean/invalidate rings/descriptors.
+        // Cacheable AArch64 virtio mappings require maintenance before device
+        // ownership; uncached mappings retain the ordering barriers below.
         self.clean_desc_entry_for_device(index)
     }
 
-    /// Publish an available descriptor after descriptors have been written and cleaned.
+    /// Publish an available descriptor after descriptors have been written and, for cacheable
+    /// mappings, cleaned.
     /// Ordering is enforced with device-scope store barriers so the device never observes a
     /// partially initialised (zeroed) descriptor even when the queue is mapped cacheable.
     /// Per the VirtIO 1.1 spec (§2.6.9), the device may consume descriptors as soon as `avail.idx`
     /// is updated, so the writes must be visible in this exact order:
-    /// 1) descriptor writes + cache maintenance (caller, per-entry clean)
+    /// 1) descriptor writes + cache maintenance when mapped cacheable
     /// 2) release/device fence
     /// 3) avail.ring slot write
     /// 4) avail.idx write
-    /// 5) combined cache clean (slot + idx cacheline window)
+    /// 5) combined cache clean (slot + idx cacheline window) when mapped cacheable
     /// 6) release/device fence
     /// 7) notify (performed by the caller)
     ///
     /// Why this fixes the wrap abort: QEMU aborted on `len=0` when a stale avail entry raced with
-    /// a freshly cleared descriptor. Cleaning the touched bytes and forcing `dmb oshst` between
-    /// desc → avail → idx → notify guarantees the device sees the fully populated descriptor chain
-    /// before it reuses a wrapped slot.
+    /// a freshly cleared descriptor. Cleaning cacheable mappings and always forcing `dmb oshst`
+    /// between desc → avail → idx → notify guarantees the device sees the fully populated
+    /// descriptor chain before it reuses a wrapped slot.
     fn push_avail(&self, index: u16) -> Result<(u16, u16, u16), DmaError> {
         self.assert_index_in_range(index, "avail");
         let avail = self.avail.as_ptr();
@@ -11184,8 +11185,6 @@ fn align_down(value: usize, align: usize) -> usize {
     value & !(align - 1)
 }
 
-const DMA_FORCE_CACHE_MAINTENANCE: bool = DMA_NONCOHERENT;
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum DmaError {
     CacheOperationFailed,
@@ -11224,13 +11223,7 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
     if len == 0 {
         return Ok(());
     }
-    let perform_cache_op = cacheable || DMA_FORCE_CACHE_MAINTENANCE;
-    #[cfg(test)]
-    if let Some(hook) = *DMA_TEST_HOOK.lock() {
-        hook(CacheOp::Clean, ptr as usize, len);
-        return Ok(());
-    }
-    if !perform_cache_op {
+    if !cacheable {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
@@ -11240,11 +11233,10 @@ fn dma_clean(ptr: *const u8, len: usize, cacheable: bool, reason: &str) -> Resul
         virtq_diag_cache_overlap(CacheDiagOp::Clean, ptr as usize, len, false);
         return Ok(());
     }
-    if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-        info!(
-            target: "virtio-net",
-            "[virtio-net][dma] forcing cache maintenance for non-cacheable mapping",
-        );
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Clean, ptr as usize, len);
+        return Ok(());
     }
     let log_once = !DMA_CLEAN_LOGGED.swap(true, AtomicOrdering::AcqRel);
     let trace_enabled =
@@ -11319,13 +11311,7 @@ fn dma_invalidate(
     if len == 0 {
         return Ok(());
     }
-    let perform_cache_op = cacheable || DMA_FORCE_CACHE_MAINTENANCE;
-    #[cfg(test)]
-    if let Some(hook) = *DMA_TEST_HOOK.lock() {
-        hook(CacheOp::Invalidate, ptr as usize, len);
-        return Ok(());
-    }
-    if !perform_cache_op {
+    if !cacheable {
         if !DMA_SKIP_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             info!(
                 target: "virtio-net",
@@ -11335,11 +11321,10 @@ fn dma_invalidate(
         virtq_diag_cache_overlap(CacheDiagOp::Invalidate, ptr as usize, len, false);
         return Ok(());
     }
-    if !cacheable && !DMA_FORCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-        info!(
-            target: "virtio-net",
-            "[virtio-net][dma] forcing cache maintenance for non-cacheable mapping",
-        );
+    #[cfg(test)]
+    if let Some(hook) = *DMA_TEST_HOOK.lock() {
+        hook(CacheOp::Invalidate, ptr as usize, len);
+        return Ok(());
     }
     let log_once = !DMA_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel);
     let trace_enabled =
@@ -11423,10 +11408,13 @@ fn dma_load_barrier() {
 
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
-fn dma_clean(ptr: *const u8, len: usize, _cacheable: bool, _reason: &str) -> Result<(), DmaError> {
+fn dma_clean(_ptr: *const u8, len: usize, cacheable: bool, _reason: &str) -> Result<(), DmaError> {
+    if len == 0 || !cacheable {
+        return Ok(());
+    }
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
-        hook(CacheOp::Clean, ptr as usize, len);
+        hook(CacheOp::Clean, _ptr as usize, len);
     }
     Ok(())
 }
@@ -11434,14 +11422,17 @@ fn dma_clean(ptr: *const u8, len: usize, _cacheable: bool, _reason: &str) -> Res
 #[cfg(not(target_arch = "aarch64"))]
 #[inline(always)]
 fn dma_invalidate(
-    ptr: *const u8,
+    _ptr: *const u8,
     len: usize,
-    _cacheable: bool,
+    cacheable: bool,
     _reason: &str,
 ) -> Result<(), DmaError> {
+    if len == 0 || !cacheable {
+        return Ok(());
+    }
     #[cfg(test)]
     if let Some(hook) = *DMA_TEST_HOOK.lock() {
-        hook(CacheOp::Invalidate, ptr as usize, len);
+        hook(CacheOp::Invalidate, _ptr as usize, len);
     }
     Ok(())
 }
@@ -12188,10 +12179,11 @@ mod tx_tests {
     }
 
     #[test]
-    fn cache_ops_forced_for_uncached_wraparound_metadata() {
+    fn cache_ops_skipped_for_uncached_wraparound_metadata() {
         let publishes = usize::from(TX_QUEUE_SIZE) * 2 + 4;
         let desc_ptr = 0x2000usize as *const u8;
         let idx_ptr = 0x4000usize as *const u8;
+        let used_header_ptr = 0x5000usize as *const u8;
         with_dma_test_hook(Some(log_hook), || {
             OP_LOG.lock().clear();
             for idx in 0..publishes {
@@ -12202,14 +12194,18 @@ mod tx_tests {
                 let _ = dma_clean(slot_ptr, core::mem::size_of::<u16>(), false, "wrap-slot");
                 let _ = dma_clean(idx_ptr, core::mem::size_of::<u16>(), false, "wrap-idx");
             }
+            let _ = dma_invalidate(
+                used_header_ptr,
+                core::mem::size_of::<u32>(),
+                false,
+                "uncached-used-header",
+            );
         });
         let log = OP_LOG.lock();
-        let expected = publishes * 3;
         assert!(
-            log.len() >= expected,
-            "cache ops must run for uncached mappings across wraps (got {} expected >= {})",
-            log.len(),
-            expected
+            log.is_empty(),
+            "uncached mappings must not issue cache operations (got {})",
+            log.len()
         );
     }
 

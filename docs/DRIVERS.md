@@ -440,14 +440,16 @@ records.
 For every buffer or descriptor, define an ownership cycle such as:
 
 ```text
-CPU free -> CPU prepared -> cleaned for device -> device owned
-device complete -> invalidated for CPU -> CPU consumed -> CPU free
+CPU free -> CPU prepared -> cache-maintained when cacheable -> device owned
+device complete -> cache-maintained when cacheable -> CPU consumed -> CPU free
 ```
 
 Requirements:
 
-- clean CPU-produced data before a non-coherent device reads it;
-- invalidate device-produced data before the CPU reads it;
+- clean CPU-produced data in cacheable mappings before a non-coherent device reads it;
+- invalidate device-produced data in cacheable mappings before the CPU reads it;
+- for `seL4_ARM_Page_Uncached` mappings, skip cache operations while retaining
+  the required DMA publication and consumption barriers;
 - order descriptor publication after payload preparation;
 - order completion consumption after device ownership returns;
 - use the selected seL4 cache operations and barriers;
