@@ -21,7 +21,8 @@ use crate::critical_tcb::{
     CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
     FaultRegistry, FaultRegistryError, GenerationIdentity, PublishResult, WorkerControlRecord,
     WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
-    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
+    FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY,
+    WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalTaskConfig, TemporalTaskKind, TimeoutPolicy,
@@ -187,6 +188,9 @@ static TIMEOUT_DRIVER_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 static TARGET_STANDARD_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_TIMEOUT_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_CNODE: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_TCB_CAP_SLOTS: [AtomicUsize; FAULT_REGISTRY_CAPACITY] =
+    [const { AtomicUsize::new(0) }; FAULT_REGISTRY_CAPACITY];
+static TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TARGET_SERVICE_RECOVERY_SLOTS: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACITY] =
     [const { AtomicUsize::new(0) }; SERVICE_FAULT_RECORD_CAPACITY];
 static TARGET_SERVICE_RECOVERY_STATES: [AtomicUsize; SERVICE_FAULT_RECORD_CAPACITY] =
@@ -345,6 +349,113 @@ pub fn target_fault_receiver_active() -> bool {
     TARGET_FAULT_RECEIVER_ACTIVE.load(Ordering::Acquire)
 }
 
+fn root_fault_tcb_control_slot(task_index: u16) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    let resource = critical_resource(ROOT_FAULT_ID)?;
+    let slot_base = seL4_CPtr::from(
+        generated::worker_resource_admission_config()
+            .fault_registry
+            .root_fault_tcb_control_slot_base,
+    );
+    let slot = slot_base
+        .checked_add(seL4_CPtr::from(task_index))
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let capacity = 1u64
+        .checked_shl(u32::from(resource.cnode_radix_bits))
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    if slot >= capacity {
+        return Err(CriticalTcbConstructionError::MissingGeneratedRecord);
+    }
+    Ok(slot)
+}
+
+fn install_root_fault_tcb_control_cap(
+    task_index: u16,
+    root_tcb_cap: seL4_CPtr,
+) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    let index = usize::from(task_index);
+    let target = TARGET_ROOT_FAULT_TCB_CAP_SLOTS
+        .get(index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    if root_tcb_cap == sel4_sys::seL4_CapNull || target.load(Ordering::Acquire) != 0 {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let root_fault_cnode = TARGET_ROOT_FAULT_CNODE.load(Ordering::Acquire) as seL4_CPtr;
+    if root_fault_cnode == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let resource = critical_resource(ROOT_FAULT_ID)?;
+    let slot = root_fault_tcb_control_slot(task_index)?;
+    let error = sel4::cnode_copy_depth(
+        root_fault_cnode,
+        slot,
+        resource.cnode_radix_bits,
+        sel4_sys::seL4_CapInitThreadCNode,
+        root_tcb_cap,
+        sel4::word_bits() as u8,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if error != sel4_sys::seL4_NoError {
+        return Err(sel4_error("critical.root-fault-tcb-control-copy", error));
+    }
+    target.store(slot as usize, Ordering::Release);
+    Ok(slot)
+}
+
+fn replace_root_fault_tcb_control_cap(
+    task_index: u16,
+    root_tcb_cap: seL4_CPtr,
+) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    let index = usize::from(task_index);
+    let target = TARGET_ROOT_FAULT_TCB_CAP_SLOTS
+        .get(index)
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let slot = root_fault_tcb_control_slot(task_index)?;
+    if root_tcb_cap == sel4_sys::seL4_CapNull || target.load(Ordering::Acquire) != slot as usize {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let root_fault_cnode = TARGET_ROOT_FAULT_CNODE.load(Ordering::Acquire) as seL4_CPtr;
+    if root_fault_cnode == sel4_sys::seL4_CapNull {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let resource = critical_resource(ROOT_FAULT_ID)?;
+    let delete_error = sel4::cnode_delete(root_fault_cnode, slot, resource.cnode_radix_bits);
+    if delete_error != sel4_sys::seL4_NoError {
+        return Err(sel4_error(
+            "critical.root-fault-tcb-control-delete",
+            delete_error,
+        ));
+    }
+    let copy_error = sel4::cnode_copy_depth(
+        root_fault_cnode,
+        slot,
+        resource.cnode_radix_bits,
+        sel4_sys::seL4_CapInitThreadCNode,
+        root_tcb_cap,
+        sel4::word_bits() as u8,
+        sel4_sys::seL4_CapRights_All,
+    );
+    if copy_error != sel4_sys::seL4_NoError {
+        target.store(0, Ordering::Release);
+        return Err(sel4_error(
+            "critical.root-fault-tcb-control-replace",
+            copy_error,
+        ));
+    }
+    Ok(slot)
+}
+
+fn root_fault_tcb_control_cap(task_index: u16) -> Result<seL4_CPtr, CriticalTcbConstructionError> {
+    let expected = root_fault_tcb_control_slot(task_index)?;
+    let cap = TARGET_ROOT_FAULT_TCB_CAP_SLOTS
+        .get(usize::from(task_index))
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?
+        .load(Ordering::Acquire) as seL4_CPtr;
+    if cap != expected {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    Ok(cap)
+}
+
 /// Register one constructed live TCB in the exact target fault registry.
 ///
 /// Service, Worker, and driver constructors call this before critical-domain
@@ -376,6 +487,7 @@ pub fn register_target_fault_source(
         tcb_cap: tcb_cap as usize,
         terminal: task.timeout_policy != TimeoutPolicy::ReplenishOnce,
     })?;
+    install_root_fault_tcb_control_cap(task_index, tcb_cap)?;
     Ok(())
 }
 
@@ -414,6 +526,7 @@ pub fn replace_target_fault_source(
             terminal: task.timeout_policy != TimeoutPolicy::ReplenishOnce,
         },
     )?;
+    replace_root_fault_tcb_control_cap(task_index, new_tcb_cap)?;
     Ok(())
 }
 
@@ -471,6 +584,12 @@ pub fn take_target_service_fault(
 }
 
 /// Resume all four restricted duties only after exact registry construction.
+///
+/// The init/root-control TCB retains its bootstrap scheduling context until
+/// userland has finished construction and is about to enter the steady event
+/// loop. Applying its generated 1.5 ms budget here would charge remaining
+/// bootstrap work to a steady-state WCET contract and can trigger a legitimate
+/// timeout before the runtime boundary exists.
 pub fn activate_critical_tcb_runtime(
     runtime: &CriticalTcbRuntime,
 ) -> Result<(), CriticalTcbConstructionError> {
@@ -499,8 +618,24 @@ pub fn activate_critical_tcb_runtime(
             return Err(sel4_error("critical.child-resume", error));
         }
     }
+    Ok(())
+}
+
+/// Apply the generated root-control SC parameters at the steady event-loop boundary.
+pub fn activate_root_control_temporal_runtime(
+    runtime: &CriticalTcbRuntime,
+) -> Result<(), CriticalTcbConstructionError> {
+    if !TARGET_FAULT_REGISTRY_SEALED.load(Ordering::Acquire)
+        || !TARGET_FAULT_RECEIVER_ACTIVE.load(Ordering::Acquire)
+        || TARGET_FATAL.load(Ordering::Acquire)
+    {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
     let root_control = runtime.handles[0];
     let root_task = temporal_task(ROOT_CONTROL_ID)?;
+    TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
     if let Err(error) = configure_active_sc_with_sched_control(
         root_task,
         root_control.tcb_cap as seL4_CPtr,
@@ -509,15 +644,7 @@ pub fn activate_critical_tcb_runtime(
         root_control.fault_endpoint_cap as seL4_CPtr,
         root_control.timeout_endpoint_cap as seL4_CPtr,
     ) {
-        let mut rollback_complete = true;
-        for handle in &runtime.handles[1..] {
-            rollback_complete &= sel4::suspend_tcb(handle.tcb_cap as seL4_CPtr).is_ok();
-        }
-        if rollback_complete {
-            TARGET_FAULT_RECEIVER_ACTIVE.store(false, Ordering::Release);
-        } else {
-            TARGET_FATAL.store(true, Ordering::Release);
-        }
+        TARGET_ROOT_CONTROL_TEMPORAL_ACTIVE.store(false, Ordering::Release);
         return Err(error);
     }
     Ok(())
@@ -899,9 +1026,10 @@ fn handle_target_fault(
         fault_class: lane,
         tcb_cap: registration.tcb_cap,
     };
+    let fault_handler_tcb_cap = root_fault_tcb_control_cap(registration.task_index)?;
     match task.kind {
         TemporalTaskKind::Worker => {
-            sel4::suspend_tcb(registration.tcb_cap as seL4_CPtr)
+            sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-worker-suspend", error))?;
             publish_target_worker_fault(record)?;
         }
@@ -919,12 +1047,12 @@ fn handle_target_fault(
         | TemporalTaskKind::RootEmergency
         | TemporalTaskKind::WorkerSupervisor
         | TemporalTaskKind::DriverSupervisor => {
-            sel4::suspend_tcb(registration.tcb_cap as seL4_CPtr)
+            sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-critical-suspend", error))?;
             sel4::signal_unchecked(CHILD_EMERGENCY_SIGNAL_SLOT);
         }
         TemporalTaskKind::Service | TemporalTaskKind::Drain => {
-            sel4::suspend_tcb(registration.tcb_cap as seL4_CPtr)
+            sel4::suspend_tcb(fault_handler_tcb_cap)
                 .map_err(|error| sel4_error("critical.root-fault-service-suspend", error))?;
             if task.execution == generated::TemporalExecution::Passive
                 && task.timeout_policy == TimeoutPolicy::ReturnError
@@ -947,12 +1075,10 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
     loop {
         #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
         cohesix_root_fault_qemu_evidence_turn();
-        let mut processed = false;
         if !STANDARD_DRIVER_LANE_BUSY.load(Ordering::Acquire) {
             let mut badge = 0;
             let info = sel4::nb_recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
             if target_message_present(&info, badge) {
-                processed = true;
                 if handle_target_fault(info, badge, FaultClass::Standard).is_err() {
                     target_fail_stop(
                         "[critical] root-fault standard lane failed",
@@ -969,7 +1095,6 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 CHILD_TIMEOUT_REPLY_SLOT,
             );
             if target_message_present(&info, badge) {
-                processed = true;
                 if handle_target_fault(info, badge, FaultClass::Timeout).is_err() {
                     target_fail_stop(
                         "[critical] root-fault timeout lane failed",
@@ -978,9 +1103,10 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 }
             }
         }
-        if !processed {
-            sel4::yield_now();
-        }
+        // One temporal turn polls each lane at most once and handles at most
+        // one record per lane. Yield even after work so a continuous fault
+        // stream cannot consume a second turn inside this 500 us SC budget.
+        sel4::yield_now();
     }
 }
 

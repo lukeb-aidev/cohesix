@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7",
-  "topology_sha256": "5ae2fd9cf62c36bc2016f4ade78bfe9805a8065af4cf703fbbab8cf085f26ec8",
+  "manifest_sha256": "7ba47983f1bc7497e21d0d47ca753c0dcbeef48b52cda4bb8c4690184f04d117",
+  "topology_sha256": "0e6cc3d0db5d24c6fcac15d7aede2071b0cfebab3c5d9e6024aa1ce7be666c5e",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
@@ -707,7 +707,7 @@
         },
         {
           "cnode_radix_bits": 6,
-          "cspace_cap_count": 16,
+          "cspace_cap_count": 20,
           "fault_reply_lanes": 2,
           "id": "root-fault",
           "ipc_buffer_pages": 1,
@@ -822,6 +822,7 @@
         "critical_tcbs": 5,
         "driver_tcbs": 0,
         "recoverable_timeout_tasks": [],
+        "root_fault_tcb_control_slot_base": 16,
         "service_tcbs": 2,
         "standard_reply_lanes": 1,
         "timeout_reply_lanes": 1,

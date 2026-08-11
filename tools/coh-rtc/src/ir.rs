@@ -1748,6 +1748,22 @@ impl Manifest {
         if service.root_fault_recovery_reply_slot >= root_fault_slots {
             bail!("ninedoor_service recovery Reply slot exceeds root-fault CSpace");
         }
+        let control_slot_start = u32::from(
+            self.worker_resource_admission
+                .fault_registry
+                .root_fault_tcb_control_slot_base,
+        );
+        let control_slot_end = control_slot_start
+            .checked_add(u32::from(
+                self.worker_resource_admission.fault_registry.capacity,
+            ))
+            .ok_or_else(|| anyhow::anyhow!("root-fault TCB control slot range overflows"))?;
+        if (control_slot_start..control_slot_end).contains(&service.root_fault_recovery_reply_slot)
+        {
+            bail!(
+                "ninedoor_service recovery Reply slot collides with root-fault TCB control slots"
+            );
+        }
         if self
             .worker_resource_admission
             .critical_tcbs

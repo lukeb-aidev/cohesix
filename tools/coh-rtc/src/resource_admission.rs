@@ -343,6 +343,7 @@ pub struct FaultRegistryAdmission {
     pub worker_tcbs: u16,
     pub driver_tcbs: u16,
     pub capacity: u16,
+    pub root_fault_tcb_control_slot_base: u16,
     pub standard_reply_lanes: u8,
     pub timeout_reply_lanes: u8,
     pub recoverable_timeout_tasks: Vec<String>,
@@ -729,6 +730,51 @@ impl WorkerResourceAdmissionConfig {
         if declared.standard_reply_lanes == 0 || declared.timeout_reply_lanes == 0 {
             bail!("fault registry requires owned standard and timeout Reply lanes");
         }
+        let passive_recovery_caps = temporal
+            .tasks
+            .iter()
+            .filter(|task| {
+                task.execution == TemporalExecution::Passive
+                    && task.timeout_policy == crate::temporal::TimeoutPolicy::ReturnError
+            })
+            .count();
+        let root_fault = self
+            .critical_tcbs
+            .iter()
+            .find(|critical| critical.id == "root-fault")
+            .ok_or_else(|| anyhow::anyhow!("root-fault resource record is missing"))?;
+        // Slots 1..=9 are the two self-fault caps, two receive endpoints, two
+        // Reply objects, and three notification signals. Passive recovery caps
+        // follow in their compiler-selected slots; every registered temporal
+        // TCB additionally needs one root-fault-local control cap because a
+        // root-Cspace CPtr is meaningless inside the restricted handler CSpace.
+        let expected_root_fault_caps = 9usize
+            .checked_add(passive_recovery_caps)
+            .and_then(|total| total.checked_add(temporal.tasks.len()))
+            .ok_or_else(|| anyhow::anyhow!("root-fault CSpace arithmetic overflows"))?;
+        if usize::from(root_fault.cspace_cap_count) != expected_root_fault_caps {
+            bail!(
+                "root-fault CSpace cap count {} does not match handler lanes + passive recovery + temporal TCB controls {}",
+                root_fault.cspace_cap_count,
+                expected_root_fault_caps
+            );
+        }
+        let root_fault_slots = 1usize << root_fault.cnode_radix_bits;
+        let tcb_control_slot_base = usize::from(declared.root_fault_tcb_control_slot_base);
+        let first_slot_after_fixed_and_recovery = 10usize
+            .checked_add(passive_recovery_caps)
+            .ok_or_else(|| anyhow::anyhow!("root-fault recovery-slot arithmetic overflows"))?;
+        if tcb_control_slot_base < first_slot_after_fixed_and_recovery {
+            bail!(
+                "root-fault TCB control slot range overlaps fixed handler or passive recovery caps"
+            );
+        }
+        let highest_tcb_control_slot = tcb_control_slot_base
+            .checked_add(temporal.tasks.len())
+            .ok_or_else(|| anyhow::anyhow!("root-fault control-slot arithmetic overflows"))?;
+        if highest_tcb_control_slot > root_fault_slots {
+            bail!("root-fault CNode cannot contain every temporal TCB control cap");
+        }
         let mut recoverable = BTreeSet::new();
         for id in &declared.recoverable_timeout_tasks {
             if !recoverable.insert(id.as_str())
@@ -1050,7 +1096,7 @@ mod tests {
                 .map(|(index, id)| CriticalTcbResource {
                     id: (*id).to_owned(),
                     cnode_radix_bits: 5,
-                    cspace_cap_count: 8,
+                    cspace_cap_count: if *id == "root-fault" { 17 } else { 8 },
                     revoke_anchor_slot: index as u32 + 1,
                     ipc_buffer_pages: 1,
                     stack_pages: 2,
@@ -1109,6 +1155,7 @@ mod tests {
                 worker_tcbs: 1,
                 driver_tcbs: 1,
                 capacity: temporal.tasks.len() as u16,
+                root_fault_tcb_control_slot_base: 16,
                 standard_reply_lanes: 1,
                 timeout_reply_lanes: 1,
                 recoverable_timeout_tasks: Vec::new(),
@@ -1161,6 +1208,28 @@ mod tests {
         config.fault_registry.capacity -= 1;
         let error = config.validate(&temporal()).expect_err("fault omission");
         assert!(error.to_string().contains("every admitted temporal TCB"));
+    }
+
+    #[test]
+    fn worker_admission_rejects_root_fault_tcb_control_slot_overlap() {
+        let mut config = admission();
+        config.fault_registry.root_fault_tcb_control_slot_base = 9;
+        let error = config
+            .validate(&temporal())
+            .expect_err("TCB control caps must not overlap fixed handler slots");
+        assert!(error.to_string().contains("overlaps fixed handler"));
+    }
+
+    #[test]
+    fn worker_admission_rejects_root_fault_tcb_control_slot_overflow() {
+        let mut config = admission();
+        config.fault_registry.root_fault_tcb_control_slot_base = 25;
+        let error = config
+            .validate(&temporal())
+            .expect_err("TCB control caps must fit the root-fault CNode");
+        assert!(error
+            .to_string()
+            .contains("cannot contain every temporal TCB"));
     }
 
     #[test]

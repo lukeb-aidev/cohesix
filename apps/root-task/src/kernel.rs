@@ -3093,6 +3093,8 @@ pub struct BootContext {
     pub(crate) local_seat: RefCell<Option<&'static mut local_seat::LocalSeatRuntime>>,
     #[cfg(feature = "kernel")]
     pub(crate) wifi_debug_hal_ptr: usize,
+    #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+    pub(crate) critical_runtime: &'static crate::hal::critical_tcb::CriticalTcbRuntime,
 }
 
 impl BootStateGuard {
@@ -5435,6 +5437,10 @@ fn bootstrap<P: Platform>(
             );
             boot_log::force_uart_line(actual_line.as_str());
 
+            // Every restricted duty below is now charged to its generated SC.
+            // Keep the IPC readiness guard active, but end synchronous UART
+            // breadcrumbs before they can consume a child's steady budget.
+            crate::sel4::complete_bootstrap_ipc_trace();
             crate::hal::critical_tcb::activate_critical_tcb_runtime(critical_runtime).map_err(
                 |error| {
                     BootError::Fatal(format!(
@@ -5803,6 +5809,8 @@ fn bootstrap<P: Platform>(
             local_seat: RefCell::new(local_seat_runtime),
             #[cfg(feature = "kernel")]
             wifi_debug_hal_ptr: hal as *mut KernelHal<'static> as usize,
+            #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+            critical_runtime,
         };
 
         #[cfg(not(feature = "net-console"))]
@@ -5829,6 +5837,8 @@ fn bootstrap<P: Platform>(
             local_seat: RefCell::new(local_seat_runtime),
             #[cfg(feature = "kernel")]
             wifi_debug_hal_ptr: hal as *mut KernelHal<'static> as usize,
+            #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+            critical_runtime,
         };
         return Ok(ctx);
     }

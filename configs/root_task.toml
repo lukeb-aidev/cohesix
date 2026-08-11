@@ -858,7 +858,7 @@ fault_reply_lanes = 1
 [[worker_resource_admission.critical_tcbs]]
 id = "root-fault"
 cnode_radix_bits = 6
-cspace_cap_count = 16
+cspace_cap_count = 20
 revoke_anchor_slot = 16129
 ipc_buffer_pages = 1
 stack_pages = 2
@@ -960,6 +960,7 @@ service_tcbs = 2
 worker_tcbs = 3
 driver_tcbs = 0
 capacity = 10
+root_fault_tcb_control_slot_base = 16
 standard_reply_lanes = 1
 timeout_reply_lanes = 1
 recoverable_timeout_tasks = []

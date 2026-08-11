@@ -291,14 +291,10 @@ pub fn main(ctx: BootContext) -> ! {
                     if !pump.queue_cyw43_bootstrap_operator_line(resume_line) {
                         boot_log::force_uart_line(resume_line);
                     }
-                    enter_root_console_loop_with_deferred_net_supervisor(
-                        &mut pump,
-                        config,
-                        ctx.wifi_debug_hal_ptr,
-                    );
+                    enter_root_console_loop_with_deferred_net_supervisor(&mut pump, config, &ctx);
                 }
             }
-            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
+            enter_root_console_loop(&mut pump, &ctx);
         } else if let Some(mut active_net_stack) = net_stack.take() {
             #[cfg(feature = "net-console")]
             {
@@ -318,14 +314,14 @@ pub fn main(ctx: BootContext) -> ! {
             #[cfg(all(feature = "net-console", feature = "kernel"))]
             wait_for_net_console_before_root_console(&mut pump);
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
+            enter_root_console_loop(&mut pump, &ctx);
         } else {
             #[cfg(feature = "net-console")]
             {
                 attach_network(&mut pump, None, net_unavailable_detail.take());
             }
             start_root_console_prompt(&mut pump);
-            enter_root_console_loop(&mut pump, ctx.wifi_debug_hal_ptr);
+            enter_root_console_loop(&mut pump, &ctx);
         }
     }
 
@@ -333,8 +329,37 @@ pub fn main(ctx: BootContext) -> ! {
     #[allow(clippy::diverging_sub_expression)]
     {
         boot_log::allow_ep_only_transport();
+        activate_root_control_temporal_or_fail(&ctx);
         pump.run();
     }
+}
+
+fn activate_root_control_temporal_or_fail(ctx: &BootContext) {
+    #[cfg(all(feature = "kernel", sel4_config_kernel_mcs))]
+    {
+        // Emit the boundary breadcrumb while the init TCB still owns its
+        // bootstrap scheduling context. A synchronous UART write after the
+        // configure call would itself consume the generated steady budget.
+        boot_log::force_uart_line(
+            "[critical] arming root-control steady-state SC at event-loop boundary",
+        );
+        if let Err(error) =
+            crate::hal::critical_tcb::activate_root_control_temporal_runtime(ctx.critical_runtime)
+        {
+            log::error!(
+                target: "root_task::kernel",
+                "[critical] root-control steady SC activation failed: {error:?}"
+            );
+            boot_log::force_uart_line(
+                "[critical] root-control steady SC activation failed; fail-stop",
+            );
+            loop {
+                sel4::yield_now();
+            }
+        }
+    }
+    #[cfg(not(all(feature = "kernel", sel4_config_kernel_mcs)))]
+    let _ = ctx;
 }
 
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
@@ -404,7 +429,7 @@ fn start_root_console_prompt<'a, D, T, I, V, const RX: usize, const TX: usize, c
 #[cfg(all(feature = "serial-console", feature = "kernel"))]
 fn enter_root_console_loop<'a, D, T, I, V, const RX: usize, const TX: usize, const LINE: usize>(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
-    hal_ptr: usize,
+    ctx: &BootContext,
 ) -> !
 where
     D: crate::serial::SerialDriver,
@@ -426,6 +451,8 @@ where
     } else {
         announce_root_console_loop_start();
     }
+    activate_root_control_temporal_or_fail(ctx);
+    let hal_ptr = ctx.wifi_debug_hal_ptr;
     loop {
         pump.poll();
         #[cfg(feature = "net-console")]
@@ -1814,7 +1841,7 @@ fn enter_root_console_loop_with_deferred_net_supervisor<
 >(
     pump: &mut EventPump<'a, D, T, I, V, RX, TX, LINE>,
     config: crate::net::ConsoleNetConfig,
-    hal_ptr: usize,
+    ctx: &BootContext,
 ) -> !
 where
     D: crate::serial::SerialDriver,
@@ -1836,6 +1863,8 @@ where
     } else {
         announce_root_console_loop_start();
     }
+    activate_root_control_temporal_or_fail(ctx);
+    let hal_ptr = ctx.wifi_debug_hal_ptr;
     let local_seat_enabled = crate::generated::hardware_config().local_seat.enabled;
     let mut supervisor_sequence = DeferredNetSupervisorSequence::new();
     if hal_ptr == 0 {

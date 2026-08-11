@@ -387,6 +387,10 @@ name = "mcs_fault_lanes"
 path = "tests/mcs_fault_lanes.rs"
 
 [[test]]
+name = "mcs_activation_order"
+path = "tests/mcs_activation_order.rs"
+
+[[test]]
 name = "driver_task_mcs"
 path = "tests/driver_task_mcs.rs"
 

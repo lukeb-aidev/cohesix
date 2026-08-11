@@ -236,6 +236,20 @@ TCBs, active SCs, CSpaces, IPC buffers, stacks, timeout caps, and named duties:
 - `root-worker-supervisor` owns Worker lifecycle and teardown; and
 - `root-driver-supervisor` owns driver faulted-call failure and containment.
 
+All four restricted children are constructed and registered while suspended.
+Root seals the exact generated fault registry and completes the bounded
+synchronous bootstrap IPC trace before any restricted child is resumed onto
+its generated SC. Root-control remains on the kernel-provided initial SC
+through the rest of bootstrap. Its generated budget, period, fault endpoint,
+and timeout policy are applied exactly once at the selected userland event-loop
+entry, immediately before steady polling; kernel construction does not arm that
+temporal policy mid-bootstrap.
+
+The root-fault CSpace receives compiler-bounded child-local TCB control caps at
+the exact critical task-index slots used by its containment loop. Root-relative
+registered TCB caps remain root-control records and are never invoked from the
+restricted root-fault CSpace.
+
 For an isolated service fault, `root-fault` suspends the exact registered TCB.
 For passive NineDoor only, it then consumes the dedicated
 compiler-selected recovery Reply association: an outstanding `root-control`

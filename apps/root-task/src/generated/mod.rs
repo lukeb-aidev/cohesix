@@ -427,6 +427,7 @@ pub struct FaultRegistryAdmission {
     pub worker_tcbs: u16,
     pub driver_tcbs: u16,
     pub capacity: u16,
+    pub root_fault_tcb_control_slot_base: u16,
     pub standard_reply_lanes: u8,
     pub timeout_reply_lanes: u8,
     pub recoverable_timeout_tasks: &'static [&'static str],
@@ -1037,7 +1038,7 @@ pub struct AuditConfig {
 
 pub const MANIFEST_SCHEMA: &str = "1.8";
 pub const MANIFEST_SHA256: &str =
-    "8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7";
+    "7ba47983f1bc7497e21d0d47ca753c0dcbeef48b52cda4bb8c4690184f04d117";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

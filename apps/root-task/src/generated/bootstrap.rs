@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "1c4654135068c8b4b0c3b15fe5eaf18ae9ad0174d419e47801f89b580855d6fb";
+    "20182cd5a998b672bfad414dbe3c52099373de371b4c20b53a8f9639ea60caa1";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -759,7 +759,7 @@ pub const CRITICAL_TCB_RESOURCES: [CriticalTcbResource; 5] = [
     CriticalTcbResource {
         id: "root-fault",
         cnode_radix_bits: 6,
-        cspace_cap_count: 16,
+        cspace_cap_count: 20,
         revoke_anchor_slot: 16129,
         ipc_buffer_pages: 1,
         stack_pages: 2,
@@ -933,6 +933,7 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             worker_tcbs: 3,
             driver_tcbs: 0,
             capacity: 10,
+            root_fault_tcb_control_slot_base: 16,
             standard_reply_lanes: 1,
             timeout_reply_lanes: 1,
             recoverable_timeout_tasks: &RECOVERABLE_TIMEOUT_TASKS,
@@ -1572,7 +1573,7 @@ pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
     "manifest.schema=1.8",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=8702c7c920c14b6449478c90ed34765787d2c3379a1ac305a4e98a99aa04ddd7",
+    "manifest.sha256=7ba47983f1bc7497e21d0d47ca753c0dcbeef48b52cda4bb8c4690184f04d117",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

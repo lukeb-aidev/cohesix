@@ -1113,6 +1113,17 @@ const IPC_TRAP_LINE_CAP: usize = 240;
 #[cfg(feature = "kernel")]
 static BOOTSTRAP_SEND_INSTRUMENT_COUNT: AtomicUsize = AtomicUsize::new(0);
 
+/// Close the bounded UART IPC trace before temporal child duties are resumed.
+///
+/// The readiness trap remains active for every syscall. Only its first-three
+/// diagnostic UART writes are disabled, because charging those synchronous
+/// boot breadcrumbs to a restricted child's sub-millisecond SC would violate
+/// the generated steady-state budget boundary.
+#[cfg(feature = "kernel")]
+pub fn complete_bootstrap_ipc_trace() {
+    BOOTSTRAP_SEND_INSTRUMENT_COUNT.store(3, Ordering::Release);
+}
+
 #[cfg(feature = "kernel")]
 fn emit_illegal_send_line(line: &str) {
     crate::bootstrap::log::force_uart_line(line);
