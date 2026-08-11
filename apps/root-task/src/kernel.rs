@@ -4519,6 +4519,9 @@ fn bootstrap<P: Platform>(
     // Keep HAL storage alive for the full root-task lifetime. Local-seat
     // backends retain a raw HAL pointer for deferred runtime keyboard bring-up.
     let hal = Box::leak(Box::new(KernelHal::new(kernel_env)));
+    if consumed_slots > 0 {
+        hal.consume_bootstrap_slots(consumed_slots);
+    }
     #[cfg(sel4_config_kernel_mcs)]
     let critical_runtime: &'static crate::hal::critical_tcb::CriticalTcbRuntime = {
         let runtime = crate::hal::critical_tcb::construct_critical_tcb_runtime(
@@ -4536,9 +4539,6 @@ fn bootstrap<P: Platform>(
         );
         Box::leak(Box::new(runtime))
     };
-    if consumed_slots > 0 {
-        hal.consume_bootstrap_slots(consumed_slots);
-    }
     #[cfg(sel4_config_kernel_mcs)]
     {
         let worker_runtime = crate::hal::worker_task::TargetWorkerRuntime::bootstrap(

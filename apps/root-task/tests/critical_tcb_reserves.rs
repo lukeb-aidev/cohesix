@@ -10,6 +10,29 @@ use root_task::critical_tcb::{
 use root_task::generated;
 
 #[test]
+fn bootstrap_slot_cursor_advances_before_critical_object_allocation() {
+    let source = include_str!("../src/kernel.rs");
+    let consume = source
+        .find("hal.consume_bootstrap_slots(consumed_slots)")
+        .expect("bootstrap slot consumption must remain explicit");
+    let critical = source
+        .find("construct_critical_tcb_runtime(")
+        .expect("critical MCS construction must remain explicit");
+
+    assert!(
+        consume < critical,
+        "HAL slot cursor must advance before critical MCS objects allocate",
+    );
+    assert_eq!(
+        source
+            .match_indices("hal.consume_bootstrap_slots(consumed_slots)")
+            .count(),
+        1,
+        "bootstrap slots must be consumed exactly once",
+    );
+}
+
+#[test]
 fn all_five_named_duties_finish_with_distinct_kernel_objects() {
     validate_critical_temporal_graph().expect("critical temporal graph");
     let resources = generated::worker_resource_admission_config().critical_tcbs;
