@@ -36,7 +36,7 @@ pub const TICKET_TABLE_SHA256: &str =
 pub const NAMESPACE_TABLE_SHA256: &str =
     "c34073b3f57eeae7ebba0eb35e56b2a1dea490aee4de2cc1f3a0b65ec2bc7b24";
 pub const AUDIT_TABLE_SHA256: &str =
-    "b42759034e9bcb358e535e4200658b29fdb78590d272195890a1f7ca55275b2d";
+    "dc771b958545c5c4431407877f35891f126b275bc79471011eab338c118bcb65";
 
 pub const TICKET_INVENTORY: [TicketSpec; 5] = [
     TicketSpec {
@@ -555,10 +555,14 @@ pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig
         fault_caps: 1,
         timeout_fault_caps: 1,
         reply_objects: 1,
-        scheduling_contexts: 0,
+        scheduling_contexts: 1,
         cspace_slots: 80,
         untyped_bytes: 1048576,
     },
+    bootstrap_scheduling_context_bits: 8,
+    bootstrap_budget_us: 3000,
+    bootstrap_period_us: 10000,
+    bootstrap_max_refills: 2,
     endpoint_slot: 2,
     reply_slot: 3,
     root_fault_recovery_reply_slot: 10,
@@ -857,7 +861,7 @@ pub const WORKER_RESOURCE_ADMISSION_CONFIG: WorkerResourceAdmissionConfig =
             fault_caps: 7,
             timeout_fault_caps: 7,
             reply_objects: 6,
-            scheduling_contexts: 6,
+            scheduling_contexts: 7,
             cspace_slots: 4103,
             untyped_bytes: 67108864,
         },
@@ -1572,9 +1576,9 @@ pub const AUDIT_CONFIG: AuditConfig = AuditConfig {
 pub const EVENT_PUMP_FDS: [&str; 5] = ["serial", "timer", "ipc", "net-console", "ninedoor"];
 
 pub const INITIAL_AUDIT_LINES: [&str; 49] = [
-    "manifest.schema=1.9",
+    "manifest.schema=1.10",
     "manifest.profile=virt-aarch64",
-    "manifest.sha256=a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa",
+    "manifest.sha256=cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c",
     "manifest.tickets=5",
     "manifest.namespaces=1 role_isolation=true",
     "manifest.secure9p.msize=8192",

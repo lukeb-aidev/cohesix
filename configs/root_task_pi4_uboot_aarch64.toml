@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Pi4 U-Boot aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.9"
+schema = "1.10"
 
 [root_task.affinity]
 enabled = true
@@ -491,6 +491,11 @@ entry_symbol = "_start"
 child_cspace_slots = 16
 revoke_anchor_slot = 16137
 revoke_anchor_bits = 20
+# Live-qualification candidate for reaching the passive receive boundary.
+bootstrap_scheduling_context_bits = 8
+bootstrap_budget_us = 3000
+bootstrap_period_us = 10000
+bootstrap_max_refills = 2
 endpoint_slot = 2
 reply_slot = 3
 root_fault_recovery_reply_slot = 10
@@ -527,7 +532,7 @@ notifications = 0
 fault_caps = 1
 timeout_fault_caps = 1
 reply_objects = 1
-scheduling_contexts = 0
+scheduling_contexts = 1
 cspace_slots = 80
 untyped_bytes = 1048576
 
@@ -936,7 +941,7 @@ notifications = 32
 fault_caps = 14
 timeout_fault_caps = 14
 reply_objects = 13
-scheduling_contexts = 13
+scheduling_contexts = 14
 cspace_slots = 9007
 untyped_bytes = 100663296
 

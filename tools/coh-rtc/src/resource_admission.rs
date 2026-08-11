@@ -390,6 +390,16 @@ impl WorkerResourceAdmissionConfig {
 
     /// Validate resources against the exact generated temporal topology.
     pub fn validate(&self, temporal: &TemporalAuthorityConfig) -> Result<()> {
+        self.validate_with_bootstrap_scheduling_contexts(temporal, 0)
+    }
+
+    /// Validate resources plus compiler-declared fixed bootstrap SCs that are
+    /// intentionally absent from the steady temporal-task topology.
+    pub(crate) fn validate_with_bootstrap_scheduling_contexts(
+        &self,
+        temporal: &TemporalAuthorityConfig,
+        bootstrap_scheduling_contexts: u32,
+    ) -> Result<()> {
         if !self.enabled {
             if temporal.enabled {
                 bail!("enabled temporal_authority requires worker_resource_admission.enabled=true");
@@ -431,7 +441,7 @@ impl WorkerResourceAdmissionConfig {
             bail!("maximum executable role mix exceeds admitted kernel resources after reserve");
         }
         self.validate_critical_tcbs(temporal)?;
-        self.validate_fault_registry(temporal)?;
+        self.validate_fault_registry(temporal, bootstrap_scheduling_contexts)?;
         self.validate_handoff(temporal)?;
         Ok(())
     }
@@ -655,7 +665,11 @@ impl WorkerResourceAdmissionConfig {
         Ok(())
     }
 
-    fn validate_fault_registry(&self, temporal: &TemporalAuthorityConfig) -> Result<()> {
+    fn validate_fault_registry(
+        &self,
+        temporal: &TemporalAuthorityConfig,
+        bootstrap_scheduling_contexts: u32,
+    ) -> Result<()> {
         let critical = temporal
             .tasks
             .iter()
@@ -679,6 +693,10 @@ impl WorkerResourceAdmissionConfig {
                 task.kind != TemporalTaskKind::Worker && task.execution == TemporalExecution::Active
             })
             .count();
+        let expected_fixed_scheduling_contexts = u32::try_from(active_nonworkers)
+            .ok()
+            .and_then(|count| count.checked_add(bootstrap_scheduling_contexts))
+            .ok_or_else(|| anyhow::anyhow!("fixed scheduling-context total overflows"))?;
         let critical_reply_objects = self
             .critical_tcbs
             .iter()
@@ -717,7 +735,7 @@ impl WorkerResourceAdmissionConfig {
             || self.fixed_objects.asids != fixed_tcb_count
             || self.fixed_objects.fault_caps != fixed_tcb_count
             || self.fixed_objects.timeout_fault_caps != fixed_tcb_count
-            || self.fixed_objects.scheduling_contexts != active_nonworkers as u32
+            || self.fixed_objects.scheduling_contexts != expected_fixed_scheduling_contexts
         {
             bail!("fixed object totals do not match non-Worker temporal duties");
         }
@@ -1174,6 +1192,21 @@ mod tests {
         config.validate(&temporal()).expect("valid admission");
         assert_eq!(config.executable_roles[0].namespace_capacity, 8);
         assert_eq!(config.executable_roles[0].executable_slots, 1);
+    }
+
+    #[test]
+    fn worker_admission_accounts_for_fixed_bootstrap_scheduling_context() {
+        let mut config = admission();
+        config.fixed_objects.scheduling_contexts += 1;
+        config
+            .validate_with_bootstrap_scheduling_contexts(&temporal(), 1)
+            .expect("one fixed bootstrap SC is admitted outside steady task topology");
+
+        config.fixed_objects.scheduling_contexts -= 1;
+        let error = config
+            .validate_with_bootstrap_scheduling_contexts(&temporal(), 1)
+            .expect_err("an omitted fixed bootstrap SC must fail closed");
+        assert!(error.to_string().contains("fixed object totals"));
     }
 
     #[test]

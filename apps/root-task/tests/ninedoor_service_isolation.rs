@@ -36,8 +36,12 @@ fn generated_child_inventory_is_exact_and_allocator_free() {
     assert_eq!(contract.objects.endpoints, 1);
     assert_eq!(contract.objects.notifications, 0);
     assert_eq!(contract.objects.reply_objects, 1);
-    assert_eq!(contract.objects.scheduling_contexts, 0);
+    assert_eq!(contract.objects.scheduling_contexts, 1);
     assert_eq!(contract.objects.cspace_slots, 80);
+    assert_eq!(contract.bootstrap_scheduling_context_bits, 8);
+    assert_eq!(contract.bootstrap_budget_us, 3_000);
+    assert_eq!(contract.bootstrap_period_us, 10_000);
+    assert_eq!(contract.bootstrap_max_refills, 2);
     assert_eq!(plan.image_pages, 35);
     assert_eq!(contract.stack_pages, 8);
     assert_eq!(contract.shared_frame_bytes, 8_192);

@@ -102,6 +102,14 @@ pub struct NineDoorServiceContract {
     pub priority: u8,
     /// Passive server MCP.
     pub mcp: u8,
+    /// One-shot scheduling-context object bits used to reach the first receive.
+    pub bootstrap_scheduling_context_bits: u8,
+    /// One-shot bootstrap scheduling budget in microseconds.
+    pub bootstrap_budget_us: u32,
+    /// One-shot bootstrap scheduling period in microseconds.
+    pub bootstrap_period_us: u32,
+    /// Total bootstrap scheduling-context replenishment bound.
+    pub bootstrap_max_refills: u8,
 }
 
 impl NineDoorServiceContract {
@@ -127,6 +135,13 @@ impl NineDoorServiceContract {
             || config.root_response_rights != SEL4_RIGHTS_READ
             || config.child_request_rights != SEL4_RIGHTS_READ
             || config.child_response_rights != SEL4_RIGHTS_READ_WRITE
+            || config.bootstrap_scheduling_context_bits
+                < crate::generated::worker_resource_admission_config()
+                    .object_bits
+                    .sched_context_min
+            || config.bootstrap_budget_us == 0
+            || config.bootstrap_period_us < config.bootstrap_budget_us
+            || config.bootstrap_max_refills < 2
         {
             return Err(TransportError::InvalidAbi);
         }
@@ -173,6 +188,10 @@ impl NineDoorServiceContract {
             core: config.core,
             priority: config.priority,
             mcp: config.mcp,
+            bootstrap_scheduling_context_bits: config.bootstrap_scheduling_context_bits,
+            bootstrap_budget_us: config.bootstrap_budget_us,
+            bootstrap_period_us: config.bootstrap_period_us,
+            bootstrap_max_refills: config.bootstrap_max_refills,
         })
     }
 
@@ -1076,6 +1095,141 @@ mod tests {
             boundary.prepare(NamespaceOpcode::Cat, "/proc/boot", ""),
             Err(TransportError::Revoked)
         );
+    }
+
+    #[test]
+    fn bootstrap_probe_does_not_consume_the_repeated_call_receive_cycle() {
+        let mut boundary = NamespaceServiceBoundary::new(17).unwrap();
+        let mut exchange = PreparedMockExchange {
+            corrupt_sequence: false,
+        };
+
+        for expected_sequence in 1..=4 {
+            let prepared = boundary
+                .prepare_with_exchange(&mut exchange, NamespaceOpcode::Log, "", "")
+                .unwrap();
+            assert_eq!(prepared.header().sequence, expected_sequence);
+            assert_eq!(prepared.header().generation, 17);
+            assert_eq!(prepared.path(), "");
+            assert_eq!(prepared.payload(), "");
+        }
+
+        assert_eq!(boundary.state(), TransportState::Open);
+        assert!(boundary.outstanding.is_none());
+    }
+
+    #[test]
+    fn failed_bootstrap_fences_every_followup_call() {
+        let mut boundary = NamespaceServiceBoundary::new(19).unwrap();
+        boundary
+            .prepare(NamespaceOpcode::Log, "", "")
+            .expect("bootstrap parser probe");
+        boundary.revoke();
+
+        assert_eq!(boundary.state(), TransportState::Revoked);
+        assert_eq!(
+            boundary.prepare(NamespaceOpcode::Log, "", ""),
+            Err(TransportError::Revoked)
+        );
+    }
+
+    #[test]
+    fn target_bootstrap_source_preserves_atomic_activation_order() {
+        let bridge_source = include_str!("ninedoor.rs");
+        let activation = bridge_source
+            .split_once("pub fn activate_target_service")
+            .unwrap()
+            .1
+            .split_once("pub fn contain_target_service_if_faulted")
+            .unwrap()
+            .0;
+        let resume = activation.find("NineDoorServiceRuntime::activate").unwrap();
+        let probe = activation
+            .find(".prepare(NamespaceOpcode::Log, \"\", \"\")")
+            .unwrap();
+        let validate = activation.find("if probe_result.is_err()").unwrap();
+        let unbind = activation
+            .find("NineDoorServiceRuntime::finish_bootstrap")
+            .unwrap();
+        assert!(resume < probe && probe < validate && validate < unbind);
+        let probe_suspend = activation
+            .find("NineDoorServiceRuntime::fail_bootstrap")
+            .unwrap();
+        let probe_revoke = probe_suspend
+            + activation[probe_suspend..]
+                .find("self.namespace_service.revoke();")
+                .unwrap();
+        assert!(validate < probe_suspend && probe_suspend < probe_revoke);
+        assert_eq!(
+            activation
+                .matches("self.namespace_service.revoke();")
+                .count(),
+            3
+        );
+        let finish_failure = activation
+            .find("if let Err(error) = finish_result")
+            .unwrap();
+        let final_revoke = activation
+            .rfind("self.namespace_service.revoke();")
+            .unwrap();
+        assert!(unbind < finish_failure && finish_failure < final_revoke);
+        assert!(!activation.contains("configure_sched_context"));
+        assert!(!activation.contains("set_tcb_sched_params_mcs"));
+        assert!(!activation.contains("set_tcb_affinity"));
+
+        let hal_source = include_str!("hal/ninedoor_service.rs");
+        let install_mcs = hal_source
+            .split_once("fn install_caps_and_mcs")
+            .unwrap()
+            .1
+            .split_once("fn scrub_root_mapping")
+            .unwrap()
+            .0;
+        let configure = install_mcs.find("configure_sched_context").unwrap();
+        let bind = install_mcs.find("set_tcb_sched_params_mcs").unwrap();
+        assert!(configure < bind);
+        assert!(!install_mcs.contains("resume_tcb"));
+        assert!(!install_mcs.contains("set_tcb_affinity"));
+        assert!(hal_source.contains("bootstrap_state: BootstrapState::Suspended"));
+
+        let finish_bootstrap = hal_source
+            .split_once("pub fn finish_bootstrap")
+            .unwrap()
+            .1
+            .split_once("pub fn fail_bootstrap")
+            .unwrap()
+            .0;
+        let unbind_sc = finish_bootstrap
+            .find("unbind_sched_context_object")
+            .unwrap();
+        let unbind_failure = finish_bootstrap.find("self.fail_bootstrap()").unwrap();
+        let passive = finish_bootstrap.find("BootstrapState::Passive").unwrap();
+        assert!(unbind_sc < unbind_failure && unbind_failure < passive);
+        let fail_bootstrap = hal_source
+            .split_once("pub fn fail_bootstrap")
+            .unwrap()
+            .1
+            .split_once("pub fn contain(")
+            .unwrap()
+            .0;
+        let failed_state = fail_bootstrap.find("BootstrapState::Failed").unwrap();
+        let suspend = fail_bootstrap.find("suspend_tcb").unwrap();
+        assert!(failed_state < suspend);
+
+        let runtime_source = include_str!("../../nine-door-runtime/src/kernel.rs");
+        let initial_receive = runtime_source
+            .find("let mut tag = receive(descriptor, &mut badge);")
+            .unwrap();
+        let receive_loop =
+            initial_receive + runtime_source[initial_receive..].find("loop {").unwrap();
+        let atomic_reply_receive = runtime_source
+            .find("tag = reply_receive(descriptor, &mut badge, reply_label);")
+            .unwrap();
+        assert!(initial_receive < receive_loop);
+        assert!(receive_loop < atomic_reply_receive);
+        assert_eq!(runtime_source.matches("seL4_Recv(").count(), 1);
+        assert_eq!(runtime_source.matches("seL4_ReplyRecv(").count(), 1);
+        assert!(!runtime_source.contains("seL4_MCS_Reply("));
     }
 
     #[test]

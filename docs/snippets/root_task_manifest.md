@@ -5,7 +5,7 @@
 ### Root-task manifest schema (generated)
 - `meta.author`: `Lukas Bower`
 - `meta.purpose`: `Root-task manifest input for coh-rtc.`
-- `root_task.schema`: `1.9`
+- `root_task.schema`: `1.10`
 - `root_task.affinity.enabled`: `true`
 - `root_task.affinity.max_cores`: `4`
 - `root_task.affinity.authority_core`: `0`
@@ -231,7 +231,7 @@
 - `sharding.shard_bits`: `8`
 - `sharding.legacy_worker_alias`: `true`
 - `tickets`: 5 entries
-- `manifest.sha256`: `a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa`
+- `manifest.sha256`: `cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c`
 
 ### Namespace mounts (generated)
 - service `logs` → `/log`
@@ -290,4 +290,4 @@
 - `ecosystem.models.enable`: `false`
 - Nodes appear only when enabled.
 
-_Generated from `configs/root_task.toml` (sha256: `a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa`)._
+_Generated from `configs/root_task.toml` (sha256: `cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c`)._

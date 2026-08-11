@@ -2,7 +2,7 @@
 # Purpose: Generated SwarmUI defaults derived from configs/root_task.toml.
 # Copyright 2026 Lukas Bower
 [meta]
-manifest_sha256 = "a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa"
+manifest_sha256 = "cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c"
 
 [swarmui]
 ticket_scope = "per-ticket"

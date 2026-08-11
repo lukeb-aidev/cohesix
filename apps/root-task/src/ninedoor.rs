@@ -701,14 +701,45 @@ impl NineDoorBridge {
         bridge
     }
 
-    /// Resume the passive child after the complete target fault registry and
-    /// independently scheduled root-fault receiver are live.
+    /// Bootstrap the child to its first receive, prove one parser-only round
+    /// trip, then remove the one-shot SC before admitting passive service.
     #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
     pub fn activate_target_service(&mut self) -> Result<(), HalError> {
-        self.target_service
+        let activation_result = self
+            .target_service
             .as_mut()
-            .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))?
-            .activate()
+            .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))
+            .and_then(NineDoorServiceRuntime::activate);
+        if let Err(error) = activation_result {
+            self.namespace_service.revoke();
+            return Err(error);
+        }
+        let probe_result = self
+            .namespace_service
+            .prepare(NamespaceOpcode::Log, "", "")
+            .map(|_| ());
+        if probe_result.is_err() {
+            let close_result = self
+                .target_service
+                .as_mut()
+                .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))
+                .and_then(NineDoorServiceRuntime::fail_bootstrap);
+            self.namespace_service.revoke();
+            return match close_result {
+                Ok(()) => Err(HalError::Unsupported("ninedoor-bootstrap-probe")),
+                Err(error) => Err(error),
+            };
+        }
+        let finish_result = self
+            .target_service
+            .as_mut()
+            .ok_or(HalError::Unsupported("ninedoor-target-service-missing"))
+            .and_then(NineDoorServiceRuntime::finish_bootstrap);
+        if let Err(error) = finish_result {
+            self.namespace_service.revoke();
+            return Err(error);
+        }
+        Ok(())
     }
 
     /// Consume one durable service-fault record or a local transport revoke,

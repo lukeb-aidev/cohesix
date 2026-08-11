@@ -4804,6 +4804,11 @@ mismatch, fewer than two total refills, missing consumed-time evidence, and an
 active SC that aliases another task. QEMU and Pi each reserve 1,000 us of every
 10,000 us core window. The Pi table includes seven linked-driver records; the
 default QEMU table deliberately does not fabricate those hardware TCBs.
+Manifest `root_task.schema = "1.10"` adds exactly one fixed, root-retained
+NineDoor bootstrap SC outside the steady temporal-task topology. Resource
+admission must therefore total 18 SCs for QEMU and 25 for Pi; the former 17/24
+totals, a zero-object NineDoor SC inventory, or double-counting the one-shot
+object must fail.
 
 The critical topology tests must account for the init TCB exactly once as the
 real `root-control` domain and exactly four distinct restricted children:
@@ -4864,9 +4869,30 @@ associated. Only an explicitly generated `replenish-once` timeout may reply
 once; the current allowlist is empty. Root-fault faults route to
 root-emergency, and root-emergency has no recovery edge.
 
-NineDoor adds one separate recovery Reply object owned by its passive receive
-loop and copied only into the compiler-selected root-fault CSpace slot. Tests
-must reject reuse of the ordinary root-fault receive Reply object, reject
+NineDoor schema tests must require `root_task.schema = "1.10"` and reject schema
+1.9. They must admit exactly one root-retained, one-shot scheduling context with
+object bits 8, `3000 us / 10000 us`, and `max_refills = 2`; any different value,
+missing fixed SC accounting, child-Cspace SC or SchedControl cap, or NineDoor
+`TCB.SetAffinity` path fails closed. The candidate is not target-qualified by
+schema, code generation, compilation, or host tests.
+
+Bootstrap tests must prove the exact transition `Resume -> validated empty Log
+prepare -> atomic ReplyRecv queued -> SC unbind -> steady passive donation`.
+Constructor/source-order coverage must first prove that root configures and
+binds the one-shot SC while the child is suspended and before registry seal;
+activation must not allocate, configure, or bind a second SC.
+
+The empty probe has `path = ""` and `payload = ""`, consumes one ordinary
+request sequence without leaving an outstanding exchange, and must not break
+repeated Calls. Source-order coverage must prove one initial `seL4_Recv`, one
+atomic `seL4_ReplyRecv` loop, no separate `seL4_MCS_Reply`, validation before
+unbind, and unbind before `Passive`. Activation, probe, and unbind failure tests
+must all revoke the namespace boundary and refuse admission; probe and unbind
+failure must also attempt to suspend the child.
+
+NineDoor also adds one separate recovery Reply object owned by its passive
+receive loop and copied only into the compiler-selected root-fault CSpace slot.
+Tests must reject reuse of the ordinary root-fault receive Reply object, reject
 active console-network admission to the passive path, and prove one atomic
 ready-to-replied transition. A fault with an outstanding Call returns exact
 sequence plus typed `Closed` once before the durable service mailbox is
@@ -4896,8 +4922,8 @@ None of this QEMU evidence is Pi hardware proof.
 
 ### Milestone 26e NineDoor service-isolation gate
 
-Run the fixed ABI, passive child, generated inventory, image binding, and
-target checks before the QEMU boot:
+Run the fixed ABI, one-shot bootstrap/passive child, generated inventory, image
+binding, and target checks before the QEMU boot:
 
 ```bash
 cargo test -p secure9p-transport -p nine-door-runtime
@@ -4912,13 +4938,20 @@ cargo check -p root-task --target aarch64-unknown-none \
   --no-default-features --features release-qemu
 ```
 
-The selected QEMU run must then show all ten sources constructed suspended,
-NineDoor registered last before seal, root-fault activated first, and NineDoor
-resumed only after that receiver is live. Inject a NineDoor standard fault both
-during one donated Call and between Calls. The first must return one typed
-failure before containment; the second must issue no Reply. Neither may leave
-the donor blocked, admit a second Reply, preserve old mappings/caps, route the
-active console through the passive path, or stop root-control progress.
+The selected four-core GICv3 QEMU run must then show all ten sources constructed
+suspended, NineDoor registered last before seal, root-fault activated first,
+and NineDoor resumed only after that receiver is live. It must observe the exact
+post-validation marker
+`[ninedoor-service] passive child active bootstrap-sc=unbound recovery-reply=installed`,
+with no NineDoor `TCB.SetAffinity`/affinity-failure marker, then complete at
+least two ordinary namespace requests so the first and repeated passive
+donation/atomic-`ReplyRecv` cycles are both live. Inject a NineDoor standard
+fault both during one donated Call and between Calls. The first must return one
+typed failure before containment; the second must issue no Reply. Neither may
+leave the donor blocked, admit a second Reply, preserve old mappings/caps, route
+the active console through the passive path, or stop root-control progress.
+This QEMU qualification is still pending; the marker or a successful boot alone
+does not satisfy the gate.
 
 ### Milestone 26e console-network service-isolation gate
 
@@ -5022,7 +5055,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa`
+- `configs/generated/root_task_resolved.json` — `sha256:cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

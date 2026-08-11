@@ -163,7 +163,7 @@ def _inventory() -> dict[str, int]:
         "fault_caps": 10,
         "timeout_fault_caps": 10,
         "reply_objects": 7,
-        "scheduling_contexts": 9,
+        "scheduling_contexts": 10,
         "cspace_slots": 4_288,
         "untyped_bytes": 70_254_592,
     }

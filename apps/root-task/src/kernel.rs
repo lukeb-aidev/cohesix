@@ -5467,7 +5467,7 @@ fn bootstrap<P: Platform>(
                 ))
             })?;
             boot_log::force_uart_line(
-                "[ninedoor-service] passive child active recovery-reply=installed",
+                "[ninedoor-service] passive child active bootstrap-sc=unbound recovery-reply=installed",
             );
 
             #[cfg(feature = "net-console")]

@@ -289,6 +289,13 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub revoke_anchor_slot: u32,")?;
     writeln!(mod_contents, "    pub revoke_anchor_bits: u8,")?;
     writeln!(mod_contents, "    pub objects: KernelObjectBudget,")?;
+    writeln!(
+        mod_contents,
+        "    pub bootstrap_scheduling_context_bits: u8,"
+    )?;
+    writeln!(mod_contents, "    pub bootstrap_budget_us: u32,")?;
+    writeln!(mod_contents, "    pub bootstrap_period_us: u32,")?;
+    writeln!(mod_contents, "    pub bootstrap_max_refills: u8,")?;
     for field in [
         "endpoint_slot",
         "reply_slot",
@@ -1926,7 +1933,7 @@ pub fn emit_rust(
     let ninedoor = &manifest.ninedoor_service;
     writeln!(
         bootstrap_contents,
-        "pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, endpoint_slot: {}, reply_slot: {}, root_fault_recovery_reply_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, request_vaddr: {}, response_vaddr: {}, shared_frame_bytes: {}, max_inflight: {}, request_badge: {}, fault_badge: {}, timeout_badge: {}, root_call_rights: {}, child_receive_rights: {}, root_request_rights: {}, root_response_rights: {}, child_request_rights: {}, child_response_rights: {}, core: {}, priority: {}, mcp: {} }};\n",
+        "pub const NINEDOOR_SERVICE_CONFIG: NineDoorServiceConfig = NineDoorServiceConfig {{ enabled: {}, abi_version: {}, image_id: \"{}\", image_path: \"{}\", entry_symbol: \"{}\", child_cspace_slots: {}, revoke_anchor_slot: {}, revoke_anchor_bits: {}, objects: {}, bootstrap_scheduling_context_bits: {}, bootstrap_budget_us: {}, bootstrap_period_us: {}, bootstrap_max_refills: {}, endpoint_slot: {}, reply_slot: {}, root_fault_recovery_reply_slot: {}, ipc_buffer_vaddr: {}, init_vaddr: {}, stack_vaddr: {}, stack_pages: {}, request_vaddr: {}, response_vaddr: {}, shared_frame_bytes: {}, max_inflight: {}, request_badge: {}, fault_badge: {}, timeout_badge: {}, root_call_rights: {}, child_receive_rights: {}, root_request_rights: {}, root_response_rights: {}, child_request_rights: {}, child_response_rights: {}, core: {}, priority: {}, mcp: {} }};\n",
         ninedoor.enabled,
         ninedoor.abi_version,
         escape_literal(&ninedoor.image_id),
@@ -1936,6 +1943,10 @@ pub fn emit_rust(
         ninedoor.revoke_anchor_slot,
         ninedoor.revoke_anchor_bits,
         kernel_object_budget_to_rust(ninedoor.objects),
+        ninedoor.bootstrap_scheduling_context_bits,
+        ninedoor.bootstrap_budget_us,
+        ninedoor.bootstrap_period_us,
+        ninedoor.bootstrap_max_refills,
         ninedoor.endpoint_slot,
         ninedoor.reply_slot,
         ninedoor.root_fault_recovery_reply_slot,

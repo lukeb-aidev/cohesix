@@ -222,8 +222,10 @@ its declared core, and declares budget, period, deadline, refill bound,
 priority, MCP, blocking, release jitter, WCET provenance, response time, and
 admission result. `max_refills` is the total refill bound; root passes
 `max_refills - 2` as the seL4 `extra_refills` argument. NineDoor is the one
-passive service in this inventory and may run only on its generated bounded
-donor/Reply chain.
+steady-state passive service in this inventory and may run only on its generated
+bounded donor/Reply chain. Manifest `root_task.schema = "1.10"` also admits
+exactly one fixed, root-retained bootstrap SC for that service; it is not a
+steady temporal-task SC.
 
 The init TCB and initial SC are the real `root-control` domain because that
 thread retains bootstrap and HAL admission authority. There is no duplicate or
@@ -245,6 +247,20 @@ through the rest of bootstrap. Its generated budget, period, fault endpoint,
 and timeout policy are applied exactly once at the selected userland event-loop
 entry, immediately before steady polling; kernel construction does not arm that
 temporal policy mid-bootstrap.
+
+During NineDoor construction, root configures and binds the schema-1.10
+bootstrap candidate (8 object bits, `3000 us / 10000 us`, `max_refills = 2`)
+while the child remains suspended and before registry seal. Only after the
+registry is sealed and the independent `root-fault` receiver is active does
+root perform exactly: resume; a validated empty `Log` prepare; the child's
+atomic `seL4_ReplyRecv` reply-and-next-receive; and root-side SC unbind. Only
+after that unbind may ordinary `root-control` Calls donate the caller's SC to
+the queued passive receiver. The child CSpace receives neither an SC nor
+SchedControl cap, and this path performs no `TCB.SetAffinity`. Activation,
+probe, or unbind failure revokes the namespace boundary and fails boot; probe
+and unbind failure also suspend the child where possible. The candidate is
+frozen compiler truth but remains unqualified until the selected four-core
+GICv3 QEMU run proves the transition and repeated steady calls.
 
 The root-fault CSpace receives compiler-bounded child-local TCB control caps at
 the exact critical task-index slots used by its containment loop. Root-relative
@@ -274,7 +290,7 @@ the association, permits root-fault to receive again. No second fault Reply,
 poller, or notification-carried fault identity exists.
 
 For an isolated service fault, `root-fault` suspends the exact registered TCB.
-For passive NineDoor only, it then consumes the dedicated
+For steady-state passive NineDoor only, it then consumes the dedicated
 compiler-selected recovery Reply association: an outstanding `root-control`
 Call receives exactly one typed `Closed` failure, while a between-call fault
 issues no Reply. The atomic ready-to-replied transition prevents double Reply,
@@ -358,7 +374,7 @@ notification or Reply sizes rather than understating MCS object memory.
 | Notifications | 35 | 51 | 128 |
 | Standard / timeout fault caps | 18 each | 25 each | 64 each |
 | Reply objects | 14 | 21 | 64 |
-| Scheduling contexts | 17 | 24 | 64 |
+| Scheduling contexts | 18 | 25 | 64 |
 | CSpace slots | 6,343 | 11,247 | 16,384 |
 | Untyped bytes | 103,809,024 | 137,363,456 | 268,435,456 |
 

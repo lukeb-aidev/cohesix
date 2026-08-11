@@ -1,8 +1,8 @@
 {
   "schema": "cohesix-root-tcb-generated-inventory/v1",
   "profile": "virt-aarch64",
-  "manifest_sha256": "a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa",
-  "topology_sha256": "6663a5dfd26d79488bc4b96d2c223ba8d48fbf412bc4ecf3b26faef13345ec1e",
+  "manifest_sha256": "cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c",
+  "topology_sha256": "386b3970a2623811c2d413a110910de7b6351ad25e4c5df13d5c3fecd3102505",
   "topology": {
     "console_network_service": {
       "abi_version": 1,
@@ -70,6 +70,10 @@
     },
     "ninedoor_service": {
       "abi_version": 1,
+      "bootstrap_budget_us": 3000,
+      "bootstrap_max_refills": 2,
+      "bootstrap_period_us": 10000,
+      "bootstrap_scheduling_context_bits": 8,
       "child_cspace_slots": 16,
       "child_receive_rights": 2,
       "child_request_rights": 2,
@@ -95,7 +99,7 @@
         "notifications": 0,
         "page_tables": 8,
         "reply_objects": 1,
-        "scheduling_contexts": 0,
+        "scheduling_contexts": 1,
         "tcbs": 1,
         "timeout_fault_caps": 1,
         "untyped_bytes": 1048576,
@@ -323,7 +327,7 @@
         ],
         "required": true
       },
-      "schema": "1.9"
+      "schema": "1.10"
     },
     "temporal_authority": {
       "admission_window_us": 10000,
@@ -838,7 +842,7 @@
         "notifications": 16,
         "page_tables": 256,
         "reply_objects": 6,
-        "scheduling_contexts": 6,
+        "scheduling_contexts": 7,
         "tcbs": 7,
         "timeout_fault_caps": 7,
         "untyped_bytes": 67108864,
@@ -1046,7 +1050,7 @@
     "fault_caps": 10,
     "timeout_fault_caps": 10,
     "reply_objects": 6,
-    "scheduling_contexts": 9,
+    "scheduling_contexts": 10,
     "cspace_slots": 4295,
     "untyped_bytes": 70254592
   }

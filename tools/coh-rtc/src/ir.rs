@@ -16,7 +16,7 @@ use crate::temporal::{
     SchedulerArchitecture, TemporalAuthorityConfig, TemporalExecution, TemporalTaskKind,
 };
 
-const SCHEMA_VERSION: &str = "1.9";
+const SCHEMA_VERSION: &str = "1.10";
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
@@ -252,8 +252,16 @@ impl Manifest {
         self.validate_lifecycle()?;
         self.validate_worker_runtime()?;
         self.temporal_authority.validate()?;
+        let ninedoor_bootstrap_scheduling_contexts = if self.ninedoor_service.enabled {
+            self.ninedoor_service.objects.scheduling_contexts
+        } else {
+            0
+        };
         self.worker_resource_admission
-            .validate(&self.temporal_authority)?;
+            .validate_with_bootstrap_scheduling_contexts(
+                &self.temporal_authority,
+                ninedoor_bootstrap_scheduling_contexts,
+            )?;
         self.validate_ninedoor_service()?;
         self.validate_console_network_service()?;
         self.validate_control_plane()?;
@@ -1692,6 +1700,11 @@ impl Manifest {
             || self.temporal_authority.architecture != SchedulerArchitecture::SmpMcs
         {
             bail!("ninedoor_service requires enabled SMP+MCS temporal_authority");
+        }
+        if service.bootstrap_scheduling_context_bits
+            < self.worker_resource_admission.object_bits.sched_context_min
+        {
+            bail!("ninedoor_service bootstrap SC bits are below the selected kernel minimum");
         }
         let task = self
             .temporal_authority
@@ -4004,22 +4017,32 @@ mod tests {
     }
 
     #[test]
-    fn ninedoor_service_requires_exact_passive_object_and_rights_inventory() {
+    fn ninedoor_service_requires_exact_bootstrap_object_and_rights_inventory() {
         let service = super::NineDoorServiceConfig::default();
         service
             .validate()
             .expect("default NineDoor passive-service inventory");
         let mut objects = service.objects;
-        objects.scheduling_contexts = 1;
+        objects.scheduling_contexts = 0;
         let service = super::NineDoorServiceConfig {
             objects,
             ..super::NineDoorServiceConfig::default()
         };
         assert!(service
             .validate()
-            .expect_err("a passive child must not own an SC")
+            .expect_err("the passive child requires one bootstrap SC")
             .to_string()
             .contains("exact passive child constructor"));
+
+        let service = super::NineDoorServiceConfig {
+            bootstrap_budget_us: 2_999,
+            ..super::NineDoorServiceConfig::default()
+        };
+        assert!(service
+            .validate()
+            .expect_err("the unqualified bootstrap candidate must remain exact")
+            .to_string()
+            .contains("live-qualification candidate"));
 
         let service = super::NineDoorServiceConfig {
             root_call_rights: 0b1111,
@@ -5198,6 +5221,14 @@ pub struct NineDoorServiceConfig {
     pub revoke_anchor_slot: u32,
     pub revoke_anchor_bits: u8,
     pub objects: KernelObjectBudget,
+    /// Candidate SC size used only to let the child reach its passive receive.
+    pub bootstrap_scheduling_context_bits: u8,
+    /// Candidate bootstrap budget pending live four-core QEMU qualification.
+    pub bootstrap_budget_us: u32,
+    /// Candidate bootstrap period pending live four-core QEMU qualification.
+    pub bootstrap_period_us: u32,
+    /// Candidate bootstrap refill bound pending live four-core QEMU qualification.
+    pub bootstrap_max_refills: u8,
     pub endpoint_slot: u32,
     pub reply_slot: u32,
     pub root_fault_recovery_reply_slot: u32,
@@ -5252,7 +5283,7 @@ impl NineDoorServiceConfig {
             fault_caps: 1,
             timeout_fault_caps: 1,
             reply_objects: 1,
-            scheduling_contexts: 0,
+            scheduling_contexts: 1,
             cspace_slots: 80,
             untyped_bytes: 1_048_576,
         };
@@ -5261,6 +5292,14 @@ impl NineDoorServiceConfig {
             || self.objects != expected_objects
         {
             bail!("ninedoor_service retained anchor/object budget differs from the exact passive child constructor");
+        }
+        if self.bootstrap_scheduling_context_bits != 8
+            || self.bootstrap_budget_us != 3_000
+            || self.bootstrap_period_us != 10_000
+            || self.bootstrap_budget_us > self.bootstrap_period_us
+            || self.bootstrap_max_refills != 2
+        {
+            bail!("ninedoor_service bootstrap SC differs from the live-qualification candidate");
         }
         let mappings = [
             self.ipc_buffer_vaddr,
@@ -5353,10 +5392,14 @@ impl Default for NineDoorServiceConfig {
                 fault_caps: 1,
                 timeout_fault_caps: 1,
                 reply_objects: 1,
-                scheduling_contexts: 0,
+                scheduling_contexts: 1,
                 cspace_slots: 80,
                 untyped_bytes: 1_048_576,
             },
+            bootstrap_scheduling_context_bits: 8,
+            bootstrap_budget_us: 3_000,
+            bootstrap_period_us: 10_000,
+            bootstrap_max_refills: 2,
             endpoint_slot: 2,
             reply_slot: 3,
             root_fault_recovery_reply_slot: 10,

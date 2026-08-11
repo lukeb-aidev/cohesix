@@ -4,7 +4,7 @@
     "purpose": "Root-task manifest input for coh-rtc."
   },
   "root_task": {
-    "schema": "1.9",
+    "schema": "1.10",
     "affinity": {
       "enabled": true,
       "max_cores": 4,
@@ -968,7 +968,7 @@
       "fault_caps": 7,
       "timeout_fault_caps": 7,
       "reply_objects": 6,
-      "scheduling_contexts": 6,
+      "scheduling_contexts": 7,
       "cspace_slots": 4103,
       "untyped_bytes": 67108864
     },
@@ -1215,10 +1215,14 @@
       "fault_caps": 1,
       "timeout_fault_caps": 1,
       "reply_objects": 1,
-      "scheduling_contexts": 0,
+      "scheduling_contexts": 1,
       "cspace_slots": 80,
       "untyped_bytes": 1048576
     },
+    "bootstrap_scheduling_context_bits": 8,
+    "bootstrap_budget_us": 3000,
+    "bootstrap_period_us": 10000,
+    "bootstrap_max_refills": 2,
     "endpoint_slot": 2,
     "reply_slot": 3,
     "root_fault_recovery_reply_slot": 10,

@@ -9090,9 +9090,17 @@ operator-visible contract explicit.
   root-emergency itself has no self/cyclic handler and fails stop if it faults.
   Faulting a handler can never recurse into the same TCB or strand the only
   critical scheduling reserve.
-- The synchronous NineDoor parser/provider child is passive and caller-funded.
-  Its allowed donors, Reply objects, call depth, timeout path, and SC return are
-  generated. Any autonomous provider drain uses a separate admitted active SC.
+- The synchronous NineDoor parser/provider child is steady-state passive and
+  caller-funded. Manifest `root_task.schema = "1.10"` adds one root-retained,
+  one-shot bootstrap SC candidate (8 object bits, `3000 us / 10000 us`,
+  `max_refills = 2`) outside the steady temporal topology. After root-fault is
+  active, root must perform the
+  frozen `Resume -> validated empty Log prepare -> atomic ReplyRecv queued ->
+  unbind` transition before ordinary Calls may donate the `root-control` SC.
+  The child receives no SC or SchedControl cap and no `TCB.SetAffinity` call.
+  Its allowed steady donors, Reply objects, call depth, timeout path, and SC
+  return are generated. Any autonomous provider drain uses a separate admitted
+  active SC. The bootstrap candidate remains QEMU-unqualified.
 - TCP/smoltcp owns an active SC because receive, retransmission, and protocol
   timers require autonomous progress. A separately isolated pure request parser
   may be passive only if its donation chain is compiler-validated.
@@ -9446,6 +9454,12 @@ required live provider, authority, package, recovery, and evidence row.
   WCET/admission provenance; passive records contain allowed donor SCs/cores,
   Reply-object cardinality, timeout/recovery policy, and maximum donation depth.
   Invalid or incomplete executable-task declarations fail closed.
+- Manifest `root_task.schema = "1.10"` accounts for the root-retained NineDoor
+  bootstrap SC exactly once, producing aggregate scheduling-context totals of
+  18 on QEMU and 25 on Pi.
+  It proves the validated empty bootstrap exchange and SC unbind before the
+  child is admitted as passive, without placing an SC or SchedControl cap in the
+  child CSpace or invoking `TCB.SetAffinity` for NineDoor.
 - The exact heartbeat/GPU/LoRA role matrix is executable on both targets;
   zero-role or host/model-only closure is impossible. Static
   executable-contract state and exact-target acceptance records remain
@@ -9595,19 +9609,19 @@ Milestone: Milestone 26e — Root-Service Compartmentalization + Worker Task Iso
 Goal: Move untrusted target namespace parsing and provider projection behind a bounded restricted seL4 child without moving Queen policy authority.
 Inputs: `m26e-mcs-abi-foundation`, `m26e-production-surface-truth-and-stub-retirement`, `m26e-worker-resource-admission-critical-tcbs`, `m26e-driver-runtime-mcs-port-and-cyw43-coexistence`, apps/root-task/src/ninedoor.rs, apps/root-task/src/event/**, apps/root-task/src/console/**, apps/nine-door/src/**, crates/secure9p-transport/**, tools/coh-rtc/src/**, configs/root_task*.toml, docs/ARCHITECTURE.md, docs/INTERFACES.md, docs/SECURITY.md.
 Changes:
-  - tools/coh-rtc/src/** + configs/root_task*.toml — add compiler-owned service-image, TCB, CSpace, VSpace, IPC-buffer, stack, endpoint, shared-frame, MCS scheduling-context/Reply/donation/timeout, fault-badge, and revoke records for the target namespace service.
-  - apps/nine-door-runtime/** — add a pure-Rust `no_std` child image that parses bounded namespace requests and returns typed prepared operations over the generated internal ABI.
+  - tools/coh-rtc/src/** + configs/root_task*.toml — freeze `root_task.schema = "1.10"` with compiler-owned service-image, TCB, CSpace, VSpace, IPC-buffer, stack, endpoint, shared-frame, MCS Reply/donation/timeout, fault-badge, revoke records, and one root-retained one-shot bootstrap SC (8 object bits, `3000 us / 10000 us`, `max_refills = 2`) for the target namespace service. Account for that fixed SC exactly once so aggregate QEMU/Pi SC totals are 18/25.
+  - apps/nine-door-runtime/** — add a pure-Rust `no_std` child image that parses bounded namespace requests, returns typed prepared operations over the generated internal ABI, receives once for bootstrap, and uses atomic `seL4_ReplyRecv` for every reply-and-next-receive transition.
   - crates/secure9p-transport/** — replace the empty scaffold with the bounded transport-neutral request/response, partial-frame, close, backpressure, and cancellation traits actually consumed by the in-process host adapter and the generated seL4 endpoint/shared-frame adapter. It provides no target TCP listener. Migrate named consumers and prove revoke/short-frame/queue-full behavior; if the final child ABI cannot use this layer without duplicating semantics, remove the crate and its public claim atomically instead of retaining contract-only scaffolding.
   - apps/nine-door/src/{main.rs,kernel.rs,lib.rs} + scripts/cohesix-build-run.sh — remove/profile-exclude the host print-and-exit and target spin-loop binaries from selected packages; stage `nine-door-runtime` under its generated image identity. Keep `apps/nine-door` as the host library/fixture provider unless a later registered host-service use case owns a real executable.
-  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — retain policy and authoritative mutation in root, replace in-root untrusted parsing for enabled profiles with bounded child IPC, and delete/profile-disable the duplicate parser path.
-  - docs/ARCHITECTURE.md + docs/INTERFACES.md + docs/SECURITY.md — document the new target child separately from host NineDoor and preserve the no in-VM 9P/TCP-listener rule.
+  - apps/root-task/src/ninedoor.rs + apps/root-task/src/event/** — retain policy and authoritative mutation in root, replace in-root untrusted parsing for enabled profiles with bounded child IPC, and delete/profile-disable the duplicate parser path. Configure and bind only the root-retained bootstrap SC while the child is suspended and before registry seal; after root-fault activation perform `Resume -> validated empty Log prepare -> atomic ReplyRecv queued -> unbind -> steady passive donation`. Install no SC or SchedControl cap in the child, issue no NineDoor `TCB.SetAffinity`, and revoke the boundary on activation, probe, or unbind failure while suspending where possible.
+  - docs/ARCHITECTURE.md + docs/ROLES_AND_SCHEDULING.md + docs/TEST_PLAN.md + docs/BUILD_PLAN.md + docs/INTERFACES.md + docs/SECURITY.md — document the target child separately from host NineDoor, the frozen bootstrap/passive transition, and the no in-VM 9P/TCP-listener rule.
 Commands:
   - cargo test -p coh-rtc
   - cargo test -p root-task --tests ninedoor
   - cargo test -p nine-door
   - cargo check -p nine-door-runtime --target aarch64-unknown-none
   - scripts/check-generated.sh
-Checks: malformed and over-limit requests are contained in the child; root receives only typed bounded operations; the passive donor/Reply/timeout chain returns its SC on success, denial, timeout, cancellation, and child fault; partial-frame, backpressure, close, and revoke behavior passes through the real shared transport boundary; the selected archive contains `nine-door-runtime` and no print-and-exit/spin stub; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace, target TCP listener, SchedControl, or root CSpace authority reaches the child.
+Checks: schema 1.10 and any bootstrap-candidate drift fail closed; the exact root-retained SC is accounted once and raises QEMU/Pi SC totals to 18/25; source tests prove construction-time configure/bind while suspended before seal, one initial `seL4_Recv`, validated empty `Log` preparation, atomic `seL4_ReplyRecv` queueing, unbind before passive admission, repeated calls, and boundary revoke plus suspension where possible on activation/probe/unbind failure; malformed and over-limit requests are contained in the child; root receives only typed bounded operations; the passive donor/Reply/timeout chain returns its SC on success, denial, timeout, cancellation, and child fault; partial-frame, backpressure, close, and revoke behavior passes through the real shared transport boundary; the selected archive contains `nine-door-runtime` and no print-and-exit/spin stub; namespace, Secure9P, console, replay, and error fixtures do not drift; no broad namespace, target TCP listener, child SC/SchedControl cap, NineDoor `TCB.SetAffinity`, or root CSpace authority reaches the child. Four-core GICv3 QEMU must still observe `[ninedoor-service] passive child active bootstrap-sc=unbound recovery-reply=installed`, complete repeated post-bootstrap calls, and pass during/between-Call fault injection; this qualification remains pending and a marker or boot alone is insufficient.
 Deliverables: Executable target namespace service with generated least-authority objects, bounded IPC, fault containment, and unchanged external semantics.
 
 Title/ID: m26e-console-network-service-isolation

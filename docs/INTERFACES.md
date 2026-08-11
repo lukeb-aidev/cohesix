@@ -138,16 +138,25 @@ two message registers and rejects extra or unwrapped caps, unknown labels,
 short replies, stale identities, mismatched prepared bytes, and unknown error
 codes. The QEMU constructor binds the exact selected ELF digest and entry/load
 span, maps image pages W^X, and creates the child from generated revoke anchor
-16137 without allocator fallback. The child owns one receive-loop Reply object
-but no scheduling context; only `root-control` donates on the single-inflight,
-one-deep Call chain. Root-fault retains a copy in its generated CSpace slot 10
+16137 without allocator fallback. While the child remains suspended, root
+configures and binds one compiler-budgeted, root-retained bootstrap scheduling
+context. After registry seal and root-fault activation, root resumes the child,
+validates an empty `Log` parser probe, observes the atomic `ReplyRecv` transition
+into the next receive, and unbinds that exact scheduling context. Only then is
+the child passive and only `root-control` donates on the single-inflight,
+one-deep Call chain. Activation, probe, or unbind failure revokes the namespace
+boundary and suspends the child where possible. The child owns one receive-loop
+Reply object but no scheduling-context cap or `SchedControl` authority, and no
+`SetAffinity` path is used. Root-fault retains a copy in its generated CSpace slot 10
 solely to return `NAMESPACE_REJECTED` with typed `Closed` once when a fault
 interrupts an outstanding Call. It then publishes the owner mailbox for scrub,
 unmap, and anchor revoke. No Reply is issued between calls, and the active
 console-network service cannot use this path. Queue-full, partial-frame, close,
 cancellation, stale-generation, and revoke outcomes are explicit and bounded.
 The ABI supplies no target TCP listener, namespace-wide capability, device
-capability, `SchedControl`, ticket-execution authority, or root CSpace access.
+capability, scheduling-context or `SchedControl` capability, ticket-execution
+authority, or root CSpace access. The bootstrap scheduling-context candidate
+remains subject to live QEMU qualification.
 `apps/nine-door` remains a host library/fixture provider and has no target or
 print-and-exit binary. A live QEMU boot is still required to promote these
 constructed interfaces to target execution evidence.

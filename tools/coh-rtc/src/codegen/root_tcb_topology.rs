@@ -140,6 +140,42 @@ mod tests {
         crate::ir::load_manifest(&path).expect("load QEMU manifest")
     }
 
+    fn pi4_manifest() -> Manifest {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join("configs/root_task_pi4_uboot_aarch64.toml");
+        crate::ir::load_manifest(&path).expect("load Pi 4 manifest")
+    }
+
+    #[test]
+    fn ninedoor_bootstrap_candidate_is_exactly_accounted() {
+        for (manifest, fixed, maximum) in [(qemu_manifest(), 7, 10), (pi4_manifest(), 14, 17)] {
+            assert_eq!(manifest.ninedoor_service.objects.scheduling_contexts, 1);
+            assert_eq!(
+                manifest.ninedoor_service.bootstrap_scheduling_context_bits,
+                8
+            );
+            assert_eq!(manifest.ninedoor_service.bootstrap_budget_us, 3_000);
+            assert_eq!(manifest.ninedoor_service.bootstrap_period_us, 10_000);
+            assert_eq!(manifest.ninedoor_service.bootstrap_max_refills, 2);
+            assert_eq!(
+                manifest
+                    .worker_resource_admission
+                    .fixed_objects
+                    .scheduling_contexts,
+                fixed
+            );
+            assert_eq!(
+                manifest
+                    .worker_resource_admission
+                    .maximum_inventory()
+                    .expect("maximum inventory")
+                    .scheduling_contexts,
+                maximum
+            );
+        }
+    }
+
     #[test]
     fn generated_inventory_is_derived_from_the_maximum_role_mix() {
         let manifest = qemu_manifest();
@@ -172,7 +208,7 @@ mod tests {
             14
         );
         assert_eq!(record["inventory"]["tcbs"], 10);
-        assert_eq!(record["inventory"]["scheduling_contexts"], 9);
+        assert_eq!(record["inventory"]["scheduling_contexts"], 10);
         assert_eq!(record["inventory"]["frames"], 2112);
         assert_eq!(record["inventory"]["endpoints"], 15);
         assert_eq!(record["inventory"]["reply_objects"], 6);

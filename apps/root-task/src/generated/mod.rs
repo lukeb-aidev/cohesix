@@ -226,6 +226,10 @@ pub struct NineDoorServiceConfig {
     pub revoke_anchor_slot: u32,
     pub revoke_anchor_bits: u8,
     pub objects: KernelObjectBudget,
+    pub bootstrap_scheduling_context_bits: u8,
+    pub bootstrap_budget_us: u32,
+    pub bootstrap_period_us: u32,
+    pub bootstrap_max_refills: u8,
     pub endpoint_slot: u32,
     pub reply_slot: u32,
     pub root_fault_recovery_reply_slot: u32,
@@ -1037,9 +1041,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.9";
+pub const MANIFEST_SCHEMA: &str = "1.10";
 pub const MANIFEST_SHA256: &str =
-    "a19ad1fb83f549ef46780ef1066d750b72331ddc3988adb9a13a164ced857cfa";
+    "cf657c65539166b45e823a1ad6bfd8a2b4b86692a8ba07fdf20ca22ecae1f04c";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;

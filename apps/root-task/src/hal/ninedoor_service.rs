@@ -6,10 +6,11 @@
 //! HAL-owned construction for the target `namespace-service/v1` boundary.
 //!
 //! Every child object and translation table is derived from one retained
-//! compiler-selected revoke anchor. The service owns no SC: the allowlisted
-//! root-control caller donates its MCS SC through `Call`, while root-fault owns
-//! a distinct retained recovery Reply cap that releases that donor exactly
-//! once if the parser faults.
+//! compiler-selected revoke anchor. A bounded bootstrap SC carries the child
+//! only through its first receive; after a validated parser probe, root unbinds
+//! that exact SC and the allowlisted root-control caller donates its MCS SC
+//! through `Call`. Root-fault owns a distinct retained recovery Reply cap that
+//! releases that donor exactly once if the parser faults.
 
 use core::fmt;
 use core::sync::atomic::{fence, Ordering};
@@ -58,11 +59,20 @@ const ROOT_RESPONSE_COPY_SLOT_START: usize = CHILD_SHARED_COPY_SLOT_START + SHAR
 const ROOT_CALL_SLOT_INDEX: usize = ROOT_RESPONSE_COPY_SLOT_START + 2;
 const STANDARD_FAULT_SLOT_INDEX: usize = ROOT_CALL_SLOT_INDEX + 1;
 const TIMEOUT_FAULT_SLOT_INDEX: usize = STANDARD_FAULT_SLOT_INDEX + 1;
+const BOOTSTRAP_SC_SLOT_INDEX: usize = TIMEOUT_FAULT_SLOT_INDEX + 1;
 
 const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
-const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
+const _: () = assert!(BOOTSTRAP_SC_SLOT_INDEX < ROOT_SLOT_COUNT);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum BootstrapState {
+    Suspended,
+    Running,
+    Passive,
+    Failed,
+}
 
 /// Live kernel resources for one exact passive NineDoor generation.
 pub struct NineDoorServiceRuntime {
@@ -70,10 +80,11 @@ pub struct NineDoorServiceRuntime {
     slots: [seL4_CPtr; ROOT_SLOT_COUNT],
     tracker: RevokeAnchorVSpaceTracker<TRANSLATION_SLOT_COUNT>,
     tcb: seL4_CPtr,
+    bootstrap_scheduling_context: seL4_CPtr,
     standard_fault_cap: seL4_CPtr,
     timeout_fault_cap: seL4_CPtr,
     generation: u64,
-    activated: bool,
+    bootstrap_state: BootstrapState,
     contained: bool,
 }
 
@@ -84,7 +95,7 @@ impl fmt::Debug for NineDoorServiceRuntime {
             .field("anchor", &self.anchor)
             .field("tcb", &self.tcb)
             .field("generation", &self.generation)
-            .field("activated", &self.activated)
+            .field("bootstrap_state", &self.bootstrap_state)
             .field("contained", &self.contained)
             .finish_non_exhaustive()
     }
@@ -97,15 +108,48 @@ impl NineDoorServiceRuntime {
         self.generation
     }
 
-    /// Resume the passive receiver only after root-fault is independently live.
+    /// Resume the receiver on its bounded bootstrap SC only after root-fault
+    /// is independently live.
     pub fn activate(&mut self) -> Result<(), HalError> {
-        if self.activated || self.contained || !super::critical_tcb::target_fault_receiver_active()
+        if self.bootstrap_state != BootstrapState::Suspended
+            || self.contained
+            || !super::critical_tcb::target_fault_receiver_active()
         {
             return Err(HalError::Unsupported("ninedoor-activation-state"));
         }
         sel4::resume_tcb(self.tcb).map_err(HalError::Sel4)?;
-        self.activated = true;
+        self.bootstrap_state = BootstrapState::Running;
         Ok(())
+    }
+
+    /// Unbind the exact one-shot SC after the parser has replied and atomically
+    /// entered its next receive. Only this transition makes the service active.
+    pub fn finish_bootstrap(&mut self) -> Result<(), HalError> {
+        if self.bootstrap_state != BootstrapState::Running || self.contained {
+            return Err(HalError::Unsupported("ninedoor-bootstrap-state"));
+        }
+        if let Err(error) =
+            sel4::unbind_sched_context_object(self.bootstrap_scheduling_context, self.tcb)
+        {
+            let close_result = self.fail_bootstrap();
+            return match close_result {
+                Ok(()) => Err(HalError::Sel4(error)),
+                Err(close_error) => Err(close_error),
+            };
+        }
+        self.bootstrap_state = BootstrapState::Passive;
+        Ok(())
+    }
+
+    /// Suspend a generation whose bootstrap exchange did not validate. The
+    /// state is marked failed before the kernel call so no caller can retry or
+    /// admit the child even if suspension itself reports an error.
+    pub fn fail_bootstrap(&mut self) -> Result<(), HalError> {
+        if self.bootstrap_state != BootstrapState::Running || self.contained {
+            return Err(HalError::Unsupported("ninedoor-bootstrap-state"));
+        }
+        self.bootstrap_state = BootstrapState::Failed;
+        sel4::suspend_tcb(self.tcb).map_err(HalError::Sel4)
     }
 
     /// Suspend, scrub, unmap, remove recovery authority, and revoke the exact
@@ -156,7 +200,7 @@ impl NineDoorServiceRuntime {
         hal.env
             .revoke_anchor_descendants_and_reset_vspace(self.anchor, &mut self.tracker)
             .map_err(map_vspace_error)?;
-        self.activated = false;
+        self.bootstrap_state = BootstrapState::Failed;
         self.contained = true;
         let proof = NineDoorContainmentProof {
             tcb_suspended: true,
@@ -249,7 +293,7 @@ fn validate_object_plan(plan: NineDoorServiceObjectPlan) -> Result<(), HalError>
         || plan.objects.endpoints != 1
         || plan.objects.notifications != 0
         || plan.objects.reply_objects != 1
-        || plan.objects.scheduling_contexts != 0
+        || plan.objects.scheduling_contexts != 1
         || plan.objects.cspace_slots as usize != ROOT_SLOT_COUNT
         || usize::from(plan.image_pages) != IMAGE_FRAME_COUNT
     {
@@ -290,6 +334,7 @@ fn construct_generation(
     let vspace = slots[VSPACE_SLOT_INDEX];
     let endpoint = slots[ENDPOINT_SLOT_INDEX];
     let reply = slots[REPLY_SLOT_INDEX];
+    let bootstrap_scheduling_context = slots[BOOTSTRAP_SC_SLOT_INDEX];
     retype(anchor, tcb, sel4_sys::seL4_TCBObject as seL4_Word, 0, hal)?;
     retype(
         anchor,
@@ -313,6 +358,13 @@ fn construct_generation(
         reply,
         sel4_sys::seL4_ReplyObject as seL4_Word,
         sel4_sys::SEL4_MCS_REPLY_BITS as seL4_Word,
+        hal,
+    )?;
+    retype(
+        anchor,
+        bootstrap_scheduling_context,
+        sel4_sys::seL4_SchedContextObject as seL4_Word,
+        seL4_Word::from(contract.bootstrap_scheduling_context_bits),
         hal,
     )?;
     for frame_index in 0..FRAME_COUNT {
@@ -369,6 +421,7 @@ fn construct_generation(
         vspace,
         endpoint,
         reply,
+        bootstrap_scheduling_context,
         contract,
         ipc_vaddr,
         image_plan.entry,
@@ -400,10 +453,11 @@ fn construct_generation(
             slots,
             tracker: tracker.clone(),
             tcb,
+            bootstrap_scheduling_context,
             standard_fault_cap,
             timeout_fault_cap,
             generation: descriptor.generation,
-            activated: false,
+            bootstrap_state: BootstrapState::Suspended,
             contained: false,
         },
         boundary,
@@ -698,6 +752,7 @@ fn install_caps_and_mcs(
     vspace: seL4_CPtr,
     endpoint: seL4_CPtr,
     reply: seL4_CPtr,
+    bootstrap_scheduling_context: seL4_CPtr,
     contract: NineDoorServiceContract,
     ipc_vaddr: usize,
     entry: usize,
@@ -774,6 +829,26 @@ fn install_caps_and_mcs(
             .map_err(|_| HalError::Unsupported("ninedoor-timeout-badge"))?,
     )?;
 
+    let sched_control = hal
+        .env
+        .sched_control_for_core(contract.core)
+        .map_err(HalError::Sel4)?;
+    let extra_refills = contract
+        .bootstrap_max_refills
+        .checked_sub(2)
+        .ok_or(HalError::Unsupported("ninedoor-bootstrap-refills"))?;
+    sel4::configure_sched_context(
+        sched_control,
+        bootstrap_scheduling_context,
+        u64::from(contract.bootstrap_budget_us),
+        u64::from(contract.bootstrap_period_us),
+        seL4_Word::from(extra_refills),
+        seL4_Word::try_from(timeout_badge)
+            .map_err(|_| HalError::Unsupported("ninedoor-timeout-badge"))?,
+        0,
+    )
+    .map_err(HalError::Sel4)?;
+
     let guard_bits = sel4::word_bits().saturating_sub(seL4_Word::from(CHILD_CNODE_RADIX_BITS));
     sel4::set_tcb_space(
         tcb,
@@ -788,11 +863,12 @@ fn install_caps_and_mcs(
     hal.env
         .bind_child_ipc_buffer(tcb, ipc_frame, ipc_vaddr)
         .map_err(HalError::Sel4)?;
-    sel4::set_passive_tcb_sched_params_mcs(
+    sel4::set_tcb_sched_params_mcs(
         tcb,
         sel4_sys::seL4_CapInitThreadTCB,
         contract.mcp,
         contract.priority,
+        bootstrap_scheduling_context,
         standard_fault_cap,
     )
     .map_err(HalError::Sel4)?;
@@ -904,7 +980,8 @@ mod tests {
         assert_eq!(ROOT_CALL_SLOT_INDEX, 68);
         assert_eq!(STANDARD_FAULT_SLOT_INDEX, 69);
         assert_eq!(TIMEOUT_FAULT_SLOT_INDEX, 70);
-        assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
+        assert_eq!(BOOTSTRAP_SC_SLOT_INDEX, 71);
+        assert!(BOOTSTRAP_SC_SLOT_INDEX < ROOT_SLOT_COUNT);
     }
 
     #[test]

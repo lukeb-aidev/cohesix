@@ -54,9 +54,9 @@ pub unsafe extern "C" fn _start(descriptor: *const RuntimeInitDescriptor) -> ! {
         Err(_) => enter_standard_fault(),
     };
 
+    let mut badge = 0;
+    let mut tag = receive(descriptor, &mut badge);
     loop {
-        let mut badge = 0;
-        let tag = receive(descriptor, &mut badge);
         let length = tag.length();
         let label = tag.label();
         let request_sequence = if length >= 1 {
@@ -94,7 +94,7 @@ pub unsafe extern "C" fn _start(descriptor: *const RuntimeInitDescriptor) -> ! {
             sel4_sys::seL4_SetMR(1, reply_bytes as u64);
         }
         compiler_fence(Ordering::Release);
-        reply(descriptor.reply_cptr, reply_label);
+        tag = reply_receive(descriptor, &mut badge, reply_label);
     }
 }
 
@@ -144,11 +144,16 @@ fn receive(
     unsafe { sel4_sys::seL4_Recv(descriptor.endpoint_cptr, badge, descriptor.reply_cptr) }
 }
 
-fn reply(reply_cptr: u64, label: u64) {
+fn reply_receive(
+    descriptor: RuntimeInitDescriptor,
+    badge: &mut sel4_sys::seL4_Word,
+    label: u64,
+) -> sel4_sys::seL4_MessageInfo {
     let tag = sel4_sys::seL4_MessageInfo::new(label, 0, 0, 2);
     // SAFETY: The runtime owns this Reply cap for exactly the outstanding
-    // receive association and performs one reply before receiving again.
-    unsafe { sel4_sys::seL4_MCS_Reply(reply_cptr, tag) }
+    // receive association. MCS ReplyRecv atomically replies and queues this
+    // same TCB on its fixed endpoint before the caller can resume.
+    unsafe { sel4_sys::seL4_ReplyRecv(descriptor.endpoint_cptr, tag, badge, descriptor.reply_cptr) }
 }
 
 #[panic_handler]

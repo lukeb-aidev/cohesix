@@ -166,18 +166,30 @@ mappings are directionally restricted, exactly two pages each, and backed by
 disjoint live frame handles validated against generated virtual addresses.
 The QEMU constructor validates the embedded image digest, entry, and W^X load
 span, allocates only the compiler-budgeted anchor generation, and registers the
-still-suspended TCB before registry seal. The passive child has no scheduling
-context; its receive-loop Reply object is shared only with the generated
-root-fault recovery slot. On fault, an outstanding donor receives exactly one
-typed `Closed` failure before the durable containment record is published;
+still-suspended TCB before registry seal. During construction, root configures
+and binds one compiler-budgeted, root-retained bootstrap scheduling context;
+the child receives neither that scheduling-context cap nor `SchedControl`
+authority. After registry seal and root-fault activation, root resumes the
+child, validates an empty `Log` parser probe, observes the child's atomic
+`ReplyRecv` transition into the next receive, and unbinds the exact bootstrap
+scheduling context before declaring the service passive. Activation, probe, or
+unbind failure revokes the namespace boundary and suspends the child where
+possible, so no later Call can block on a failed bootstrap. The receive-loop
+Reply object is shared only with the generated root-fault recovery slot. On
+fault, an outstanding donor receives exactly one typed `Closed` failure before
+the durable containment record is published;
 without an outstanding Call no Reply is attempted. Recovery authority is then
 deleted before the shared frames are scrubbed/unmapped and the retained anchor
-is revoked. The active console service cannot enter this passive path. Closing
+is revoked. Steady operation is passive donation only after the bootstrap
+scheduling context has been unbound; no `SetAffinity` placement path is used.
+The active console service cannot enter this passive path. Closing
 with a partial frame, queue saturation, cancellation, child-generation
 revocation, replay, and late completion fail closed. The child receives only
 its service endpoint/Reply object and two bounded shared-frame mappings; it
 receives no Queen policy, root CSpace, device, broad namespace, scheduling
-context, or `SchedControl` authority. This internal ABI does not relax the rule
+context cap, or `SchedControl` authority. The bootstrap scheduling-context
+candidate remains subject to live QEMU qualification. This internal ABI does
+not relax the rule
 that the authenticated console is the only in-VM TCP listener. Live QEMU fault
 injection remains evidence required beyond source and target checks; it is not
 Pi hardware acceptance.

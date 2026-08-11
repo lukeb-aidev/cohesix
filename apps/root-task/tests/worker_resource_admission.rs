@@ -113,7 +113,7 @@ fn maximum_role_mix_reserves_exactly_three_executable_bundles() {
     assert_eq!(total.endpoints, 31);
     assert_eq!(total.notifications, 35);
     assert_eq!(total.reply_objects, 14);
-    assert_eq!(total.scheduling_contexts, 17);
+    assert_eq!(total.scheduling_contexts, 18);
     assert_eq!(total.cspace_slots, 6_343);
     assert_eq!(total.untyped_bytes, 103_809_024);
     assert!(total.tcbs <= admission.capacity.tcbs);
