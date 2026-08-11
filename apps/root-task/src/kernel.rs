@@ -5172,13 +5172,25 @@ fn bootstrap<P: Platform>(
                 let detail = physical_pi_wifi_boot_supervisor_defer_detail(reason);
                 (None, false, Some(detail), net_backend_label, Some(config))
             } else {
-                #[cfg(feature = "net-backend-virtio")]
+                #[cfg(all(
+                    feature = "net-backend-virtio",
+                    target_os = "none",
+                    sel4_config_kernel_mcs
+                ))]
                 let net_init_result = if matches!(config.backend, crate::net::NetBackend::Virtio) {
                     crate::net::init_isolated_qemu_net_console(hal, config)
                 } else {
                     init_net_console(hal, config)
                 };
-                #[cfg(not(feature = "net-backend-virtio"))]
+                #[cfg(any(
+                    not(feature = "net-backend-virtio"),
+                    all(feature = "net-backend-virtio", not(target_os = "none")),
+                    all(
+                        feature = "net-backend-virtio",
+                        target_os = "none",
+                        not(sel4_config_kernel_mcs)
+                    )
+                ))]
                 let net_init_result = init_net_console(hal, config);
                 match net_init_result {
                     Ok(stack) => {

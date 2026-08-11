@@ -61,7 +61,11 @@ use super::{
     NetStatusReport, NetTelemetry, WifiCredentials, DEV_VIRT_GATEWAY, DEV_VIRT_IP, DEV_VIRT_PREFIX,
     MAX_FRAME_LEN, NET_DIAG, NET_STAGE,
 };
-#[cfg(feature = "net-backend-virtio")]
+#[cfg(all(
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
 use super::{IsolatedConsoleInitError, IsolatedVirtioConsole};
 use crate::bootstrap::bootinfo_snapshot::{BootInfoCanaryError, BootInfoState};
 use crate::debug::maybe_report_str_write;
@@ -824,6 +828,14 @@ fn cyw43_dhcp_post_secure_eapol_settle(
 type DefaultNetDevice = VirtioNetStatic;
 #[cfg(not(feature = "net-backend-virtio"))]
 type DefaultNetDevice = Rtl8139Device;
+#[cfg(all(
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+type DefaultVirtioStack = IsolatedVirtioConsole;
+#[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+type DefaultVirtioStack = NetStack<VirtioNetStatic>;
 
 #[derive(Debug)]
 pub enum DefaultDriverError {
@@ -831,7 +843,11 @@ pub enum DefaultDriverError {
     DriverTaskNet(DriverTaskNetError),
     #[cfg(feature = "net-backend-virtio")]
     Virtio(VirtioDriverError),
-    #[cfg(feature = "net-backend-virtio")]
+    #[cfg(all(
+        feature = "net-backend-virtio",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
     IsolatedConsole(IsolatedConsoleInitError),
 }
 
@@ -842,7 +858,11 @@ impl fmt::Display for DefaultDriverError {
             Self::DriverTaskNet(err) => write!(f, "{err}"),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => write!(f, "{err}"),
-            #[cfg(feature = "net-backend-virtio")]
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
             Self::IsolatedConsole(err) => write!(f, "{err}"),
         }
     }
@@ -855,9 +875,17 @@ impl NetDriverError for DefaultDriverError {
             Self::DriverTaskNet(err) => err.is_absent(),
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(err) => err.is_absent(),
-            #[cfg(feature = "net-backend-virtio")]
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
             Self::IsolatedConsole(IsolatedConsoleInitError::Driver(err)) => err.is_absent(),
-            #[cfg(feature = "net-backend-virtio")]
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
             Self::IsolatedConsole(
                 IsolatedConsoleInitError::Hal(_) | IsolatedConsoleInitError::InvalidConfig(_),
             ) => false,
@@ -884,7 +912,11 @@ impl From<VirtioDriverError> for DefaultDriverError {
     }
 }
 
-#[cfg(feature = "net-backend-virtio")]
+#[cfg(all(
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
 impl From<IsolatedConsoleInitError> for DefaultDriverError {
     fn from(value: IsolatedConsoleInitError) -> Self {
         Self::IsolatedConsole(value)
@@ -896,7 +928,7 @@ pub enum DefaultNetStack {
     GenetDriverTask(Box<NetStack<GenetDriverTaskDevice>>),
     Cyw43DriverTask(Box<NetStack<Cyw43DriverTaskDevice>>),
     #[cfg(feature = "net-backend-virtio")]
-    Virtio(Box<IsolatedVirtioConsole>),
+    Virtio(Box<DefaultVirtioStack>),
 }
 
 pub type DefaultNetStackError = NetStackError<DefaultDriverError>;
@@ -2947,10 +2979,20 @@ where
         mem::size_of::<Cyw43DriverTaskDevice>(),
         mem::size_of::<DefaultNetStack>(),
     );
-    #[cfg(feature = "net-backend-virtio")]
+    #[cfg(all(
+        feature = "net-backend-virtio",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    ))]
     info!(
         "[net-console] layout sizes: adapter.virtio-isolated={} dev.virtio={}",
         mem::size_of::<IsolatedVirtioConsole>(),
+        mem::size_of::<VirtioNetStatic>(),
+    );
+    #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+    info!(
+        "[net-console] layout sizes: stack.virtio-compat={} dev.virtio={}",
+        mem::size_of::<NetStack<VirtioNetStatic>>(),
         mem::size_of::<VirtioNetStatic>(),
     );
 
@@ -2998,15 +3040,30 @@ where
                 }
             }
         },
-        #[cfg(feature = "net-backend-virtio")]
+        #[cfg(all(
+            feature = "net-backend-virtio",
+            target_os = "none",
+            sel4_config_kernel_mcs
+        ))]
         NetBackend::Virtio => Err(NetConsoleError::InvalidConfig(
             "QEMU virtio console requires the isolated child constructor",
         )),
+        #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+        NetBackend::Virtio => {
+            let stack = NetStack::<VirtioNetStatic>::new(hal, config, backend)
+                .map_err(convert_console_error::<VirtioDriverError>)?;
+            check_bootinfo_wrap("net.init.wrap.after-new.virtio-compat")?;
+            Ok(DefaultNetStack::Virtio(stack))
+        }
     }
 }
 
 /// Construct the QEMU Virtio NIC adapter plus suspended console-network child.
-#[cfg(feature = "net-backend-virtio")]
+#[cfg(all(
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
 pub fn init_isolated_qemu_net_console(
     hal: &mut KernelHal<'_>,
     config: ConsoleNetConfig,
@@ -8513,11 +8570,17 @@ impl DefaultNetStack {
     /// Activate the QEMU console child after the exact fault registry seal.
     pub fn activate_console_network_child(&mut self) -> Result<bool, HalError> {
         match self {
-            #[cfg(feature = "net-backend-virtio")]
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
             Self::Virtio(stack) => {
                 stack.activate()?;
                 Ok(true)
             }
+            #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+            Self::Virtio(_) => Ok(false),
             Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => Ok(false),
         }
     }
@@ -8526,8 +8589,14 @@ impl DefaultNetStack {
     #[must_use]
     pub fn console_network_child_faulted(&self) -> bool {
         match self {
-            #[cfg(feature = "net-backend-virtio")]
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
             Self::Virtio(stack) => stack.faulted(),
+            #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+            Self::Virtio(_) => false,
             Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
         }
     }
@@ -8535,12 +8604,18 @@ impl DefaultNetStack {
     /// Suspend, scrub, unbind, and revoke the isolated QEMU generation.
     pub fn contain_console_network_child(
         &mut self,
-        hal: &mut KernelHal<'_>,
+        _hal: &mut KernelHal<'_>,
     ) -> Result<Option<crate::console_network_service::ConsoleNetworkContainmentProof>, HalError>
     {
         match self {
-            #[cfg(feature = "net-backend-virtio")]
-            Self::Virtio(stack) => stack.contain(hal).map(Some),
+            #[cfg(all(
+                feature = "net-backend-virtio",
+                target_os = "none",
+                sel4_config_kernel_mcs
+            ))]
+            Self::Virtio(stack) => stack.contain(_hal).map(Some),
+            #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
+            Self::Virtio(_) => Ok(None),
             Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => Ok(None),
         }
     }

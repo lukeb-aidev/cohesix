@@ -1510,15 +1510,28 @@ mod console_srv;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
-    feature = "net-backend-virtio"
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
 ))]
 mod isolated_console;
 #[cfg(all(
     feature = "kernel",
     feature = "net-console",
-    feature = "net-backend-virtio"
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
 ))]
 pub use isolated_console::{IsolatedConsoleInitError, IsolatedVirtioConsole};
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    feature = "net-backend-virtio",
+    target_os = "none",
+    not(sel4_config_kernel_mcs)
+))]
+compile_error!("target QEMU virtio console requires the selected seL4 MCS profile");
 
 #[cfg(feature = "kernel")]
 mod stack;
