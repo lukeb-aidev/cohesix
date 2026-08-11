@@ -321,9 +321,27 @@ def test_root_build_requires_both_target_qualified_worker_identities() -> None:
     assert "COHESIX_WORKER_IMAGE_MANIFEST" in build_rs
     assert "COHESIX_WORKER_IMAGE_ARCHIVE" in build_rs
     assert "target root-task builds require" in build_rs
+    assert "EMBEDDED_WORKER_ARCHIVE" in build_rs
+    assert "EMBEDDED_WORKER_MANIFEST" in build_rs
+    assert '.cohesix_worker_image_archive' in build_rs
+    assert '.cohesix_worker_image_manifest' in build_rs
+    linker = (ROOT / "apps" / "root-task" / "sel4.ld").read_text(encoding="utf-8")
+    assert "KEEP(*(.cohesix_worker_image_archive))" in linker
+    assert "KEEP(*(.cohesix_worker_image_manifest))" in linker
     loader = (
         ROOT / "apps" / "root-task" / "src" / "hal" / "worker_image.rs"
     ).read_text(encoding="utf-8")
     assert "WORKER_ARCHIVE_SHA256" in loader
     assert "WORKER_MANIFEST_SHA256" in loader
     assert "WorkerSegmentRights::ReadExecute" in loader
+    assert "plan_embedded_worker_image" in loader
+    worker_runtime = (
+        ROOT / "apps" / "root-task" / "src" / "hal" / "worker_task.rs"
+    ).read_text(encoding="utf-8")
+    assert "plan_embedded_worker_image" in worker_runtime
+    assert "plan_packaged_worker_image(self.system_payload" not in worker_runtime
+    build_script = (ROOT / "scripts" / "cohesix-build-run.sh").read_text(
+        encoding="utf-8"
+    )
+    assert "rootserver must embed the exact validated Worker archive once" in build_script
+    assert "rootserver must embed the exact validated Worker manifest once" in build_script

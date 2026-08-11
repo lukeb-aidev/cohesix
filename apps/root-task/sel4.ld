@@ -46,6 +46,14 @@ SECTIONS
     KEEP(*(.cohesix_driver_runtime_payload))
   } :text
 
+  /* Exact target-qualified Worker payload consumed directly by root. */
+  .cohesix_worker_image_archive : ALIGN(16) {
+    KEEP(*(.cohesix_worker_image_archive))
+  } :text
+  .cohesix_worker_image_manifest : ALIGN(16) {
+    KEEP(*(.cohesix_worker_image_manifest))
+  } :text
+
   .rodata : {
     *(.rodata .rodata.*)
     *(.gnu.linkonce.r.*)

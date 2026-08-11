@@ -4,9 +4,11 @@
 // Author: Lukas Bower
 
 //! The Worker image loader accepts only the canonical, sectionless ELF subset
-//! emitted by `scripts/worker_image_manifest.py`.  It binds the boot-provided
-//! archive and manifest to digests compiled into root after Worker packaging,
-//! then exposes each load segment to a HAL mapper with exact W^X rights.
+//! emitted by `scripts/worker_image_manifest.py`. It binds the rootserver-
+//! embedded archive and manifest to digests compiled into root after Worker
+//! packaging, then exposes each load segment to a HAL mapper with exact W^X
+//! rights. The outer system CPIO remains a release/host-tool projection; seL4
+//! BootInfo extra bytes contain FDT records and are not a Worker image source.
 
 use core::cmp::Ordering;
 
@@ -464,9 +466,9 @@ pub fn plan_canonical_worker_image(
     Ok(plan)
 }
 
-/// Resolve and admit one Worker image from the boot-provided system payload.
-pub fn plan_packaged_worker_image<'a>(
-    system_payload: &'a [u8],
+fn plan_bound_worker_image<'a>(
+    archive: &'a [u8],
+    manifest: &[u8],
     name: &str,
 ) -> Result<(WorkerImagePlan, &'a [u8]), WorkerImageError> {
     if !WORKER_IMAGE_IDENTITY_BOUND {
@@ -477,14 +479,35 @@ pub fn plan_packaged_worker_image<'a>(
         .find(|identity| identity.name == name)
         .copied()
         .ok_or(WorkerImageError::UnknownImage)?;
-    let archive = cpio_entry(system_payload, WORKER_ARCHIVE_PATH)?;
-    let manifest = cpio_entry(system_payload, WORKER_MANIFEST_PATH)?;
     if hash(archive) != WORKER_ARCHIVE_SHA256 || hash(manifest) != WORKER_MANIFEST_SHA256 {
         return Err(WorkerImageError::DigestMismatch);
     }
     let image = cpio_entry(archive, expected.archive_path)?;
     let plan = plan_canonical_worker_image(image, expected)?;
     Ok((plan, image))
+}
+
+/// Resolve and admit one Worker image from root's retained target payload.
+pub fn plan_embedded_worker_image(
+    name: &str,
+) -> Result<(WorkerImagePlan, &'static [u8]), WorkerImageError> {
+    let archive: &'static [u8] = &generated_identity::EMBEDDED_WORKER_ARCHIVE;
+    let manifest: &'static [u8] = &generated_identity::EMBEDDED_WORKER_MANIFEST;
+    plan_bound_worker_image(archive, manifest, name)
+}
+
+/// Resolve and admit one Worker image from a packaged outer system CPIO.
+///
+/// This is retained for host/package validation. Target bootstrap uses
+/// [`plan_embedded_worker_image`] because BootInfo extra bytes are typed FDT
+/// records rather than the QEMU `-initrd` archive.
+pub fn plan_packaged_worker_image<'a>(
+    system_payload: &'a [u8],
+    name: &str,
+) -> Result<(WorkerImagePlan, &'a [u8]), WorkerImageError> {
+    let archive = cpio_entry(system_payload, WORKER_ARCHIVE_PATH)?;
+    let manifest = cpio_entry(system_payload, WORKER_MANIFEST_PATH)?;
+    plan_bound_worker_image(archive, manifest, name)
 }
 
 /// Execute a validated mapping plan through the least-authority HAL boundary.

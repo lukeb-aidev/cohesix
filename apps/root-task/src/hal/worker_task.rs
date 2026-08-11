@@ -814,7 +814,6 @@ pub struct TargetWorkerBackend {
 /// Root-control-owned live supervisor for the three mandatory target Workers.
 pub struct TargetWorkerRuntime {
     supervisor: WorkerSupervisor<TargetWorkerBackend>,
-    system_payload: &'static [u8],
     ready_sequences: [u64; ROLE_COUNT],
     completion_sequences: [u64; ROLE_COUNT],
     receipt_sequences: [u64; ROLE_COUNT],
@@ -827,7 +826,6 @@ impl TargetWorkerRuntime {
     pub fn bootstrap(
         hal: &mut KernelHal<'static>,
         critical: &'static CriticalTcbRuntime,
-        system_payload: &'static [u8],
         now_ms: u64,
     ) -> Result<Self, WorkerSupervisorError> {
         worker_supervisor::prepare_target_supervisor_mailbox()?;
@@ -843,14 +841,13 @@ impl TargetWorkerRuntime {
         let mut constructed = Vec::<WorkerRole, ROLE_COUNT>::new();
         for role in roles {
             let image_name = worker_image_name(role);
-            let (plan, image) =
-                match super::worker_image::plan_packaged_worker_image(system_payload, image_name) {
-                    Ok(planned) => planned,
-                    Err(_) => {
-                        rollback_bootstrap_workers(&mut supervisor, &constructed)?;
-                        return Err(WorkerSupervisorError::InvalidImage);
-                    }
-                };
+            let (plan, image) = match super::worker_image::plan_embedded_worker_image(image_name) {
+                Ok(planned) => planned,
+                Err(_) => {
+                    rollback_bootstrap_workers(&mut supervisor, &constructed)?;
+                    return Err(WorkerSupervisorError::InvalidImage);
+                }
+            };
             if supervisor.spawn(role, 1, &plan, image, now_ms).is_err() {
                 rollback_bootstrap_workers(&mut supervisor, &constructed)?;
                 return Err(WorkerSupervisorError::Backend);
@@ -867,7 +864,6 @@ impl TargetWorkerRuntime {
         }
         Ok(Self {
             supervisor,
-            system_payload,
             ready_sequences: [0; ROLE_COUNT],
             completion_sequences: [0; ROLE_COUNT],
             receipt_sequences: [0; ROLE_COUNT],
@@ -1202,11 +1198,9 @@ impl TargetWorkerRuntime {
                     }
                     identity
                 } else if current.lifecycle == WorkerLifecycleState::Terminal {
-                    let (plan, image) = super::worker_image::plan_packaged_worker_image(
-                        self.system_payload,
-                        worker_image_name(role),
-                    )
-                    .map_err(|_| WorkerSupervisorError::InvalidImage)?;
+                    let (plan, image) =
+                        super::worker_image::plan_embedded_worker_image(worker_image_name(role))
+                            .map_err(|_| WorkerSupervisorError::InvalidImage)?;
                     let receipt =
                         self.supervisor
                             .spawn(role, expected.lease_epoch, &plan, image, now_ms)?;

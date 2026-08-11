@@ -4546,17 +4546,13 @@ fn bootstrap<P: Platform>(
     };
     #[cfg(sel4_config_kernel_mcs)]
     {
-        let worker_runtime = crate::hal::worker_task::TargetWorkerRuntime::bootstrap(
-            hal,
-            critical_runtime,
-            extra_bytes,
-            0,
-        )
-        .map_err(|error| {
-            BootError::Fatal(format!(
-                "isolated Worker construction failed before registry seal: {error:?}"
-            ))
-        })?;
+        let worker_runtime =
+            crate::hal::worker_task::TargetWorkerRuntime::bootstrap(hal, critical_runtime, 0)
+                .map_err(|error| {
+                    BootError::Fatal(format!(
+                        "isolated Worker construction failed before registry seal: {error:?}"
+                    ))
+                })?;
         bootstrap_ipc
             .install_worker_runtime(worker_runtime)
             .map_err(|error| {

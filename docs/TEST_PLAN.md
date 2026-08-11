@@ -122,7 +122,10 @@ and manifest under `out/cohesix/worker-images/`, and the canonical external
 driver archive at
 `out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio`. The driver archive
 is byte-verified inside rootserver but is intentionally not duplicated in the
-system CPIO.
+system CPIO. Rootserver also retains exactly one byte-identical Worker archive
+and manifest for target loading; their system-CPIO copies remain the host and
+release projection. A build fails if either embedded payload differs from the
+validated source or target code treats typed BootInfo FDT bytes as a CPIO.
 
 Capture each boot through macOS `script`. The ordinary preflight boot remains
 running while the operator drives Worker and service turns from another

@@ -632,6 +632,8 @@ fn emit_worker_image_identity(required: bool) -> io::Result<()> {
             "pub const WORKER_IMAGE_IDENTITY_BOUND:bool=false;\n\
              pub const WORKER_ARCHIVE_SHA256:[u8;32]=[0;32];\n\
              pub const WORKER_MANIFEST_SHA256:[u8;32]=[0;32];\n\
+             pub static EMBEDDED_WORKER_ARCHIVE:[u8;0]=[];\n\
+             pub static EMBEDDED_WORKER_MANIFEST:[u8;0]=[];\n\
              pub const WORKER_IMAGE_IDENTITIES:[super::ExpectedWorkerImage;0]=[];\n",
         )?;
         return Ok(());
@@ -716,10 +718,18 @@ fn emit_worker_image_identity(required: bool) -> io::Result<()> {
             rust_digest(metadata_digest),
         ));
     }
+    let archive_literal = rust_string_literal(archive_path.to_string_lossy().as_ref());
+    let manifest_literal = rust_string_literal(manifest_path.to_string_lossy().as_ref());
     let contents = format!(
         "pub const WORKER_IMAGE_IDENTITY_BOUND:bool=true;\n\
          pub const WORKER_ARCHIVE_SHA256:[u8;32]={};\n\
          pub const WORKER_MANIFEST_SHA256:[u8;32]={};\n\
+         #[used]\n\
+         #[link_section=\".cohesix_worker_image_archive\"]\n\
+         pub static EMBEDDED_WORKER_ARCHIVE:[u8;include_bytes!({archive_literal}).len()]=*include_bytes!({archive_literal});\n\
+         #[used]\n\
+         #[link_section=\".cohesix_worker_image_manifest\"]\n\
+         pub static EMBEDDED_WORKER_MANIFEST:[u8;include_bytes!({manifest_literal}).len()]=*include_bytes!({manifest_literal});\n\
          pub const WORKER_IMAGE_IDENTITIES:[super::ExpectedWorkerImage;3]=[\n{}];\n",
         rust_digest(actual_archive_digest),
         rust_digest(sha256_bytes(&manifest_bytes)),

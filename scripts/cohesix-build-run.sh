@@ -1370,6 +1370,13 @@ if worker_manifest_path.read_bytes() != worker_manifest_source.read_bytes():
     raise SystemExit("staged Worker manifest differs from its validated source")
 if worker_archive_path.read_bytes() != worker_archive_source.read_bytes():
     raise SystemExit("staged Worker archive differs from its validated source")
+worker_archive_bytes = worker_archive_source.read_bytes()
+worker_manifest_bytes = worker_manifest_source.read_bytes()
+rootserver_bytes = rootserver.read_bytes()
+if rootserver_bytes.count(worker_archive_bytes) != 1:
+    raise SystemExit("rootserver must embed the exact validated Worker archive once")
+if rootserver_bytes.count(worker_manifest_bytes) != 1:
+    raise SystemExit("rootserver must embed the exact validated Worker manifest once")
 worker_manifest = json.loads(worker_manifest_path.read_text(encoding="utf-8"))
 driver_manifest_path = staging / "cohesix" / "artifacts" / "cohesix-driver-runtime-manifest.json"
 if driver_manifest_path.read_bytes() != driver_manifest_source.read_bytes():
@@ -1403,9 +1410,11 @@ manifest = {
     },
     "worker_images": {
         "archive_path": "cohesix/artifacts/cohesix-worker-images.cpio",
-        "archive_sha256": hashlib.sha256(worker_archive_path.read_bytes()).hexdigest(),
+        "archive_sha256": hashlib.sha256(worker_archive_bytes).hexdigest(),
         "manifest_path": "cohesix/artifacts/cohesix-worker-image-manifest.json",
-        "manifest_sha256": hashlib.sha256(worker_manifest_path.read_bytes()).hexdigest(),
+        "manifest_sha256": hashlib.sha256(worker_manifest_bytes).hexdigest(),
+        "embedded_in_rootserver": True,
+        "target_load_source": "rootserver-embedded",
         "images": worker_manifest["images"],
     },
     "driver_runtimes": {

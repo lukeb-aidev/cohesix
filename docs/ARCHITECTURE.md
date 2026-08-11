@@ -470,7 +470,10 @@ tasks:
   executable Worker image archive.
 
 The three executable Workers are separate `no_std`, W^X images in a deterministic
-Worker archive distinct from the driver archive. A pointer-free
+Worker archive distinct from the driver archive. Rootserver retains the exact
+target-qualified archive and manifest for target loading because seL4 BootInfo
+extra bytes contain typed FDT records, not the outer system CPIO; byte-identical
+copies remain in that CPIO for host and release inspection. A pointer-free
 `worker-task-abi/v1` binds every request and result to exact
 `(role, slot, lease_epoch, supervisor_generation, cap_generation)` identity.
 Each Worker has one dedicated active SC and no normal IPC donation.
