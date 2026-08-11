@@ -4846,7 +4846,10 @@ boot-fatal; a source may not be inferred from a badge range at receive time.
 
 Fault-lane tests must prove the acyclic graph and Reply cardinality. Standard
 and timeout receive lanes are distinct and each has one root-fault-owned Reply
-object. Fault send caps are Write + GrantReply, receives are Read-only, and
+object. An empty `seL4_NBRecv` is recognized solely by its guaranteed zero
+badge; tests must prove stale or undefined message-info bits cannot fabricate a
+fault, while every compiler-admitted nonzero fault badge is accepted. Fault
+send caps are Write + GrantReply, receives are Read-only, and
 supervisor signals/waits are Write-only/Read-only. Ordinary Worker faults are
 suspended and handed off without Reply. Driver faults remain associated until
 the independent driver supervisor returns at most one command failure,

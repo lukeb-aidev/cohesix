@@ -4,8 +4,9 @@
 // Author: Lukas Bower
 
 use root_task::critical_tcb::{
-    mcs_extra_refills, validate_critical_temporal_graph, FaultClass, FaultRegistration,
-    FaultReplyLane, FaultReplyLaneError, FaultReplyLaneState, GenerationIdentity,
+    fault_nbrecv_delivered, mcs_extra_refills, validate_critical_temporal_graph, FaultClass,
+    FaultRegistration, FaultReplyLane, FaultReplyLaneError, FaultReplyLaneState,
+    GenerationIdentity,
 };
 use root_task::generated;
 
@@ -22,6 +23,14 @@ fn registration(terminal: bool) -> FaultRegistration {
         timeout_badge: 0x2001,
         tcb_cap: 0x3001,
         terminal,
+    }
+}
+
+#[test]
+fn empty_nbrecv_ignores_undefined_message_info_and_requires_a_badge() {
+    assert!(!fault_nbrecv_delivered(0));
+    for badge in [1, 0x26e3_0001, 0x26ee_0001, u64::MAX] {
+        assert!(fault_nbrecv_delivered(badge));
     }
 }
 

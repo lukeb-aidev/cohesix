@@ -30,6 +30,17 @@ pub const CRITICAL_TCB_COUNT: usize = 5;
 /// seL4 supplies two base replenishments; manifests record the total bound.
 pub const MCS_BASE_REFILLS: u8 = 2;
 
+/// Return whether an seL4 nonblocking fault receive delivered a message.
+///
+/// On an empty `seL4_NBRecv`, seL4 guarantees only that the badge register is
+/// zero; the returned message-info register may retain stale bits. Every
+/// compiler-admitted fault capability has a nonzero badge, so badge presence is
+/// the complete and fail-closed delivery discriminator.
+#[must_use]
+pub const fn fault_nbrecv_delivered(badge: u64) -> bool {
+    badge != 0
+}
+
 const REQUIRED_CRITICAL_TCBS: [&str; CRITICAL_TCB_COUNT] = [
     "root-control",
     "root-fault",
@@ -1106,6 +1117,13 @@ mod tests {
     #[test]
     fn generated_critical_topology_matches_fixed_runtime_bounds() {
         validate_critical_temporal_graph().expect("generated critical topology");
+    }
+
+    #[test]
+    fn empty_nonblocking_fault_receive_is_identified_only_by_zero_badge() {
+        assert!(!fault_nbrecv_delivered(0));
+        assert!(fault_nbrecv_delivered(0x26e3_0001));
+        assert!(fault_nbrecv_delivered(u64::MAX));
     }
 
     #[test]

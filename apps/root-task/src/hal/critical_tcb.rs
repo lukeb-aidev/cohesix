@@ -15,14 +15,14 @@
 //! their capability views remain separate and compiler-bounded.
 
 use crate::critical_tcb::{
-    generated_standard_fault_badge, mcs_extra_refills, passive_service_recovery_contract,
-    service_fault_mailbox_index, validate_critical_temporal_graph, validate_worker_supervisor_wake,
-    CriticalHandoff, CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin,
-    CriticalTopologyError, FaultClass, FaultHandoffError, FaultHandoffRecord, FaultRegistration,
-    FaultRegistry, FaultRegistryError, GenerationIdentity, PublishResult, WorkerControlRecord,
-    WorkerSupervisorItem, CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY,
-    FAULT_REGISTRY_CAPACITY, SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY,
-    WORKER_FAULT_MAILBOX_CAPACITY,
+    fault_nbrecv_delivered, generated_standard_fault_badge, mcs_extra_refills,
+    passive_service_recovery_contract, service_fault_mailbox_index,
+    validate_critical_temporal_graph, validate_worker_supervisor_wake, CriticalHandoff,
+    CriticalTcbHandle, CriticalTcbInventory, CriticalTcbOrigin, CriticalTopologyError, FaultClass,
+    FaultHandoffError, FaultHandoffRecord, FaultRegistration, FaultRegistry, FaultRegistryError,
+    GenerationIdentity, PublishResult, WorkerControlRecord, WorkerSupervisorItem,
+    CRITICAL_TCB_COUNT, DRIVER_FAULT_RECORD_CAPACITY, FAULT_REGISTRY_CAPACITY,
+    SERVICE_FAULT_RECORD_CAPACITY, WORKER_CONTROL_QUEUE_CAPACITY, WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
     self, CriticalTcbResource, TemporalTaskConfig, TemporalTaskKind, TimeoutPolicy,
@@ -875,14 +875,6 @@ pub fn construct_critical_tcb_runtime(
     })
 }
 
-fn target_message_present(info: &sel4_sys::seL4_MessageInfo, badge: seL4_Word) -> bool {
-    badge != 0
-        || info.label() != 0
-        || info.length() != 0
-        || info.extra_caps() != 0
-        || info.caps_unwrapped() != 0
-}
-
 fn target_fail_stop(reason: &'static str, emergency_cap: Option<seL4_CPtr>) -> ! {
     TARGET_FATAL.store(true, Ordering::Release);
     crate::debug_uart::debug_uart_line(reason);
@@ -1078,7 +1070,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
         if !STANDARD_DRIVER_LANE_BUSY.load(Ordering::Acquire) {
             let mut badge = 0;
             let info = sel4::nb_recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
-            if target_message_present(&info, badge) {
+            if fault_nbrecv_delivered(badge) {
                 if handle_target_fault(info, badge, FaultClass::Standard).is_err() {
                     target_fail_stop(
                         "[critical] root-fault standard lane failed",
@@ -1094,7 +1086,7 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
                 &mut badge,
                 CHILD_TIMEOUT_REPLY_SLOT,
             );
-            if target_message_present(&info, badge) {
+            if fault_nbrecv_delivered(badge) {
                 if handle_target_fault(info, badge, FaultClass::Timeout).is_err() {
                     target_fail_stop(
                         "[critical] root-fault timeout lane failed",
