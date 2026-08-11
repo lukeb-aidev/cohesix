@@ -60,13 +60,15 @@ Artifacts:
 
 GENET used the same smoltcp console, REST harness, and hive gateway and therefore
 isolates the material delay to the CYW43 linked-runtime/HAL cadence rather than
-the common TCP/application stack. The mandatory next-image floor is at least a
-tenfold Wi-Fi improvement: request-to-first-payload p95 at or below 40 ms and
-at least 29 successful sequential requests/s. The aggressive stretch target is
-p95 at or below 10 ms and at least 100 successful sequential requests/s. Both
-targets additionally require zero packet loss, reconnects, and benchmark
-timeouts, complete cold first-pair repeatability, and unchanged GENET control
-performance. Source and model results alone cannot satisfy these thresholds.
+the common TCP/application stack. The earlier proposed tenfold Wi-Fi floor of
+request-to-first-payload p95 at or below 40 ms and at least 29 successful
+sequential requests/s is retained as a non-blocking optimization target. The
+aggressive stretch target remains p95 at or below 10 ms and at least 100
+successful sequential requests/s. Milestone 26b closure instead uses the
+operator-approved usable, repeatable, no-semantic-loss envelope recorded in the
+Build Plan, with honest recovered-retransmission and RF-exclusion accounting
+and unchanged GENET control. Source and model results alone cannot satisfy that
+hardware gate.
 
 ### M26d QEMU Gateway Cache/Coalescing Revalidation (2026-07-16)
 

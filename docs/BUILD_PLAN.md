@@ -136,7 +136,7 @@ manual availability, profile selection, implementation, and target proof.
 | [25h](#25h) | Multi-Hive Federation via Ticket Relay (Single-Writer Preserved, 10x1k Fleet Pattern) | Complete |
 | [26](#26) | Official Pi 4 Bring-up (U-Boot + Binary Image) | Complete |
 | [26a](#26a) | Pi 4 Driver-Task Substrate + GENET/Serial/Display Isolation | Complete |
-| [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Reopened |
+| [26b](#26b) | Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency | Complete |
 | [26c](#26c) | Regression-Gated Refactor + Surface Audit (Zero-Regression) | Complete |
 | [26d](#26d) | seL4 16 Baseline Refresh + Reference/Performance Realignment | Complete |
 | [26e](#26e) | Root-Service Compartmentalization + Worker Task Isolation + SMP+MCS Temporal Isolation | Pending |
@@ -6725,9 +6725,33 @@ Deliverables:
 ## Milestone 26b — Pi 4 USB/Wi-Fi Driver Tasks + DHCP/Benchmark Concurrency <a id="26b"></a>
 [Milestones](#Milestones)
 
-**Status:** Reopened — the 2026-08-10 transport matrix passed the operator-approved reliability and performance envelope, but final acceptance remains pending for the scoped USB runtime-publication regression repair and its exact-image physical local-seat proof. The repaired image must retain current USB/PCIe descriptor and owner gates, reach functional enumeration and the one-deep command-ready queue, and prove real USB input plus HDMI output; this status does not waive that hardware proof or mark 26b Complete.
+**Status:** Complete — exact image `7a10b8fd6accc3d47ab4726cdd3de5828042c9f3` restored the previously reliable USB enumeration/command-ready path and passed the operator-approved current-image Wi-Fi and same-image GENET closure. The five requested Wi-Fi reboot attempts were completed; W01-W03 and W05 passed, while W04 is retained honestly as an operator-excluded RF-affected sample rather than counted as a passing lifetime. The accepted cold, W01-W03, and W05 Wi-Fi samples had no semantic errors, and the GENET control did not regress. No fresh USB key was typed during this matrix. The operator explicitly accepted current Gate 10, the exact one-deep idle-report queue, command readiness, zero current USB recovery/no-reply debt, and healthy HDMI completions together with exact restoration of the previously board-proven `2668c34f76ff` path as sufficient final local-seat evidence; this record does not claim a fresh first-byte or printable-key observation.
 
-The operator-approved 2026-08-10 candidate matrix binds transport evidence to clean commit `2668c34f76ffde175a55c10085b03e8cc7ee1925`, build timestamp `2026-08-10T06:58:17Z`, build ID `54399c52aae6006affd3b526a8c7eb5860e2be73b88b8352eb9ca0f66434d56b`, image ID `23905de1e5e4da182c8b8727d52215b58ba4fa0be41049b705d6bcedc45159f0`, image SHA-256 `50ebaa44a64a4d400a5942fcc905efc863f569d4e0cbf06348c97556fabf2cb7`, and manifest SHA-256 `34bdbce3528f3572d118609fbd48c04c9425edf424167df7680989e584f11928`. One fully settled cold Wi-Fi boot, five rebooted Wi-Fi lifetimes, and one same-image GENET control passed the requested transport and pressure workload. Every Wi-Fi lifetime reached Gate 10, Gate 7a-e, Gate 8a-h, DHCP, `nettest`, balanced current DPC state with zero faults, USB queue-depth-one/Gate 10, and responsive HDMI. All 18 early `.coh` runs passed. The six Wi-Fi REST pressure runs completed 18,363 operations with zero semantic errors; their wire rates were `20.509`, `25.525`, `25.626`, `22.153`, `28.291`, and `27.784` commands/s. Raw TCP completed `256/256` cold and `64/64` on every reboot at `25.729`, `22.456`, `19.696`, `30.606`, `23.703`, and `27.637` requests/s, with p95 request-to-first-payload latency of `66.196`, `68.619`, `98.915`, `49.851`, `66.382`, and `59.412` ms. Paired pcaps showed bounded recovered retransmissions, but no semantic loss, reconnect, accepted-flow RST or zero window, drops, overruns, recovery, or driver faults. The GENET control completed raw TCP at `178.082` requests/s with `1.874` ms p95, all three `.coh` runs, and `9,711/9,712` REST operations; its sole typed buffer-full response was `0.0103%`, below the accepted `1%` error budget, while the wire path sustained `70.436` commands/s at `1.790` ms p95 with no core retransmission, sequence gap, RST, zero window, or reconnect. This usable, repeatable research/diagnostic Wi-Fi envelope and unchanged production GENET control support replacing the earlier proposed 10/10 cold plus 10/10 warm and p95-at-most-40-ms/at-least-29-requests-per-second transport targets, without relaxing semantic error accounting. They do not supersede the normative retained owner-state or physical local-seat proof gates. The host prompt-tail split repair used only by reboot orchestration is closure tooling, passes `79/79` focused tests, and changes no target runtime or acceptance authority.
+The operator-approved 2026-08-11 closure binds source commit `7a10b8fd6accc3d47ab4726cdd3de5828042c9f3`, build timestamp `2026-08-10T21:38:52Z`, build ID `54f78abe4cd2091b8aba2561f099e494f03983b9e0b845f468d9cfef7e7e9ee7`, image ID `5978c5c278b556dba235c3060803c46f4636ba3770d596d0669f16ef7617d926`, image SHA-256 `97874558bf93cfa4f2e323bf757a2a9d7a4d6d8d00e03db9202f106f152673cf`, and resolved manifest SHA-256 `34bdbce3528f3572d118609fbd48c04c9425edf424167df7680989e584f11928`. Every lifetime reached its selected-network DHCP frontier and USB Gate 10 command readiness with healthy HDMI completion; W01-W05 and G01 diagnostics additionally recorded the exact one-deep idle-report queue. Raw TCP completed `64/64` on every tested lifetime. The accepted Wi-Fi samples completed `16,446/16,446` no-retry pressure operations with zero errors; all fifteen accepted early `.coh` runs passed first attempt. W04 also completed all three `.coh` scripts and delivered a semantic terminal for every one of 1,150 wire commands, but recurring RF/ingress delay produced 85 client retransmissions and `25/757` REST timeouts (`3.3025%`, above the `1%` budget), so the operator excluded it. The GENET control completed `9,213/9,213` pressure operations with zero errors, raw TCP at `180.269` requests/s and `1.677` ms p95, and no transport regression against the accepted wired comparator.
+
+| Current-image lane | Raw TCP | No-retry REST pressure | Disposition |
+|---|---|---|---|
+| Cold Wi-Fi | `64/64`, `27.089` requests/s, `50.457` ms p95 | `3,040/3,040`, zero errors, `4.814` s p95 | Accepted |
+| Wi-Fi W01 | `64/64`, `38.871` requests/s, `28.282` ms p95 | `3,916/3,916`, zero errors, `4.107` s p95 | Accepted |
+| Wi-Fi W02 | `64/64`, `25.863` requests/s, `50.685` ms p95 | `2,665/2,665`, zero errors, `5.651` s p95 | Accepted |
+| Wi-Fi W03 | `64/64`, `29.732` requests/s, `50.945` ms p95 | `3,733/3,733`, zero errors, `4.348` s p95 | Accepted |
+| Wi-Fi W04 | initial `12.575` requests/s / `235.298` ms p95; paced repeat `18.201` requests/s / `106.379` ms p95 | `732/757`, 25 timeouts, `9.821` s p95 | Operator-excluded RF-affected sample |
+| Wi-Fi W05 | `64/64`, `28.257` requests/s, `67.581` ms p95 | `3,092/3,092`, zero errors, `5.683` s p95 | Accepted |
+| GENET G01 | `64/64`, `180.269` requests/s, `1.677` ms p95 | `9,213/9,213`, zero errors, `0.810` s p95 | Accepted; no wired regression |
+
+The current-image immutable evidence ledger records `serial / selected-transport pcap / paired-other-interface pcap` SHA-256 values. Pcap hashes cover exact completed-record prefixes; incomplete live-writer tails were excluded. G01's completed prefix contains the full gap-free, retransmission-free gateway pressure stream with one terminal for each of its `4,345` framed commands; the separate harness artifact reports `9,213/9,213` REST operations. Its final FIN record remained in the excluded live-writer tail; process/socket absence and gateway `reconnects=0` independently prove teardown.
+
+| Current-image boot | Serial SHA-256 | Selected-transport pcap SHA-256 | Paired-interface pcap SHA-256 |
+|---|---|---|---|
+| Cold Wi-Fi | `cd3dae6022720d2aca28077cf6f60594196ab3ce0ba2f070aabf52689f37f72e` | `c3308213e4cb8bd48db7c35b677ae907d611ec0cc94d539b83f56eccbf51722b` | `8def95914c8d58560ed25bd3bebbf48dc67d70ad653453e8c1f11aa20282c5bf` |
+| Wi-Fi W01 | `7144f6cb2382f563879b274331fcdc0f0b97ba69590928a77ca302589abe5004` | `87e13c8f91d847c7ef1149f7afab8dd5e2e0e45d9d5207f6bd9e8771cf1b6352` | `6eb8045165b56a0b3858b8549011c53e0d746d5172f646feaa93b0d5716746c1` |
+| Wi-Fi W02 | `ab8fc307e778322f8a5cb6af29c31e3764d1eaa8a7885ffeb3955627bcb65be9` | `a35e14f4cf6285fc7fcfd0019a85e6d8bbb7f2efa9cb43320179862b3a9f816b` | `f70b5c3626b9270d082fc3a9ab9bc23b65c5695dfdff1eddbc4e3ec11b4a2c15` |
+| Wi-Fi W03 | `1c194ada997b85dad481ed9f26a9553d721fa0a138f49083a53f4a44c4c643cd` | `4b48f48d06d67bb55f31033cc3113bca5a91719346c601ddbe1e159f24c25299` | `3bc325c77cd09452c62255bdc0f37a6c2dfa8071bfd9fed90efd639c282e383d` |
+| Wi-Fi W04 (excluded) | `a026b28a6240eaf5c1e72303eb29a9e822bd89a6388846cb856140677bf19591` | `ba111fa6cc9572ce940e764ace8e7ada6ada243ebb49650ba916f865bbb28667` | `465a453de2fdaa3c54f933a750248125ba1cee827cf2a6d944265d2d82e0f2d5` |
+| Wi-Fi W05 | `4ceb8e54c3679b35f6c0db5972c36967bd7ec3a3cb3b5c1d56b0935b121d93c8` | `414c33c7745029ac966e3523c89244768c8ac4a8b384e808914396053c7b24ed` | `43c35b569364bed8a0306bb4b131a019dc70599603ba7ba16c63d3856dff754a` |
+| GENET G01 | `45a06612b3bb8685a2619347055f81b2eb57090c6f6735b42d31dce780f8820f` | `12eb4008a6dede27f42a443e83e97800a4104777e79772be95148143a50fe4ff` | `0c71cbedc1f3c4872a11c12270480402f2aebacd2e6cc903b216cce587e8f1cb` |
+
+The prior operator-approved 2026-08-10 candidate matrix remains the historical performance/reliability baseline. It binds transport evidence to clean commit `2668c34f76ffde175a55c10085b03e8cc7ee1925`, build timestamp `2026-08-10T06:58:17Z`, build ID `54399c52aae6006affd3b526a8c7eb5860e2be73b88b8352eb9ca0f66434d56b`, image ID `23905de1e5e4da182c8b8727d52215b58ba4fa0be41049b705d6bcedc45159f0`, image SHA-256 `50ebaa44a64a4d400a5942fcc905efc863f569d4e0cbf06348c97556fabf2cb7`, and manifest SHA-256 `34bdbce3528f3572d118609fbd48c04c9425edf424167df7680989e584f11928`. One fully settled cold Wi-Fi boot, five rebooted Wi-Fi lifetimes, and one same-image GENET control passed the requested transport and pressure workload. Every Wi-Fi lifetime reached Gate 10, Gate 7a-e, Gate 8a-h, DHCP, `nettest`, balanced current DPC state with zero faults, USB queue-depth-one/Gate 10, and responsive HDMI. All 18 early `.coh` runs passed. The six Wi-Fi REST pressure runs completed 18,363 operations with zero semantic errors; their wire rates were `20.509`, `25.525`, `25.626`, `22.153`, `28.291`, and `27.784` commands/s. Raw TCP completed `256/256` cold and `64/64` on every reboot at `25.729`, `22.456`, `19.696`, `30.606`, `23.703`, and `27.637` requests/s, with p95 request-to-first-payload latency of `66.196`, `68.619`, `98.915`, `49.851`, `66.382`, and `59.412` ms. Paired pcaps showed bounded recovered retransmissions, but no semantic loss, reconnect, accepted-flow RST or zero window, drops, overruns, recovery, or driver faults. The GENET control completed raw TCP at `178.082` requests/s with `1.874` ms p95, all three `.coh` runs, and `9,711/9,712` REST operations; its sole typed buffer-full response was `0.0103%`, below the accepted `1%` error budget, while the wire path sustained `70.436` commands/s at `1.790` ms p95 with no core retransmission, sequence gap, RST, zero window, or reconnect. This usable, repeatable research/diagnostic Wi-Fi envelope and unchanged production GENET control replaced the earlier proposed 10/10 cold plus 10/10 warm and p95-at-most-40-ms/at-least-29-requests-per-second transport targets, without relaxing semantic error accounting. The host prompt-tail split repair used only by reboot orchestration is closure tooling, passes `79/79` focused tests, and changes no target runtime or acceptance authority.
 
 The immutable boot ledger below records `serial / selected-transport pcap / paired-other-interface pcap` SHA-256 values. Each pcap hash covers the completed-record prefix through that boot's workload terminal; an active-writer tail was excluded rather than classified as a packet fault.
 
@@ -6772,19 +6796,19 @@ second scheduler and its endpoint cache, restoring the known-working
 PCIe descriptor/prep and owner registration, then USB descriptor replay and
 runtime initialization; it registers the USB owner once controller init is
 ready, before enumeration.
-HAL and gate tooling separately require current USB/PCIe owner and descriptor
-proof, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness for
-acceptance. Compact identity-bound USB/PCIe owner state and the reserved zero
-compatibility record remain passive `usb diag`/`usb status` evidence rather than
-local-seat progress authority.
+HAL and gate tooling retain the general fresh-image requirement for current
+USB/PCIe owner and descriptor proof, Gate 10, the exact one-deep queue, and real
+HID/parser/HDMI liveness. Compact identity-bound USB/PCIe owner state and the
+reserved zero compatibility record remain passive `usb diag`/`usb status`
+evidence rather than local-seat progress authority. For exact image
+`7a10b8fd6acc`, the operator typed no key and explicitly accepted repeated Gate
+10, one-deep idle-report, command-ready, recovery-free, and HDMI-complete
+sentinels plus exact restoration of the previously board-proven physical path
+as the final Milestone 26b local-seat boundary. This scoped closure records
+`physical_input_proven=no` honestly and does not turn Gate 10 into first-byte
+evidence or weaken the default proof required from a future changed image.
 This restoration adds no raw-UART writer, USB operation, retry, poll, wake,
-authority path, or acceptance inference from Gate 10. One rebuilt same-image
-functional local-seat sample must arm `usb diag` before real keyboard input and
-prove printable input, arrow/lock activity, visible HDMI echo/history, current
-counter growth, and zero drops; the five network-repeatability reboots may then
-use the explicitly documented matrix-level passive
-current-owner/queue/display sentinels rather than silently waiving the
-functional anchor.
+authority path, or acceptance inference from Gate 10.
 
 The 2026-08-06 exact `5b57ebcdcf73` boot reached firmware/control readiness and
 the pre-Join drain, then allocated request 64 without publishing its
@@ -6797,14 +6821,15 @@ lease phase at failure. The source repair
 uses NetStack's exact association claim to open the outer lease before the
 first Join poll and keeps that lease `Open` across the named wait without
 polling. Durable IRQ/DPC/RX/terminal state resumes the same episode; ordinary
-traffic gains no retry, rescue wake, timer, grant, or second owner. Fresh Pi
-Gate 10 and raw-TCP proof remain pending for the rebuilt image.
+traffic gains no retry, rescue wake, timer, grant, or second owner. At that
+source stage, fresh Pi Gate 10 and raw-TCP proof remained pending; the
+current-image closure recorded above subsequently supplied them.
 
-The 2026-08-03 exact `f9ba51abf` cold plus three paced warm lifetimes all completed release, `txglomalign`, and the following `ulp_sdioctrl` Function-2 TX, then stopped at control-reply RX before Gate 8. The first missing edge is therefore post-TX `CARD_INT -> DPC -> Function-2 RX`, not TX, root scheduling, GENET, or smoltcp. The current source repair makes a physically armed DPC condition for the same physical bus-link epoch an issue prerequisite for every persistent Function-2 child, with pre-install rearm/readback, a final pre-command durable-state linearization point, typed no-I/O defer for canonically masked visible source work, and fail-closed health handling including impossible event-plus-unmasked state. It also closes each condition-first request terminal with its shared IRQ episode before exposing the child completion, and makes the final empty-ring/masked-`CARD_INT` rearm due from durable owner state even when no SDIO command is queued. Historical `78d5195582c7` 5/5 boot code remains an oracle only: recurrent Poll/Grant/reply-probe turns masked both lifetime gaps but made inbound service scheduler-dependent and TCP unacceptably slow. No poller, fallback lane, source probe, smoltcp tuning, or GENET change is restored. Fresh Pi repeatability and TCP performance remain unproved until the next exact image.
+The 2026-08-03 exact `f9ba51abf` cold plus three paced warm lifetimes all completed release, `txglomalign`, and the following `ulp_sdioctrl` Function-2 TX, then stopped at control-reply RX before Gate 8. The first missing edge is therefore post-TX `CARD_INT -> DPC -> Function-2 RX`, not TX, root scheduling, GENET, or smoltcp. The current source repair makes a physically armed DPC condition for the same physical bus-link epoch an issue prerequisite for every persistent Function-2 child, with pre-install rearm/readback, a final pre-command durable-state linearization point, typed no-I/O defer for canonically masked visible source work, and fail-closed health handling including impossible event-plus-unmasked state. It also closes each condition-first request terminal with its shared IRQ episode before exposing the child completion, and makes the final empty-ring/masked-`CARD_INT` rearm due from durable owner state even when no SDIO command is queued. Historical `78d5195582c7` 5/5 boot code remains an oracle only: recurrent Poll/Grant/reply-probe turns masked both lifetime gaps but made inbound service scheduler-dependent and TCP unacceptably slow. No poller, fallback lane, source probe, smoltcp tuning, or GENET change is restored. At that source stage, fresh Pi repeatability and TCP performance remained unproved; the current exact-image matrix above supplies that proof.
 
-The later exact `9e673510bf43` cold plus R01-R03 matrix crossed firmware release, the complete control program, and the pre-Join drain, then stalled the generation-1 Join at a redundant per-control `DPC_ACTIVATE` boundary even though post-release activation and the same physical generation were already healthy. This isolates the remaining design defect: internal activation housekeeping was exposed to CYW43 as another bus transaction and therefore another consumable scheduling boundary. The source correction makes activation generation-long, lets healthy owner-active empty/unmasked state continue locally, binds at most one exact already-committed event before TX, and quarantines a vanished bound event. `DPC_ACTIVATE` is reserved for activation-absent or mask-skewed state and exact ACK debt retained by an already-submitted immutable activation frontier; invalid, wrong-generation, poisoned, overrun, or lost-authority state fails closed and quarantines the generation. SDIO also re-reads the ring-only one-way command immediately before idle receive. At that source stage, focused runtime library coverage passed 822/822; fresh exact-image Pi boot and TCP proof remained pending.
+The later exact `9e673510bf43` cold plus R01-R03 matrix crossed firmware release, the complete control program, and the pre-Join drain, then stalled the generation-1 Join at a redundant per-control `DPC_ACTIVATE` boundary even though post-release activation and the same physical generation were already healthy. This isolates the remaining design defect: internal activation housekeeping was exposed to CYW43 as another bus transaction and therefore another consumable scheduling boundary. The source correction makes activation generation-long, lets healthy owner-active empty/unmasked state continue locally, binds at most one exact already-committed event before TX, and quarantines a vanished bound event. `DPC_ACTIVATE` is reserved for activation-absent or mask-skewed state and exact ACK debt retained by an already-submitted immutable activation frontier; invalid, wrong-generation, poisoned, overrun, or lost-authority state fails closed and quarantines the generation. SDIO also re-reads the ring-only one-way command immediately before idle receive. At that source stage, focused runtime library coverage passed 822/822 while fresh exact-image Pi boot and TCP proof remained pending; the current closure matrix above supplies that later hardware proof.
 
-The subsequent exact `51741e5c25d9` cold plus R01-R03 matrix again reached the complete pre-Join drain but stopped before the first physical Join child. The generated DPC/bus epoch was `0x43595301`, while the immutable root parent correctly carried logical connection generation `1`; persistent and steady admissions had regressed by directly comparing those independent domains. The source repair keeps logical `aux1` sealed in every root parent, binds each retained CYW43 transaction once to the current private physical epoch, and requires every SDIO child to carry that physical epoch. DPC ring v3 now publishes explicit `OWNER_ACTIVE` state so empty/unmasked cannot impersonate admitted activation, and an exact source-bearing event already bound in `PreTxDpcProbe` services through canonical DPC in the same owner episode. Focused ABI/runtime/root/parser proof passes; fresh Pi Gate 8, DHCP and TCP quality remain pending after exact-image publication.
+The subsequent exact `51741e5c25d9` cold plus R01-R03 matrix again reached the complete pre-Join drain but stopped before the first physical Join child. The generated DPC/bus epoch was `0x43595301`, while the immutable root parent correctly carried logical connection generation `1`; persistent and steady admissions had regressed by directly comparing those independent domains. The source repair keeps logical `aux1` sealed in every root parent, binds each retained CYW43 transaction once to the current private physical epoch, and requires every SDIO child to carry that physical epoch. DPC ring v3 now publishes explicit `OWNER_ACTIVE` state so empty/unmasked cannot impersonate admitted activation, and an exact source-bearing event already bound in `PreTxDpcProbe` services through canonical DPC in the same owner episode. Focused ABI/runtime/root/parser proof passed; fresh Pi Gate 8, DHCP, and TCP quality remained pending at that source stage and were supplied by the current closure matrix above.
 
 The exact `a9c01a58f2c0` cold plus R01-R03 matrix then crossed association and
 stopped after the host EAPOL-Key M2 parent was accepted and issued but before
@@ -6859,8 +6884,9 @@ after stable identity rechecks and reaches the same sole issuer in the same bus
 episode. The same boot also proved the HDMI runtime healthy while root stranded
 durable display output behind CYW43/USB edges. HDMI display admission and the
 root prompt are now independent durable levels; final Wi-Fi/console Ready and
-USB parser ingress retain their separate proofs. Fresh exact-image Pi Gate 8,
-DHCP, TCP-quality, recovery, and HDMI evidence remain pending.
+USB parser ingress retain their separate proofs. At that source stage, fresh
+exact-image Pi Gate 8, DHCP, TCP-quality, recovery, and HDMI evidence remained
+pending; the current closure matrix above supplies it.
 
 The exact `325756c800b0` boot then crossed the repaired bootstrap
 `txglomalign` parent and the complete control program before retaining Join
@@ -6871,8 +6897,9 @@ matching bus episode's child/exit tuple. The bounded evidence-only follow-up
 therefore adds one sequence-last `runtime_recovery_source_line` to the existing
 RX queue record and copies it into the already-passive first-pre-fence
 diagnostic. This field adds no wake, poll, owner, scheduler phase, recovery
-predicate, or fallback; one rebuilt exact image must supply the missing
-hardware fact before any behavioral correction is considered.
+predicate, or fallback. At that source stage, one rebuilt exact image still had
+to supply the missing hardware fact before any behavioral correction; the
+later repair and current closure matrix supersede that pending frontier.
 
 **Why now (operator continuity):**  
 Milestone 26b depends on completed 26a driver-task substrate and wired/serial/display isolation. Milestone 26b applies that model to the two paths that exposed the regression: USB keyboard/local-seat and CYW43 Wi-Fi. Wi-Fi and selected-network performance must improve by moving SDIO/firmware/RX/TX or GENET RX/TX progress onto bounded manifest-declared isolated driver runtimes, not by extending the root event-loop turn.
@@ -7008,7 +7035,7 @@ Changes:
   - crates/pi4-driver-abi/src/lib.rs — retain one fixed 48-byte, commit-last, role-qualified USB old-good record reservation in the existing ring gap. It remains pointer-free and has no admission, command, wake, retry, recovery, scheduling, ownership, or acceptance semantics; root may passively project the zero record for compatibility.
   - apps/pi4-driver-runtime/src/lib.rs — request a one-second HID idle report on the existing interrupt-IN lifetime so an unchanged keyboard establishes its safe attach baseline before the separate five-second liveness deadline, repeat only held arrow usages from the exported virtual counter and selected timer frequency, preserve make/release edges for every ordinary key, and render bounded one-row HDMI scroll steps without report-count timing or a second input/display owner. Remove the USB old-good partial/final publication state and hooks after fresh exact-image regressions at phases 198, 316, and 412, restoring the prior physical enumeration/one-deep queue path while preserving every Wi-Fi change.
   - apps/root-task/src/local_seat.rs — revoke stale prompt and console-ready presentation across attach/recovery boundaries, re-release the interactive HDMI prompt after current USB command admission and display health, re-admit the ready banner after current USB command admission, retain the canonical prompt/input row until its matching display completion, preserve FIFO output and the prompt backspace floor, and chase completed viewport state through bounded receipts. Retain the bounded canonical `[local-seat] usb keyboard command-ready action=enable-command-input ...` receipt exactly once in `queen.log`, keep its verbose counter detail log-only, and do not project either through a pre-cutover raw-UART path. Restore the known-working `2668c34f76ff` command/first-report path: keep PCIe descriptor/prep and owner registration followed by USB descriptor replay/runtime init and USB owner registration before enumeration, but remove the second post-completion descriptor/owner proof scheduler and its deferred endpoint/byte cache. Valid linked input follows the existing parser-admission path once and a valid first report follows the existing command-ready transition.
-    HAL and gate acceptance independently require current USB/PCIe owners and descriptors, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. An ordinary pending enumeration retry retains the existing pre-prompt deferral, which grants no descriptor or owner proof authority.
+    HAL and gate acceptance ordinarily require current USB/PCIe owners and descriptors, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. The final `7a10b8fd6acc` record uses the explicit operator-approved passive local-seat exception documented in the milestone status and does not claim a fresh key byte. An ordinary pending enumeration retry retains the existing pre-prompt deferral, which grants no descriptor or owner proof authority.
   - apps/root-task/src/event/mod.rs — project passive bounded USB controller, keyboard-enumeration, and first-report startup feedback, and attribute USB/HDMI SMP activity to each manifest-selected runtime core while preserving `Dispatch -> Display -> Serial` priority and granting no USB or HDMI scheduling authority. EventPump is the sole serial projector for the canonical command-ready receipt and queues it exactly once immediately before `[drivers] USB console ready` through the existing HighImpact/EventPump path. Sustained status treats the single armed interrupt-IN transfer and a zero current no-reply streak as healthy, and uses current HDMI driver-task active authority instead of cumulative submitted/completed gaps. The existing passive `usb diag`/`usb status` and `smp activity` response paths project compact current USB/PCIe owner state and the reserved zero compatibility record through the linked serial owner; they must fit the bounded line/backlog contract and cannot issue, retry, wake, or authorize hardware.
   - apps/root-task/src/hal/driver_task.rs — bound the retained steady USB poll to its existing finite no-progress allowance, fail closed instead of retaining a permanently split submitted/completed request, and require a current live-complete keyboard probe rather than promoting cached readiness. Classify the existing `USB_RESET_DONE` progress edge as part of the already bounded extended controller-init/reset timeout so the following run-stage setup is not cut down to the generic three-resume allowance. Preserve an exact retained descriptor request as pending rather than projecting a terminal no-reply blocker; only its own replacement, timeout, typed fault, or fail-closed terminal may make it red. Expose one shared compact owner-state formatter sourced only from the current HAL registration and descriptor-seal truth so USB, PCIe, CYW43, SDIO, and GENET diagnostic receipts cannot drift.
   - scripts/pi4_gate_proof.sh + focused gate-proof fixtures — keep passive `usb status` as the default hardware-proof action, make active `usb probe-kbd` opt-in, and accept only current end-to-end input/display receipt evidence.
@@ -7039,16 +7066,16 @@ Checks:
   - Ordinary keys emit once per make/release edge; only held arrows repeat, after a 300 ms initial delay and at 50 ms intervals scaled from `CNTVCT_EL0` and `TIMER_CLOCK_HZ`, and arrow escape bytes never enter the command parser.
   - HID setup requests an unchanged boot report every one second on the existing endpoint lifetime, so an idle keyboard can establish the attach baseline before the unchanged five-second exact-transfer failure deadline; no additional poll, retry, wakeup, fallback, or owner is introduced.
   - A retained steady USB poll cannot remain permanently split between submitted and completed state: the existing bounded no-progress allowance terminalizes it fail-closed, and cached keyboard readiness alone cannot promote a pending live probe to attached.
-  - The restored `2668c34f76ff` local-seat path has no second descriptor/owner proof scheduler or deferred endpoint/byte cache after a linked completion. The established attach phase performs PCIe descriptor/prep and owner registration, then USB descriptor replay and runtime initialization; it registers the USB owner once controller init is ready, before enumeration. HAL/gate acceptance separately fails closed without current USB/PCIe owner and descriptor proof, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. The dormant old-good receipt authorizes neither progress nor acceptance.
+  - The restored `2668c34f76ff` local-seat path has no second descriptor/owner proof scheduler or deferred endpoint/byte cache after a linked completion. The established attach phase performs PCIe descriptor/prep and owner registration, then USB descriptor replay and runtime initialization; it registers the USB owner once controller init is ready, before enumeration. HAL/gate acceptance ordinarily fails closed without current USB/PCIe owner and descriptor proof, Gate 10, the exact one-deep queue, and real HID/parser/HDMI liveness. The dormant old-good receipt authorizes neither progress nor acceptance. Exact image `7a10b8fd6acc` closes only through the separately recorded operator-approved passive exception.
   - `USB_RESET_DONE` retains the existing bounded extended controller-init/reset allowance; it does not create a new timeout, retry, wake, owner, or unbounded lifetime.
   - The canonical command-ready receipt remains exactly once in `queen.log` and appears exactly once on serial immediately before `[drivers] USB console ready`; EventPump is the only serial projector. Before a current linked-runtime HID byte is accepted, the truthful state is `usb-physical-input-unproven`, with no post-first-byte failure classification.
   - Serial remains usable during USB startup; HDMI shows bounded passive startup feedback but no interactive prompt until current USB command readiness and display health both hold. The console-ready banner is re-admitted canonically only after current USB command readiness and becomes visible only through healthy display service. Attach/recovery revokes stale first-report, command, prompt, and ready-banner presentation, and only current-lifetime proof re-releases them.
   - An older HDMI completion cannot acknowledge a newer canonical input row or viewport request; FIFO output remains ordered, backspace cannot erase the prompt prefix, and rapid arrows advance one completed viewport row per bounded display turn without stale tails, full-screen blink, or unbounded queue growth.
   - Passive hardware proof never turns a diagnostic into USB authority: default helpers use `usb status`, an active keyboard probe is explicit, and USB/HDMI SMP accounting names each selected runtime core from current manifest truth.
   - USB remains the sole xHCI/HID owner and HDMI remains child-only. The reserved fixed USB evidence record changes no authority or command ABI semantics and runtime publication remains dormant; no parser command, `ACK`/`ERR`/`END`, network, REST, `cohsh`, or benchmark semantic changes occur.
-  - The exact rebuilt image preserves Wi-Fi first-pair progress and proves same-boot USB first-byte/first-printable-byte input, visible HDMI echo, prompt and ready-banner revocation/re-release, arrow history, and bounded display completion under selected-network load.
-  - Matrix closure includes one same-image functional local-seat anchor captured after `usb diag` is armed, plus passive current owner/one-deep-queue/HDMI sentinels on each network-repeatability reboot; neither layer substitutes for the other.
-Deliverables: Focused source/tests/docs repair, warning-free Pi target builds, exact rebuilt image and independent COHESIX media readback, and fresh same-boot USB keyboard/HDMI functional proof.
+  - The exact rebuilt image preserves Wi-Fi first-pair progress and repeatedly proves USB enumeration, Gate 10, the one-deep idle-report queue, command readiness, zero current recovery/no-reply debt, and bounded HDMI completion under selected-network load. No fresh key was typed on `7a10b8fd6acc`; the closure record therefore makes no first-byte, printable-byte, arrow-history, or visible-key-echo claim.
+  - Matrix closure ordinarily includes one same-image functional local-seat anchor captured after `usb diag` is armed, plus passive current owner/one-deep-queue/HDMI sentinels on each network-repeatability reboot. For `7a10b8fd6acc`, the operator explicitly accepted the passive sentinels and exact known-working-path restoration without a fresh anchor; this exception is image-specific and cannot be reused after changing the physical USB path.
+Deliverables: Focused source/tests/docs repair, warning-free Pi target builds, exact rebuilt image, and the operator-approved same-image USB/HDMI evidence recorded above.
 
 Title/ID: m26b-usb-driver-task
 Goal: Move Pi 4 xHCI/HID keyboard service behind the realtime USB driver-task contract.
@@ -8339,10 +8366,11 @@ Deliverables:
 **Why now (kernel truth):**
 Milestone 26c makes the docs-as-built audit, target-qualified Test Plan, host/VM boundary evidence, and regression-gated refactor baseline explicit. Milestone 26d refreshes the external kernel baseline and canonical references to seL4 16.0.0, anchors manual alignment to the official seL4 Reference Manual v16.0.0 ([PDF](https://sel4.systems/Info/Docs/seL4-manual-16.0.0.pdf)), proves the reopened 26a/26b driver-task model still holds on QEMU and Pi 4, and closes kernel-version drift before later feature work builds on stale assumptions. Because a kernel refresh changes scheduler, syscall, timer, cache, and generated-artifact behavior that can move measured latency or throughput, 26d also owns a bounded benchmark revalidation and regression-tuning lane: compare historical-best, accepted 26b, accepted seL4 15, first seL4 16, and post-tuning seL4 16 evidence before later milestones rely on the refreshed baseline.
 
-Milestone 26b was subsequently reopened for the steady-data-plane repair and
-remains Reopened pending the repaired exact-image functional local-seat proof
-matrix specified above. Its `2668c34f76ff` transport matrix is accepted as the
-performance/reliability baseline, but is not final milestone closure. Urgent-only
+Milestone 26b was subsequently reopened for the steady-data-plane and
+local-seat regressions and returned to Complete on exact image
+`7a10b8fd6acc` through the operator-approved matrix recorded above. Its
+`2668c34f76ff` transport matrix remains the performance/reliability baseline;
+the current-image record is final milestone closure. Urgent-only
 lease eligibility, bulk exclusion, normal deadline or
 hintless scheduling, and zero/no-ack fallback language retained inside the
 completed 26d task records below describes the superseded evidence baseline;
@@ -8392,7 +8420,7 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
   risk-ratchet baseline, and no-std boundary evidence available). Its later
   documentation-only remediation may run concurrently and does not invalidate
   those accepted prerequisite artifacts.
-- At the accepted 26d closure, Milestones **26a** and **26b** were complete where their driver-task and benchmark artifacts were inputs to the kernel refresh. Milestone 26b was later reopened for the bounded evidence defects recorded above; no isolated runtime performance assumption may be rewritten under the kernel-refresh label.
+- At the accepted 26d closure, Milestones **26a** and **26b** were complete where their driver-task and benchmark artifacts were inputs to the kernel refresh. Milestone 26b was later reopened for the bounded evidence defects recorded above and returned to Complete on exact image `7a10b8fd6acc`; no isolated runtime performance assumption may be rewritten under the kernel-refresh label.
 - The root-service/Worker task-isolation claims in Milestone **25** and Worker
   capability/notification claims in Milestone **26c** are reopened to restore
   as-built truth in the first 26d phase. Root-service decomposition and actual
@@ -8401,7 +8429,7 @@ to imply new product behavior or completed Pi 4 Wi-Fi evidence.
   neither can be inferred from driver-runtime TCB evidence or model tests.
 
 ### Goal
-Upgrade Cohesix's external seL4 baseline and normative references to seL4 16.0.0 while preserving root-task authority plus the reopened 26a/26b hardware driver-task model, prove zero operator-visible drift across QEMU and Pi 4, and preserve or recover the accepted 26b REST/driver-runtime benchmark envelope when the refreshed kernel baseline exposes a bounded performance regression.
+Upgrade Cohesix's external seL4 baseline and normative references to seL4 16.0.0 while preserving root-task authority plus the accepted 26a/26b hardware driver-task model, prove zero operator-visible drift across QEMU and Pi 4, and preserve or recover the accepted 26b REST/driver-runtime benchmark envelope when the refreshed kernel baseline exposes a bounded performance regression.
 
 ### Deliverables
 - **Kernel baseline refresh**
@@ -8801,7 +8829,7 @@ The root notify boundary additionally accepts only the exact legal
 notify, root commits `Issued`, sends no redundant signal, and polls on the next
 turn. A matching late completion before replacement publication likewise wins
 without publishing or signalling.
-Deliverables: retained linked-runtime implementation, production-chain adversarial tests, aligned canonical docs, exact-image identity metadata, deterministic gate records, and a Pi-ready exact image. This task's closure was hardware-free only. Its original 10-cold plus 10-warm proposal was superseded for final physical Milestone 26b acceptance by the operator-approved matrix recorded in the `2668c34f76ff` candidate ledger above: one fully settled cold Wi-Fi boot, five rebooted Wi-Fi lifetimes, and one same-image GENET control, each with the applicable association and gate proof, EAPOL, DHCP, ARP, raw TCP/authenticated `cohsh`, USB/local-seat, boot-paired pcap, and benchmark evidence. The repaired exact image must repeat that matrix with current descriptor/owner, one-deep queue, command-ready, real HID/parser, and HDMI local-seat proof closed before the milestone status changes from Reopened.
+Deliverables: retained linked-runtime implementation, production-chain adversarial tests, aligned canonical docs, exact-image identity metadata, deterministic gate records, and a Pi-ready exact image. This task's closure was hardware-free only. Its original 10-cold plus 10-warm proposal was superseded for final physical Milestone 26b acceptance by the operator-approved matrices recorded above. Exact image `7a10b8fd6acc` completed one settled cold Wi-Fi boot, five reboot attempts, and one same-image GENET control with raw TCP, first-attempt `.coh`, no-retry pressure, and boot-paired pcap evidence. W04 remains an explicitly excluded RF-affected sample; cold, W01-W03, W05, and G01 form the accepted closure set. No fresh USB key was typed, so the current-image record claims only repeated Gate 10, one-deep idle-report, command-ready, recovery-free, and HDMI-complete evidence plus exact restoration of the previously board-proven path under the operator-approved image-specific exception.
 ```
 
 ```
@@ -8910,12 +8938,11 @@ be planned.
 - Reopened Milestones **25** and **26c** accepted for truth correction: current
   root-owned services and model-only Workers remain documented honestly until
   this milestone produces target evidence.
-- Reopened Milestone **26b** CYW43/SDIO reliability and current-image evidence
-  must close or be frozen behind an explicit accepted blocker. No 26e task may
-  rewrite its active CYW43 timing, restart, packaging, or proof-classification
-  logic. Only deterministic preparatory 26e work may proceed while that surface
-  is frozen; the 26e Pi component, full-system, and release gates still require
-  positive exact-image CYW43 closure and a matching MCS coexistence record.
+- Milestone **26b** is complete for CYW43/SDIO reliability and current-image
+  evidence. No 26e task may rewrite its accepted CYW43 timing, restart,
+  packaging, or proof-classification logic. The 26e Pi component, full-system,
+  and release gates still require the accepted exact-image CYW43 closure and a
+  matching MCS coexistence record.
 
 ### Goal
 
@@ -9869,7 +9896,7 @@ Cadence by milestone family:
 - USB mass storage is not the Milestone 27 default path. It may be added only as a later optional removable-media profile after USB local-seat/xHCI ownership is hardware-proved and cannot be a boot-critical dependency.
 
 ### Prerequisite
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c**, **26d**, and
+- Milestones **26a** and **26b**, plus Milestones **26c**, **26d**, and
   **26e**, completed where they are dependencies for the selected profile: Pi 4
   driver-task concurrency evidence is available, the 26b benchmark ledger is
   closed or explicitly non-blocking for the selected persistence profile,
@@ -10140,7 +10167,7 @@ Deliverables:
 - Milestone **26e**, including `m26e-mcs-smp-target-acceptance`, completed so
   witnesses describe the one accepted SMP+MCS QEMU/Pi task topology rather than
   a hypothetical or dual-scheduler design.
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, isolated runtime descriptors, 26b benchmark evidence, target-qualified tests, and refreshed seL4 baseline evidence.
+- Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to the proof surface: driver-task substrate, HAL admission, isolated runtime descriptors, 26b benchmark evidence, target-qualified tests, and refreshed seL4 baseline evidence.
 
 ### Goal
 Establish a machine-checkable verification baseline for the highest-value Cohesix contracts:
@@ -10454,7 +10481,7 @@ Deliverables:
 ## Milestone 27b — Core-Local Service-Turn Scheduling (SMP Hot-Path Optimization) <a id="27b"></a>
 [Milestones](#Milestones)
 
-**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Reopened Milestone 26b owns the immediate isolated runtime same-harness benchmark gate. Milestones 26c, 26d, 26e, 27, and 27a add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, the accepted SMP+MCS temporal-authority model, persistence drains, proof witnesses, HAL authority checks, and verification gates. Milestone 27b is the right point to consume accepted SC/core placement and eventual 26b hot-path closure as compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries; it does not reopen scheduler selection.
+**Why now (core-local performance with proof):** Milestone 25 established the architectural rule for multicore Cohesix: use isolated seL4 tasks and manifest affinity, not bulky SMP libraries, shared thread pools, or hidden work stealing. Completed Milestone 26b supplies the accepted isolated runtime same-harness benchmark gate. Milestones 26c, 26d, 26e, 27, and 27a add the missing enforcement substrate around generated worker/driver scheduling evidence, seL4 baseline alignment, the accepted SMP+MCS temporal-authority model, persistence drains, proof witnesses, HAL authority checks, and verification gates. Milestone 27b is the right point to consume accepted SC/core placement and accepted 26b hot-path closure as compiler-owned core-local service scheduling without weakening authority, replay, or hardware-proof boundaries; it does not reopen scheduler selection.
 
 **As-built alignment note:** Cohesix already has manifest affinity, `smp activity`, manifest-declared isolated driver runtime active-slot rules, bounded service-turn language, and host-safe pressure evidence. Milestone 26b owns the first isolated runtime benchmark comparator, same-harness Pi/QEMU benchmark evidence, and immediate bounded driver hot-path fixes. Cohesix does **not** yet have compiler-owned core-local service buckets, generated per-core service-turn budgets, per-core telemetry/spool drain policy, IRQ-locality witnesses, or Pi/QEMU evidence proving that hot paths stay local to their assigned core under mixed load. Older prose must not claim core-local hot-path scheduling or multicore throughput closure until this milestone has passing evidence.
 
@@ -10480,7 +10507,7 @@ Deliverables:
   console/network, Worker, and root-task bucket ownership is assigned to real
   as-built tasks rather than the superseded root-owned/model-only layout.
 - Milestone **27a** completed for the selected profile, including proof witnesses, HAL/driver-task authority checks, and verification-gate evidence.
-- Reopened Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, isolated runtime benchmark evidence, affinity, seL4 baseline, and target-qualified proof.
+- Milestones **26a** and **26b**, plus Milestones **26c** and **26d**, completed or explicitly scoped where their artifacts are inputs to Pi 4 driver-runtime, isolated runtime benchmark evidence, affinity, seL4 baseline, and target-qualified proof.
 
 ### Goal
 Convert existing manifest affinity into **core-local, bounded service-turn execution** for workers, manifest-declared isolated driver runtimes, NineDoor/provider paths, telemetry drains, and persistent-spool drains while preserving Cohesix's file-shaped control plane, deterministic ordering, and tiny TCB.

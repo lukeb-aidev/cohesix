@@ -2381,20 +2381,24 @@ cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 
 cargo test -p root-task --lib --no-default-features --features driver-tests-pi4 icmp_echo_reservation_failure_releases_earlier_leases -- --test-threads=1
 ```
 
-Fresh exact-image acceptance must pair one power-off plus five first-pair warm
-WiFi boots with one GENET control and then run the same sequential request and
-no-retry pressure workloads. Before ping, TCP, `cohsh`, or benchmark traffic
-warms the Pi's host-neighbor entry on each lifetime, send exactly one ICMPv4
-Echo Request. The boot-paired pcap must show that request, the Pi's ARP request,
-the matching host ARP reply, and exactly one Echo Reply with the original
-identifier, sequence, and payload, without a second host Echo Request or
-duplicate Pi reply. Failure of that semantic cold-neighbor gate fails the
-lifetime independently of CYW43 ingress and warmed cadence. Record its elapsed
-time separately; use only subsequent ARP-warmed ping, SYN, and
-request-to-first-payload samples for the CYW43 cadence threshold. The mandatory
-tenfold floor is WiFi request-to-first-payload p95 at most 40 ms and at least
-29 sequential requests/s. The aggressive low-overhead target is p95 at most 10
-ms and at least 100 requests/s. At true idle the committed queue must be stably
+Default future exact-image acceptance must pair one power-off plus five
+first-pair warm WiFi boots with one GENET control and then run the same
+sequential request and no-retry pressure workloads. Before ping, TCP, `cohsh`,
+or benchmark traffic warms the Pi's host-neighbor entry on each lifetime, send
+exactly one ICMPv4 Echo Request. The boot-paired pcap must show that request,
+the Pi's ARP request, the matching host ARP reply, and exactly one Echo Reply
+with the original identifier, sequence, and payload, without a second host Echo
+Request or duplicate Pi reply. Failure of that semantic cold-neighbor gate
+fails the lifetime. Record its elapsed time separately and use only subsequent
+ARP-warmed ping, SYN, and request-to-first-payload samples for cadence
+comparison. The earlier tenfold floor of WiFi request-to-first-payload p95 at
+most 40 ms and at least 29 sequential requests/s is a non-blocking optimization
+target; the aggressive low-overhead target remains p95 at most 10 ms and at
+least 100 requests/s. Exact image `7a10b8fd6acc` closed Milestone 26b through the
+operator-approved usable/reliable matrix in the Build Plan. That image-specific
+record did not run the pre-TCP ICMP probe, explicitly excluded the RF-affected
+W04 sample, and cannot be reused as a generic waiver for a future changed image.
+At true idle the committed queue must be stably
 empty, no batch parent may be active, and elapsed time alone must produce zero
 Function-2 reads, op8 parents, priority leases, live notification-derived
 admission latch, or GENET work. Historical passive root-wake poll/hit counters
@@ -2411,13 +2415,14 @@ nonterminal sideband; its exact disjoint root ACK must release the batch without
 changing parent identity. Ordinary acceptance also requires
 `sdio_deadline_hints=0`; a nonzero value is fault-containment evidence and fails
 the normal-latency sample even if the request eventually completes.
-The pcap must additionally show no warmed-traffic loss, sequence gap,
-out-of-order delivery, reset, zero window, SACK recovery block, SYN retry, or
-reconnect, and the pressure run must have zero timeout masking. GENET must pass
+Accepted samples must additionally show no unresolved warmed-traffic loss,
+sequence gap, reset, established zero window, or reconnect, and the pressure
+run must have zero timeout masking. Bounded recovered retransmissions remain
+visible evidence rather than being hidden. GENET must pass
 the same common cold-neighbor semantic gate while latency, throughput, and
-scheduler counters remain within its control contract. Until a rebuilt/read-back
-image produces this evidence, the cold-neighbor repair and both performance
-thresholds remain source claims rather than hardware results.
+scheduler counters remain within its control contract. Exact image
+`7a10b8fd6acc` supplies the accepted Milestone 26b hardware result; a future
+changed image must establish its own evidence rather than inheriting this one.
 
 CYW43 device tests must also prove that a retained TX blocks another physical
 issue, while a runtime-closed SDPCM window retains the already-promoted exact
@@ -4108,7 +4113,7 @@ Run this matrix in addition to the staged runner when Milestone 26a or 26b files
     - for static boots sourced from the U-Boot wizard, `/chosen/cohesix,static-ipv4`, `/chosen/cohesix,static-prefix-len`, and optional `/chosen/cohesix,static-gateway` appear in the U-Boot handoff log
     - for DHCP boots, `[net-console] pending-dhcp ...` followed by `[dhcp] lease bound ...`; DHCP-bound evidence is address proof only, while acceptance still requires listener/command evidence (`netstatus ... tcp_ready=yes`, authenticated `cohsh`, or successful `nettest`).
     - USB cold-boot proof shows `USB_BOOTLOADER_HANDOFF_SEEN=no` and `USB_COLD_BOOT_SEEN=yes`; any U-Boot xHCI handoff, stop-seed, preserve-state, bootloader-authorized reset, or `run-uboot` label fails the Pi 4 USB gate.
-    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, current USB and PCIe descriptor/owner proof, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: companion `queued_reports` and `transfer_events` fields may be untyped bytes from an earlier enumeration result and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. The dormant USB old-good receipt is not hardware acceptance authority. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain required user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker.
+    - USB keyboard proof reaches `USB_GATE=10` / `USB_BLOCKER=none` with `USB_COMMAND_READY=yes`, `USB_FIRST_REPORT_READY=yes`, `USB_LOCAL_SEAT_STATE=ready`, `USB_BUSY_AFTER_READY=no`, current USB and PCIe descriptor/owner proof, and the single interrupt-IN lane stably armed by a current `queue_valid=yes queued_reports=1` record; missing queue evidence is acceptance-red, zero is empty, and any larger active depth is an invariant failure, independent of the cumulative transfer-event count. An explicit `queue_valid=no` revokes the queue sample: companion `queued_reports` and `transfer_events` fields may be untyped bytes from an earlier enumeration result and the normalizer must not export or classify them as HID queue counters. Current health uses the consecutive no-reply streak, not historical no-reply totals. The dormant USB old-good receipt is not hardware acceptance authority. The first HID report and first byte must be sourced from `linked-runtime-hid`; `usb status` must remain honest with `physical_input_proven=no` until that linked-runtime byte also reaches parser ingress. A linked first-byte latch or parser ingress reported only as `local-seat-queue-diagnostic`, local-seat queue text, or `source=first-byte` is diagnostic by itself and never sets the proof. A printable-key line such as `runtime keyboard first-printable-byte ...`, `physical_input_proven=yes`, visible HDMI echo, and a post-`usb diag` `USB_DIAG_LIVENESS_STATUS=pass` remain the default user-experience evidence. Sustained USB acceptance additionally requires `USB_POST_FIRST_BYTE_BLOCKER=none`, no `recovery-failed` report status, no post-first-byte queue collapse, and no growing no-reply or dropped-byte pressure during typing, arrow-history, and lock-key bursts. HDMI completion proof uses the current driver-task active request; an inactive historical submitted/completed counter gap remains telemetry and cannot fabricate a live outstanding turn. The passive status and immediately adjacent `hdmi: driver` row must jointly prove present counters, inactive authority, at least one completion, zero outstanding work, zero current no-reply streak, and no stale snapshot. `USB_EVENT_LOOP_RUNTIME_SKIPPED` may grow when those turns intentionally service input first and is not itself a blocker. Exact image `7a10b8fd6acc` is the recorded exception: no key was typed, `physical_input_proven=no` remained truthful, and the operator accepted repeated Gate 10/one-deep/command-ready/recovery-free/HDMI-complete sentinels plus exact restoration of the board-proven path. That exception is not parser authority and expires when the physical USB path changes.
     - if the attached keyboard exposes lock LEDs, Caps Lock, Num Lock, and Scroll Lock testing either proves the preallocated EP0 OUT DMA path (`xhci-control-out-prealloc` plus `pi4 keyboard led sync ready ...`) or cleanly logs `keyboard led sync unavailable ... action=disabled` without blocking input.
     - HDMI local-seat acceptance observes typed USB keyboard bytes echoing at
       parser ingress on the live prompt row, boot/progress messages refreshing

@@ -146,7 +146,7 @@ Work is tracked in the [Build Plan](docs/BUILD_PLAN.md), including future planne
 | QEMU `aarch64/virt` | Reference development and regression target on seL4 16.0.0; fresh static profiles and linked `--no-run` packaging pass | Booted target-qualified evidence is still required; QEMU is not hardware proof. |
 | Raspberry Pi 4 boot | Pi firmware → U-Boot → seL4 binary image → root task; fresh v16 Pi profiles and direct `~/seL4_16` diagnostic build pass | Implemented and previously board-proven; a clean exact image and current-tree live revalidation remain part of Milestone 26d. |
 | Pi 4 wired networking | Isolated GENETv5 runtime with DHCP and TCP | Accepted Milestone 26c evidence exists for its recorded image; a new image must prove its own state. |
-| Pi 4 Wi-Fi | Linked CYW43455 and SDIO runtimes implemented | Reopened 26b work has no current-image association, DHCP, TCP, or repeatability claim yet. |
+| Pi 4 Wi-Fi | Linked CYW43455 and SDIO runtimes implemented | Accepted Milestone 26b evidence binds exact image `7a10b8fd6acc` to association, DHCP, usable raw TCP, no-retry pressure, USB command readiness, and a same-image GENET control; future changed images must prove their own state. |
 | Host tools | macOS 26 on Apple Silicon is the primary development host | Host success does not prove target or Pi hardware behavior. |
 | AWS/UEFI | Planned profile | Milestone 30 is pending; AWS is not a current Cohesix VM target. |
 

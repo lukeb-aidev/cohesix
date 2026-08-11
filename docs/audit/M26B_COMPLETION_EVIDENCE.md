@@ -5,16 +5,24 @@
 
 # Historical Milestone 26b Compatibility Evidence
 
-This file records the pre-reopen 26b compatibility baseline. Reopened 26a/26b
-driver-task acceptance is not complete until fresh hardware captures prove
+This file records the pre-reopen 26b compatibility baseline. At this
+2026-05-17 evidence cut, reopened 26a/26b driver-task acceptance remained
+incomplete pending fresh hardware captures proving
 `DRIVER_TASK_DEDICATED_READY=yes`, `DRIVER_TASK_DEDICATED>=4`, and
 `DRIVER_TASK_COMPATIBILITY=0`, plus `DRIVER_TASK_SERIAL_DEDICATED=yes`,
 `DRIVER_TASK_USB_DEDICATED=yes`, `DRIVER_TASK_DISPLAY_DEDICATED=yes`, and
 `DRIVER_TASK_NET_DEDICATED=yes` for the active Pi 4 driver set.
 
+Current-status supersession (2026-08-11): the Build Plan records Milestone 26b
+Complete on exact image `7a10b8fd6acc` after the later current-image Wi-Fi,
+USB command-readiness under the documented image-specific no-key exception,
+and same-image GENET matrix. No fresh key was typed. The unqualified
+`Not Complete` entry below describes only this evidence file's 2026-05-17
+historical cut; it is not the current milestone status.
+
 ## Scope
 
-This evidence closes only the historical Milestone 26b Pi 4 DHCP/Wi-Fi baseline and QEMU compatibility guardrail. It does not close reopened 26a/26b driver-task isolation, and it does not start the Milestone 26c target-qualified runner, audit refactor, or cleanup work.
+At this historical evidence cut, the record closes only the Milestone 26b Pi 4 DHCP/Wi-Fi baseline and QEMU compatibility guardrail. It did not close the later reopened 26a/26b driver-task isolation work, and it did not start the Milestone 26c target-qualified runner, audit refactor, or cleanup work.
 
 ## QEMU Evidence
 
@@ -107,5 +115,5 @@ USB_COLD_BOOT_SEEN=yes
 
 - Historical 26a GENET/static compatibility baseline: Complete.
 - Historical 26b DHCP/Wi-Fi compatibility baseline: Complete.
-- Reopened 26a/26b dedicated driver-task acceptance: Not Complete.
+- Reopened 26a/26b dedicated driver-task acceptance at this evidence cut: Not Complete.
 - Milestone 26c: Not Started.

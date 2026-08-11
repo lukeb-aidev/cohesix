@@ -678,6 +678,13 @@ reusable ownership pattern.
   alone cannot satisfy those gates. An ordinary pending enumeration retry may
   retain the existing pre-prompt deferral, but that deferral is not descriptor
   or owner proof authority.
+- Exact image `7a10b8fd6acc` is the operator-approved Milestone 26b exception:
+  no key was typed, so `physical_input_proven=no` remains the truthful state.
+  Repeated Gate 10, one-deep idle-report, command-ready, recovery-free, and
+  HDMI-complete sentinels plus exact restoration of the previously board-proven
+  path were accepted for that image only. This grants no parser authority and
+  does not weaken the default fresh-input requirement after a physical-path
+  change.
 - Withhold the interactive HDMI prompt until current USB command admission and
   display retry health both hold. Before that boundary, project bounded
   controller, keyboard-enumeration, and first-report feedback through the

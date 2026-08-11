@@ -543,6 +543,13 @@ one-deep queue, and real HID/parser/HDMI liveness all pass; endpoint completion
 alone is not board acceptance. An ordinary pending enumeration retry retains
 the existing pre-prompt deferral, which supplies no descriptor or owner proof.
 
+For exact image `7a10b8fd6acc`, the operator typed no key and explicitly
+accepted repeated Gate 10, one-deep idle-report, command-ready, recovery-free,
+and HDMI-complete sentinels plus exact restoration of this board-proven path as
+the final Milestone 26b local-seat record. It truthfully retains
+`physical_input_proven=no`, grants no parser authority, and does not waive the
+default fresh-input check after a future physical-path change.
+
 After the HDMI prompt appears, verify that every typed character reaches the
 canonical command row, backspace stops at the prompt prefix, and held up/down
 arrows advance scrollback smoothly one completed viewport row at a time.
@@ -1998,13 +2005,15 @@ Before any peer-warming traffic on every lifetime, it must answer one first
 Echo Request across the ordered cold trace
 `Echo Request -> Pi ARP Request -> host ARP Reply -> matching Echo Reply`
 without a second request or duplicate reply. Record that semantic/elapsed
-sample separately, then require ARP-warmed request-to-first-payload p95 at or
-below 40 ms and at least 29 sequential requests/s with no loss, reconnect, or
-benchmark timeout. The aggressive target is p95 at or below 10 ms and at least
-100 requests/s. The GENET control must retain the same common cold-neighbor
-semantics and its accepted wired performance. Until the rebuilt/read-back
-image produces that evidence, neither source repair nor performance target has
-Pi proof.
+sample separately. The earlier ARP-warmed request-to-first-payload p95-at-most-
+40-ms and at-least-29-sequential-requests/s floor is now a non-blocking
+optimization target; the aggressive target remains p95 at or below 10 ms and
+at least 100 requests/s. Milestone 26b closure uses the operator-approved
+usable, repeatable, no-semantic-loss envelope recorded in the Build Plan, with
+bounded recovered retransmissions and any RF exclusion reported honestly. The
+GENET control must retain the same common cold-neighbor semantics and its
+accepted wired performance. Exact image `7a10b8fd6acc` is the accepted hardware
+record; future changed images must prove their own state.
 
 The historical capture `pi4-serial-20260724-214130.log`, with the bounded
 post-exhaustion sidecar `pi4-serial-20260724-6c6-postexhaust-diag.log` and
