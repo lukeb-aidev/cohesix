@@ -97,6 +97,12 @@ pub enum AffinityError {
         core: u8,
         err: i32,
     },
+    McsInitialPlacementMismatch {
+        tcb: usize,
+        role: AffinityRole,
+        requested_core: u8,
+        boot_core: u8,
+    },
 }
 
 impl fmt::Display for AffinityError {
@@ -149,8 +155,33 @@ impl fmt::Display for AffinityError {
                 core,
                 err
             ),
+            Self::McsInitialPlacementMismatch {
+                tcb,
+                role,
+                requested_core,
+                boot_core,
+            } => write!(
+                f,
+                "MCS initial TCB placement mismatch tcb=0x{tcb:x} role={} requested_core={} boot_core={} expected=init-tcb/authority/core0",
+                role.label(),
+                requested_core,
+                boot_core,
+            ),
         }
     }
+}
+
+/// How the initial root-control TCB's manifest placement was established.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InitialTcbPlacement {
+    /// Affinity policy is disabled.
+    Disabled,
+    /// The policy does not select an authority core.
+    Unspecified,
+    /// Classic seL4 moved the initial TCB with `TCB.SetAffinity`.
+    ClassicAffinityApplied(u8),
+    /// MCS already placed the initial TCB on CPU0 with its initial scheduling context.
+    McsBootPlacementValidated(u8),
 }
 
 pub fn policy() -> generated::AffinityPolicy {
@@ -580,16 +611,42 @@ where
     emit("ERR reason=unsupported");
 }
 
+fn validate_mcs_initial_tcb_placement(
+    tcb: usize,
+    initial_tcb: usize,
+    role: AffinityRole,
+    requested_core: u8,
+    boot_core: u8,
+) -> Result<(), AffinityError> {
+    if tcb != initial_tcb
+        || role != AffinityRole::Authority
+        || requested_core != 0
+        || boot_core != 0
+    {
+        return Err(AffinityError::McsInitialPlacementMismatch {
+            tcb,
+            role,
+            requested_core,
+            boot_core,
+        });
+    }
+    Ok(())
+}
+
 #[cfg(feature = "kernel")]
-pub fn apply_tcb_affinity(
+pub fn establish_initial_tcb_placement(
     tcb: crate::sel4::seL4_CPtr,
     role: AffinityRole,
     index: usize,
+    boot_core: u8,
     policy: &generated::AffinityPolicy,
-) -> Result<Option<u8>, AffinityError> {
+) -> Result<InitialTcbPlacement, AffinityError> {
+    if !policy.enabled {
+        return Ok(InitialTcbPlacement::Disabled);
+    }
     let core = match select_core(policy, role, index) {
         Some(core) => core,
-        None => return Ok(None),
+        None => return Ok(InitialTcbPlacement::Unspecified),
     };
     if core >= policy.max_cores {
         return Err(AffinityError::InvalidCore {
@@ -598,14 +655,31 @@ pub fn apply_tcb_affinity(
             max_cores: policy.max_cores,
         });
     }
-    if let Err(err) = crate::sel4::set_tcb_affinity(tcb, core) {
-        return Err(AffinityError::Syscall {
+
+    #[cfg(sel4_config_kernel_mcs)]
+    {
+        validate_mcs_initial_tcb_placement(
+            tcb as usize,
+            sel4_sys::seL4_CapInitThreadTCB as usize,
             role,
             core,
-            err: err as i32,
-        });
+            boot_core,
+        )?;
+        return Ok(InitialTcbPlacement::McsBootPlacementValidated(core));
     }
-    Ok(Some(core))
+
+    #[cfg(not(sel4_config_kernel_mcs))]
+    {
+        let _ = boot_core;
+        if let Err(err) = crate::sel4::set_tcb_affinity(tcb, core) {
+            return Err(AffinityError::Syscall {
+                role,
+                core,
+                err: err as i32,
+            });
+        }
+        Ok(InitialTcbPlacement::ClassicAffinityApplied(core))
+    }
 }
 
 #[cfg(feature = "kernel")]
@@ -630,15 +704,18 @@ pub fn apply_driver_tcb_affinity(
 }
 
 #[cfg(feature = "kernel")]
-pub fn apply_boot_policy(view: &crate::sel4::BootInfoView) -> Result<Option<u8>, AffinityError> {
+pub fn apply_boot_policy(
+    view: &crate::sel4::BootInfoView,
+) -> Result<InitialTcbPlacement, AffinityError> {
     let policy = policy();
     if !policy.enabled {
-        return Ok(None);
+        return Ok(InitialTcbPlacement::Disabled);
     }
     let observed_nodes = view.header().numNodes as u8;
     validate_policy(&policy, observed_nodes)?;
     let tcb = view.header().init_tcb_cap();
-    apply_tcb_affinity(tcb, AffinityRole::Authority, 0, &policy)
+    let boot_core = crate::sel4::bootinfo_node_id(view.header()) as u8;
+    establish_initial_tcb_placement(tcb, AffinityRole::Authority, 0, boot_core, &policy)
 }
 
 #[cfg(test)]
@@ -730,5 +807,25 @@ mod tests {
         policy.drivers.serial = Some(0);
         let err = validate_policy(&policy, 4).unwrap_err();
         assert!(matches!(err, AffinityError::DriverOnRootCore { .. }));
+    }
+
+    #[test]
+    fn mcs_initial_placement_accepts_only_init_authority_on_boot_core_zero() {
+        assert_eq!(
+            validate_mcs_initial_tcb_placement(1, 1, AffinityRole::Authority, 0, 0),
+            Ok(())
+        );
+
+        for (tcb, role, requested_core, boot_core) in [
+            (2, AffinityRole::Authority, 0, 0),
+            (1, AffinityRole::NineDoor, 0, 0),
+            (1, AffinityRole::Authority, 1, 0),
+            (1, AffinityRole::Authority, 0, 1),
+        ] {
+            assert!(matches!(
+                validate_mcs_initial_tcb_placement(tcb, 1, role, requested_core, boot_core),
+                Err(AffinityError::McsInitialPlacementMismatch { .. })
+            ));
+        }
     }
 }

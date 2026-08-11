@@ -3320,34 +3320,6 @@ fn bootstrap<P: Platform>(
     })?;
     boot_guard.record_phase("BootInfoValidate");
     sel4_guard::install_bootinfo(&bootinfo_view);
-    let affinity_policy = affinity::policy();
-    if affinity_policy.enabled {
-        let observed_nodes = bootinfo_view.header().numNodes as u8;
-        if let Err(err) = affinity::validate_policy(&affinity_policy, observed_nodes) {
-            return Err(BootError::Fatal(format!("affinity policy invalid: {err}")));
-        }
-        let tcb = bootinfo_view.header().init_tcb_cap();
-        match affinity::apply_tcb_affinity(
-            tcb,
-            affinity::AffinityRole::Authority,
-            0,
-            &affinity_policy,
-        ) {
-            Ok(Some(core)) => {
-                log::info!("[boot] affinity: init tcb pinned core={core}");
-            }
-            Ok(None) => {
-                log::warn!(
-                    "[boot] affinity enabled but authority_core unset; init tcb left unpinned"
-                );
-            }
-            Err(err) => {
-                return Err(BootError::Fatal(format!(
-                    "affinity policy apply failed: {err}"
-                )));
-            }
-        }
-    }
 
     early_phase = EarlyBootPhase::MemoryLayout;
     sequencer
@@ -3446,6 +3418,28 @@ fn bootstrap<P: Platform>(
     boot_guard.record_invariant("allocator.ready");
 
     boot_log::init_logger_bootstrap_only();
+
+    match affinity::apply_boot_policy(&bootinfo_view) {
+        Ok(affinity::InitialTcbPlacement::Disabled) => {}
+        Ok(affinity::InitialTcbPlacement::Unspecified) => {
+            log::warn!(
+                "[boot] affinity enabled but authority_core unset; init tcb placement unchanged"
+            );
+        }
+        Ok(affinity::InitialTcbPlacement::ClassicAffinityApplied(core)) => {
+            log::info!("[boot] affinity: init tcb pinned core={core}");
+        }
+        Ok(affinity::InitialTcbPlacement::McsBootPlacementValidated(core)) => {
+            log::info!(
+                "[boot] affinity: MCS init tcb boot placement validated core={core} source=initial-scheduling-context"
+            );
+        }
+        Err(err) => {
+            return Err(BootError::Fatal(format!(
+                "affinity boot placement failed: {err}"
+            )));
+        }
+    }
 
     crate::sel4::log_sel4_type_sanity();
 
