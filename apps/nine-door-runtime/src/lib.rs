@@ -152,7 +152,8 @@ mod tests {
             request_badge: 1,
             endpoint_cptr: SERVICE_ENDPOINT_SLOT,
             reply_cptr: SERVICE_REPLY_SLOT,
-            reserved: [0; 2],
+            ipc_buffer_vaddr: 0x5000,
+            reserved: 0,
         };
         assert!(valid.valid());
         assert!(!RuntimeInitDescriptor {
@@ -162,6 +163,11 @@ mod tests {
         .valid());
         assert!(!RuntimeInitDescriptor {
             endpoint_cptr: 9,
+            ..valid
+        }
+        .valid());
+        assert!(!RuntimeInitDescriptor {
+            ipc_buffer_vaddr: 0,
             ..valid
         }
         .valid());

@@ -215,7 +215,8 @@ impl NineDoorServiceContract {
                 .map_err(|_| TransportError::InvalidLimits)?,
             endpoint_cptr: u64::from(self.endpoint_slot),
             reply_cptr: u64::from(self.reply_slot),
-            reserved: [0; 2],
+            ipc_buffer_vaddr: self.ipc_buffer_vaddr,
+            reserved: 0,
         };
         if descriptor.valid() {
             Ok(descriptor)
@@ -969,7 +970,8 @@ mod tests {
             request_badge: 5,
             endpoint_cptr: NAMESPACE_SERVICE_ENDPOINT_SLOT,
             reply_cptr: NAMESPACE_SERVICE_REPLY_SLOT,
-            reserved: [0; 2],
+            ipc_buffer_vaddr: 0x9000,
+            reserved: 0,
         }
     }
 
@@ -1217,6 +1219,8 @@ mod tests {
         assert!(failed_state < suspend);
 
         let runtime_source = include_str!("../../nine-door-runtime/src/kernel.rs");
+        let install_ipc_buffer = runtime_source.find("seL4_SetIPCBuffer(").unwrap();
+        let receive_syscall = runtime_source.find("seL4_Recv(").unwrap();
         let initial_receive = runtime_source
             .find("let mut tag = receive(descriptor, &mut badge);")
             .unwrap();
@@ -1225,8 +1229,10 @@ mod tests {
         let atomic_reply_receive = runtime_source
             .find("tag = reply_receive(descriptor, &mut badge, reply_label);")
             .unwrap();
+        assert!(install_ipc_buffer < receive_syscall);
         assert!(initial_receive < receive_loop);
         assert!(receive_loop < atomic_reply_receive);
+        assert_eq!(runtime_source.matches("seL4_SetIPCBuffer(").count(), 1);
         assert_eq!(runtime_source.matches("seL4_Recv(").count(), 1);
         assert_eq!(runtime_source.matches("seL4_ReplyRecv(").count(), 1);
         assert!(!runtime_source.contains("seL4_MCS_Reply("));

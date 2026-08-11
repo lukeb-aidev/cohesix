@@ -44,7 +44,7 @@ pub const NAMESPACE_OPERATION_FRAME_BYTES: usize =
 /// ABI to a variable mapping size.
 pub const NAMESPACE_SHARED_FRAME_BYTES: usize = 8192;
 /// Runtime-init descriptor version for the isolated namespace child.
-pub const NAMESPACE_RUNTIME_INIT_VERSION: u16 = 1;
+pub const NAMESPACE_RUNTIME_INIT_VERSION: u16 = 2;
 /// Fixed pointer-free namespace runtime-init descriptor size.
 pub const NAMESPACE_RUNTIME_INIT_DESCRIPTOR_BYTES: usize = 72;
 /// Fixed child CSpace slot holding the service receive endpoint.
@@ -218,26 +218,68 @@ pub struct NamespaceRuntimeInitDescriptor {
     pub endpoint_cptr: u64,
     /// CSpace slot containing the single-owner MCS Reply object.
     pub reply_cptr: u64,
+    /// Virtual address of the child IPC-buffer mapping installed before IPC.
+    pub ipc_buffer_vaddr: u64,
     /// Reserved for a future ABI; must be zero.
-    pub reserved: [u64; 2],
+    pub reserved: u64,
 }
 
 const _: [(); NAMESPACE_RUNTIME_INIT_DESCRIPTOR_BYTES] =
     [(); core::mem::size_of::<NamespaceRuntimeInitDescriptor>()];
+
+fn mapping_windows_overlap(
+    first_vaddr: u64,
+    first_bytes: u64,
+    second_vaddr: u64,
+    second_bytes: u64,
+) -> Option<bool> {
+    let first_end = first_vaddr.checked_add(first_bytes)?;
+    let second_end = second_vaddr.checked_add(second_bytes)?;
+    Some(first_vaddr < second_end && second_vaddr < first_end)
+}
 
 impl NamespaceRuntimeInitDescriptor {
     /// Validate exact layout, generation, mappings, cap rights, badge, and
     /// fixed child CSpace slots.
     #[must_use]
     pub fn valid(self) -> bool {
+        let frame_bytes = u64::from(self.frame_bytes);
+        let Some(request_response_overlap) = mapping_windows_overlap(
+            self.request_frame_vaddr,
+            frame_bytes,
+            self.response_frame_vaddr,
+            frame_bytes,
+        ) else {
+            return false;
+        };
+        let Some(ipc_request_overlap) = mapping_windows_overlap(
+            self.ipc_buffer_vaddr,
+            4096,
+            self.request_frame_vaddr,
+            frame_bytes,
+        ) else {
+            return false;
+        };
+        let Some(ipc_response_overlap) = mapping_windows_overlap(
+            self.ipc_buffer_vaddr,
+            4096,
+            self.response_frame_vaddr,
+            frame_bytes,
+        ) else {
+            return false;
+        };
         self.version == NAMESPACE_RUNTIME_INIT_VERSION
             && self.descriptor_bytes as usize == NAMESPACE_RUNTIME_INIT_DESCRIPTOR_BYTES
             && self.generation != 0
             && self.request_frame_vaddr != 0
             && self.response_frame_vaddr != 0
-            && self.request_frame_vaddr != self.response_frame_vaddr
+            && self.ipc_buffer_vaddr != 0
+            && !request_response_overlap
             && self.request_frame_vaddr as usize & 4095 == 0
             && self.response_frame_vaddr as usize & 4095 == 0
+            && self.ipc_buffer_vaddr as usize & 4095 == 0
+            && !ipc_request_overlap
+            && !ipc_response_overlap
             && self.frame_bytes as usize == NAMESPACE_SHARED_FRAME_BYTES
             && self.request_badge != 0
             && self.endpoint_cap_rights == NAMESPACE_CHILD_RECEIVE_RIGHTS
@@ -246,8 +288,7 @@ impl NamespaceRuntimeInitDescriptor {
             && self.reserved_rights == 0
             && self.endpoint_cptr == NAMESPACE_SERVICE_ENDPOINT_SLOT
             && self.reply_cptr == NAMESPACE_SERVICE_REPLY_SLOT
-            && self.reserved[0] == 0
-            && self.reserved[1] == 0
+            && self.reserved == 0
     }
 
     /// Encode the fixed descriptor in native target layout without exposing a
@@ -271,8 +312,8 @@ impl NamespaceRuntimeInitDescriptor {
         output[36..40].copy_from_slice(&self.request_badge.to_le_bytes());
         output[40..48].copy_from_slice(&self.endpoint_cptr.to_le_bytes());
         output[48..56].copy_from_slice(&self.reply_cptr.to_le_bytes());
-        output[56..64].copy_from_slice(&self.reserved[0].to_le_bytes());
-        output[64..72].copy_from_slice(&self.reserved[1].to_le_bytes());
+        output[56..64].copy_from_slice(&self.ipc_buffer_vaddr.to_le_bytes());
+        output[64..72].copy_from_slice(&self.reserved.to_le_bytes());
         Ok(())
     }
 }
@@ -1551,11 +1592,37 @@ mod tests {
             request_badge: 11,
             endpoint_cptr: NAMESPACE_SERVICE_ENDPOINT_SLOT,
             reply_cptr: NAMESPACE_SERVICE_REPLY_SLOT,
-            reserved: [0; 2],
+            ipc_buffer_vaddr: 0x5000,
+            reserved: 0,
         };
         assert!(descriptor.valid());
         assert!(!NamespaceRuntimeInitDescriptor {
             endpoint_cap_rights: NAMESPACE_ROOT_CALL_RIGHTS,
+            ..descriptor
+        }
+        .valid());
+        assert!(!NamespaceRuntimeInitDescriptor {
+            version: 1,
+            ..descriptor
+        }
+        .valid());
+        assert!(!NamespaceRuntimeInitDescriptor {
+            response_frame_vaddr: 0x2000,
+            ..descriptor
+        }
+        .valid());
+        assert!(!NamespaceRuntimeInitDescriptor {
+            ipc_buffer_vaddr: 0x2000,
+            ..descriptor
+        }
+        .valid());
+        assert!(!NamespaceRuntimeInitDescriptor {
+            ipc_buffer_vaddr: 0x4000,
+            ..descriptor
+        }
+        .valid());
+        assert!(!NamespaceRuntimeInitDescriptor {
+            request_frame_vaddr: u64::MAX & !4095,
             ..descriptor
         }
         .valid());
@@ -1572,6 +1639,7 @@ mod tests {
         assert_eq!(read_u32(&encoded, 36), descriptor.request_badge);
         assert_eq!(read_u64(&encoded, 40), NAMESPACE_SERVICE_ENDPOINT_SLOT);
         assert_eq!(read_u64(&encoded, 48), NAMESPACE_SERVICE_REPLY_SLOT);
+        assert_eq!(read_u64(&encoded, 56), descriptor.ipc_buffer_vaddr);
 
         for error in [
             TransportError::InvalidLimits,

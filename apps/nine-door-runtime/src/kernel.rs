@@ -139,9 +139,14 @@ fn receive(
     descriptor: RuntimeInitDescriptor,
     badge: &mut sel4_sys::seL4_Word,
 ) -> sel4_sys::seL4_MessageInfo {
-    // SAFETY: The validated descriptor names the fixed Read endpoint and the
-    // single-owner Reply object installed by the supervisor for this child.
-    unsafe { sel4_sys::seL4_Recv(descriptor.endpoint_cptr, badge, descriptor.reply_cptr) }
+    // SAFETY: Descriptor validation proves the aligned IPC-buffer mapping and
+    // names the fixed Read endpoint plus the single-owner Reply object. This is
+    // the runtime's sole initial receive, so the libsel4 pointer is installed
+    // exactly once before any syscall can store message registers through it.
+    unsafe {
+        sel4_sys::seL4_SetIPCBuffer(descriptor.ipc_buffer_vaddr as *mut sel4_sys::seL4_IPCBuffer);
+        sel4_sys::seL4_Recv(descriptor.endpoint_cptr, badge, descriptor.reply_cptr)
+    }
 }
 
 fn reply_receive(

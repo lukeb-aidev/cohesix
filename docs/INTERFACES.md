@@ -136,8 +136,11 @@ uses distinct frame capabilities and physical pages, and carries no pointers in
 the shared record. The target adapter sends only sequence and encoded length in
 two message registers and rejects extra or unwrapped caps, unknown labels,
 short replies, stale identities, mismatched prepared bytes, and unknown error
-codes. The QEMU constructor binds the exact selected ELF digest and entry/load
-span, maps image pages W^X, and creates the child from generated revoke anchor
+codes. The sealed 72-byte `namespace-runtime-init/v2` descriptor carries the
+aligned child IPC-buffer address in its formerly reserved word; the child
+validates that mapping and installs it as the libsel4 IPC buffer before its
+first receive. The QEMU constructor binds the exact selected ELF digest and
+entry/load span, maps image pages W^X, and creates the child from generated revoke anchor
 16137 without allocator fallback. While the child remains suspended, root
 configures and binds one compiler-budgeted, root-retained bootstrap scheduling
 context. After registry seal and root-fault activation, root resumes the child,
