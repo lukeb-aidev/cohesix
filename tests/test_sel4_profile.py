@@ -1379,11 +1379,16 @@ def test_wrapper_is_parameterized_and_has_no_legacy_schedule() -> None:
     assert "/Users/" not in wrapper
 
 
-def test_pi_profiles_reserve_root_cspace_for_linked_runtimes(
+def test_operational_profiles_reserve_root_cspace_for_generated_anchors(
     tmp_path: Path,
     contract: dict[str, Any],
 ) -> None:
-    for profile_name in ("pi4_production", "pi4_diagnostic"):
+    for profile_name in (
+        "qemu_smp_production",
+        "qemu_smp_diagnostic",
+        "pi4_production",
+        "pi4_diagnostic",
+    ):
         profile = contract["profiles"][profile_name]
 
         assert profile["cmake"]["KernelRootCNodeSizeBits"] == "14"

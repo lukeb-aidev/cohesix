@@ -282,6 +282,11 @@ not sufficient. Pi 4 builds require the generated virtual-counter
 export and `TIMER_CLOCK_HZ=54000000`; target timeout logic must not substitute
 CPU-speed loops or physical-counter access.
 
+All operational QEMU and Pi profiles select a 14-bit initial root CNode. This
+is required by the compiler-owned M26e retention-anchor slots at `0x3f00` and
+above; a kernel that falls back to the upstream 13-bit default cannot construct
+the critical MCS topology and is not a valid Cohesix runtime profile.
+
 Validate cache, generated JSON, DTS, source provenance and evidence class as
 one contract. This command is expected to fail for stale GICv2, old-project or
 legacy-domain-schedule trees:
