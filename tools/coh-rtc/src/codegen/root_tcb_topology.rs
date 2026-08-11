@@ -191,7 +191,7 @@ mod tests {
             assert_eq!(root_control.response_time_us, 5_100);
             assert_eq!(
                 root_control.wcet_provenance,
-                "m26e-qemu-root-turn-candidate-v2"
+                "m26e-qemu-root-phase-candidate-v3"
             );
 
             let console_network = manifest

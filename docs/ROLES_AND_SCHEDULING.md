@@ -249,14 +249,19 @@ entry, immediately before steady polling; kernel construction does not arm that
 temporal policy mid-bootstrap.
 
 The QEMU and Pi manifests assign `root-control` a `2750 us / 10000 us` active
-SC, a compiler-admitted `2500 us` whole-turn WCET with provenance
-`m26e-qemu-root-turn-candidate-v2`, and a `5100 us` response bound. This
-candidate supersedes the `1500 us` budget after live four-core QEMU separately
-timed out during an unnecessary uncached cache operation and, after that
-operation was removed, during the later console-network notification send. The
-second fault proves aggregate root-turn underbudget rather than another cache
-semantic defect. Fresh canonical QEMU boot, console, regression, and pressure
-evidence remain required; compiler admission alone is not target qualification.
+SC, a compiler-admitted `2500 us` per-phase WCET with provenance
+`m26e-qemu-root-phase-candidate-v3`, and a `5100 us` per-phase response bound.
+That response-time result is scheduler admission for one runnable phase, not
+end-to-end host/TCP latency. The former
+v2 whole-turn interpretation was live-falsified: after the uncached cache
+operation was removed and the budget was raised, four-core QEMU again consumed
+the complete root-control refill at the final console-network control wake.
+The isolated VirtIO path therefore alternates an Operator/Dispatch phase and a
+Network phase on separate outer EventPump calls. Each call returns to the
+userland loop's existing `seL4_Yield` replenishment boundary; no internal yield,
+extra SC, notification omission, or cache-semantic exception implements the
+cut. Fresh canonical QEMU boot, console, regression, and pressure evidence
+remain required; compiler admission alone is not target qualification.
 
 During NineDoor construction, root configures and binds the schema-1.10
 bootstrap candidate (8 object bits, `3000 us / 10000 us`, `max_refills = 2`)

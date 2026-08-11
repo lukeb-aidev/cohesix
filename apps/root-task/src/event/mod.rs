@@ -2753,6 +2753,30 @@ enum LinkedRuntimeServicePhase {
     Display,
 }
 
+/// Root-control service cut used by the isolated QEMU VirtIO console path.
+///
+/// Operator/dispatch and NIC service run on separate outer EventPump calls so
+/// the userland loop's existing `seL4_Yield` is the only MCS replenishment
+/// boundary. The next phase is committed before either turn starts, making
+/// every early return preserve deterministic alternation.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OrdinaryServicePhase {
+    #[default]
+    Operator,
+    Network,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryServicePhase {
+    const fn next(self) -> Self {
+        match self {
+            Self::Operator => Self::Network,
+            Self::Network => Self::Operator,
+        }
+    }
+}
+
 /// Current CYW43 generation whose level-triggered work must be resumed.
 ///
 /// The root-wake hit cursor remains an edge-urgency hint. This identity is the
@@ -3516,6 +3540,8 @@ where
     #[cfg(feature = "kernel")]
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
+    ordinary_service_phase: OrdinaryServicePhase,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_consecutive_turns: u16,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_quantum_started_ms: Option<u64>,
@@ -4129,6 +4155,8 @@ where
             #[cfg(feature = "kernel")]
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
+            ordinary_service_phase: OrdinaryServicePhase::Operator,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_consecutive_turns: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_quantum_started_ms: None,
@@ -4580,6 +4608,28 @@ where
             self.poll_with_linked_serial_runtime();
             return;
         }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let split_ordinary_virtio_turn = !self.network_service_quarantined
+            && self.net.as_ref().is_some_and(|net| {
+                net.driver_task_contract()
+                    == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+            });
+        #[cfg(not(all(feature = "kernel", feature = "net-console")))]
+        let split_ordinary_virtio_turn = false;
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if split_ordinary_virtio_turn {
+            let phase = self.ordinary_service_phase;
+            self.ordinary_service_phase = phase.next();
+            if phase == OrdinaryServicePhase::Network {
+                // The isolated QEMU NIC owns this complete outer turn. TCP
+                // commands remain in the bounded child adapter queue for the
+                // following hardware-free Operator turn; the userland loop
+                // yields immediately after this method returns.
+                self.poll_runtime(true, false, true);
+                return;
+            }
+        }
+        let service_network_this_turn = !split_ordinary_virtio_turn;
         let serial_rx_activity = self.serial.poll_io();
         let local_seat_input_waiting = self
             .local_seat
@@ -4592,7 +4642,7 @@ where
             let serial_input = self.consume_serial();
             self.serial.flush_tx();
             let serial_output_pending = self.serial.tx_pending();
-            self.poll_runtime(false, true, true);
+            self.poll_runtime(false, true, service_network_this_turn);
             self.serial.poll_io();
             let serial_followup_input = if self.local_seat.is_some() {
                 false
@@ -4633,11 +4683,25 @@ where
         }
         let serial_input = self.consume_serial();
         self.serial.flush_tx();
+        #[cfg(feature = "net-console")]
+        if split_ordinary_virtio_turn
+            && !serial_input
+            && !self.serial.tx_pending()
+            && !self.physical_console_response_pending()
+            && self.dispatch_one_buffered_network_line()
+        {
+            // Network polling retained this one authenticated line during the
+            // preceding phase. Execute only policy/dispatch and bounded
+            // timer/IPC/stream housekeeping now; NIC service resumes after the
+            // outer replenishment boundary.
+            self.poll_runtime(true, false, false);
+            return;
+        }
         let serial_output_pending = self.serial.tx_pending();
         self.poll_runtime(
             false,
             serial_rx_activity || serial_input || local_input || serial_output_pending,
-            true,
+            service_network_this_turn,
         );
         self.serial.poll_io();
         let post_runtime_local_input =
@@ -30096,6 +30160,7 @@ mod tests {
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
+        poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
     }
 
     #[cfg(feature = "net-console")]
@@ -30132,6 +30197,7 @@ mod tests {
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
+                poll_observer: None,
             }
         }
     }
@@ -30147,6 +30213,9 @@ mod tests {
                 );
             }
             self.polls = self.polls.saturating_add(1);
+            if let Some(observer) = self.poll_observer.as_ref() {
+                observer.set(observer.get().saturating_add(1));
+            }
             if self
                 .tcp_ready_after_polls
                 .is_some_and(|target| self.polls >= target)
@@ -30308,6 +30377,99 @@ mod tests {
             self.status_reports
                 .set(self.status_reports.get().saturating_add(1));
             self.status.clone()
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_network_buffers_until_one_hardware_free_operator_dispatch() {
+        assert_eq!(
+            OrdinaryServicePhase::Operator.next(),
+            OrdinaryServicePhase::Network
+        );
+        assert_eq!(
+            OrdinaryServicePhase::Network.next(),
+            OrdinaryServicePhase::Operator
+        );
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.active_conn_id = Some(7);
+        net.authenticated_conn_id = Some(7);
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut line = HeaplessString::new();
+        line.push_str("help").expect("bounded command");
+        net.lines
+            .push(ConsoleLine::new(line, 1))
+            .expect("bounded network line");
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Operator,
+                "Network must commit Operator before servicing the NIC"
+            );
+            assert_eq!(polls.get(), 1);
+            assert_eq!(pump.metrics.console_lines, 0);
+            assert!(pump
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending()));
+
+            pump.poll();
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Network,
+                "Operator must commit Network before dispatching"
+            );
+            assert_eq!(polls.get(), 1, "Operator must not repoll the NIC");
+            assert_eq!(pump.metrics.console_lines, 1);
+            assert!(!pump
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending()));
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_non_virtio_contract_keeps_the_unsplit_first_poll() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.poll();
+            assert_eq!(
+                polls.get(),
+                1,
+                "GENET must retain the ordinary combined poll"
+            );
+            assert_eq!(
+                pump.ordinary_service_phase,
+                OrdinaryServicePhase::Operator,
+                "the QEMU-only phase state must not advance for GENET"
+            );
         }
     }
 

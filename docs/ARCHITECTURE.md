@@ -481,6 +481,13 @@ pointer-free pages, and consumes authenticated command records. It constructs
 the child suspended, resumes it only after the exact critical fault registry is
 sealed, and on a standard/timeout/protocol fault suspends, unbinds, scrubs, and
 revokes the complete retained-anchor generation before prohibiting replacement.
+Steady root-control uses a two-phase outer EventPump cut: Network performs the
+bounded child/VirtIO poll with timer and IPC housekeeping while suppressing
+command execution; the following hardware-free Operator/Dispatch phase gives
+serial and local-seat work priority, then executes at most one already-buffered
+authenticated network line. The existing outer userland yield separates the
+phases and replenishes the MCS budget; no yield occurs inside the NIC or while a
+shared-page or device transaction is open.
 The current measured repair candidate assigns 144 frames, 168 retained root
 slots, a 32-page stack at `0x72030000..0x72050000`, and an active-SC
 `3000 us / 10000 us` budget with `2400 us` WCET and `7500 us` response bound.

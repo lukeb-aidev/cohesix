@@ -628,7 +628,7 @@
         "wcet_us": 2500,
         "response_time_us": 5100,
         "admitted": true,
-        "wcet_provenance": "m26e-qemu-root-turn-candidate-v2",
+        "wcet_provenance": "m26e-qemu-root-phase-candidate-v3",
         "allowed_donors": [],
         "reply_objects": 0,
         "max_donation_depth": 0,

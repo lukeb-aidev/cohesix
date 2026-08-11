@@ -24,7 +24,7 @@
     "schema": "host-integration-dependency/v1"
   },
   "manifest_profile": "pi4-uboot-aarch64",
-  "manifest_sha256": "6cfc27f8b715fffbc6d6ab1a5f1277fb7032c0bd6d93d6c44be578cb5574a827",
+  "manifest_sha256": "282ff60a60620c1ca19d5e5b2d3001b38c48a78d9cc16f413349e498b9d046f4",
   "meta": {
     "author": "Lukas Bower",
     "purpose": "Bind the target-neutral Cohesix Python SDK to one selected 26e target manifest."

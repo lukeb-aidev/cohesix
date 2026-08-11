@@ -359,7 +359,7 @@ timeout_badge = 653131777
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2500
-wcet_provenance = "m26e-qemu-root-turn-candidate-v2"
+wcet_provenance = "m26e-qemu-root-phase-candidate-v3"
 fault_handler = "root-fault"
 critical_reserve = true
 
