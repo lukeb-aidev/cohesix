@@ -4512,9 +4512,14 @@ fn bootstrap<P: Platform>(
     );
     console.writeln_prefixed(cnode_line.as_str());
 
+    // Early endpoint, notification, and retype-plan paths share this untyped
+    // before KernelEnv owns its watermark. Their object-size accounting cannot
+    // reconstruct seL4's alignment padding exactly, so quarantine the bounded
+    // bootstrap untyped rather than exposing phantom free bytes to MCS object
+    // construction. Other BootInfo RAM untypeds remain available to the HAL.
     kernel_env.record_untyped_bytes(
         notification_selection.index,
-        notification_selection.used_bytes,
+        notification_selection.capacity_bytes(),
     );
     // Keep HAL storage alive for the full root-task lifetime. Local-seat
     // backends retain a raw HAL pointer for deferred runtime keyboard bring-up.

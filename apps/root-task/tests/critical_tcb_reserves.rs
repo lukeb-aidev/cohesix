@@ -33,6 +33,19 @@ fn bootstrap_slot_cursor_advances_before_critical_object_allocation() {
 }
 
 #[test]
+fn bootstrap_shared_untyped_is_quarantined_before_mcs_allocation() {
+    let source = include_str!("../src/kernel.rs");
+    let record_start = source
+        .find("kernel_env.record_untyped_bytes(")
+        .expect("bootstrap untyped handoff must remain explicit");
+    let record = &source[record_start..record_start + 180];
+
+    assert!(record.contains("notification_selection.index"));
+    assert!(record.contains("notification_selection.capacity_bytes()"));
+    assert!(!record.contains("notification_selection.used_bytes"));
+}
+
+#[test]
 fn all_five_named_duties_finish_with_distinct_kernel_objects() {
     validate_critical_temporal_graph().expect("critical temporal graph");
     let resources = generated::worker_resource_admission_config().critical_tcbs;
