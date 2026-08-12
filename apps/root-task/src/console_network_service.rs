@@ -428,7 +428,7 @@ pub struct ConsoleNetworkContainmentProof {
     pub tcb_suspended: bool,
     /// Active scheduling context was unbound.
     pub scheduling_context_unbound: bool,
-    /// Four shared mappings and IPC/stack mappings were scrubbed.
+    /// Four shared frames were scrubbed, cleaned, and unmapped before revoke.
     pub mappings_scrubbed: bool,
     /// Root and child notification/fault caps were revoked.
     pub capabilities_revoked: bool,
@@ -449,6 +449,114 @@ impl ConsoleNetworkContainmentProof {
             && self.objects_deleted
             && self.generation_fenced
     }
+}
+
+/// One material unit in the exact console-network containment order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsoleNetworkContainmentUnit {
+    /// Suspend the faulted child TCB.
+    SuspendTcb,
+    /// Unbind the child's scheduling context.
+    UnbindSchedulingContext,
+    /// Zero and clean one indexed shared frame.
+    ScrubCleanSharedFrame(usize),
+    /// Unmap one indexed shared frame after its clean completed.
+    UnmapSharedFrame(usize),
+    /// Delete one indexed standard/timeout fault cap.
+    DeleteFaultCap(usize),
+    /// Revoke the generation anchor and reset its VSpace tracker.
+    RevokeAnchor,
+    /// Publish the exact proof and quarantine the terminal generation.
+    Finalize,
+    /// No containment units remain.
+    Complete,
+}
+
+/// Pure progress cursor shared by the HAL implementation and focused tests.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleNetworkContainmentCursor {
+    unit: ConsoleNetworkContainmentUnit,
+}
+
+impl Default for ConsoleNetworkContainmentCursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ConsoleNetworkContainmentCursor {
+    /// Exact number of shared-frame units before either fault cap is deleted.
+    pub const SHARED_FRAME_COUNT: usize = 4;
+    /// Exact number of fault-cap units before the retained anchor is revoked.
+    pub const FAULT_CAP_COUNT: usize = 2;
+
+    /// Start at the mandatory TCB suspension unit.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            unit: ConsoleNetworkContainmentUnit::SuspendTcb,
+        }
+    }
+
+    /// Unit owned by the current exclusive recovery turn.
+    #[must_use]
+    pub const fn unit(self) -> ConsoleNetworkContainmentUnit {
+        self.unit
+    }
+
+    /// Select one unit after durably committing its successor.
+    pub fn select_next(&mut self) -> ConsoleNetworkContainmentUnit {
+        let selected = self.unit;
+        self.unit = match selected {
+            ConsoleNetworkContainmentUnit::SuspendTcb => {
+                ConsoleNetworkContainmentUnit::UnbindSchedulingContext
+            }
+            ConsoleNetworkContainmentUnit::UnbindSchedulingContext => {
+                ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(0)
+            }
+            ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(frame_index) => {
+                ConsoleNetworkContainmentUnit::UnmapSharedFrame(frame_index)
+            }
+            ConsoleNetworkContainmentUnit::UnmapSharedFrame(frame_index)
+                if frame_index + 1 < Self::SHARED_FRAME_COUNT =>
+            {
+                ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(frame_index + 1)
+            }
+            ConsoleNetworkContainmentUnit::UnmapSharedFrame(_) => {
+                ConsoleNetworkContainmentUnit::DeleteFaultCap(0)
+            }
+            ConsoleNetworkContainmentUnit::DeleteFaultCap(cap_index)
+                if cap_index + 1 < Self::FAULT_CAP_COUNT =>
+            {
+                ConsoleNetworkContainmentUnit::DeleteFaultCap(cap_index + 1)
+            }
+            ConsoleNetworkContainmentUnit::DeleteFaultCap(_) => {
+                ConsoleNetworkContainmentUnit::RevokeAnchor
+            }
+            ConsoleNetworkContainmentUnit::RevokeAnchor => ConsoleNetworkContainmentUnit::Finalize,
+            ConsoleNetworkContainmentUnit::Finalize => ConsoleNetworkContainmentUnit::Complete,
+            ConsoleNetworkContainmentUnit::Complete => ConsoleNetworkContainmentUnit::Complete,
+        };
+        selected
+    }
+
+    /// Restore a selected unit after its synchronous material action failed.
+    pub fn restore_selected(&mut self, selected: ConsoleNetworkContainmentUnit) {
+        self.unit = selected;
+    }
+}
+
+/// Outcome of one exclusive root-control containment turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConsoleNetworkContainmentTurn {
+    /// No console-network fault or containment work is pending.
+    Idle,
+    /// Mailbox ownership was contended before a fault was latched; retry only.
+    Retry,
+    /// Exactly one containment unit completed; another recovery turn is required.
+    InProgress,
+    /// The exact complete proof is available and root may quarantine the service.
+    Complete(ConsoleNetworkContainmentProof),
 }
 
 /// Transactional root-side boundary for one isolated child generation.

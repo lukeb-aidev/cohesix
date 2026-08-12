@@ -35,8 +35,9 @@ use crate::critical_tcb::{
 use crate::generated::{self, ExecutableRoleAdmission, KernelObjectBudget, TemporalTaskConfig};
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceError, RevokeAnchorVSpaceTracker};
 use crate::worker_supervisor::{
-    self, TargetSupervisorWork, WorkerChildContract, WorkerContainmentProof, WorkerKernelBackend,
-    WorkerLifecycleState, WorkerSupervisor, WorkerSupervisorError, WorkerTerminalReason,
+    self, TargetSupervisorWork, WorkerChildContract, WorkerContainmentProof, WorkerDeadlineCursor,
+    WorkerKernelBackend, WorkerLifecycleState, WorkerSupervisor, WorkerSupervisorError,
+    WorkerTerminalReason,
 };
 
 const ROLE_COUNT: usize = 3;
@@ -818,6 +819,7 @@ pub struct TargetWorkerRuntime {
     completion_sequences: [u64; ROLE_COUNT],
     receipt_sequences: [u64; ROLE_COUNT],
     last_policy_sequence: u64,
+    deadline_cursor: WorkerDeadlineCursor,
 }
 
 impl TargetWorkerRuntime {
@@ -868,6 +870,7 @@ impl TargetWorkerRuntime {
             completion_sequences: [0; ROLE_COUNT],
             receipt_sequences: [0; ROLE_COUNT],
             last_policy_sequence: 0,
+            deadline_cursor: WorkerDeadlineCursor::default(),
         })
     }
 
@@ -892,11 +895,7 @@ impl TargetWorkerRuntime {
         let mut processed = 0usize;
         while processed < TARGET_WORKER_SERVICE_BOUND {
             if let Some(work) = worker_supervisor::take_target_supervisor_work()? {
-                match work {
-                    TargetSupervisorWork::Fault(record) => self.handle_fault(record)?,
-                    TargetSupervisorWork::Wake(badge) => self.handle_wake(badge)?,
-                    TargetSupervisorWork::Control(record) => self.handle_policy(record, now_ms)?,
-                }
+                self.handle_supervisor_work(work, now_ms)?;
                 processed += 1;
                 continue;
             }
@@ -917,6 +916,28 @@ impl TargetWorkerRuntime {
         Ok(processed)
     }
 
+    /// Service one persistent isolated-VirtIO Worker unit.
+    ///
+    /// A mailbox record or pending Queen operation consumes the complete unit.
+    /// When neither exists, exactly one retained role slot is checked for a
+    /// generated deadline, with the successor committed before the check.
+    pub fn service_one(&mut self, now_ms: u64) -> Result<usize, WorkerSupervisorError> {
+        if let Some(work) = worker_supervisor::take_target_supervisor_work()? {
+            self.handle_supervisor_work(work, now_ms)?;
+            return Ok(1);
+        }
+        if self.handle_pending_worker_operation()? {
+            return Ok(1);
+        }
+
+        let role = self.deadline_cursor.take();
+        if target_worker_claimed(role) && self.supervisor.enforce_role_deadline(role, now_ms)? {
+            update_target_worker_projection(self.supervisor.snapshot(role)?)?;
+            return Ok(1);
+        }
+        Ok(0)
+    }
+
     /// Immutable supervisor projection used by the root namespace adapter.
     #[must_use]
     pub const fn supervisor(&self) -> &WorkerSupervisor<TargetWorkerBackend> {
@@ -926,6 +947,18 @@ impl TargetWorkerRuntime {
     /// Mutable supervisor access for already validated Queen operations.
     pub fn supervisor_mut(&mut self) -> &mut WorkerSupervisor<TargetWorkerBackend> {
         &mut self.supervisor
+    }
+
+    fn handle_supervisor_work(
+        &mut self,
+        work: TargetSupervisorWork,
+        now_ms: u64,
+    ) -> Result<(), WorkerSupervisorError> {
+        match work {
+            TargetSupervisorWork::Fault(record) => self.handle_fault(record),
+            TargetSupervisorWork::Wake(badge) => self.handle_wake(badge),
+            TargetSupervisorWork::Control(record) => self.handle_policy(record, now_ms),
+        }
     }
 
     fn handle_pending_worker_operation(&mut self) -> Result<bool, WorkerSupervisorError> {

@@ -613,6 +613,8 @@ const USB_OLDGOOD_RETAINED_LINE_COUNT: usize = 2;
 const USB_OLDGOOD_RETAINED_LINE_MAX_BYTES: usize =
     crate::hal::driver_task::DRIVER_TASK_COMPACT_DIAGNOSTIC_LINE_MAX_BYTES;
 const CONSOLE_OUTPUT_LINES_PER_IDLE_TURN: usize = 2;
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+const VIRTIO_OPERATOR_CONSOLE_OUTPUT_RECORDS_PER_TURN: usize = 1;
 const CONSOLE_INPUT_TURN_IMMEDIATE_OUTPUT_LINES: usize = 1;
 const CONSOLE_PARSE_ERROR_REPEAT_MAX: u16 = 1024;
 #[cfg(feature = "kernel")]
@@ -1668,6 +1670,10 @@ pub trait IpcDispatcher {
     /// Service pending IPC messages.
     fn dispatch(&mut self, now_ms: u64);
 
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    /// Service exactly one persistent isolated-VirtIO Runtime IPC unit.
+    fn dispatch_runtime_unit(&mut self, now_ms: u64, unit: RuntimeIpcUnit);
+
     /// Called once the event pump has registered bootstrap handlers.
     fn handlers_ready(&mut self) {}
 
@@ -2650,6 +2656,25 @@ struct NetDiagLogSnapshot {
 }
 
 #[cfg(feature = "net-console")]
+#[derive(Clone, Copy)]
+struct PendingOrdinaryVirtioNetDiag {
+    telemetry: NetTelemetry,
+    now_ms: u64,
+    last_rx_used_change_ms: u64,
+}
+
+#[cfg(feature = "net-console")]
+impl PendingOrdinaryVirtioNetDiag {
+    fn capture(telemetry: NetTelemetry, now_ms: u64) -> Self {
+        Self {
+            telemetry,
+            now_ms,
+            last_rx_used_change_ms: NET_DIAG.last_rx_used_change_ms(),
+        }
+    }
+}
+
+#[cfg(feature = "net-console")]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug)]
 enum NetDiagRateKind {
@@ -2692,6 +2717,7 @@ impl ConsoleInputSource {
 enum PendingConsoleOutputKind {
     BackgroundLine,
     HighImpactLine,
+    ContainmentLine,
     Line,
     TerminalLine,
     ResponseTailLine,
@@ -2717,6 +2743,203 @@ impl PendingConsoleOutputKind {
             Self::TerminalLine | Self::ResponseTailLine | Self::ResponseTailPrompt
         )
     }
+}
+
+/// Persistent ordinary-output subcursor for a mandatory containment record.
+#[cfg(feature = "kernel")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ContainmentDiagnosticOutputPhase {
+    /// Attempt lossless admission without flushing in the same visit.
+    #[default]
+    Admit,
+    /// Drain exactly one older record, then retry admission on a later visit.
+    DrainSpace,
+}
+
+/// One quiet ordinary unit in the post-containment network authority cut.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ConsoleNetworkQuarantineCleanupUnit {
+    /// Retire root's heap-owned session ticket into a reboot-lifetime tombstone.
+    #[default]
+    RootSessionTicket,
+    /// Retire root's heap-owned ticket-usage state without dropping it.
+    RootTicketUsage,
+    /// Retire NineDoor's heap-owned session ticket without dropping it.
+    NineDoorSessionTicket,
+    /// Retire NineDoor's heap-owned session scope without dropping it.
+    NineDoorSessionScope,
+    /// Retire NineDoor's fixed bind vector without dropping its strings.
+    NineDoorSessionBinds,
+    /// Retire the heap-owned pending-stream cursor without dropping its path.
+    PendingStreamCursor,
+    /// Reset only heapless/Copy pending-stream state after cursor retirement.
+    PendingStream,
+    /// Commit the durable Complete successor without other work.
+    Finalize,
+    /// Publish the quiet cleanup proof/diagnostic state.
+    Complete,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl ConsoleNetworkQuarantineCleanupUnit {
+    const fn next(self) -> Self {
+        match self {
+            Self::RootSessionTicket => Self::RootTicketUsage,
+            Self::RootTicketUsage => Self::NineDoorSessionTicket,
+            Self::NineDoorSessionTicket => Self::NineDoorSessionScope,
+            Self::NineDoorSessionScope => Self::NineDoorSessionBinds,
+            Self::NineDoorSessionBinds => Self::PendingStreamCursor,
+            Self::PendingStreamCursor => Self::PendingStream,
+            Self::PendingStream => Self::Finalize,
+            Self::Finalize | Self::Complete => Self::Complete,
+        }
+    }
+}
+
+/// Scalar scope retained before quiet post-containment cleanup starts.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ConsoleNetworkQuarantineScope {
+    reboot: bool,
+    session: bool,
+    stream: bool,
+    parser_input: bool,
+    serial_input: bool,
+    local_input: bool,
+    tail: bool,
+    tcp_detach: bool,
+    sid: u64,
+    conn_id: u64,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl ConsoleNetworkQuarantineScope {
+    const fn any(self) -> bool {
+        self.reboot
+            || self.parser_input
+            || self.serial_input
+            || self.local_input
+            || (cfg!(feature = "cohesix-dev") && (self.tail || self.tcp_detach))
+    }
+}
+
+/// One losslessly retained post-containment audit payload.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConsoleNetworkQuarantineDiagnosticUnit {
+    RebootCancelled,
+    ParserInputCleared,
+    SerialInputCleared,
+    LocalInputCleared,
+    TailStopped,
+    TcpDetached,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl ConsoleNetworkQuarantineDiagnosticUnit {
+    const fn first(scope: ConsoleNetworkQuarantineScope) -> Option<Self> {
+        if scope.reboot {
+            Some(Self::RebootCancelled)
+        } else if scope.parser_input {
+            Some(Self::ParserInputCleared)
+        } else if scope.serial_input {
+            Some(Self::SerialInputCleared)
+        } else if scope.local_input {
+            Some(Self::LocalInputCleared)
+        } else if cfg!(feature = "cohesix-dev") && scope.tail {
+            Some(Self::TailStopped)
+        } else if cfg!(feature = "cohesix-dev") && scope.tcp_detach {
+            Some(Self::TcpDetached)
+        } else {
+            None
+        }
+    }
+
+    const fn next(self, scope: ConsoleNetworkQuarantineScope) -> Option<Self> {
+        match self {
+            Self::RebootCancelled if scope.parser_input => Some(Self::ParserInputCleared),
+            Self::RebootCancelled | Self::ParserInputCleared if scope.serial_input => {
+                Some(Self::SerialInputCleared)
+            }
+            Self::RebootCancelled | Self::ParserInputCleared | Self::SerialInputCleared
+                if scope.local_input =>
+            {
+                Some(Self::LocalInputCleared)
+            }
+            Self::RebootCancelled
+            | Self::ParserInputCleared
+            | Self::SerialInputCleared
+            | Self::LocalInputCleared
+                if cfg!(feature = "cohesix-dev") && scope.tail =>
+            {
+                Some(Self::TailStopped)
+            }
+            Self::RebootCancelled
+            | Self::ParserInputCleared
+            | Self::SerialInputCleared
+            | Self::LocalInputCleared
+            | Self::TailStopped
+                if cfg!(feature = "cohesix-dev") && scope.tcp_detach =>
+            {
+                Some(Self::TcpDetached)
+            }
+            _ => None,
+        }
+    }
+
+    fn render(
+        self,
+        scope: ConsoleNetworkQuarantineScope,
+    ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        use core::fmt::Write as _;
+
+        let mut line = HeaplessString::new();
+        match self {
+            Self::RebootCancelled => line
+                .push_str("network quarantine cancelled unprovable TCP reboot ACK")
+                .ok()?,
+            Self::ParserInputCleared => line
+                .push_str(
+                    "console: cleared parser input on session end reason=network-quarantined",
+                )
+                .ok()?,
+            Self::SerialInputCleared => line
+                .push_str(
+                    "console: cleared serial partial input on session end reason=network-quarantined",
+                )
+                .ok()?,
+            Self::LocalInputCleared => line
+                .push_str(
+                    "console: cleared local-seat partial input on session end reason=network-quarantined",
+                )
+                .ok()?,
+            Self::TailStopped => {
+                write!(
+                    line,
+                    "audit tail.stop sid={} reason=network-quarantined",
+                    scope.sid
+                )
+                .ok()?;
+            }
+            Self::TcpDetached => {
+                write!(
+                    line,
+                    "audit tcp.session.detach conn_id={} sid={} reason=network-quarantined",
+                    scope.conn_id, scope.sid
+                )
+                .ok()?;
+            }
+        }
+        Some(line)
+    }
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ConsoleNetworkQuarantineDiagnostic {
+    scope: ConsoleNetworkQuarantineScope,
+    unit: ConsoleNetworkQuarantineDiagnosticUnit,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -2748,6 +2971,7 @@ enum LinkedRuntimeServicePhase {
     #[default]
     Serial,
     Dispatch,
+    ContainmentDiagnostic,
     Network,
     LocalSeat,
     Display,
@@ -2776,6 +3000,183 @@ impl OrdinaryServicePhase {
             Self::Runtime => Self::Network,
             Self::Network => Self::Operator,
         }
+    }
+}
+
+/// IPC-owned unit selected by the isolated QEMU VirtIO Runtime cursor.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuntimeIpcUnit {
+    /// Service one Worker mailbox/pending operation or one retained role check.
+    Worker,
+    /// Poll at most one root-control message and immediately forward its stage.
+    ControlEndpoint,
+}
+
+/// Persistent hardware-free work cursor inside the isolated VirtIO Runtime.
+///
+/// The cursor is independent of containment and network recovery state. Its
+/// successor is committed before the shared Runtime prelude starts, so a
+/// timeout or early return cannot repeat the selected unit.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OrdinaryRuntimeUnit {
+    #[default]
+    Worker,
+    ControlEndpoint,
+    BootstrapDrain,
+    StreamFlush,
+    RebootTail,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryRuntimeUnit {
+    const fn next(self) -> Self {
+        match self {
+            Self::Worker => Self::ControlEndpoint,
+            Self::ControlEndpoint => Self::BootstrapDrain,
+            Self::BootstrapDrain => Self::StreamFlush,
+            Self::StreamFlush => Self::RebootTail,
+            Self::RebootTail => Self::Worker,
+        }
+    }
+}
+
+/// Persistent refill-sized work cursor inside the isolated VirtIO Network phase.
+///
+/// Timer/timebase maintenance and one bounded NIC unit use distinct outer
+/// Network visits. The successor is committed before either unit starts so a
+/// timeout cannot replay the selected responsibility on a later refill.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OrdinaryVirtioNetworkUnit {
+    #[default]
+    Timer,
+    Nic,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryVirtioNetworkUnit {
+    const fn next(self) -> Self {
+        match self {
+            Self::Timer => Self::Nic,
+            Self::Nic => Self::Timer,
+        }
+    }
+}
+
+/// Last admitted leaf in the isolated VirtIO Operator scheduler.
+///
+/// Eligibility remains strict priority rather than blind round-robin. The
+/// cursor records the successor before the selected noinline leaf starts, so a
+/// fault cannot attribute or replay the same admitted unit as unfinished work.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum OrdinaryOperatorUnit {
+    #[default]
+    SerialIo,
+    SerialDispatch,
+    RetainedOutput,
+    NetEvent,
+    NetLine,
+    LocalSeat,
+    DisplayAttach,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryOperatorUnit {
+    const fn next(self) -> Self {
+        match self {
+            Self::SerialIo => Self::SerialDispatch,
+            Self::SerialDispatch => Self::RetainedOutput,
+            Self::RetainedOutput => Self::NetEvent,
+            Self::NetEvent => Self::NetLine,
+            Self::NetLine => Self::LocalSeat,
+            Self::LocalSeat => Self::DisplayAttach,
+            Self::DisplayAttach => Self::SerialIo,
+        }
+    }
+}
+
+/// Shared retained-output admission for one isolated VirtIO Operator turn.
+///
+/// Every pending-output flush site consults this cursor. Leaving it inactive
+/// preserves the existing two-record service contract for zero-selector,
+/// physical, linked-runtime, and unsplit network profiles.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct OrdinaryVirtioConsoleOutputTurn {
+    active: bool,
+    records_remaining: usize,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryVirtioConsoleOutputTurn {
+    fn begin(&mut self) {
+        debug_assert!(!self.active);
+        self.active = true;
+        self.records_remaining = VIRTIO_OPERATOR_CONSOLE_OUTPUT_RECORDS_PER_TURN;
+    }
+
+    fn finish(&mut self) {
+        debug_assert!(self.active);
+        self.active = false;
+        self.records_remaining = 0;
+    }
+
+    const fn record_available(self) -> bool {
+        !self.active || self.records_remaining != 0
+    }
+
+    fn charge_record(&mut self) {
+        if self.active {
+            debug_assert_ne!(self.records_remaining, 0);
+            self.records_remaining = self.records_remaining.saturating_sub(1);
+        }
+    }
+
+    const fn active(self) -> bool {
+        self.active
+    }
+}
+
+/// Root-retained work that can keep one isolated VirtIO Operator open.
+///
+/// This snapshot contains only state that the Operator body can service after
+/// its first bounded serial/local-seat probes and one network-line admission
+/// attempt. Quarantine, timer work, Runtime/Network cursors, and unattached
+/// local-seat flags are deliberately absent: none is Operator work and none may
+/// force an otherwise empty refill through the composite runtime tail.
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct OrdinaryVirtioOperatorWork {
+    serial_input: bool,
+    serial_output: bool,
+    local_seat_input: bool,
+    dispatchable_network_line: bool,
+    pending_console_output: bool,
+    physical_response: bool,
+    stream_or_tail: bool,
+    reboot: bool,
+    serviceable_display: bool,
+    serviceable_frontier: bool,
+    serviceable_attach: bool,
+}
+
+#[cfg(all(feature = "kernel", feature = "net-console"))]
+impl OrdinaryVirtioOperatorWork {
+    const fn is_empty(self) -> bool {
+        !self.serial_input
+            && !self.serial_output
+            && !self.local_seat_input
+            && !self.dispatchable_network_line
+            && !self.pending_console_output
+            && !self.physical_response
+            && !self.stream_or_tail
+            && !self.reboot
+            && !self.serviceable_display
+            && !self.serviceable_frontier
+            && !self.serviceable_attach
     }
 }
 
@@ -3408,6 +3809,7 @@ struct PendingStream {
     bandwidth_bytes: u64,
     cursor: Option<PendingCursor>,
     log_cursor: Option<log_buffer::LogCursor>,
+    isolated_runtime_completion_deferred: bool,
 }
 
 #[cfg(feature = "kernel")]
@@ -3428,6 +3830,7 @@ impl PendingStream {
             bandwidth_bytes: 0,
             cursor: None,
             log_cursor: None,
+            isolated_runtime_completion_deferred: false,
         }
     }
 
@@ -3437,6 +3840,19 @@ impl PendingStream {
         self.bandwidth_bytes = 0;
         self.cursor = None;
         self.log_cursor = None;
+        self.isolated_runtime_completion_deferred = false;
+    }
+
+    /// Retire heapless/Copy stream state after its heap cursor was tombstoned.
+    fn reset_quiet_after_cursor_retired(&mut self) {
+        if self.cursor.is_some() {
+            return;
+        }
+        self.lines.clear();
+        self.next_line = 0;
+        self.bandwidth_bytes = 0;
+        self.log_cursor = None;
+        self.isolated_runtime_completion_deferred = false;
     }
 }
 
@@ -3460,6 +3876,10 @@ where
     session_role: Option<Role>,
     session_ticket: Option<String>,
     ticket_usage: Option<TicketUsage>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    retired_console_session_ticket: Option<String>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    retired_console_ticket_usage: Option<TicketUsage>,
     session_id: Option<u64>,
     session_origin: Option<ConsoleInputSource>,
     #[cfg(feature = "net-console")]
@@ -3475,6 +3895,8 @@ where
     throttle: AuthThrottle,
     #[cfg(feature = "kernel")]
     pending_stream: Option<PendingStream>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    retired_console_stream_cursor: Option<PendingCursor>,
     #[cfg(feature = "net-console")]
     net: Option<&'a mut dyn NetPoller>,
     #[cfg(feature = "net-console")]
@@ -3485,6 +3907,16 @@ where
     pending_net_flush: PendingNetFlush,
     #[cfg(feature = "net-console")]
     network_service_quarantined: bool,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    console_network_quarantine_cleanup_pending: bool,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    console_network_quarantine_cleanup_unit: ConsoleNetworkQuarantineCleanupUnit,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    console_network_quarantine_scope: ConsoleNetworkQuarantineScope,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pending_console_network_quarantine_diagnostic: Option<ConsoleNetworkQuarantineDiagnostic>,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    pending_ordinary_virtio_net_diag: Option<PendingOrdinaryVirtioNetDiag>,
     #[cfg(feature = "net-console")]
     last_net_diag_log_ms: Option<u64>,
     #[cfg(feature = "net-console")]
@@ -3509,6 +3941,8 @@ where
     wifi_diag_snapshot_sequence: u64,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_operator_turn_active: bool,
+    #[cfg(feature = "kernel")]
+    cyw43_bootstrap_containment_diagnostic_due: bool,
     #[cfg(feature = "kernel")]
     cyw43_bootstrap_hdmi_pending: bool,
     #[cfg(feature = "kernel")]
@@ -3543,6 +3977,14 @@ where
     linked_runtime_service_phase: LinkedRuntimeServicePhase,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     ordinary_service_phase: OrdinaryServicePhase,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    ordinary_runtime_unit: OrdinaryRuntimeUnit,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    ordinary_virtio_network_unit: OrdinaryVirtioNetworkUnit,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    ordinary_operator_unit: OrdinaryOperatorUnit,
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    ordinary_virtio_console_output_turn: OrdinaryVirtioConsoleOutputTurn,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     linked_runtime_network_consecutive_turns: u16,
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -3600,6 +4042,8 @@ where
     local_seat_hdmi_serial_deferrals: u8,
     local_seat_escape_state: LocalSeatEscapeState,
     pending_console_output: HeaplessVec<PendingConsoleOutput, CONSOLE_OUTPUT_BACKLOG_LINES>,
+    #[cfg(feature = "kernel")]
+    containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase,
     physical_response_barrier: PhysicalResponseBarrier,
     #[cfg(feature = "kernel")]
     serial_input_idle_trace_next_ms: u64,
@@ -4079,6 +4523,10 @@ where
             session_role: None,
             session_ticket: None,
             ticket_usage: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            retired_console_session_ticket: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            retired_console_ticket_usage: None,
             session_id: None,
             session_origin: None,
             #[cfg(feature = "net-console")]
@@ -4094,6 +4542,8 @@ where
             throttle: AuthThrottle::default(),
             #[cfg(feature = "kernel")]
             pending_stream: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            retired_console_stream_cursor: None,
             #[cfg(feature = "net-console")]
             net: None,
             #[cfg(feature = "net-console")]
@@ -4104,6 +4554,17 @@ where
             pending_net_flush: PendingNetFlush::default(),
             #[cfg(feature = "net-console")]
             network_service_quarantined: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            console_network_quarantine_cleanup_pending: false,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            console_network_quarantine_cleanup_unit:
+                ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            console_network_quarantine_scope: ConsoleNetworkQuarantineScope::default(),
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            pending_console_network_quarantine_diagnostic: None,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            pending_ordinary_virtio_net_diag: None,
             #[cfg(feature = "net-console")]
             last_net_diag_log_ms: None,
             #[cfg(feature = "net-console")]
@@ -4128,6 +4589,8 @@ where
             wifi_diag_snapshot_sequence: 0,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_operator_turn_active: false,
+            #[cfg(feature = "kernel")]
+            cyw43_bootstrap_containment_diagnostic_due: false,
             #[cfg(feature = "kernel")]
             cyw43_bootstrap_hdmi_pending: false,
             #[cfg(feature = "kernel")]
@@ -4158,6 +4621,14 @@ where
             linked_runtime_service_phase: LinkedRuntimeServicePhase::Serial,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             ordinary_service_phase: OrdinaryServicePhase::Operator,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            ordinary_runtime_unit: OrdinaryRuntimeUnit::Worker,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            ordinary_virtio_network_unit: OrdinaryVirtioNetworkUnit::Timer,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            ordinary_operator_unit: OrdinaryOperatorUnit::SerialIo,
+            #[cfg(all(feature = "kernel", feature = "net-console"))]
+            ordinary_virtio_console_output_turn: OrdinaryVirtioConsoleOutputTurn::default(),
             #[cfg(all(feature = "kernel", feature = "net-console"))]
             linked_runtime_network_consecutive_turns: 0,
             #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -4215,6 +4686,8 @@ where
             local_seat_hdmi_serial_deferrals: 0,
             local_seat_escape_state: LocalSeatEscapeState::Idle,
             pending_console_output: HeaplessVec::new(),
+            #[cfg(feature = "kernel")]
+            containment_diagnostic_output_phase: ContainmentDiagnosticOutputPhase::Admit,
             physical_response_barrier: PhysicalResponseBarrier::Idle,
             #[cfg(feature = "kernel")]
             serial_input_idle_trace_next_ms: 0,
@@ -4272,6 +4745,10 @@ where
     /// session ownership and is therefore rejected.
     #[cfg(feature = "net-console")]
     pub fn attach_network_after_bootstrap(&mut self, net: &'a mut dyn NetPoller) -> bool {
+        #[cfg(feature = "kernel")]
+        if self.console_network_quarantine_cleanup_pending {
+            return false;
+        }
         if self.net.is_some() {
             return false;
         }
@@ -4279,36 +4756,133 @@ where
         self.net = Some(net);
         self.net_unavailable_detail = None;
         self.network_service_quarantined = false;
+        #[cfg(feature = "kernel")]
+        {
+            self.console_network_quarantine_cleanup_pending = false;
+            self.console_network_quarantine_cleanup_unit =
+                ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
+            self.console_network_quarantine_scope = ConsoleNetworkQuarantineScope::default();
+            self.pending_console_network_quarantine_diagnostic = None;
+        }
         true
+    }
+
+    /// Fence all scalar authority inherited from a failed TCP generation.
+    ///
+    /// This Recovery-only path is lock-free and allocation-free. Heap-owned
+    /// session resources remain retained for the persistent ordinary cleanup
+    /// cursor below, so the fault turn cannot enter an allocator or logger.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn fence_console_network_authority_quiet(&mut self) {
+        let net_session = matches!(self.session_origin, Some(ConsoleInputSource::Net))
+            || self.session_net_conn_id.is_some();
+        let net_stream = matches!(self.stream_output_source, Some(ConsoleInputSource::Net))
+            || self.stream_net_conn_id.is_some()
+            || (net_session
+                && (self.stream_end_pending
+                    || self.stream_prompt_pending
+                    || self.tail_active
+                    || self.pending_stream.is_some()));
+        let net_reboot = self.reboot_ack_source == Some(ConsoleInputSource::Net)
+            || self.reboot_ack_net_conn_id.is_some();
+        let sid = self.session_id.unwrap_or(0);
+        let conn_id = self
+            .session_net_conn_id
+            .or(self.stream_net_conn_id)
+            .or(self.reboot_ack_net_conn_id)
+            .or(self.net_conn_id)
+            .unwrap_or(0);
+        let mut scope = ConsoleNetworkQuarantineScope {
+            reboot: net_reboot,
+            session: net_session,
+            stream: net_stream,
+            parser_input: false,
+            serial_input: false,
+            local_input: false,
+            tail: self.tail_active && (net_session || net_stream),
+            tcp_detach: net_session && self.session_id.is_some(),
+            sid,
+            conn_id,
+        };
+
+        self.network_service_quarantined = true;
+        self.pending_net_flush = PendingNetFlush::default();
+        self.pending_ordinary_virtio_net_diag = None;
+        self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
+        self.pending_cyw43_bootstrap_hdmi_progress_milestone = None;
+        self.clear_linked_runtime_cyw43_scheduler_state();
+
+        if net_reboot {
+            self.reboot_pending = false;
+            self.reboot_ack_wait_turns = 0;
+            self.reboot_ack_source = None;
+            self.reboot_ack_net_conn_id = None;
+            self.reboot_ack_deadline_ms = 0;
+            self.reboot_ack_failed = false;
+            self.reboot_ack_drain_observed = false;
+        }
+        if net_session {
+            self.session = None;
+            self.session_role = None;
+            self.session_id = None;
+            self.session_origin = None;
+            self.session_net_conn_id = None;
+            if let Some(bridge) = self.ninedoor.as_deref_mut() {
+                bridge.fence_session_authority_quiet();
+            }
+        }
+        if net_stream {
+            self.stream_end_pending = false;
+            self.stream_prompt_pending = false;
+            self.stream_output_source = None;
+            self.stream_net_conn_id = None;
+            self.tail_active = false;
+        }
+        self.net_conn_id = None;
+        if self.last_input_source == ConsoleInputSource::Net {
+            self.last_input_source = ConsoleInputSource::Serial;
+        }
+
+        if net_session {
+            scope.parser_input = self.parser.clear_buffer();
+            scope.serial_input = self.serial.clear_partial_line_buffered_quiet();
+            crate::serial::invalidate_prompt_input_shadow_quiet();
+            scope.local_input = !self.local_line.is_empty();
+            self.local_line.clear();
+        }
+
+        self.console_network_quarantine_scope = scope;
+        self.console_network_quarantine_cleanup_unit =
+            ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
+        self.console_network_quarantine_cleanup_pending = true;
     }
 
     /// Consume and contain one terminal isolated console-network fault.
     ///
     /// Only the QEMU isolated adapter overrides this service-owner hook. The
-    /// existing physical-network pollers return `Ok(false)`, so this bounded
+    /// existing physical-network pollers return `Idle`, so this bounded
     /// root-control turn neither inspects nor changes CYW43/SDIO behavior.
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     pub fn contain_faulted_console_network(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {
+        use crate::console_network_service::ConsoleNetworkContainmentTurn;
+
         let outcome = match self.net.as_deref_mut() {
             Some(net) => net.contain_faulted_console_service(hal),
             None => return false,
         };
         match outcome {
-            Ok(false) => false,
-            Ok(true) => {
-                self.audit
-                    .denied("isolated console-network generation contained after terminal fault");
-                self.quarantine_network_service_after_cyw43_terminal_failure();
-                true
-            }
-            Err(error) => {
-                log::error!(
-                    "[console-network] terminal containment incomplete error={error} action=quarantine-no-replacement"
-                );
-                self.audit.denied(
-                    "isolated console-network containment incomplete; replacement prohibited",
-                );
-                self.quarantine_network_service_after_cyw43_terminal_failure();
+            Ok(ConsoleNetworkContainmentTurn::Idle) => false,
+            Ok(ConsoleNetworkContainmentTurn::Retry) => true,
+            Ok(ConsoleNetworkContainmentTurn::InProgress)
+            | Ok(ConsoleNetworkContainmentTurn::Complete(_))
+            | Err(_) => {
+                // Recovery owns only the scalar authority fence. Session
+                // cleanup and retained diagnostic output run later through
+                // one-unit ordinary Operator turns.
+                if !self.console_network_quarantine_cleanup_pending {
+                    self.fence_console_network_authority_quiet();
+                }
                 true
             }
         }
@@ -4327,39 +4901,17 @@ where
         sel4_config_kernel_mcs
     ))]
     pub fn contain_faulted_ninedoor(&mut self, hal: &mut crate::hal::KernelHal<'_>) -> bool {
+        use crate::ninedoor_service::NineDoorContainmentTurn;
+
         let outcome = match self.ninedoor.as_deref_mut() {
             Some(bridge) => bridge.contain_target_service_if_faulted(hal),
             None => return false,
         };
         match outcome {
-            Ok(None) => false,
-            Ok(Some(proof))
-                if proof.tcb_suspended
-                    && proof.mappings_scrubbed
-                    && proof.recovery_reply_revoked
-                    && proof.capabilities_revoked
-                    && proof.generation_fenced =>
-            {
-                self.audit
-                    .denied("isolated NineDoor generation contained after terminal fault");
-                true
-            }
-            Ok(Some(_)) => {
-                log::error!(
-                    "[ninedoor-service] terminal containment proof incomplete action=quarantine-no-replacement"
-                );
-                self.audit
-                    .denied("isolated NineDoor containment proof incomplete");
-                true
-            }
-            Err(error) => {
-                log::error!(
-                    "[ninedoor-service] terminal containment failed error={error} action=quarantine-no-replacement"
-                );
-                self.audit
-                    .denied("isolated NineDoor containment failed; replacement prohibited");
-                true
-            }
+            Ok(NineDoorContainmentTurn::Idle) => false,
+            Ok(NineDoorContainmentTurn::InProgress) => true,
+            Ok(NineDoorContainmentTurn::Complete(proof)) if proof.complete() => true,
+            Ok(NineDoorContainmentTurn::Complete(_)) | Err(_) => true,
         }
     }
 
@@ -4379,6 +4931,10 @@ where
     pub fn quarantine_network_service_after_cyw43_terminal_failure(&mut self) {
         self.network_service_quarantined = true;
         self.pending_net_flush = PendingNetFlush::default();
+        #[cfg(feature = "kernel")]
+        {
+            self.pending_ordinary_virtio_net_diag = None;
+        }
         #[cfg(feature = "kernel")]
         {
             self.cyw43_network_ready_hdmi_progress.clear(self.now_ms);
@@ -4423,6 +4979,89 @@ where
         if self.last_input_source == ConsoleInputSource::Net {
             self.last_input_source = ConsoleInputSource::Serial;
         }
+    }
+
+    /// Advance exactly one quiet post-containment resource-retirement unit.
+    ///
+    /// Every successor is stored before the selected pure bounded action.
+    /// Heap owners move into reboot-lifetime tombstones rather than being
+    /// dropped, so no admitted unit can enter the allocator or logger.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn service_deferred_console_network_quarantine_cleanup(&mut self) -> bool {
+        if !self.console_network_quarantine_cleanup_pending {
+            return false;
+        }
+        let selected = self.console_network_quarantine_cleanup_unit;
+        self.console_network_quarantine_cleanup_unit = selected.next();
+        let scope = self.console_network_quarantine_scope;
+        match selected {
+            ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket => {
+                if scope.session && self.retired_console_session_ticket.is_none() {
+                    core::mem::swap(
+                        &mut self.session_ticket,
+                        &mut self.retired_console_session_ticket,
+                    );
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::RootTicketUsage => {
+                if scope.session && self.retired_console_ticket_usage.is_none() {
+                    core::mem::swap(
+                        &mut self.ticket_usage,
+                        &mut self.retired_console_ticket_usage,
+                    );
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionTicket => {
+                if scope.session {
+                    if let Some(bridge) = self.ninedoor.as_deref_mut() {
+                        bridge.retire_session_ticket_quiet();
+                    }
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionScope => {
+                if scope.session {
+                    if let Some(bridge) = self.ninedoor.as_deref_mut() {
+                        bridge.retire_session_scope_quiet();
+                    }
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionBinds => {
+                if scope.session {
+                    if let Some(bridge) = self.ninedoor.as_deref_mut() {
+                        bridge.retire_session_binds_quiet();
+                    }
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::PendingStreamCursor => {
+                if scope.stream && self.retired_console_stream_cursor.is_none() {
+                    if let Some(pending) = self.pending_stream.as_mut() {
+                        core::mem::swap(
+                            &mut pending.cursor,
+                            &mut self.retired_console_stream_cursor,
+                        );
+                    }
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::PendingStream => {
+                if scope.stream {
+                    if let Some(pending) = self.pending_stream.as_mut() {
+                        pending.reset_quiet_after_cursor_retired();
+                    }
+                }
+            }
+            ConsoleNetworkQuarantineCleanupUnit::Finalize => {}
+            ConsoleNetworkQuarantineCleanupUnit::Complete => {
+                if scope.any() && self.pending_console_network_quarantine_diagnostic.is_none() {
+                    if let Some(unit) = ConsoleNetworkQuarantineDiagnosticUnit::first(scope) {
+                        self.pending_console_network_quarantine_diagnostic =
+                            Some(ConsoleNetworkQuarantineDiagnostic { scope, unit });
+                    }
+                }
+                self.console_network_quarantine_cleanup_pending = false;
+            }
+        }
+        true
     }
 
     /// Attach the preserved reason why the network stack was unavailable.
@@ -4574,7 +5213,33 @@ where
     }
 
     /// Execute a single cooperative polling cycle.
+    #[inline(never)]
     pub fn poll(&mut self) {
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if self.isolated_virtio_compact_path_attached() {
+            self.poll_split_ordinary_virtio_compact();
+            return;
+        }
+        self.poll_generic();
+    }
+
+    /// Return whether this is the exact isolated QEMU VirtIO service path.
+    ///
+    /// Physical owner state and linked serial retain the generic Pi ordering,
+    /// even if a future profile also exposes a VirtIO-compatible NIC contract.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn isolated_virtio_compact_path_attached(&self) -> bool {
+        !crate::hal::driver_task::physical_pi_driver_task_only_owner_state_active()
+            && !crate::serial::serial_linked_runtime_transport_active()
+            && self.net.as_ref().is_some_and(|net| {
+                net.driver_task_contract()
+                    == crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+            })
+    }
+
+    /// Preserve the existing physical and unsplit EventPump composition.
+    #[inline(never)]
+    fn poll_generic(&mut self) {
         self.reconcile_physical_response_barrier();
         self.queue_stream_prompt_tail_if_ready();
         if self.reboot_pending && self.reboot_ack_drain_observed {
@@ -4630,19 +5295,288 @@ where
                 // following hardware-free Operator turn. Runtime IPC remains
                 // deferred until its own phase and the userland loop yields
                 // immediately after this method returns.
-                self.poll_runtime_without_control_tail(true, false, true);
+                self.poll_split_ordinary_virtio_network_turn();
                 return;
             }
             if phase == OrdinaryServicePhase::Runtime {
-                // Kernel IPC, bootstrap drain, stream flush, and reboot
-                // completion own this complete hardware-free turn. Suppress
-                // both NIC service and command ingress before returning to the
-                // sole outer userland yield.
-                self.poll_runtime(true, false, false);
+                // One persistent Runtime unit owns this complete hardware-free
+                // turn. Suppress both NIC service and command ingress before
+                // returning to the sole outer userland yield.
+                self.poll_split_ordinary_virtio_runtime_turn();
                 return;
             }
         }
+        if split_ordinary_virtio_turn {
+            self.poll_split_ordinary_virtio_operator_turn(
+                crate::generated::ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN,
+            );
+            return;
+        }
+        self.poll_ordinary_operator_turn(false, ordinary_virtio_contract_attached);
+    }
+
+    /// Run one isolated QEMU VirtIO predispatch or phase unit without entering
+    /// the generic CYW43/SDIO/linked-runtime EventPump frame.
+    ///
+    /// Successful tail-drain reconciliation and prompt-tail publication each
+    /// own a whole outer turn and preserve every ordinary cursor. Backpressure
+    /// instead admits one Operator unit without advancing the phase so staged
+    /// serial bytes or one retained record can make bounded progress. Only a
+    /// later turn may commit and execute the retained phase.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_compact(&mut self) {
+        if self.physical_response_barrier == PhysicalResponseBarrier::TailInFlight {
+            self.reconcile_physical_response_barrier();
+            if self.physical_response_barrier != PhysicalResponseBarrier::TailInFlight {
+                return;
+            }
+            self.poll_split_ordinary_virtio_compact_operator_turn();
+            return;
+        }
+        if !self.stream_end_pending && self.stream_prompt_pending {
+            self.queue_stream_prompt_tail_if_ready();
+            if !self.stream_prompt_pending {
+                return;
+            }
+            self.poll_split_ordinary_virtio_compact_operator_turn();
+            return;
+        }
+        if self.reboot_pending && self.reboot_ack_drain_observed {
+            self.service_pending_reboot();
+            return;
+        }
+
+        let phase = self.ordinary_service_phase;
+        self.ordinary_service_phase = phase.next();
+        match phase {
+            OrdinaryServicePhase::Operator => {
+                self.poll_split_ordinary_virtio_compact_operator_turn()
+            }
+            OrdinaryServicePhase::Runtime => self.poll_split_ordinary_virtio_runtime_turn(),
+            OrdinaryServicePhase::Network => self.poll_split_ordinary_virtio_network_turn(),
+        }
+    }
+
+    /// Admit one strict-priority Operator leaf under the shared serial/output
+    /// cursors. Every heavy leaf is noinline, and this wrapper never calls the
+    /// generic Operator or Runtime bodies.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_compact_operator_turn(&mut self) {
+        self.ordinary_virtio_console_output_turn.begin();
+        self.serial.begin_ordinary_root_control_turn();
+        self.poll_one_split_ordinary_virtio_operator_unit();
+        self.serial.finish_ordinary_root_control_turn();
+        self.ordinary_virtio_console_output_turn.finish();
+    }
+
+    /// Select one eligible isolated VirtIO Operator unit in strict priority.
+    ///
+    /// Serial is probed on every visit so newly arrived UART input is not
+    /// hidden behind a software-only predicate. A response-blocked buffered
+    /// command remains retained while its ordered response tail advances.
+    /// Background output does not overtake lifecycle or authenticated network
+    /// input. The selected successor is committed before each noinline leaf.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_one_split_ordinary_virtio_operator_unit(&mut self) {
+        if self.ordinary_operator_unit == OrdinaryOperatorUnit::SerialDispatch {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::SerialDispatch.next();
+            self.poll_split_ordinary_virtio_serial_dispatch_unit();
+            return;
+        }
+
+        let serial_tx_pending_at_entry = self.serial.tx_pending();
+        self.ordinary_operator_unit = OrdinaryOperatorUnit::SerialIo.next();
+        if self.poll_split_ordinary_virtio_serial_io_unit(serial_tx_pending_at_entry) {
+            return;
+        }
+        self.ordinary_operator_unit = OrdinaryOperatorUnit::SerialIo;
+
+        if self.split_ordinary_virtio_local_seat_input_pending() {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::LocalSeat.next();
+            self.poll_split_ordinary_virtio_local_seat_unit();
+            return;
+        }
+
+        if self.physical_console_response_pending() {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::RetainedOutput.next();
+            self.poll_split_ordinary_virtio_retained_output_unit();
+            return;
+        }
+
+        if self.deferred_containment_work_pending() {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::RetainedOutput.next();
+            self.poll_split_ordinary_virtio_retained_output_unit();
+            return;
+        }
+
+        if !self.network_service_quarantined
+            && self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.console_event_pending())
+        {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::NetEvent.next();
+            self.poll_split_ordinary_virtio_net_event_unit();
+            return;
+        }
+
+        if !self.network_service_quarantined
+            && !self.pending_net_flush.active()
+            && self
+                .net
+                .as_ref()
+                .is_some_and(|net| net.buffered_console_lines_pending())
+        {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::NetLine.next();
+            self.poll_split_ordinary_virtio_net_line_unit();
+            return;
+        }
+
+        if !self.pending_console_output.is_empty() {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::RetainedOutput.next();
+            self.poll_split_ordinary_virtio_retained_output_unit();
+            return;
+        }
+
+        if self.split_ordinary_virtio_display_attach_pending() {
+            self.ordinary_operator_unit = OrdinaryOperatorUnit::DisplayAttach.next();
+            self.poll_split_ordinary_virtio_display_attach_unit();
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_serial_io_unit(&mut self, tx_pending_at_entry: bool) -> bool {
+        let rx_activity = self.serial.poll_rx_only();
+        let input_pending = self.serial.interactive_input_active();
+        tx_pending_at_entry || rx_activity || input_pending
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_serial_dispatch_unit(&mut self) {
+        self.serial_console_turn_active = true;
+        let _ = self.consume_serial();
+        self.serial.flush_tx();
+        self.serial_console_turn_active = false;
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_retained_output_unit(&mut self) {
+        let _ = self.flush_pending_console_output_if_idle();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_net_event_unit(&mut self) {
+        let _ = self.admit_one_net_console_event();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_net_line_unit(&mut self) {
+        let _ = self.dispatch_one_buffered_network_line();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn split_ordinary_virtio_local_seat_input_pending(&self) -> bool {
+        self.local_seat.is_some()
+            && (!self.local_line.is_empty()
+                || self.local_seat_chunk_input_pending
+                || self
+                    .local_seat
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0)
+                || self.linked_local_seat_usb_service_pending())
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_local_seat_unit(&mut self) {
+        let consumed = self.consume_local_seat(LocalSeatConsumePhase::PreRuntime, true);
+        if consumed {
+            self.serial.flush_tx();
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn split_ordinary_virtio_display_attach_pending(&self) -> bool {
+        let attached = self.local_seat.is_some();
+        if !attached {
+            return false;
+        }
+        let display = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.linked_hdmi_pending_work());
+        let frontier = self.pending_usb_debug_hdmi_frontier.is_some();
+        #[cfg(feature = "usb")]
+        let attach = self.post_prompt_local_seat_attach_pending;
+        #[cfg(not(feature = "usb"))]
+        let attach = false;
+        display || frontier || attach
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_display_attach_unit(&mut self) {
+        if self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.linked_hdmi_pending_work())
+        {
+            self.pump_local_seat_display_if_idle();
+        } else if self.pending_usb_debug_hdmi_frontier.is_some() {
+            self.retry_pending_usb_debug_hdmi_frontier();
+        } else {
+            self.maybe_run_post_prompt_local_seat_attach(false);
+        }
+    }
+
+    /// Run an admitted isolated VirtIO Operator with its generated serial cap.
+    ///
+    /// A zero generated value is the explicit inactive selector. It preserves
+    /// the existing three-phase VirtIO schedule while leaving Operator serial
+    /// and retained-output service on their existing contracts. A nonzero
+    /// selector activates one shared 64-byte serial cursor and one shared
+    /// retained-output-record cursor around the complete Operator body.
+    fn poll_split_ordinary_virtio_operator_turn(&mut self, serial_byte_limit: u32) {
+        if serial_byte_limit == 0 {
+            self.poll_ordinary_operator_turn(true, true);
+            return;
+        }
+        debug_assert_eq!(
+            serial_byte_limit,
+            crate::generated::ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN
+        );
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        self.ordinary_virtio_console_output_turn.begin();
+        self.serial.begin_ordinary_root_control_turn();
+        self.poll_ordinary_operator_turn(true, true);
+        self.serial.finish_ordinary_root_control_turn();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        self.ordinary_virtio_console_output_turn.finish();
+    }
+
+    /// Run the ordinary Operator body after target-specific phase admission.
+    ///
+    /// The isolated VirtIO wrapper activates one shared 64-byte serial cursor
+    /// and one shared one-record output cursor around this entire body. Early
+    /// returns therefore finish here before the wrapper releases either
+    /// cursor; linked physical serial and unsplit network profiles call the
+    /// same body with their existing service contracts.
+    fn poll_ordinary_operator_turn(
+        &mut self,
+        split_ordinary_virtio_turn: bool,
+        ordinary_virtio_contract_attached: bool,
+    ) {
         let service_network_this_turn = !split_ordinary_virtio_turn;
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        let serial_tx_pending_at_entry = self.serial.tx_pending();
         let serial_rx_activity = self.serial.poll_io();
         let local_seat_input_waiting = self
             .local_seat
@@ -4655,6 +5589,13 @@ where
             let serial_input = self.consume_serial();
             self.serial.flush_tx();
             let serial_output_pending = self.serial.tx_pending();
+            #[cfg(feature = "kernel")]
+            if self.deferred_containment_work_pending() {
+                // This refill already belongs to physical serial work. Fence
+                // Runtime and leave cleanup/admission for a later Operator.
+                self.serial_console_turn_active = false;
+                return;
+            }
             if split_ordinary_virtio_turn {
                 self.poll_runtime_without_control_tail(false, true, false);
             } else {
@@ -4679,7 +5620,9 @@ where
                 // ACK queued while the next command is already buffered. The
                 // response barrier owns this turn; flush its ordered tail
                 // before returning to input arbitration.
-                self.flush_pending_console_output_if_idle();
+                if self.flush_pending_console_output_if_idle() {
+                    return;
+                }
                 if self.pump_local_seat_display_after_bounded_serial_deferral() {
                     return;
                 }
@@ -4700,6 +5643,26 @@ where
         }
         let serial_input = self.consume_serial();
         self.serial.flush_tx();
+        #[cfg(feature = "kernel")]
+        if self.deferred_containment_work_pending() {
+            if serial_input || self.serial.tx_pending() {
+                return;
+            }
+            let _ = self.flush_pending_console_output_if_idle();
+            return;
+        }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if split_ordinary_virtio_turn
+            && !serial_input
+            && !self.serial.tx_pending()
+            && !self.physical_console_response_pending()
+            && self.admit_one_net_console_event()
+        {
+            // Connection lifecycle belongs to Operator, one retained record
+            // per visit. It never shares the NIC operation that produced it or
+            // a command dispatch that may schedule additional work.
+            return;
+        }
         #[cfg(feature = "net-console")]
         if split_ordinary_virtio_turn
             && !serial_input
@@ -4712,6 +5675,35 @@ where
             // timer work only; runtime IPC follows after the next outer
             // replenishment boundary.
             self.poll_runtime_without_control_tail(true, false, false);
+            return;
+        }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if split_ordinary_virtio_turn && !self.pending_console_output.is_empty() {
+            // One retained physical record owns this Operator refill. The
+            // shared output cursor preserves FIFO order and admits at most one
+            // record; Runtime timer/IPC work follows only after the outer
+            // replenishment boundary.
+            if self.flush_pending_console_output_if_idle() {
+                return;
+            }
+            return;
+        }
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if split_ordinary_virtio_turn
+            && self.ordinary_virtio_console_output_turn.active()
+            && self
+                .ordinary_virtio_operator_work(
+                    serial_rx_activity,
+                    serial_tx_pending_at_entry,
+                    serial_input,
+                    local_input,
+                )
+                .is_empty()
+        {
+            // The outer successor was committed before Operator admission. An
+            // empty admitted Operator therefore closes here and reaches the
+            // existing userland Yield without borrowing Runtime timer work or
+            // repeating serial/local-seat/output/display/attach probes.
             return;
         }
         let serial_output_pending = self.serial.tx_pending();
@@ -4728,7 +5720,9 @@ where
         if !local_input && !post_runtime_local_input && !serial_input {
             let followup_serial_input = self.consume_serial();
             self.serial.flush_tx();
-            self.flush_pending_console_output_if_idle();
+            if self.flush_pending_console_output_if_idle() {
+                return;
+            }
             if self.serial.tx_pending()
                 && self.pump_local_seat_display_after_bounded_serial_deferral()
             {
@@ -4754,7 +5748,9 @@ where
             return;
         }
         self.serial.flush_tx();
-        self.flush_pending_console_output_if_idle();
+        if self.flush_pending_console_output_if_idle() {
+            return;
+        }
         if self.serial.tx_pending() && self.pump_local_seat_display_after_bounded_serial_deferral()
         {
             return;
@@ -4768,6 +5764,57 @@ where
             serial_rx_activity || serial_input || local_input || post_runtime_local_input,
             ordinary_virtio_contract_attached,
         );
+    }
+
+    /// Snapshot only work serviceable by the current isolated VirtIO Operator.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn ordinary_virtio_operator_work(
+        &self,
+        serial_rx_activity: bool,
+        serial_tx_pending_at_entry: bool,
+        serial_input: bool,
+        local_input: bool,
+    ) -> OrdinaryVirtioOperatorWork {
+        let local_seat_attached = self.local_seat.is_some();
+        let serviceable_display = self
+            .local_seat
+            .as_ref()
+            .is_some_and(|runtime| runtime.linked_hdmi_pending_work());
+        let serviceable_frontier =
+            local_seat_attached && self.pending_usb_debug_hdmi_frontier.is_some();
+        #[cfg(feature = "usb")]
+        let serviceable_attach = local_seat_attached && self.post_prompt_local_seat_attach_pending;
+        #[cfg(not(feature = "usb"))]
+        let serviceable_attach = false;
+
+        OrdinaryVirtioOperatorWork {
+            serial_input: serial_rx_activity
+                || serial_input
+                || self.serial.interactive_input_active(),
+            serial_output: serial_tx_pending_at_entry || self.serial.tx_pending(),
+            local_seat_input: local_input
+                || !self.local_line.is_empty()
+                || self.local_seat_chunk_input_pending
+                || self
+                    .local_seat
+                    .as_ref()
+                    .is_some_and(|runtime| runtime.keyboard_trace().queued_bytes != 0),
+            dispatchable_network_line: !self.network_service_quarantined
+                && !self.pending_net_flush.active()
+                && self
+                    .net
+                    .as_ref()
+                    .is_some_and(|net| net.buffered_console_lines_pending()),
+            pending_console_output: !self.pending_console_output.is_empty(),
+            physical_response: self.physical_console_response_pending(),
+            stream_or_tail: self.stream_end_pending
+                || self.stream_prompt_pending
+                || self.tail_active,
+            reboot: self.reboot_pending,
+            serviceable_display,
+            serviceable_frontier,
+            serviceable_attach,
+        }
     }
 
     /// Run an ordinary pump cycle after serial has moved behind its linked
@@ -4784,8 +5831,19 @@ where
         match self.linked_runtime_service_phase {
             LinkedRuntimeServicePhase::Serial => {
                 self.serial_console_turn_active = true;
-                self.queue_pending_console_output_for_linked_serial();
+                if !self.deferred_containment_work_pending() {
+                    let _ = self.queue_pending_console_output_for_linked_serial(false);
+                }
                 let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
+                if self.deferred_containment_work_pending() {
+                    self.linked_runtime_service_phase = if self.local_seat.is_some() {
+                        LinkedRuntimeServicePhase::LocalSeat
+                    } else {
+                        LinkedRuntimeServicePhase::Dispatch
+                    };
+                    self.serial_console_turn_active = false;
+                    return;
+                }
                 self.poll_runtime(true, serial_rx_activity || self.serial.tx_pending(), false);
                 #[cfg(feature = "net-console")]
                 {
@@ -4817,6 +5875,11 @@ where
                 } else {
                     self.consume_local_seat_buffered_for_dispatch(LocalSeatConsumePhase::PreRuntime)
                 };
+                if !serial_input && !local_input && self.deferred_containment_work_pending() {
+                    self.linked_runtime_service_phase =
+                        LinkedRuntimeServicePhase::ContainmentDiagnostic;
+                    return;
+                }
                 #[cfg(feature = "net-console")]
                 let network_input = if serial_input || local_input {
                     false
@@ -4890,6 +5953,10 @@ where
                     serial_input || local_input || network_input,
                     false,
                 );
+            }
+            LinkedRuntimeServicePhase::ContainmentDiagnostic => {
+                let _ = self.queue_pending_console_output_for_linked_serial(true);
+                self.linked_runtime_service_phase = LinkedRuntimeServicePhase::Serial;
             }
             LinkedRuntimeServicePhase::Network => {
                 #[cfg(feature = "net-console")]
@@ -6039,6 +7106,7 @@ where
     /// schedule hardware work cannot share an outer event turn with the NIC
     /// poll that received it.
     #[cfg(feature = "net-console")]
+    #[inline(never)]
     fn dispatch_one_buffered_network_line(&mut self) -> bool {
         if self.network_service_quarantined || self.pending_net_flush.active() {
             return false;
@@ -6094,19 +7162,48 @@ where
         }
         self.cyw43_bootstrap_last_operator_turn_was_display = false;
         self.serial_console_turn_active = true;
-        self.queue_pending_console_output_for_linked_serial();
+        if self.cyw43_bootstrap_containment_diagnostic_due {
+            let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
+            let serial_input = self.consume_serial();
+            let local_input = if serial_input {
+                false
+            } else {
+                self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime)
+            };
+            if local_input {
+                self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PriorityFollowup);
+            }
+            if serial_rx_activity || serial_input || local_input || self.serial.tx_pending() {
+                self.serial_console_turn_active = false;
+                self.cyw43_bootstrap_operator_turn_active = false;
+                return;
+            }
+            let _ = self.queue_pending_console_output_for_linked_serial(true);
+            self.cyw43_bootstrap_containment_diagnostic_due =
+                self.deferred_containment_work_pending();
+            self.serial_console_turn_active = false;
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return;
+        }
+        let _ = self.queue_pending_console_output_for_linked_serial(false);
         let serial_rx_activity = self.serial.service_linked_runtime_only_turn();
         let serial_input = self.consume_serial();
         let local_input = self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PreRuntime);
         if local_input {
             self.consume_local_seat_buffered_only(LocalSeatConsumePhase::PriorityFollowup);
         }
+        if self.deferred_containment_work_pending() {
+            self.cyw43_bootstrap_containment_diagnostic_due = true;
+            self.serial_console_turn_active = false;
+            self.cyw43_bootstrap_operator_turn_active = false;
+            return;
+        }
         self.poll_runtime(
             false,
             serial_rx_activity || serial_input || local_input || self.serial.tx_pending(),
             false,
         );
-        self.queue_pending_console_output_for_linked_serial();
+        let _ = self.queue_pending_console_output_for_linked_serial(false);
         self.serial_console_turn_active = false;
         self.cyw43_bootstrap_operator_turn_active = false;
     }
@@ -6920,21 +8017,8 @@ where
         );
     }
 
-    fn poll_runtime_inner(
-        &mut self,
-        suppress_console_input: bool,
-        physical_input_active: bool,
-        service_network: bool,
-        service_control_tail: bool,
-    ) {
-        let suppress_console_input = suppress_console_input || self.reboot_pending;
-        #[cfg(not(feature = "net-console"))]
-        let _ = suppress_console_input;
-        #[cfg(not(feature = "net-console"))]
-        let _ = physical_input_active;
-        #[cfg(not(feature = "net-console"))]
-        let _ = service_network;
-
+    /// Advance only the shared timer/timebase portion of a Runtime visit.
+    fn poll_runtime_timer_prelude(&mut self) {
         #[cfg(feature = "kernel")]
         let timebase_now_ms = crate::hal::timebase().now_ms();
         #[cfg(not(feature = "kernel"))]
@@ -6955,6 +8039,159 @@ where
         } else {
             self.now_ms = timebase_now_ms;
         }
+    }
+
+    /// Run the exact non-network prelude required by one split Runtime unit.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn poll_split_ordinary_virtio_runtime_prelude(&mut self) {
+        self.poll_runtime_timer_prelude();
+        self.reconcile_cyw43_network_ready_hdmi();
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_runtime_turn(&mut self) {
+        let unit = self.ordinary_runtime_unit;
+        self.ordinary_runtime_unit = unit.next();
+
+        // Preserve only the timer/reconciliation prelude. The generic runtime
+        // network monolith and composite control tail remain outside this
+        // isolated Runtime refill. Exactly one selected unit runs next and the
+        // userland loop supplies the only yield.
+        self.poll_split_ordinary_virtio_runtime_prelude();
+        match unit {
+            OrdinaryRuntimeUnit::Worker => self
+                .ipc
+                .dispatch_runtime_unit(self.now_ms, RuntimeIpcUnit::Worker),
+            OrdinaryRuntimeUnit::ControlEndpoint => self
+                .ipc
+                .dispatch_runtime_unit(self.now_ms, RuntimeIpcUnit::ControlEndpoint),
+            OrdinaryRuntimeUnit::BootstrapDrain => self.drain_one_bootstrap_ipc(),
+            OrdinaryRuntimeUnit::StreamFlush => self.flush_one_pending_stream_record(),
+            OrdinaryRuntimeUnit::RebootTail => self.service_pending_reboot(),
+        }
+    }
+
+    /// Service one refill-sized isolated VirtIO Network responsibility.
+    ///
+    /// A retained diagnostic preempts both ordinary units without advancing
+    /// their cursor. Otherwise the Timer/NIC successor is committed before
+    /// work and the userland loop supplies the only replenishment yield.
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_split_ordinary_virtio_network_turn(&mut self) {
+        if let Some(observation) = self.pending_ordinary_virtio_net_diag.take() {
+            self.log_net_diag_observation(observation);
+            return;
+        }
+        let unit = self.ordinary_virtio_network_unit;
+        self.ordinary_virtio_network_unit = unit.next();
+        match unit {
+            OrdinaryVirtioNetworkUnit::Timer => self.poll_runtime_timer_prelude(),
+            OrdinaryVirtioNetworkUnit::Nic => self.poll_one_split_ordinary_virtio_network_unit(),
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[inline(never)]
+    fn poll_one_split_ordinary_virtio_network_unit(&mut self) {
+        if self.network_service_quarantined {
+            return;
+        }
+        let Some(net) = self.net.as_ref() else {
+            return;
+        };
+        let contract = net.driver_task_contract();
+        debug_assert_eq!(
+            contract,
+            crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT
+        );
+        debug_assert!(Self::network_contract_service_admissible(contract));
+        let conn_id = net.active_console_conn_id();
+        if self.pending_net_flush.active() && self.pending_net_flush.conn_id != conn_id {
+            self.pending_net_flush = PendingNetFlush::default();
+        }
+        let flush_turn = self.pending_net_flush.active();
+        let Ok(mut budget) = DriverServiceBudget::new(contract) else {
+            return;
+        };
+        let (result, telemetry, ingest_snapshot) = {
+            let Some(net) = self.net.as_mut() else {
+                return;
+            };
+            let result = if flush_turn {
+                net.flush_tcp_with_budget(self.now_ms, &mut budget)
+            } else {
+                net.poll_with_budget(self.now_ms, &mut budget)
+            };
+            (result, net.telemetry(), net.ingest_snapshot())
+        };
+        let activity = match result {
+            Ok(activity) => activity,
+            Err(error) => {
+                let message = format_message(format_args!(
+                    "BUDGET_OVERRUN contract={} budget_overrun=1 reason={} service_us={}",
+                    contract.name,
+                    error.reason(),
+                    contract.max_service_us(),
+                ));
+                self.audit.denied(message.as_str());
+                false
+            }
+        };
+        if flush_turn {
+            self.metrics.net_post_dispatch_flush_polls =
+                self.metrics.net_post_dispatch_flush_polls.saturating_add(1);
+            self.pending_net_flush.remaining_turns =
+                self.pending_net_flush.remaining_turns.saturating_sub(1);
+            if !activity {
+                self.pending_net_flush = PendingNetFlush::default();
+            } else if self.pending_net_flush.remaining_turns == 0 {
+                self.metrics.net_post_dispatch_flush_exhaustions = self
+                    .metrics
+                    .net_post_dispatch_flush_exhaustions
+                    .saturating_add(1);
+                self.pending_net_flush = PendingNetFlush::default();
+            }
+        }
+        self.net_conn_id = conn_id;
+        if NET_DIAG_FEATURED {
+            debug_assert!(
+                self.pending_ordinary_virtio_net_diag.is_none(),
+                "a retained VirtIO NETDIAG visit must preempt another NIC unit"
+            );
+            self.pending_ordinary_virtio_net_diag = Some(PendingOrdinaryVirtioNetDiag::capture(
+                telemetry,
+                self.now_ms,
+            ));
+        } else if activity {
+            let message = format_message(format_args!(
+                "net: poll link_up={} tx_drops={}",
+                telemetry.link_up, telemetry.tx_drops
+            ));
+            self.audit.info(message.as_str());
+        }
+        if let Some(bridge) = self.ninedoor.as_mut() {
+            bridge.update_ingest_snapshot(ingest_snapshot);
+        }
+    }
+
+    fn poll_runtime_inner(
+        &mut self,
+        suppress_console_input: bool,
+        physical_input_active: bool,
+        service_network: bool,
+        service_control_tail: bool,
+    ) {
+        let suppress_console_input = suppress_console_input || self.reboot_pending;
+        #[cfg(not(feature = "net-console"))]
+        let _ = suppress_console_input;
+        #[cfg(not(feature = "net-console"))]
+        let _ = physical_input_active;
+        #[cfg(not(feature = "net-console"))]
+        let _ = service_network;
+
+        self.poll_runtime_timer_prelude();
 
         #[cfg(feature = "net-console")]
         let cyw43_network_service_fenced = service_network
@@ -7340,10 +8577,36 @@ where
             return;
         }
         let snapshot = NET_DIAG.snapshot();
+        self.log_net_diag_snapshot(telemetry, snapshot, self.now_ms, None);
+    }
+
+    #[cfg(feature = "net-console")]
+    fn log_net_diag_observation(&mut self, observation: PendingOrdinaryVirtioNetDiag) {
+        let PendingOrdinaryVirtioNetDiag {
+            telemetry,
+            now_ms,
+            last_rx_used_change_ms,
+        } = observation;
+        // The exact compact Operator and Runtime visits cannot service the NIC
+        // or mutate NET_DIAG. Capture the diagnostic counters here, after the
+        // retained visit has preempted another timer/NIC unit, while preserving
+        // the originating NIC visit's timestamp and progress horizon.
+        let snapshot = NET_DIAG.snapshot();
+        self.log_net_diag_snapshot(telemetry, snapshot, now_ms, Some(last_rx_used_change_ms));
+    }
+
+    #[cfg(feature = "net-console")]
+    fn log_net_diag_snapshot(
+        &mut self,
+        telemetry: NetTelemetry,
+        snapshot: NetDiagSnapshot,
+        now_ms: u64,
+        last_rx_used_change_ms: Option<u64>,
+    ) {
         if self.should_log_net_diag(snapshot, telemetry) {
             if let Some(suppressed) = self
                 .net_diag_limiter
-                .check(NetDiagRateKind::Summary, self.now_ms)
+                .check(NetDiagRateKind::Summary, now_ms)
             {
                 let line = format_message(format_args!(
                     "NETDIAG in_bytes={} out_bytes={} rx_stack={} rx_smoltcp={} tx_smoltcp={} tx_drops={} link={} q_lines={} q_bytes={} q_drops={} q_wblk={} suppressed={}",
@@ -7361,7 +8624,7 @@ where
                     suppressed,
                 ));
                 self.audit.info(line.as_str());
-                self.last_net_diag_log_ms = Some(self.now_ms);
+                self.last_net_diag_log_ms = Some(now_ms);
                 self.last_net_diag_emitted = Some(NetDiagLogSnapshot {
                     snapshot,
                     link_up: telemetry.link_up,
@@ -7369,28 +8632,34 @@ where
                 });
             }
         }
-        self.check_net_diag_progress(snapshot);
+        self.check_net_diag_progress(snapshot, now_ms, last_rx_used_change_ms);
         self.last_net_diag_snapshot = Some(snapshot);
     }
 
     #[cfg(feature = "net-console")]
-    fn check_net_diag_progress(&mut self, snapshot: NetDiagSnapshot) {
+    fn check_net_diag_progress(
+        &mut self,
+        snapshot: NetDiagSnapshot,
+        now_ms: u64,
+        last_rx_used_change_ms: Option<u64>,
+    ) {
         if let Some(prev) = self.last_net_diag_snapshot {
             if snapshot.rx_used_seen != prev.rx_used_seen {
                 self.net_diag_stuck_logged = false;
             }
             let poll_delta = snapshot.poll_calls.saturating_sub(prev.poll_calls);
             let irq_delta = snapshot.rx_irq_count.saturating_sub(prev.rx_irq_count);
-            let last_progress_ms = NET_DIAG.last_rx_used_change_ms();
+            let last_rx_used_change_ms =
+                last_rx_used_change_ms.unwrap_or_else(|| NET_DIAG.last_rx_used_change_ms());
             if poll_delta > 0
                 && irq_delta > 0
-                && last_progress_ms > 0
-                && self.now_ms.saturating_sub(last_progress_ms) >= NET_DIAG_STUCK_MS
+                && last_rx_used_change_ms > 0
+                && now_ms.saturating_sub(last_rx_used_change_ms) >= NET_DIAG_STUCK_MS
                 && !self.net_diag_stuck_logged
             {
                 let warn_line = format_message(format_args!(
                     "NETDIAG warn: rx_used_stuck ms={} poll_delta={} irq_delta={} rx_used={}",
-                    self.now_ms.saturating_sub(last_progress_ms),
+                    now_ms.saturating_sub(last_rx_used_change_ms),
                     poll_delta,
                     irq_delta,
                     snapshot.rx_used_seen
@@ -7530,18 +8799,30 @@ where
     #[cfg(feature = "kernel")]
     fn drain_bootstrap_ipc(&mut self) {
         while let Some(message) = self.ipc.take_bootstrap_message() {
-            self.metrics.bootstrap_messages = self.metrics.bootstrap_messages.saturating_add(1);
-            if let Some(handler) = self.bootstrap_handler.as_mut() {
-                handler.handle(&message, &mut *self.audit);
-            } else {
-                let summary = format_message(format_args!(
-                    "bootstrap-ipc: badge=0x{badge:016x} label=0x{label:08x} words={words}",
-                    badge = message.badge,
-                    label = message.info.words[0],
-                    words = message.payload.len(),
-                ));
-                self.audit.info(summary.as_str());
-            }
+            self.handle_bootstrap_message(&message);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn drain_one_bootstrap_ipc(&mut self) {
+        if let Some(message) = self.ipc.take_bootstrap_message() {
+            self.handle_bootstrap_message(&message);
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn handle_bootstrap_message(&mut self, message: &BootstrapMessage) {
+        self.metrics.bootstrap_messages = self.metrics.bootstrap_messages.saturating_add(1);
+        if let Some(handler) = self.bootstrap_handler.as_mut() {
+            handler.handle(message, &mut *self.audit);
+        } else {
+            let summary = format_message(format_args!(
+                "bootstrap-ipc: badge=0x{badge:016x} label=0x{label:08x} words={words}",
+                badge = message.badge,
+                label = message.info.words[0],
+                words = message.payload.len(),
+            ));
+            self.audit.info(summary.as_str());
         }
     }
 
@@ -8059,7 +9340,11 @@ where
         let insert_at = if response_ordered {
             self.pending_console_output
                 .iter()
-                .position(|queued| queued.kind.is_background() || queued.kind.is_high_impact())
+                .position(|queued| {
+                    queued.kind.is_background()
+                        || queued.kind.is_high_impact()
+                        || queued.kind == PendingConsoleOutputKind::ContainmentLine
+                })
                 .unwrap_or(self.pending_console_output.len())
         } else {
             self.pending_console_output.len()
@@ -8087,6 +9372,145 @@ where
                 .saturating_add(1);
             false
         }
+    }
+
+    /// Append one deferred containment marker without scanning or evicting the
+    /// bounded output queue. Backpressure leaves its service-owned record intact.
+    #[cfg(feature = "kernel")]
+    fn containment_diagnostic_queue_has_capacity(&self) -> bool {
+        self.pending_console_output.len()
+            < CONSOLE_OUTPUT_BACKLOG_LINES
+                .saturating_sub(CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn queue_containment_diagnostic(&mut self, text: &str) -> bool {
+        if !self.containment_diagnostic_queue_has_capacity() {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+            return false;
+        }
+        let Some(output) =
+            PendingConsoleOutput::try_from_str(PendingConsoleOutputKind::ContainmentLine, text)
+        else {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+            return false;
+        };
+        if self.pending_console_output.push(output).is_err() {
+            self.metrics.physical_console_output_backpressure = self
+                .metrics
+                .physical_console_output_backpressure
+                .saturating_add(1);
+            return false;
+        }
+        self.metrics.physical_console_output_deferred = self
+            .metrics
+            .physical_console_output_deferred
+            .saturating_add(1);
+        true
+    }
+
+    #[cfg(feature = "kernel")]
+    fn containment_diagnostic_pending(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        if self
+            .net
+            .as_deref()
+            .is_some_and(|net| net.console_network_containment_diagnostic_pending())
+        {
+            return true;
+        }
+        #[cfg(feature = "net-console")]
+        if self.pending_console_network_quarantine_diagnostic.is_some() {
+            return true;
+        }
+        self.ninedoor
+            .as_deref()
+            .and_then(NineDoorBridge::pending_containment_diagnostic)
+            .is_some()
+    }
+
+    #[cfg(feature = "kernel")]
+    fn deferred_containment_work_pending(&self) -> bool {
+        #[cfg(feature = "net-console")]
+        if self.console_network_quarantine_cleanup_pending {
+            return true;
+        }
+        self.containment_diagnostic_pending()
+    }
+
+    /// Materialize at most one bridge-retained record in an ordinary output
+    /// turn. A successful queue admission owns this visit; flushing waits for
+    /// the next retained-output visit.
+    #[cfg(feature = "kernel")]
+    #[inline(never)]
+    fn admit_one_containment_diagnostic(&mut self) -> bool {
+        if self.reboot_pending
+            || self.serial.tx_pending()
+            || self.physical_console_response_pending()
+        {
+            return false;
+        }
+        #[cfg(feature = "net-console")]
+        if let Some(line) = self
+            .net
+            .as_deref()
+            .and_then(|net| net.pending_console_network_containment_diagnostic())
+        {
+            if !self.queue_containment_diagnostic(line.as_str()) {
+                return false;
+            }
+            let committed = self.net.as_deref_mut().is_some_and(|net| {
+                net.commit_console_network_containment_diagnostic(line.as_str())
+            });
+            if !committed {
+                let _ = self.pending_console_output.pop();
+            }
+            return committed;
+        }
+        #[cfg(feature = "net-console")]
+        if let Some(diagnostic) = self.pending_console_network_quarantine_diagnostic {
+            let Some(line) = diagnostic.unit.render(diagnostic.scope) else {
+                return false;
+            };
+            if !self.queue_containment_diagnostic(line.as_str()) {
+                return false;
+            }
+            if self.pending_console_network_quarantine_diagnostic != Some(diagnostic) {
+                let _ = self.pending_console_output.pop();
+                return false;
+            }
+            self.pending_console_network_quarantine_diagnostic = diagnostic
+                .unit
+                .next(diagnostic.scope)
+                .map(|unit| ConsoleNetworkQuarantineDiagnostic {
+                    scope: diagnostic.scope,
+                    unit,
+                });
+            return true;
+        }
+        let Some(diagnostic) = self
+            .ninedoor
+            .as_deref()
+            .and_then(NineDoorBridge::pending_containment_diagnostic)
+        else {
+            return false;
+        };
+        let Ok(line) = diagnostic.render() else {
+            return false;
+        };
+        if !self.queue_containment_diagnostic(line.as_str()) {
+            return false;
+        }
+        if let Some(bridge) = self.ninedoor.as_deref_mut() {
+            bridge.commit_containment_diagnostic(diagnostic);
+        }
+        true
     }
 
     /// Discard only nonessential bootstrap/recovery chatter before a platform
@@ -8131,28 +9555,105 @@ where
         }
     }
 
-    fn flush_pending_console_output_if_idle(&mut self) {
-        #[cfg(feature = "kernel")]
-        self.admit_one_retained_cyw43_serial_milestone();
+    fn pending_console_output_record_available(&self) -> bool {
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        {
+            self.ordinary_virtio_console_output_turn.record_available()
+        }
+        #[cfg(not(all(feature = "kernel", feature = "net-console")))]
+        {
+            true
+        }
+    }
+
+    fn charge_pending_console_output_record(&mut self) {
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        self.ordinary_virtio_console_output_turn.charge_record();
+    }
+
+    fn flush_pending_console_output_if_idle(&mut self) -> bool {
+        if !self.pending_console_output_record_available() {
+            return false;
+        }
         let response_has_priority = self.physical_response_barrier != PhysicalResponseBarrier::Idle;
+        let physical_input_pending = self.physical_console_input_pending_for_output();
+        #[cfg(feature = "kernel")]
+        let deferred_work_pending = self.deferred_containment_work_pending();
+        #[cfg(not(feature = "kernel"))]
+        let deferred_work_pending = false;
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if self.console_network_quarantine_cleanup_pending
+            && !response_has_priority
+            && !physical_input_pending
+            && !self.serial.tx_pending()
+            && self.service_deferred_console_network_quarantine_cleanup()
+        {
+            return true;
+        }
+        #[cfg(feature = "kernel")]
+        let containment_diagnostic_pending = self.containment_diagnostic_pending();
+        #[cfg(feature = "kernel")]
+        if containment_diagnostic_pending
+            && !response_has_priority
+            && !physical_input_pending
+            && !self.serial.tx_pending()
+            && self.containment_diagnostic_output_phase == ContainmentDiagnosticOutputPhase::Admit
+        {
+            if self.admit_one_containment_diagnostic() {
+                return true;
+            }
+            if !self.containment_diagnostic_queue_has_capacity() {
+                self.containment_diagnostic_output_phase =
+                    ContainmentDiagnosticOutputPhase::DrainSpace;
+            }
+            // A failed admission owns this visit. An explicitly selected later
+            // DrainSpace visit may free one slot, but never this visit.
+            return true;
+        }
+        #[cfg(feature = "kernel")]
+        if !containment_diagnostic_pending {
+            self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            self.admit_one_retained_cyw43_serial_milestone();
+        }
+        #[cfg(feature = "kernel")]
+        let drain_containment_space = containment_diagnostic_pending
+            && self.containment_diagnostic_output_phase
+                == ContainmentDiagnosticOutputPhase::DrainSpace;
+        #[cfg(not(feature = "kernel"))]
+        let drain_containment_space = false;
+        if drain_containment_space && self.pending_console_output.is_empty() {
+            #[cfg(feature = "kernel")]
+            {
+                self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            }
+            return true;
+        }
         if self.pending_console_output.is_empty()
             || self.serial.tx_pending()
-            || (self.physical_console_input_pending_for_output() && !response_has_priority)
+            || (physical_input_pending && !response_has_priority)
         {
-            return;
+            return deferred_work_pending;
         }
         self.console_output_flush_active = true;
         let mut flushed = 0usize;
-        while flushed < CONSOLE_OUTPUT_LINES_PER_IDLE_TURN
+        let flush_limit = if drain_containment_space {
+            1
+        } else {
+            CONSOLE_OUTPUT_LINES_PER_IDLE_TURN
+        };
+        while flushed < flush_limit
+            && self.pending_console_output_record_available()
             && !self.pending_console_output.is_empty()
             && !self.serial.tx_pending()
             && (!self.physical_console_input_pending_for_output()
                 || self.physical_response_barrier != PhysicalResponseBarrier::Idle)
         {
             let output = self.pending_console_output.remove(0);
+            self.charge_pending_console_output_record();
             self.with_local_seat_mirror_suppressed(|this| match output.kind {
                 PendingConsoleOutputKind::BackgroundLine
                 | PendingConsoleOutputKind::HighImpactLine
+                | PendingConsoleOutputKind::ContainmentLine
                 | PendingConsoleOutputKind::Line
                 | PendingConsoleOutputKind::TerminalLine
                 | PendingConsoleOutputKind::ResponseTailLine => {
@@ -8168,9 +9669,13 @@ where
                 .physical_console_output_flushed
                 .saturating_add(1);
             flushed = flushed.saturating_add(1);
+            #[cfg(feature = "kernel")]
+            if drain_containment_space {
+                self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            }
             let _ = self.serial.poll_io();
             self.service_local_seat_keyboard_during_output();
-            if output.kind.is_response_tail() {
+            if output.kind.is_response_tail() || drain_containment_space {
                 // The terminal ACK/ERR/END or prompt must remain the final
                 // bytes of this outer turn. Background output may resume only
                 // after a later turn proves that tail drained on the wire.
@@ -8178,21 +9683,65 @@ where
             }
         }
         self.console_output_flush_active = false;
+        deferred_work_pending
     }
 
     #[cfg(feature = "kernel")]
-    fn queue_pending_console_output_for_linked_serial(&mut self) {
-        self.admit_one_retained_cyw43_serial_milestone();
+    fn queue_pending_console_output_for_linked_serial(
+        &mut self,
+        admit_containment_diagnostic: bool,
+    ) -> bool {
+        let response_has_priority = self.physical_response_barrier != PhysicalResponseBarrier::Idle;
+        let deferred_work_pending =
+            admit_containment_diagnostic && self.deferred_containment_work_pending();
+        #[cfg(feature = "net-console")]
+        if admit_containment_diagnostic
+            && !response_has_priority
+            && !self.serial.tx_pending()
+            && self.service_deferred_console_network_quarantine_cleanup()
+        {
+            return true;
+        }
+        let containment_diagnostic_pending =
+            admit_containment_diagnostic && self.containment_diagnostic_pending();
+        if containment_diagnostic_pending
+            && !response_has_priority
+            && !self.serial.tx_pending()
+            && self.containment_diagnostic_output_phase == ContainmentDiagnosticOutputPhase::Admit
+        {
+            if self.admit_one_containment_diagnostic() {
+                return true;
+            }
+            if !self.containment_diagnostic_queue_has_capacity() {
+                self.containment_diagnostic_output_phase =
+                    ContainmentDiagnosticOutputPhase::DrainSpace;
+            }
+            return true;
+        }
+        if !containment_diagnostic_pending {
+            if admit_containment_diagnostic {
+                self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            }
+            self.admit_one_retained_cyw43_serial_milestone();
+        }
+        let drain_containment_space = containment_diagnostic_pending
+            && self.containment_diagnostic_output_phase
+                == ContainmentDiagnosticOutputPhase::DrainSpace;
+        if drain_containment_space && self.pending_console_output.is_empty() {
+            self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            return true;
+        }
         if self.pending_console_output.is_empty()
             || self.serial.tx_pending()
             || self.physical_response_barrier == PhysicalResponseBarrier::TailInFlight
         {
-            return;
+            return deferred_work_pending;
         }
         let output = self.pending_console_output.remove(0);
         let queued = match output.kind {
             PendingConsoleOutputKind::BackgroundLine
             | PendingConsoleOutputKind::HighImpactLine
+            | PendingConsoleOutputKind::ContainmentLine
             | PendingConsoleOutputKind::Line
             | PendingConsoleOutputKind::TerminalLine
             | PendingConsoleOutputKind::ResponseTailLine => {
@@ -8203,6 +9752,9 @@ where
                 .try_enqueue_tx_record(&[CONSOLE_PROMPT.as_bytes()]),
         };
         if queued {
+            if drain_containment_space {
+                self.containment_diagnostic_output_phase = ContainmentDiagnosticOutputPhase::Admit;
+            }
             if output.kind.is_response_tail() {
                 self.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
             }
@@ -8217,6 +9769,7 @@ where
                 .physical_console_output_backpressure
                 .saturating_add(1);
         }
+        deferred_work_pending
     }
 
     fn reconcile_physical_response_barrier(&mut self) {
@@ -22090,6 +23643,7 @@ where
     }
 
     #[cfg(feature = "net-console")]
+    #[inline(never)]
     fn handle_network_line(&mut self, line: HeaplessString<{ cohsh_core::MAX_LINE_LEN }>) {
         if self.network_service_quarantined {
             return;
@@ -22131,66 +23685,72 @@ where
     }
 
     #[cfg(feature = "net-console")]
-    fn drain_net_console_events(&mut self) {
-        if self.network_service_quarantined {
-            return;
-        }
-        let session_is_net = matches!(self.session_origin, Some(ConsoleInputSource::Net));
-        let session_net_conn_id = self.session_net_conn_id;
-        let mut end_reason: Option<NetConsoleDisconnectReason> = None;
-        if let Some(net) = self.net.as_mut() {
-            net.drain_console_events(&mut |event| match event {
-                NetConsoleEvent::Connected { conn_id, peer } => match peer {
-                    Some(remote) => {
-                        log::info!(
-                            target: "net-console",
-                            "[net-console] conn {}: tcp-established auth=pending from {}",
-                            conn_id,
-                            remote
-                        );
-                    }
-                    None => {
-                        log::info!(
-                            target: "net-console",
-                            "[net-console] conn {}: tcp-established auth=pending",
-                            conn_id
-                        );
-                    }
-                },
-                NetConsoleEvent::Authenticated { conn_id } => {
+    #[inline(never)]
+    fn handle_net_console_event(&mut self, event: NetConsoleEvent) {
+        match event {
+            NetConsoleEvent::Connected { conn_id, peer } => match peer {
+                Some(remote) => {
                     log::info!(
                         target: "net-console",
-                        "[net-console] conn {}: authenticated",
+                        "[net-console] conn {}: tcp-established auth=pending from {}",
+                        conn_id,
+                        remote
+                    );
+                }
+                None => {
+                    log::info!(
+                        target: "net-console",
+                        "[net-console] conn {}: tcp-established auth=pending",
                         conn_id
                     );
                 }
-                NetConsoleEvent::Disconnected {
+            },
+            NetConsoleEvent::Authenticated { conn_id } => {
+                log::info!(
+                    target: "net-console",
+                    "[net-console] conn {}: authenticated",
+                    conn_id
+                );
+            }
+            NetConsoleEvent::Disconnected {
+                conn_id,
+                reason,
+                bytes_read,
+                bytes_written,
+            } => {
+                log::info!(
+                    target: "net-console",
+                    "[net-console] conn {}: closed reason={} (bytes_read={}, bytes_written={})",
                     conn_id,
-                    reason,
+                    reason.as_str(),
                     bytes_read,
                     bytes_written,
-                } => {
-                    log::info!(
-                        target: "net-console",
-                        "[net-console] conn {}: closed reason={} (bytes_read={}, bytes_written={})",
-                        conn_id,
-                        reason.as_str(),
-                        bytes_read,
-                        bytes_written,
-                    );
-                    let disconnects_current_session = session_net_conn_id == Some(conn_id);
-                    if session_is_net && disconnects_current_session && end_reason.is_none() {
-                        end_reason = Some(reason);
-                    }
+                );
+                if self.session_origin == Some(ConsoleInputSource::Net)
+                    && self.session_net_conn_id == Some(conn_id)
+                {
+                    let reason_label = Self::disconnect_reason_label(reason);
+                    self.end_session(reason_label);
                 }
-            });
-        }
-        if session_is_net {
-            if let Some(reason) = end_reason {
-                let reason_label = Self::disconnect_reason_label(reason);
-                self.end_session(reason_label);
             }
         }
+    }
+
+    #[cfg(feature = "net-console")]
+    fn admit_one_net_console_event(&mut self) -> bool {
+        if self.network_service_quarantined {
+            return false;
+        }
+        let Some(event) = self.net.as_mut().and_then(|net| net.take_console_event()) else {
+            return false;
+        };
+        self.handle_net_console_event(event);
+        true
+    }
+
+    #[cfg(feature = "net-console")]
+    fn drain_net_console_events(&mut self) {
+        while self.admit_one_net_console_event() {}
     }
 
     #[inline(never)]
@@ -22200,6 +23760,16 @@ where
         #[cfg(feature = "kernel")]
         let mut forwarded = false;
         let verb_label = command.verb().ack_label();
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        if self.console_network_quarantine_cleanup_pending {
+            self.metrics.denied_commands = self.metrics.denied_commands.saturating_add(1);
+            self.emit_refusal(
+                verb_label,
+                RefusalReason::Busy,
+                Some("detail=containment-cleanup"),
+            );
+            return Ok(());
+        }
         if matches!(self.session, Some(SessionRole::Queen)) {
             lifecycle::root_record_activity(self.now_ms);
         }
@@ -23738,7 +25308,10 @@ where
         if self.stream_end_pending {
             #[cfg(feature = "kernel")]
             if let Some(pending) = self.pending_stream.as_ref() {
-                if pending.next_line < pending.lines.len() || pending.log_cursor.is_some() {
+                if pending.next_line < pending.lines.len()
+                    || pending.log_cursor.is_some()
+                    || pending.isolated_runtime_completion_deferred
+                {
                     return;
                 }
             }
@@ -23763,6 +25336,38 @@ where
                 self.queue_stream_prompt_tail_if_ready();
             }
         }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn flush_one_pending_stream_record(&mut self) {
+        if !self.stream_end_pending {
+            return;
+        }
+        let Some(mut pending) = self.pending_stream.take() else {
+            // Finalization and END are distinct material units. A prior visit
+            // removed the exhausted cursor; this visit emits only END.
+            self.emit_stream_end_if_pending();
+            return;
+        };
+        if pending.next_line >= pending.lines.len()
+            && !Self::refill_log_pending_stream(&mut pending)
+        {
+            // A successful line always returned with the cursor retained. This
+            // later visit owns only bandwidth/cursor finalization; END remains
+            // pending for the next selected StreamFlush unit.
+            self.consume_ticket_bandwidth(pending.bandwidth_bytes);
+            if let Some(cursor) = pending.cursor {
+                self.record_ticket_cursor(cursor.path_key, cursor.offset, cursor.len, cursor.check);
+            }
+            return;
+        }
+
+        let line = pending.lines[pending.next_line].as_str();
+        if self.try_emit_stream_line(line) {
+            pending.next_line = pending.next_line.saturating_add(1);
+            pending.isolated_runtime_completion_deferred = true;
+        }
+        self.pending_stream = Some(pending);
     }
 
     #[cfg(feature = "kernel")]
@@ -28537,17 +30142,38 @@ mod tests {
 
     impl IpcDispatcher for NullIpc {
         fn dispatch(&mut self, _now_ms: u64) {}
+
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        fn dispatch_runtime_unit(&mut self, _now_ms: u64, _unit: RuntimeIpcUnit) {}
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     struct CountingIpc {
         dispatches: std::rc::Rc<core::cell::Cell<usize>>,
+        runtime_units: std::rc::Rc<std::cell::RefCell<Vec<RuntimeIpcUnit>>>,
+        pending_control_message: Option<BootstrapMessage>,
+        staged_message: Option<BootstrapMessage>,
+        bootstrap_take_calls: usize,
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     impl CountingIpc {
-        fn new(dispatches: std::rc::Rc<core::cell::Cell<usize>>) -> Self {
-            Self { dispatches }
+        fn new(
+            dispatches: std::rc::Rc<core::cell::Cell<usize>>,
+            runtime_units: std::rc::Rc<std::cell::RefCell<Vec<RuntimeIpcUnit>>>,
+        ) -> Self {
+            Self {
+                dispatches,
+                runtime_units,
+                pending_control_message: None,
+                staged_message: None,
+                bootstrap_take_calls: 0,
+            }
+        }
+
+        fn with_control_message(mut self, message: BootstrapMessage) -> Self {
+            self.pending_control_message = Some(message);
+            self
         }
     }
 
@@ -28555,6 +30181,18 @@ mod tests {
     impl IpcDispatcher for CountingIpc {
         fn dispatch(&mut self, _now_ms: u64) {
             self.dispatches.set(self.dispatches.get().saturating_add(1));
+        }
+
+        fn dispatch_runtime_unit(&mut self, _now_ms: u64, unit: RuntimeIpcUnit) {
+            self.runtime_units.borrow_mut().push(unit);
+            if unit == RuntimeIpcUnit::ControlEndpoint && self.staged_message.is_none() {
+                self.staged_message = self.pending_control_message.take();
+            }
+        }
+
+        fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
+            self.bootstrap_take_calls = self.bootstrap_take_calls.saturating_add(1);
+            self.staged_message.take()
         }
     }
 
@@ -30096,6 +31734,13 @@ mod tests {
             self.dispatched = true;
         }
 
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        fn dispatch_runtime_unit(&mut self, _now_ms: u64, unit: RuntimeIpcUnit) {
+            if unit == RuntimeIpcUnit::ControlEndpoint {
+                self.dispatched = true;
+            }
+        }
+
         fn take_bootstrap_message(&mut self) -> Option<BootstrapMessage> {
             if self.dispatched {
                 self.message.take()
@@ -30127,6 +31772,13 @@ mod tests {
     impl IpcDispatcher for ProbeIpc {
         fn dispatch(&mut self, _now_ms: u64) {
             if self.staged.is_none() {
+                self.staged = self.pending.take();
+            }
+        }
+
+        #[cfg(all(feature = "kernel", feature = "net-console"))]
+        fn dispatch_runtime_unit(&mut self, _now_ms: u64, unit: RuntimeIpcUnit) {
+            if unit == RuntimeIpcUnit::ControlEndpoint && self.staged.is_none() {
                 self.staged = self.pending.take();
             }
         }
@@ -30248,6 +31900,8 @@ mod tests {
         console_output_drained: bool,
         console_output_drained_after_polls: Option<usize>,
         events: heapless::Vec<NetConsoleEvent, 8>,
+        containment_diagnostic: Option<HeaplessString<DEFAULT_LINE_CAPACITY>>,
+        containment_diagnostic_commits: usize,
         driver_contract: crate::hal::driver_task::DriverTaskContract,
         poll_observer: Option<std::rc::Rc<core::cell::Cell<usize>>>,
     }
@@ -30285,6 +31939,8 @@ mod tests {
                 console_output_drained: true,
                 console_output_drained_after_polls: None,
                 events: heapless::Vec::new(),
+                containment_diagnostic: None,
+                containment_diagnostic_commits: 0,
                 driver_contract: crate::hal::driver_task::VIRTIO_NET_DRIVER_TASK_CONTRACT,
                 poll_observer: None,
             }
@@ -30429,6 +32085,18 @@ mod tests {
             }
         }
 
+        fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+            if self.events.is_empty() {
+                None
+            } else {
+                Some(self.events.remove(0))
+            }
+        }
+
+        fn console_event_pending(&self) -> bool {
+            !self.events.is_empty()
+        }
+
         fn active_console_conn_id(&self) -> Option<u64> {
             self.active_conn_id
         }
@@ -30467,11 +32135,220 @@ mod tests {
                 .set(self.status_reports.get().saturating_add(1));
             self.status.clone()
         }
+
+        #[cfg(feature = "kernel")]
+        fn console_network_containment_diagnostic_pending(&self) -> bool {
+            self.containment_diagnostic.is_some()
+        }
+
+        #[cfg(feature = "kernel")]
+        fn pending_console_network_containment_diagnostic(
+            &self,
+        ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+            self.containment_diagnostic.clone()
+        }
+
+        #[cfg(feature = "kernel")]
+        fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
+            if self
+                .containment_diagnostic
+                .as_ref()
+                .is_none_or(|line| line.as_str() != expected_line)
+            {
+                return false;
+            }
+            self.containment_diagnostic = None;
+            self.containment_diagnostic_commits =
+                self.containment_diagnostic_commits.saturating_add(1);
+            true
+        }
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
     #[test]
-    fn ordinary_virtio_rotates_operator_runtime_network_with_one_control_tail() {
+    fn ordinary_virtio_operator_empty_classifier_rejects_each_serviceable_work_class() {
+        let empty = OrdinaryVirtioOperatorWork::default();
+        assert!(empty.is_empty());
+
+        let nonempty = [
+            (
+                "serial-input",
+                OrdinaryVirtioOperatorWork {
+                    serial_input: true,
+                    ..empty
+                },
+            ),
+            (
+                "serial-output",
+                OrdinaryVirtioOperatorWork {
+                    serial_output: true,
+                    ..empty
+                },
+            ),
+            (
+                "local-seat-input",
+                OrdinaryVirtioOperatorWork {
+                    local_seat_input: true,
+                    ..empty
+                },
+            ),
+            (
+                "buffered-auth-line",
+                OrdinaryVirtioOperatorWork {
+                    dispatchable_network_line: true,
+                    ..empty
+                },
+            ),
+            (
+                "pending-console-output",
+                OrdinaryVirtioOperatorWork {
+                    pending_console_output: true,
+                    ..empty
+                },
+            ),
+            (
+                "physical-response",
+                OrdinaryVirtioOperatorWork {
+                    physical_response: true,
+                    ..empty
+                },
+            ),
+            (
+                "stream-or-tail",
+                OrdinaryVirtioOperatorWork {
+                    stream_or_tail: true,
+                    ..empty
+                },
+            ),
+            (
+                "reboot",
+                OrdinaryVirtioOperatorWork {
+                    reboot: true,
+                    ..empty
+                },
+            ),
+            (
+                "serviceable-display",
+                OrdinaryVirtioOperatorWork {
+                    serviceable_display: true,
+                    ..empty
+                },
+            ),
+            (
+                "serviceable-frontier",
+                OrdinaryVirtioOperatorWork {
+                    serviceable_frontier: true,
+                    ..empty
+                },
+            ),
+            (
+                "serviceable-attach",
+                OrdinaryVirtioOperatorWork {
+                    serviceable_attach: true,
+                    ..empty
+                },
+            ),
+        ];
+
+        for (label, work) in nonempty {
+            assert!(!work.is_empty(), "{label} must bypass the empty cut");
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn quarantined_empty_virtio_operator_returns_before_runtime_tail() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.network_service_quarantined = true;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::ControlEndpoint;
+
+        assert!(!pump.serial.interactive_input_active());
+        assert!(!pump.serial.tx_pending());
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle
+        );
+        assert!(!pump
+            .net
+            .as_ref()
+            .is_some_and(|net| net.buffered_console_lines_pending()));
+
+        pump.poll();
+
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Runtime,
+            "Operator commits its successor before taking the empty cut"
+        );
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+            "the empty Operator cannot consume or advance the retained Runtime cursor"
+        );
+        assert_eq!(
+            pump.timer.index, 0,
+            "Operator must not borrow Runtime timer work"
+        );
+        assert_eq!(pump.metrics.timer_ticks, 0);
+        assert_eq!(
+            polls.get(),
+            0,
+            "Operator must not touch the retained Network cursor"
+        );
+        assert_eq!(dispatches.get(), 0);
+        assert!(runtime_units.borrow().is_empty());
+        assert!(!pump.ordinary_virtio_console_output_turn.active());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console", feature = "usb"))]
+    #[test]
+    fn unattached_qemu_local_seat_flags_do_not_mask_the_empty_operator_cut() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.post_prompt_local_seat_attach_pending = true;
+        let mut frontier = HeaplessString::new();
+        frontier
+            .push_str("unattached-qemu-frontier")
+            .expect("bounded test frontier");
+        pump.pending_usb_debug_hdmi_frontier = Some(frontier);
+
+        pump.poll();
+
+        assert!(pump.local_seat.is_none());
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.timer.index, 0,
+            "cfg-present but unattached local-seat flags are not serviceable Operator work"
+        );
+        assert!(pump.post_prompt_local_seat_attach_pending);
+        assert!(pump.pending_usb_debug_hdmi_frontier.is_some());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_rotates_outer_phases_with_one_refill_sized_unit() {
         assert_eq!(
             OrdinaryServicePhase::Operator.next(),
             OrdinaryServicePhase::Runtime
@@ -30488,9 +32365,10 @@ mod tests {
         let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
             32768,
         >::new());
-        let timer = TestTimer::repeated(4, 1);
+        let timer = TestTimer::repeated(5, 1);
         let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
-        let ipc = CountingIpc::new(dispatches.clone());
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30518,7 +32396,12 @@ mod tests {
                 "Runtime must commit Network before dispatching IPC"
             );
             assert_eq!(polls.get(), 0, "Runtime must not service the NIC");
-            assert_eq!(dispatches.get(), 1, "Runtime owns one IPC dispatch");
+            assert_eq!(
+                dispatches.get(),
+                0,
+                "split Runtime must not use full dispatch"
+            );
+            assert_eq!(runtime_units.borrow().as_slice(), &[RuntimeIpcUnit::Worker]);
             assert_eq!(
                 pump.metrics.console_lines, 0,
                 "Runtime must not consume buffered serial input"
@@ -30530,10 +32413,18 @@ mod tests {
                 OrdinaryServicePhase::Operator,
                 "Network must commit the immediately following Operator"
             );
-            assert_eq!(polls.get(), 1, "Network owns one NIC service turn");
+            assert_eq!(
+                polls.get(),
+                0,
+                "the first Network visit owns only the timer unit"
+            );
+            assert_eq!(
+                pump.ordinary_virtio_network_unit,
+                OrdinaryVirtioNetworkUnit::Nic,
+            );
             assert_eq!(
                 dispatches.get(),
-                1,
+                0,
                 "Network must not compose another IPC dispatch"
             );
             assert_eq!(
@@ -30545,15 +32436,1008 @@ mod tests {
             assert_eq!(
                 pump.ordinary_service_phase,
                 OrdinaryServicePhase::Runtime,
-                "Operator must commit Runtime after serial command dispatch"
+                "SerialIo must commit Runtime after retaining serial dispatch"
             );
-            assert_eq!(polls.get(), 1, "Operator must not repoll the NIC");
-            assert_eq!(dispatches.get(), 1, "Operator must not dispatch IPC");
+            assert_eq!(polls.get(), 0, "Operator must not poll the NIC");
+            assert_eq!(dispatches.get(), 0, "Operator must not dispatch IPC");
             assert_eq!(
-                pump.metrics.console_lines, 1,
-                "only Operator may consume the buffered serial command"
+                pump.metrics.console_lines, 0,
+                "SerialIo must not consume the buffered serial command"
+            );
+            assert_eq!(
+                pump.ordinary_operator_unit,
+                OrdinaryOperatorUnit::SerialDispatch,
+            );
+
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            assert_eq!(dispatches.get(), 0);
+            assert_eq!(
+                runtime_units.borrow().as_slice(),
+                &[RuntimeIpcUnit::Worker, RuntimeIpcUnit::ControlEndpoint],
+                "Worker and NBRecv must occupy distinct Runtime visits"
+            );
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+            assert_eq!(polls.get(), 1, "the next Network visit owns one NIC unit");
+            assert_eq!(
+                pump.ordinary_virtio_network_unit,
+                OrdinaryVirtioNetworkUnit::Timer,
+            );
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+            assert_eq!(pump.metrics.console_lines, 1);
+            assert_eq!(
+                pump.ordinary_operator_unit,
+                OrdinaryOperatorUnit::RetainedOutput,
             );
         }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_tail_drain_reconciliation_owns_one_predispatch_turn() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::ControlEndpoint;
+        pump.ordinary_virtio_network_unit = OrdinaryVirtioNetworkUnit::Timer;
+        pump.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+
+        pump.poll();
+
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle
+        );
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Network,
+            "tail-drain reconciliation must not commit an ordinary successor",
+        );
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+        );
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Timer,
+        );
+        assert_eq!(pump.timer.index, 0);
+        assert_eq!(polls.get(), 0);
+        assert_eq!(dispatches.get(), 0);
+        assert!(runtime_units.borrow().is_empty());
+
+        pump.poll();
+
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+            "the preserved Network phase must run only on the later turn",
+        );
+        assert_eq!(pump.timer.index, 1);
+        assert_eq!(polls.get(), 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_tail_drain_backpressure_admits_only_operator_until_clear() {
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
+            LoopbackSerial::<32768>::new(),
+        );
+        let tail = b"pending-response-tail";
+        assert_eq!(serial.enqueue_tx_best_effort(tail), tail.len());
+        let timer = TestTimer::repeated(4, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::ControlEndpoint;
+        pump.ordinary_virtio_network_unit = OrdinaryVirtioNetworkUnit::Timer;
+        pump.physical_response_barrier = PhysicalResponseBarrier::TailInFlight;
+
+        pump.poll();
+
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight,
+        );
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::SerialDispatch,
+            "the first backpressured Operator unit must retain serial dispatch",
+        );
+        assert!(pump.serial_mut().tx_pending());
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+
+        pump.poll();
+
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight,
+        );
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::RetainedOutput,
+        );
+        assert!(!pump.serial_mut().tx_pending());
+        assert_eq!(pump.serial_mut().driver_mut().drain_tx().as_slice(), tail);
+
+        pump.poll();
+
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::Idle,
+        );
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Network,
+            "drain progress and its proof must preserve the ordinary phase",
+        );
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+        );
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Timer,
+        );
+        assert_eq!(pump.timer.index, 0);
+        assert_eq!(polls.get(), 0);
+        assert_eq!(dispatches.get(), 0);
+        assert!(runtime_units.borrow().is_empty());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_prompt_tail_queue_owns_one_predispatch_turn() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::ControlEndpoint;
+        pump.ordinary_virtio_network_unit = OrdinaryVirtioNetworkUnit::Nic;
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        pump.stream_prompt_pending = true;
+
+        pump.poll();
+
+        assert!(!pump.stream_prompt_pending);
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued,
+        );
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::ResponseTailPrompt,
+        );
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Operator,
+            "prompt-tail publication must not commit an ordinary successor",
+        );
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+        );
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+        );
+        assert_eq!(pump.timer.index, 0);
+        assert_eq!(polls.get(), 0);
+        assert_eq!(dispatches.get(), 0);
+        assert!(runtime_units.borrow().is_empty());
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+
+        pump.poll();
+
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            CONSOLE_PROMPT.as_bytes(),
+            "the preserved Operator phase must flush the retained prompt later",
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight,
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_prompt_tail_backpressure_frees_one_record_before_retry() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(3, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::ControlEndpoint;
+        pump.ordinary_virtio_network_unit = OrdinaryVirtioNetworkUnit::Nic;
+        for index in 0..CONSOLE_OUTPUT_BACKLOG_LINES {
+            let line = format!("retained-{index}");
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::TerminalLine,
+                line.as_str(),
+            ));
+        }
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        pump.stream_prompt_pending = true;
+
+        pump.poll();
+
+        assert!(pump.stream_prompt_pending);
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::AwaitingTail,
+        );
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES - 1,
+        );
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::NetEvent,
+            "failed prompt admission must run exactly one RetainedOutput unit",
+        );
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            b"retained-0\r\n",
+        );
+
+        pump.poll();
+
+        assert!(!pump.stream_prompt_pending);
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued,
+        );
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES,
+        );
+        assert_eq!(
+            pump.pending_console_output.last().map(|output| output.kind),
+            Some(PendingConsoleOutputKind::ResponseTailPrompt),
+        );
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Network,
+            "the prompt retry must not commit the preserved phase",
+        );
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+        );
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+        );
+        assert_eq!(pump.timer.index, 0);
+        assert_eq!(polls.get(), 0);
+        assert_eq!(dispatches.get(), 0);
+        assert!(runtime_units.borrow().is_empty());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_ready_reboot_fires_without_advancing_phase() {
+        struct RebootReset;
+
+        impl Drop for RebootReset {
+            fn drop(&mut self) {
+                crate::reboot::reset_test_backend();
+            }
+        }
+
+        let _guard = crate::reboot::test_lock();
+        crate::reboot::reset_test_backend();
+        crate::reboot::set_test_backend_available(true);
+        let _reset = RebootReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+        pump.reboot_pending = true;
+        pump.reboot_ack_source = Some(ConsoleInputSource::Serial);
+        pump.reboot_ack_drain_observed = true;
+
+        pump.poll();
+
+        assert_eq!(crate::reboot::test_reboot_requests(), 1);
+        assert!(!pump.reboot_pending);
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Network,
+            "ready reboot service must return before committing a split-phase successor"
+        );
+        assert_eq!(pump.timer.index, 0);
+        assert_eq!(polls.get(), 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_runtime_compact_prelude_ticks_and_reconciles_without_network_poll() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::single(TickEvent {
+            tick: 8_000,
+            now_ms: 37,
+        });
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_service_phase = OrdinaryServicePhase::Runtime;
+        pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::Worker;
+        pump.cyw43_network_ready_hdmi_progress.begin(17, 0);
+        pump.network_service_quarantined = true;
+
+        pump.poll();
+
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+            "the Runtime successor must be committed before its compact prelude",
+        );
+        assert_eq!(pump.timer.index, 1);
+        assert_eq!(pump.now_ms, 37);
+        assert_eq!(pump.metrics.timer_ticks, 1);
+        assert_eq!(polls.get(), 0, "Runtime must not enter NIC service");
+        assert_eq!(dispatches.get(), 0, "Runtime must not use composite IPC");
+        assert_eq!(runtime_units.borrow().as_slice(), &[RuntimeIpcUnit::Worker]);
+        assert!(!pump.cyw43_network_ready_hdmi_progress.active);
+        assert_eq!(pump.cyw43_network_ready_hdmi_progress.generation, None);
+        assert_eq!(pump.cyw43_network_ready_hdmi_progress.last_emitted_ms, 37);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_network_rotates_timer_nic_diag_timer_visits() {
+        assert!(NET_DIAG_FEATURED);
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(5, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+
+        pump.poll_split_ordinary_virtio_network_turn();
+        assert_eq!(polls.get(), 0, "Timer must not enter NIC service");
+        assert_eq!(pump.timer.index, 1);
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+            "the Timer successor must commit before timer work",
+        );
+        assert!(pump.pending_ordinary_virtio_net_diag.is_none());
+
+        pump.poll_split_ordinary_virtio_network_turn();
+        assert_eq!(polls.get(), 1);
+        assert_eq!(pump.timer.index, 1, "NIC must not repeat timer work");
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Timer,
+            "the NIC successor must commit before NIC work",
+        );
+        let observation = pump
+            .pending_ordinary_virtio_net_diag
+            .expect("the NIC visit must retain one diagnostic observation");
+        assert_eq!(observation.now_ms, pump.now_ms);
+        let captured_snapshot = NET_DIAG.snapshot();
+        assert!(pump.last_net_diag_snapshot.is_none());
+
+        pump.poll_split_ordinary_virtio_network_turn();
+        assert_eq!(
+            polls.get(),
+            1,
+            "the retained NETDIAG visit must not attempt another NIC unit",
+        );
+        assert_eq!(
+            pump.timer.index, 1,
+            "the retained NETDIAG visit must not compose the timer prelude",
+        );
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Timer,
+            "the retained NETDIAG visit must not advance the ordinary cursor",
+        );
+        assert!(pump.pending_ordinary_virtio_net_diag.is_none());
+        assert_eq!(
+            pump.last_net_diag_snapshot,
+            Some(captured_snapshot),
+            "compact Operator/Runtime work cannot change the retained NIC counter epoch",
+        );
+
+        pump.poll_split_ordinary_virtio_network_turn();
+        assert_eq!(polls.get(), 1);
+        assert_eq!(pump.timer.index, 2);
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+            "the exact retained sequence must be Timer -> NIC -> NETDIAG -> Timer",
+        );
+        assert!(pump.pending_ordinary_virtio_net_diag.is_none());
+
+        pump.pending_ordinary_virtio_net_diag = Some(PendingOrdinaryVirtioNetDiag::capture(
+            NetTelemetry::default(),
+            pump.now_ms,
+        ));
+        pump.poll_split_ordinary_virtio_network_turn();
+        assert_eq!(polls.get(), 1);
+        assert_eq!(pump.timer.index, 2);
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+            "NETDIAG must also preempt a retained NIC unit without advancing it",
+        );
+
+        pump.pending_ordinary_virtio_net_diag = Some(PendingOrdinaryVirtioNetDiag::capture(
+            NetTelemetry::default(),
+            pump.now_ms,
+        ));
+        pump.quarantine_network_service_after_cyw43_terminal_failure();
+        assert!(pump.pending_ordinary_virtio_net_diag.is_none());
+        assert_eq!(
+            pump.ordinary_virtio_network_unit,
+            OrdinaryVirtioNetworkUnit::Nic,
+            "quarantine clears retained diagnostics without falsifying the ordinary cursor",
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_runtime_cursor_rotates_material_and_noop_units() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(15, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let mut payload: HeaplessVec<sel4_sys::seL4_Word, { MAX_BOOTSTRAP_WORDS }> =
+            HeaplessVec::new();
+        payload.push(0x5151).expect("bounded bootstrap payload");
+        let message = BootstrapMessage {
+            badge: 0xA5A5,
+            info: sel4_sys::seL4_MessageInfo::new(0x51, 0, 0, 1),
+            payload,
+        };
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone())
+            .with_control_message(message);
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+
+        for selected in [
+            OrdinaryRuntimeUnit::Worker,
+            OrdinaryRuntimeUnit::ControlEndpoint,
+            OrdinaryRuntimeUnit::BootstrapDrain,
+            OrdinaryRuntimeUnit::StreamFlush,
+            OrdinaryRuntimeUnit::RebootTail,
+        ] {
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+            assert_eq!(pump.ordinary_runtime_unit, selected);
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        }
+
+        assert_eq!(pump.ordinary_runtime_unit, OrdinaryRuntimeUnit::Worker);
+        assert_eq!(
+            dispatches.get(),
+            0,
+            "split turns must never use composite dispatch"
+        );
+        assert_eq!(
+            runtime_units.borrow().as_slice(),
+            &[RuntimeIpcUnit::Worker, RuntimeIpcUnit::ControlEndpoint],
+            "only the two IPC-owned units may enter the dispatcher"
+        );
+        assert_eq!(
+            pump.metrics.bootstrap_messages, 1,
+            "ControlEndpoint staging must remain retained until BootstrapDrain"
+        );
+        assert_eq!(
+            pump.ipc.bootstrap_take_calls, 1,
+            "BootstrapDrain may inspect only one staged Option per Runtime visit"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_operator_serial_backlog_uses_one_shared_bounded_cursor() {
+        const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
+
+        assert_eq!(
+            crate::generated::ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN as usize,
+            EXPECTED_ROOT_CONTROL_SERIAL_BYTES,
+            "the behavioral gate must exercise the compiler-owned root-control limit"
+        );
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
+            LoopbackSerial::<32768>::new(),
+        );
+        let backlog = [b'x'; EXPECTED_ROOT_CONTROL_SERIAL_BYTES + 32];
+        serial.enqueue_tx(&backlog);
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::SerialDispatch
+        );
+        assert!(
+            pump.serial_mut().driver_mut().drain_tx().is_empty(),
+            "SerialIo may probe RX but must retain entry TX for SerialDispatch"
+        );
+        assert!(pump.serial_mut().tx_pending());
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::RetainedOutput
+        );
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().len(),
+            EXPECTED_ROOT_CONTROL_SERIAL_BYTES,
+            "the later SerialDispatch unit owns at most the shared 64-byte cursor"
+        );
+        assert!(pump.serial_mut().tx_pending());
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::SerialDispatch
+        );
+        assert!(
+            pump.serial_mut().driver_mut().drain_tx().is_empty(),
+            "a retained TX tail must cross the RX-only SerialIo unit unchanged"
+        );
+        assert!(pump.serial_mut().tx_pending());
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            &[b'x'; 32]
+        );
+        assert!(!pump.serial_mut().tx_pending());
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_operator_retains_rx_for_later_serial_dispatch() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.serial_mut().driver_mut().push_rx(b"ping\n");
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::SerialDispatch
+        );
+        assert_eq!(pump.metrics.console_lines, 0);
+        assert!(pump.serial.interactive_input_active());
+        assert!(
+            pump.serial_mut().driver_mut().drain_tx().is_empty(),
+            "SerialIo must not echo, dispatch, or flush newly admitted input"
+        );
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::RetainedOutput
+        );
+        assert_eq!(pump.metrics.console_lines, 1);
+        assert!(
+            pump.serial_mut().driver_mut().drain_tx().len()
+                <= crate::generated::ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN as usize,
+            "SerialDispatch must retain the compiler-owned shared byte cap"
+        );
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_idle_serial_probe_does_not_retain_empty_dispatch() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+
+        for _ in 0..2 {
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+            assert_eq!(pump.ordinary_operator_unit, OrdinaryOperatorUnit::SerialIo);
+            assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        }
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_output_record_admission_preserves_fifo_and_response_barrier() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let polls = std::rc::Rc::new(core::cell::Cell::new(0));
+        net.poll_observer = Some(polls.clone());
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::Line,
+            "[mark] root-console.start.ok",
+        ));
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            CONSOLE_PROMPT,
+        ));
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued
+        );
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        let first = pump.serial_mut().driver_mut().drain_tx();
+        assert_eq!(first.as_slice(), b"[mark] root-console.start.ok\r\n");
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::ResponseTailPrompt
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued,
+            "the prompt remains retained until a later Operator"
+        );
+        assert_eq!(pump.metrics.physical_console_output_flushed, 1);
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+        assert_eq!(
+            pump.timer.index, 0,
+            "retained output must not borrow Runtime timer work"
+        );
+        assert_eq!(
+            dispatches.get(),
+            0,
+            "retained output must not compose IPC dispatch"
+        );
+        assert!(runtime_units.borrow().is_empty());
+        assert_eq!(polls.get(), 0, "retained output must not service the NIC");
+        assert_eq!(
+            pump.ordinary_runtime_unit,
+            OrdinaryRuntimeUnit::Worker,
+            "retained output must not advance the Runtime cursor",
+        );
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        let second = pump.serial_mut().driver_mut().drain_tx();
+        assert_eq!(second.as_slice(), CONSOLE_PROMPT.as_bytes());
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight
+        );
+        assert_eq!(pump.metrics.physical_console_output_flushed, 2);
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+
+        let mut transcript = first.to_vec();
+        transcript.extend_from_slice(second.as_slice());
+        let mut expected = b"[mark] root-console.start.ok\r\n".to_vec();
+        expected.extend_from_slice(CONSOLE_PROMPT.as_bytes());
+        assert_eq!(transcript, expected, "retained records remain FIFO ordered");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_output_record_admission_retains_long_serial_tail() {
+        const EXPECTED_ROOT_CONTROL_SERIAL_BYTES: usize = 64;
+
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(4, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        let long_line = "L".repeat(96);
+        assert!(
+            pump.queue_physical_console_output(PendingConsoleOutputKind::Line, long_line.as_str(),)
+        );
+        assert!(pump.queue_physical_console_output(
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            CONSOLE_PROMPT,
+        ));
+
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            &[b'L'; EXPECTED_ROOT_CONTROL_SERIAL_BYTES]
+        );
+        assert!(pump.serial_mut().tx_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(pump.ordinary_operator_unit, OrdinaryOperatorUnit::NetEvent);
+
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Runtime);
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        assert!(pump.serial_mut().tx_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.ordinary_operator_unit,
+            OrdinaryOperatorUnit::SerialDispatch,
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued
+        );
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        let later = pump.serial_mut().driver_mut().drain_tx();
+        let mut expected = vec![b'L'; 32];
+        expected.extend_from_slice(b"\r\n");
+        assert_eq!(later.as_slice(), expected.as_slice());
+        assert!(!pump.serial_mut().tx_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::ResponseTailPrompt,
+            "serial progress owns this Operator; the prompt tail waits for the next Operator"
+        );
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailQueued
+        );
+
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert!(pump.serial_mut().driver_mut().drain_tx().is_empty());
+        pump.poll();
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            CONSOLE_PROMPT.as_bytes()
+        );
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(
+            pump.physical_response_barrier,
+            PhysicalResponseBarrier::TailInFlight
+        );
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_virtio_zero_serial_limit_preserves_operator_serial_service() {
+        let mut serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(
+            LoopbackSerial::<32768>::new(),
+        );
+        let backlog = [b'z'; 96];
+        serial.enqueue_tx(&backlog);
+        let timer = TestTimer::repeated(2, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        assert!(pump.queue_physical_console_output(PendingConsoleOutputKind::Line, "zero-one"));
+        assert!(pump.queue_physical_console_output(PendingConsoleOutputKind::Line, "zero-two"));
+
+        pump.poll_split_ordinary_virtio_operator_turn(0);
+
+        let emitted = pump.serial_mut().driver_mut().drain_tx();
+        let mut expected = backlog.to_vec();
+        expected.extend_from_slice(b"zero-one\r\nzero-two\r\n");
+        assert_eq!(
+            emitted.as_slice(),
+            expected.as_slice(),
+            "zero leaves the admitted Operator on its existing serial and two-record contracts"
+        );
+        assert!(!pump.serial_mut().tx_pending());
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(pump.metrics.physical_console_output_flushed, 2);
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+        assert_eq!(
+            pump.ordinary_service_phase,
+            OrdinaryServicePhase::Operator,
+            "the helper must not create an additional phase transition"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ordinary_non_virtio_operator_preserves_two_output_record_contract() {
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(2, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        net.driver_contract = crate::hal::driver_task::GENET_DRIVER_TASK_CONTRACT;
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.banner_emitted = true;
+        assert!(pump.queue_physical_console_output(PendingConsoleOutputKind::Line, "genet-one"));
+        assert!(pump.queue_physical_console_output(PendingConsoleOutputKind::Line, "genet-two"));
+
+        pump.poll();
+
+        assert_eq!(
+            pump.serial_mut().driver_mut().drain_tx().as_slice(),
+            b"genet-one\r\ngenet-two\r\n"
+        );
+        assert!(pump.pending_console_output.is_empty());
+        assert_eq!(pump.metrics.physical_console_output_flushed, 2);
+        assert_eq!(pump.serial_mut().telemetry().driver_task_budget_overruns, 0);
+        assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Operator);
+        assert_eq!(
+            dispatches.get(),
+            1,
+            "GENET keeps its composite Runtime tail"
+        );
+        assert!(
+            runtime_units.borrow().is_empty(),
+            "GENET must not enter the QEMU-only Runtime cursor"
+        );
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -30564,7 +33448,8 @@ mod tests {
         >::new());
         let timer = TestTimer::repeated(3, 1);
         let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
-        let ipc = CountingIpc::new(dispatches.clone());
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30581,6 +33466,7 @@ mod tests {
             let mut pump =
                 EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
             pump.ordinary_service_phase = OrdinaryServicePhase::Network;
+            pump.ordinary_virtio_network_unit = OrdinaryVirtioNetworkUnit::Nic;
 
             pump.poll();
             assert_eq!(
@@ -30589,6 +33475,10 @@ mod tests {
                 "Network must commit Operator before servicing the NIC"
             );
             assert_eq!(polls.get(), 1);
+            assert_eq!(
+                pump.ordinary_virtio_network_unit,
+                OrdinaryVirtioNetworkUnit::Timer,
+            );
             assert_eq!(dispatches.get(), 0, "Network must not dispatch IPC");
             assert_eq!(pump.metrics.console_lines, 0);
             assert!(pump
@@ -30617,7 +33507,12 @@ mod tests {
                 "Runtime must return to Network after one control tail"
             );
             assert_eq!(polls.get(), 1, "Runtime must not repoll the NIC");
-            assert_eq!(dispatches.get(), 1, "Runtime owns exactly one IPC dispatch");
+            assert_eq!(
+                dispatches.get(),
+                0,
+                "Runtime must not use composite dispatch"
+            );
+            assert_eq!(runtime_units.borrow().as_slice(), &[RuntimeIpcUnit::Worker]);
         }
     }
 
@@ -30629,7 +33524,8 @@ mod tests {
         >::new());
         let timer = TestTimer::repeated(2, 1);
         let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
-        let ipc = CountingIpc::new(dispatches.clone());
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30656,6 +33552,7 @@ mod tests {
                 1,
                 "the ordinary GENET turn must retain its unsplit IPC dispatch"
             );
+            assert!(runtime_units.borrow().is_empty());
             assert_eq!(
                 pump.serial_input_idle_trace_count, 1,
                 "the Pi/GENET idle trace contract must remain unchanged"
@@ -30703,7 +33600,8 @@ mod tests {
             now_ms: SERIAL_INPUT_IDLE_TRACE_INTERVAL_MS,
         });
         let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
-        let ipc = CountingIpc::new(dispatches.clone());
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -30739,9 +33637,9 @@ mod tests {
                 "quarantined Runtime must retain the ordinary phase rotation"
             );
             assert_eq!(
-                dispatches.get(),
-                1,
-                "quarantined Runtime remains the sole IPC owner"
+                runtime_units.borrow().as_slice(),
+                &[RuntimeIpcUnit::Worker],
+                "quarantined Runtime preserves the persistent Worker unit"
             );
 
             pump.poll();
@@ -30756,7 +33654,7 @@ mod tests {
                 "quarantined Network must not invoke the contained NIC"
             );
             assert_eq!(
-                dispatches.get(),
+                runtime_units.borrow().len(),
                 1,
                 "quarantined Network must not compose another IPC dispatch"
             );
@@ -30770,7 +33668,7 @@ mod tests {
             assert_eq!(polls.get(), 0, "quarantined Operator must not poll the NIC");
             assert_eq!(
                 dispatches.get(),
-                1,
+                0,
                 "quarantined Operator must not compose an IPC dispatch"
             );
         }
@@ -34503,7 +37401,9 @@ mod tests {
         let driver = LoopbackSerial::<4096>::new();
         let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
         let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
-        let ipc = NullIpc;
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
         let store: TicketTable<4> = TicketTable::new();
         let mut audit = AuditLog::new();
         let mut net = FakeNet::new();
@@ -34530,9 +37430,32 @@ mod tests {
             pending.bandwidth_bytes = pending.lines.iter().map(|line| line.len() as u64).sum();
             pump.pending_stream = Some(pending);
 
-            pump.flush_pending_stream();
+            pump.ordinary_service_phase = OrdinaryServicePhase::Runtime;
+            pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::StreamFlush;
+            pump.poll();
+            assert_eq!(pump.ordinary_service_phase, OrdinaryServicePhase::Network);
+            assert_eq!(pump.ordinary_runtime_unit, OrdinaryRuntimeUnit::RebootTail);
             assert!(pump.stream_end_pending);
-            assert!(pump.pending_stream.is_some());
+            assert_eq!(
+                pump.pending_stream
+                    .as_ref()
+                    .expect("bounded Runtime stream retains its tail")
+                    .next_line,
+                1,
+                "one isolated Runtime StreamFlush may emit only one retained line"
+            );
+            assert_eq!(dispatches.get(), 0);
+            assert!(runtime_units.borrow().is_empty());
+
+            pump.flush_pending_stream();
+            assert_eq!(
+                pump.pending_stream
+                    .as_ref()
+                    .expect("legacy 48-line stream turn retains the final tail")
+                    .next_line,
+                1 + NET_PENDING_STREAM_FLUSH_LINES_PER_TURN,
+                "the unsplit stream flush keeps its existing 48-line contract"
+            );
             pump.last_input_source = ConsoleInputSource::Serial;
             pump.flush_pending_stream();
             assert!(!pump.stream_end_pending);
@@ -34545,6 +37468,71 @@ mod tests {
             assert_eq!(net.sent[index].as_str(), format!("line-{index:02}"));
         }
         assert_eq!(net.sent[total_lines].as_str(), "END");
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn isolated_runtime_stream_flush_separates_last_line_finalization_and_end() {
+        let driver = LoopbackSerial::<4096>::new();
+        let serial = SerialPort::<_, 4096, 4096, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::repeated(3, 1);
+        let dispatches = std::rc::Rc::new(core::cell::Cell::new(0));
+        let runtime_units = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let ipc = CountingIpc::new(dispatches.clone(), runtime_units.clone());
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.session = Some(SessionRole::Worker);
+            pump.session_origin = Some(ConsoleInputSource::Net);
+            pump.session_net_conn_id = Some(2);
+            pump.net_conn_id = Some(2);
+            pump.last_input_source = ConsoleInputSource::Net;
+            pump.stream_end_pending = true;
+            pump.stream_output_source = Some(ConsoleInputSource::Net);
+            pump.stream_net_conn_id = Some(2);
+
+            let mut pending = PendingStream::new();
+            let mut line: HeaplessString<DEFAULT_LINE_CAPACITY> = HeaplessString::new();
+            line.push_str("only-line").expect("bounded stream line");
+            pending.lines.push(line).expect("bounded pending stream");
+            pending.bandwidth_bytes = 9;
+            pump.pending_stream = Some(pending);
+
+            pump.ordinary_service_phase = OrdinaryServicePhase::Runtime;
+            pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::StreamFlush;
+            pump.poll();
+            assert!(pump.stream_end_pending);
+            assert_eq!(
+                pump.pending_stream
+                    .as_ref()
+                    .expect("last line remains retained for later finalization")
+                    .next_line,
+                1
+            );
+
+            pump.ordinary_service_phase = OrdinaryServicePhase::Runtime;
+            pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::StreamFlush;
+            pump.poll();
+            assert!(pump.pending_stream.is_none());
+            assert!(
+                pump.stream_end_pending,
+                "finalization must not compose the END record"
+            );
+
+            pump.ordinary_service_phase = OrdinaryServicePhase::Runtime;
+            pump.ordinary_runtime_unit = OrdinaryRuntimeUnit::StreamFlush;
+            pump.poll();
+            assert!(!pump.stream_end_pending, "the following visit emits END");
+            assert_eq!(dispatches.get(), 0);
+            assert!(runtime_units.borrow().is_empty());
+        }
+
+        assert_eq!(net.sent.len(), 2);
+        assert_eq!(net.sent[0].as_str(), "only-line");
+        assert_eq!(net.sent[1].as_str(), "END");
     }
 
     #[cfg(all(feature = "kernel", feature = "net-console"))]
@@ -41015,6 +44003,552 @@ mod tests {
             pump.physical_response_barrier,
             PhysicalResponseBarrier::TailQueued
         );
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ninedoor_containment_line_survives_response_saturation_without_eviction() {
+        let driver = LoopbackSerial::<16>::new();
+        let serial = SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit);
+        let body_capacity =
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+
+        assert!(pump.queue_containment_diagnostic("mandatory-containment-marker"));
+        for index in 1..body_capacity {
+            let line = format!("stale-background-{index}");
+            assert!(pump.queue_physical_console_output(
+                PendingConsoleOutputKind::BackgroundLine,
+                line.as_str(),
+            ));
+        }
+        pump.physical_response_barrier = PhysicalResponseBarrier::AwaitingTail;
+        for index in 0..12 {
+            let line = format!("response-body-{index}");
+            assert!(
+                pump.queue_physical_console_output(PendingConsoleOutputKind::Line, line.as_str(),)
+            );
+        }
+        pump.emit_ack_ok("NINEDOOR", Some("detail=ordered"));
+        assert!(
+            pump.queue_physical_console_output(PendingConsoleOutputKind::ResponseTailLine, "END",)
+        );
+        pump.emit_prompt();
+
+        let marker = pump
+            .pending_console_output
+            .iter()
+            .find(|output| output.kind == PendingConsoleOutputKind::ContainmentLine)
+            .expect("mandatory containment marker survives response admission");
+        assert_eq!(marker.text.as_str(), "mandatory-containment-marker");
+        assert_eq!(
+            pump.pending_console_output.len(),
+            CONSOLE_OUTPUT_BACKLOG_LINES
+        );
+        drop(pump);
+
+        let mut saturated = EventPump::new(
+            SerialPort::<_, 16, 16, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<16>::new()),
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        for index in 0..body_capacity {
+            let line = format!("non-evictable-{index}");
+            assert!(saturated
+                .queue_physical_console_output(PendingConsoleOutputKind::Line, line.as_str(),));
+        }
+        let before = saturated.pending_console_output.len();
+        assert!(!saturated.queue_containment_diagnostic("retry-later"));
+        assert_eq!(saturated.pending_console_output.len(), before);
+        assert!(!saturated.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::ContainmentLine
+                && output.text.as_str() == "retry-later"
+        }));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn console_network_diagnostic_commits_only_after_non_evicting_admission() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut marker = HeaplessString::new();
+        marker
+            .push_str("CONSOLE_NETWORK_TEARDOWN generation=7 state=terminal")
+            .unwrap();
+        net.containment_diagnostic = Some(marker);
+        {
+            let mut pump =
+                EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+            pump.poll_split_ordinary_virtio_compact_operator_turn();
+
+            assert_eq!(pump.timer.index, 0, "admission owns the Operator turn");
+            assert!(!pump.containment_diagnostic_pending());
+            assert_eq!(pump.pending_console_output.len(), 1);
+            assert_eq!(
+                pump.pending_console_output[0].kind,
+                PendingConsoleOutputKind::ContainmentLine
+            );
+            assert!(
+                !pump.serial.tx_pending(),
+                "admission cannot flush in the same turn"
+            );
+        }
+        assert_eq!(net.containment_diagnostic_commits, 1);
+        assert!(net.containment_diagnostic.is_none());
+
+        let body_capacity =
+            CONSOLE_OUTPUT_BACKLOG_LINES - CONSOLE_OUTPUT_BACKLOG_PROTOCOL_TAIL_RESERVE;
+        let mut retry = HeaplessString::new();
+        retry.push_str("[console-network] retry-later").unwrap();
+        net.containment_diagnostic = Some(retry);
+        {
+            let mut saturated = EventPump::new(
+                SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new()),
+                TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+                NullIpc,
+                TicketTable::<4>::new(),
+                &mut audit,
+            )
+            .with_network(&mut net);
+            for _ in 0..body_capacity {
+                assert!(saturated.queue_physical_console_output(
+                    PendingConsoleOutputKind::Line,
+                    "non-evictable-body",
+                ));
+            }
+            assert!(saturated.flush_pending_console_output_if_idle());
+            assert_eq!(
+                saturated.containment_diagnostic_output_phase,
+                ContainmentDiagnosticOutputPhase::DrainSpace
+            );
+            assert_eq!(
+                saturated.pending_console_output.len(),
+                body_capacity,
+                "failed admission cannot flush an older record in the same visit",
+            );
+            assert!(saturated.flush_pending_console_output_if_idle());
+            assert_eq!(
+                saturated.containment_diagnostic_output_phase,
+                ContainmentDiagnosticOutputPhase::Admit
+            );
+            assert_eq!(saturated.pending_console_output.len(), body_capacity - 1);
+            for _ in 0..8 {
+                let _ = saturated.serial.poll_io();
+                let _ = saturated.flush_pending_console_output_if_idle();
+                if !saturated.containment_diagnostic_pending() {
+                    break;
+                }
+            }
+            assert!(!saturated.containment_diagnostic_pending());
+        }
+        assert_eq!(net.containment_diagnostic_commits, 2);
+        assert!(net.containment_diagnostic.is_none());
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn generic_serial_activity_fences_deferred_containment_before_runtime() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut net = FakeNet::new();
+        let mut marker = HeaplessString::new();
+        marker.push_str("[console-network] retained").unwrap();
+        net.containment_diagnostic = Some(marker);
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit).with_network(&mut net);
+        pump.serial_mut().driver_mut().push_rx(b"h");
+
+        pump.poll_ordinary_operator_turn(false, false);
+
+        assert_eq!(pump.timer.index, 0, "serial refill cannot borrow Runtime");
+        assert!(pump.containment_diagnostic_pending());
+        assert!(!pump
+            .pending_console_output
+            .iter()
+            .any(|output| { output.kind == PendingConsoleOutputKind::ContainmentLine }));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn console_network_latch_fence_cuts_net_authority_and_session_owned_input() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        pump.session = Some(SessionRole::Queen);
+        pump.session_role = Some(Role::Queen);
+        pump.session_ticket = Some("retained-ticket".to_owned());
+        pump.session_id = Some(41);
+        pump.session_origin = Some(ConsoleInputSource::Net);
+        pump.session_net_conn_id = Some(7);
+        pump.net_conn_id = Some(7);
+        pump.last_input_source = ConsoleInputSource::Net;
+        pump.stream_end_pending = true;
+        pump.stream_prompt_pending = true;
+        pump.stream_output_source = Some(ConsoleInputSource::Net);
+        pump.stream_net_conn_id = Some(7);
+        pump.tail_active = true;
+        pump.reboot_pending = true;
+        pump.reboot_ack_source = Some(ConsoleInputSource::Net);
+        pump.reboot_ack_net_conn_id = Some(7);
+        assert!(pump.parser.push_byte(b'p').unwrap().is_none());
+        pump.serial.driver_mut().push_rx(b"serial");
+        assert!(pump.serial.poll_io());
+        assert!(pump.serial.next_line().is_none());
+        pump.local_line.push_str("local").unwrap();
+
+        pump.fence_console_network_authority_quiet();
+
+        assert!(pump.network_service_quarantined);
+        assert!(pump.console_network_quarantine_cleanup_pending);
+        assert_eq!(pump.session, None);
+        assert_eq!(pump.session_role, None);
+        assert_eq!(pump.session_id, None);
+        assert_eq!(pump.session_origin, None);
+        assert_eq!(pump.session_net_conn_id, None);
+        assert_eq!(pump.net_conn_id, None);
+        assert!(!pump.reboot_pending);
+        assert!(!pump.stream_end_pending);
+        assert!(!pump.stream_prompt_pending);
+        assert!(!pump.tail_active);
+        assert_eq!(pump.session_ticket.as_deref(), Some("retained-ticket"));
+        assert!(!pump.parser.clear_buffer());
+        assert!(!pump.serial.clear_partial_line_buffered_quiet());
+        assert!(pump.local_line.is_empty());
+        assert!(pump.console_network_quarantine_scope.parser_input);
+        assert!(pump.console_network_quarantine_scope.serial_input);
+        assert!(pump.console_network_quarantine_scope.local_input);
+        assert!(pump.console_network_quarantine_scope.tail);
+        assert!(pump.console_network_quarantine_scope.tcp_detach);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn console_network_latch_fence_preserves_unrelated_physical_partial_input() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        pump.session = Some(SessionRole::Queen);
+        pump.session_role = Some(Role::Queen);
+        pump.session_origin = Some(ConsoleInputSource::Serial);
+        pump.last_input_source = ConsoleInputSource::Serial;
+        assert!(pump.parser.push_byte(b'p').unwrap().is_none());
+        pump.serial.driver_mut().push_rx(b"serial");
+        assert!(pump.serial.poll_io());
+        assert!(pump.serial.next_line().is_none());
+        pump.local_line.push_str("local").unwrap();
+
+        pump.fence_console_network_authority_quiet();
+
+        assert_eq!(pump.session, Some(SessionRole::Queen));
+        assert_eq!(pump.session_origin, Some(ConsoleInputSource::Serial));
+        assert!(pump.parser.clear_buffer());
+        assert!(pump.serial.clear_partial_line_buffered_quiet());
+        assert_eq!(pump.local_line.as_str(), "local");
+        assert!(!pump.console_network_quarantine_scope.parser_input);
+        assert!(!pump.console_network_quarantine_scope.serial_input);
+        assert!(!pump.console_network_quarantine_scope.local_input);
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn console_network_quiet_cleanup_advances_and_tombstones_without_overwrite() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        pump.session_ticket = Some("root-ticket".to_owned());
+        let mut pending = PendingStream::new();
+        pending.cursor = Some(PendingCursor {
+            path_key: "/log/queen.log".to_owned(),
+            offset: 4,
+            len: 8,
+            check: CursorCheck { is_resume: false },
+        });
+        pending
+            .lines
+            .push(HeaplessString::try_from("retained").unwrap())
+            .unwrap();
+        pump.pending_stream = Some(pending);
+        pump.console_network_quarantine_scope = ConsoleNetworkQuarantineScope {
+            session: true,
+            stream: true,
+            ..ConsoleNetworkQuarantineScope::default()
+        };
+        pump.console_network_quarantine_cleanup_pending = true;
+        pump.console_network_quarantine_cleanup_unit =
+            ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
+
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert_eq!(
+            pump.console_network_quarantine_cleanup_unit,
+            ConsoleNetworkQuarantineCleanupUnit::RootTicketUsage
+        );
+        assert!(pump.session_ticket.is_none());
+        assert_eq!(
+            pump.retired_console_session_ticket.as_deref(),
+            Some("root-ticket")
+        );
+        for expected in [
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionTicket,
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionScope,
+            ConsoleNetworkQuarantineCleanupUnit::NineDoorSessionBinds,
+            ConsoleNetworkQuarantineCleanupUnit::PendingStreamCursor,
+        ] {
+            assert!(pump.service_deferred_console_network_quarantine_cleanup());
+            assert_eq!(pump.console_network_quarantine_cleanup_unit, expected);
+        }
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert_eq!(
+            pump.console_network_quarantine_cleanup_unit,
+            ConsoleNetworkQuarantineCleanupUnit::PendingStream
+        );
+        assert!(pump
+            .pending_stream
+            .as_ref()
+            .expect("pending stream stays retained")
+            .cursor
+            .is_none());
+        assert_eq!(
+            pump.retired_console_stream_cursor
+                .as_ref()
+                .expect("cursor allocation moved to tombstone")
+                .path_key,
+            "/log/queen.log"
+        );
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert_eq!(
+            pump.console_network_quarantine_cleanup_unit,
+            ConsoleNetworkQuarantineCleanupUnit::Finalize
+        );
+        assert!(pump
+            .pending_stream
+            .as_ref()
+            .expect("empty stream shell remains retained")
+            .lines
+            .is_empty());
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert_eq!(
+            pump.console_network_quarantine_cleanup_unit,
+            ConsoleNetworkQuarantineCleanupUnit::Complete
+        );
+        assert!(pump.console_network_quarantine_cleanup_pending);
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert!(!pump.console_network_quarantine_cleanup_pending);
+        assert!(!pump.service_deferred_console_network_quarantine_cleanup());
+
+        pump.session_ticket = Some("new-ticket".to_owned());
+        pump.console_network_quarantine_cleanup_unit =
+            ConsoleNetworkQuarantineCleanupUnit::RootSessionTicket;
+        pump.console_network_quarantine_cleanup_pending = true;
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert_eq!(pump.session_ticket.as_deref(), Some("new-ticket"));
+        assert_eq!(
+            pump.retired_console_session_ticket.as_deref(),
+            Some("root-ticket"),
+            "re-entry cannot overwrite or drop the reboot-lifetime tombstone"
+        );
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn console_network_cleanup_completion_defers_admission_then_flush() {
+        let serial =
+            SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<256>::new());
+        let mut audit = AuditLog::new();
+        let mut pump = EventPump::new(
+            serial,
+            TestTimer::single(TickEvent { tick: 1, now_ms: 1 }),
+            NullIpc,
+            TicketTable::<4>::new(),
+            &mut audit,
+        );
+        pump.console_network_quarantine_scope = ConsoleNetworkQuarantineScope {
+            reboot: true,
+            ..ConsoleNetworkQuarantineScope::default()
+        };
+        pump.console_network_quarantine_cleanup_unit =
+            ConsoleNetworkQuarantineCleanupUnit::Complete;
+        pump.console_network_quarantine_cleanup_pending = true;
+
+        assert!(pump.service_deferred_console_network_quarantine_cleanup());
+        assert!(pump.pending_console_output.is_empty());
+        assert!(pump.containment_diagnostic_pending());
+        assert!(pump.admit_one_containment_diagnostic());
+        assert!(!pump.containment_diagnostic_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert!(!pump.serial.tx_pending());
+        assert!(pump.serial.driver_mut().drain_tx().is_empty());
+        let _ = pump.flush_pending_console_output_if_idle();
+        assert!(pump.pending_console_output.is_empty());
+        let rendered = String::from_utf8(pump.serial.driver_mut().drain_tx().to_vec()).unwrap();
+        assert!(rendered.contains("network quarantine cancelled unprovable TCP reboot ACK"));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ninedoor_diagnostic_admission_owns_generic_operator_turn() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        bridge.retain_containment_diagnostic_for_test(
+            crate::ninedoor::NineDoorContainmentDiagnostic::ContainmentFailed { generation: 19 },
+        );
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+
+        pump.poll_ordinary_operator_turn(false, false);
+
+        assert!(!pump.containment_diagnostic_pending());
+        assert_eq!(
+            pump.timer.index, 0,
+            "Runtime work must wait for a later turn"
+        );
+        assert!(!pump.serial.tx_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::ContainmentLine
+        );
+        assert!(pump.pending_console_output[0]
+            .text
+            .contains("terminal containment failed generation=19"));
+    }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    #[test]
+    fn ninedoor_diagnostic_precedes_compact_network_event() {
+        let driver = LoopbackSerial::<256>::new();
+        let serial = SerialPort::<_, 256, 256, DEFAULT_LINE_CAPACITY>::new(driver);
+        let timer = TestTimer::single(TickEvent { tick: 1, now_ms: 1 });
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        bridge.retain_containment_diagnostic_for_test(
+            crate::ninedoor::NineDoorContainmentDiagnostic::TransportRevoked { generation: 23 },
+        );
+        let mut net = FakeNet::new();
+        net.events
+            .push(NetConsoleEvent::Authenticated { conn_id: 41 })
+            .unwrap();
+        let mut pump = EventPump::new(serial, timer, ipc, store, &mut audit)
+            .with_ninedoor(&mut bridge)
+            .with_network(&mut net);
+
+        pump.poll_split_ordinary_virtio_compact_operator_turn();
+
+        assert!(!pump.containment_diagnostic_pending());
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert_eq!(
+            pump.pending_console_output[0].kind,
+            PendingConsoleOutputKind::ContainmentLine
+        );
+        assert!(pump
+            .net
+            .as_ref()
+            .expect("network remains attached")
+            .console_event_pending());
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ninedoor_diagnostic_gets_exclusive_linked_and_bootstrap_turns() {
+        struct LinkedRuntimeTestReset;
+
+        impl Drop for LinkedRuntimeTestReset {
+            fn drop(&mut self) {
+                crate::serial::test_end_linked_runtime_only_transport();
+            }
+        }
+
+        crate::serial::test_begin_linked_runtime_only_transport();
+        let _reset = LinkedRuntimeTestReset;
+        let serial = SerialPort::<_, 32768, 32768, DEFAULT_LINE_CAPACITY>::new(LoopbackSerial::<
+            32768,
+        >::new());
+        let timer = TestTimer::repeated(8, 1);
+        let ipc = NullIpc;
+        let store: TicketTable<4> = TicketTable::new();
+        let mut audit = AuditLog::new();
+        let mut bridge = NineDoorBridge::new();
+        bridge.retain_containment_diagnostic_for_test(
+            crate::ninedoor::NineDoorContainmentDiagnostic::IncompleteProof { generation: 29 },
+        );
+        let mut pump =
+            EventPump::new(serial, timer, ipc, store, &mut audit).with_ninedoor(&mut bridge);
+        pump.linked_runtime_service_phase = LinkedRuntimeServicePhase::Dispatch;
+
+        pump.poll_with_linked_serial_runtime();
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::ContainmentDiagnostic
+        );
+        assert!(pump.pending_console_output.is_empty());
+        pump.poll_with_linked_serial_runtime();
+        assert_eq!(
+            pump.linked_runtime_service_phase,
+            LinkedRuntimeServicePhase::Serial
+        );
+        assert_eq!(pump.pending_console_output.len(), 1);
+        assert!(!pump.serial.tx_pending());
+
+        pump.ninedoor
+            .as_deref_mut()
+            .expect("NineDoor remains attached")
+            .retain_containment_diagnostic_for_test(
+                crate::ninedoor::NineDoorContainmentDiagnostic::Teardown { generation: 29 },
+            );
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert!(pump.cyw43_bootstrap_containment_diagnostic_due);
+        assert!(pump.pending_console_output.len() <= 1);
+        pump.poll_cyw43_bootstrap_supervisor_event_turn();
+        assert!(!pump.cyw43_bootstrap_containment_diagnostic_due);
+        assert!(pump.pending_console_output.iter().any(|output| {
+            output.kind == PendingConsoleOutputKind::ContainmentLine
+                && output
+                    .text
+                    .contains("NINEDOOR_SERVICE_TEARDOWN generation=29")
+        }));
+        assert!(!pump.serial_console_turn_active);
+        assert!(!pump.cyw43_bootstrap_operator_turn_active);
     }
 
     #[cfg(feature = "kernel")]

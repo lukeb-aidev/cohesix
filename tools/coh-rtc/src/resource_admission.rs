@@ -986,6 +986,11 @@ mod tests {
             response_time_us: 80,
             admitted: true,
             wcet_provenance: "unit-test".to_owned(),
+            virtio_operator_serial_io_bytes_per_turn: if kind == TemporalTaskKind::RootControl {
+                64
+            } else {
+                0
+            },
             allowed_donors: Vec::new(),
             reply_objects: 0,
             max_donation_depth: 0,

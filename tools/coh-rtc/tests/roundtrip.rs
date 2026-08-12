@@ -97,10 +97,14 @@ fn manifest_codegen_is_deterministic() {
     assert!(generated_mod.contains("pub bootstrap_budget_us: u32,"));
     assert!(generated_mod.contains("pub bootstrap_period_us: u32,"));
     assert!(generated_mod.contains("pub bootstrap_max_refills: u8,"));
+    assert!(generated_mod.contains("pub virtio_operator_serial_io_bytes_per_turn: u32,"));
+    assert!(generated_mod
+        .contains("pub const ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN: u32 = 64;"));
     assert!(generated_bootstrap.contains("bootstrap_scheduling_context_bits: 8"));
     assert!(generated_bootstrap.contains("bootstrap_budget_us: 3000"));
     assert!(generated_bootstrap.contains("bootstrap_period_us: 10000"));
     assert!(generated_bootstrap.contains("bootstrap_max_refills: 2"));
+    assert!(generated_bootstrap.contains("virtio_operator_serial_io_bytes_per_turn: 64"));
     assert!(
         !generated_bootstrap.contains("0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef"),
         "generated target bootstrap must not embed the registered private fixture seed"
@@ -212,7 +216,7 @@ fn invalid_manifest_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"
@@ -302,7 +306,7 @@ fn cache_kernel_ops_required_for_dma() {
 # Author: Lukas Bower
 # Purpose: Invalid cache manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"
@@ -384,7 +388,7 @@ fn sharding_shard_bits_over_max_rejected() {
 # Author: Lukas Bower
 # Purpose: Invalid sharding manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"
@@ -465,7 +469,7 @@ fn legacy_worker_paths_rejected_when_alias_disabled() {
 # Author: Lukas Bower
 # Purpose: Invalid alias manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"
@@ -553,7 +557,7 @@ fn sharding_requires_walk_depth() {
 # Author: Lukas Bower
 # Purpose: Invalid walk depth manifest sample for coh-rtc tests.
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"

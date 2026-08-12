@@ -88,19 +88,19 @@ mount_at = "/lora"
 }
 
 #[test]
-fn schema_1_9_is_rejected_after_ninedoor_bootstrap_contract_change() {
+fn schema_1_10_is_rejected_after_operator_serial_contract_change() {
     let temp_dir = TempDir::new().expect("create tempdir");
-    let manifest_path = temp_dir.path().join("schema-1.9.toml");
+    let manifest_path = temp_dir.path().join("schema-1.10.toml");
     let manifest = fs::read_to_string(repo_path("configs/root_task.toml"))
         .expect("read default manifest")
-        .replacen("schema = \"1.10\"", "schema = \"1.9\"", 1);
+        .replacen("schema = \"1.11\"", "schema = \"1.10\"", 1);
     fs::write(&manifest_path, manifest).expect("write legacy-schema manifest");
 
     let options = options_for(manifest_path, &temp_dir.path().join("legacy"));
-    let error = compile(&options).expect_err("schema 1.9 must be rejected");
+    let error = compile(&options).expect_err("schema 1.10 must be rejected");
     let message = format!("{error:#}");
     assert!(
-        message.contains("unsupported root_task.schema 1.9 (expected 1.10)"),
+        message.contains("unsupported root_task.schema 1.10 (expected 1.11)"),
         "unexpected rejection: {message}"
     );
 }

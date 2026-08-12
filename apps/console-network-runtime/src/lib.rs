@@ -17,7 +17,7 @@ use abi::{
 };
 use heapless::{Deque, Vec as HeaplessVec};
 use smoltcp::iface::{
-    Config as InterfaceConfig, Interface, PollResult, SocketHandle, SocketSet, SocketStorage,
+    Config as InterfaceConfig, Interface, SocketHandle, SocketSet, SocketStorage,
 };
 use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::socket::tcp::{
@@ -50,6 +50,174 @@ pub enum RuntimeError {
     Unauthenticated,
     /// The generation has been shut down or revoked.
     Terminal,
+}
+
+/// One closed material unit admitted for an isolated child scheduling turn.
+///
+/// The target loop selects exactly one value after each notification wait and
+/// returns to that wait after executing it. Publication units are selected
+/// before retained service work, which in turn precedes newly signalled input.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ChildTurnUnit {
+    /// Publish and signal one retained packet/control completion.
+    PublishCompletion,
+    /// Publish and signal one retained service event.
+    PublishServiceEvent,
+    /// Publish and signal one retained Ethernet egress frame.
+    PublishEgress,
+    /// Advance one retained stack-ingress, stack-egress, or session subunit.
+    PollService,
+    /// Copy and ingest one newly committed Ethernet ingress frame.
+    IngestPacket,
+    /// Read and apply one newly committed root control record.
+    ApplyControl,
+    /// The notification carried no new or retained material work.
+    Idle,
+}
+
+/// Result of one internally bounded service-poll unit.
+///
+/// `Continuation` keeps the outer [`ChildTurnUnit::PollService`] retained for
+/// a later active-MCS refill. `Complete` closes the three-unit
+/// StackIngress/StackEgress/Session cycle and permits the child scheduler to
+/// clear that retained work.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ServicePollOutcome {
+    /// A stack unit completed and another service unit remains pending.
+    Continuation,
+    /// The Session unit completed the current service-poll cycle.
+    Complete,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServicePollUnit {
+    StackIngress,
+    StackEgress,
+    Session,
+}
+
+impl ServicePollUnit {
+    const fn successor(self) -> Self {
+        match self {
+            Self::StackIngress => Self::StackEgress,
+            Self::StackEgress => Self::Session,
+            Self::Session => Self::StackIngress,
+        }
+    }
+}
+
+/// Read-only retained publication state used by the child-turn chooser.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChildTurnReadiness {
+    completion: bool,
+    service_event: bool,
+    egress: bool,
+}
+
+impl ChildTurnReadiness {
+    /// Describe the three child-owned publication queues without consuming them.
+    #[must_use]
+    pub const fn new(completion: bool, service_event: bool, egress: bool) -> Self {
+        Self {
+            completion,
+            service_event,
+            egress,
+        }
+    }
+}
+
+/// Retained chooser for one-material-unit child scheduling turns.
+///
+/// Notification badges are coalescing prompts. Durable page sequences and
+/// these retained booleans preserve work until a later active-SC turn selects
+/// it; no notification causes the chooser to execute more than one unit.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ChildTurnScheduler {
+    ingress_pending: bool,
+    control_pending: bool,
+    service_pending: bool,
+}
+
+impl ChildTurnScheduler {
+    /// Construct an empty retained child scheduler.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            ingress_pending: false,
+            control_pending: false,
+            service_pending: false,
+        }
+    }
+
+    /// Retain ordinary work represented by one coalesced root notification.
+    ///
+    /// The control badge represents either a durable record or the existing
+    /// root service tick. The selected control-read unit distinguishes them;
+    /// an empty read remains retained and requests a later service-poll unit.
+    pub fn retain_notification(&mut self, packet_wake: bool, control_wake: bool) {
+        if packet_wake {
+            self.ingress_pending = true;
+        }
+        if control_wake {
+            self.control_pending = true;
+        }
+    }
+
+    /// Retain one three-unit service-poll cycle after packet or control work.
+    pub fn request_service(&mut self) {
+        self.service_pending = true;
+    }
+
+    /// Select and claim at most one material unit for the current turn.
+    ///
+    /// Publications stay ahead of service work so shared producer slots are
+    /// drained before another poll can create more output. Service work stays
+    /// ahead of new input so a one-frame device cannot be overwritten.
+    #[must_use]
+    pub const fn take_next(&self, readiness: ChildTurnReadiness) -> ChildTurnUnit {
+        if readiness.completion {
+            return ChildTurnUnit::PublishCompletion;
+        }
+        if readiness.service_event {
+            return ChildTurnUnit::PublishServiceEvent;
+        }
+        if readiness.egress {
+            return ChildTurnUnit::PublishEgress;
+        }
+        if self.service_pending {
+            return ChildTurnUnit::PollService;
+        }
+        if self.ingress_pending {
+            return ChildTurnUnit::IngestPacket;
+        }
+        if self.control_pending {
+            return ChildTurnUnit::ApplyControl;
+        }
+        ChildTurnUnit::Idle
+    }
+
+    /// Commit a successfully executed retained non-publication unit.
+    ///
+    /// Input remains retained when a page read reports backpressure because the
+    /// root cannot overwrite or re-signal that one-slot record before its exact
+    /// completion. Call this only after the selected operation succeeds.
+    pub fn complete(&mut self, unit: ChildTurnUnit) {
+        match unit {
+            ChildTurnUnit::PollService => self.service_pending = false,
+            ChildTurnUnit::IngestPacket => self.ingress_pending = false,
+            ChildTurnUnit::ApplyControl => self.control_pending = false,
+            ChildTurnUnit::PublishCompletion
+            | ChildTurnUnit::PublishServiceEvent
+            | ChildTurnUnit::PublishEgress
+            | ChildTurnUnit::Idle => {}
+        }
+    }
+
+    /// Whether any non-publication work remains retained for a later turn.
+    #[must_use]
+    pub const fn retained_work_pending(&self) -> bool {
+        self.ingress_pending || self.control_pending || self.service_pending
+    }
 }
 
 /// One typed event delivered to root policy over the event page.
@@ -589,6 +757,7 @@ pub struct ConsoleNetworkService<'a> {
     session: TransportSession,
     next_connection_id: u64,
     last_tcp_state: TcpState,
+    poll_unit: ServicePollUnit,
     terminal: bool,
 }
 
@@ -645,6 +814,7 @@ impl<'a> ConsoleNetworkService<'a> {
             session: TransportSession::new(descriptor)?,
             next_connection_id: 1,
             last_tcp_state: TcpState::Listen,
+            poll_unit: ServicePollUnit::StackIngress,
             terminal: false,
         })
     }
@@ -660,6 +830,12 @@ impl<'a> ConsoleNetworkService<'a> {
     /// Copy one smoltcp egress frame for the admitted NIC transport.
     pub fn take_packet(&mut self, output: &mut [u8]) -> Result<Option<usize>, RuntimeError> {
         self.device.pop_egress(output)
+    }
+
+    /// Whether one child-produced Ethernet frame is retained for publication.
+    #[must_use]
+    pub const fn egress_pending(&self) -> bool {
+        self.device.egress.is_some()
     }
 
     /// Apply one root-authorized output control.
@@ -680,23 +856,57 @@ impl<'a> ConsoleNetworkService<'a> {
         }
     }
 
-    /// Run one bounded smoltcp/TCP/authentication service turn.
-    pub fn poll(&mut self, now_ms: u64) -> Result<bool, RuntimeError> {
+    /// Run one internally bounded unit of the retained service-poll cycle.
+    ///
+    /// The cursor successor is committed before the selected work starts, so a
+    /// timeout or other terminal fault identifies the exact attempted unit.
+    /// StackIngress, StackEgress, and Session therefore execute in separate
+    /// active-MCS refills. The selected smoltcp entry points each have a bounded
+    /// work contract, unlike `Interface::poll`.
+    pub fn poll_service_unit(&mut self, now_ms: u64) -> Result<ServicePollOutcome, RuntimeError> {
         if self.terminal {
             return Err(RuntimeError::Terminal);
         }
+        let unit = self.poll_unit;
+        self.poll_unit = unit.successor();
         let timestamp = Instant::from_millis(now_ms.min(i64::MAX as u64) as i64);
-        let mut activity = matches!(
-            self.interface
-                .poll(timestamp, &mut self.device, &mut self.sockets),
-            PollResult::SocketStateChanged
-        );
+        match unit {
+            ServicePollUnit::StackIngress => {
+                self.poll_stack_ingress_unit(timestamp);
+                Ok(ServicePollOutcome::Continuation)
+            }
+            ServicePollUnit::StackEgress => {
+                self.poll_stack_egress_unit(timestamp);
+                Ok(ServicePollOutcome::Continuation)
+            }
+            ServicePollUnit::Session => {
+                self.poll_session_unit(now_ms)?;
+                Ok(ServicePollOutcome::Complete)
+            }
+        }
+    }
+
+    #[inline(never)]
+    fn poll_stack_ingress_unit(&mut self, timestamp: Instant) {
+        let _ = self
+            .interface
+            .poll_ingress_single(timestamp, &mut self.device, &mut self.sockets);
+    }
+
+    #[inline(never)]
+    fn poll_stack_egress_unit(&mut self, timestamp: Instant) {
+        let _ = self
+            .interface
+            .poll_egress(timestamp, &mut self.device, &mut self.sockets);
+    }
+
+    #[inline(never)]
+    fn poll_session_unit(&mut self, now_ms: u64) -> Result<(), RuntimeError> {
         let state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
-        if state == TcpState::Established && self.last_tcp_state == TcpState::Listen {
+        if state == TcpState::Established && self.session.connection_id().is_none() {
             let connection_id = self.next_connection_id;
             self.next_connection_id = self.next_connection_id.saturating_add(1).max(1);
             self.session.begin(connection_id, now_ms)?;
-            activity = true;
         }
 
         let mut chunk = [0u8; CONSOLE_PAYLOAD_BYTES + FRAME_PREFIX_BYTES];
@@ -713,7 +923,7 @@ impl<'a> ConsoleNetworkService<'a> {
         };
         if received != 0 {
             match self.session.ingest(&chunk[..received], now_ms) {
-                Ok(()) | Err(RuntimeError::ConsoleFrame) => activity = true,
+                Ok(()) | Err(RuntimeError::ConsoleFrame) => {}
                 Err(error) => return Err(error),
             }
         }
@@ -738,12 +948,10 @@ impl<'a> ConsoleNetworkService<'a> {
                     return Err(RuntimeError::Backpressure);
                 }
                 self.session.commit_wire_output()?;
-                activity = true;
             }
         }
         if self.session.close_ready() {
             self.sockets.get_mut::<TcpSocket>(self.tcp_handle).close();
-            activity = true;
         }
 
         let current = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
@@ -753,15 +961,20 @@ impl<'a> ConsoleNetworkService<'a> {
                 .get_mut::<TcpSocket>(self.tcp_handle)
                 .listen(IpListenEndpoint::from(self.listener_port))
                 .map_err(|_| RuntimeError::ListenerBind)?;
-            activity = true;
         }
         self.last_tcp_state = self.sockets.get::<TcpSocket>(self.tcp_handle).state();
-        Ok(activity)
+        Ok(())
     }
 
     /// Pop one authenticated transport event for root policy.
     pub fn pop_event(&mut self) -> Option<ServiceEvent> {
         self.session.pop_event()
+    }
+
+    /// Whether one typed service event is retained for publication.
+    #[must_use]
+    pub fn service_event_pending(&self) -> bool {
+        !self.session.events.is_empty()
     }
 
     /// Connection whose root-authorized bytes have fully left smoltcp's send queue.
@@ -848,6 +1061,203 @@ mod tests {
         let mut frame = (payload.len() as u32 + 4).to_le_bytes().to_vec();
         frame.extend_from_slice(payload);
         frame
+    }
+
+    #[test]
+    fn child_turn_scheduler_retains_priority_and_retries_uncommitted_input() {
+        let mut scheduler = ChildTurnScheduler::new();
+        scheduler.retain_notification(true, true);
+
+        let readiness = ChildTurnReadiness::new(true, true, true);
+        assert_eq!(
+            scheduler.take_next(readiness),
+            ChildTurnUnit::PublishCompletion
+        );
+        assert!(scheduler.retained_work_pending());
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::new(false, true, true)),
+            ChildTurnUnit::PublishServiceEvent
+        );
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::new(false, false, true)),
+            ChildTurnUnit::PublishEgress
+        );
+
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::IngestPacket
+        );
+        // An empty/stale observation does not complete the claimed one-slot input.
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::IngestPacket
+        );
+        // The handler retains one service unit before retrying the input.
+        scheduler.request_service();
+        scheduler.retain_notification(false, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        scheduler.complete(ChildTurnUnit::PollService);
+        scheduler.retain_notification(false, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::IngestPacket
+        );
+        scheduler.complete(ChildTurnUnit::IngestPacket);
+        scheduler.request_service();
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        scheduler.complete(ChildTurnUnit::PollService);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::ApplyControl
+        );
+        scheduler.complete(ChildTurnUnit::ApplyControl);
+        assert!(!scheduler.retained_work_pending());
+    }
+
+    #[test]
+    fn empty_control_probe_alternates_with_service_then_accepts_control() {
+        let mut scheduler = ChildTurnScheduler::new();
+        scheduler.retain_notification(false, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::ApplyControl
+        );
+        // An empty/stale service-tick probe remains retained and requests one
+        // separate service unit for the following active-SC turn.
+        scheduler.request_service();
+        scheduler.retain_notification(false, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        scheduler.complete(ChildTurnUnit::PollService);
+
+        scheduler.retain_notification(false, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::ApplyControl
+        );
+        scheduler.complete(ChildTurnUnit::ApplyControl);
+        scheduler.request_service();
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+    }
+
+    #[test]
+    fn stack_continuations_survive_publication_between_every_phase() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        let mut scheduler = ChildTurnScheduler::new();
+
+        scheduler.request_service();
+        assert_eq!(service.poll_unit, ServicePollUnit::StackIngress);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        assert_eq!(
+            service.poll_service_unit(1).unwrap(),
+            ServicePollOutcome::Continuation
+        );
+        assert_eq!(service.poll_unit, ServicePollUnit::StackEgress);
+
+        // Coalesced packet/control hints remain durable while publication
+        // priority preempts the retained StackEgress continuation.
+        scheduler.retain_notification(true, true);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::new(true, false, false)),
+            ChildTurnUnit::PublishCompletion
+        );
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        assert_eq!(
+            service.poll_service_unit(2).unwrap(),
+            ServicePollOutcome::Continuation
+        );
+        assert_eq!(service.poll_unit, ServicePollUnit::Session);
+
+        // Publication may also preempt between StackEgress and Session without
+        // clearing the same retained outer PollService unit.
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::new(false, true, false)),
+            ChildTurnUnit::PublishServiceEvent
+        );
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService
+        );
+        assert_eq!(
+            service.poll_service_unit(3).unwrap(),
+            ServicePollOutcome::Complete
+        );
+        assert_eq!(service.poll_unit, ServicePollUnit::StackIngress);
+        scheduler.complete(ChildTurnUnit::PollService);
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::IngestPacket
+        );
+    }
+
+    #[test]
+    fn session_error_commits_internal_successor_but_retains_outer_work() {
+        let mut rx = [0u8; 4096];
+        let mut tx = [0u8; 4096];
+        let mut storage = [SocketStorage::EMPTY];
+        let mut service =
+            ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
+        let mut scheduler = ChildTurnScheduler::new();
+        scheduler.request_service();
+
+        assert_eq!(
+            service.poll_service_unit(1).unwrap(),
+            ServicePollOutcome::Continuation
+        );
+        assert_eq!(service.poll_unit, ServicePollUnit::StackEgress);
+        assert_eq!(
+            service.poll_service_unit(2).unwrap(),
+            ServicePollOutcome::Continuation
+        );
+        assert_eq!(service.poll_unit, ServicePollUnit::Session);
+        service.session.state = AuthState::Authenticated;
+        service.session.connection_id = 1;
+        for now_ms in 0..SESSION_EVENT_DEPTH as u64 {
+            service
+                .session
+                .push_event(ExchangeKind::Command, now_ms, b"x")
+                .unwrap();
+        }
+        service
+            .sockets
+            .get_mut::<TcpSocket>(service.tcp_handle)
+            .abort();
+
+        assert_eq!(
+            service.poll_service_unit(3),
+            Err(RuntimeError::Backpressure)
+        );
+        assert_eq!(
+            service.poll_unit,
+            ServicePollUnit::StackIngress,
+            "the faulting Session committed its successor before work"
+        );
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::PollService,
+            "an error cannot clear the outer retained service unit"
+        );
     }
 
     #[test]
@@ -970,5 +1380,220 @@ mod tests {
         let service =
             ConsoleNetworkService::new(descriptor(), &mut rx, &mut tx, &mut storage).unwrap();
         assert!(service.listener_ready());
+    }
+
+    #[test]
+    fn operational_syn_auth_ok_advances_one_child_unit_per_turn() {
+        let mut server_rx = [0u8; 4096];
+        let mut server_tx = [0u8; 4096];
+        let mut server_storage = [SocketStorage::EMPTY];
+        let mut service = ConsoleNetworkService::new(
+            descriptor(),
+            &mut server_rx,
+            &mut server_tx,
+            &mut server_storage,
+        )
+        .unwrap();
+
+        let mut client_device = SharedFrameDevice::new();
+        let mut client_config = InterfaceConfig::new(HardwareAddress::Ethernet(EthernetAddress([
+            2, 0, 0, 0, 0, 2,
+        ])));
+        client_config.random_seed = 9;
+        let mut client_interface =
+            Interface::new(client_config, &mut client_device, Instant::from_millis(0));
+        client_interface.update_ip_addrs(|addresses| {
+            addresses.clear();
+            addresses
+                .push(IpCidr::new(Ipv4Address::new(10, 0, 2, 16).into(), 24))
+                .unwrap();
+        });
+        let mut client_rx = [0u8; 4096];
+        let mut client_tx = [0u8; 4096];
+        let mut client_storage = [SocketStorage::EMPTY];
+        let mut client_sockets = SocketSet::new(&mut client_storage[..]);
+        let client_socket = TcpSocket::new(
+            TcpSocketBuffer::new(&mut client_rx[..]),
+            TcpSocketBuffer::new(&mut client_tx[..]),
+        );
+        let client_handle = client_sockets.add(client_socket);
+        client_sockets
+            .get_mut::<TcpSocket>(client_handle)
+            .connect(
+                client_interface.context(),
+                (Ipv4Address::new(10, 0, 2, 15), descriptor().listener_port),
+                49_152,
+            )
+            .unwrap();
+
+        let mut scheduler = ChildTurnScheduler::new();
+        let mut completions: Deque<(ExchangeKind, u64, u64), 3> = Deque::new();
+        let mut staged_packet: Option<std::vec::Vec<u8>> = None;
+        let mut packet_signal = false;
+        let mut packet_inflight = false;
+        let mut packet_sequence = 0u64;
+        let mut units = std::vec::Vec::new();
+        let mut poll_outcomes = std::vec::Vec::new();
+        let mut event_creation_turns = std::vec::Vec::new();
+        let mut published_events = std::vec::Vec::new();
+        let mut published_completion_turns = std::vec::Vec::new();
+        let mut published_egress_turns = std::vec::Vec::new();
+        let mut auth_sent = false;
+        let mut received = std::vec::Vec::new();
+        let expected = framed(b"OK AUTH");
+        let mut response_observed_turn = None;
+
+        for turn in 1u64..=512 {
+            let timestamp = Instant::from_millis(turn as i64);
+            let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+
+            if !packet_inflight {
+                let mut packet = [0u8; ETHERNET_FRAME_BYTES];
+                if let Some(length) = client_device.pop_egress(&mut packet).unwrap() {
+                    staged_packet = Some(packet[..length].to_vec());
+                    packet_signal = true;
+                    packet_inflight = true;
+                    packet_sequence = packet_sequence.saturating_add(1).max(1);
+                }
+            }
+
+            let this_packet_signal = core::mem::take(&mut packet_signal);
+            scheduler.retain_notification(this_packet_signal, !this_packet_signal);
+            let readiness = ChildTurnReadiness::new(
+                !completions.is_empty(),
+                service.service_event_pending(),
+                service.egress_pending(),
+            );
+            let unit = scheduler.take_next(readiness);
+            units.push(unit);
+            match unit {
+                ChildTurnUnit::PublishCompletion => {
+                    let (kind, related_sequence, _) = completions.pop_front().unwrap();
+                    published_completion_turns.push(turn);
+                    if kind == ExchangeKind::PacketConsumed {
+                        assert_eq!(related_sequence, packet_sequence);
+                        packet_inflight = false;
+                    }
+                }
+                ChildTurnUnit::PublishServiceEvent => {
+                    let event = service.pop_event().unwrap();
+                    published_events.push((turn, event.kind()));
+                }
+                ChildTurnUnit::PublishEgress => {
+                    let mut packet = [0u8; ETHERNET_FRAME_BYTES];
+                    let length = service.take_packet(&mut packet).unwrap().unwrap();
+                    client_device.push_ingress(&packet[..length]).unwrap();
+                    published_egress_turns.push(turn);
+                }
+                ChildTurnUnit::PollService => {
+                    let events_before = service.session.events.len();
+                    let poll_unit = service.poll_unit;
+                    let outcome = service.poll_service_unit(turn).unwrap();
+                    poll_outcomes.push((turn, poll_unit, outcome));
+                    if service.session.events.len() > events_before {
+                        event_creation_turns.push((turn, poll_unit, outcome));
+                    }
+                    if outcome == ServicePollOutcome::Complete {
+                        scheduler.complete(ChildTurnUnit::PollService);
+                    }
+                }
+                ChildTurnUnit::IngestPacket => {
+                    let packet = staged_packet.take().unwrap();
+                    service.ingest_packet(packet.as_slice()).unwrap();
+                    completions
+                        .push_back((ExchangeKind::PacketConsumed, packet_sequence, 0))
+                        .unwrap();
+                    scheduler.complete(ChildTurnUnit::IngestPacket);
+                    scheduler.request_service();
+                }
+                ChildTurnUnit::ApplyControl => {
+                    // This is the existing root service tick: its page carries
+                    // no new control record, so retain the probe and drive a
+                    // distinct service-poll unit on the following notification.
+                    scheduler.request_service();
+                }
+                ChildTurnUnit::Idle => {}
+            }
+
+            let _ = client_interface.poll(timestamp, &mut client_device, &mut client_sockets);
+            let socket = client_sockets.get_mut::<TcpSocket>(client_handle);
+            if !auth_sent && socket.state() == TcpState::Established {
+                let auth = framed(b"AUTH secret");
+                assert_eq!(socket.send_slice(auth.as_slice()).unwrap(), auth.len());
+                auth_sent = true;
+            }
+            while socket.can_recv() {
+                let mut chunk = [0u8; 64];
+                let length = socket.recv_slice(&mut chunk).unwrap();
+                if length == 0 {
+                    break;
+                }
+                received.extend_from_slice(&chunk[..length]);
+            }
+            if received.len() >= expected.len() && response_observed_turn.is_none() {
+                response_observed_turn = Some(turn);
+            }
+            if response_observed_turn.is_some_and(|observed| {
+                turn > observed
+                    && poll_outcomes.last().is_some_and(|(poll_turn, _, outcome)| {
+                        *poll_turn == turn && *outcome == ServicePollOutcome::Complete
+                    })
+            }) {
+                break;
+            }
+        }
+
+        assert!(auth_sent, "client never completed the SYN handshake");
+        assert_eq!(received.as_slice(), expected.as_slice());
+        let connected_turn = published_events
+            .iter()
+            .find_map(|(turn, kind)| (*kind == ExchangeKind::Connected).then_some(*turn))
+            .expect("Connected must be published");
+        let authenticated_turn = published_events
+            .iter()
+            .find_map(|(turn, kind)| (*kind == ExchangeKind::Authenticated).then_some(*turn))
+            .expect("Authenticated must be published");
+        let ok_egress_turn = *published_egress_turns.last().expect("OK AUTH needs egress");
+        assert!(connected_turn < authenticated_turn);
+        assert!(authenticated_turn < ok_egress_turn);
+        assert!(units.contains(&ChildTurnUnit::IngestPacket));
+        assert!(units.contains(&ChildTurnUnit::PollService));
+        assert!(units.contains(&ChildTurnUnit::PublishCompletion));
+        assert!(units.contains(&ChildTurnUnit::PublishServiceEvent));
+        assert!(units.contains(&ChildTurnUnit::PublishEgress));
+        assert!(poll_outcomes.len() >= 3);
+        for cycle in poll_outcomes.chunks_exact(3) {
+            assert_eq!(
+                cycle[0].1,
+                ServicePollUnit::StackIngress,
+                "each service cycle must start with one bounded ingress attempt"
+            );
+            assert_eq!(cycle[0].2, ServicePollOutcome::Continuation);
+            assert_eq!(cycle[1].1, ServicePollUnit::StackEgress);
+            assert_eq!(cycle[1].2, ServicePollOutcome::Continuation);
+            assert_eq!(cycle[2].1, ServicePollUnit::Session);
+            assert_eq!(cycle[2].2, ServicePollOutcome::Complete);
+            assert!(cycle[0].0 < cycle[1].0 && cycle[1].0 < cycle[2].0);
+        }
+        assert_eq!(poll_outcomes.len() % 3, 0);
+        assert!(event_creation_turns.len() >= 2);
+        assert!(event_creation_turns
+            .iter()
+            .all(|(_, unit, outcome)| *unit == ServicePollUnit::Session
+                && *outcome == ServicePollOutcome::Complete));
+        assert!(published_completion_turns.iter().all(|turn| {
+            !published_events
+                .iter()
+                .any(|(event_turn, _)| event_turn == turn)
+                && !published_egress_turns.contains(turn)
+        }));
+        assert!(published_events
+            .iter()
+            .all(|(turn, _)| !published_egress_turns.contains(turn)));
+        assert_eq!(
+            scheduler.take_next(ChildTurnReadiness::default()),
+            ChildTurnUnit::ApplyControl,
+            "the empty service-tick probe remains the next bounded unit"
+        );
     }
 }

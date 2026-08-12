@@ -12,6 +12,7 @@ extern crate alloc;
 use crate::affinity;
 use crate::authority::{AuthorityError, AuthorityOp, AuthorityQueue};
 use crate::bootstrap::{boot_tracer, log as boot_log, BootPhase};
+use crate::critical_tcb::FaultClass;
 use crate::event::AuditSink;
 use crate::generated;
 use crate::lifecycle;
@@ -30,7 +31,7 @@ use crate::{
         },
         HalError, KernelHal,
     },
-    ninedoor_service::NineDoorContainmentProof,
+    ninedoor_service::NineDoorContainmentTurn,
 };
 use alloc::{
     borrow::ToOwned,
@@ -44,6 +45,8 @@ use cohesix_cas::{CasManifest, CasManifestError, CAS_MANIFEST_SCHEMA};
 use cohesix_ticket::TicketToken;
 use core::fmt::{self, Write};
 use core::str;
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+use core::sync::atomic::{AtomicBool, Ordering};
 use ed25519_dalek::{Signature, VerifyingKey};
 use heapless::{String as HeaplessString, Vec as HeaplessVec};
 use secure9p_codec::ErrorCode;
@@ -59,6 +62,29 @@ use worker_task_abi::{
     Digest32, ReceiptDigests, WorkerAction, WorkerControlRecord, WorkerIdentity, WorkerOutcome,
     WorkerRole,
 };
+
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+static NINEDOOR_QEMU_EVIDENCE_LOCAL_REVOKE_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+/// Stable QEMU observation point after one donated NineDoor Call has returned.
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+#[inline(never)]
+pub extern "C" fn cohesix_ninedoor_qemu_evidence_post_prepare() {
+    core::hint::black_box(cohesix_ninedoor_qemu_evidence_request_local_revoke as extern "C" fn());
+}
+
+/// Request one root-local transport revoke from the ordinary preparation path.
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+#[inline(never)]
+pub extern "C" fn cohesix_ninedoor_qemu_evidence_request_local_revoke() {
+    NINEDOOR_QEMU_EVIDENCE_LOCAL_REVOKE_REQUESTED.store(true, Ordering::Release);
+    core::hint::black_box(());
+}
+
+#[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+fn take_ninedoor_qemu_evidence_local_revoke_request() -> bool {
+    NINEDOOR_QEMU_EVIDENCE_LOCAL_REVOKE_REQUESTED.swap(false, Ordering::AcqRel)
+}
 
 const LOG_PATH: &str = "/log/queen.log";
 const QUEEN_CTL_PATH: &str = "/queen/ctl";
@@ -226,6 +252,82 @@ const TELEMETRY_REFERENCE_CHUNK_SCHEMA: &str = "coh-ref-c/v1";
 const TELEMETRY_REFERENCE_DIGEST_MAX_BYTES: usize = 64;
 const AUTHORITY_QUEUE_MAX: usize = 16;
 
+/// One compact NineDoor containment record retained across Recovery turns.
+///
+/// Recovery only copies these scalar fields. Formatting and serial admission
+/// are deferred to an ordinary retained-output turn after containment yields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NineDoorContainmentDiagnostic {
+    Fault {
+        expected_generation: u64,
+        observed_generation: u32,
+        fault_class: FaultClass,
+        sequence: u64,
+    },
+    InvalidMailbox {
+        generation: u64,
+    },
+    TransportRevoked {
+        generation: u64,
+    },
+    ContainmentFailed {
+        generation: u64,
+    },
+    IncompleteProof {
+        generation: u64,
+    },
+    Teardown {
+        generation: u64,
+    },
+}
+
+impl NineDoorContainmentDiagnostic {
+    /// Render the retained record only after ordinary Operator output admits it.
+    pub(crate) fn render(self) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, fmt::Error> {
+        let mut line = HeaplessString::new();
+        match self {
+            Self::Fault {
+                expected_generation,
+                observed_generation,
+                fault_class,
+                sequence,
+            } if expected_generation == u64::from(observed_generation) => write!(
+                line,
+                "[ninedoor-service] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence}"
+            )?,
+            Self::Fault {
+                expected_generation,
+                observed_generation,
+                ..
+            } => write!(
+                line,
+                "[ninedoor-service] fault generation mismatch expected={expected_generation} observed={observed_generation}"
+            )?,
+            Self::InvalidMailbox { generation } => write!(
+                line,
+                "[ninedoor-service] generation={generation} invalid fault mailbox action=contain"
+            )?,
+            Self::TransportRevoked { generation } => write!(
+                line,
+                "[ninedoor-service] generation={generation} terminal-revoke state=local"
+            )?,
+            Self::ContainmentFailed { generation } => write!(
+                line,
+                "[ninedoor-service] terminal containment failed generation={generation} action=quarantine-no-replacement"
+            )?,
+            Self::IncompleteProof { generation } => write!(
+                line,
+                "[ninedoor-service] terminal containment proof incomplete generation={generation} action=quarantine-no-replacement"
+            )?,
+            Self::Teardown { generation } => write!(
+                line,
+                "NINEDOOR_SERVICE_TEARDOWN generation={generation} tcb_suspended=yes mappings_scrubbed=yes recovery_reply_revoked=yes capabilities_revoked=yes generation_fenced=yes state=terminal"
+            )?,
+        }
+        Ok(line)
+    }
+}
+
 const SELFTEST_QUICK_SCRIPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../resources/proc_tests/selftest_quick.coh"
@@ -249,15 +351,21 @@ pub struct NineDoorBridge {
     namespace_service: NamespaceServiceBoundary,
     #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
     target_service: Option<NineDoorServiceRuntime>,
+    pending_containment_fault_diagnostic: Option<NineDoorContainmentDiagnostic>,
+    pending_containment_failure_diagnostic: Option<NineDoorContainmentDiagnostic>,
+    pending_containment_teardown_diagnostic: Option<NineDoorContainmentDiagnostic>,
     attached: bool,
     session_role: Option<SessionRoleLabel>,
     session_ticket: Option<String>,
     session_scope: Option<String>,
+    retired_session_ticket: Option<String>,
+    retired_session_scope: Option<String>,
     ui: generated::UiProviderConfig,
     telemetry: generated::TelemetryConfig,
     telemetry_ingest: TelemetryIngestState,
     workers: Vec<WorkerTelemetry>,
     binds: HeaplessVec<BindEntry, MAX_BINDS>,
+    retired_session_binds: HeaplessVec<BindEntry, MAX_BINDS>,
     authority: AuthorityQueue,
     host: HostState,
     gpu: GpuState,
@@ -664,15 +772,21 @@ impl NineDoorBridge {
             namespace_service,
             #[cfg(all(target_arch = "aarch64", target_os = "none", sel4_config_kernel_mcs))]
             target_service: None,
+            pending_containment_fault_diagnostic: None,
+            pending_containment_failure_diagnostic: None,
+            pending_containment_teardown_diagnostic: None,
             attached: false,
             session_role: None,
             session_ticket: None,
             session_scope: None,
+            retired_session_ticket: None,
+            retired_session_scope: None,
             ui: generated::ui_provider_config(),
             telemetry: generated::telemetry_config(),
             telemetry_ingest: TelemetryIngestState::new(),
             workers: Vec::new(),
             binds: HeaplessVec::new(),
+            retired_session_binds: HeaplessVec::new(),
             authority: AuthorityQueue::new(AUTHORITY_QUEUE_MAX),
             host,
             gpu,
@@ -748,50 +862,125 @@ impl NineDoorBridge {
     pub fn contain_target_service_if_faulted(
         &mut self,
         hal: &mut KernelHal<'_>,
-    ) -> Result<Option<NineDoorContainmentProof>, HalError> {
+    ) -> Result<NineDoorContainmentTurn, HalError> {
         let Some(runtime) = self.target_service.as_mut() else {
-            return Ok(None);
+            return Ok(NineDoorContainmentTurn::Idle);
         };
-        let mut faulted = self.namespace_service.state() == TransportState::Revoked;
-        match crate::hal::critical_tcb::take_target_service_fault(
-            crate::ninedoor_service::SERVICE_TASK_ID,
-        ) {
-            Ok(Some(record)) => {
-                if u64::from(record.identity.supervisor_generation) != runtime.generation() {
-                    log::error!(
-                        "[ninedoor-service] fault generation mismatch expected={} observed={}",
-                        runtime.generation(),
-                        record.identity.supervisor_generation,
-                    );
-                } else {
-                    log::error!(
-                        "[ninedoor-service] generation={} terminal-fault class={:?} sequence={}",
-                        runtime.generation(),
-                        record.fault_class,
-                        record.sequence,
-                    );
+        if !runtime.containment_active() {
+            let mut faulted = self.namespace_service.state() == TransportState::Revoked;
+            let generation = runtime.generation();
+            let mut diagnostic =
+                faulted.then_some(NineDoorContainmentDiagnostic::TransportRevoked { generation });
+            match crate::hal::critical_tcb::take_target_service_fault(
+                crate::ninedoor_service::SERVICE_TASK_ID,
+            ) {
+                Ok(Some(record)) => {
+                    diagnostic = Some(NineDoorContainmentDiagnostic::Fault {
+                        expected_generation: generation,
+                        observed_generation: record.identity.supervisor_generation,
+                        fault_class: record.fault_class,
+                        sequence: record.sequence,
+                    });
+                    faulted = true;
                 }
-                faulted = true;
+                Ok(None) => {}
+                Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
+                    crate::critical_tcb::FaultHandoffError::Contended,
+                )) => {
+                    // Publication is durable. Reserve this Recovery turn and
+                    // retry the sole mailbox take without starting teardown.
+                    return Ok(NineDoorContainmentTurn::InProgress);
+                }
+                Err(_) => {
+                    diagnostic = Some(NineDoorContainmentDiagnostic::InvalidMailbox { generation });
+                    faulted = true;
+                }
             }
-            Ok(None) => {}
-            Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
-                crate::critical_tcb::FaultHandoffError::Contended,
-            )) => {
-                // Publication is durable. A later bounded root-control turn
-                // retries without creating a second fault or Reply.
+            if !faulted {
+                return Ok(NineDoorContainmentTurn::Idle);
             }
+            if self.pending_containment_fault_diagnostic.is_none() {
+                self.pending_containment_fault_diagnostic = diagnostic;
+            }
+            if let Err(error) = runtime.begin_containment(&mut self.namespace_service) {
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(NineDoorContainmentDiagnostic::ContainmentFailed { generation });
+                }
+                return Err(error);
+            }
+            // Mailbox consumption and transport/resource fencing own this
+            // complete Recovery turn. The persisted cursor selects SuspendTcb
+            // only after the sole outer yield replenishes root-control.
+            return Ok(NineDoorContainmentTurn::InProgress);
+        }
+
+        let generation = runtime.generation();
+        let turn = match runtime.contain_one_turn(hal) {
+            Ok(turn) => turn,
             Err(error) => {
-                log::error!("[ninedoor-service] invalid fault mailbox: {error:?}");
-                faulted = true;
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(NineDoorContainmentDiagnostic::ContainmentFailed { generation });
+                }
+                return Err(error);
             }
+        };
+        match turn {
+            NineDoorContainmentTurn::Complete(proof) if proof.complete() => {
+                if self.pending_containment_teardown_diagnostic.is_none() {
+                    self.pending_containment_teardown_diagnostic =
+                        Some(NineDoorContainmentDiagnostic::Teardown { generation });
+                }
+                self.target_service = None;
+            }
+            NineDoorContainmentTurn::Complete(_) => {
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(NineDoorContainmentDiagnostic::IncompleteProof { generation });
+                }
+            }
+            NineDoorContainmentTurn::Idle | NineDoorContainmentTurn::InProgress => {}
         }
-        if faulted {
-            let proof = runtime.contain(hal, &mut self.namespace_service)?;
-            self.target_service = None;
-            Ok(Some(proof))
-        } else {
-            Ok(None)
+        Ok(turn)
+    }
+
+    /// Peek the oldest retained containment record without consuming it.
+    #[must_use]
+    pub(crate) fn pending_containment_diagnostic(&self) -> Option<NineDoorContainmentDiagnostic> {
+        self.pending_containment_fault_diagnostic
+            .or(self.pending_containment_failure_diagnostic)
+            .or(self.pending_containment_teardown_diagnostic)
+    }
+
+    /// Commit one record only after ordinary output admitted its exact copy.
+    pub(crate) fn commit_containment_diagnostic(
+        &mut self,
+        diagnostic: NineDoorContainmentDiagnostic,
+    ) {
+        if self.pending_containment_fault_diagnostic.is_some() {
+            if self.pending_containment_fault_diagnostic == Some(diagnostic) {
+                self.pending_containment_fault_diagnostic = None;
+            }
+            return;
         }
+        if self.pending_containment_failure_diagnostic.is_some() {
+            if self.pending_containment_failure_diagnostic == Some(diagnostic) {
+                self.pending_containment_failure_diagnostic = None;
+            }
+            return;
+        }
+        if self.pending_containment_teardown_diagnostic == Some(diagnostic) {
+            self.pending_containment_teardown_diagnostic = None;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retain_containment_diagnostic_for_test(
+        &mut self,
+        diagnostic: NineDoorContainmentDiagnostic,
+    ) {
+        self.pending_containment_fault_diagnostic = Some(diagnostic);
     }
 
     fn prepare_namespace<'a>(
@@ -800,9 +989,18 @@ impl NineDoorBridge {
         path: &'a str,
         payload: &'a str,
     ) -> Result<crate::ninedoor_service::PreparedNamespaceView<'a>, NineDoorBridgeError> {
-        self.namespace_service
+        let prepared = self
+            .namespace_service
             .prepare(opcode, path, payload)
-            .map_err(namespace_transport_error)
+            .map_err(namespace_transport_error)?;
+        #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+        {
+            cohesix_ninedoor_qemu_evidence_post_prepare();
+            if take_ninedoor_qemu_evidence_local_revoke_request() {
+                self.namespace_service.revoke();
+            }
+        }
+        Ok(prepared)
     }
 
     /// Reset per-session state after a console disconnect.
@@ -812,6 +1010,33 @@ impl NineDoorBridge {
         self.session_ticket = None;
         self.session_scope = None;
         self.binds.clear();
+    }
+
+    /// Quietly fence scalar session authority before deferred resource retirement.
+    pub(crate) fn fence_session_authority_quiet(&mut self) {
+        self.attached = false;
+        self.session_role = None;
+    }
+
+    /// Move the active ticket allocation into a reboot-lifetime tombstone.
+    pub(crate) fn retire_session_ticket_quiet(&mut self) {
+        if self.retired_session_ticket.is_none() {
+            self.retired_session_ticket = self.session_ticket.take();
+        }
+    }
+
+    /// Move the active scope allocation into a reboot-lifetime tombstone.
+    pub(crate) fn retire_session_scope_quiet(&mut self) {
+        if self.retired_session_scope.is_none() {
+            self.retired_session_scope = self.session_scope.take();
+        }
+    }
+
+    /// Move all fixed-capacity binds into a reboot-lifetime tombstone.
+    pub(crate) fn retire_session_binds_quiet(&mut self) {
+        if self.retired_session_binds.is_empty() {
+            core::mem::swap(&mut self.binds, &mut self.retired_session_binds);
+        }
     }
 
     fn with_authority<T>(
@@ -10801,6 +11026,57 @@ mod tests {
     }
 
     #[test]
+    fn quiet_session_retirement_moves_allocations_once_without_overwrite() {
+        let mut bridge = NineDoorBridge::new();
+        bridge.attached = true;
+        bridge.session_role = Some(SessionRoleLabel::Queen);
+        bridge.session_ticket = Some("ticket-old".to_owned());
+        bridge.session_scope = Some("scope-old".to_owned());
+        bridge
+            .binds
+            .push(BindEntry {
+                from: "/old/from".to_owned(),
+                to: "/old/to".to_owned(),
+            })
+            .unwrap();
+
+        bridge.fence_session_authority_quiet();
+        bridge.retire_session_ticket_quiet();
+        bridge.retire_session_scope_quiet();
+        bridge.retire_session_binds_quiet();
+
+        assert!(!bridge.attached);
+        assert!(bridge.session_role.is_none());
+        assert!(bridge.session_ticket.is_none());
+        assert!(bridge.session_scope.is_none());
+        assert!(bridge.binds.is_empty());
+        assert_eq!(bridge.retired_session_ticket.as_deref(), Some("ticket-old"));
+        assert_eq!(bridge.retired_session_scope.as_deref(), Some("scope-old"));
+        assert_eq!(bridge.retired_session_binds.len(), 1);
+        assert_eq!(bridge.retired_session_binds[0].from, "/old/from");
+
+        bridge.session_ticket = Some("ticket-new".to_owned());
+        bridge.session_scope = Some("scope-new".to_owned());
+        bridge
+            .binds
+            .push(BindEntry {
+                from: "/new/from".to_owned(),
+                to: "/new/to".to_owned(),
+            })
+            .unwrap();
+        bridge.retire_session_ticket_quiet();
+        bridge.retire_session_scope_quiet();
+        bridge.retire_session_binds_quiet();
+
+        assert_eq!(bridge.session_ticket.as_deref(), Some("ticket-new"));
+        assert_eq!(bridge.session_scope.as_deref(), Some("scope-new"));
+        assert_eq!(bridge.binds.len(), 1);
+        assert_eq!(bridge.retired_session_ticket.as_deref(), Some("ticket-old"));
+        assert_eq!(bridge.retired_session_scope.as_deref(), Some("scope-old"));
+        assert_eq!(bridge.retired_session_binds[0].from, "/old/from");
+    }
+
+    #[test]
     fn worker_ids_reuse_lowest_free_slot_after_kill() {
         let mut bridge = NineDoorBridge::new();
         bridge
@@ -11279,5 +11555,64 @@ mod tests {
             )
             .expect_err("duplicate ids in one payload should be rejected");
         assert!(matches!(err, NineDoorBridgeError::InvalidPayload));
+    }
+
+    #[test]
+    fn containment_diagnostics_render_exact_bounded_evidence_markers() {
+        let fault = NineDoorContainmentDiagnostic::Fault {
+            expected_generation: 7,
+            observed_generation: 7,
+            fault_class: FaultClass::Timeout,
+            sequence: 11,
+        }
+        .render()
+        .expect("bounded fault diagnostic");
+        assert_eq!(
+            fault.as_str(),
+            "[ninedoor-service] generation=7 terminal-fault class=Timeout sequence=11"
+        );
+
+        let mismatch = NineDoorContainmentDiagnostic::Fault {
+            expected_generation: u64::MAX,
+            observed_generation: u32::MAX,
+            fault_class: FaultClass::Standard,
+            sequence: u64::MAX,
+        }
+        .render()
+        .expect("bounded mismatch diagnostic");
+        assert_eq!(
+            mismatch.as_str(),
+            "[ninedoor-service] fault generation mismatch expected=18446744073709551615 observed=4294967295"
+        );
+
+        let teardown = NineDoorContainmentDiagnostic::Teardown {
+            generation: u64::MAX,
+        }
+        .render()
+        .expect("bounded teardown diagnostic");
+        assert_eq!(
+            teardown.as_str(),
+            "NINEDOOR_SERVICE_TEARDOWN generation=18446744073709551615 tcb_suspended=yes mappings_scrubbed=yes recovery_reply_revoked=yes capabilities_revoked=yes generation_fenced=yes state=terminal"
+        );
+        assert!(fault.len() < DEFAULT_LINE_CAPACITY);
+        assert!(mismatch.len() < DEFAULT_LINE_CAPACITY);
+        assert!(teardown.len() < DEFAULT_LINE_CAPACITY);
+    }
+
+    #[test]
+    fn containment_diagnostics_commit_in_fault_then_teardown_order() {
+        let fault = NineDoorContainmentDiagnostic::InvalidMailbox { generation: 9 };
+        let teardown = NineDoorContainmentDiagnostic::Teardown { generation: 9 };
+        let mut bridge = NineDoorBridge::new();
+        bridge.pending_containment_fault_diagnostic = Some(fault);
+        bridge.pending_containment_teardown_diagnostic = Some(teardown);
+
+        assert_eq!(bridge.pending_containment_diagnostic(), Some(fault));
+        bridge.commit_containment_diagnostic(teardown);
+        assert_eq!(bridge.pending_containment_diagnostic(), Some(fault));
+        bridge.commit_containment_diagnostic(fault);
+        assert_eq!(bridge.pending_containment_diagnostic(), Some(teardown));
+        bridge.commit_containment_diagnostic(teardown);
+        assert_eq!(bridge.pending_containment_diagnostic(), None);
     }
 }

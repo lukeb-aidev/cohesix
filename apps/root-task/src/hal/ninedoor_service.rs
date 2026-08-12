@@ -28,7 +28,8 @@ use super::{
 };
 use crate::critical_tcb::GenerationIdentity;
 use crate::ninedoor_service::{
-    NamespaceServiceBoundary, NineDoorContainmentProof, NineDoorServiceContract,
+    NamespaceServiceBoundary, NineDoorContainmentCursor, NineDoorContainmentProof,
+    NineDoorContainmentTurn, NineDoorContainmentUnit, NineDoorServiceContract,
     NineDoorServiceObjectPlan, TargetNamespaceServiceConfig, TargetNamespaceServiceResources,
     NINEDOOR_IMAGE_IDENTITY_BOUND, NINEDOOR_RUNTIME_ENTRY_VADDR, NINEDOOR_RUNTIME_IMAGE,
     NINEDOOR_RUNTIME_LOAD_BASE_VADDR, NINEDOOR_RUNTIME_LOAD_LIMIT_VADDR,
@@ -65,6 +66,9 @@ const CHILD_CNODE_RADIX_BITS: u8 = 4;
 
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
 const _: () = assert!(BOOTSTRAP_SC_SLOT_INDEX < ROOT_SLOT_COUNT);
+const _: () = assert!(NineDoorContainmentCursor::REQUEST_FRAME_COUNT == 2);
+const _: () = assert!(NineDoorContainmentCursor::RESPONSE_FRAME_COUNT == 2);
+const _: () = assert!(NineDoorContainmentCursor::FAULT_CAP_COUNT == 2);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum BootstrapState {
@@ -72,6 +76,11 @@ enum BootstrapState {
     Running,
     Passive,
     Failed,
+}
+
+struct NineDoorContainmentResources {
+    request_frames: [RamFrame; NineDoorContainmentCursor::REQUEST_FRAME_COUNT],
+    response_frames: [RamFrame; NineDoorContainmentCursor::RESPONSE_FRAME_COUNT],
 }
 
 /// Live kernel resources for one exact passive NineDoor generation.
@@ -86,6 +95,8 @@ pub struct NineDoorServiceRuntime {
     generation: u64,
     bootstrap_state: BootstrapState,
     contained: bool,
+    containment: NineDoorContainmentCursor,
+    containment_resources: Option<NineDoorContainmentResources>,
 }
 
 impl fmt::Debug for NineDoorServiceRuntime {
@@ -97,6 +108,7 @@ impl fmt::Debug for NineDoorServiceRuntime {
             .field("generation", &self.generation)
             .field("bootstrap_state", &self.bootstrap_state)
             .field("contained", &self.contained)
+            .field("containment", &self.containment)
             .finish_non_exhaustive()
     }
 }
@@ -152,55 +164,85 @@ impl NineDoorServiceRuntime {
         sel4::suspend_tcb(self.tcb).map_err(HalError::Sel4)
     }
 
-    /// Suspend, scrub, unmap, remove recovery authority, and revoke the exact
-    /// target generation.
-    pub fn contain(
+    /// Whether a consumed fault has transferred the transport into containment.
+    #[must_use]
+    pub const fn containment_active(&self) -> bool {
+        self.containment_resources.is_some()
+    }
+
+    /// Fence new Calls and retain all four live mappings for bounded teardown.
+    pub fn begin_containment(
         &mut self,
-        hal: &mut KernelHal<'_>,
         boundary: &mut NamespaceServiceBoundary,
-    ) -> Result<NineDoorContainmentProof, HalError> {
-        if self.contained {
-            return Err(HalError::Unsupported("ninedoor-already-contained"));
+    ) -> Result<(), HalError> {
+        if self.contained || self.containment_resources.is_some() {
+            return Err(HalError::Unsupported("ninedoor-containment-state"));
         }
-        sel4::suspend_tcb(self.tcb).map_err(HalError::Sel4)?;
         let resources = boundary
             .take_target_resources_for_containment()
             .ok_or(HalError::Unsupported("ninedoor-target-resources"))?;
-        let (mut request_frames, response_frames) = resources.into_frames();
-        for frame in &mut request_frames {
-            scrub_root_mapping(hal, frame)?;
+        let (request_frames, response_frames) = resources.into_frames();
+        self.bootstrap_state = BootstrapState::Failed;
+        self.containment_resources = Some(NineDoorContainmentResources {
+            request_frames,
+            response_frames,
+        });
+        Ok(())
+    }
+
+    /// Advance exactly one successor-committed containment unit.
+    #[inline(never)]
+    pub fn contain_one_turn(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<NineDoorContainmentTurn, HalError> {
+        if self.containment_resources.is_none() {
+            return Err(HalError::Unsupported("ninedoor-already-contained"));
         }
-        for (index, frame) in response_frames.into_iter().enumerate() {
-            let root_vaddr = frame.ptr().as_ptr() as usize;
-            hal.env
-                .unmap_page_cap(frame.cap())
-                .map_err(HalError::Sel4)?;
-            let source_cap = self.slots[FRAME_SLOT_START + SHARED_FRAME_START + 2 + index];
-            let mut writable = hal
+        let selected = self.containment.select_next();
+        let result = match selected {
+            NineDoorContainmentUnit::SuspendTcb => {
+                sel4::suspend_tcb_bounded(self.tcb).map_err(HalError::Sel4)
+            }
+            NineDoorContainmentUnit::ScrubCleanRequestFrame(frame_index) => {
+                self.scrub_clean_request_frame(frame_index)
+            }
+            NineDoorContainmentUnit::UnmapRequestFrame(frame_index) => {
+                self.unmap_request_frame(hal, frame_index)
+            }
+            NineDoorContainmentUnit::UnmapResponseRead(frame_index) => {
+                self.unmap_response_read(hal, frame_index)
+            }
+            NineDoorContainmentUnit::MapResponseWritable(frame_index) => {
+                self.map_response_writable(frame_index)
+            }
+            NineDoorContainmentUnit::ScrubCleanResponseWritable(frame_index) => {
+                self.scrub_clean_response_writable(frame_index)
+            }
+            NineDoorContainmentUnit::UnmapResponseWritable(frame_index) => {
+                self.unmap_response_writable(hal, frame_index)
+            }
+            NineDoorContainmentUnit::RevokeRecoveryReply => {
+                super::critical_tcb::revoke_target_service_recovery_reply_bounded(SERVICE_TASK_ID)
+                    .map_err(|_| HalError::Unsupported("ninedoor-recovery-reply-revoke"))
+            }
+            NineDoorContainmentUnit::DeleteFaultCap(cap_index) => {
+                self.delete_fault_cap(hal, cap_index)
+            }
+            NineDoorContainmentUnit::RevokeAnchor => hal
                 .env
-                .remap_revoke_anchor_frame_in_root(
-                    source_cap,
-                    root_vaddr,
-                    runtime_cacheable_xn_attributes(),
-                )
-                .map_err(HalError::Sel4)?;
-            scrub_root_mapping(hal, &mut writable)?;
+                .revoke_anchor_descendants_and_reset_vspace(self.anchor, &mut self.tracker)
+                .map_err(map_vspace_error),
+            NineDoorContainmentUnit::Finalize | NineDoorContainmentUnit::Complete => Ok(()),
+        };
+        if let Err(error) = result {
+            self.containment.restore_selected(selected);
+            return Err(error);
+        }
+        if selected != NineDoorContainmentUnit::Complete {
+            return Ok(NineDoorContainmentTurn::InProgress);
         }
 
-        super::critical_tcb::revoke_target_service_recovery_reply(SERVICE_TASK_ID)
-            .map_err(|_| HalError::Unsupported("ninedoor-recovery-reply-revoke"))?;
-        let root_cnode = hal.env.init_cnode_cap();
-        let root_depth = sel4::word_bits() as u8;
-        for cap in [self.standard_fault_cap, self.timeout_fault_cap] {
-            let error = sel4::cnode_delete(root_cnode, cap, root_depth);
-            if error != sel4_sys::seL4_NoError {
-                return Err(HalError::Sel4(error));
-            }
-        }
-        hal.env
-            .revoke_anchor_descendants_and_reset_vspace(self.anchor, &mut self.tracker)
-            .map_err(map_vspace_error)?;
-        self.bootstrap_state = BootstrapState::Failed;
         self.contained = true;
         let proof = NineDoorContainmentProof {
             tcb_suspended: true,
@@ -209,11 +251,116 @@ impl NineDoorServiceRuntime {
             capabilities_revoked: true,
             generation_fenced: true,
         };
-        log::info!(
-            "NINEDOOR_SERVICE_TEARDOWN generation={} tcb_suspended=yes mappings_scrubbed=yes recovery_reply_revoked=yes capabilities_revoked=yes generation_fenced=yes state=terminal",
-            self.generation,
-        );
-        Ok(proof)
+        Ok(NineDoorContainmentTurn::Complete(proof))
+    }
+
+    #[inline(never)]
+    fn scrub_clean_request_frame(&mut self, frame_index: usize) -> Result<(), HalError> {
+        let frame = self
+            .containment_resources
+            .as_mut()
+            .and_then(|resources| resources.request_frames.get_mut(frame_index))
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-request-frame-index",
+            ))?;
+        scrub_clean_root_mapping(frame)
+    }
+
+    #[inline(never)]
+    fn unmap_request_frame(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+        frame_index: usize,
+    ) -> Result<(), HalError> {
+        let frame = self
+            .containment_resources
+            .as_ref()
+            .and_then(|resources| resources.request_frames.get(frame_index))
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-request-frame-index",
+            ))?;
+        hal.env.unmap_page_cap(frame.cap()).map_err(HalError::Sel4)
+    }
+
+    #[inline(never)]
+    fn unmap_response_read(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+        frame_index: usize,
+    ) -> Result<(), HalError> {
+        let frame = self
+            .containment_resources
+            .as_mut()
+            .and_then(|resources| resources.response_frames.get_mut(frame_index))
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-response-frame-index",
+            ))?;
+        hal.env.unmap_page_cap(frame.cap()).map_err(HalError::Sel4)
+    }
+
+    #[inline(never)]
+    fn map_response_writable(&mut self, frame_index: usize) -> Result<(), HalError> {
+        let frame = self
+            .containment_resources
+            .as_ref()
+            .and_then(|resources| resources.response_frames.get(frame_index))
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-response-frame-index",
+            ))?;
+        let root_vaddr = frame.ptr().as_ptr() as usize;
+        let source_cap = self.slots[FRAME_SLOT_START + SHARED_FRAME_START + 2 + frame_index];
+        sel4::map_page_into_vspace_bounded(
+            source_cap,
+            sel4_sys::seL4_CapInitThreadVSpace,
+            root_vaddr,
+            sel4_sys::seL4_CapRights_ReadWrite,
+            runtime_cacheable_xn_attributes(),
+        )
+        .map_err(HalError::Sel4)
+    }
+
+    #[inline(never)]
+    fn scrub_clean_response_writable(&mut self, frame_index: usize) -> Result<(), HalError> {
+        let frame = self
+            .containment_resources
+            .as_mut()
+            .and_then(|resources| resources.response_frames.get_mut(frame_index))
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-response-frame-index",
+            ))?;
+        scrub_clean_root_mapping(frame)
+    }
+
+    #[inline(never)]
+    fn unmap_response_writable(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+        frame_index: usize,
+    ) -> Result<(), HalError> {
+        if frame_index >= NineDoorContainmentCursor::RESPONSE_FRAME_COUNT {
+            return Err(HalError::Unsupported(
+                "ninedoor-containment-response-frame-index",
+            ));
+        }
+        let source_cap = self.slots[FRAME_SLOT_START + SHARED_FRAME_START + 2 + frame_index];
+        hal.env.unmap_page_cap(source_cap).map_err(HalError::Sel4)
+    }
+
+    #[inline(never)]
+    fn delete_fault_cap(&self, hal: &KernelHal<'_>, cap_index: usize) -> Result<(), HalError> {
+        let cap = [self.standard_fault_cap, self.timeout_fault_cap]
+            .get(cap_index)
+            .copied()
+            .ok_or(HalError::Unsupported(
+                "ninedoor-containment-fault-cap-index",
+            ))?;
+        let error =
+            sel4::cnode_delete_bounded(hal.env.init_cnode_cap(), cap, sel4::word_bits() as u8);
+        if error == sel4_sys::seL4_NoError {
+            Ok(())
+        } else {
+            Err(HalError::Sel4(error))
+        }
     }
 }
 
@@ -459,6 +606,8 @@ fn construct_generation(
             generation: descriptor.generation,
             bootstrap_state: BootstrapState::Suspended,
             contained: false,
+            containment: NineDoorContainmentCursor::new(),
+            containment_resources: None,
         },
         boundary,
     ))
@@ -915,16 +1064,15 @@ fn install_caps_and_mcs(
     Ok((root_call_cap, standard_fault_cap, timeout_fault_cap))
 }
 
-fn scrub_root_mapping(hal: &mut KernelHal<'_>, frame: &mut RamFrame) -> Result<(), HalError> {
+fn scrub_clean_root_mapping(frame: &mut RamFrame) -> Result<(), HalError> {
     frame.as_mut_slice().fill(0);
     fence(Ordering::Release);
-    super::cache::cache_clean(
+    super::cache::cache_clean_bounded(
         sel4_sys::seL4_CapInitThreadVSpace,
         frame.ptr().as_ptr() as usize,
         sel4::IPC_PAGE_BYTES,
     )
-    .map_err(|error| HalError::Sel4(error.code()))?;
-    hal.env.unmap_page_cap(frame.cap()).map_err(HalError::Sel4)
+    .map_err(|error| HalError::Sel4(error.code()))
 }
 
 #[allow(clippy::too_many_arguments)]

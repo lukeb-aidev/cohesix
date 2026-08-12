@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
 # Purpose: Assert documentation invariants for NIST evidence mapping.
+# Copyright 2026 Lukas Bower
 
 set -euo pipefail
 
@@ -64,7 +65,9 @@ check "Reason tagging" "reason=<busy\\|quota\\|cut\\|policy>" "$userland_doc"
 check "Attach grammar" "attach <role> \\[ticket\\]" "$userland_doc"
 
 # Console-only TCP listener guidance
-check "Console-only TCP listener" "only permitted in-VM TCP listener" "$agents_doc"
+check "Console-only TCP listener" \
+  "The authenticated root-task console is the only in-VM TCP listener\\." \
+  "$agents_doc"
 
 if [[ "$fail" -ne 0 ]]; then
   exit 1

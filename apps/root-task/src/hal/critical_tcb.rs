@@ -25,7 +25,8 @@ use crate::critical_tcb::{
     WORKER_FAULT_MAILBOX_CAPACITY,
 };
 use crate::generated::{
-    self, CriticalTcbResource, TemporalTaskConfig, TemporalTaskKind, TimeoutPolicy,
+    self, CriticalTcbResource, TemporalExecution, TemporalTaskConfig, TemporalTaskKind,
+    TimeoutPolicy,
 };
 use crate::sel4::{self, KernelEnv, RamFrame};
 use core::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
@@ -182,6 +183,24 @@ static TARGET_FAULT_RECEIVER_ACTIVE: AtomicBool = AtomicBool::new(false);
 static TARGET_FATAL: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 static TARGET_RECOVERED_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+static TARGET_PENDING_FAULT_LABEL: AtomicU64 = AtomicU64::new(0);
+static TARGET_PENDING_FAULT_BADGE: AtomicU64 = AtomicU64::new(0);
+static TARGET_PENDING_FAULT_VALID: AtomicBool = AtomicBool::new(false);
+static TARGET_ROOT_FAULT_TURN: AtomicUsize =
+    AtomicUsize::new(RootFaultCriticalTurn::PrimeReceive as usize);
+static TARGET_ROOT_FAULT_CRITICAL_TASK: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_VALID: AtomicBool = AtomicBool::new(false);
+static TARGET_ROOT_FAULT_SERVICE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static TARGET_ROOT_FAULT_SERVICE_TASK: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_IDENTITY_SLOT: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_IDENTITY_LEASE: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_IDENTITY_SUPERVISOR: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_IDENTITY_CAP: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_BADGE: AtomicU64 = AtomicU64::new(0);
+static TARGET_ROOT_FAULT_SERVICE_CLASS: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_ROOT_TCB: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB: AtomicUsize = AtomicUsize::new(0);
+static TARGET_ROOT_FAULT_SERVICE_RECOVER_PASSIVE: AtomicBool = AtomicBool::new(false);
 static DRIVER_FAULT_REPLY_BUSY: AtomicBool = AtomicBool::new(false);
 static TARGET_FAULT_ENDPOINT: AtomicUsize = AtomicUsize::new(0);
 static TARGET_ROOT_FAULT_CNODE: AtomicUsize = AtomicUsize::new(0);
@@ -316,6 +335,20 @@ pub fn finish_target_service_call(
 pub fn revoke_target_service_recovery_reply(
     task_id: &str,
 ) -> Result<(), CriticalTcbConstructionError> {
+    revoke_target_service_recovery_reply_with(task_id, sel4::cnode_delete)
+}
+
+/// Remove the retained passive-service Reply cap with one quiet kernel action.
+pub(crate) fn revoke_target_service_recovery_reply_bounded(
+    task_id: &str,
+) -> Result<(), CriticalTcbConstructionError> {
+    revoke_target_service_recovery_reply_with(task_id, sel4::cnode_delete_bounded)
+}
+
+fn revoke_target_service_recovery_reply_with(
+    task_id: &str,
+    delete: fn(seL4_CPtr, seL4_CPtr, u8) -> sel4_sys::seL4_Error,
+) -> Result<(), CriticalTcbConstructionError> {
     let mailbox = target_service_mailbox(task_id)?;
     if TARGET_SERVICE_CALL_SEQUENCES[mailbox].load(Ordering::Acquire) != 0 {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
@@ -326,7 +359,7 @@ pub fn revoke_target_service_recovery_reply(
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
     let root_fault = critical_resource(ROOT_FAULT_ID)?;
-    let error = sel4::cnode_delete(root_fault_cnode, slot, root_fault.cnode_radix_bits);
+    let error = delete(root_fault_cnode, slot, root_fault.cnode_radix_bits);
     if error != sel4_sys::seL4_NoError {
         return Err(sel4_error("critical.service-recovery-reply-delete", error));
     }
@@ -915,24 +948,27 @@ fn resolve_target_fault(
     registry.resolve(badge).map_err(Into::into)
 }
 
+#[inline(never)]
 fn recover_target_passive_service_call(
     task_index: u16,
 ) -> Result<(), CriticalTcbConstructionError> {
     let mailbox = service_fault_mailbox_index(task_index)
         .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
-    TARGET_SERVICE_RECOVERY_STATES[mailbox]
-        .compare_exchange(
-            SERVICE_RECOVERY_READY,
-            SERVICE_RECOVERY_REPLIED,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        )
-        .map_err(|_| CriticalTcbConstructionError::RuntimeNotReady)?;
-    let sequence = TARGET_SERVICE_CALL_SEQUENCES[mailbox].swap(0, Ordering::AcqRel);
     let reply_slot = TARGET_SERVICE_RECOVERY_SLOTS[mailbox].load(Ordering::Acquire) as seL4_CPtr;
     if reply_slot == sel4_sys::seL4_CapNull {
         return Err(CriticalTcbConstructionError::RuntimeNotReady);
     }
+    match TARGET_SERVICE_RECOVERY_STATES[mailbox].compare_exchange(
+        SERVICE_RECOVERY_READY,
+        SERVICE_RECOVERY_REPLIED,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    ) {
+        Ok(_) => {}
+        Err(SERVICE_RECOVERY_REPLIED) => return Ok(()),
+        Err(_) => return Err(CriticalTcbConstructionError::RuntimeNotReady),
+    }
+    let sequence = TARGET_SERVICE_CALL_SEQUENCES[mailbox].swap(0, Ordering::AcqRel);
     // A passive child can fault before its first receive or between calls. In
     // that case there is no blocked donor to release, but the transition to
     // REPLIED still permanently closes this generation and prevents a later
@@ -961,10 +997,222 @@ fn recover_target_passive_service_call(
 enum FaultReplyDisposition {
     Released,
     RetainedByDriver,
+    CriticalTerminal { task_index: u16 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingTargetFault {
+    fault_label: seL4_Word,
+    fault_badge: seL4_Word,
+}
+
+#[inline(never)]
+fn publish_pending_target_fault(
+    pending: PendingTargetFault,
+) -> Result<(), CriticalTcbConstructionError> {
+    if TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire) {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    TARGET_PENDING_FAULT_LABEL.store(pending.fault_label, Ordering::Relaxed);
+    TARGET_PENDING_FAULT_BADGE.store(pending.fault_badge, Ordering::Relaxed);
+    TARGET_PENDING_FAULT_VALID.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[inline(never)]
+fn pending_target_fault() -> Option<PendingTargetFault> {
+    if !TARGET_PENDING_FAULT_VALID.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(PendingTargetFault {
+        fault_label: TARGET_PENDING_FAULT_LABEL.load(Ordering::Relaxed),
+        fault_badge: TARGET_PENDING_FAULT_BADGE.load(Ordering::Relaxed),
+    })
+}
+
+#[inline(never)]
+fn clear_pending_target_fault() {
+    TARGET_PENDING_FAULT_VALID.store(false, Ordering::Release);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PendingTargetServiceFault {
+    record: FaultHandoffRecord,
+    fault_handler_tcb_cap: seL4_CPtr,
+    recover_passive_call: bool,
+}
+
+#[inline(never)]
+fn publish_pending_target_service_fault(
+    pending: PendingTargetServiceFault,
+) -> Result<(), CriticalTcbConstructionError> {
+    if TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire) {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    let record = pending.record;
+    TARGET_ROOT_FAULT_SERVICE_SEQUENCE.store(record.sequence, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_TASK.store(usize::from(record.task_index), Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_IDENTITY_SLOT
+        .store(usize::from(record.identity.slot), Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_IDENTITY_LEASE
+        .store(record.identity.lease_epoch as usize, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_IDENTITY_SUPERVISOR.store(
+        record.identity.supervisor_generation as usize,
+        Ordering::Relaxed,
+    );
+    TARGET_ROOT_FAULT_SERVICE_IDENTITY_CAP
+        .store(record.identity.cap_generation as usize, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_BADGE.store(record.fault_badge, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_CLASS.store(
+        match record.fault_class {
+            FaultClass::Standard => 0,
+            FaultClass::Timeout => 1,
+        },
+        Ordering::Relaxed,
+    );
+    TARGET_ROOT_FAULT_SERVICE_ROOT_TCB.store(record.tcb_cap, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB
+        .store(pending.fault_handler_tcb_cap as usize, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_RECOVER_PASSIVE
+        .store(pending.recover_passive_call, Ordering::Relaxed);
+    TARGET_ROOT_FAULT_SERVICE_VALID.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[inline(never)]
+fn pending_target_service_fault() -> Option<PendingTargetServiceFault> {
+    if !TARGET_ROOT_FAULT_SERVICE_VALID.load(Ordering::Acquire) {
+        return None;
+    }
+    Some(PendingTargetServiceFault {
+        record: FaultHandoffRecord {
+            sequence: TARGET_ROOT_FAULT_SERVICE_SEQUENCE.load(Ordering::Relaxed),
+            task_index: TARGET_ROOT_FAULT_SERVICE_TASK.load(Ordering::Relaxed) as u16,
+            identity: GenerationIdentity {
+                slot: TARGET_ROOT_FAULT_SERVICE_IDENTITY_SLOT.load(Ordering::Relaxed) as u16,
+                lease_epoch: TARGET_ROOT_FAULT_SERVICE_IDENTITY_LEASE.load(Ordering::Relaxed)
+                    as u32,
+                supervisor_generation: TARGET_ROOT_FAULT_SERVICE_IDENTITY_SUPERVISOR
+                    .load(Ordering::Relaxed) as u32,
+                cap_generation: TARGET_ROOT_FAULT_SERVICE_IDENTITY_CAP.load(Ordering::Relaxed)
+                    as u32,
+            },
+            fault_badge: TARGET_ROOT_FAULT_SERVICE_BADGE.load(Ordering::Relaxed),
+            fault_class: match TARGET_ROOT_FAULT_SERVICE_CLASS.load(Ordering::Relaxed) {
+                0 => FaultClass::Standard,
+                1 => FaultClass::Timeout,
+                _ => return None,
+            },
+            tcb_cap: TARGET_ROOT_FAULT_SERVICE_ROOT_TCB.load(Ordering::Relaxed),
+        },
+        fault_handler_tcb_cap: TARGET_ROOT_FAULT_SERVICE_HANDLER_TCB.load(Ordering::Relaxed)
+            as seL4_CPtr,
+        recover_passive_call: TARGET_ROOT_FAULT_SERVICE_RECOVER_PASSIVE.load(Ordering::Relaxed),
+    })
+}
+
+#[inline(never)]
+fn clear_pending_target_service_fault() {
+    TARGET_ROOT_FAULT_SERVICE_VALID.store(false, Ordering::Release);
+}
+
+#[repr(usize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RootFaultCriticalTurn {
+    PrimeReceive = 0,
+    Receive = 1,
+    Classify = 2,
+    ResolveService = 3,
+    SuspendService = 4,
+    RecoverPassiveService = 5,
+    PublishService = 6,
+    SuspendCritical = 7,
+    SignalEmergency = 8,
+}
+
+#[inline(never)]
+fn commit_root_fault_turn(turn: RootFaultCriticalTurn) {
+    TARGET_ROOT_FAULT_TURN.store(turn as usize, Ordering::Release);
+}
+
+#[inline(never)]
+fn commit_root_fault_suspend(task_index: u16) {
+    TARGET_ROOT_FAULT_CRITICAL_TASK.store(usize::from(task_index), Ordering::Relaxed);
+    TARGET_ROOT_FAULT_TURN.store(
+        RootFaultCriticalTurn::SuspendCritical as usize,
+        Ordering::Release,
+    );
+}
+
+fn current_root_fault_turn() -> RootFaultCriticalTurn {
+    match TARGET_ROOT_FAULT_TURN.load(Ordering::Acquire) {
+        0 => RootFaultCriticalTurn::PrimeReceive,
+        1 => RootFaultCriticalTurn::Receive,
+        2 => RootFaultCriticalTurn::Classify,
+        3 => RootFaultCriticalTurn::ResolveService,
+        4 => RootFaultCriticalTurn::SuspendService,
+        5 => RootFaultCriticalTurn::RecoverPassiveService,
+        6 => RootFaultCriticalTurn::PublishService,
+        7 => RootFaultCriticalTurn::SuspendCritical,
+        8 => RootFaultCriticalTurn::SignalEmergency,
+        _ => target_fail_stop(
+            "[critical] root-fault cursor invalid",
+            Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+        ),
+    }
+}
+
+#[inline(always)]
+fn is_generated_service_fault_badge(badge: seL4_Word) -> bool {
+    let ninedoor = generated::ninedoor_service_config();
+    let console = generated::console_network_service_config();
+    (ninedoor.enabled && (badge == ninedoor.fault_badge || badge == ninedoor.timeout_badge))
+        || (console.enabled && (badge == console.fault_badge || badge == console.timeout_badge))
+}
+
+#[inline(never)]
+fn prepare_target_service_fault(
+    fault_label: seL4_Word,
+    badge: seL4_Word,
+) -> Result<PendingTargetServiceFault, CriticalTcbConstructionError> {
+    let (registration, fault_class) = resolve_target_fault(badge)?;
+    let task = generated::temporal_tasks()
+        .get(usize::from(registration.task_index))
+        .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
+    let timeout_label = sel4_sys::SEL4_MCS_FAULT_TIMEOUT_LABEL as seL4_Word;
+    if !is_generated_service_fault_badge(badge)
+        || !matches!(
+            task.kind,
+            TemporalTaskKind::Service | TemporalTaskKind::Drain
+        )
+        || (fault_class == FaultClass::Timeout) != (fault_label == timeout_label)
+    {
+        return Err(CriticalTcbConstructionError::FaultRegistry(
+            FaultRegistryError::UnknownBadge,
+        ));
+    }
+    let sequence = TARGET_FAULT_SEQUENCE.fetch_add(1, Ordering::AcqRel);
+    if sequence == 0 {
+        return Err(CriticalTcbConstructionError::RuntimeNotReady);
+    }
+    Ok(PendingTargetServiceFault {
+        record: FaultHandoffRecord {
+            sequence,
+            task_index: registration.task_index,
+            identity: registration.identity,
+            fault_badge: badge,
+            fault_class,
+            tcb_cap: registration.tcb_cap,
+        },
+        fault_handler_tcb_cap: root_fault_tcb_control_cap(registration.task_index)?,
+        recover_passive_call: task.kind == TemporalTaskKind::Service
+            && task.execution == TemporalExecution::Passive
+            && task.timeout_policy == TimeoutPolicy::ReturnError,
+    })
 }
 
 fn handle_target_fault(
-    info: sel4_sys::seL4_MessageInfo,
+    fault_label: seL4_Word,
     badge: seL4_Word,
 ) -> Result<FaultReplyDisposition, CriticalTcbConstructionError> {
     let (registration, fault_class) = resolve_target_fault(badge)?;
@@ -972,7 +1220,7 @@ fn handle_target_fault(
         .get(usize::from(registration.task_index))
         .ok_or(CriticalTcbConstructionError::MissingGeneratedRecord)?;
     let timeout_label = sel4_sys::SEL4_MCS_FAULT_TIMEOUT_LABEL as seL4_Word;
-    if (fault_class == FaultClass::Timeout) != (info.label() == timeout_label) {
+    if (fault_class == FaultClass::Timeout) != (fault_label == timeout_label) {
         return Err(CriticalTcbConstructionError::FaultRegistry(
             FaultRegistryError::UnknownBadge,
         ));
@@ -1022,22 +1270,13 @@ fn handle_target_fault(
         | TemporalTaskKind::RootFault
         | TemporalTaskKind::RootEmergency
         | TemporalTaskKind::WorkerSupervisor
-        | TemporalTaskKind::DriverSupervisor => {
-            sel4::suspend_tcb(fault_handler_tcb_cap)
-                .map_err(|error| sel4_error("critical.root-fault-critical-suspend", error))?;
-            sel4::signal_unchecked(CHILD_EMERGENCY_SIGNAL_SLOT);
-            FaultReplyDisposition::Released
-        }
+        | TemporalTaskKind::DriverSupervisor => FaultReplyDisposition::CriticalTerminal {
+            task_index: registration.task_index,
+        },
+        // Exact generated service badges are routed through the persistent V6
+        // cursor before this composite legacy classifier can consume them.
         TemporalTaskKind::Service | TemporalTaskKind::Drain => {
-            sel4::suspend_tcb(fault_handler_tcb_cap)
-                .map_err(|error| sel4_error("critical.root-fault-service-suspend", error))?;
-            if task.execution == generated::TemporalExecution::Passive
-                && task.timeout_policy == TimeoutPolicy::ReturnError
-            {
-                recover_target_passive_service_call(registration.task_index)?;
-            }
-            publish_target_service_fault(record)?;
-            FaultReplyDisposition::Released
+            return Err(CriticalTcbConstructionError::RuntimeNotReady)
         }
     };
     Ok(disposition)
@@ -1054,25 +1293,189 @@ extern "C" fn root_fault_entry(_arg0: seL4_Word) -> ! {
         .handoff
         .root_fault_release_badge;
     loop {
-        #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
-        cohesix_root_fault_qemu_evidence_turn();
-        let mut badge = 0;
-        let info = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
-        let disposition = match handle_target_fault(info, badge) {
-            Ok(disposition) => disposition,
-            Err(_) => target_fail_stop(
-                "[critical] root-fault receive failed",
-                Some(CHILD_EMERGENCY_SIGNAL_SLOT),
-            ),
-        };
-        if disposition == FaultReplyDisposition::RetainedByDriver {
-            let mut observed_badge = 0;
-            let _ = sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge);
-            if observed_badge != release_badge || DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire) {
-                target_fail_stop(
-                    "[critical] root-fault driver release invalid",
-                    Some(CHILD_EMERGENCY_SIGNAL_SLOT),
-                );
+        match current_root_fault_turn() {
+            RootFaultCriticalTurn::PrimeReceive => {
+                // The first fault receive starts only after an explicit MCS
+                // replenishment boundary. No receive, Reply association, or
+                // copied fault value exists across this one-time yield.
+                commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::Receive => {
+                commit_root_fault_turn(RootFaultCriticalTurn::Classify);
+                #[cfg(all(feature = "bootstrap-trace", feature = "release-qemu"))]
+                cohesix_root_fault_qemu_evidence_turn();
+                let mut badge = 0;
+                let info = sel4::recv_with_reply(CHILD_INBOX_SLOT, &mut badge, CHILD_REPLY_SLOT);
+                // Only copied message values cross this refill boundary. The
+                // single Reply object stays in its fixed child CSpace slot,
+                // and no second receive can replace its association before
+                // the Classify turn consumes these values.
+                if publish_pending_target_fault(PendingTargetFault {
+                    fault_label: info.label(),
+                    fault_badge: badge,
+                })
+                .is_err()
+                {
+                    target_fail_stop(
+                        "[critical] root-fault publication state invalid",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    );
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::Classify => {
+                let PendingTargetFault {
+                    fault_label,
+                    fault_badge,
+                } = match pending_target_fault() {
+                    Some(fault) => fault,
+                    None => target_fail_stop(
+                        "[critical] root-fault classification state missing",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                if is_generated_service_fault_badge(fault_badge) {
+                    commit_root_fault_turn(RootFaultCriticalTurn::ResolveService);
+                    sel4::yield_now();
+                } else {
+                    clear_pending_target_fault();
+                    let disposition = match handle_target_fault(fault_label, fault_badge) {
+                        Ok(disposition) => disposition,
+                        Err(_) => target_fail_stop(
+                            "[critical] root-fault classification failed",
+                            Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                        ),
+                    };
+                    match disposition {
+                        FaultReplyDisposition::Released => {
+                            commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                            sel4::yield_now();
+                        }
+                        FaultReplyDisposition::RetainedByDriver => {
+                            let mut observed_badge = 0;
+                            let _ = sel4::wait(CHILD_DRIVER_RELEASE_SLOT, &mut observed_badge);
+                            if observed_badge != release_badge
+                                || DRIVER_FAULT_REPLY_BUSY.load(Ordering::Acquire)
+                            {
+                                target_fail_stop(
+                                    "[critical] root-fault driver release invalid",
+                                    Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                                );
+                            }
+                            commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                            sel4::yield_now();
+                        }
+                        FaultReplyDisposition::CriticalTerminal { task_index } => {
+                            commit_root_fault_suspend(task_index);
+                            sel4::yield_now();
+                        }
+                    }
+                }
+            }
+            RootFaultCriticalTurn::ResolveService => {
+                let PendingTargetFault {
+                    fault_label,
+                    fault_badge,
+                } = match pending_target_fault() {
+                    Some(fault) => fault,
+                    None => target_fail_stop(
+                        "[critical] root-fault service classification state missing",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                commit_root_fault_turn(RootFaultCriticalTurn::SuspendService);
+                match prepare_target_service_fault(fault_label, fault_badge) {
+                    Ok(pending) => {
+                        if publish_pending_target_service_fault(pending).is_err() {
+                            target_fail_stop(
+                                "[critical] root-fault service snapshot invalid",
+                                Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                            );
+                        }
+                        clear_pending_target_fault();
+                    }
+                    Err(CriticalTcbConstructionError::FaultHandoff(
+                        FaultHandoffError::Contended,
+                    )) => commit_root_fault_turn(RootFaultCriticalTurn::ResolveService),
+                    Err(_) => target_fail_stop(
+                        "[critical] root-fault service resolution failed",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::SuspendService => {
+                let pending = match pending_target_service_fault() {
+                    Some(pending) => pending,
+                    None => target_fail_stop(
+                        "[critical] root-fault service snapshot missing",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                let successor = if pending.recover_passive_call {
+                    RootFaultCriticalTurn::RecoverPassiveService
+                } else {
+                    RootFaultCriticalTurn::PublishService
+                };
+                commit_root_fault_turn(successor);
+                if sel4::suspend_tcb_bounded(pending.fault_handler_tcb_cap).is_err() {
+                    commit_root_fault_turn(RootFaultCriticalTurn::SuspendService);
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::RecoverPassiveService => {
+                let pending = match pending_target_service_fault() {
+                    Some(pending) if pending.recover_passive_call => pending,
+                    _ => target_fail_stop(
+                        "[critical] root-fault passive recovery state invalid",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                commit_root_fault_turn(RootFaultCriticalTurn::PublishService);
+                if recover_target_passive_service_call(pending.record.task_index).is_err() {
+                    commit_root_fault_turn(RootFaultCriticalTurn::RecoverPassiveService);
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::PublishService => {
+                let pending = match pending_target_service_fault() {
+                    Some(pending) => pending,
+                    None => target_fail_stop(
+                        "[critical] root-fault service publication state missing",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                if publish_target_service_fault(pending.record).is_ok() {
+                    clear_pending_target_service_fault();
+                } else {
+                    commit_root_fault_turn(RootFaultCriticalTurn::PublishService);
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::SuspendCritical => {
+                commit_root_fault_turn(RootFaultCriticalTurn::SignalEmergency);
+                let task_index = TARGET_ROOT_FAULT_CRITICAL_TASK.load(Ordering::Acquire) as u16;
+                let fault_handler_tcb_cap = match root_fault_tcb_control_cap(task_index) {
+                    Ok(cap) => cap,
+                    Err(_) => target_fail_stop(
+                        "[critical] root-fault critical TCB cap missing",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    ),
+                };
+                if sel4::suspend_tcb(fault_handler_tcb_cap).is_err() {
+                    target_fail_stop(
+                        "[critical] root-fault critical suspend failed",
+                        Some(CHILD_EMERGENCY_SIGNAL_SLOT),
+                    );
+                }
+                sel4::yield_now();
+            }
+            RootFaultCriticalTurn::SignalEmergency => {
+                commit_root_fault_turn(RootFaultCriticalTurn::Receive);
+                sel4::signal_unchecked(CHILD_EMERGENCY_SIGNAL_SLOT);
+                sel4::yield_now();
             }
         }
     }

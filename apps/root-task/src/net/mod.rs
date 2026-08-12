@@ -1352,8 +1352,26 @@ pub trait NetPoller {
         false
     }
 
+    /// Remove one pending net-console connection event (optional).
+    fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+        None
+    }
+
+    /// Return whether one lifecycle event is retained for Operator admission.
+    ///
+    /// This side-effect-free predicate lets the isolated VirtIO scheduler skip
+    /// an ineligible event unit without consuming or composing it with the
+    /// immediately following authenticated-line unit.
+    fn console_event_pending(&self) -> bool {
+        false
+    }
+
     /// Drain pending net-console connection events (optional).
-    fn drain_console_events(&mut self, _visitor: &mut dyn FnMut(NetConsoleEvent)) {}
+    fn drain_console_events(&mut self, visitor: &mut dyn FnMut(NetConsoleEvent)) {
+        while let Some(event) = self.take_console_event() {
+            visitor(event);
+        }
+    }
 
     /// Snapshot ingest metrics for observability providers.
     fn ingest_snapshot(&self) -> IngestSnapshot {
@@ -1451,10 +1469,55 @@ pub trait NetPoller {
     fn contain_faulted_console_service(
         &mut self,
         _hal: &mut crate::hal::KernelHal<'_>,
-    ) -> Result<bool, crate::hal::HalError> {
-        Ok(false)
+    ) -> Result<crate::console_network_service::ConsoleNetworkContainmentTurn, crate::hal::HalError>
+    {
+        Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle)
+    }
+
+    /// Return whether a retained console-network containment diagnostic exists.
+    #[cfg(feature = "kernel")]
+    fn console_network_containment_diagnostic_pending(&self) -> bool {
+        false
+    }
+
+    /// Copy the oldest retained console-network containment diagnostic.
+    #[cfg(feature = "kernel")]
+    fn pending_console_network_containment_diagnostic(
+        &self,
+    ) -> Option<HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }>> {
+        None
+    }
+
+    /// Commit exactly the copied diagnostic admitted to root-owned output.
+    #[cfg(feature = "kernel")]
+    fn commit_console_network_containment_diagnostic(&mut self, _expected_line: &str) -> bool {
+        false
     }
 }
+
+#[cfg(any(
+    test,
+    all(
+        feature = "kernel",
+        feature = "net-console",
+        feature = "net-backend-virtio",
+        target_os = "none",
+        sel4_config_kernel_mcs
+    )
+))]
+mod isolated_network_turn;
+
+#[cfg(all(
+    feature = "kernel",
+    feature = "net-console",
+    feature = "net-backend-virtio",
+    target_os = "none",
+    sel4_config_kernel_mcs
+))]
+pub(crate) use isolated_network_turn::{
+    select_isolated_network_turn, IsolatedNetworkLowerCursor, IsolatedNetworkLowerUnit,
+    IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection, IsolatedNetworkTurnUnit,
+};
 
 /// Connection lifecycle notifications surfaced by TCP console transports.
 #[derive(Debug, Clone, PartialEq, Eq)]

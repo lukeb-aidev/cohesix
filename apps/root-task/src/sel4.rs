@@ -1596,17 +1596,52 @@ pub fn map_page_into_vspace(
     KernelEnv::assert_page_aligned(vaddr);
     let vaddr_word =
         sel4_sys::seL4_Word::try_from(vaddr).expect("virtual address must fit in seL4_Word");
+    let result = map_page_into_vspace_syscall(frame_cap, vspace, vaddr_word, rights, attr);
+    if let Err(err) = result {
+        ::log::error!(
+            "[vspace] page-map failed frame=0x{frame_cap:04x} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x} err={err} ({name})",
+            name = error_name(err),
+        );
+    }
+    result
+}
+
+/// Map one page without diagnostic formatting or logger acquisition.
+/// The containment caller supplies the retained page-aligned root mapping
+/// address constructed and validated during NineDoor service admission.
+#[cfg(feature = "kernel")]
+pub(crate) fn map_page_into_vspace_bounded(
+    frame_cap: seL4_CPtr,
+    vspace: seL4_CPtr,
+    vaddr: usize,
+    rights: sel4_sys::seL4_CapRights,
+    attr: sel4_sys::seL4_ARM_VMAttributes,
+) -> Result<(), seL4_Error> {
+    map_page_into_vspace_syscall(
+        frame_cap,
+        vspace,
+        vaddr as sel4_sys::seL4_Word,
+        rights,
+        attr,
+    )
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn map_page_into_vspace_syscall(
+    frame_cap: seL4_CPtr,
+    vspace: seL4_CPtr,
+    vaddr_word: sel4_sys::seL4_Word,
+    rights: sel4_sys::seL4_CapRights,
+    attr: sel4_sys::seL4_ARM_VMAttributes,
+) -> Result<(), seL4_Error> {
     // SAFETY: `frame_cap` names a page capability, `vspace` names the target
-    // VSpace, and `vaddr` is page-aligned. seL4 validates page-table presence,
+    // VSpace, and `vaddr_word` is page-aligned. seL4 validates page-table presence,
     // rights, attributes, and authority.
     let err = unsafe { sel4_sys::seL4_ARM_Page_Map(frame_cap, vspace, vaddr_word, rights, attr) };
     if err == seL4_NoError {
         Ok(())
     } else {
-        ::log::error!(
-            "[vspace] page-map failed frame=0x{frame_cap:04x} vspace=0x{vspace:04x} vaddr=0x{vaddr:016x} err={err} ({name})",
-            name = error_name(err),
-        );
         Err(err)
     }
 }
@@ -2316,17 +2351,31 @@ pub fn write_tcb_registers(
 pub fn suspend_tcb(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
     let guard_stage = "TCB.Suspend";
     let guarded_tcb = sel4_guard::guard_cptr(guard_stage, "tcb_cap", tcb_cap);
+    let result = suspend_tcb_syscall(guarded_tcb);
+    if let Err(error) = result {
+        ::log::error!(
+            "[tcb] suspend failed tcb=0x{tcb:04x} err={error} ({name})",
+            tcb = guarded_tcb,
+            name = error_name(error),
+        );
+    }
+    result
+}
+
+/// Suspend one TCB without diagnostic formatting or logger acquisition.
+#[cfg(feature = "kernel")]
+pub(crate) fn suspend_tcb_bounded(tcb_cap: seL4_CPtr) -> Result<(), seL4_Error> {
+    suspend_tcb_syscall(tcb_cap)
+}
+
+#[cfg(feature = "kernel")]
+#[inline(always)]
+fn suspend_tcb_syscall(guarded_tcb: seL4_CPtr) -> Result<(), seL4_Error> {
     // SAFETY: The guarded CPtr is a TCB capability; seL4 validates the operation.
     let result = unsafe { sel4_sys::seL4_TCB_Suspend(guarded_tcb) };
     if result == seL4_NoError {
         Ok(())
     } else {
-        ::log::error!(
-            "[tcb] suspend failed tcb=0x{tcb:04x} err={err} ({name})",
-            tcb = guarded_tcb,
-            err = result,
-            name = error_name(result),
-        );
         Err(result)
     }
 }
@@ -2491,6 +2540,13 @@ pub fn cnode_copy_depth(
 #[inline(always)]
 pub fn cnode_delete(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
     debug_put_char(b'C' as i32);
+    cnode_delete_bounded(root, index, depth)
+}
+
+/// Perform one validated CNode delete without a debug or logging side effect.
+#[cfg(feature = "kernel")]
+#[inline(always)]
+pub(crate) fn cnode_delete_bounded(root: seL4_CNode, index: seL4_CPtr, depth: u8) -> seL4_Error {
     let depth_word: seL4_Word = depth.into();
     // SAFETY: Callers provide a valid CNode root/index/depth triple from bootstrap-owned caps;
     // seL4 validates the addressed slot.

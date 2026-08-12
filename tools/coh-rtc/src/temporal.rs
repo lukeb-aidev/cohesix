@@ -110,6 +110,7 @@ pub struct TemporalTaskConfig {
     pub response_time_us: u32,
     pub admitted: bool,
     pub wcet_provenance: String,
+    pub virtio_operator_serial_io_bytes_per_turn: u32,
     pub allowed_donors: Vec<String>,
     pub reply_objects: u8,
     pub max_donation_depth: u8,
@@ -145,6 +146,14 @@ impl TemporalTaskConfig {
         if self.timeout_badge == 0 {
             bail!(
                 "temporal task {} requires a non-zero timeout badge",
+                self.id
+            );
+        }
+        if self.kind != TemporalTaskKind::RootControl
+            && self.virtio_operator_serial_io_bytes_per_turn != 0
+        {
+            bail!(
+                "non-root-control temporal task {} must not declare a VirtIO Operator serial I/O byte bound",
                 self.id
             );
         }
@@ -715,6 +724,11 @@ mod tests {
             response_time_us: 400,
             admitted: true,
             wcet_provenance: "m26e-qemu-probe-v1".to_owned(),
+            virtio_operator_serial_io_bytes_per_turn: if kind == TemporalTaskKind::RootControl {
+                64
+            } else {
+                0
+            },
             allowed_donors: Vec::new(),
             reply_objects: 0,
             max_donation_depth: 0,
@@ -778,6 +792,17 @@ mod tests {
     #[test]
     fn exact_critical_topology_is_admitted() {
         valid_config().validate().expect("valid MCS topology");
+    }
+
+    #[test]
+    fn virtio_operator_serial_io_bound_is_root_control_only() {
+        let mut misplaced = valid_config();
+        misplaced.tasks[1].virtio_operator_serial_io_bytes_per_turn = 64;
+        assert!(misplaced
+            .validate()
+            .expect_err("serial bound is root-control-only")
+            .to_string()
+            .contains("must not declare a VirtIO Operator serial I/O byte bound"));
     }
 
     #[test]

@@ -403,6 +403,14 @@ name = "console_network_service"
 path = "tests/console_network_service.rs"
 
 [[test]]
+name = "isolated_virtio_network_phasing"
+path = "tests/isolated_virtio_network_phasing.rs"
+
+[[test]]
+name = "isolated_virtio_rx_seam"
+path = "tests/isolated_virtio_rx_seam.rs"
+
+[[test]]
 name = "ninedoor_service_isolation"
 path = "tests/ninedoor_service_isolation.rs"
 

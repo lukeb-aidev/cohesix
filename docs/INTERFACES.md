@@ -164,6 +164,275 @@ remains subject to live QEMU qualification.
 print-and-exit binary. A live QEMU boot is still required to promote these
 constructed interfaces to target execution evidence.
 
+### Internal target console-network ABI
+
+`console-network-runtime` is an active-SC child, not the passive NineDoor
+donation chain and not a second external transport. Its console-network ABI v1
+retains four fixed 4096-byte, pointer-free, sequence-last pages: root-produced
+packet ingress and control are read-only in the child; child-produced packet
+egress and events are read-write there. Compact 40-byte packet and 64-byte
+control/event headers plus the validated active payload are authoritative;
+inactive tails are not protocol fields.
+
+One active-MCS replenishment closes at most one logical unit. The
+retained-first priority is completion publication, service-event publication,
+egress publication, service-poll continuation, new ingress, then new control.
+After the initial Ready signal and every later nonterminal unit, including idle
+or backpressure retention, the child executes exactly one `seL4_Yield` and then
+one `seL4_Wait`. Coalesced later work remains pending until replenishment and
+the existing root service tick signals the existing wake notification. Terminal
+revoke/shutdown uses only its wait-only park. This scheduling cut adds no
+capability, page, field, version, schema, or external console verb. Root keeps
+`ChildTurnUnit::PollService` as the ABI-neutral scheduler unit, while v6
+internally resumes it across private `StackIngress`, `StackEgress`, and
+`Session` steps. The first two return `ServicePollOutcome::Continuation` and
+retain `service_pending` across the existing Yield-then-Wait seam; only
+`Session` returns `Complete` and clears it. This adds no shared
+record, notification, or external state. Root
+containment is separately resumable: one exclusive Recovery turn advances at
+most one fixed-order material unit, preserves both retained Runtime- and
+Network-unit cursors, and
+reaches the sole outer yield without ordinary-pump fallthrough. Console-network
+has precedence until its pending sequence completes; only then may NineDoor
+containment advance. The
+`m26e-qemu-console-bounded-stack-steps-candidate-v6` child and
+`m26e-qemu-root-exclusive-predispatch-candidate-v23` root-control plus
+`m26e-qemu-root-fault-service-units-candidate-v6` root-fault candidates
+remain pending fresh QEMU authentication and standard/timeout fault-injection evidence. Their
+manifest change is provenance-only: ABI v1 pages, fields, version, notification
+rights, and external console grammar are unchanged.
+
+V23 and root-fault V6 change internal turn boundaries only. Successful compact
+physical-tail/prompt housekeeping returns before ordinary phase selection;
+bounded backpressure may fall through to exactly one compact Operator unit
+without phase advance. Root-fault's one-time PrimeReceive commits Receive and
+yields before accepting a fault, so an early sender may queue on the existing
+endpoint but no fault value or Reply association crosses that prime boundary.
+The V6 service branch adds only internal `ResolveService`, `SuspendService`,
+optional passive `RecoverPassiveService`, and `PublishService` turns. Active
+console service faults issue no recovery Reply; passive service recovery may
+issue at most one. Neither change adds an endpoint, message, field, right, verb,
+or response.
+
+V18 retains v17's exact isolated QEMU VirtIO selection at the public EventPump
+entry, before the generic EventPump frame is allocated. Its tiny noinline dispatcher
+commits the outer successor and cannot call generic Operator or Runtime bodies.
+The compact Operator begins the existing shared serial and one-record output
+credits. A retained SerialDispatch is selected first; otherwise an RX-only
+SerialIo probe may retain SerialDispatch for a later Operator. SerialIo admits
+no TX, dispatch, flush, or raw-UART RX trace formatting while the admitted
+ordinary root-control turn is active; SerialDispatch commits its successor before
+bounded consume/echo plus TX flush and does not probe RX. The Operator admits
+at most one eligible
+material noinline leaf in strict priority: serial RX or retained dispatch/TX, local-seat input,
+ordered physical-response output, one lifecycle event, one buffered
+authenticated line, background/high-impact pending output, then
+display/frontier/attach. Every material leaf commits its
+recorded successor before work. This is internal temporal decomposition only:
+it changes no frame, event, line, response, ACK/ERR/END, authentication,
+authority, or ordering contract visible to a host client. Pi, linked-runtime,
+physical-owner, and non-VirtIO paths retain the generic EventPump.
+
+This split follows exact v17 failure evidence: root ELF
+`3d0641bac42d21ce383c47f38628a05db0d2474fab69fc6e14b67ba39a71bd47`,
+unchanged child ELF
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO
+`fa478638d6d2b93b654a2615e4dcd1e1d7f666d0945d4e012adcf28da2292af1`.
+Four authentication attempts each wrote 18 bytes and read zero. Root-control
+faulted at outer-Yield PC `0xf6624`; saved ordinary, Runtime, and Operator
+successors were `Runtime`, `Worker`, and `SerialDispatch`, identifying the
+remaining composed SerialIo leaf. This internal split changes no external
+frame, event, line, response, ACK/ERR/END, authentication, authority, or
+ordering contract.
+
+The exact v18 artifact bound root ELF
+`e7d34f018ff308c575fedb79ca7cef5542a7da8e753c09ddb9d55cf9daa79d4e`
+and system CPIO
+`0dca41cc6fdd9a877144dcd2db610beaeafef95423a81ce6896b01bb9b8f5cf5`.
+Four authentication attempts each wrote 18 bytes and read zero. Root-control
+timed out after Network at outer-Yield FaultIP `0xf66e4`; successor
+`Operator(0)` and lower successor `Disconnect(2)` identify selected no-op
+`StageOutput(1)`, with no pending egress or child signal. V19 therefore changed
+only the internal QEMU Network prelude: it retained the timer prelude and one
+retained NIC unit but did not reconcile CYW43/HDMI state. Runtime and generic/Pi
+paths retained that behavior. The exact clean v19 root/CPIO hashes were
+`0737a6f008197fd5b931af104c95164ddcd925fa04a8440439895c1e76b26fca`
+and `51e7b955b449b42b7a0cad569aa187e19a0f71464ffb81080d29733a589e7ed0`.
+Four authentication attempts each wrote 18 bytes and read zero. Root-control
+timed out at outer-Yield PC `0xf66dc` after Network; lower successor
+`Ingress(3)` proves selected `Disconnect(2)` was a no-op without child signal.
+Pending egress was empty, the child was healthy at Wait PC `0x21343c`, and
+root `smoltcp_polls` was `250098`, isolating the composed post-leaf diagnostic
+aggregate. V20 retains one compact telemetry, originating-time, and
+last-RX-progress observation after the timer-plus-one-NIC visit. The next
+Network visit takes it and runs NETDIAG only before returning, while immediate
+flush, connection-id, and NineDoor ingest accounting remain unchanged. No ABI v1 field, frame, notification, capability,
+verb, ACK/ERR/END state, authentication rule, or host-visible ordering changes.
+The exact v20 root/CPIO hashes were
+`ed5cb9f587d0d63e6121f8b00b083e68f5a0a7dd23dd6d2bbf0c899e1e85e80f`
+and `ca2a52038eb0814a17c8609f03bec32ff357fdd524edee3e7080ac69ceb7823b`.
+The image reached the root marker and prompt, then root-control timed out at
+outer-Yield PC `0xf680c`. Successor Operator and retained NETDIAG prove timer
+plus NIC completed and the diagnostic had not run; lower-cursor, egress, and
+child state remain unconfirmed. V21 splits those internal Timer and Nic units
+through a successor-before-work QEMU cursor. A retained diagnostic preempts
+without advancing it, giving Timer -> Nic -> DeferredDiagnostic -> Timer.
+Quarantine clears the diagnostic but preserves the cursor; generic/Pi paths do
+not use it. This adds no external interface field or ordering state.
+
+The QEMU VirtIO root adapter also persists an internal lower-service cursor:
+ObserveChild -> StageOutput -> Disconnect -> Ingress -> ServiceTick. One Network
+visit attempts exactly one selected unit, even when it is a no-op. A no-op
+advances the cursor; a successful unit that signals the child forces the next
+lower attempt to ObserveChild. A pending deferred diagnostic or retained TX
+preempts without changing the cursor or forced-observe state. This is an
+internal scheduling contract only: it adds no console-network ABI field, page,
+notification, capability, verb, or external ordering rule. Live v7 evidence
+then located the next bound inside root's startup Operator: the exact image
+timed out in serial queue dequeue from `SerialPort::flush_tx_unlocked` while
+the UART-visible `[mark] root-console.start.ok` remained queued, before Network
+or Recovery. The missing wire marker is not a source lifecycle boundary.
+Schema 1.11 therefore adds the
+internal temporal field `virtio_operator_serial_io_bytes_per_turn`. QEMU
+root-control selects `64`; every non-root task and Pi/non-VirtIO root-control
+selects zero. One credit is shared across every serial RX poll and TX flush in
+that Operator turn. Entry-time TX backlog reserves `32` bytes for TX and limits
+RX to `32`; without entry backlog RX may use all `64`. Exhaustion retains
+unfinished bytes for a later turn.
+
+V14 introduced the ABI-neutral lower cursor through the compact
+`poll_split_ordinary_virtio_network_turn`. V21 adds the separate private
+`OrdinaryVirtioNetworkUnit::{Timer, Nic}` cursor. With no retained diagnostic,
+the cursor successor commits before Timer calls only
+`poll_runtime_timer_prelude` or Nic calls one budgeted NIC unit and retains the
+compact diagnostic. The following Network visit takes that observation and
+runs only NETDIAG without advancing the Timer/Nic cursor; quarantine clears the
+observation while preserving the cursor. The former composite Network prelude
+is absent. The distinct split Runtime prelude retains network-ready-HDMI
+reconciliation, and generic/Pi behavior is unchanged. The
+adapter commits the ordinary lower successor before one distinct noinline unit
+helper, avoiding a compiler-expanded closure that contains every unit. A
+successful child signal may still force the retained cursor to ObserveChild.
+Network may retain one lifecycle event but does not drain it; the immediately
+following Operator admits at most one retained event before buffered command
+dispatch. No shared record, event schema, ordering promise, or host-visible
+interface changes.
+The canonical v8 root ELF
+`5052e7a5070987c252d3c1f5cf6f27172bd5ece1836a8f6c2a5c329c789a0a61`
+still consumed the complete `2750 us` root-control refill and raised
+current-fault `Timeout`, badge `0x26ee0001`, at PC `0xede84` immediately after
+`emit_prompt_now`. The internal v9 scheduling rule therefore permits at most
+one retained output-record attempt in an Operator whose generated VirtIO
+serial limit is nonzero. Remaining FIFO and response-tail records stay ordered
+for later Operators; Pi and non-VirtIO turns keep their existing two-record
+attempt limit.
+The canonical v9 root ELF
+`fa488c9367136f0eadef7182a18691664c3ae51c2ac2974e12000ff5d27f38ed`
+and CPIO
+`aca549e99e0d86299e9f98348d896b730259277654544ebd22a74595b61e9bfb`
+then consumed the complete first post-bind `2750 us` refill and raised
+current-fault `Timeout`, badge `0x26ee0001`, at PC `0x13a798`, the first
+`compiler_builtins` `memmove` instruction reached from
+`heapless::Vec<PendingConsoleOutput, 72>::remove(0)` (LR `0x79ccc`, prospective
+`x2 = 0x110`). No byte was copied, serial was idle, the one-record cursor was
+full, and the marker plus initial prompt stayed queued. This is aggregate
+first-post-bind refill exhaustion rather than copy-cost evidence or a failure
+of the one-record rule.
+V10 therefore inserts one universal MCS `seL4_Yield` after the steady SC and
+timeout endpoint are installed but before either containment probe or the first
+Operator. It sacrifices the partial activation refill and waits for the next
+replenishment without draining retained output under bootstrap authority. The
+yield is a one-time internal activation seam, distinct from the sole recurring
+outer yield. It adds no interface, capability, schema field, or numeric change;
+Pi adds one startup-period wait while retaining its existing phase behavior.
+The exact v10 root ELF
+`022908395c954f73a67136f70fe4404d96e0cf1ff16f4531fa95eae7a6f57cb5`
+crossed that seam and emitted the retained startup marker and prompt, then
+timed out with badge `0x26ee0001` in the second fresh Runtime at PC `0xce98c`,
+the root-endpoint nonblocking receive. V11 retains every external interface and
+gives isolated QEMU Runtime the internal Worker -> ControlEndpoint ->
+BootstrapDrain -> StreamFlush -> RebootTail cursor with one selected unit per
+visit and successor commit before its prelude. Worker handles one
+pending mailbox operation or one retained role-slot check; ControlEndpoint
+performs at most one poll and its immediate forward; BootstrapDrain takes one
+staged `Option`; RebootTail owns its visit. MCS fault polling is absent from the
+cursor. StreamFlush uses one visit per line;
+after the retained final-line visit, a later selected no-line visit finalizes
+cursor/bandwidth state only and the following selected visit emits END only.
+Legacy Pi/non-VirtIO Runtime keeps its 48-line/16-KiB behavior.
+The exact v11/v4 artifacts were root ELF
+`44971429e4941d751248c216082256f01e187930d9a6d40028e5c89d8611b597`,
+console child ELF
+`af08f817191cc51c9354b61f09f3eeb50c8cdf875c660c7231987a426886666d`,
+and CPIO
+`9fbb58e1dc6dc508361f37ce0c24219e3e9029dae101e2be789df1bcb1a5b11d`.
+There were four TCP connects. The first three completed authentication attempts
+each wrote 18 bytes and read zero; the fourth connect had no completed
+authentication record. The child timed out with badge `0x26ee0007` after
+`3000 us` at PC `0x213458`, the `seL4_Yield` immediately after the composite
+`PollService` completed and cleared; saved retained state identified
+`PollService` as that completed unit. Containment
+reached `Complete(6)`; root then timed out with badge `0x26ee0001` at outer
+Yield PC `0xf5fbc` after an empty Operator and `2750 us`, with successors
+`Runtime` and `ControlEndpoint` and empty output. V11/v4 are failure evidence,
+so Stage 03 and pressure were withheld. V12 keeps the external interface
+unchanged and returns an isolated QEMU VirtIO Operator before its repeated tail
+when the bounded priority pass leaves no serviceable work.
+
+The non-claiming v12/v5 run
+`out/test-plan-convergence/v12-v5-auth-20260812T010200Z` bound root ELF
+`7cec5bd582d063adc73830af8cc62e0ec8dbbb33d91bd4701db09ca69e32e6ca`,
+console child ELF
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO
+`dc36495a5de0df13bfb853ffa33fdc6e7ccc3bbf3a1a3c8c4cd74c8551160c16`.
+All four authentication attempts wrote 18 bytes and read zero. Root-control was
+the only timeout: badge `0x26ee0001`, exact `2750 us`, outer-Yield PC
+`0xf612c`. Stored successors `Network(2)` and `StreamFlush(3)` prove the prior
+ordinary phase was Runtime and the selected unit was `BootstrapDrain`; its
+staged `Option` was `None`. Fault sequence 2 and the child healthy at
+Yield-then-Wait exclude a prior child fault or Recovery. The observation
+embedded dirty source commit
+`a533290ffe264f0a2bf0af3db4bb4c45d1a4a278`, while repository HEAD later
+advanced to `84934dda6`, so it is diagnostic/failure evidence only.
+
+V13 changes no external interface. It preserves the same cursor and replaces
+only the split isolated-VirtIO Runtime's generic Runtime-without-control tail
+with a compact prelude. It reads HAL timebase and polls the timer once; an
+observed tick updates `now_ms`, increments the timer metric, publishes HAL
+timebase, and runs the existing conditional timer trace, while no tick refreshes
+`now_ms` from the read timebase. It then reconciles CYW43 network-ready HDMI
+state before the already-selected unit. Pi/non-VirtIO Runtime remains unchanged.
+This does not change the external serial grammar, the physical driver's
+`max_bytes=1024` contract, the outer Operator/Dispatch -> Runtime/IPC -> Network
+cycle, the sole recurring outer yield, resumable Recovery, or Pi/non-VirtIO
+outer Runtime behavior. Active-MCS child Yield-then-Wait semantics are
+universal.
+
+The exact v16 image bound root ELF
+`4fab7abc8707b9829ba66ac525efdfc7afefa812df4bab9abb8cb67d504a76a6`
+and CPIO
+`456558cac05e4d136d3cbc18d1290cc48bebf619ba5459cd623b667dbfff3e96`.
+The prompt serial/output completed, but root-control consumed the full
+`2750 us` and faulted at outer-Yield PC `0xf61c4`; saved successors were
+`Runtime` and `ControlEndpoint`. Target disassembly showed approximately
+`0x42c0` bytes of generic EventPump frame plus `0x12a0` bytes of generic
+Operator frame still preceded the bounded output leaf. Root-fault consumed the
+full `3000 us` at its first post-classification Yield, PC `0x113938`, before
+suspension or emergency signal. This is failure evidence for v16/v3, not
+interface or child-v5 failure.
+
+Root-fault v4 preserves the same endpoint, badges, Reply, and release
+interfaces while splitting `Receive -> Classify -> SuspendCritical ->
+SignalEmergency`. Receive commits Classify before the blocking receive, copies
+only label/badge, and yields. Released classifications yield before the next
+Receive; RetainedByDriver waits for and validates the exact release then
+yields; Critical commits SuspendCritical then yields. SuspendCritical commits
+SignalEmergency, suspends, and yields; SignalEmergency commits Receive,
+signals, and yields. These internal refill boundaries introduce no externally
+observable field, verb, error, or authority.
+
 ## Target TCP console sequence
 
 ```mermaid

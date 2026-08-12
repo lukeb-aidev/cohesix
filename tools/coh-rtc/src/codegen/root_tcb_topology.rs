@@ -242,10 +242,23 @@ mod tests {
             assert_eq!(root_control.period_us, 10_000);
             assert_eq!(root_control.wcet_us, 2_500);
             assert_eq!(root_control.response_time_us, 5_100);
+            let expected_serial_io_bound = if manifest.profile.name == "virt-aarch64" {
+                64
+            } else {
+                0
+            };
+            assert_eq!(
+                root_control.virtio_operator_serial_io_bytes_per_turn,
+                expected_serial_io_bound
+            );
             assert_eq!(
                 root_control.wcet_provenance,
-                "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4"
+                "m26e-qemu-root-exclusive-predispatch-candidate-v23"
             );
+
+            assert!(manifest.temporal_authority.tasks.iter().all(|task| {
+                task.id == "root-control" || task.virtio_operator_serial_io_bytes_per_turn == 0
+            }));
 
             let console_network = manifest
                 .temporal_authority
@@ -253,7 +266,14 @@ mod tests {
                 .iter()
                 .find(|task| task.id == "console-network-service")
                 .expect("console-network-service temporal task");
+            assert_eq!(console_network.budget_us, 3_000);
+            assert_eq!(console_network.period_us, 10_000);
+            assert_eq!(console_network.wcet_us, 2_400);
             assert_eq!(console_network.response_time_us, 7_500);
+            assert_eq!(
+                console_network.wcet_provenance,
+                "m26e-qemu-console-bounded-stack-steps-candidate-v6"
+            );
 
             let core_zero_demand = manifest
                 .temporal_authority
@@ -278,6 +298,116 @@ mod tests {
                 core_zero_admission.capacity_us - core_zero_admission.reserve_us
             );
         }
+    }
+
+    #[test]
+    fn root_fault_turn_candidate_is_exactly_accounted() {
+        for manifest in [qemu_manifest(), pi4_manifest()] {
+            let root_fault = manifest
+                .temporal_authority
+                .tasks
+                .iter()
+                .find(|task| task.id == "root-fault")
+                .expect("root-fault temporal task");
+            assert_eq!(root_fault.budget_us, 3_000);
+            assert_eq!(root_fault.period_us, 10_000);
+            assert_eq!(root_fault.wcet_us, 2_400);
+            assert_eq!(root_fault.response_time_us, 2_600);
+            assert_eq!(
+                root_fault.wcet_provenance,
+                "m26e-qemu-root-fault-service-units-candidate-v6"
+            );
+        }
+    }
+
+    #[test]
+    fn supervisor_cold_activation_candidates_are_profile_scoped() {
+        let qemu = qemu_manifest();
+        let qemu_worker = qemu
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-worker-supervisor")
+            .expect("QEMU root-worker-supervisor temporal task");
+        assert_eq!(qemu_worker.budget_us, 3_000);
+        assert_eq!(qemu_worker.period_us, 10_000);
+        assert_eq!(qemu_worker.wcet_us, 2_400);
+        assert_eq!(qemu_worker.response_time_us, 4_800);
+        assert_eq!(
+            qemu_worker.wcet_provenance,
+            "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15"
+        );
+
+        let qemu_driver = qemu
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-driver-supervisor")
+            .expect("QEMU root-driver-supervisor temporal task");
+        assert_eq!(qemu_driver.budget_us, 3_000);
+        assert_eq!(qemu_driver.period_us, 10_000);
+        assert_eq!(qemu_driver.wcet_us, 2_400);
+        assert_eq!(qemu_driver.response_time_us, 2_400);
+        assert_eq!(
+            qemu_driver.wcet_provenance,
+            "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15"
+        );
+
+        let qemu_supervisor_demand = qemu
+            .temporal_authority
+            .tasks
+            .iter()
+            .filter(|task| {
+                matches!(
+                    task.id.as_str(),
+                    "root-worker-supervisor" | "root-driver-supervisor"
+                )
+            })
+            .map(|task| task.budget_us)
+            .sum::<u32>();
+        assert_eq!(qemu_supervisor_demand, 6_000);
+        assert_eq!(qemu.ninedoor_service.bootstrap_budget_us, 3_000);
+        assert_eq!(qemu.ninedoor_service.bootstrap_period_us, 10_000);
+        assert_eq!(qemu.ninedoor_service.priority, 128);
+        assert!(qemu.ninedoor_service.priority < qemu_worker.priority);
+        assert!(qemu.ninedoor_service.priority < qemu_driver.priority);
+        let qemu_core_one_admission = qemu
+            .temporal_authority
+            .core_admission
+            .iter()
+            .find(|admission| admission.core == 1)
+            .expect("QEMU core-1 temporal admission");
+        assert_eq!(qemu_core_one_admission.capacity_us, 10_000);
+        assert_eq!(qemu_core_one_admission.reserve_us, 1_000);
+        assert_eq!(
+            qemu_supervisor_demand + qemu.ninedoor_service.bootstrap_budget_us,
+            qemu_core_one_admission.capacity_us - qemu_core_one_admission.reserve_us
+        );
+
+        let pi4 = pi4_manifest();
+        let pi4_worker = pi4
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-worker-supervisor")
+            .expect("Pi root-worker-supervisor temporal task");
+        assert_eq!(pi4_worker.budget_us, 750);
+        assert_eq!(pi4_worker.period_us, 10_000);
+        assert_eq!(pi4_worker.wcet_us, 600);
+        assert_eq!(pi4_worker.response_time_us, 1_400);
+        assert_eq!(pi4_worker.wcet_provenance, "m26e-qemu-candidate-v1");
+
+        let pi4_driver = pi4
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-driver-supervisor")
+            .expect("Pi root-driver-supervisor temporal task");
+        assert_eq!(pi4_driver.budget_us, 1_000);
+        assert_eq!(pi4_driver.period_us, 10_000);
+        assert_eq!(pi4_driver.wcet_us, 800);
+        assert_eq!(pi4_driver.response_time_us, 800);
+        assert_eq!(pi4_driver.wcet_provenance, "m26e-qemu-candidate-v1");
     }
 
     #[test]

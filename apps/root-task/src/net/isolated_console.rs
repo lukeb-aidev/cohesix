@@ -11,21 +11,24 @@
 //! enters the child.
 
 use core::fmt;
+use core::fmt::Write as _;
 
 use console_network_abi::ExchangeKind;
 use heapless::{Deque, String as HeaplessString, Vec as HeaplessVec};
-use smoltcp::phy::{Device, RxToken, TxToken};
+use smoltcp::phy::{RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, Ipv4Address};
 
 use super::{
-    ConsoleLine, ConsoleNetConfig, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters,
-    NetDevice, NetPoller, NetStatusReport, NetTelemetry, NET_STAGE,
+    select_isolated_network_turn, ConsoleLine, ConsoleNetConfig, IsolatedNetworkLowerCursor,
+    IsolatedNetworkLowerUnit, IsolatedNetworkTurnOutcome, IsolatedNetworkTurnSelection,
+    IsolatedNetworkTurnUnit, NetConsoleDisconnectReason, NetConsoleEvent, NetCounters, NetDevice,
+    NetPoller, NetStatusReport, NetTelemetry, NET_STAGE,
 };
-use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentProof, ServiceState};
+use crate::console_network_service::{BoundaryError, ConsoleNetworkContainmentTurn, ServiceState};
 use crate::drivers::virtio::net::{DriverError as VirtioDriverError, VirtioNetStatic};
 use crate::hal::console_network::ConsoleNetworkRuntime;
-use crate::hal::driver_task::DriverTaskContract;
+use crate::hal::driver_task::{DriverServiceBudget, DriverServiceBudgetError, DriverTaskContract};
 use crate::hal::{HalError, KernelHal};
 use crate::observe::IngestSnapshot;
 use crate::rust_alloc::boxed::Box;
@@ -33,6 +36,80 @@ use crate::serial::DEFAULT_LINE_CAPACITY;
 
 const LINE_QUEUE_DEPTH: usize = 8;
 const EVENT_QUEUE_DEPTH: usize = 8;
+const ISOLATED_NETWORK_TURN_FRAMES: u16 = 2;
+const ISOLATED_NETWORK_TURN_BYTES: u32 =
+    (console_network_abi::CONSOLE_PAYLOAD_BYTES + console_network_abi::ETHERNET_FRAME_BYTES) as u32;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ConsoleNetworkContainmentDiagnostic {
+    Fault {
+        expected_generation: u64,
+        observed_generation: u32,
+        fault_class: crate::critical_tcb::FaultClass,
+        sequence: u64,
+    },
+    LocalFault {
+        generation: u64,
+    },
+    InvalidMailbox {
+        generation: u64,
+    },
+    ContainmentFailed {
+        generation: u64,
+    },
+    IncompleteProof {
+        generation: u64,
+    },
+    Teardown {
+        generation: u64,
+    },
+}
+
+impl ConsoleNetworkContainmentDiagnostic {
+    fn render(self) -> Result<HeaplessString<DEFAULT_LINE_CAPACITY>, fmt::Error> {
+        let mut line = HeaplessString::new();
+        match self {
+            Self::Fault {
+                expected_generation,
+                observed_generation,
+                fault_class,
+                sequence,
+            } if expected_generation == u64::from(observed_generation) => write!(
+                line,
+                "[console-network] generation={expected_generation} terminal-fault class={fault_class:?} sequence={sequence}"
+            )?,
+            Self::Fault {
+                expected_generation,
+                observed_generation,
+                ..
+            } => write!(
+                line,
+                "[console-network] fault generation mismatch expected={expected_generation} observed={observed_generation}"
+            )?,
+            Self::LocalFault { generation } => write!(
+                line,
+                "[console-network] generation={generation} terminal-fault source=local"
+            )?,
+            Self::InvalidMailbox { generation } => write!(
+                line,
+                "[console-network] generation={generation} fault-mailbox-invalid action=contain"
+            )?,
+            Self::ContainmentFailed { generation } => write!(
+                line,
+                "[console-network] terminal containment failed generation={generation} action=quarantine-no-replacement"
+            )?,
+            Self::IncompleteProof { generation } => write!(
+                line,
+                "[console-network] terminal containment proof incomplete generation={generation} action=quarantine-no-replacement"
+            )?,
+            Self::Teardown { generation } => write!(
+                line,
+                "CONSOLE_NETWORK_TEARDOWN generation={generation} tcb_suspended=yes scheduling_context_unbound=yes mappings_scrubbed=yes capabilities_revoked=yes objects_deleted=yes generation_fenced=yes state=terminal"
+            )?,
+        }
+        Ok(line)
+    }
+}
 
 /// Construction failure for the QEMU isolated console-network adapter.
 #[derive(Debug)]
@@ -68,6 +145,7 @@ pub struct IsolatedVirtioConsole {
     events: Deque<NetConsoleEvent, EVENT_QUEUE_DEPTH>,
     output: Deque<HeaplessString<DEFAULT_LINE_CAPACITY>, LINE_QUEUE_DEPTH>,
     pending_egress: Option<HeaplessVec<u8, { console_network_abi::ETHERNET_FRAME_BYTES }>>,
+    lower_cursor: IsolatedNetworkLowerCursor,
     active_connection: Option<u64>,
     authenticated_connection: Option<u64>,
     listener_ready: bool,
@@ -75,6 +153,9 @@ pub struct IsolatedVirtioConsole {
     output_issued: bool,
     faulted: bool,
     terminal: bool,
+    pending_containment_fault_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
+    pending_containment_failure_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
+    pending_containment_teardown_diagnostic: Option<ConsoleNetworkContainmentDiagnostic>,
     last_now_ms: u64,
     telemetry: NetTelemetry,
     counters: NetCounters,
@@ -131,6 +212,7 @@ impl IsolatedVirtioConsole {
             events: Deque::new(),
             output: Deque::new(),
             pending_egress: None,
+            lower_cursor: IsolatedNetworkLowerCursor::new(),
             active_connection: None,
             authenticated_connection: None,
             listener_ready: false,
@@ -138,6 +220,9 @@ impl IsolatedVirtioConsole {
             output_issued: false,
             faulted: false,
             terminal: false,
+            pending_containment_fault_diagnostic: None,
+            pending_containment_failure_diagnostic: None,
+            pending_containment_teardown_diagnostic: None,
             last_now_ms: 0,
             telemetry: NetTelemetry {
                 link_up: true,
@@ -165,69 +250,136 @@ impl IsolatedVirtioConsole {
         self.faulted || matches!(self.runtime.boundary().state(), ServiceState::Faulted)
     }
 
-    /// Contain and revoke the exact child generation.
-    pub fn contain(
+    /// Advance the exact child generation by one containment unit.
+    pub fn contain_one_turn(
         &mut self,
         hal: &mut KernelHal<'_>,
-    ) -> Result<ConsoleNetworkContainmentProof, HalError> {
-        let proof = self.runtime.contain(hal)?;
-        self.faulted = true;
-        self.terminal = true;
-        self.listener_ready = false;
-        self.active_connection = None;
-        self.authenticated_connection = None;
-        self.lines.clear();
-        self.events.clear();
-        self.output.clear();
-        self.pending_egress = None;
-        Ok(proof)
+    ) -> Result<ConsoleNetworkContainmentTurn, HalError> {
+        let generation = self.runtime.generation();
+        let turn = match self.runtime.contain_one_turn(hal) {
+            Ok(turn) => turn,
+            Err(error) => {
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(ConsoleNetworkContainmentDiagnostic::ContainmentFailed { generation });
+                }
+                return Err(error);
+            }
+        };
+        match turn {
+            ConsoleNetworkContainmentTurn::Complete(proof) if proof.complete() => {
+                self.terminal = true;
+                self.listener_ready = false;
+                if self.pending_containment_teardown_diagnostic.is_none() {
+                    self.pending_containment_teardown_diagnostic =
+                        Some(ConsoleNetworkContainmentDiagnostic::Teardown { generation });
+                }
+            }
+            ConsoleNetworkContainmentTurn::Complete(_) => {
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(ConsoleNetworkContainmentDiagnostic::IncompleteProof { generation });
+                }
+            }
+            ConsoleNetworkContainmentTurn::Idle
+            | ConsoleNetworkContainmentTurn::Retry
+            | ConsoleNetworkContainmentTurn::InProgress => {}
+        }
+        Ok(turn)
     }
 
-    /// Consume the critical service mailbox and contain a faulted generation.
-    pub fn contain_if_faulted(&mut self, hal: &mut KernelHal<'_>) -> Result<bool, HalError> {
+    /// Consume the critical mailbox and advance one containment unit.
+    pub fn contain_if_faulted(
+        &mut self,
+        hal: &mut KernelHal<'_>,
+    ) -> Result<ConsoleNetworkContainmentTurn, HalError> {
         if self.terminal {
-            return Ok(false);
+            return Ok(ConsoleNetworkContainmentTurn::Idle);
         }
-        match crate::hal::critical_tcb::take_target_service_fault(
-            crate::console_network_service::SERVICE_TASK_ID,
-        ) {
-            Ok(Some(record)) => {
-                if u64::from(record.identity.supervisor_generation) != self.runtime.generation() {
-                    self.runtime.record_supervisor_fault();
-                    self.faulted = true;
-                    return self.contain(hal).map(|_| true);
+        if !self.runtime.containment_active() {
+            let generation = self.runtime.generation();
+            let mut faulted = self.faulted();
+            let mut diagnostic =
+                faulted.then_some(ConsoleNetworkContainmentDiagnostic::LocalFault { generation });
+            match crate::hal::critical_tcb::take_target_service_fault(
+                crate::console_network_service::SERVICE_TASK_ID,
+            ) {
+                Ok(Some(record)) => {
+                    diagnostic = Some(ConsoleNetworkContainmentDiagnostic::Fault {
+                        expected_generation: generation,
+                        observed_generation: record.identity.supervisor_generation,
+                        fault_class: record.fault_class,
+                        sequence: record.sequence,
+                    });
+                    faulted = true;
                 }
-                log::error!(
-                    "[console-network] generation={} terminal-fault class={:?} sequence={}",
-                    self.runtime.generation(),
-                    record.fault_class,
-                    record.sequence,
-                );
-                self.runtime.record_supervisor_fault();
-                self.faulted = true;
+                Ok(None) => {}
+                Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
+                    crate::critical_tcb::FaultHandoffError::Contended,
+                )) => {
+                    // The critical mailbox is durable. Contention means another
+                    // bounded root-control turn owns its lock, so retry without
+                    // manufacturing a service fault or losing the record. A
+                    // simultaneous local fault cannot bypass this retry: once
+                    // latched, later turns intentionally stop taking mail.
+                    return Ok(ConsoleNetworkContainmentTurn::Retry);
+                }
+                Err(_) => {
+                    diagnostic =
+                        Some(ConsoleNetworkContainmentDiagnostic::InvalidMailbox { generation });
+                    faulted = true;
+                }
             }
-            Ok(None) => {}
-            Err(crate::hal::critical_tcb::CriticalTcbConstructionError::FaultHandoff(
-                crate::critical_tcb::FaultHandoffError::Contended,
-            )) => {
-                // The critical mailbox is durable. Contention means another
-                // bounded root-control turn owns its lock, so retry without
-                // manufacturing a service fault or losing the record.
+            if !faulted {
+                return Ok(ConsoleNetworkContainmentTurn::Idle);
             }
-            Err(error) => {
-                log::error!(
-                    "[console-network] generation={} fault-mailbox-invalid error={error:?}",
-                    self.runtime.generation(),
-                );
-                self.runtime.record_supervisor_fault();
-                self.faulted = true;
+            self.faulted = true;
+            self.listener_ready = false;
+            if self.pending_containment_fault_diagnostic.is_none() {
+                self.pending_containment_fault_diagnostic = diagnostic;
             }
+            if let Err(error) = self.runtime.begin_containment() {
+                if self.pending_containment_failure_diagnostic.is_none() {
+                    self.pending_containment_failure_diagnostic =
+                        Some(ConsoleNetworkContainmentDiagnostic::ContainmentFailed { generation });
+                }
+                return Err(error);
+            }
+            return Ok(ConsoleNetworkContainmentTurn::InProgress);
         }
-        if self.faulted {
-            self.contain(hal).map(|_| true)
+        self.contain_one_turn(hal)
+    }
+
+    fn pending_containment_diagnostic(&self) -> Option<ConsoleNetworkContainmentDiagnostic> {
+        self.pending_containment_fault_diagnostic
+            .or(self.pending_containment_failure_diagnostic)
+            .or(self.pending_containment_teardown_diagnostic)
+    }
+
+    fn pending_containment_diagnostic_line(&self) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        self.pending_containment_diagnostic()?.render().ok()
+    }
+
+    fn commit_containment_diagnostic(&mut self, expected_line: &str) -> bool {
+        let Some(expected) = self.pending_containment_diagnostic() else {
+            return false;
+        };
+        let Ok(rendered) = expected.render() else {
+            return false;
+        };
+        if rendered.as_str() != expected_line {
+            return false;
+        }
+        if self.pending_containment_fault_diagnostic == Some(expected) {
+            self.pending_containment_fault_diagnostic = None;
+        } else if self.pending_containment_failure_diagnostic == Some(expected) {
+            self.pending_containment_failure_diagnostic = None;
+        } else if self.pending_containment_teardown_diagnostic == Some(expected) {
+            self.pending_containment_teardown_diagnostic = None;
         } else {
-            Ok(false)
+            return false;
         }
+        true
     }
 
     /// Exact active child generation.
@@ -417,7 +569,11 @@ impl IsolatedVirtioConsole {
         let Some(frame) = self.pending_egress.take() else {
             return false;
         };
-        let Some(token) = self.device.transmit(timestamp) else {
+        debug_assert!(
+            !self.device.deferred_tx_diagnostic_pending(),
+            "isolated TX must drain the preceding success diagnostic in its own turn"
+        );
+        let Some(token) = self.device.transmit_isolated(timestamp) else {
             self.pending_egress = Some(frame);
             return false;
         };
@@ -426,12 +582,12 @@ impl IsolatedVirtioConsole {
         true
     }
 
-    fn stage_one_ingress(&mut self, timestamp: Instant) -> bool {
+    fn stage_one_ingress(&mut self) -> bool {
         if self.pending_egress.is_some() || !self.runtime.ingress_available() {
             return false;
         }
         self.device.begin_smoltcp_rx_transaction();
-        let staged = if let Some((receive, transmit)) = self.device.receive(timestamp) {
+        let staged = if let Some(receive) = self.device.receive_isolated() {
             let runtime = &mut self.runtime;
             let result = receive.consume(|packet| {
                 if packet.is_empty() {
@@ -440,7 +596,6 @@ impl IsolatedVirtioConsole {
                     runtime.stage_ingress(packet).map(Some)
                 }
             });
-            drop(transmit);
             Some(result)
         } else {
             None
@@ -525,9 +680,58 @@ impl IsolatedVirtioConsole {
         self.counters.tx_double_submit = device.tx_double_submit;
         self.counters.tx_zero_len_attempt = device.tx_zero_len_attempt;
     }
+
+    #[inline(never)]
+    fn poll_deferred_diagnostic_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        // A successful TX owned the prior Network visit. Drain its one compact
+        // routine record before another operation can overwrite that slot.
+        let emitted = self.device.emit_one_deferred_tx_diagnostic();
+        debug_assert!(emitted, "selected deferred diagnostic must exist");
+        IsolatedNetworkTurnOutcome::complete(emitted)
+    }
+
+    #[inline(never)]
+    fn poll_transmit_egress_unit(&mut self, now_ms: u64) -> IsolatedNetworkTurnOutcome {
+        // One bounded reclaim plus one atomic publish/notify attempt. Success
+        // and backpressure both return through the outer replenishment seam.
+        let timestamp = Instant::from_millis(now_ms.min(i64::MAX as u64) as i64);
+        IsolatedNetworkTurnOutcome::complete(self.transmit_pending_egress(timestamp))
+    }
+
+    #[inline(never)]
+    fn poll_observe_child_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        IsolatedNetworkTurnOutcome::complete(self.poll_child_output())
+    }
+
+    #[inline(never)]
+    fn poll_stage_output_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        IsolatedNetworkTurnOutcome::child_signal_attempt(self.stage_one_output())
+    }
+
+    #[inline(never)]
+    fn poll_disconnect_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        IsolatedNetworkTurnOutcome::child_signal_attempt(self.stage_disconnect_if_drained())
+    }
+
+    #[inline(never)]
+    fn poll_ingress_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        IsolatedNetworkTurnOutcome::child_signal_attempt(self.stage_one_ingress())
+    }
+
+    #[inline(never)]
+    fn poll_service_tick_unit(&mut self) -> IsolatedNetworkTurnOutcome {
+        match self.runtime.service_tick() {
+            Ok(()) => IsolatedNetworkTurnOutcome::child_signaled(false),
+            Err(_) => {
+                self.fail_closed("service-tick");
+                IsolatedNetworkTurnOutcome::complete(false)
+            }
+        }
+    }
 }
 
 impl NetPoller for IsolatedVirtioConsole {
+    #[inline(never)]
     fn poll(&mut self, now_ms: u64) -> bool {
         self.last_now_ms = now_ms;
         self.telemetry.last_poll_ms = now_ms;
@@ -536,22 +740,57 @@ impl NetPoller for IsolatedVirtioConsole {
             return false;
         }
         self.counters.smoltcp_polls = self.counters.smoltcp_polls.saturating_add(1);
-        let timestamp = Instant::from_millis(now_ms.min(i64::MAX as u64) as i64);
-        let mut activity = self.poll_child_output();
-        if self.faulted {
-            return activity;
-        }
-        activity |= self.transmit_pending_egress(timestamp);
-        if self.pending_egress.is_none() {
-            activity |= self.stage_one_output();
-            activity |= self.stage_disconnect_if_drained();
-            activity |= self.stage_one_ingress(timestamp);
-            if self.runtime.service_tick().is_err() {
-                self.fail_closed("service-tick");
+
+        let selection: IsolatedNetworkTurnSelection = select_isolated_network_turn(
+            self.device.deferred_tx_diagnostic_pending(),
+            self.pending_egress.is_some(),
+            self.lower_cursor,
+        );
+        // Commit the ordinary successor before any selected unit can block or
+        // fault. Only a successful child notification may force ObserveChild.
+        self.lower_cursor = selection.successor();
+        let outcome = match selection.unit() {
+            IsolatedNetworkTurnUnit::DeferredDiagnostic => self.poll_deferred_diagnostic_unit(),
+            IsolatedNetworkTurnUnit::TransmitEgress => self.poll_transmit_egress_unit(now_ms),
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ObserveChild) => {
+                self.poll_observe_child_unit()
             }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::StageOutput) => {
+                self.poll_stage_output_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Disconnect) => {
+                self.poll_disconnect_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::Ingress) => {
+                self.poll_ingress_unit()
+            }
+            IsolatedNetworkTurnUnit::Lower(IsolatedNetworkLowerUnit::ServiceTick) => {
+                self.poll_service_tick_unit()
+            }
+        };
+        let (lower_cursor, activity) = selection.finish(outcome);
+        self.lower_cursor = lower_cursor;
+        if self.faulted {
+            self.refresh_device_counters();
+            return false;
         }
         self.refresh_device_counters();
         activity
+    }
+
+    fn poll_with_budget(
+        &mut self,
+        now_ms: u64,
+        budget: &mut DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        // One child observation may coalesce one event and one egress record.
+        // Charge both bounded records before any observation or device side
+        // effect; every other selected unit is conservatively covered and
+        // returns through the outer yield.
+        budget.charge_ops(1)?;
+        budget.charge_frames(ISOLATED_NETWORK_TURN_FRAMES)?;
+        budget.charge_bytes(ISOLATED_NETWORK_TURN_BYTES)?;
+        Ok(self.poll(now_ms))
     }
 
     fn driver_task_contract(&self) -> DriverTaskContract {
@@ -620,6 +859,14 @@ impl NetPoller for IsolatedVirtioConsole {
         }
     }
 
+    fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+        self.events.pop_front()
+    }
+
+    fn console_event_pending(&self) -> bool {
+        !self.events.is_empty()
+    }
+
     fn ingest_snapshot(&self) -> IngestSnapshot {
         IngestSnapshot {
             backpressure: self.ingest_backpressure,
@@ -686,7 +933,21 @@ impl NetPoller for IsolatedVirtioConsole {
     fn contain_faulted_console_service(
         &mut self,
         hal: &mut KernelHal<'_>,
-    ) -> Result<bool, HalError> {
+    ) -> Result<ConsoleNetworkContainmentTurn, HalError> {
         self.contain_if_faulted(hal)
+    }
+
+    fn pending_console_network_containment_diagnostic(
+        &self,
+    ) -> Option<HeaplessString<DEFAULT_LINE_CAPACITY>> {
+        self.pending_containment_diagnostic_line()
+    }
+
+    fn console_network_containment_diagnostic_pending(&self) -> bool {
+        self.pending_containment_diagnostic().is_some()
+    }
+
+    fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
+        self.commit_containment_diagnostic(expected_line)
     }
 }

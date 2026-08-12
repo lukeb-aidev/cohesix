@@ -31,6 +31,32 @@ use worker_task_abi::{
 
 const EXECUTABLE_ROLE_COUNT: usize = 3;
 
+/// Persistent role selector used by one-unit root-control Worker service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WorkerDeadlineCursor {
+    next: WorkerRole,
+}
+
+impl Default for WorkerDeadlineCursor {
+    fn default() -> Self {
+        Self {
+            next: WorkerRole::Heartbeat,
+        }
+    }
+}
+
+impl WorkerDeadlineCursor {
+    pub(crate) fn take(&mut self) -> WorkerRole {
+        let role = self.next;
+        self.next = match role {
+            WorkerRole::Heartbeat => WorkerRole::Gpu,
+            WorkerRole::Gpu => WorkerRole::Lora,
+            WorkerRole::Lora => WorkerRole::Heartbeat,
+        };
+        role
+    }
+}
+
 /// One bounded item transferred by the restricted Worker-supervisor TCB to
 /// root-control. The child owns wake validation and precedence; root-control
 /// remains the only thread with object-construction and teardown authority.
@@ -1180,5 +1206,20 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
         b'0'..=b'9' => Some(byte - b'0'),
         b'a'..=b'f' => Some(byte - b'a' + 10),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerDeadlineCursor, WorkerRole};
+
+    #[test]
+    fn isolated_runtime_deadline_cursor_retains_role_rotation() {
+        let mut cursor = WorkerDeadlineCursor::default();
+
+        assert_eq!(cursor.take(), WorkerRole::Heartbeat);
+        assert_eq!(cursor.take(), WorkerRole::Gpu);
+        assert_eq!(cursor.take(), WorkerRole::Lora);
+        assert_eq!(cursor.take(), WorkerRole::Heartbeat);
     }
 }

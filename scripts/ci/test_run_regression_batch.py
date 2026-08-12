@@ -9,8 +9,11 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import socket
 import stat
 import subprocess
+import sys
+import threading
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -22,6 +25,47 @@ def write_executable(path: Path, body: str) -> None:
 
     path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
+
+
+def auth_probe_source() -> str:
+    """Extract the wrapper's embedded authentication readiness probe."""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+    function = source.split("check_auth_ready() {", maxsplit=1)[1]
+    return function.split("<<'PY'\n", maxsplit=1)[1].split("\nPY\n}", maxsplit=1)[0]
+
+
+def run_auth_probe(payload: bytes, *, declared_extra: int = 0) -> int:
+    """Run the production probe against one framed loopback response."""
+
+    ready = threading.Event()
+    port: list[int] = []
+
+    def serve_once() -> None:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port.append(listener.getsockname()[1])
+            ready.set()
+            connection, _ = listener.accept()
+            with connection:
+                connection.recv(4096)
+                total = len(payload) + 4 + declared_extra
+                connection.sendall(total.to_bytes(4, "little") + payload)
+
+    server = threading.Thread(target=serve_once, daemon=True)
+    server.start()
+    assert ready.wait(timeout=1), "loopback auth fixture did not start"
+    result = subprocess.run(
+        [sys.executable, "-", "127.0.0.1", str(port[0]), "fixture-token"],
+        input=auth_probe_source(),
+        text=True,
+        check=False,
+        capture_output=True,
+    )
+    server.join(timeout=1)
+    assert not server.is_alive(), "loopback auth fixture did not finish"
+    return result.returncode
 
 
 def run_path_admission(
@@ -151,9 +195,9 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
         "host-tools/coh; do\n"
         "  printf 'fixture:%s\\n' \"$path\" >\"$out_dir/$path\"\n"
         "done\n"
-        "mkdir -p configs/generated out\n"
+        "mkdir -p configs/generated\n"
         "printf '{\"fixture\":true}\\n' >configs/generated/root_task_resolved.json\n"
-        "printf 'fixture = true\\n' >out/cohsh_policy.toml\n",
+        "printf 'fixture = true\\n' >configs/generated/cohsh_policy.toml\n",
     )
     sel4 = tmp_path / "sel4"
     config = sel4 / "kernel" / "gen_config" / "kernel_config.h"
@@ -164,7 +208,7 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
 
     generated = REPO_ROOT / "configs" / "generated" / "root_task_resolved.json"
     generated_before = generated.read_bytes()
-    policy = REPO_ROOT / "out" / "cohsh_policy.toml"
+    policy = REPO_ROOT / "configs" / "generated" / "cohsh_policy.toml"
     policy_existed = policy.exists()
     policy_before = policy.read_bytes() if policy_existed else b""
     environment = os.environ.copy()
@@ -192,8 +236,33 @@ def test_prepare_only_builds_shared_base_manifest_once_and_restores_generated(
 
     assert count_file.read_text(encoding="utf-8").splitlines() == ["build"]
     assert (artifact_root / "base" / "qemu-artifact.json").is_file()
+    assert (
+        artifact_root / "base" / "evidence" / "cohsh_policy.toml"
+    ).read_text(encoding="utf-8") == "fixture = true\n"
     assert generated.read_bytes() == generated_before
     if policy_existed:
         assert policy.read_bytes() == policy_before
     else:
         assert not policy.exists()
+
+
+def test_qemu_batch_uses_canonical_policy_and_requires_auth_success() -> None:
+    """Artifact recording and readiness use current generated policy truth."""
+
+    source = SCRIPT.read_text(encoding="utf-8")
+
+    assert '--policy "$GENERATED_CONFIG_DIR/cohsh_policy.toml"' in source
+    assert '--policy "$PROJECT_ROOT/out/cohsh_policy.toml"' not in source
+    assert 'if data == b"OK AUTH":' in source
+    assert 'or b"ERR AUTH" in data' not in source
+
+
+def test_auth_readiness_requires_one_exact_complete_ok_frame() -> None:
+    """Readiness rejects protocol errors, lookalikes, and truncated frames."""
+
+    assert run_auth_probe(b"OK AUTH") == 0
+    assert run_auth_probe(b"ERR AUTH") != 0
+    assert run_auth_probe(b"XOK AUTH") != 0
+    assert run_auth_probe(b"OK AUTHENTICATED") != 0
+    assert run_auth_probe(b"OK AUTH detail=unexpected") != 0
+    assert run_auth_probe(b"OK AUTH", declared_extra=1) != 0

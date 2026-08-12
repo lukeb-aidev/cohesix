@@ -16,7 +16,8 @@ use crate::temporal::{
     SchedulerArchitecture, TemporalAuthorityConfig, TemporalExecution, TemporalTaskKind,
 };
 
-const SCHEMA_VERSION: &str = "1.10";
+const SCHEMA_VERSION: &str = "1.11";
+const VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 const PI4_PROFILE_NAME: &str = "pi4-uboot-aarch64";
 const PI4_PROFILE_LEGACY_ALIAS: &str = "uefi-aarch64";
 const MAX_WALK_DEPTH: usize = 8;
@@ -252,6 +253,7 @@ impl Manifest {
         self.validate_lifecycle()?;
         self.validate_worker_runtime()?;
         self.temporal_authority.validate()?;
+        self.validate_virtio_operator_serial_io_bound()?;
         let ninedoor_bootstrap_scheduling_contexts = if self.ninedoor_service.enabled {
             self.ninedoor_service.objects.scheduling_contexts
         } else {
@@ -273,6 +275,41 @@ impl Manifest {
         self.validate_cas(base_dir)?;
         self.validate_affinity()?;
         self.root_task.driver_images.validate()?;
+        Ok(())
+    }
+
+    fn validate_virtio_operator_serial_io_bound(&self) -> Result<()> {
+        if !self.temporal_authority.enabled {
+            return Ok(());
+        }
+
+        let root_control = self
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-control")
+            .ok_or_else(|| anyhow::anyhow!("missing critical temporal task root-control"))?;
+        if self.temporal_authority.tasks.iter().any(|task| {
+            task.id != "root-control" && task.virtio_operator_serial_io_bytes_per_turn != 0
+        }) {
+            bail!(
+                "only root-control may declare temporal_authority.tasks.virtio_operator_serial_io_bytes_per_turn"
+            );
+        }
+
+        let bound = root_control.virtio_operator_serial_io_bytes_per_turn;
+        if self.profile.name == "virt-aarch64" {
+            if bound != VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN {
+                bail!(
+                    "profile.name=virt-aarch64 requires root-control temporal_authority.tasks.virtio_operator_serial_io_bytes_per_turn={VIRT_AARCH64_ROOT_CONTROL_SERIAL_IO_BYTES_PER_TURN}, got {bound}"
+                );
+            }
+        } else if bound != 0 {
+            bail!(
+                "profile.name={} must set the root-control VirtIO Operator serial I/O byte bound to zero",
+                self.profile.name
+            );
+        }
         Ok(())
     }
 
@@ -4085,6 +4122,82 @@ mod tests {
             .expect_err("unapproved donor must fail")
             .to_string()
             .contains("donation inventory"));
+    }
+
+    #[test]
+    fn virtio_operator_serial_io_bound_is_profile_scoped() {
+        let qemu_path = repo_root()
+            .join("configs/root_task.toml")
+            .canonicalize()
+            .expect("QEMU fixture manifest path");
+        let qemu = load_manifest(&qemu_path).expect("load QEMU fixture manifest");
+        qemu.validate_with_base(Some(repo_root().as_path()))
+            .expect("QEMU profile accepts its bounded VirtIO Operator serial service");
+
+        let mut missing = qemu.clone();
+        missing
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-control")
+            .expect("root-control temporal task")
+            .virtio_operator_serial_io_bytes_per_turn = 0;
+        assert!(missing
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("QEMU root-control bound is required")
+            .to_string()
+            .contains("requires root-control temporal_authority.tasks.virtio_operator_serial_io_bytes_per_turn=64, got 0"));
+
+        for invalid_bound in [65, 1024, u32::MAX] {
+            let mut oversized = qemu.clone();
+            oversized
+                .temporal_authority
+                .tasks
+                .iter_mut()
+                .find(|task| task.id == "root-control")
+                .expect("root-control temporal task")
+                .virtio_operator_serial_io_bytes_per_turn = invalid_bound;
+            assert!(oversized
+                .validate_with_base(Some(repo_root().as_path()))
+                .expect_err("QEMU root-control bound must be the exact admitted candidate")
+                .to_string()
+                .contains(&format!(
+                    "requires root-control temporal_authority.tasks.virtio_operator_serial_io_bytes_per_turn=64, got {invalid_bound}"
+                )));
+        }
+
+        let pi_path = repo_root()
+            .join("configs/root_task_pi4_uboot_aarch64.toml")
+            .canonicalize()
+            .expect("Pi fixture manifest path");
+        let mut pi = load_manifest(&pi_path).expect("load Pi fixture manifest");
+        pi.validate_with_base(Some(repo_root().as_path()))
+            .expect("Pi profile keeps the VirtIO-only root bound disabled");
+        pi.temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-control")
+            .expect("Pi root-control temporal task")
+            .virtio_operator_serial_io_bytes_per_turn = 64;
+        assert!(pi
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("non-VirtIO profile must reject the root bound")
+            .to_string()
+            .contains("must set the root-control VirtIO Operator serial I/O byte bound to zero"));
+
+        let mut misplaced = qemu;
+        misplaced
+            .temporal_authority
+            .tasks
+            .iter_mut()
+            .find(|task| task.id == "root-fault")
+            .expect("root-fault temporal task")
+            .virtio_operator_serial_io_bytes_per_turn = 64;
+        assert!(misplaced
+            .validate_with_base(Some(repo_root().as_path()))
+            .expect_err("non-root task must reject a serial bound")
+            .to_string()
+            .contains("must not declare a VirtIO Operator serial I/O byte bound"));
     }
 
     fn fixture_manifest() -> super::Manifest {

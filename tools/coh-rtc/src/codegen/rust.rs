@@ -245,6 +245,10 @@ pub fn emit_rust(
     writeln!(mod_contents, "    pub wcet_provenance: &'static str,")?;
     writeln!(
         mod_contents,
+        "    pub virtio_operator_serial_io_bytes_per_turn: u32,"
+    )?;
+    writeln!(
+        mod_contents,
         "    pub allowed_donors: &'static [&'static str],"
     )?;
     writeln!(mod_contents, "    pub reply_objects: u8,")?;
@@ -1494,6 +1498,18 @@ pub fn emit_rust(
     writeln!(mod_contents, "    &bootstrap::TEMPORAL_TASKS")?;
     writeln!(mod_contents, "}}")?;
     writeln!(mod_contents)?;
+    let root_control_virtio_operator_serial_io_bytes_per_turn = manifest
+        .temporal_authority
+        .tasks
+        .iter()
+        .find(|task| task.id == "root-control")
+        .map_or(0, |task| task.virtio_operator_serial_io_bytes_per_turn);
+    writeln!(
+        mod_contents,
+        "pub const ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN: u32 = {};",
+        root_control_virtio_operator_serial_io_bytes_per_turn
+    )?;
+    writeln!(mod_contents)?;
     writeln!(
         mod_contents,
         "pub const fn ninedoor_service_config() -> NineDoorServiceConfig {{"
@@ -1889,7 +1905,7 @@ pub fn emit_rust(
             .join(", ");
         writeln!(
             bootstrap_contents,
-            "    TemporalTaskConfig {{ id: \"{}\", kind: {}, execution: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, sched_control_core: {}, budget_us: {}, period_us: {}, deadline_us: {}, blocking_us: {}, jitter_us: {}, max_refills: {}, priority: {}, mcp: {}, timeout_badge: {}, timeout_policy: {}, consumed_time_evidence: {}, wcet_us: {}, response_time_us: {}, admitted: {}, wcet_provenance: \"{}\", allowed_donors: &[{}], reply_objects: {}, max_donation_depth: {}, fault_handler: \"{}\", critical_reserve: {}, locality_bound: {} }},",
+            "    TemporalTaskConfig {{ id: \"{}\", kind: {}, execution: {}, core: {}, scheduling_context_slot: {}, scheduling_context_bits: {}, sched_control_core: {}, budget_us: {}, period_us: {}, deadline_us: {}, blocking_us: {}, jitter_us: {}, max_refills: {}, priority: {}, mcp: {}, timeout_badge: {}, timeout_policy: {}, consumed_time_evidence: {}, wcet_us: {}, response_time_us: {}, admitted: {}, wcet_provenance: \"{}\", virtio_operator_serial_io_bytes_per_turn: {}, allowed_donors: &[{}], reply_objects: {}, max_donation_depth: {}, fault_handler: \"{}\", critical_reserve: {}, locality_bound: {} }},",
             escape_literal(&task.id),
             temporal_task_kind_to_rust(task.kind),
             temporal_execution_to_rust(task.execution),
@@ -1912,6 +1928,7 @@ pub fn emit_rust(
             task.response_time_us,
             task.admitted,
             escape_literal(&task.wcet_provenance),
+            task.virtio_operator_serial_io_bytes_per_turn,
             donors,
             task.reply_objects,
             task.max_donation_depth,

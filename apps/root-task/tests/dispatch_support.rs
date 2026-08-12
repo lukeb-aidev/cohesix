@@ -1,4 +1,4 @@
-// Copyright © 2025 Lukas Bower
+// Copyright © 2026 Lukas Bower
 // SPDX-License-Identifier: Apache-2.0
 // Purpose: Defines tests for root-task dispatch_support.
 // Author: Lukas Bower
@@ -209,6 +209,9 @@ impl TestDispatcher {
 
 impl IpcDispatcher for TestDispatcher {
     fn dispatch(&mut self, _now_ms: u64) {}
+
+    #[cfg(feature = "net-console")]
+    fn dispatch_runtime_unit(&mut self, _now_ms: u64, _unit: root_task::event::RuntimeIpcUnit) {}
 
     fn handlers_ready(&mut self) {
         self.ready = true;

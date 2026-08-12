@@ -28,6 +28,36 @@ lane is QEMU-first on four-core AArch64 `virt` with GICv3. Pi 4 measurements
 remain a later independent hardware lane and cannot be copied from, predicted
 by, or replaced with QEMU results.
 
+The current `m26e-qemu-root-exclusive-predispatch-candidate-v23` repair is
+performance-relevant even though it changes no REST endpoint, workload, retry
+policy, or report schema. It preserves v21's separate successor-before-work
+Timer and Nic Network visits and the following NETDIAG-only visit, so the
+featured sequence remains Timer -> Nic -> DeferredDiagnostic -> Timer and the
+NIC remains serviced once per three featured Network visits. V23 makes compact
+predispatch completion success-sensitive. A physical-tail reconciliation or
+prompt-tail queue attempt returns exclusively when it clears its predicate; if
+the bounded attempt leaves the predicate pending, exactly one compact Operator
+unit may run before return without advancing the ordinary phase. Ready reboot
+remains an exclusive pre-phase return. Runtime and Network never share a turn
+with this housekeeping, while an Operator fallback may advance only its private
+subcursor. Do not infer parity from green compiler or protocol tests.
+First pass fresh QEMU authentication and standard/timeout injection,
+then the focused direct base `.coh` batch, then Hive Gateway REST core/parity
+plus the Python smoke. After those functional gates, rerun TEST_PLAN
+Conditional D with retries disabled for the canonical `telemetry-1mb`,
+`telemetry-10mb`, `telemetry-100mb`, and `telemetry-1gb` scenarios. Preserve
+the unchanged harness inputs and summary schema so the result remains
+comparable; report any error-budget or latency regression rather than masking
+it with retry or timeout changes.
+
+The paired child candidate is now
+`m26e-qemu-console-bounded-stack-steps-candidate-v6`. It replaces the private
+composite smoltcp poll with one ingress attempt, one egress pass, and Session
+on separate child replenishments. It changes no benchmark request, REST
+endpoint, retry policy, timeout, or report schema. The direct `.coh`, Hive
+Gateway REST, and no-retry telemetry benchmarks therefore remain unchanged but
+withheld until fresh v23/root-fault-V6/child-V6 authentication and fault injection pass.
+
 ### Milestone 26e QEMU-first evidence contract
 
 The 26e benchmark artifacts are inputs to target evidence; they are not proof

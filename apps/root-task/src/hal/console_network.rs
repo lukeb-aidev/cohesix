@@ -25,11 +25,12 @@ use super::{
     runtime_elf_page_mapping, HalError, KernelHal,
 };
 use crate::console_network_service::{
-    BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentProof, ConsoleNetworkContract,
-    ConsoleNetworkEvent, ConsoleNetworkObjectPlan, CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND,
-    CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR, CONSOLE_NETWORK_RUNTIME_IMAGE,
-    CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR,
-    CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
+    BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
+    ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit,
+    ConsoleNetworkContract, ConsoleNetworkEvent, ConsoleNetworkObjectPlan,
+    CONSOLE_NETWORK_IMAGE_IDENTITY_BOUND, CONSOLE_NETWORK_RUNTIME_ENTRY_VADDR,
+    CONSOLE_NETWORK_RUNTIME_IMAGE, CONSOLE_NETWORK_RUNTIME_LOAD_BASE_VADDR,
+    CONSOLE_NETWORK_RUNTIME_LOAD_LIMIT_VADDR, CONSOLE_NETWORK_RUNTIME_LOAD_PAGES, SERVICE_TASK_ID,
 };
 use crate::critical_tcb::GenerationIdentity;
 use crate::sel4::{self, RamFrame, RevokeAnchorVSpaceTracker};
@@ -67,6 +68,8 @@ const CHILD_CNODE_RADIX_BITS: u8 = 4;
 const _: () = assert!(TIMEOUT_FAULT_SLOT_INDEX < ROOT_SLOT_COUNT);
 const _: () = assert!(STACK_FRAME_START + 32 == IPC_FRAME_INDEX);
 const _: () = assert!(SHARED_FRAME_START + SHARED_FRAME_COUNT == FRAME_COUNT);
+const _: () = assert!(SHARED_FRAME_COUNT == ConsoleNetworkContainmentCursor::SHARED_FRAME_COUNT);
+const _: () = assert!(ConsoleNetworkContainmentCursor::FAULT_CAP_COUNT == 2);
 
 /// One nonblocking child-output turn copied into root-owned values.
 pub struct ConsoleNetworkTurn {
@@ -90,7 +93,9 @@ pub struct ConsoleNetworkRuntime {
     timeout_fault_cap: seL4_CPtr,
     shared_frames: Vec<RamFrame, SHARED_FRAME_COUNT>,
     activated: bool,
+    containment_started: bool,
     contained: bool,
+    containment: ConsoleNetworkContainmentCursor,
 }
 
 impl ConsoleNetworkRuntime {
@@ -122,6 +127,23 @@ impl ConsoleNetworkRuntime {
     #[must_use]
     pub const fn activated(&self) -> bool {
         self.activated && !self.contained
+    }
+
+    /// Whether the exact terminal generation has entered containment.
+    #[must_use]
+    pub const fn containment_active(&self) -> bool {
+        self.containment_started
+    }
+
+    /// Fence root admission and retain all kernel resources for later units.
+    pub fn begin_containment(&mut self) -> Result<(), HalError> {
+        if self.contained || self.containment_active() {
+            return Err(HalError::Unsupported("console-network-containment-state"));
+        }
+        self.boundary.record_fault();
+        self.activated = false;
+        self.containment_started = true;
+        Ok(())
     }
 
     /// Mark a critical-lane fault before root performs complete containment.
@@ -255,61 +277,103 @@ impl ConsoleNetworkRuntime {
         Ok(ConsoleNetworkTurn { event, egress })
     }
 
-    /// Suspend, scrub, unbind, and revoke the complete child generation.
-    pub fn contain(
+    /// Perform at most one ordered containment unit for this recovery turn.
+    pub fn contain_one_turn(
         &mut self,
         hal: &mut KernelHal<'_>,
-    ) -> Result<ConsoleNetworkContainmentProof, HalError> {
-        if self.contained {
-            return Err(HalError::Unsupported("console-network-already-contained"));
-        }
-        self.boundary.record_fault();
-        sel4::suspend_tcb(self.tcb).map_err(HalError::Sel4)?;
-        sel4::unbind_sched_context_object(self.scheduling_context, self.tcb)
-            .map_err(HalError::Sel4)?;
-
-        for frame in &mut self.shared_frames {
-            frame.as_mut_slice().fill(0);
-            super::cache::cache_clean(
-                sel4_sys::seL4_CapInitThreadVSpace,
-                frame.ptr().as_ptr() as usize,
-                SHARED_PAGE_BYTES,
-            )
-            .map_err(|error| HalError::Sel4(error.code()))?;
-            hal.env
-                .unmap_page_cap(frame.cap())
-                .map_err(HalError::Sel4)?;
+    ) -> Result<ConsoleNetworkContainmentTurn, HalError> {
+        if !self.containment_active() {
+            return Err(HalError::Unsupported(
+                "console-network-containment-not-latched",
+            ));
         }
 
-        let root_cnode = hal.env.init_cnode_cap();
-        let root_depth = sel4::word_bits() as u8;
-        for cap in [self.standard_fault_cap, self.timeout_fault_cap] {
-            let error = sel4::cnode_delete(root_cnode, cap, root_depth);
-            if error != sel4_sys::seL4_NoError {
-                return Err(HalError::Sel4(error));
+        let selected = self.containment.select_next();
+        let result = match selected {
+            ConsoleNetworkContainmentUnit::SuspendTcb => {
+                sel4::suspend_tcb_bounded(self.tcb).map_err(HalError::Sel4)
             }
+            ConsoleNetworkContainmentUnit::UnbindSchedulingContext => {
+                sel4::unbind_sched_context_object(self.scheduling_context, self.tcb)
+                    .map_err(HalError::Sel4)
+            }
+            ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(frame_index) => {
+                match self.shared_frames.get_mut(frame_index) {
+                    Some(frame) => {
+                        frame.as_mut_slice().fill(0);
+                        super::cache::cache_clean_bounded(
+                            sel4_sys::seL4_CapInitThreadVSpace,
+                            frame.ptr().as_ptr() as usize,
+                            SHARED_PAGE_BYTES,
+                        )
+                        .map_err(|error| HalError::Sel4(error.code()))
+                    }
+                    None => Err(HalError::Unsupported(
+                        "console-network-containment-frame-index",
+                    )),
+                }
+            }
+            ConsoleNetworkContainmentUnit::UnmapSharedFrame(frame_index) => {
+                match self.shared_frames.get(frame_index) {
+                    Some(frame) => hal.env.unmap_page_cap(frame.cap()).map_err(HalError::Sel4),
+                    None => Err(HalError::Unsupported(
+                        "console-network-containment-frame-index",
+                    )),
+                }
+            }
+            ConsoleNetworkContainmentUnit::DeleteFaultCap(cap_index) => {
+                match [self.standard_fault_cap, self.timeout_fault_cap]
+                    .get(cap_index)
+                    .copied()
+                {
+                    Some(cap) => {
+                        let error = sel4::cnode_delete_bounded(
+                            hal.env.init_cnode_cap(),
+                            cap,
+                            sel4::word_bits() as u8,
+                        );
+                        if error == sel4_sys::seL4_NoError {
+                            Ok(())
+                        } else {
+                            Err(HalError::Sel4(error))
+                        }
+                    }
+                    None => Err(HalError::Unsupported(
+                        "console-network-containment-fault-cap-index",
+                    )),
+                }
+            }
+            ConsoleNetworkContainmentUnit::RevokeAnchor => hal
+                .env
+                .revoke_anchor_descendants_and_reset_vspace(self.anchor, &mut self.tracker)
+                .map_err(|error| match error {
+                    sel4::RevokeAnchorVSpaceError::Sel4(error) => HalError::Sel4(error),
+                    _ => HalError::Unsupported("console-network-revoke-tracker"),
+                }),
+            ConsoleNetworkContainmentUnit::Finalize | ConsoleNetworkContainmentUnit::Complete => {
+                Ok(())
+            }
+        };
+        if let Err(error) = result {
+            self.containment.restore_selected(selected);
+            return Err(error);
         }
-        hal.env
-            .revoke_anchor_descendants_and_reset_vspace(self.anchor, &mut self.tracker)
-            .map_err(|error| match error {
-                sel4::RevokeAnchorVSpaceError::Sel4(error) => HalError::Sel4(error),
-                _ => HalError::Unsupported("console-network-revoke-tracker"),
-            })?;
+        if selected != ConsoleNetworkContainmentUnit::Complete {
+            return Ok(ConsoleNetworkContainmentTurn::InProgress);
+        }
+
         self.contained = true;
         self.activated = false;
-        let proof = ConsoleNetworkContainmentProof {
-            tcb_suspended: true,
-            scheduling_context_unbound: true,
-            mappings_scrubbed: true,
-            capabilities_revoked: true,
-            objects_deleted: true,
-            generation_fenced: true,
-        };
-        log::info!(
-            "CONSOLE_NETWORK_TEARDOWN generation={} tcb_suspended=yes scheduling_context_unbound=yes mappings_scrubbed=yes capabilities_revoked=yes objects_deleted=yes generation_fenced=yes state=terminal",
-            self.boundary.generation(),
-        );
-        Ok(proof)
+        Ok(ConsoleNetworkContainmentTurn::Complete(
+            ConsoleNetworkContainmentProof {
+                tcb_suspended: true,
+                scheduling_context_unbound: true,
+                mappings_scrubbed: true,
+                capabilities_revoked: true,
+                objects_deleted: true,
+                generation_fenced: true,
+            },
+        ))
     }
 
     /// Root slots permanently reserved for deterministic generation reuse.
@@ -546,7 +610,9 @@ fn construct_generation(
         timeout_fault_cap,
         shared_frames,
         activated: false,
+        containment_started: false,
         contained: false,
+        containment: ConsoleNetworkContainmentCursor::new(),
     })
 }
 

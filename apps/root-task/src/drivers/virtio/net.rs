@@ -17,7 +17,6 @@ use core::fmt::{self, Write as FmtWrite};
 #[cfg(feature = "net-backend-virtio")]
 use core::mem::MaybeUninit;
 use core::ops::Range;
-use core::ptr::read_unaligned;
 use core::ptr::{read_volatile, write_volatile, NonNull};
 #[cfg(not(target_arch = "aarch64"))]
 use core::sync::atomic::fence;
@@ -179,7 +178,6 @@ const VIRTIO_NET_HEADER_LEN_MRG: usize = core::mem::size_of::<VirtioNetHdrMrgRxb
 const FRAME_BUFFER_LEN: usize = MAX_FRAME_LEN + VIRTIO_NET_HEADER_LEN_MRG;
 static LOG_TCP_DEST_PORT: AtomicBool = AtomicBool::new(true);
 static RX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
-static TX_NOTIFY_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_PUBLISH_FENCE_LOGGED: AtomicBool = AtomicBool::new(false);
 static RX_ARM_START_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -199,7 +197,6 @@ static VIRTQ_ALIAS_OP_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
 static VIRTQ_PROGRAM_LOGGED: [AtomicBool; VIRTQ_DIAG_QUEUE_MAX] =
     [const { AtomicBool::new(false) }; VIRTQ_DIAG_QUEUE_MAX];
 static VIRTQ_WIRING_LOGGED: AtomicBool = AtomicBool::new(false);
-static TX_NOTIFY_DIAG_LOGGED: AtomicBool = AtomicBool::new(false);
 static VIRTQ_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_CLEAN_LOGGED: AtomicBool = AtomicBool::new(false);
 static DMA_INVALIDATE_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -218,7 +215,6 @@ static RING_SLOT_CANARY_LOGGED: [AtomicBool; virtio_mmio::VIRTIO_MMIO_SLOTS] =
     [const { AtomicBool::new(false) }; virtio_mmio::VIRTIO_MMIO_SLOTS];
 static FORENSICS_FROZEN: AtomicBool = AtomicBool::new(false);
 static FORENSICS_DUMPED: AtomicBool = AtomicBool::new(false);
-static TX_WRAP_DMA_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_ID_SEM_LOGGED: AtomicBool = AtomicBool::new(false);
 static TX_WRAP_TRIPWIRE: AtomicU32 = AtomicU32::new(0);
 static TX_WRAP_SNAPSHOT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2195,13 +2191,48 @@ struct VirtioNetHdrMrgRxbuf {
     num_buffers: u16,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
-struct TxHeaderInspect {
-    flags: u8,
-    gso_type: u8,
-    hdr_len: u16,
-    csum_start: u16,
-    csum_offset: u16,
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DeferredTxDiagnostic {
+    attempt: u64,
+    head: u16,
+    slot: u16,
+    used_idx: u16,
+    avail_before: u16,
+    avail_after: u16,
+    total_len: u32,
+    payload_len: u16,
+    console_tcp: bool,
+}
+
+#[derive(Default)]
+struct DeferredTxDiagnostics {
+    pending: Option<DeferredTxDiagnostic>,
+}
+
+impl DeferredTxDiagnostics {
+    const fn due(attempt: u64) -> bool {
+        attempt < 64 || (attempt & 0x3f) == 0
+    }
+
+    fn record(&mut self, diagnostic: DeferredTxDiagnostic) -> Result<(), ()> {
+        if self.pending.is_some() {
+            return Err(());
+        }
+        self.pending = Some(diagnostic);
+        Ok(())
+    }
+
+    fn pending(&self) -> bool {
+        self.pending.is_some()
+    }
+
+    fn drain_one(&mut self, emit: impl FnOnce(DeferredTxDiagnostic)) -> bool {
+        let Some(diagnostic) = self.pending.take() else {
+            return false;
+        };
+        emit(diagnostic);
+        true
+    }
 }
 
 /// Errors surfaced by the virtio network driver.
@@ -2306,7 +2337,7 @@ pub struct VirtioNet {
     tx_packets: u64,
     tx_used_count: u64,
     tx_attempt_seq: u64,
-    tx_attempt_log_gate: u64,
+    deferred_tx_diagnostics: DeferredTxDiagnostics,
     rx_packets: u64,
     rx_publish_calls: u64,
     tx_publish_calls: u64,
@@ -2320,7 +2351,6 @@ pub struct VirtioNet {
     last_progress_ms: u64,
     last_snapshot_ms: u64,
     stalled_snapshot_logged: bool,
-    tx_post_logged: bool,
     tx_selftest_done: bool,
     tx_selftest_loop_done: bool,
     device_faulted: bool,
@@ -2332,7 +2362,6 @@ pub struct VirtioNet {
     tx_anomaly_logged: bool,
     tx_descriptor_dumped: bool,
     tx_used_window_dumped: bool,
-    tx_dma_log_once: bool,
     tx_publish_verify_count: u32,
     tx_publish_guard_logged: bool,
     tx_publish_guard_detail_logged: bool,
@@ -2413,6 +2442,46 @@ pub struct VirtioNet {
 #[cfg(feature = "net-backend-virtio")]
 pub struct VirtioNetStatic {
     driver: &'static mut VirtioNet,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RxRoutineDiagnostics {
+    Enabled,
+    Suppressed,
+}
+
+impl RxRoutineDiagnostics {
+    const fn enabled(self) -> bool {
+        matches!(self, Self::Enabled)
+    }
+}
+
+#[cfg(feature = "net-backend-virtio")]
+impl VirtioNetStatic {
+    /// Whether a successful TX publication is waiting for its later bounded
+    /// normal-diagnostic visit.
+    pub(crate) fn deferred_tx_diagnostic_pending(&self) -> bool {
+        self.driver.deferred_tx_diagnostic_pending()
+    }
+
+    /// Emit at most one compact successful-TX record outside the atomic
+    /// publication/notify visit.
+    pub(crate) fn emit_one_deferred_tx_diagnostic(&mut self) -> bool {
+        self.driver.emit_one_deferred_tx_diagnostic()
+    }
+
+    /// Prepare one isolated-console TX without draining a prior routine
+    /// diagnostic in the same visit. The adapter proves the diagnostic queue is
+    /// empty before calling this seam.
+    pub(crate) fn transmit_isolated(&mut self, timestamp: Instant) -> Option<VirtioTxToken> {
+        self.driver.transmit_without_diagnostic_drain(timestamp)
+    }
+
+    /// Poll and retain at most one isolated-console RX record without
+    /// composing TX reclaim, TX reservation, or routine healthy diagnostics.
+    pub(crate) fn receive_isolated(&mut self) -> Option<VirtioRxToken> {
+        self.driver.receive_isolated()
+    }
 }
 
 impl VirtioNet {
@@ -2938,7 +3007,7 @@ impl VirtioNet {
             tx_packets: 0,
             tx_used_count: 0,
             tx_attempt_seq: 0,
-            tx_attempt_log_gate: 0,
+            deferred_tx_diagnostics: DeferredTxDiagnostics::default(),
             rx_packets: 0,
             rx_publish_calls: 0,
             tx_publish_calls: 0,
@@ -2952,7 +3021,6 @@ impl VirtioNet {
             last_progress_ms: now_ms,
             last_snapshot_ms: now_ms,
             stalled_snapshot_logged: false,
-            tx_post_logged: false,
             tx_selftest_done: false,
             tx_selftest_loop_done: false,
             device_faulted: false,
@@ -2964,7 +3032,6 @@ impl VirtioNet {
             tx_anomaly_logged: false,
             tx_descriptor_dumped: false,
             tx_used_window_dumped: false,
-            tx_dma_log_once: false,
             tx_publish_verify_count: 0,
             tx_publish_guard_logged: false,
             tx_publish_guard_detail_logged: false,
@@ -3082,6 +3149,48 @@ impl VirtioNet {
     #[must_use]
     pub fn tx_drop_count(&self) -> u32 {
         self.tx_drops
+    }
+
+    fn receive_isolated(&mut self) -> Option<VirtioRxToken> {
+        if self.stage == NetStage::TxOnly {
+            return None;
+        }
+        self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
+        self.poll_rx_interrupt_without_tx_work();
+        if self.device_faulted {
+            return None;
+        }
+
+        let (id, len) = self.pop_rx_with_routine_diagnostics(RxRoutineDiagnostics::Suppressed)?;
+        self.rx_used_count = self.rx_used_count.wrapping_add(1);
+        self.note_progress();
+        NET_DIAG.record_rx_frame_to_stack();
+        Some(VirtioRxToken {
+            driver: self as *mut _,
+            id,
+            len,
+            diagnostics: RxRoutineDiagnostics::Suppressed,
+        })
+    }
+
+    fn poll_rx_interrupt_without_tx_work(&mut self) {
+        let (status, _) = self.regs.acknowledge_interrupts();
+        if status != 0 {
+            NET_DIAG.record_rx_irq();
+        }
+        self.check_device_health();
+    }
+
+    fn transmit_without_diagnostic_drain(&mut self, _timestamp: Instant) -> Option<VirtioTxToken> {
+        if self.stage == NetStage::RxOnly {
+            return None;
+        }
+        self.poll_interrupts_without_routine_diagnostics();
+        if self.device_faulted || self.tx_publish_blocked() {
+            return None;
+        }
+        let token = self.prepare_tx_token_without_routine_diagnostics();
+        token.has_id().then_some(token)
     }
 
     pub fn debug_snapshot(&mut self) {
@@ -3213,11 +3322,12 @@ impl VirtioNet {
             payload[write_len - 1] = last_before ^ 0xff;
             write_len
         });
+        let _ = self.emit_one_deferred_tx_diagnostic();
 
         let mut used_idx_after = used_idx_before;
         let mut success = false;
         for _ in 0..200 {
-            self.reclaim_tx();
+            self.reclaim_tx_bounded(TX_QUEUE_SIZE as u16);
             let (used_idx_now, _avail_idx_now) = self.tx_queue.indices();
             used_idx_after = used_idx_now;
             if used_idx_now != used_idx_before {
@@ -3362,6 +3472,7 @@ impl VirtioNet {
                 payload[write_len - 1] ^= 0xff;
                 write_len
             });
+            let _ = self.emit_one_deferred_tx_diagnostic();
 
             if written == 0 {
                 info!(
@@ -3392,7 +3503,7 @@ impl VirtioNet {
 
             let mut success = false;
             for _ in 0..200 {
-                self.reclaim_tx();
+                self.reclaim_tx_bounded(TX_QUEUE_SIZE as u16);
                 let (used_idx_now, _avail_idx_now) = self.tx_queue.indices();
                 if used_idx_now != used_idx_before {
                     success = true;
@@ -5596,6 +5707,29 @@ impl VirtioNet {
         used_len: Option<usize>,
         notify: bool,
     ) -> Result<(), ()> {
+        self.enqueue_rx_chain_checked_with_routine_diagnostics(
+            head_id,
+            descs,
+            header_len,
+            payload_len,
+            frame_capacity,
+            used_len,
+            notify,
+            RxRoutineDiagnostics::Enabled,
+        )
+    }
+
+    fn enqueue_rx_chain_checked_with_routine_diagnostics(
+        &mut self,
+        head_id: u16,
+        descs: &[DescSpec],
+        header_len: usize,
+        payload_len: usize,
+        frame_capacity: usize,
+        used_len: Option<usize>,
+        notify: bool,
+        diagnostics: RxRoutineDiagnostics,
+    ) -> Result<(), ()> {
         self.check_device_health();
         if self.device_faulted || forensics_frozen() {
             return Err(());
@@ -5667,13 +5801,6 @@ impl VirtioNet {
         if payload_len == 0 {
             self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_payload_len_zero");
         }
-        let _header_fields = self.inspect_tx_header(head_id, header_len);
-        let _payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
-            let header_end = desc.addr.saturating_add(header_len as u64);
-            let payload_addr = desc.addr.saturating_add(header_len as u64);
-            payload_len > 0 && payload_addr < header_end
-        });
-
         virtq_publish_barrier();
         self.verify_descriptor_write("RX", QueueKind::Rx, head_id, &resolved_descs)?;
         if self.rx_queue.sync_descriptor_table_for_device().is_err() {
@@ -5703,17 +5830,19 @@ impl VirtioNet {
             self.freeze_and_capture("rx_avail_sync_failed");
             return Err(());
         }
-        self.log_publish_transaction(
-            "RX",
-            QueueKind::Rx,
-            old_idx,
-            avail_idx,
-            slot,
-            head_id,
-            false,
-        );
+        if diagnostics.enabled() {
+            self.log_publish_transaction(
+                "RX",
+                QueueKind::Rx,
+                old_idx,
+                avail_idx,
+                slot,
+                head_id,
+                false,
+            );
+        }
         NET_DIAG.record_rx_desc_posted();
-        if !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
+        if diagnostics.enabled() && !RX_PUBLISH_FENCE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             debug!(
                 target: "virtio-net",
                 "[virtio-net] enqueue publish: fences applied (rx) head={} slot={} avail_idx={}",
@@ -5725,7 +5854,11 @@ impl VirtioNet {
         if notify && !self.device_faulted {
             if self
                 .rx_queue
-                .notify(&mut self.regs, RX_QUEUE_INDEX)
+                .notify_with_routine_diagnostics(
+                    &mut self.regs,
+                    RX_QUEUE_INDEX,
+                    diagnostics.enabled(),
+                )
                 .is_err()
             {
                 self.freeze_and_capture("rx_notify_failed");
@@ -5742,7 +5875,7 @@ impl VirtioNet {
         used_len: Option<usize>,
         notify: bool,
     ) -> Result<(), ()> {
-        let log_breadcrumb = self.tx_publish_log_count < 4 || self.tx_anomaly_logged;
+        let log_breadcrumb = self.tx_publish_calls < 4 || self.tx_anomaly_logged;
         if log_breadcrumb {
             debug!(
                 target: "virtio-net",
@@ -5861,13 +5994,6 @@ impl VirtioNet {
         if payload_len == 0 {
             self.tx_anomaly(TxAnomalyReason::DescLenZero, "tx_payload_len_zero");
         }
-        let header_fields = self.inspect_tx_header(head_id, header_len);
-        let payload_overlaps = resolved_descs.get(0).map_or(false, |desc| {
-            let header_end = desc.addr.saturating_add(header_len as u64);
-            let payload_addr = desc.addr.saturating_add(header_len as u64);
-            payload_len > 0 && payload_addr < header_end
-        });
-
         virtq_publish_barrier();
         self.verify_descriptor_write("TX", QueueKind::Tx, head_id, &resolved_descs)?;
         for (offset, _) in resolved_descs.iter().enumerate() {
@@ -5893,12 +6019,7 @@ impl VirtioNet {
             return self.handle_forensic_fault(fault);
         }
 
-        let buffer_range = self
-            .clean_tx_buffer_for_device(
-                head_id,
-                resolved_descs[0].len as usize,
-                self.tx_anomaly_logged,
-            )
+        self.clean_tx_buffer_for_device(head_id, resolved_descs[0].len as usize)
             .ok_or(())?;
         // Ensure cache maintenance and descriptor writes are visible before handing ownership to the device.
         dma_barrier();
@@ -5995,67 +6116,13 @@ impl VirtioNet {
         if avail_idx == 17 && slot == 0 && !TX_ID_SEM_LOGGED.swap(true, AtomicOrdering::AcqRel) {
             let written_desc_index = head_id;
             let avail_head = self.tx_queue.read_avail_slot(slot as usize);
-            let head_state = self.tx_head_mgr.state(head_id);
-            let head_gen = match head_state {
-                Some(TxHeadState::Prepared { gen })
-                | Some(TxHeadState::Published { gen, .. })
-                | Some(TxHeadState::InFlight { gen, .. })
-                | Some(TxHeadState::Completed { gen }) => Some(gen),
-                _ => None,
-            };
-            let desc = if written_desc_index < self.tx_queue.size {
-                self.tx_queue.read_descriptor(written_desc_index)
-            } else {
-                VirtqDesc {
-                    addr: 0,
-                    len: 0,
-                    flags: 0,
-                    next: 0,
-                }
-            };
-            warn!(
-                target: "net-console",
-                "[virtio-net][tx-id] qsize={} avail_idx_before={} avail_idx_after={} ring_slot={} avail_ring_val={} head_id={} written_desc_index={} head_gen={:?} head_state={:?} desc{{addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next}}} avail_eq_desc={avail_eq_desc}",
-                qsize,
-                old_idx,
-                avail_idx,
-                slot,
-                avail_head,
-                head_id,
-                written_desc_index,
-                head_gen,
-                head_state,
-                addr = desc.addr,
-                len = desc.len,
-                flags = desc.flags,
-                next = desc.next,
-                avail_eq_desc = avail_head == written_desc_index,
-            );
             assert_eq!(
                 avail_head, written_desc_index,
                 "tx publish avail ring mismatch: avail_ring_val={} desc_index_written={}",
                 avail_head, written_desc_index
             );
         }
-        self.tx_wrap_publish_snapshot(head_id, slot, old_idx, avail_idx);
-        self.tx_wrap_tripwire(old_idx, avail_idx, slot, head_id);
         self.guard_tx_publish_readback(slot, head_id, &resolved_descs[0])?;
-        self.tx_publish_readback_probe(head_id, slot, old_idx, avail_idx);
-        let wrap_boundary = (old_idx as usize % qsize) > (avail_idx as usize % qsize);
-        if wrap_boundary && !self.tx_wrap_logged {
-            self.tx_wrap_logged = true;
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-wrap] avail_idx {old_idx}->{avail_idx} slot={slot} head={head_id} free={free} in_flight={in_flight} wrap_detected={wrap_detected} qsize={qsize} desc_len={desc_len} desc_addr=0x{desc_addr:016x} avail_head={avail_head}",
-                free = self.tx_head_mgr.free_len(),
-                in_flight = self.tx_head_mgr.in_flight_count(),
-                wrap_detected = wrap_boundary,
-                qsize = qsize,
-                desc_len = resolved_descs.get(0).map(|d| d.len).unwrap_or_default(),
-                desc_addr = resolved_descs.get(0).map(|d| d.addr).unwrap_or(0),
-                avail_head = self.tx_queue.read_avail_slot(slot as usize),
-            );
-        }
         self.verify_tx_publish(slot, head_id, &resolved_descs[0])?;
         self.debug_check_tx_avail_uniqueness(self.tx_queue.last_used, avail_idx);
         self.debug_check_tx_outstanding_window(self.tx_queue.last_used, avail_idx);
@@ -6069,47 +6136,7 @@ impl VirtioNet {
                 avail_idx,
             );
         }
-        self.log_tx_dma_ranges(
-            head_id,
-            total_len,
-            header_len,
-            buffer_range,
-            &resolved_descs,
-            self.tx_anomaly_logged,
-        );
         dma_barrier();
-        if slot == 0 && !TX_WRAP_DMA_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] tx wrap head={} len={} desc_bytes={} avail_bytes={} buffer=0x{buf_start:016x}..0x{buf_end:016x}",
-                head_id,
-                resolved_descs[0].len,
-                self.tx_queue.layout.desc_len,
-                self.tx_queue.layout.avail_len,
-                buf_start = buffer_range.0,
-                buf_end = buffer_range.1,
-            );
-        }
-        self.log_publish_transaction(
-            "TX",
-            QueueKind::Tx,
-            old_idx,
-            avail_idx,
-            slot,
-            head_id,
-            false,
-        );
-        self.log_tx_chain_publish(
-            head_id,
-            slot,
-            old_idx,
-            avail_idx,
-            header_len,
-            payload_len,
-            payload_overlaps,
-            header_fields,
-            &resolved_descs,
-        );
         if VIRTIO_DMA_TRACE {
             let desc_snapshot = self.tx_queue.read_descriptor(head_id);
             let avail_slot_val = self.tx_queue.read_avail_slot(slot as usize);
@@ -6150,7 +6177,6 @@ impl VirtioNet {
             );
         }
         if notify && !self.device_faulted {
-            self.log_tx_notify_contract(TX_QUEUE_INDEX);
             if self
                 .tx_queue
                 .notify(&mut self.regs, TX_QUEUE_INDEX)
@@ -6418,14 +6444,24 @@ impl VirtioNet {
     }
 
     fn poll_interrupts(&mut self) {
+        self.poll_interrupts_with_routine_diagnostics(true);
+    }
+
+    fn poll_interrupts_without_routine_diagnostics(&mut self) {
+        self.poll_interrupts_with_routine_diagnostics(false);
+    }
+
+    fn poll_interrupts_with_routine_diagnostics(&mut self, routine_diagnostics: bool) {
         self.verify_tx_canary("irq");
         let (status, isr_ack) = self.regs.acknowledge_interrupts();
-        log::debug!(
-            target: "virtio-net",
-            "ISR status=0x{:02x}, ISRACK=0x{:02x}",
-            status,
-            isr_ack,
-        );
+        if routine_diagnostics {
+            log::debug!(
+                target: "virtio-net",
+                "ISR status=0x{:02x}, ISRACK=0x{:02x}",
+                status,
+                isr_ack,
+            );
+        }
         if status != 0 {
             NET_DIAG.record_rx_irq();
             self.tx_stats.record_irq();
@@ -6435,12 +6471,24 @@ impl VirtioNet {
             return;
         }
         if NET_VIRTIO_TX_V2 {
-            self.tx_reclaim_used(TX_RECLAIM_IRQ_BUDGET, TxReclaimSource::Irq);
-            self.log_tx_stats_snapshot();
+            if routine_diagnostics {
+                self.tx_reclaim_used(TX_RECLAIM_IRQ_BUDGET, TxReclaimSource::Irq);
+                self.log_tx_stats_snapshot();
+            } else {
+                self.tx_reclaim_used_with_routine_diagnostics(
+                    TX_RECLAIM_IRQ_BUDGET,
+                    TxReclaimSource::Irq,
+                    false,
+                );
+            }
             return;
         }
-        self.reclaim_tx();
-        self.log_tx_stats_snapshot();
+        if routine_diagnostics {
+            self.reclaim_tx();
+            self.log_tx_stats_snapshot();
+        } else {
+            self.reclaim_tx_bounded_with_routine_diagnostics(TX_RECLAIM_POLL_BUDGET, false);
+        }
     }
 
     fn check_device_health(&mut self) {
@@ -6478,21 +6526,41 @@ impl VirtioNet {
     }
 
     fn reclaim_tx(&mut self) {
+        self.reclaim_tx_bounded(TX_RECLAIM_POLL_BUDGET);
+    }
+
+    fn reclaim_tx_bounded(&mut self, budget: u16) {
+        self.reclaim_tx_bounded_with_routine_diagnostics(budget, true);
+    }
+
+    fn reclaim_tx_bounded_with_routine_diagnostics(
+        &mut self,
+        budget: u16,
+        routine_diagnostics: bool,
+    ) {
+        if budget == 0 {
+            return;
+        }
         if forensics_frozen() {
             return;
         }
         self.verify_tx_canary("tx_reclaim_v1");
         if NET_VIRTIO_TX_V2 {
-            self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
+            if routine_diagnostics {
+                self.tx_reclaim_used(budget, TxReclaimSource::Poll);
+            } else {
+                self.tx_reclaim_used_with_routine_diagnostics(budget, TxReclaimSource::Poll, false);
+            }
             return;
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
         let (used_idx, avail_idx) = self.tx_queue.indices();
         let in_flight = self.tx_head_mgr.in_flight_count();
-        let should_log = used_idx != self.tx_last_used_seen
-            || (in_flight > 0 && (self.tx_progress_log_gate & 0x3f) == 0);
+        let should_log = routine_diagnostics
+            && (used_idx != self.tx_last_used_seen
+                || (in_flight > 0 && (self.tx_progress_log_gate & 0x3f) == 0));
         if should_log {
-            info!(
+            log::debug!(
                 target: "net-console",
                 "[virtio-net] tx poll: avail.idx={} used.idx={} last_used={} in_flight={} tx_free={} tx_gen={}",
                 avail_idx,
@@ -6512,9 +6580,11 @@ impl VirtioNet {
         // used.len is advisory for TX; accept zero-length after the visibility retry so we do
         // not stall reclaim when the device advances used.idx but leaves len as zero.
         let mut progressed = false;
-        loop {
+        let mut processed = 0u16;
+        while processed < budget {
             match self.tx_queue.pop_used("TX", true) {
                 Ok(Some((id, len, ring_slot, used_idx, last_used_before))) => {
+                    processed = processed.saturating_add(1);
                     progressed = true;
                     self.record_tx_used_entry(id, len);
                     // used.len is ignored for TX; ownership returns solely via used.id and tracked state.
@@ -6568,6 +6638,15 @@ impl VirtioNet {
     }
 
     fn tx_reclaim_used(&mut self, budget: u16, source: TxReclaimSource) {
+        self.tx_reclaim_used_with_routine_diagnostics(budget, source, true);
+    }
+
+    fn tx_reclaim_used_with_routine_diagnostics(
+        &mut self,
+        budget: u16,
+        source: TxReclaimSource,
+        routine_diagnostics: bool,
+    ) {
         if budget == 0 || forensics_frozen() {
             return;
         }
@@ -6632,14 +6711,16 @@ impl VirtioNet {
             }
             let id = u32::from_le(elem.id) as u16;
             let next_used = self.tx_v2_last_used.wrapping_add(1);
-            log::debug!(
-                target: "virtio-net",
-                "[virtio-net][tx-complete] used_idx={}→{} id={} len={}",
-                self.tx_v2_last_used,
-                next_used,
-                id,
-                elem_len
-            );
+            if routine_diagnostics {
+                log::debug!(
+                    target: "virtio-net",
+                    "[virtio-net][tx-complete] used_idx={}→{} id={} len={}",
+                    self.tx_v2_last_used,
+                    next_used,
+                    id,
+                    elem_len
+                );
+            }
             // used.len is advisory; the head lifecycle is guarded by state, not the device-provided length.
             let reclaim_result = match self.reclaim_posted_head(
                 id,
@@ -6676,8 +6757,8 @@ impl VirtioNet {
         let avail_idx_now = self.tx_queue.indices_no_sync().1;
         self.debug_check_tx_outstanding_window(self.tx_queue.last_used, avail_idx_now);
 
-        self.audit_tx_accounting("reclaim_tx_v2");
-        self.log_tx_v2_invariants();
+        self.audit_tx_accounting("reclaim_tx_v2", routine_diagnostics);
+        self.log_tx_v2_invariants(routine_diagnostics);
         #[cfg(debug_assertions)]
         self.tx_assert_invariants("reclaim");
         match source {
@@ -6686,7 +6767,7 @@ impl VirtioNet {
         }
     }
 
-    fn audit_tx_accounting(&mut self, context: &'static str) {
+    fn audit_tx_accounting(&mut self, context: &'static str, routine_diagnostics: bool) {
         match self.tx_head_mgr.audit() {
             Ok((free, prepared, in_flight, completed, posted)) => {
                 let qsize = self.tx_queue.size;
@@ -6712,7 +6793,7 @@ impl VirtioNet {
                     }
                 }
                 let now_ms = crate::hal::timebase().now_ms();
-                if now_ms.saturating_sub(self.tx_audit_log_ms) >= 1_000 {
+                if routine_diagnostics && now_ms.saturating_sub(self.tx_audit_log_ms) >= 1_000 {
                     self.tx_audit_log_ms = now_ms;
                     info!(
                         target: "net-console",
@@ -6742,12 +6823,7 @@ impl VirtioNet {
         }
     }
 
-    fn log_tx_v2_invariants(&mut self) {
-        let now_ms = crate::hal::timebase().now_ms();
-        if now_ms.saturating_sub(self.tx_v2_log_ms) < 1_000 {
-            return;
-        }
-        self.tx_v2_log_ms = now_ms;
+    fn log_tx_v2_invariants(&mut self, routine_diagnostics: bool) {
         let in_flight = self.tx_head_mgr.in_flight_count();
         let free = self.tx_head_mgr.free_len();
         let qsize = self.tx_queue.size;
@@ -6760,6 +6836,14 @@ impl VirtioNet {
                 qsize,
             );
         }
+        if !routine_diagnostics {
+            return;
+        }
+        let now_ms = crate::hal::timebase().now_ms();
+        if now_ms.saturating_sub(self.tx_v2_log_ms) < 1_000 {
+            return;
+        }
+        self.tx_v2_log_ms = now_ms;
         let (dup_alloc, dup_publish, invalid_id, invalid_state, zero_len_publish) =
             self.tx_head_mgr.counters();
         info!(
@@ -6914,11 +6998,21 @@ impl VirtioNet {
     fn debug_check_tx_outstanding_window(&mut self, _used_idx: u16, _avail_idx: u16) {}
 
     fn pop_rx(&mut self) -> Option<(u16, usize)> {
+        self.pop_rx_with_routine_diagnostics(RxRoutineDiagnostics::Enabled)
+    }
+
+    fn pop_rx_with_routine_diagnostics(
+        &mut self,
+        diagnostics: RxRoutineDiagnostics,
+    ) -> Option<(u16, usize)> {
         if forensics_frozen() {
             return None;
         }
         self.used_poll_calls = self.used_poll_calls.wrapping_add(1);
-        match self.rx_queue.pop_used("RX", false) {
+        match self
+            .rx_queue
+            .pop_used_with_routine_diagnostics("RX", false, diagnostics.enabled())
+        {
             Ok(Some((id, len, _slot, _used_idx, _last_used_before))) => {
                 let len = len as usize;
                 let header_len = self.rx_header_len;
@@ -6941,7 +7035,7 @@ impl VirtioNet {
                     self.rx_used_count = self.rx_used_count.wrapping_add(1);
                     NET_DIAG.record_rx_used_seen(crate::hal::timebase().now_ms());
                     self.note_progress();
-                    self.requeue_rx(id, Some(len));
+                    self.requeue_rx_with_routine_diagnostics(id, Some(len), diagnostics);
                     return None;
                 }
                 if let Some(buffer) = self.rx_buffers.get_mut(id as usize) {
@@ -6962,13 +7056,15 @@ impl VirtioNet {
                     );
                 }
                 self.last_used_idx_debug = self.rx_queue.last_used;
-                let (used_idx, avail_idx) = self.rx_queue.indices();
-                log::debug!(
-                    target: "virtio-net",
-                    "[RX] consumed used_idx={} avail_idx={}",
-                    used_idx,
-                    avail_idx,
-                );
+                if diagnostics.enabled() {
+                    let (used_idx, avail_idx) = self.rx_queue.indices();
+                    log::debug!(
+                        target: "virtio-net",
+                        "[RX] consumed used_idx={} avail_idx={}",
+                        used_idx,
+                        avail_idx,
+                    );
+                }
                 self.rx_used_count = self.rx_used_count.wrapping_add(1);
                 NET_DIAG.record_rx_used_seen(crate::hal::timebase().now_ms());
                 self.note_progress();
@@ -6983,6 +7079,15 @@ impl VirtioNet {
     }
 
     fn requeue_rx(&mut self, id: u16, used_len: Option<usize>) {
+        self.requeue_rx_with_routine_diagnostics(id, used_len, RxRoutineDiagnostics::Enabled);
+    }
+
+    fn requeue_rx_with_routine_diagnostics(
+        &mut self,
+        id: u16,
+        used_len: Option<usize>,
+        diagnostics: RxRoutineDiagnostics,
+    ) {
         self.check_device_health();
         if self.device_faulted {
             return;
@@ -7037,7 +7142,9 @@ impl VirtioNet {
 
             let vaddr = buffer.ptr().as_ptr() as usize;
             let paddr = buffer.paddr();
-            log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
+            if diagnostics.enabled() {
+                log_dma_programming("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
+            }
             assert_dma_region("virtq.rx.buffer.requeue", vaddr, paddr, total_len);
             let desc = [DescSpec {
                 addr: buffer.paddr() as u64,
@@ -7062,20 +7169,22 @@ impl VirtioNet {
                 "rx cache clean must run before posting descriptors"
             );
 
-            if !self
-                .rx_requeue_logged_ids
-                .iter()
-                .any(|&logged| logged == id)
-            {
-                let _ = self.rx_requeue_logged_ids.push(id);
-                debug!(
-                    target: "net-console",
-                    "[virtio-net] rx_requeue id={id} hdr_len={header_len} payload_len={payload_len} frame_len={frame_capacity} buffer_capacity={buffer_capacity}",
-                );
+            if diagnostics.enabled() {
+                if !self
+                    .rx_requeue_logged_ids
+                    .iter()
+                    .any(|&logged| logged == id)
+                {
+                    let _ = self.rx_requeue_logged_ids.push(id);
+                    debug!(
+                        target: "net-console",
+                        "[virtio-net] rx_requeue id={id} hdr_len={header_len} payload_len={payload_len} frame_len={frame_capacity} buffer_capacity={buffer_capacity}",
+                    );
+                }
             }
 
             if self
-                .enqueue_rx_chain_checked(
+                .enqueue_rx_chain_checked_with_routine_diagnostics(
                     id,
                     &desc,
                     header_len,
@@ -7083,20 +7192,23 @@ impl VirtioNet {
                     frame_capacity,
                     used_len,
                     true,
+                    diagnostics,
                 )
                 .is_err()
             {
                 return;
             }
 
-            let (used_idx, avail_idx) = self.rx_queue.indices();
-            log::debug!(
-                target: "virtio-net",
-                "[RX] posted buffers={} used_idx={} avail_idx={}",
-                1,
-                used_idx,
-                avail_idx,
-            );
+            if diagnostics.enabled() {
+                let (used_idx, avail_idx) = self.rx_queue.indices();
+                log::debug!(
+                    target: "virtio-net",
+                    "[RX] posted buffers={} used_idx={} avail_idx={}",
+                    1,
+                    used_idx,
+                    avail_idx,
+                );
+            }
         } else {
             warn!(
                 target: "net-console",
@@ -7108,6 +7220,17 @@ impl VirtioNet {
     }
 
     fn prepare_tx_token(&mut self) -> VirtioTxToken {
+        self.prepare_tx_token_with_routine_diagnostics(true)
+    }
+
+    fn prepare_tx_token_without_routine_diagnostics(&mut self) -> VirtioTxToken {
+        self.prepare_tx_token_with_routine_diagnostics(false)
+    }
+
+    fn prepare_tx_token_with_routine_diagnostics(
+        &mut self,
+        routine_diagnostics: bool,
+    ) -> VirtioTxToken {
         let driver_ptr = self as *mut _;
         self.verify_tx_canary("tx_prepare");
         if NET_VIRTIO_TX_V2 {
@@ -7115,7 +7238,15 @@ impl VirtioNet {
                 return VirtioTxToken::new(driver_ptr, None);
             }
             if self.tx_free_count() == 0 {
-                self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
+                if routine_diagnostics {
+                    self.tx_reclaim_used(TX_RECLAIM_POLL_BUDGET, TxReclaimSource::Poll);
+                } else {
+                    self.tx_reclaim_used_with_routine_diagnostics(
+                        TX_RECLAIM_POLL_BUDGET,
+                        TxReclaimSource::Poll,
+                        false,
+                    );
+                }
             }
             if let Some(reservation) = self.reserve_tx_slot() {
                 return VirtioTxToken::new(driver_ptr, Some(reservation));
@@ -7153,33 +7284,82 @@ impl VirtioNet {
 
     fn log_tx_attempt(
         &mut self,
-        seq: u64,
+        _seq: u64,
         requested_len: usize,
-        payload_len: usize,
+        _payload_len: usize,
         written_len: usize,
     ) {
-        let should_log = seq < 32
-            || written_len == 0
-            || payload_len == 0
-            || payload_len != requested_len
-            || (self.tx_attempt_log_gate & 0x3f) == 0;
-        self.tx_attempt_log_gate = self.tx_attempt_log_gate.wrapping_add(1);
-        if should_log {
-            info!(
-                target: "net-console",
-                "[virtio-net][tx-attempt] seq={} requested={} payload_len={} written={}",
-                seq,
-                requested_len,
-                payload_len,
-                written_len,
-            );
-        }
         if requested_len == 0 {
             self.tx_anomaly(TxAnomalyReason::SmoltcpRequestedZeroLen, "smoltcp_len_zero");
-        }
-        if written_len == 0 {
+        } else if written_len == 0 {
             self.tx_zero_len_attempt = self.tx_zero_len_attempt.wrapping_add(1);
+            self.tx_anomaly(TxAnomalyReason::ClosureWroteZero, "closure_wrote_zero");
         }
+    }
+
+    fn deferred_tx_diagnostic_pending(&self) -> bool {
+        self.deferred_tx_diagnostics.pending()
+    }
+
+    fn queue_deferred_tx_diagnostic(
+        &mut self,
+        attempt: u64,
+        head: u16,
+        total_len: usize,
+        console_tcp: bool,
+    ) -> Result<bool, ()> {
+        if !DeferredTxDiagnostics::due(attempt) {
+            return Ok(false);
+        }
+        let (used_idx, avail_after) = self.tx_queue.indices_no_sync();
+        let avail_before = avail_after.wrapping_sub(1);
+        let qsize = self.tx_queue.size;
+        let slot = if qsize == 0 { 0 } else { avail_before % qsize };
+        let diagnostic = DeferredTxDiagnostic {
+            attempt,
+            head,
+            slot,
+            used_idx,
+            avail_before,
+            avail_after,
+            total_len: total_len.min(u32::MAX as usize) as u32,
+            payload_len: total_len
+                .saturating_sub(self.tx_header_len)
+                .min(u16::MAX as usize) as u16,
+            console_tcp,
+        };
+        if self.deferred_tx_diagnostics.record(diagnostic).is_err() {
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-anomaly] deferred success diagnostic backpressure head={} attempt={}",
+                head,
+                attempt,
+            );
+            self.device_faulted = true;
+            self.last_error
+                .get_or_insert("tx_deferred_diagnostic_backpressure");
+            self.freeze_and_capture("tx_deferred_diagnostic_backpressure");
+            return Err(());
+        }
+        Ok(true)
+    }
+
+    fn emit_one_deferred_tx_diagnostic(&mut self) -> bool {
+        self.deferred_tx_diagnostics.drain_one(|diagnostic| {
+            info!(
+                target: "net-console",
+                "[virtio-net][tx-ok] attempt={} head={} slot={} avail={}->{} used={} len={} payload={} kick=1 console_tcp={}",
+                diagnostic.attempt,
+                diagnostic.head,
+                diagnostic.slot,
+                diagnostic.avail_before,
+                diagnostic.avail_after,
+                diagnostic.used_idx,
+                diagnostic.total_len,
+                diagnostic.payload_len,
+                diagnostic.console_tcp,
+            );
+        })
     }
 
     fn drop_duplicate_publish(&mut self, id: u16, state: TxHeadState) {
@@ -7771,26 +7951,25 @@ impl VirtioNet {
         self.tx_stats.record_kick();
     }
 
-    fn log_tx_notify_contract(&self, queue: u32) {
-        if !VIRTQ_DIAG {
-            return;
-        }
-        debug_assert_eq!(queue, TX_QUEUE_INDEX, "tx notify must target TX queue");
-        if !TX_NOTIFY_DIAG_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            let (vaddr, paddr, offset) = self.regs.notify_register_info();
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-notify] queue={queue} notify_vaddr=0x{vaddr:016x} notify_paddr=0x{paddr:016x} offset=0x{offset:03x}",
-            );
-        }
-    }
-
-    fn submit_tx(&mut self, id: u16, len: usize) {
+    fn submit_tx(&mut self, id: u16, len: usize, attempt: u64, console_tcp: bool) {
         if NET_VIRTIO_TX_V2 {
             self.submit_tx_v2(id, len);
             return;
         }
         self.verify_tx_canary("tx_submit_v1");
+        if self.deferred_tx_diagnostic_pending() {
+            error!(
+                target: "net-console",
+                "[virtio-net][tx-anomaly] publish attempted before deferred success diagnostic drained head={} attempt={}",
+                id,
+                attempt,
+            );
+            self.device_faulted = true;
+            self.last_error
+                .get_or_insert("tx_deferred_diagnostic_not_drained");
+            self.release_tx_head(id, "tx_deferred_diagnostic_not_drained");
+            return;
+        }
         if self.tx_publish_blocked() {
             self.release_tx_head(id, "tx_publish_blocked");
             return;
@@ -7811,7 +7990,6 @@ impl VirtioNet {
         {
             if let Some(buffer) = self.tx_buffers.get(id as usize) {
                 let vaddr = buffer.ptr().as_ptr() as usize;
-                log_dma_programming("virtq.tx.buffer", vaddr, addr, length);
                 assert_dma_region("virtq.tx.buffer", vaddr, addr, length);
             }
             let desc = [DescSpec {
@@ -7830,21 +8008,12 @@ impl VirtioNet {
                 return;
             }
             NET_DIAG.record_tx_submit();
-            if let Some(buffer) = self.tx_buffers.get_mut(id as usize) {
-                let slice = buffer.as_mut_slice();
-                for byte in &mut slice[length..] {
-                    *byte = 0;
-                }
-            }
-            if !self.tx_post_logged {
-                info!(
-                    target: "net-console",
-                    "[virtio-net] TX descriptor posted: id={} len={}",
-                    id,
-                    length
-                );
-                self.tx_post_logged = true;
-            }
+            // The descriptor's validated `len` is the complete device-owned
+            // range. Bytes beyond it are never published, while every future
+            // header and payload byte is zero-initialised before reuse. Do not
+            // scrub the inactive tail after notify: ownership has transferred
+            // to the device until a bounded used-ring reclaim returns it.
+            let _ = self.queue_deferred_tx_diagnostic(attempt, id, length, console_tcp);
         }
     }
 
@@ -7996,10 +8165,7 @@ impl VirtioNet {
             return;
         }
 
-        if self
-            .clean_tx_buffer_for_device(id, capped_len, self.tx_anomaly_logged)
-            .is_none()
-        {
+        if self.clean_tx_buffer_for_device(id, capped_len).is_none() {
             self.release_tx_head(id, "tx_v2_cache_clean_failed");
             return;
         }
@@ -8204,7 +8370,6 @@ impl VirtioNet {
                     );
                 }
                 if self.should_kick_after_publish(total_len) {
-                    self.log_tx_notify_contract(TX_QUEUE_INDEX);
                     if self
                         .tx_queue
                         .notify(&mut self.regs, TX_QUEUE_INDEX)
@@ -8231,12 +8396,7 @@ impl VirtioNet {
         }
     }
 
-    fn clean_tx_buffer_for_device(
-        &mut self,
-        head_id: u16,
-        len: usize,
-        force_log: bool,
-    ) -> Option<(usize, usize)> {
+    fn clean_tx_buffer_for_device(&mut self, head_id: u16, len: usize) -> Option<(usize, usize)> {
         let (ptr, capped_len, start) = {
             let buffer = match self.tx_buffers.get(head_id as usize) {
                 Some(buffer) => buffer,
@@ -8258,64 +8418,7 @@ impl VirtioNet {
             self.freeze_and_capture("tx_cache_clean_failed");
             return None;
         }
-
-        let payload_start = start.saturating_add(self.tx_header_len);
-        let payload_end =
-            payload_start.saturating_add(capped_len.saturating_sub(self.tx_header_len));
-        if force_log || !self.tx_dma_log_once {
-            self.tx_dma_log_once = true;
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] tx buffer clean head={} header=0x{start:016x}..0x{hdr_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x}",
-                head_id,
-                hdr_end = start.saturating_add(self.tx_header_len),
-                payload_start = payload_start,
-                payload_end = payload_end,
-            );
-        }
         Some((start, start.saturating_add(capped_len)))
-    }
-
-    fn log_tx_dma_ranges(
-        &mut self,
-        head_id: u16,
-        total_len: usize,
-        header_len: usize,
-        buffer_range: (usize, usize),
-        descs: &[DescSpec],
-        force: bool,
-    ) {
-        if !force && self.tx_dma_log_once {
-            return;
-        }
-        self.tx_dma_log_once = true;
-        let payload_start = buffer_range.0.saturating_add(header_len);
-        let payload_end = buffer_range.1;
-        let desc_start = self.tx_queue.base_paddr + self.tx_queue.layout.desc_offset;
-        let avail_start = self.tx_queue.base_paddr + self.tx_queue.layout.avail_offset;
-        info!(
-            target: "virtio-net",
-            "[virtio-net][dma] tx ranges head={} total_len={} header_len={} buffer=0x{buf_start:016x}..0x{buf_end:016x} payload=0x{payload_start:016x}..0x{payload_end:016x} desc=0x{desc_start:016x}/{desc_len} avail=0x{avail_start:016x}/{avail_len}",
-            head_id,
-            total_len,
-            header_len,
-            buf_start = buffer_range.0,
-            buf_end = buffer_range.1,
-            payload_start = payload_start,
-            payload_end = payload_end,
-            desc_len = self.tx_queue.layout.desc_len,
-            avail_len = self.tx_queue.layout.avail_len,
-        );
-        for (idx, desc) in descs.iter().enumerate() {
-            info!(
-                target: "virtio-net",
-                "[virtio-net][dma] desc[{idx}] addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
-                addr = desc.addr,
-                len = desc.len,
-                flags = desc.flags,
-                next = desc.next,
-            );
-        }
     }
 
     fn log_tx_descriptor_readback(&mut self, head_id: u16, expected_chain: &[DescSpec]) {
@@ -8527,81 +8630,6 @@ impl VirtioNet {
 
     #[cfg(not(debug_assertions))]
     fn tx_assert_invariants(&mut self, _context: &'static str) {}
-
-    fn inspect_tx_header(&self, head_id: u16, header_len: usize) -> Option<TxHeaderInspect> {
-        self.tx_buffers.get(head_id as usize).and_then(|buffer| {
-            let slice = buffer.as_slice();
-            if slice.len() < header_len || header_len < VIRTIO_NET_HEADER_LEN_BASIC {
-                return None;
-            }
-            let hdr = if header_len >= VIRTIO_NET_HEADER_LEN_MRG {
-                let hdr = unsafe { read_unaligned(slice.as_ptr() as *const VirtioNetHdrMrgRxbuf) };
-                hdr.hdr
-            } else {
-                unsafe { read_unaligned(slice.as_ptr() as *const VirtioNetHdr) }
-            };
-            Some(TxHeaderInspect {
-                flags: hdr.flags,
-                gso_type: hdr.gso_type,
-                hdr_len: hdr.hdr_len,
-                csum_start: hdr.csum_start,
-                csum_offset: hdr.csum_offset,
-            })
-        })
-    }
-
-    fn log_tx_chain_publish(
-        &mut self,
-        head_id: u16,
-        slot: u16,
-        old_idx: u16,
-        avail_idx: u16,
-        header_len: usize,
-        payload_len: usize,
-        payload_overlaps: bool,
-        header_fields: Option<TxHeaderInspect>,
-        descs: &[DescSpec],
-    ) {
-        if self.tx_publish_log_count >= FORENSICS_PUBLISH_LOG_LIMIT && !self.tx_anomaly_logged {
-            return;
-        }
-        self.tx_publish_log_count = self.tx_publish_log_count.wrapping_add(1);
-        let total_len = descs.get(0).map(|d| d.len).unwrap_or(0);
-        info!(
-            target: "virtio-net",
-            "[virtio-net][tx-publish] head={} slot={} idx {}->{} total_len={} header_len={} payload_len={} overlap={}",
-            head_id,
-            slot,
-            old_idx,
-            avail_idx,
-            total_len,
-            header_len,
-            payload_len,
-            payload_overlaps,
-        );
-        if let Some(fields) = header_fields {
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-publish] header flags=0x{:02x} gso_type=0x{:02x} hdr_len={} csum_start={} csum_offset={}",
-                fields.flags,
-                fields.gso_type,
-                fields.hdr_len,
-                fields.csum_start,
-                fields.csum_offset,
-            );
-        }
-        for (idx, desc) in descs.iter().enumerate() {
-            let desc_index = head_id.wrapping_add(idx as u16);
-            info!(
-                target: "virtio-net",
-                "[virtio-net][tx-publish] desc[{desc_index}] addr=0x{addr:016x} len={len} flags=0x{flags:04x} next={next:?}",
-                addr = desc.addr,
-                len = desc.len,
-                flags = desc.flags,
-                next = desc.next,
-            );
-        }
-    }
 }
 
 fn format_ipv4(bytes: &[u8]) -> HeaplessString<16> {
@@ -8645,6 +8673,25 @@ fn tcp_flag_string(flags: u8) -> HeaplessString<8> {
         push_flag(&mut out, 'C');
     }
     out
+}
+
+fn is_console_tcp_frame(frame: &[u8]) -> bool {
+    const IPV4_ETHERTYPE: u16 = 0x0800;
+    if frame.len() < 34 || u16::from_be_bytes([frame[12], frame[13]]) != IPV4_ETHERTYPE {
+        return false;
+    }
+    let ip_start = 14usize;
+    let ip_header_len = usize::from(frame[ip_start] & 0x0f).saturating_mul(4);
+    if ip_header_len < 20
+        || frame[ip_start + 9] != 0x06
+        || frame.len() < ip_start.saturating_add(ip_header_len).saturating_add(4)
+    {
+        return false;
+    }
+    let tcp_offset = ip_start + ip_header_len;
+    let src_port = u16::from_be_bytes([frame[tcp_offset], frame[tcp_offset + 1]]);
+    let dst_port = u16::from_be_bytes([frame[tcp_offset + 2], frame[tcp_offset + 3]]);
+    src_port == CONSOLE_TCP_PORT || dst_port == CONSOLE_TCP_PORT
 }
 
 fn log_tcp_trace(direction: &str, frame: &[u8]) {
@@ -8798,6 +8845,11 @@ impl Device for VirtioNet {
         if self.stage == NetStage::TxOnly {
             return None;
         }
+        // Generic smoltcp may consume the paired TX token returned from RX.
+        // Clear any prior compact record before exposing that token. The
+        // isolated adapter reaches RX only after its dedicated diagnostic
+        // Network visit, so this is a no-op on the bounded target path.
+        let _ = self.emit_one_deferred_tx_diagnostic();
         self.rx_poll_count = self.rx_poll_count.wrapping_add(1);
 
         if self.rx_poll_count % 1024 == 0 {
@@ -8862,6 +8914,7 @@ impl Device for VirtioNet {
                 driver: driver_ptr,
                 id,
                 len,
+                diagnostics: RxRoutineDiagnostics::Enabled,
             };
             let tx = self.prepare_tx_token();
             if !tx.has_id() {
@@ -8876,23 +8929,9 @@ impl Device for VirtioNet {
         }
     }
 
-    fn transmit(&mut self, _timestamp: Instant) -> Option<Self::TxToken<'_>> {
-        if self.stage == NetStage::RxOnly {
-            return None;
-        }
-        self.poll_interrupts();
-        if self.device_faulted {
-            return None;
-        }
-        if self.tx_publish_blocked() {
-            return None;
-        }
-        let token = self.prepare_tx_token();
-        if token.has_id() {
-            Some(token)
-        } else {
-            None
-        }
+    fn transmit(&mut self, timestamp: Instant) -> Option<Self::TxToken<'_>> {
+        let _ = self.emit_one_deferred_tx_diagnostic();
+        self.transmit_without_diagnostic_drain(timestamp)
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -9100,6 +9139,7 @@ pub struct VirtioRxToken {
     driver: *mut VirtioNet,
     id: u16,
     len: usize,
+    diagnostics: RxRoutineDiagnostics,
 }
 
 impl RxToken for VirtioRxToken {
@@ -9121,25 +9161,27 @@ impl RxToken for VirtioRxToken {
                 "[virtio-net] RX: frame too small for virtio-net header (len={})",
                 available
             );
-            driver.requeue_rx(self.id, Some(self.len));
+            driver.requeue_rx_with_routine_diagnostics(self.id, Some(self.len), self.diagnostics);
             return f(&[]);
         }
 
         let payload_len = available - header_len;
         let mut_slice = &mut buffer.as_mut_slice()[..available];
         let payload = &mut mut_slice[header_len..header_len + payload_len];
-        let preview_len = core::cmp::min(payload.len(), 16);
-        log_tcp_dest_port_once(payload);
-        log::debug!(
-            target: "net-console",
-            "[virtio] RX packet len={} first_bytes={:02x?}",
-            payload_len,
-            &payload[..preview_len],
-        );
-        log_tcp_trace("RX", payload);
+        if self.diagnostics.enabled() {
+            let preview_len = core::cmp::min(payload.len(), 16);
+            log_tcp_dest_port_once(payload);
+            log::debug!(
+                target: "net-console",
+                "[virtio] RX packet len={} first_bytes={:02x?}",
+                payload_len,
+                &payload[..preview_len],
+            );
+            log_tcp_trace("RX", payload);
+        }
         driver.rx_packets = driver.rx_packets.saturating_add(1);
         let result = f(payload);
-        driver.requeue_rx(self.id, Some(self.len));
+        driver.requeue_rx_with_routine_diagnostics(self.id, Some(self.len), self.diagnostics);
         result
     }
 }
@@ -9237,6 +9279,7 @@ impl TxToken for VirtioTxToken {
                 .min(max_len.saturating_sub(header_len));
             let result;
             let written_len;
+            let console_tcp;
             let total_capacity = payload_len.saturating_add(header_len);
             {
                 let mut_slice = &mut buffer.as_mut_slice()[..total_capacity];
@@ -9246,7 +9289,7 @@ impl TxToken for VirtioTxToken {
                 payload[..payload_len].fill(0);
                 result = f(&mut payload[..payload_len]);
                 written_len = payload_len;
-                log_tcp_trace("TX", &payload[..payload_len]);
+                console_tcp = is_console_tcp_frame(&payload[..payload_len]);
             }
             driver.log_tx_attempt(attempt_seq, len, payload_len, written_len);
             if written_len == 0 {
@@ -9273,7 +9316,7 @@ impl TxToken for VirtioTxToken {
                 return result;
             };
             debug_assert!(total_len > 0, "tx total_len must be non-zero before submit");
-            driver.submit_tx(id, total_len);
+            driver.submit_tx(id, total_len, attempt_seq, console_tcp);
             driver.tx_packets = driver.tx_packets.saturating_add(1);
             result
         }
@@ -10621,16 +10664,24 @@ impl VirtQueue {
     }
 
     fn notify(&mut self, regs: &mut VirtioRegs, queue: u32) -> Result<(), DmaError> {
+        self.notify_with_routine_diagnostics(regs, queue, true)
+    }
+
+    fn notify_with_routine_diagnostics(
+        &mut self,
+        regs: &mut VirtioRegs,
+        queue: u32,
+        routine_diagnostics: bool,
+    ) -> Result<(), DmaError> {
         // Ensure descriptor and avail writes are visible before the MMIO notify.
         dma_barrier();
         virtq_notify_barrier();
-        if queue == TX_QUEUE_INDEX {
+        if routine_diagnostics && queue == TX_QUEUE_INDEX {
             log::debug!(target: "virtio-net", "[virtio-net][tx-notify] queue={queue}");
         }
         regs.notify(queue);
         let notify_flag = match queue {
             RX_QUEUE_INDEX => Some(&RX_NOTIFY_LOGGED),
-            TX_QUEUE_INDEX => Some(&TX_NOTIFY_LOGGED),
             _ => None,
         };
         match queue {
@@ -10638,10 +10689,11 @@ impl VirtQueue {
             TX_QUEUE_INDEX => NET_DIAG.record_tx_kick(),
             _ => {}
         }
-        if let Some(flag) = notify_flag {
-            if !flag.swap(true, AtomicOrdering::AcqRel) {
-                let label = if queue == TX_QUEUE_INDEX { "TX" } else { "RX" };
-                info!(target: "virtio-net", "[virtio-net] notify queue={queue} ({label})");
+        if routine_diagnostics {
+            if let Some(flag) = notify_flag {
+                if !flag.swap(true, AtomicOrdering::AcqRel) {
+                    info!(target: "virtio-net", "[virtio-net] notify queue={queue} (RX)");
+                }
             }
         }
         Ok(())
@@ -10754,7 +10806,7 @@ impl VirtQueue {
     fn invalidate_used_elem_for_cpu(&self, ring_slot: usize) -> Result<(), DmaError> {
         let elem_ptr = unsafe { (*self.used.as_ptr()).ring.as_ptr().add(ring_slot) as *const u8 };
         if !USED_RING_INVALIDATE_LOGGED.swap(true, AtomicOrdering::AcqRel) {
-            info!(
+            log::debug!(
                 target: "virtio-net",
                 "[virtio-net][dma] invalidate used ring entry slot={} addr=0x{addr:016x}",
                 ring_slot,
@@ -10876,6 +10928,15 @@ impl VirtQueue {
         &mut self,
         queue_label: &'static str,
         allow_zero_len: bool,
+    ) -> Result<Option<(u16, u32, u16, u16, u16)>, ForensicFault> {
+        self.pop_used_with_routine_diagnostics(queue_label, allow_zero_len, true)
+    }
+
+    fn pop_used_with_routine_diagnostics(
+        &mut self,
+        queue_label: &'static str,
+        allow_zero_len: bool,
+        routine_diagnostics: bool,
     ) -> Result<Option<(u16, u32, u16, u16, u16)>, ForensicFault> {
         let used = self.used.as_ptr();
         if let Err(err) = self.invalidate_used_header_for_cpu() {
@@ -11070,15 +11131,17 @@ impl VirtQueue {
                 reason: ForensicFaultReason::UsedDescriptorZero,
             });
         }
-        debug!(
-            target: "net-console",
-            "[virtio-net] pop_used: last_used={} idx={} ring_slot={} id={} len={}",
-            last_used,
-            used_idx,
-            ring_slot,
-            elem_id,
-            elem_len,
-        );
+        if routine_diagnostics {
+            debug!(
+                target: "net-console",
+                "[virtio-net] pop_used: last_used={} idx={} ring_slot={} id={} len={}",
+                last_used,
+                used_idx,
+                ring_slot,
+                elem_id,
+                elem_len,
+            );
+        }
         self.last_used = last_used.wrapping_add(1);
         Ok(Some((
             elem_id as u16,
@@ -11507,6 +11570,55 @@ fn reservation_matches(
 #[cfg(test)]
 mod tx_tests {
     use super::*;
+
+    fn deferred_diagnostic(attempt: u64, head: u16) -> DeferredTxDiagnostic {
+        DeferredTxDiagnostic {
+            attempt,
+            head,
+            slot: head,
+            used_idx: 0,
+            avail_before: head,
+            avail_after: head.wrapping_add(1),
+            total_len: 74,
+            payload_len: 64,
+            console_tcp: true,
+        }
+    }
+
+    #[test]
+    fn deferred_tx_diagnostic_matches_bounded_early_and_periodic_cadence() {
+        for attempt in 0..64 {
+            assert!(
+                DeferredTxDiagnostics::due(attempt),
+                "early successful attempt {attempt} must retain one compact record"
+            );
+        }
+        assert!(DeferredTxDiagnostics::due(64));
+        assert!(!DeferredTxDiagnostics::due(65));
+        assert!(!DeferredTxDiagnostics::due(127));
+        assert!(DeferredTxDiagnostics::due(128));
+    }
+
+    #[test]
+    fn deferred_tx_diagnostic_is_lossless_and_drains_at_most_one() {
+        let first = deferred_diagnostic(7, 1);
+        let second = deferred_diagnostic(8, 2);
+        let mut deferred = DeferredTxDiagnostics::default();
+        deferred.record(first).expect("first compact record");
+        assert_eq!(
+            deferred.record(second),
+            Err(()),
+            "a later publication must not overwrite the retained record"
+        );
+
+        let mut observed = None;
+        assert!(deferred.drain_one(|record| observed = Some(record)));
+        assert_eq!(observed, Some(first));
+        assert!(
+            !deferred.drain_one(|_| unreachable!("only one record was queued")),
+            "one Network diagnostic visit emits at most one record"
+        );
+    }
 
     fn publish_prepared(mgr: &mut TxHeadManager, id: u16, slot: u16, len: u32, addr: u64) -> u32 {
         mgr.prepare_publish(id, slot, len, addr)

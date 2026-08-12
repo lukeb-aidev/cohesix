@@ -19,6 +19,13 @@ import tempfile
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
+try:
+    from scripts import driver_runtime_manifest as driver_runtimes
+    from scripts import worker_image_manifest as worker_images
+except ImportError:  # pragma: no cover - direct script execution uses this path
+    import driver_runtime_manifest as driver_runtimes
+    import worker_image_manifest as worker_images
+
 MAX_RECORD_BYTES = 256 * 1024
 MAX_ARTIFACT_BYTES = 64 * 1024 * 1024
 MAX_IDENTIFIER_BYTES = 128
@@ -84,6 +91,33 @@ TARGET_SESSION_KEYS = {
     "worker_image_manifest_sha256",
     "worker_abi_sha256",
 }
+QEMU_LAUNCH_SCHEMA = "cohesix-qemu-launch-artifacts/v1"
+QEMU_AUTH_OBSERVATION_SCHEMA = "cohesix-target-observation/v1"
+QEMU_AUTH_OBSERVATION_PROFILE = "qemu_smp_production / configs/root_task.toml"
+QEMU_AUTH_UART_MARKER = "[cohsh-net][auth] auth OK, session established"
+QEMU_LAUNCH_ARTIFACTS = (
+    ("elfloader", Path("staging/elfloader")),
+    ("kernel", Path("staging/kernel.elf")),
+    ("rootserver", Path("staging/rootserver")),
+    ("initrd", Path("cohesix-system.cpio")),
+)
+QEMU_SESSION_ARTIFACTS = {
+    "driver_archive": Path("driver-runtimes/cohesix-driver-runtimes.cpio"),
+    "driver_manifest": Path(
+        "driver-runtimes/cohesix-driver-runtime-manifest.json"
+    ),
+    "worker_archive": Path("worker-images/cohesix-worker-images.cpio"),
+    "worker_manifest": Path(
+        "worker-images/cohesix-worker-image-manifest.json"
+    ),
+}
+WORKER_ABI_FILES = (
+    Path("crates/worker-task-abi/Cargo.toml"),
+    Path("crates/worker-task-abi/src/lib.rs"),
+)
+SOURCE_INVENTORY_SCHEMA = "cohesix-source-inventory/v1"
+WORKER_ABI_IDENTITY_SCHEMA = "cohesix-worker-abi-identity/v1"
+CYW43_QEMU_BINDING_SCHEMA = "cohesix-cyw43-coexistence-binding/v1"
 COMPONENT_REQUIRED_OUTCOMES = (
     "bounded-control-path",
     "bounded-receipt-path",
@@ -182,6 +216,27 @@ QEMU_SERVICE_SYMBOLS = {
         "cohesix_console_network_qemu_evidence_timeout_spin",
     ),
 }
+QEMU_NINEDOOR_ROOT_SYMBOLS = (
+    "cohesix_ninedoor_qemu_evidence_post_prepare",
+    "cohesix_ninedoor_qemu_evidence_request_local_revoke",
+)
+QEMU_NINEDOOR_ROOT_MODULE = "root_task::ninedoor"
+QEMU_SERVICE_MODES = {
+    "ninedoor-service": (
+        "during-call-standard",
+        "between-calls-revoke",
+    ),
+    "console-network": (
+        "during-call-standard",
+        "budget-exhaustion-timeout",
+    ),
+}
+QEMU_SERVICE_EVIDENCE_PLAN = (
+    ("ninedoor-service", "during-call-standard"),
+    ("ninedoor-service", "between-calls-revoke"),
+    ("console-network", "during-call-standard"),
+    ("console-network", "budget-exhaustion-timeout"),
+)
 QEMU_CRITICAL_SYMBOLS = (
     "cohesix_root_fault_qemu_evidence_turn",
     "cohesix_root_emergency_qemu_evidence_wait",
@@ -209,6 +264,16 @@ def _parser() -> argparse.ArgumentParser:
     validate = commands.add_parser("validate", help="validate target Worker evidence")
     validate.add_argument("--target", choices=("qemu", "pi4"), required=True)
     validate.add_argument("--evidence", type=Path, required=True)
+
+    emit_session = commands.add_parser(
+        "emit-qemu-target-session",
+        help="emit one exact QEMU target session from verified build artifacts",
+    )
+    emit_session.add_argument("--repo-root", type=Path, required=True)
+    emit_session.add_argument("--qemu-out", type=Path, required=True)
+    emit_session.add_argument("--resolved-manifest", type=Path, required=True)
+    emit_session.add_argument("--topology", type=Path, required=True)
+    emit_session.add_argument("--out-dir", type=Path, required=True)
 
     validate_root = commands.add_parser(
         "validate-root", help="validate root-TCB containment evidence"
@@ -245,6 +310,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     collect_preflight.add_argument("--target-session", type=Path, required=True)
     collect_preflight.add_argument("--generated-inventory", type=Path, required=True)
+    collect_preflight.add_argument("--qemu-out", type=Path, required=True)
+    collect_preflight.add_argument("--auth-observation", type=Path, required=True)
     collect_preflight.add_argument("--uart", type=Path, required=True)
     collect_preflight.add_argument("--cohsh", type=Path, required=True)
     collect_preflight.add_argument(
@@ -264,6 +331,9 @@ def _parser() -> argparse.ArgumentParser:
     collect_preflight.add_argument(
         "--service-gdb-log", type=Path, action="append", required=True
     )
+    collect_preflight.add_argument(
+        "--service-uart", type=Path, action="append", required=True
+    )
     collect_preflight.add_argument("--root-elf", type=Path, required=True)
     collect_preflight.add_argument("--critical-gdb-log", type=Path, required=True)
     collect_preflight.add_argument("--integration-dir", type=Path, required=True)
@@ -275,6 +345,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     collect_qemu.add_argument("--target-session", type=Path, required=True)
     collect_qemu.add_argument("--generated-inventory", type=Path, required=True)
+    collect_qemu.add_argument("--qemu-out", type=Path, required=True)
+    collect_qemu.add_argument("--auth-observation", type=Path, required=True)
     collect_qemu.add_argument("--uart", type=Path, action="append", required=True)
     collect_qemu.add_argument("--cohsh", type=Path, required=True)
     collect_qemu.add_argument("--preflight-uart", type=Path, required=True)
@@ -283,6 +355,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     collect_qemu.add_argument(
         "--preflight-service-gdb-log", type=Path, action="append", required=True
+    )
+    collect_qemu.add_argument(
+        "--preflight-service-uart", type=Path, action="append", required=True
     )
     collect_qemu.add_argument("--preflight-critical-gdb-log", type=Path, required=True)
     collect_qemu.add_argument("--gdb-log", type=Path, action="append", required=True)
@@ -355,10 +430,22 @@ def _parser() -> argparse.ArgumentParser:
     service_gdb.add_argument("--remote", required=True)
     service_gdb.add_argument("--target-session", type=Path, required=True)
     service_gdb.add_argument("--generated-inventory", type=Path, required=True)
+    service_gdb.add_argument("--qemu-out", type=Path, required=True)
+    service_gdb.add_argument("--auth-observation", type=Path, required=True)
     service_gdb.add_argument(
         "--service", choices=tuple(QEMU_SERVICE_SYMBOLS), required=True
     )
+    service_gdb.add_argument(
+        "--mode",
+        choices=tuple(
+            mode
+            for modes in QEMU_SERVICE_MODES.values()
+            for mode in modes
+        ),
+        required=True,
+    )
     service_gdb.add_argument("--service-elf", type=Path, required=True)
+    service_gdb.add_argument("--root-elf", type=Path)
     service_gdb.add_argument("--timeout-secs", type=int, default=300)
     service_gdb.add_argument("--out", type=Path, required=True)
 
@@ -1443,6 +1530,497 @@ def _load_frozen_json(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     return value, raw
 
 
+def _resolved_directory(path: Path, label: str) -> Path:
+    try:
+        metadata = path.lstat()
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise EvidenceError(f"cannot resolve {label}: {path}: {exc}") from exc
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise EvidenceError(f"{label} must be an existing non-symlink directory")
+    return resolved
+
+
+def _bounded_artifact_path(root: Path, relative: Path, label: str) -> Path:
+    if relative.is_absolute() or not relative.parts or ".." in relative.parts:
+        raise EvidenceError(f"{label} path is outside the verified QEMU output")
+    current = root
+    try:
+        for component in relative.parts:
+            current = current / component
+            metadata = current.lstat()
+            if stat.S_ISLNK(metadata.st_mode):
+                raise EvidenceError(f"{label} path contains a symlink: {current}")
+    except OSError as exc:
+        raise EvidenceError(f"cannot inspect {label}: {current}: {exc}") from exc
+    return current
+
+
+def _git_output(repo_root: Path, arguments: Sequence[str], label: str) -> bytes:
+    try:
+        completed = subprocess.run(
+            ["git", *arguments],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise EvidenceError(f"cannot run git for {label}: {exc}") from exc
+    if completed.returncode != 0:
+        raise EvidenceError(f"git failed while deriving {label}")
+    return completed.stdout
+
+
+def _git_visible_paths(repo_root: Path) -> list[Path]:
+    raw = _git_output(
+        repo_root,
+        ("ls-files", "-co", "--exclude-standard", "-z"),
+        "source inventory",
+    )
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for encoded in raw.split(b"\0"):
+        if not encoded:
+            continue
+        relative = Path(os.fsdecode(encoded))
+        rendered = relative.as_posix()
+        if (
+            relative.is_absolute()
+            or not relative.parts
+            or ".." in relative.parts
+            or rendered in seen
+        ):
+            raise EvidenceError("git returned an invalid or duplicate source path")
+        seen.add(rendered)
+        paths.append(relative)
+    paths.sort(key=lambda value: value.as_posix())
+    return paths
+
+
+def _source_inventory_row(repo_root: Path, relative: Path) -> dict[str, Any]:
+    path = repo_root / relative
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return {
+            "path": relative.as_posix(),
+            "kind": "deleted",
+            "mode": 0,
+            "sha256": _sha256(b""),
+            "bytes": 0,
+        }
+    except OSError as exc:
+        raise EvidenceError(f"cannot inspect source entry {relative}: {exc}") from exc
+
+    if stat.S_ISLNK(before.st_mode):
+        try:
+            raw = os.fsencode(os.readlink(path))
+            after = path.lstat()
+        except OSError as exc:
+            raise EvidenceError(f"cannot read source symlink {relative}: {exc}") from exc
+        identity = lambda value: (  # noqa: E731 - compact stable-file identity
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+        )
+        if identity(before) != identity(after):
+            raise EvidenceError(f"source symlink changed while frozen: {relative}")
+        kind = "symlink"
+    elif stat.S_ISREG(before.st_mode):
+        try:
+            with path.open("rb") as handle:
+                opened = os.fstat(handle.fileno())
+                raw = handle.read(MAX_ARTIFACT_BYTES + 1)
+                closed = os.fstat(handle.fileno())
+            after = path.lstat()
+        except OSError as exc:
+            raise EvidenceError(f"cannot read source entry {relative}: {exc}") from exc
+        identity = lambda value: (  # noqa: E731 - compact stable-file identity
+            value.st_dev,
+            value.st_ino,
+            value.st_mode,
+            value.st_size,
+            value.st_mtime_ns,
+        )
+        if (
+            len(raw) != before.st_size
+            or len(raw) > MAX_ARTIFACT_BYTES
+            or identity(before) != identity(opened)
+            or identity(opened) != identity(closed)
+            or identity(closed) != identity(after)
+        ):
+            raise EvidenceError(f"source entry changed while frozen: {relative}")
+        kind = "file"
+    else:
+        raise EvidenceError(f"unsupported source inventory entry: {relative}")
+    return {
+        "path": relative.as_posix(),
+        "kind": kind,
+        "mode": stat.S_IMODE(before.st_mode),
+        "sha256": _sha256(raw),
+        "bytes": len(raw),
+    }
+
+
+def _source_inventory_bytes(repo_root: Path) -> bytes:
+    paths = _git_visible_paths(repo_root)
+    rows = [_source_inventory_row(repo_root, relative) for relative in paths]
+    if _git_visible_paths(repo_root) != paths:
+        raise EvidenceError("git-visible source paths changed while frozen")
+    for relative, expected in zip(paths, rows, strict=True):
+        if _source_inventory_row(repo_root, relative) != expected:
+            raise EvidenceError(f"source entry changed while frozen: {relative}")
+    record = {
+        "schema": SOURCE_INVENTORY_SCHEMA,
+        "algorithm": "git-visible-paths-sha256",
+        "entries": rows,
+    }
+    try:
+        return (
+            json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise EvidenceError("source inventory paths are not exact UTF-8") from exc
+
+
+def _validate_session_output_location(
+    repo_root: Path,
+    qemu_out: Path,
+    requested: Path,
+) -> Path:
+    if not requested.name or requested.name in (".", ".."):
+        raise EvidenceError("target-session output directory is invalid")
+    parent = _resolved_directory(requested.parent, "target-session output parent")
+    output = parent / requested.name
+    if output.exists() or output.is_symlink():
+        raise EvidenceError("target-session output directory must not already exist")
+    try:
+        output.relative_to(qemu_out)
+    except ValueError:
+        pass
+    else:
+        raise EvidenceError("target-session output cannot mutate verified QEMU output")
+    try:
+        relative = output.relative_to(repo_root)
+    except ValueError:
+        return output
+    try:
+        completed = subprocess.run(
+            ["git", "check-ignore", "-q", "--", relative.as_posix()],
+            cwd=repo_root,
+            check=False,
+            capture_output=True,
+        )
+    except OSError as exc:
+        raise EvidenceError(f"cannot validate target-session output: {exc}") from exc
+    if completed.returncode != 0:
+        raise EvidenceError(
+            "target-session output inside the repository must be git-ignored"
+        )
+    return output
+
+
+def _validate_qemu_launch_artifacts(
+    qemu_out: Path,
+) -> dict[str, bytes]:
+    record_path = _bounded_artifact_path(
+        qemu_out,
+        Path("cohesix-qemu-launch-artifacts.json"),
+        "QEMU launch record",
+    )
+    record, _ = _load_frozen_json(record_path, "QEMU launch record")
+    _exact_keys(
+        record,
+        {
+            "schema",
+            "profile",
+            "cargo_target",
+            "root_task_features",
+            "sel4_build_dir",
+            "gic_version",
+            "artifacts",
+        },
+        context="QEMU launch record",
+    )
+    if (
+        record["schema"] != QEMU_LAUNCH_SCHEMA
+        or record["profile"] != "release"
+        or record["cargo_target"] != "aarch64-unknown-none"
+        or record["root_task_features"] != "release-qemu,bootstrap-trace"
+        or record["gic_version"] != "3"
+    ):
+        raise EvidenceError("QEMU launch record is not the exact pressure profile")
+    build_dir_raw = record["sel4_build_dir"]
+    if not isinstance(build_dir_raw, str) or not Path(build_dir_raw).is_absolute():
+        raise EvidenceError("QEMU launch record has an invalid seL4 build directory")
+    build_dir = _resolved_directory(Path(build_dir_raw), "selected seL4 build directory")
+    if str(build_dir) != build_dir_raw:
+        raise EvidenceError("QEMU launch record aliases its seL4 build directory")
+
+    rows = record["artifacts"]
+    if not isinstance(rows, list) or len(rows) != len(QEMU_LAUNCH_ARTIFACTS):
+        raise EvidenceError("QEMU launch record has the wrong artifact count")
+    artifacts: dict[str, bytes] = {}
+    for row, (identifier, relative) in zip(
+        rows, QEMU_LAUNCH_ARTIFACTS, strict=True
+    ):
+        if not isinstance(row, dict):
+            raise EvidenceError("QEMU launch artifact row must be an object")
+        _exact_keys(
+            row,
+            {"id", "path", "bytes", "sha256"},
+            context="QEMU launch artifact row",
+        )
+        if row["id"] != identifier or row["path"] != relative.as_posix():
+            raise EvidenceError("QEMU launch artifact order/path differs")
+        path = _bounded_artifact_path(qemu_out, relative, f"QEMU {identifier}")
+        raw = _read_frozen_artifact(path, f"QEMU {identifier}")
+        if row["bytes"] != len(raw) or row["sha256"] != _sha256(raw):
+            raise EvidenceError(f"QEMU launch artifact bytes differ: {identifier}")
+        artifacts[identifier] = raw
+    if len(artifacts["initrd"]) >= 4 * 1024 * 1024:
+        raise EvidenceError("QEMU rootfs CPIO exceeds the 4 MiB invariant")
+    return artifacts
+
+
+def _validate_session_manifests(
+    qemu_out: Path,
+    frozen: Mapping[str, bytes],
+    parsed: Mapping[str, Mapping[str, Any]],
+) -> None:
+    worker_archive = _bounded_artifact_path(
+        qemu_out,
+        QEMU_SESSION_ARTIFACTS["worker_archive"],
+        "Worker archive",
+    )
+    worker_manifest = _bounded_artifact_path(
+        qemu_out,
+        QEMU_SESSION_ARTIFACTS["worker_manifest"],
+        "Worker image manifest",
+    )
+    driver_archive = _bounded_artifact_path(
+        qemu_out,
+        QEMU_SESSION_ARTIFACTS["driver_archive"],
+        "driver runtime archive",
+    )
+    driver_manifest = _bounded_artifact_path(
+        qemu_out,
+        QEMU_SESSION_ARTIFACTS["driver_manifest"],
+        "driver runtime manifest",
+    )
+    try:
+        verified_worker = worker_images.verify_manifest(
+            worker_manifest,
+            worker_archive,
+        )
+        verified_driver = driver_runtimes.verify_manifest(
+            driver_manifest,
+            driver_archive,
+        )
+    except (
+        OSError,
+        worker_images.WorkerImageError,
+        driver_runtimes.DriverRuntimeManifestError,
+    ) as exc:
+        raise EvidenceError(f"canonical Worker/driver manifest rejected: {exc}") from exc
+    if (
+        verified_worker != parsed["worker_manifest"]
+        or verified_driver != parsed["driver_manifest"]
+        or verified_worker.get("profile") != "release"
+        or verified_driver.get("profile") != "release"
+    ):
+        raise EvidenceError("canonical Worker/driver manifest identity differs")
+    for identifier, path in (
+        ("worker_archive", worker_archive),
+        ("worker_manifest", worker_manifest),
+        ("driver_archive", driver_archive),
+        ("driver_manifest", driver_manifest),
+    ):
+        if _read_frozen_artifact(path, identifier.replace("_", " ")) != frozen[
+            identifier
+        ]:
+            raise EvidenceError(f"{identifier} changed during canonical validation")
+
+
+def _worker_abi_identity(
+    repo_root: Path,
+    topology: Mapping[str, Any],
+) -> bytes:
+    runtime = topology.get("worker_runtime")
+    task_abi = runtime.get("task_abi") if isinstance(runtime, dict) else None
+    if (
+        not isinstance(task_abi, dict)
+        or task_abi.get("enabled") is not True
+        or task_abi.get("version") != 1
+    ):
+        raise EvidenceError("generated topology lacks Worker task ABI version 1")
+    files = []
+    for relative in WORKER_ABI_FILES:
+        path = _bounded_artifact_path(repo_root, relative, "Worker ABI source")
+        raw = _read_frozen_artifact(path, f"Worker ABI source {relative}")
+        files.append(
+            {
+                "path": relative.as_posix(),
+                "sha256": _sha256(raw),
+                "bytes": len(raw),
+            }
+        )
+    record = {
+        "schema": WORKER_ABI_IDENTITY_SCHEMA,
+        "task_abi_schema": "worker-task-abi/v1",
+        "task_abi_version": 1,
+        "files": files,
+    }
+    raw = (
+        json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    return raw
+
+
+def _write_exclusive_artifact(path: Path, raw: bytes) -> None:
+    if not raw or len(raw) > MAX_ARTIFACT_BYTES:
+        raise EvidenceError("target-session artifact exceeds its bounded size")
+    temporary: Path | None = None
+    try:
+        descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+        temporary = Path(name)
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(raw)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.link(temporary, path)
+    except FileExistsError as exc:
+        raise EvidenceError(f"refusing to overwrite target-session artifact: {path}") from exc
+    except OSError as exc:
+        raise EvidenceError(f"cannot publish target-session artifact {path}: {exc}") from exc
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _publish_target_session(output: Path, artifacts: Mapping[str, bytes]) -> None:
+    try:
+        output.mkdir(mode=0o700)
+    except FileExistsError as exc:
+        raise EvidenceError("target-session output directory already exists") from exc
+    except OSError as exc:
+        raise EvidenceError(f"cannot create target-session output directory: {exc}") from exc
+    published: list[Path] = []
+    try:
+        for name, raw in artifacts.items():
+            path = output / name
+            _write_exclusive_artifact(path, raw)
+            published.append(path)
+        descriptor = os.open(output, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except (EvidenceError, OSError) as exc:
+        for path in published:
+            path.unlink(missing_ok=True)
+        try:
+            output.rmdir()
+        except OSError:
+            pass
+        if isinstance(exc, EvidenceError):
+            raise
+        raise EvidenceError(f"cannot finalize target-session output: {exc}") from exc
+
+
+def _emit_qemu_target_session(args: argparse.Namespace) -> None:
+    repo_root = _resolved_directory(args.repo_root, "repository root")
+    try:
+        top_level = _git_output(
+            repo_root,
+            ("rev-parse", "--show-toplevel"),
+            "repository root",
+        ).decode("utf-8", errors="strict").strip()
+        exact_top_level = Path(top_level).resolve(strict=True)
+    except (UnicodeDecodeError, OSError) as exc:
+        raise EvidenceError(f"cannot resolve exact Git worktree root: {exc}") from exc
+    if exact_top_level != repo_root:
+        raise EvidenceError("--repo-root is not the exact Git worktree root")
+    qemu_out = _resolved_directory(args.qemu_out, "verified QEMU output")
+    output = _validate_session_output_location(repo_root, qemu_out, args.out_dir)
+
+    launch_artifacts = _validate_qemu_launch_artifacts(qemu_out)
+    manifest, manifest_raw = _load_frozen_json(
+        args.resolved_manifest, "resolved root-task manifest"
+    )
+    profile = manifest.get("profile")
+    if not isinstance(profile, dict) or profile.get("name") != TARGET_PROFILE["qemu"]:
+        raise EvidenceError("resolved manifest is not the QEMU target profile")
+    topology_record, _topology_raw = _load_frozen_json(
+        args.topology, "generated root-task topology"
+    )
+    manifest_sha256 = _sha256(manifest_raw)
+    topology, _inventory_value = _generated_inventory(
+        topology_record,
+        "qemu",
+        {"manifest_sha256": manifest_sha256},
+    )
+    abi_raw = _worker_abi_identity(repo_root, topology)
+
+    frozen: dict[str, bytes] = {}
+    parsed: dict[str, dict[str, Any]] = {}
+    for identifier, relative in QEMU_SESSION_ARTIFACTS.items():
+        path = _bounded_artifact_path(qemu_out, relative, identifier.replace("_", " "))
+        raw = _read_frozen_artifact(path, identifier.replace("_", " "))
+        frozen[identifier] = raw
+        if identifier.endswith("manifest"):
+            try:
+                value = json.loads(raw)
+            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                raise EvidenceError(f"{identifier} is invalid JSON") from exc
+            if not isinstance(value, dict):
+                raise EvidenceError(f"{identifier} must be a JSON object")
+            _scan_sensitive(value)
+            parsed[identifier] = value
+    _validate_session_manifests(qemu_out, frozen, parsed)
+
+    source_raw = _source_inventory_bytes(repo_root)
+    cyw43_record = {
+        "schema": CYW43_QEMU_BINDING_SCHEMA,
+        "target": "qemu",
+        "selected": False,
+        "classification": "not-applicable-physical-driver",
+        "driver_archive_sha256": _sha256(frozen["driver_archive"]),
+    }
+    cyw43_raw = (
+        json.dumps(cyw43_record, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    session = {
+        "target": "qemu",
+        "source_sha256": _sha256(source_raw),
+        "manifest_sha256": manifest_sha256,
+        "kernel_sha256": _sha256(launch_artifacts["kernel"]),
+        "root_image_sha256": _sha256(launch_artifacts["rootserver"]),
+        "driver_archive_sha256": _sha256(frozen["driver_archive"]),
+        "driver_manifest_sha256": _sha256(frozen["driver_manifest"]),
+        "cyw43_coexistence_record_sha256": _sha256(cyw43_raw),
+        "worker_archive_sha256": _sha256(frozen["worker_archive"]),
+        "worker_image_manifest_sha256": _sha256(frozen["worker_manifest"]),
+        "worker_abi_sha256": _sha256(abi_raw),
+    }
+    _target_session(session, "qemu")
+    session_raw = (json.dumps(session, indent=2, sort_keys=True) + "\n").encode(
+        "utf-8"
+    )
+    _publish_target_session(
+        output,
+        {
+            "source-inventory.json": source_raw,
+            "worker-abi-identity.json": abi_raw,
+            "qemu-cyw43-coexistence.json": cyw43_raw,
+            "target-session.json": session_raw,
+        },
+    )
+    print(f"worker evidence: qemu target session PASS ({output})")
+
+
 def _pressure_proc(value: Any, label: str) -> None:
     if not isinstance(value, dict) or set(value) != set(QEMU_PROC_KEYS):
         raise EvidenceError(f"{label} lacks the exact five canonical /proc projections")
@@ -2077,28 +2655,98 @@ def _validate_qemu_session_marker(
 def _validate_service_gdb_markers(
     texts: Sequence[str],
     session: Mapping[str, Any],
+    session_raw: bytes,
     generated: Mapping[str, Any],
     service_raw: Mapping[str, bytes],
+    root_raw: bytes,
 ) -> None:
-    if len(texts) != len(QEMU_SERVICE_SYMBOLS):
-        raise EvidenceError("preflight requires one GDB transcript per isolated service")
-    observed_services: list[str] = []
-    for text in texts:
+    if len(texts) != len(QEMU_SERVICE_EVIDENCE_PLAN):
+        raise EvidenceError("preflight requires the exact four service GDB transcripts")
+    observed_plan: list[tuple[str, str]] = []
+    for text, expected_plan in zip(
+        texts, QEMU_SERVICE_EVIDENCE_PLAN, strict=True
+    ):
         _validate_qemu_session_marker(text, session, generated)
+        auth_rows = _marker_rows(
+            text,
+            "M26E_QEMU_AUTH",
+            {
+                "result",
+                "observation_sha256",
+                "observation_bytes",
+                "serial_sha256",
+                "serial_bytes",
+                "launch_record_sha256",
+                "launch_record_bytes",
+                "target_session_sha256",
+                "target_session_bytes",
+            },
+        )
+        if (
+            len(auth_rows) != 1
+            or auth_rows[0]["result"] != "PASS"
+            or auth_rows[0]["target_session_sha256"] != _sha256(session_raw)
+            or _marker_uint(auth_rows[0], "target_session_bytes") != len(session_raw)
+            or any(
+                SHA256_RE.fullmatch(auth_rows[0][key]) is None
+                for key in (
+                    "observation_sha256",
+                    "serial_sha256",
+                    "launch_record_sha256",
+                )
+            )
+            or any(
+                _marker_uint(auth_rows[0], key) == 0
+                for key in (
+                    "observation_bytes",
+                    "serial_bytes",
+                    "launch_record_bytes",
+                )
+            )
+        ):
+            raise EvidenceError(
+                "service GDB transcript lacks its exact authenticated-QEMU binding"
+            )
         elf_rows = _marker_rows(
             text,
             "M26E_GDB_SERVICE_ELF",
-            {"service", "elf_sha256", "root_image_sha256"},
+            {"service", "mode", "elf_sha256", "elf_bytes", "root_image_sha256"},
         )
         if len(elf_rows) != 1:
             raise EvidenceError("service GDB transcript has an ambiguous ELF binding")
         service = elf_rows[0]["service"]
+        mode = elf_rows[0]["mode"]
         if (
             service not in QEMU_SERVICE_SYMBOLS
+            or mode not in QEMU_SERVICE_MODES[service]
+            or (service, mode) != expected_plan
             or elf_rows[0]["elf_sha256"] != _sha256(service_raw[service])
+            or _marker_uint(elf_rows[0], "elf_bytes") != len(service_raw[service])
             or elf_rows[0]["root_image_sha256"] != session["root_image_sha256"]
         ):
             raise EvidenceError("service GDB ELF marker differs from immutable target bytes")
+        root_rows = _marker_rows(
+            text,
+            "M26E_GDB_SERVICE_ROOT_ELF",
+            {"service", "mode", "elf_sha256", "elf_bytes", "root_image_sha256"},
+            required=False,
+        )
+        if mode == "between-calls-revoke":
+            if (
+                len(root_rows) != 1
+                or root_rows[0]["service"] != service
+                or root_rows[0]["mode"] != mode
+                or root_rows[0]["elf_sha256"] != _sha256(root_raw)
+                or _marker_uint(root_rows[0], "elf_bytes") != len(root_raw)
+                or root_rows[0]["root_image_sha256"]
+                != session["root_image_sha256"]
+                or _sha256(root_raw) != session["root_image_sha256"]
+            ):
+                raise EvidenceError(
+                    "between-Calls transcript differs from exact root ELF/image truth"
+                )
+        elif root_rows:
+            raise EvidenceError("only between-Calls revoke may bind a root GDB hook")
         rows = _marker_rows(
             text,
             "M26E_GDB_SERVICE_INJECTION",
@@ -2106,17 +2754,26 @@ def _validate_service_gdb_markers(
         )
         handler = QEMU_SERVICE_SYMBOLS[service][0]
         expected = {
-            ("during-ipc", handler, "redirect-standard-fault", "continued")
-        }
-        if service == "console-network":
-            expected.add(
+            "during-call-standard": {
+                ("during-call", handler, "redirect-standard-fault", "continued")
+            },
+            "between-calls-revoke": {
+                (
+                    "between-calls",
+                    QEMU_NINEDOOR_ROOT_SYMBOLS[0],
+                    "redirect-local-revoke",
+                    "continued",
+                )
+            },
+            "budget-exhaustion-timeout": {
                 (
                     "budget-exhaustion",
                     handler,
                     "redirect-timeout-spin",
                     "continued",
                 )
-            )
+            },
+        }[mode]
         observed = {
             (row["phase"], row["symbol"], row["action"], row["result"])
             for row in rows
@@ -2124,9 +2781,9 @@ def _validate_service_gdb_markers(
         }
         if observed != expected or len(rows) != len(expected):
             raise EvidenceError("service GDB transcript lacks its exact injection plan")
-        observed_services.append(service)
-    if tuple(observed_services) != tuple(QEMU_SERVICE_SYMBOLS):
-        raise EvidenceError("service GDB transcripts must use exact service order")
+        observed_plan.append((service, mode))
+    if tuple(observed_plan) != QEMU_SERVICE_EVIDENCE_PLAN:
+        raise EvidenceError("service GDB transcripts must use the exact evidence order")
 
 
 def _validate_critical_gdb_markers(
@@ -2217,72 +2874,100 @@ def _validate_root_markers(text: str, generated_inventory: Mapping[str, int]) ->
         "mode=fixture",
         "profile=qemu",
         "gate=bootstrap-trace",
-        "[ninedoor-service] generation=",
-        "terminal-fault class=",
-        "[console-network] generation=",
-        "NINEDOOR_SERVICE_TEARDOWN",
-        "CONSOLE_NETWORK_TEARDOWN",
     )
     missing = [literal for literal in required_literals if literal not in text]
     if missing:
         raise EvidenceError(f"UART lacks root/service live markers: {','.join(missing)}")
-    ninedoor = _marker_rows(
-        text,
-        "NINEDOOR_SERVICE_TEARDOWN",
-        {
-            "generation",
-            "tcb_suspended",
-            "mappings_scrubbed",
-            "recovery_reply_revoked",
-            "capabilities_revoked",
-            "generation_fenced",
-            "state",
-        },
-    )
-    console = _marker_rows(
-        text,
-        "CONSOLE_NETWORK_TEARDOWN",
-        {
-            "generation",
-            "tcb_suspended",
-            "scheduling_context_unbound",
-            "mappings_scrubbed",
-            "capabilities_revoked",
-            "objects_deleted",
-            "generation_fenced",
-            "state",
-        },
-    )
-    for row in (*ninedoor, *console):
-        if row["state"] != "terminal" or any(
-            value != "yes"
-            for key, value in row.items()
-            if key not in {"line", "generation", "state"}
-        ):
-            raise EvidenceError("critical service teardown is incomplete")
+
+
+def _validate_service_uart_markers(texts: Sequence[str]) -> None:
+    """Validate terminal service outcomes from their distinct fresh boots."""
+
+    if len(texts) != len(QEMU_SERVICE_EVIDENCE_PLAN):
+        raise EvidenceError("preflight requires four ordered fresh service UART boots")
     fault_pattern = re.compile(
         r"\[(ninedoor-service|console-network)\] generation=([1-9][0-9]*) "
         r"terminal-fault class=(Standard|Timeout) sequence=[1-9][0-9]*"
     )
-    faults = {
-        (service, int(generation), fault_class)
-        for service, generation, fault_class in fault_pattern.findall(text)
-    }
-    required_classes = {
-        ("ninedoor-service", "Standard"),
-        ("console-network", "Standard"),
-        ("console-network", "Timeout"),
-    }
-    if {(service, fault_class) for service, _, fault_class in faults} != required_classes:
-        raise EvidenceError("UART lacks exact GDB-induced service fault classes")
-    ninedoor_teardowns = {_marker_uint(row, "generation") for row in ninedoor}
-    console_teardowns = {_marker_uint(row, "generation") for row in console}
-    if any(
-        generation
-        not in (ninedoor_teardowns if service == "ninedoor-service" else console_teardowns)
-        for service, generation, _ in faults
+    revoke_pattern = re.compile(
+        r"\[ninedoor-service\] generation=([1-9][0-9]*) "
+        r"terminal-revoke state=local"
+    )
+    for text, (service, mode) in zip(
+        texts, QEMU_SERVICE_EVIDENCE_PLAN, strict=True
     ):
-        raise EvidenceError("service fault generation lacks matching terminal teardown")
+        ninedoor = _marker_rows(
+            text,
+            "NINEDOOR_SERVICE_TEARDOWN",
+            {
+                "generation",
+                "tcb_suspended",
+                "mappings_scrubbed",
+                "recovery_reply_revoked",
+                "capabilities_revoked",
+                "generation_fenced",
+                "state",
+            },
+            required=service == "ninedoor-service",
+        )
+        console = _marker_rows(
+            text,
+            "CONSOLE_NETWORK_TEARDOWN",
+            {
+                "generation",
+                "tcb_suspended",
+                "scheduling_context_unbound",
+                "mappings_scrubbed",
+                "capabilities_revoked",
+                "objects_deleted",
+                "generation_fenced",
+                "state",
+            },
+            required=service == "console-network",
+        )
+        if service == "ninedoor-service" and console:
+            raise EvidenceError("NineDoor injection boot contains console teardown")
+        if service == "console-network" and ninedoor:
+            raise EvidenceError("console injection boot contains NineDoor teardown")
+        for row in (*ninedoor, *console):
+            if row["state"] != "terminal" or any(
+                value != "yes"
+                for key, value in row.items()
+                if key not in {"line", "generation", "state"}
+            ):
+                raise EvidenceError("critical service teardown is incomplete")
+
+        faults = {
+            (observed_service, int(generation), fault_class)
+            for observed_service, generation, fault_class in fault_pattern.findall(text)
+        }
+        revokes = {int(generation) for generation in revoke_pattern.findall(text)}
+        teardown_generations = {
+            _marker_uint(row, "generation") for row in (*ninedoor, *console)
+        }
+        if mode == "during-call-standard":
+            expected = {(service, generation, "Standard") for generation in teardown_generations}
+            service_teardowns = ninedoor if service == "ninedoor-service" else console
+            if len(service_teardowns) != 1 or faults != expected or revokes:
+                raise EvidenceError(
+                    f"{service} boot lacks one standard fault and teardown"
+                )
+        elif mode == "between-calls-revoke":
+            if len(ninedoor) != 1 or faults or revokes != teardown_generations:
+                raise EvidenceError(
+                    "between-Calls NineDoor boot lacks one local revoke and teardown"
+                )
+        elif mode == "budget-exhaustion-timeout":
+            expected = {
+                ("console-network", generation, "Timeout")
+                for generation in teardown_generations
+            }
+            if len(console) != 1 or faults != expected or revokes:
+                raise EvidenceError(
+                    "console-network boot lacks one timeout fault and teardown"
+                )
+        else:  # pragma: no cover - exact evidence plan owns the mode set
+            raise EvidenceError(f"unsupported service UART evidence mode: {mode}")
 
 
 def _validate_cohsh_transcript(text: str) -> None:
@@ -2569,6 +3254,45 @@ def _symbol_addresses(
     return addresses
 
 
+def _rust_symbol_addresses(
+    nm: Path,
+    elf: Path,
+    symbols: Sequence[str],
+    module: str,
+    label: str,
+) -> dict[str, int]:
+    """Resolve exact retained Rust functions without unsafe exported symbols."""
+
+    try:
+        completed = subprocess.run(
+            [str(nm), "-g", "--defined-only", "--demangle", str(elf)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise EvidenceError(f"cannot inspect {label} symbols with {nm}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = completed.stderr.strip().splitlines()[-1:] or ["unknown nm failure"]
+        raise EvidenceError(f"{label} symbol inspection failed: {detail[0]}")
+
+    qualified = {f"{module}::{symbol}": symbol for symbol in symbols}
+    addresses: dict[str, int] = {}
+    for line in completed.stdout.splitlines():
+        match = re.fullmatch(r"([0-9A-Fa-f]+)\s+[A-Za-z]\s+(\S+)", line.strip())
+        if not match or match.group(2) not in qualified:
+            continue
+        symbol = qualified[match.group(2)]
+        if symbol in addresses:
+            raise EvidenceError(f"{label} ELF duplicates evidence symbol {symbol}")
+        addresses[symbol] = int(match.group(1), 16)
+    expected = set(symbols)
+    if set(addresses) != expected or len(set(addresses.values())) != len(addresses):
+        raise EvidenceError(f"{label} ELF lacks its distinct QEMU evidence symbols")
+    return addresses
+
+
 def _worker_symbol_addresses(nm: Path, elf: Path) -> dict[str, int]:
     return _symbol_addresses(nm, elf, QEMU_WORKER_SYMBOLS, "Worker")
 
@@ -2776,6 +3500,192 @@ def _qemu_session_header(
     )
 
 
+def _validate_emitted_target_session_bundle(
+    path: Path,
+    session: Mapping[str, Any],
+    session_raw: bytes,
+) -> None:
+    """Require the canonical four-file output emitted for one target session."""
+
+    parent = _resolved_directory(path.parent, "emitted target-session directory")
+    try:
+        resolved_session = path.resolve(strict=True)
+    except OSError as exc:
+        raise EvidenceError(f"cannot resolve emitted target session: {path}: {exc}") from exc
+    if path.name != "target-session.json" or resolved_session != parent / path.name:
+        raise EvidenceError("--target-session must name the exact emitted target-session.json")
+    if _sha256(session_raw) != _sha256(
+        _read_frozen_artifact(resolved_session, "emitted target session")
+    ):
+        raise EvidenceError("emitted target session changed during validation")
+    siblings = (
+        ("source-inventory.json", "source_sha256"),
+        ("worker-abi-identity.json", "worker_abi_sha256"),
+        (
+            "qemu-cyw43-coexistence.json",
+            "cyw43_coexistence_record_sha256",
+        ),
+    )
+    for name, field in siblings:
+        raw = _read_frozen_artifact(parent / name, f"emitted target-session {name}")
+        if _sha256(raw) != session[field]:
+            raise EvidenceError(
+                f"emitted target-session {name} differs from target-session identity"
+            )
+
+
+def _observation_file(
+    value: Any,
+    label: str,
+    *,
+    expected: Path | None = None,
+) -> tuple[Path, bytes]:
+    if not isinstance(value, dict):
+        raise EvidenceError(f"authenticated QEMU observation {label} is not a file record")
+    _exact_keys(
+        value,
+        {"path", "present", "size_bytes", "sha256"},
+        context=f"authenticated QEMU observation {label}",
+    )
+    raw_path = value["path"]
+    if not isinstance(raw_path, str) or not raw_path or not Path(raw_path).is_absolute():
+        raise EvidenceError(
+            f"authenticated QEMU observation {label} path is not canonical"
+        )
+    path = Path(raw_path)
+    try:
+        resolved = path.resolve(strict=True)
+    except OSError as exc:
+        raise EvidenceError(
+            f"cannot resolve authenticated QEMU observation {label}: {path}: {exc}"
+        ) from exc
+    if resolved != path or (expected is not None and resolved != expected):
+        raise EvidenceError(
+            f"authenticated QEMU observation {label} aliases the expected artifact"
+        )
+    raw = _read_frozen_artifact(resolved, f"authenticated QEMU {label}")
+    if (
+        value["present"] is not True
+        or value["size_bytes"] != len(raw)
+        or value["sha256"] != _sha256(raw)
+    ):
+        raise EvidenceError(
+            f"authenticated QEMU observation {label} bytes differ from its record"
+        )
+    return resolved, raw
+
+
+def _validate_authenticated_qemu_observation(
+    observation_path: Path,
+    qemu_out_path: Path,
+    target_session_path: Path,
+    session: Mapping[str, Any],
+    session_raw: bytes,
+) -> tuple[dict[str, str], dict[str, bytes]]:
+    """Bind service injection to one prior authenticated exact-artifact PASS."""
+
+    qemu_out = _resolved_directory(qemu_out_path, "authenticated QEMU output")
+    launch_artifacts = _validate_qemu_launch_artifacts(qemu_out)
+    if (
+        _sha256(launch_artifacts["kernel"]) != session["kernel_sha256"]
+        or _sha256(launch_artifacts["rootserver"])
+        != session["root_image_sha256"]
+    ):
+        raise EvidenceError(
+            "authenticated QEMU launch bytes differ from the emitted target session"
+        )
+
+    observation, observation_raw = _load_frozen_json(
+        observation_path, "authenticated QEMU target observation"
+    )
+    _exact_keys(
+        observation,
+        {
+            "schema",
+            "banner",
+            "claiming",
+            "result",
+            "first_failing_proof_layer",
+            "detail",
+            "target",
+            "focus",
+            "run_id",
+            "profile",
+            "serial_log",
+            "serial_source_log",
+            "built_image",
+            "image_identity",
+            "operation_script",
+        },
+        context="authenticated QEMU target observation",
+    )
+    if (
+        observation["schema"] != QEMU_AUTH_OBSERVATION_SCHEMA
+        or observation["banner"] != "NON-CLAIMING TARGET DIAGNOSTIC"
+        or observation["claiming"] is not False
+        or observation["result"] != "PASS"
+        or observation["first_failing_proof_layer"] is not None
+        or observation["target"] != "qemu"
+        or observation["focus"] != "ninedoor"
+        or observation["profile"] != QEMU_AUTH_OBSERVATION_PROFILE
+        or not isinstance(observation["run_id"], str)
+        or not observation["run_id"]
+        or not isinstance(observation["detail"], str)
+        or not observation["detail"]
+    ):
+        raise EvidenceError(
+            "service injection requires a prior exact ninedoor QEMU PASS observation"
+        )
+
+    launch_record = qemu_out / "cohesix-qemu-launch-artifacts.json"
+    initrd = qemu_out / "cohesix-system.cpio"
+    _built_path, built_raw = _observation_file(
+        observation["built_image"], "built image", expected=initrd
+    )
+    _identity_path, launch_record_raw = _observation_file(
+        observation["image_identity"],
+        "launch identity",
+        expected=launch_record,
+    )
+    if built_raw != launch_artifacts["initrd"]:
+        raise EvidenceError("authenticated QEMU image differs from launch record bytes")
+    serial_path, serial_raw = _observation_file(
+        observation["serial_log"], "UART transcript"
+    )
+    if observation["serial_source_log"] != str(serial_path):
+        raise EvidenceError("authenticated QEMU UART source aliases its frozen transcript")
+    serial_text = _artifact_text(serial_raw, "authenticated QEMU UART transcript")
+    if QEMU_AUTH_UART_MARKER not in serial_text:
+        raise EvidenceError("prior QEMU PASS lacks a live authenticated cohsh session")
+    operation_path, _operation_raw = _observation_file(
+        observation["operation_script"], "operation script"
+    )
+    if operation_path.parts[-3:] != ("scripts", "cohsh", "9p_batch.coh"):
+        raise EvidenceError("prior QEMU PASS did not use the canonical NineDoor operation")
+
+    _validate_emitted_target_session_bundle(
+        target_session_path, session, session_raw
+    )
+    return (
+        {
+            "observation_sha256": _sha256(observation_raw),
+            "observation_bytes": str(len(observation_raw)),
+            "serial_sha256": _sha256(serial_raw),
+            "serial_bytes": str(len(serial_raw)),
+            "launch_record_sha256": _sha256(launch_record_raw),
+            "launch_record_bytes": str(len(launch_record_raw)),
+            "target_session_sha256": _sha256(session_raw),
+            "target_session_bytes": str(len(session_raw)),
+        },
+        {
+            "authenticated-qemu-observation": observation_raw,
+            "authenticated-qemu-uart": serial_raw,
+            "authenticated-qemu-launch-record": launch_record_raw,
+            "authenticated-qemu-system-cpio": built_raw,
+        },
+    )
+
+
 def _gdb_file_argument(path: Path) -> str:
     value = str(path)
     if not value or any(ord(character) < 0x20 for character in value) or '"' in value:
@@ -2784,6 +3694,17 @@ def _gdb_file_argument(path: Path) -> str:
 
 
 def _qemu_service_gdb(args: argparse.Namespace) -> None:
+    if args.mode not in QEMU_SERVICE_MODES[args.service]:
+        raise EvidenceError(
+            f"{args.service} does not support qemu-service-gdb mode {args.mode}"
+        )
+    between_calls = (
+        args.service == "ninedoor-service" and args.mode == "between-calls-revoke"
+    )
+    if between_calls != (args.root_elf is not None):
+        raise EvidenceError(
+            "--root-elf is required only for ninedoor-service between-calls-revoke"
+        )
     gdb, nm = _validate_remote_and_tools(
         args.remote, args.timeout_secs, args.gdb, args.nm
     )
@@ -2797,15 +3718,74 @@ def _qemu_service_gdb(args: argparse.Namespace) -> None:
         raise EvidenceError("service GDB target session/topology is invalid JSON") from exc
     _target_session(session, "qemu")
     _generated_inventory(generated, "qemu", session)
-    symbols = QEMU_SERVICE_SYMBOLS[args.service]
-    addresses = _symbol_addresses(nm, args.service_elf, symbols, args.service)
-    handler = addresses[symbols[0]]
-    standard = addresses[symbols[1]]
-    if args.service == "ninedoor-service":
+    auth, _auth_artifacts = _validate_authenticated_qemu_observation(
+        args.auth_observation,
+        args.qemu_out,
+        args.target_session,
+        session,
+        session_raw,
+    )
+    root_raw: bytes | None = None
+    if between_calls:
+        root_elf = args.root_elf
+        if root_elf is None:  # pragma: no cover - paired-mode guard above
+            raise EvidenceError("between-Calls revoke requires the root-task ELF")
+        root_raw = _read_frozen_artifact(root_elf, "unstripped root-task ELF")
+        if _sha256(root_raw) != session["root_image_sha256"]:
+            raise EvidenceError(
+                "between-Calls revoke root ELF differs from target-session root image"
+            )
+        symbols = QEMU_NINEDOOR_ROOT_SYMBOLS
+        addresses = _rust_symbol_addresses(
+            nm,
+            root_elf,
+            symbols,
+            QEMU_NINEDOOR_ROOT_MODULE,
+            "root-task NineDoor evidence",
+        )
+        post_prepare = addresses[symbols[0]]
+        request_revoke = addresses[symbols[1]]
+        command_file = root_elf
+        command_body = f"""set $m26e_ninedoor_prepare_hits = 0
+hbreak *0x{post_prepare:x}
+commands 1
+  silent
+  set $m26e_ninedoor_prepare_hits = $m26e_ninedoor_prepare_hits + 1
+  if $m26e_ninedoor_prepare_hits == 1
+    continue
+  end
+  if $m26e_ninedoor_prepare_hits == 2
+    printf "M26E_GDB_SERVICE_INJECTION service=ninedoor-service phase=between-calls symbol={symbols[0]} action=redirect-local-revoke result=continued\\n"
+    set $pc = 0x{request_revoke:x}
+    disable 1
+    detach
+    quit
+  end
+  printf "M26E_GDB_ABORT reason=unexpected-ninedoor-prepare-hit result=failed\\n"
+  detach
+  quit
+end
+"""
+        expected = {
+            (
+                "between-calls",
+                symbols[0],
+                "redirect-local-revoke",
+                "continued",
+            )
+        }
+    else:
+        symbols = QEMU_SERVICE_SYMBOLS[args.service]
+        addresses = _symbol_addresses(nm, args.service_elf, symbols, args.service)
+        handler = addresses[symbols[0]]
+        standard = addresses[symbols[1]]
+        command_file = args.service_elf
+
+    if args.mode == "during-call-standard":
         command_body = f"""hbreak *0x{handler:x}
 commands 1
   silent
-  printf "M26E_GDB_SERVICE_INJECTION service=ninedoor-service phase=during-ipc symbol={symbols[0]} action=redirect-standard-fault result=continued\\n"
+  printf "M26E_GDB_SERVICE_INJECTION service={args.service} phase=during-call symbol={symbols[0]} action=redirect-standard-fault result=continued\\n"
   set $pc = 0x{standard:x}
   disable 1
   detach
@@ -2814,38 +3794,25 @@ end
 """
         expected = {
             (
-                "during-ipc",
+                "during-call",
                 symbols[0],
                 "redirect-standard-fault",
                 "continued",
             )
         }
-    else:
+    elif args.mode == "budget-exhaustion-timeout":
         timeout_spin = addresses[symbols[2]]
-        command_body = f"""set $m26e_control_hits = 0
-hbreak *0x{handler:x}
+        command_body = f"""hbreak *0x{handler:x}
 commands 1
   silent
-  set $m26e_control_hits = $m26e_control_hits + 1
-  if $m26e_control_hits == 1
-    printf "M26E_GDB_SERVICE_INJECTION service=console-network phase=during-ipc symbol={symbols[0]} action=redirect-standard-fault result=continued\\n"
-    set $pc = 0x{standard:x}
-    continue
-  end
-  if $m26e_control_hits == 2
-    printf "M26E_GDB_SERVICE_INJECTION service=console-network phase=budget-exhaustion symbol={symbols[0]} action=redirect-timeout-spin result=continued\\n"
-    set $pc = 0x{timeout_spin:x}
-    disable 1
-    detach
-    quit
-  end
-  printf "M26E_GDB_ABORT reason=unexpected-service-control-hit result=failed\\n"
+  printf "M26E_GDB_SERVICE_INJECTION service=console-network phase=budget-exhaustion symbol={symbols[0]} action=redirect-timeout-spin result=continued\\n"
+  set $pc = 0x{timeout_spin:x}
+  disable 1
   detach
   quit
 end
 """
         expected = {
-            ("during-ipc", symbols[0], "redirect-standard-fault", "continued"),
             (
                 "budget-exhaustion",
                 symbols[0],
@@ -2856,7 +3823,7 @@ end
     command_text = f"""set pagination off
 set confirm off
 set architecture aarch64
-file {_gdb_file_argument(args.service_elf)}
+file {_gdb_file_argument(command_file)}
 target remote {args.remote}
 delete breakpoints
 {command_body}continue
@@ -2866,10 +3833,29 @@ delete breakpoints
     )
     header = [
         _qemu_session_header(session, generated),
+        "M26E_QEMU_AUTH "
+        f"result=PASS observation_sha256={auth['observation_sha256']} "
+        f"observation_bytes={auth['observation_bytes']} "
+        f"serial_sha256={auth['serial_sha256']} "
+        f"serial_bytes={auth['serial_bytes']} "
+        f"launch_record_sha256={auth['launch_record_sha256']} "
+        f"launch_record_bytes={auth['launch_record_bytes']} "
+        f"target_session_sha256={auth['target_session_sha256']} "
+        f"target_session_bytes={auth['target_session_bytes']}",
         "M26E_GDB_SERVICE_ELF "
-        f"service={args.service} elf_sha256={_sha256(service_raw)} "
+        f"service={args.service} mode={args.mode} "
+        f"elf_sha256={_sha256(service_raw)} "
+        f"elf_bytes={len(service_raw)} "
         f"root_image_sha256={session['root_image_sha256']}",
     ]
+    if root_raw is not None:
+        header.append(
+            "M26E_GDB_SERVICE_ROOT_ELF "
+            f"service={args.service} mode={args.mode} "
+            f"elf_sha256={_sha256(root_raw)} "
+            f"elf_bytes={len(root_raw)} "
+            f"root_image_sha256={session['root_image_sha256']}"
+        )
     transcript = (
         ("\n".join(header) + "\n").encode("utf-8")
         + completed.stdout
@@ -2895,7 +3881,10 @@ delete breakpoints
     if observed != expected or len(rows) != len(expected):
         raise EvidenceError("QEMU service GDB runner did not complete its exact plan")
     _write_frozen_output(args.out, transcript)
-    print(f"worker evidence: qemu {args.service} GDB injection PASS ({args.out})")
+    print(
+        f"worker evidence: qemu {args.service}/{args.mode} "
+        f"GDB injection PASS ({args.out})"
+    )
 
 
 def _qemu_critical_gdb(args: argparse.Namespace) -> None:
@@ -2992,6 +3981,13 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
         raise EvidenceError("preflight session/topology is invalid JSON") from exc
     _target_session(session, "qemu")
     topology, generated_inventory = _generated_inventory(generated, "qemu", session)
+    _auth, auth_artifacts = _validate_authenticated_qemu_observation(
+        args.auth_observation,
+        args.qemu_out,
+        args.target_session,
+        session,
+        session_raw,
+    )
     uart_raw = _read_frozen_artifact(args.uart, "preflight UART transcript")
     cohsh_raw = _read_frozen_artifact(args.cohsh, "preflight cohsh transcript")
     gdb_artifacts = [
@@ -3001,6 +3997,10 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     service_gdb_artifacts = [
         _read_frozen_artifact(path, f"service GDB transcript {index + 1}")
         for index, path in enumerate(args.service_gdb_log)
+    ]
+    service_uart_artifacts = [
+        _read_frozen_artifact(path, f"service UART transcript {index + 1}")
+        for index, path in enumerate(args.service_uart)
     ]
     critical_gdb_raw = _read_frozen_artifact(
         args.critical_gdb_log, "critical GDB transcript"
@@ -3021,6 +4021,10 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     service_gdb_texts = [
         _artifact_text(raw, f"service GDB transcript {index + 1}")
         for index, raw in enumerate(service_gdb_artifacts)
+    ]
+    service_uart_texts = [
+        _artifact_text(raw, f"service UART transcript {index + 1}")
+        for index, raw in enumerate(service_uart_artifacts)
     ]
     critical_gdb_text = _artifact_text(critical_gdb_raw, "critical GDB transcript")
     elf_paths = _parse_worker_elfs(args.worker_elf)
@@ -3080,8 +4084,14 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
     if injection_roles != set(REQUIRED_ROLES) or len(gdb_texts) != 3:
         raise EvidenceError("preflight requires one exact GDB injection transcript per role")
     _validate_service_gdb_markers(
-        service_gdb_texts, session, generated, service_raw
+        service_gdb_texts,
+        session,
+        session_raw,
+        generated,
+        service_raw,
+        root_raw,
     )
+    _validate_service_uart_markers(service_uart_texts)
     _validate_critical_gdb_markers(
         critical_gdb_text, session, generated, root_raw
     )
@@ -3099,12 +4109,20 @@ def _collect_qemu_preflight(args: argparse.Namespace) -> None:
         _artifact_row("driver-runtime-archive", driver_archive_raw),
         _artifact_row("worker-image-manifest", manifest_raw),
         *(
+            _artifact_row(identifier, raw)
+            for identifier, raw in auth_artifacts.items()
+        ),
+        *(
             _artifact_row(f"{role}-unstripped-elf", raw)
             for role, raw in elf_raw.items()
         ),
         *(
             _artifact_row(f"{service}-unstripped-elf", raw)
             for service, raw in service_raw.items()
+        ),
+        *(
+            _artifact_row(f"service-uart-transcript-{index + 1}", raw)
+            for index, raw in enumerate(service_uart_artifacts)
         ),
         *(
             _artifact_row(f"service-gdb-transcript-{index + 1}", raw)
@@ -3156,6 +4174,13 @@ def _collect_qemu(args: argparse.Namespace) -> None:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise EvidenceError("generated topology is invalid JSON") from exc
     topology, generated_inventory = _generated_inventory(generated, "qemu", session)
+    _auth, auth_artifacts = _validate_authenticated_qemu_observation(
+        args.auth_observation,
+        args.qemu_out,
+        args.target_session,
+        session,
+        session_raw,
+    )
 
     if len(args.uart) != len(args.pressure) or len(args.gdb_log) != len(args.pressure):
         raise EvidenceError(
@@ -3181,6 +4206,10 @@ def _collect_qemu(args: argparse.Namespace) -> None:
         _read_frozen_artifact(path, f"preflight service GDB transcript {index + 1}")
         for index, path in enumerate(args.preflight_service_gdb_log)
     ]
+    preflight_service_uart_artifacts = [
+        _read_frozen_artifact(path, f"preflight service UART transcript {index + 1}")
+        for index, path in enumerate(args.preflight_service_uart)
+    ]
     preflight_critical_gdb_raw = _read_frozen_artifact(
         args.preflight_critical_gdb_log, "preflight critical GDB transcript"
     )
@@ -3203,6 +4232,10 @@ def _collect_qemu(args: argparse.Namespace) -> None:
     preflight_service_gdb_texts = [
         _artifact_text(raw, f"preflight service GDB transcript {index + 1}")
         for index, raw in enumerate(preflight_service_gdb_artifacts)
+    ]
+    preflight_service_uart_texts = [
+        _artifact_text(raw, f"preflight service UART transcript {index + 1}")
+        for index, raw in enumerate(preflight_service_uart_artifacts)
     ]
     preflight_critical_gdb_text = _artifact_text(
         preflight_critical_gdb_raw, "preflight critical GDB transcript"
@@ -3265,8 +4298,14 @@ def _collect_qemu(args: argparse.Namespace) -> None:
     ):
         raise EvidenceError("final collection requires one preflight GDB log per role")
     _validate_service_gdb_markers(
-        preflight_service_gdb_texts, session, generated, service_raw
+        preflight_service_gdb_texts,
+        session,
+        session_raw,
+        generated,
+        service_raw,
+        root_raw,
     )
+    _validate_service_uart_markers(preflight_service_uart_texts)
     _validate_critical_gdb_markers(
         preflight_critical_gdb_text, session, generated, root_raw
     )
@@ -3351,10 +4390,18 @@ def _collect_qemu(args: argparse.Namespace) -> None:
             _artifact_row(f"preflight-service-gdb-transcript-{index + 1}", raw)
             for index, raw in enumerate(preflight_service_gdb_artifacts)
         ),
+        *(
+            _artifact_row(f"preflight-service-uart-transcript-{index + 1}", raw)
+            for index, raw in enumerate(preflight_service_uart_artifacts)
+        ),
         _artifact_row("preflight-critical-gdb-transcript", preflight_critical_gdb_raw),
         _artifact_row("worker-image-archive", archive_raw),
         _artifact_row("driver-runtime-archive", driver_archive_raw),
         _artifact_row("worker-image-manifest", manifest_raw),
+        *(
+            _artifact_row(identifier, raw)
+            for identifier, raw in auth_artifacts.items()
+        ),
         *(
             _artifact_row(f"uart-transcript-{index + 1}", raw)
             for index, raw in enumerate(uart_artifacts)
@@ -3875,6 +4922,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             record, _ = _load(args.evidence)
             validate_component(record, args.target)
             print(f"worker evidence: {args.target} target-component {record['verdict']}")
+        elif args.command == "emit-qemu-target-session":
+            _emit_qemu_target_session(args)
         elif args.command == "emit-component":
             _emit_component(args)
         elif args.command == "collect-qemu-preflight":

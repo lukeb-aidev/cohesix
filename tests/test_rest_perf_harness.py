@@ -1883,10 +1883,28 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         ),
         'qemu-critical-gdb',
         'qemu-service-gdb',
+        'emit-qemu-target-session',
+        '--qemu-out "$OUT_ROOT"',
+        '--out-dir "$RUN_DIR/session"',
+        'source-inventory=source-inventory.json',
+        'worker-abi-identity=worker-abi-identity.json',
+        'qemu-cyw43-coexistence=qemu-cyw43-coexistence.json',
         'collect-qemu-preflight',
         'collect-qemu',
-        '--preflight-service-gdb-log "$RUN_DIR/medium/ninedoor-service.gdb.log"',
-        '--preflight-service-gdb-log "$RUN_DIR/medium/console-network.gdb.log"',
+        '--preflight-service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log"',
+        '--preflight-service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log"',
+        '--preflight-service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log"',
+        '--preflight-service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log"',
+        '--preflight-service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log"',
+        '--preflight-service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log"',
+        '--preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log"',
+        '--preflight-service-uart "$RUN_DIR/console-timeout-fault/service.uart.log"',
+        '--auth-observation "$AUTH_OBSERVATION"',
+        '--mode "$mode"',
+        'ninedoor-during-call ninedoor-service during-call-standard',
+        'ninedoor-between-calls ninedoor-service between-calls-revoke',
+        'console-standard-fault console-network during-call-standard',
+        'console-timeout-fault console-network budget-exhaustion-timeout',
         '--preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log"',
         '--pressure "$RUN_DIR/medium/pressure.summary.json"',
         '--pressure "$RUN_DIR/high/pressure.summary.json"',
@@ -1909,10 +1927,26 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
         'unset M26E_CONSOLE_AUTH_TOKEN M26E_REST_AUTH_TOKEN',
     ):
         assert literal in source
-    assert source.count('"$BUILD_RUN" --launch-existing') == 2
+    assert source.count('"$BUILD_RUN" --launch-existing') == 3
     assert source.count('"$BUILD_RUN" --clean --no-run') == 1
     canonical_build = source.index(
         'log "building canonical release-qemu,bootstrap-trace artifacts"'
+    )
+    target_session = source.index('TARGET_SESSION="$RUN_DIR/session/target-session.json"')
+    authenticated_boot = source.index(
+        'log "proving one prior authenticated NineDoor operation on the exact artifacts"'
+    )
+    during_call_boot = source.index(
+        "ninedoor-during-call ninedoor-service during-call-standard"
+    )
+    between_calls_boot = source.index(
+        "ninedoor-between-calls ninedoor-service between-calls-revoke"
+    )
+    console_standard_boot = source.index(
+        "console-standard-fault console-network during-call-standard"
+    )
+    console_timeout_boot = source.index(
+        "console-timeout-fault console-network budget-exhaustion-timeout"
     )
     medium_boot = source.index("run_pressure_boot medium 4 1 16 2604")
     high_boot = source.index("run_pressure_boot high 8 4 32 2608")
@@ -1923,13 +1957,26 @@ def test_m26e_qemu_pressure_runner_has_exact_orchestration_contract() -> None:
     final_collection = source.index(
         '"$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu \\\n'
     )
-    assert canonical_build < medium_boot < high_boot < staged_plan < final_collection
+    assert (
+        canonical_build
+        < target_session
+        < authenticated_boot
+        < during_call_boot
+        < between_calls_boot
+        < console_standard_boot
+        < console_timeout_boot
+        < medium_boot
+        < high_boot
+        < staged_plan
+        < final_collection
+    )
     assert "rebuilding the exact pressure artifact set" not in source
     assert "qemu-gdb-services" not in source
     assert "staging/cohesix/artifacts/cohesix-driver-runtimes.cpio" not in source
     assert "--auth-token" not in source
     assert ': "${COH_AUTH_TOKEN:?' not in source
     assert "M26E_CONSOLE_AUTH_TOKEN=$COH_AUTH_TOKEN" not in source
+    assert 'source_inventory = {' not in source
     assert 'find "$REPO_ROOT"' not in source
     preserve = source.index('PRESERVE_ROOT="$(mktemp -d ')
     assert source.index("COH_AUTH_TOKEN differs from the compiler-selected") < preserve
@@ -1952,6 +1999,9 @@ def test_m26e_qemu_pressure_freezes_collector_inputs_by_hash(
     )
     filenames = {
         "target-session": "target-session.json",
+        "source-inventory": "source-inventory.json",
+        "worker-abi-identity": "worker-abi-identity.json",
+        "qemu-cyw43-coexistence": "qemu-cyw43-coexistence.json",
         "generated-topology": "generated-topology.json",
         "worker-archive": "worker-images.cpio",
         "driver-archive": "driver-runtimes.cpio",

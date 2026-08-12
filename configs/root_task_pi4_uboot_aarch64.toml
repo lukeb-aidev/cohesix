@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Pi4 U-Boot aarch64 root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [root_task.affinity]
 enabled = true
@@ -359,7 +359,8 @@ timeout_badge = 653131777
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2500
-wcet_provenance = "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4"
+wcet_provenance = "m26e-qemu-root-exclusive-predispatch-candidate-v23"
+virtio_operator_serial_io_bytes_per_turn = 0
 fault_handler = "root-fault"
 critical_reserve = true
 
@@ -385,7 +386,7 @@ timeout_badge = 653131778
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2400
-wcet_provenance = "m26e-qemu-containment-candidate-v2"
+wcet_provenance = "m26e-qemu-root-fault-service-units-candidate-v6"
 fault_handler = "root-emergency"
 critical_reserve = true
 
@@ -558,7 +559,7 @@ timeout_badge = 653131783
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2400
-wcet_provenance = "m26e-qemu-console-auth-candidate-v2"
+wcet_provenance = "m26e-qemu-console-bounded-stack-steps-candidate-v6"
 fault_handler = "root-fault"
 
 [console_network_service]

@@ -15,6 +15,7 @@ BUILD_SCRIPT = REPO_ROOT / "scripts" / "cohesix-build-run.sh"
 ROOT_BUILD = REPO_ROOT / "apps" / "root-task" / "build.rs"
 RUNTIME_MANIFEST = REPO_ROOT / "apps" / "console-network-runtime" / "Cargo.toml"
 RUNTIME_MAIN = REPO_ROOT / "apps" / "console-network-runtime" / "src" / "main.rs"
+RUNTIME_LIB = REPO_ROOT / "apps" / "console-network-runtime" / "src" / "lib.rs"
 RUNTIME_KERNEL = REPO_ROOT / "apps" / "console-network-runtime" / "src" / "kernel.rs"
 ROOT_HAL = (
     REPO_ROOT / "apps" / "root-task" / "src" / "hal" / "console_network.rs"
@@ -80,12 +81,96 @@ def test_runtime_qemu_fault_hooks_are_diagnostic_and_control_path_bound() -> Non
     assert "cohesix_console_network_qemu_evidence_control_handler" in source
     assert "cohesix_console_network_qemu_evidence_standard_fault" in source
     assert "cohesix_console_network_qemu_evidence_timeout_spin" in source
-    control_branch = source.split("if badge & WAKE_CONTROL != 0", maxsplit=1)[1]
-    control_branch = control_branch.split("if badge & WAKE_SHUTDOWN != 0", maxsplit=1)[0]
-    assert "cohesix_console_network_qemu_evidence_control_handler();" in control_branch
+    control_branch = source.split("ChildTurnUnit::ApplyControl => {", maxsplit=1)[1]
+    control_branch = control_branch.split("ChildTurnUnit::Idle => {}", maxsplit=1)[0]
+    control_hook = "cohesix_console_network_qemu_evidence_control_handler();"
+    assert control_hook in control_branch
+    assert control_branch.index(control_hook) < control_branch.index("match read_control(")
     hook = source.split("/// Stable external-QEMU evidence hook", maxsplit=1)[1]
     hook = hook.split("/// Target entry", maxsplit=1)[0]
     assert "seL4_" not in hook
+
+
+def test_runtime_crosses_one_mcs_refill_before_each_ordinary_wait() -> None:
+    """Ready and every completed material unit re-enter Yield then Wait."""
+
+    source = RUNTIME_KERNEL.read_text(encoding="utf-8")
+    target = source.split("pub unsafe extern \"C\" fn _start", maxsplit=1)[1]
+    target = target.split("fn install_ipc_buffer", maxsplit=1)[0]
+    ready = target.index("ExchangeKind::Ready,")
+    ready_signal = target.index(
+        "signal_slot(descriptor.supervisor_wake_notification_slot);", ready
+    )
+    loop_start = target.index("    loop {", ready_signal)
+    first_wait = target.index("let badge = wait_for_work(descriptor);", loop_start)
+    unit_match = target.index("match unit {", first_wait)
+    loop_end = target.rindex("\n    }")
+    assert ready < ready_signal < loop_start < first_wait < unit_match < loop_end
+
+    ordinary_loop = target[loop_start:loop_end]
+    assert ordinary_loop.count("let badge = wait_for_work(descriptor);") == 1
+    assert ordinary_loop.rstrip().endswith("ChildTurnUnit::Idle => {}\n        }")
+    assert "continue;" not in ordinary_loop
+    for unit in (
+        "PublishCompletion",
+        "PublishServiceEvent",
+        "PublishEgress",
+        "PollService",
+        "IngestPacket",
+        "ApplyControl",
+        "Idle",
+    ):
+        assert f"ChildTurnUnit::{unit}" in ordinary_loop
+
+    wait = source.split("fn wait_for_work", maxsplit=1)[1]
+    wait = wait.split("fn signal_slot", maxsplit=1)[0]
+    assert wait.count("sel4_sys::seL4_Yield();") == 1
+    assert wait.count("sel4_sys::seL4_Wait(") == 1
+    assert wait.index("sel4_sys::seL4_Yield();") < wait.index("sel4_sys::seL4_Wait(")
+
+    terminal_park = source.split("fn park_for_teardown", maxsplit=1)[1]
+    terminal_park = terminal_park.split("#[panic_handler]", maxsplit=1)[0]
+    assert "seL4_Yield" not in terminal_park
+    assert terminal_park.count("sel4_sys::seL4_Wait(") == 1
+
+
+def test_service_poll_continuation_is_retained_until_session_complete() -> None:
+    """Ingress, egress, and session work occupy distinct PollService turns."""
+
+    library = RUNTIME_LIB.read_text(encoding="utf-8")
+    kernel = RUNTIME_KERNEL.read_text(encoding="utf-8")
+    poll = library.split("pub fn poll_service_unit", maxsplit=1)[1]
+    poll = poll.split("fn poll_session_unit", maxsplit=1)[0]
+    dispatch_body = poll.split("fn poll_stack_ingress_unit", maxsplit=1)[0]
+    selected = poll.index("let unit = self.poll_unit;")
+    successor = poll.index("self.poll_unit = unit.successor();")
+    dispatch = poll.index("match unit {")
+    assert selected < successor < dispatch
+    assert "ServicePollUnit::StackIngress => {" in dispatch_body
+    assert "self.poll_stack_ingress_unit(timestamp);" in dispatch_body
+    assert "ServicePollUnit::StackEgress => {" in dispatch_body
+    assert "self.poll_stack_egress_unit(timestamp);" in dispatch_body
+    assert "ServicePollUnit::Session => {" in dispatch_body
+    assert "self.poll_session_unit(now_ms)?;" in dispatch_body
+    assert dispatch_body.count("Ok(ServicePollOutcome::Continuation)") == 2
+    assert dispatch_body.count("Ok(ServicePollOutcome::Complete)") == 1
+    ingress = poll.split("fn poll_stack_ingress_unit", maxsplit=1)[1]
+    ingress = ingress.split("fn poll_stack_egress_unit", maxsplit=1)[0]
+    egress = poll.split("fn poll_stack_egress_unit", maxsplit=1)[1]
+    assert ".poll_ingress_single(" in ingress
+    assert ".poll_egress(" not in ingress
+    assert ".poll_egress(" in egress
+    assert ".poll_ingress_single(" not in egress
+    assert poll.count("#[inline(never)]") == 3
+    assert ".poll(" not in poll
+
+    target = kernel.split("ChildTurnUnit::PollService => {", maxsplit=1)[1]
+    target = target.split("ChildTurnUnit::IngestPacket => {", maxsplit=1)[0]
+    call = target.index("service.poll_service_unit")
+    complete_guard = target.index("if outcome == ServicePollOutcome::Complete {")
+    clear = target.index("turn_scheduler.complete(ChildTurnUnit::PollService);")
+    assert call < complete_guard < clear
+    assert target.count("turn_scheduler.complete(ChildTurnUnit::PollService);") == 1
 
 
 def test_runtime_shared_pages_use_bounded_sequence_last_io() -> None:

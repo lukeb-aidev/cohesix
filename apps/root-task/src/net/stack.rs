@@ -8601,7 +8601,7 @@ impl DefaultNetStack {
         }
     }
 
-    /// Suspend, scrub, unbind, and revoke the isolated QEMU generation.
+    /// Advance the isolated QEMU generation by one containment unit.
     pub fn contain_console_network_child(
         &mut self,
         _hal: &mut KernelHal<'_>,
@@ -8613,7 +8613,16 @@ impl DefaultNetStack {
                 target_os = "none",
                 sel4_config_kernel_mcs
             ))]
-            Self::Virtio(stack) => stack.contain(_hal).map(Some),
+            Self::Virtio(stack) => match stack.contain_one_turn(_hal)? {
+                crate::console_network_service::ConsoleNetworkContainmentTurn::Complete(proof) => {
+                    Ok(Some(proof))
+                }
+                crate::console_network_service::ConsoleNetworkContainmentTurn::Idle
+                | crate::console_network_service::ConsoleNetworkContainmentTurn::Retry
+                | crate::console_network_service::ConsoleNetworkContainmentTurn::InProgress => {
+                    Ok(None)
+                }
+            },
             #[cfg(all(feature = "net-backend-virtio", not(target_os = "none")))]
             Self::Virtio(_) => Ok(None),
             Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => Ok(None),
@@ -9010,6 +9019,10 @@ impl<D: NetDevice> NetPoller for NetStack<D> {
         for event in drained {
             visitor(event);
         }
+    }
+
+    fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+        self.events.pop()
     }
 
     fn active_console_conn_id(&self) -> Option<u64> {
@@ -9679,6 +9692,16 @@ impl NetPoller for DefaultNetStack {
         }
     }
 
+    fn take_console_event(&mut self) -> Option<NetConsoleEvent> {
+        match self {
+            Self::Rtl8139(stack) => stack.take_console_event(),
+            Self::GenetDriverTask(stack) => stack.take_console_event(),
+            Self::Cyw43DriverTask(stack) => stack.take_console_event(),
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.take_console_event(),
+        }
+    }
+
     fn ingest_snapshot(&self) -> IngestSnapshot {
         match self {
             Self::Rtl8139(stack) => stack.ingest_snapshot(),
@@ -9823,11 +9846,44 @@ impl NetPoller for DefaultNetStack {
     fn contain_faulted_console_service(
         &mut self,
         hal: &mut KernelHal<'_>,
-    ) -> Result<bool, HalError> {
+    ) -> Result<crate::console_network_service::ConsoleNetworkContainmentTurn, HalError> {
         match self {
-            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => Ok(false),
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => {
+                Ok(crate::console_network_service::ConsoleNetworkContainmentTurn::Idle)
+            }
             #[cfg(feature = "net-backend-virtio")]
             Self::Virtio(stack) => stack.contain_faulted_console_service(hal),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn console_network_containment_diagnostic_pending(&self) -> bool {
+        match self {
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.console_network_containment_diagnostic_pending(),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn pending_console_network_containment_diagnostic(
+        &self,
+    ) -> Option<HeaplessString<{ crate::serial::DEFAULT_LINE_CAPACITY }>> {
+        match self {
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => None,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => stack.pending_console_network_containment_diagnostic(),
+        }
+    }
+
+    #[cfg(feature = "kernel")]
+    fn commit_console_network_containment_diagnostic(&mut self, expected_line: &str) -> bool {
+        match self {
+            Self::Rtl8139(_) | Self::GenetDriverTask(_) | Self::Cyw43DriverTask(_) => false,
+            #[cfg(feature = "net-backend-virtio")]
+            Self::Virtio(stack) => {
+                stack.commit_console_network_containment_diagnostic(expected_line)
+            }
         }
     }
 }

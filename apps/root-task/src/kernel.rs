@@ -51,6 +51,8 @@ use crate::cspace::CSpace;
 use crate::debug_uart::debug_uart_str;
 #[cfg(debug_assertions)]
 use crate::event::EventPump;
+#[cfg(feature = "net-console")]
+use crate::event::RuntimeIpcUnit;
 use crate::event::{
     AuditSink, BootstrapMessage, BootstrapMessageHandler, IpcDispatcher, TickEvent,
     TicketRegistryError, TicketTable, TimerSource,
@@ -7240,6 +7242,23 @@ impl KernelIpc {
             .as_mut()
             .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)
             .and_then(|runtime| runtime.service(now_ms));
+        Self::enforce_worker_runtime_result(result);
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn service_worker_runtime_one(&mut self, now_ms: u64) {
+        let result = self
+            .worker_runtime
+            .as_mut()
+            .ok_or(crate::worker_supervisor::WorkerSupervisorError::InvalidState)
+            .and_then(|runtime| runtime.service_one(now_ms));
+        Self::enforce_worker_runtime_result(result);
+    }
+
+    #[cfg(sel4_config_kernel_mcs)]
+    fn enforce_worker_runtime_result(
+        result: Result<usize, crate::worker_supervisor::WorkerSupervisorError>,
+    ) {
         if let Err(error) = result {
             panic!("isolated Worker supervisor failed closed: {error:?}");
         }
@@ -7627,34 +7646,58 @@ impl KernelIpc {
         );
         self.staged_forwarded = true;
     }
+
+    fn announce_fault_loop_once(&mut self) {
+        if self.fault_loop_announced {
+            return;
+        }
+        if cfg!(sel4_config_kernel_mcs) {
+            log::info!(
+                "[fault] root-control polling disabled; independent root-fault owns ep=0x{ep:04x}",
+                ep = self.fault_endpoint.raw(),
+            );
+        } else {
+            log::info!(
+                "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
+                ep = if self.fault_endpoint.is_valid() {
+                    self.fault_endpoint.raw()
+                } else {
+                    self.control_ep.raw()
+                }
+            );
+        }
+        self.fault_loop_announced = true;
+    }
 }
 
 impl IpcDispatcher for KernelIpc {
     fn dispatch(&mut self, now_ms: u64) {
-        if !self.fault_loop_announced {
-            if cfg!(sel4_config_kernel_mcs) {
-                log::info!(
-                    "[fault] root-control polling disabled; independent root-fault owns ep=0x{ep:04x}",
-                    ep = self.fault_endpoint.raw(),
-                );
-            } else {
-                log::info!(
-                    "[fault] handler loop online; waiting for fault messages (ep=0x{ep:04x})",
-                    ep = if self.fault_endpoint.is_valid() {
-                        self.fault_endpoint.raw()
-                    } else {
-                        self.control_ep.raw()
-                    }
-                );
-            }
-            self.fault_loop_announced = true;
-        }
+        self.announce_fault_loop_once();
         self.poll_fault_endpoint(now_ms);
         #[cfg(sel4_config_kernel_mcs)]
         self.service_worker_runtime(now_ms);
         let _ = self.poll_endpoint(now_ms, false);
         if self.handlers_ready {
             self.forward_staged(now_ms);
+        }
+    }
+
+    #[cfg(feature = "net-console")]
+    fn dispatch_runtime_unit(&mut self, now_ms: u64, unit: RuntimeIpcUnit) {
+        self.announce_fault_loop_once();
+        match unit {
+            RuntimeIpcUnit::Worker => {
+                #[cfg(sel4_config_kernel_mcs)]
+                self.service_worker_runtime_one(now_ms);
+                #[cfg(not(sel4_config_kernel_mcs))]
+                let _ = now_ms;
+            }
+            RuntimeIpcUnit::ControlEndpoint => {
+                let _ = self.poll_endpoint(now_ms, false);
+                if self.handlers_ready {
+                    self.forward_staged(now_ms);
+                }
+            }
         }
     }
 

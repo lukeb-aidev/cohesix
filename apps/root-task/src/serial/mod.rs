@@ -121,6 +121,61 @@ const SERIAL_RUNTIME_AUX_INIT: u32 = 0x5345_5249;
 #[cfg(feature = "kernel")]
 const SERIAL_RUNTIME_AUX_TX_IDLE: u32 = pi4_driver_abi::DRIVER_RUNTIME_SERIAL_TX_IDLE_AUX;
 
+/// Admission cursor for one root-control Operator serial service turn.
+///
+/// The isolated QEMU VirtIO profile gives Operator, Runtime, and Network their
+/// own outer MCS turns. Operator may enqueue any bounded response work, but it
+/// shares one smaller byte cap across every serial helper it reaches before
+/// yielding. Bytes that do not fit remain in the ordinary queues for the next
+/// Operator turn. When RX and a previously queued TX tail are both ready, RX
+/// leaves half of the same cap for TX so sustained input cannot starve ordered
+/// ACK/ERR/END output.
+#[derive(Debug, Default)]
+struct OrdinaryRootControlSerialTurn {
+    active: bool,
+    bytes_left: u32,
+    tx_reserve: u32,
+}
+
+impl OrdinaryRootControlSerialTurn {
+    fn begin(&mut self, byte_limit: u32, tx_pending_at_turn_start: bool) {
+        debug_assert!(!self.active);
+        self.active = true;
+        self.bytes_left = byte_limit;
+        self.tx_reserve = if tx_pending_at_turn_start {
+            byte_limit.saturating_add(1) / 2
+        } else {
+            0
+        };
+    }
+
+    fn finish(&mut self) {
+        debug_assert!(self.active);
+        self.active = false;
+        self.bytes_left = 0;
+        self.tx_reserve = 0;
+    }
+
+    const fn byte_available(&self) -> bool {
+        !self.active || self.bytes_left != 0
+    }
+
+    const fn rx_byte_available(&self) -> bool {
+        self.byte_available() && (!self.active || self.bytes_left > self.tx_reserve)
+    }
+
+    fn charge_byte(&mut self) {
+        if self.active {
+            debug_assert!(self.bytes_left != 0);
+            self.bytes_left = self.bytes_left.saturating_sub(1);
+        }
+    }
+
+    const fn active(&self) -> bool {
+        self.active
+    }
+}
+
 /// Immutable linked-runtime TX bytes retained until their exact completion.
 ///
 /// The child can physically emit bytes before root observes its completion.
@@ -279,6 +334,8 @@ static SERIAL_INPUT_LINE_TRACE_COUNT: AtomicU32 = AtomicU32::new(0);
 #[cfg(feature = "kernel")]
 static SERIAL_PROMPT_INPUT_SHADOW: SpinMutex<HeaplessString<DEFAULT_LINE_CAPACITY>> =
     SpinMutex::new(HeaplessString::new());
+#[cfg(feature = "kernel")]
+static SERIAL_PROMPT_INPUT_SHADOW_VALID: AtomicU32 = AtomicU32::new(1);
 
 #[cfg(feature = "kernel")]
 const SERIAL_RUNTIME_ATTACH_DESCRIPTOR: u32 = 0;
@@ -305,24 +362,45 @@ static SERIAL_LINKED_RUNTIME_ONLY_TEST_TX_IDLE_MISSES: AtomicU32 = AtomicU32::ne
 #[cfg(feature = "kernel")]
 fn prompt_shadow_push(byte: u8) {
     let mut shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
+    if SERIAL_PROMPT_INPUT_SHADOW_VALID.swap(1, AtomicOrdering::AcqRel) == 0 {
+        shadow.clear();
+    }
     let _ = shadow.push(byte as char);
 }
 
 #[cfg(feature = "kernel")]
 fn prompt_shadow_pop() {
-    let _ = SERIAL_PROMPT_INPUT_SHADOW.lock().pop();
+    let mut shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
+    if SERIAL_PROMPT_INPUT_SHADOW_VALID.swap(1, AtomicOrdering::AcqRel) == 0 {
+        shadow.clear();
+    } else {
+        let _ = shadow.pop();
+    }
 }
 
 #[cfg(feature = "kernel")]
 fn prompt_shadow_clear() {
     SERIAL_PROMPT_INPUT_SHADOW.lock().clear();
+    SERIAL_PROMPT_INPUT_SHADOW_VALID.store(1, AtomicOrdering::Release);
+}
+
+/// Invalidate prompt-shadow bytes without acquiring a lock in Recovery.
+///
+/// The next ordinary serial mutation clears the retained buffer while holding
+/// its existing lock. Prompt refresh suppresses the stale bytes until then.
+#[cfg(feature = "kernel")]
+pub(crate) fn invalidate_prompt_input_shadow_quiet() {
+    SERIAL_PROMPT_INPUT_SHADOW_VALID.store(0, AtomicOrdering::Release);
 }
 
 #[cfg(feature = "kernel")]
 pub(crate) fn emit_prompt_refresh_with_input_shadow_unlocked(prompt: &[u8]) {
     crate::sel4::debug_put_bytes_unlocked(prompt);
+    if SERIAL_PROMPT_INPUT_SHADOW_VALID.load(AtomicOrdering::Acquire) == 0 {
+        return;
+    }
     let shadow = SERIAL_PROMPT_INPUT_SHADOW.lock();
-    if !shadow.is_empty() {
+    if SERIAL_PROMPT_INPUT_SHADOW_VALID.load(AtomicOrdering::Acquire) != 0 && !shadow.is_empty() {
         crate::sel4::debug_put_bytes_unlocked(shadow.as_bytes());
     }
 }
@@ -1048,6 +1126,14 @@ fn serial_input_trace_budget_take(counter: &AtomicU32, limit: u32) -> bool {
     counter.fetch_add(1, AtomicOrdering::AcqRel) < limit
 }
 
+#[cfg(feature = "kernel")]
+const fn serial_input_poll_trace_allowed(
+    accepted: usize,
+    ordinary_root_control_turn_active: bool,
+) -> bool {
+    accepted != 0 && !ordinary_root_control_turn_active
+}
+
 #[cfg(all(feature = "kernel", target_arch = "aarch64", target_os = "none"))]
 fn emit_serial_input_trace(line: &str) {
     crate::bootstrap::log::force_uart_line_raw(line);
@@ -1305,6 +1391,9 @@ pub struct SerialPort<
     line: HeaplessString<LINE>,
     driver_local: SerialDriverLocalRuntimeRecord,
     telemetry: SerialTelemetryCounters,
+    ordinary_root_control_turn: OrdinaryRootControlSerialTurn,
+    #[cfg(feature = "kernel")]
+    root_context_rx_only_service: bool,
     #[cfg(feature = "kernel")]
     linked_tx: LinkedSerialTxCursor,
     #[cfg(feature = "kernel")]
@@ -1336,6 +1425,9 @@ where
             line: HeaplessString::new(),
             driver_local: SerialDriverLocalRuntimeRecord::new(),
             telemetry: SerialTelemetryCounters::default(),
+            ordinary_root_control_turn: OrdinaryRootControlSerialTurn::default(),
+            #[cfg(feature = "kernel")]
+            root_context_rx_only_service: false,
             #[cfg(feature = "kernel")]
             linked_tx: LinkedSerialTxCursor::new(),
             #[cfg(feature = "kernel")]
@@ -1450,6 +1542,28 @@ where
         <D as SerialDriver>::driver_task_contract()
     }
 
+    /// Begin one isolated VirtIO root-control Operator turn.
+    ///
+    /// Only the EventPump phase wrapper calls this. Linked physical serial and
+    /// unsplit non-VirtIO profiles leave the cursor inactive and retain their
+    /// existing service behavior.
+    pub(crate) fn begin_ordinary_root_control_turn(&mut self) {
+        self.begin_ordinary_root_control_turn_with_limit(
+            crate::generated::ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN,
+        );
+    }
+
+    fn begin_ordinary_root_control_turn_with_limit(&mut self, byte_limit: u32) {
+        let tx_pending_at_turn_start = self.tx_pending();
+        self.ordinary_root_control_turn
+            .begin(byte_limit, tx_pending_at_turn_start);
+    }
+
+    /// Finish the isolated VirtIO root-control Operator turn.
+    pub(crate) fn finish_ordinary_root_control_turn(&mut self) {
+        self.ordinary_root_control_turn.finish();
+    }
+
     /// Inject data that should be transmitted to the remote peer.
     pub fn enqueue_tx(&mut self, data: &[u8]) {
         #[cfg(feature = "kernel")]
@@ -1546,6 +1660,11 @@ where
 
     /// Emit bytes directly to the device while holding the shared UART TX lock.
     pub fn write_bytes_blocking(&mut self, data: &[u8]) {
+        if self.ordinary_root_control_turn.active() {
+            self.enqueue_tx(data);
+            self.flush_tx_locked();
+            return;
+        }
         #[cfg(feature = "kernel")]
         if serial_driver_task_transport_active() {
             self.enqueue_tx(data);
@@ -1567,6 +1686,12 @@ where
 
     /// Emit a complete console line without allowing other UART producers to interleave.
     pub fn write_line_blocking(&mut self, line: &str) {
+        if self.ordinary_root_control_turn.active() {
+            self.enqueue_tx(line.as_bytes());
+            self.enqueue_tx(b"\r\n");
+            self.flush_tx_locked();
+            return;
+        }
         #[cfg(feature = "kernel")]
         if serial_driver_task_transport_active() {
             self.enqueue_tx(line.as_bytes());
@@ -1604,40 +1729,8 @@ where
                 return false;
             }
             if serial_root_context_service_allowed() {
-                crate::hal::driver_task::register_driver_task_root_context_ring_service(
-                    contract,
-                    self as *mut Self as usize,
-                    serial_ring_service_driver_task::<D, RX, TX, LINE>,
-                );
-                let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
-                    0,
-                    crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
-                    crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
-                    crate::hal::driver_task::DriverFrameDescriptor {
-                        offset: 0,
-                        len: 0,
-                        flags:
-                            crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
-                    },
-                );
-                if let Some(completion) =
-                    crate::hal::driver_task::run_driver_task_ring_service(contract, command)
-                {
-                    return completion.code
-                        == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
-                        && completion.result != 0;
-                }
-                // SAFETY: The HAL admits this compatibility callback only for
-                // QEMU/host profiles. Physical Pi 4 builds return None without
-                // compiling callback slot state.
-                if let Some(result) = unsafe {
-                    crate::hal::driver_task::try_driver_task_compat_service(
-                        contract,
-                        self as *mut Self as usize,
-                        serial_poll_io_driver_task::<D, RX, TX, LINE>,
-                    )
-                } {
-                    return result != 0;
+                if let Some(activity) = self.poll_root_context_io(contract, false) {
+                    return activity;
                 }
                 if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
                     self.telemetry.driver_task_budget_overrun();
@@ -1651,6 +1744,86 @@ where
             }
         }
         self.poll_io_current_tcb(contract)
+    }
+
+    /// Probe serial RX without admitting any TX transport or flush work.
+    ///
+    /// The isolated QEMU Operator uses this as its complete `SerialIo` unit;
+    /// a later retained `SerialDispatch` unit owns parsing, echo, and TX. The
+    /// public `poll_io` path remains the combined legacy/generic operation.
+    pub(crate) fn poll_rx_only(&mut self) -> bool {
+        let contract = <D as SerialDriver>::driver_task_contract();
+        #[cfg(feature = "kernel")]
+        {
+            if serial_driver_task_transport_active() {
+                return self.poll_driver_task_rx_into_queue(contract);
+            }
+            if !serial_root_uart_direct_io_allowed(serial_root_uart_released_for_linked_runtime()) {
+                return false;
+            }
+            if serial_root_context_service_allowed() {
+                if let Some(activity) = self.poll_root_context_io(contract, true) {
+                    return activity;
+                }
+                if !crate::hal::driver_task::admit_root_task_compatibility_service(contract) {
+                    self.telemetry.driver_task_budget_overrun();
+                    return false;
+                }
+            } else {
+                emit_serial_input_route_trace_once(
+                    "poll-route",
+                    "physical-root-mini-uart-fallback",
+                );
+            }
+        }
+        self.poll_rx_only_current_tcb(contract)
+    }
+
+    #[cfg(feature = "kernel")]
+    fn poll_root_context_io(
+        &mut self,
+        contract: DriverTaskContract,
+        rx_only: bool,
+    ) -> Option<bool> {
+        self.root_context_rx_only_service = rx_only;
+        crate::hal::driver_task::register_driver_task_root_context_ring_service(
+            contract,
+            self as *mut Self as usize,
+            serial_ring_service_driver_task::<D, RX, TX, LINE>,
+        );
+        let command = crate::hal::driver_task::DriverTaskCommandRecord::pi4_hot_path(
+            0,
+            crate::hal::driver_task::DriverTaskHotPath::SerialConsole,
+            crate::hal::driver_task::DriverTaskBudgetGrant::from_contract(contract),
+            crate::hal::driver_task::DriverFrameDescriptor {
+                offset: 0,
+                len: 0,
+                flags: crate::hal::driver_task::DRIVER_TASK_RING_FLAG_ROOT_CONTEXT_NON_ACCEPTANCE,
+            },
+        );
+        let completion = crate::hal::driver_task::run_driver_task_ring_service(contract, command);
+        self.root_context_rx_only_service = false;
+        if let Some(completion) = completion {
+            return Some(
+                completion.code
+                    == crate::hal::driver_task::DriverTaskCompletionCode::Progress.as_u16()
+                    && completion.result != 0,
+            );
+        }
+
+        self.root_context_rx_only_service = rx_only;
+        // SAFETY: The HAL admits this compatibility callback only for QEMU/host
+        // profiles. Physical Pi 4 builds return None without compiling callback
+        // slot state, and the synchronous call returns before the mode is reset.
+        let result = unsafe {
+            crate::hal::driver_task::try_driver_task_compat_service(
+                contract,
+                self as *mut Self as usize,
+                serial_poll_io_driver_task::<D, RX, TX, LINE>,
+            )
+        };
+        self.root_context_rx_only_service = false;
+        result.map(|activity| activity != 0)
     }
 
     /// Poll only the independently owned physical serial linked runtime.
@@ -1914,6 +2087,29 @@ where
         }
     }
 
+    fn poll_rx_only_current_tcb(&mut self, contract: DriverTaskContract) -> bool {
+        let mut budget = match DriverServiceBudget::new(contract) {
+            Ok(budget) => budget,
+            Err(_) => {
+                self.telemetry.driver_task_budget_overrun();
+                return false;
+            }
+        };
+        let (rx_activity, budget_exhausted) = self.poll_rx_current_tcb(&mut budget);
+        if budget_exhausted {
+            self.telemetry.driver_task_budget_overrun();
+        }
+        rx_activity
+    }
+
+    #[cfg(feature = "kernel")]
+    fn poll_root_context_callback_current_tcb(&mut self, contract: DriverTaskContract) -> bool {
+        if self.root_context_rx_only_service {
+            return self.poll_rx_only_current_tcb(contract);
+        }
+        self.poll_io_current_tcb(contract)
+    }
+
     fn poll_io_current_tcb(&mut self, contract: DriverTaskContract) -> bool {
         let mut budget = match DriverServiceBudget::new(contract) {
             Ok(budget) => budget,
@@ -1922,6 +2118,16 @@ where
                 return false;
             }
         };
+        let (rx_activity, budget_exhausted) = self.poll_rx_current_tcb(&mut budget);
+        if budget_exhausted {
+            self.telemetry.driver_task_budget_overrun();
+        } else {
+            with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
+        }
+        rx_activity
+    }
+
+    fn poll_rx_current_tcb(&mut self, budget: &mut DriverServiceBudget) -> (bool, bool) {
         let mut budget_exhausted = false;
         let mut rx_activity = false;
         let mut accepted = 0usize;
@@ -1932,13 +2138,17 @@ where
         // Drain RX side first so newly available bytes can be processed in the
         // same cycle.
         loop {
-            if self.serial_byte_budget_available(&budget).is_err() {
-                budget_exhausted = true;
-                break;
+            match self.serial_rx_byte_budget_available(budget) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => {
+                    budget_exhausted = true;
+                    break;
+                }
             }
             match self.driver.read_byte() {
                 Ok(byte) => {
-                    if self.charge_serial_byte(&mut budget).is_err() {
+                    if self.charge_serial_byte(budget).is_err() {
                         self.telemetry.driver_task_budget_overrun();
                         break;
                     }
@@ -1963,13 +2173,8 @@ where
             }
         }
 
-        if budget_exhausted {
-            self.telemetry.driver_task_budget_overrun();
-        } else {
-            with_uart_tx_lock(|| self.flush_tx_unlocked(&mut budget));
-        }
         #[cfg(feature = "kernel")]
-        if accepted != 0 {
+        if serial_input_poll_trace_allowed(accepted, self.ordinary_root_control_turn.active()) {
             emit_serial_input_poll_trace(
                 "uart-rx",
                 accepted,
@@ -1979,7 +2184,7 @@ where
                 last,
             );
         }
-        rx_activity
+        (rx_activity, budget_exhausted)
     }
 
     fn flush_tx_locked(&mut self) {
@@ -2404,10 +2609,17 @@ where
     fn flush_tx_unlocked(&mut self, budget: &mut DriverServiceBudget) {
         // Flush staged TX bytes to the device until it reports back-pressure.
         if let Some(byte) = self.driver_local.take_pending_tx() {
-            if self.serial_byte_budget_available(budget).is_err() {
-                self.telemetry.driver_task_budget_overrun();
-                self.driver_local.set_pending_tx(Some(byte));
-                return;
+            match self.serial_byte_budget_available(budget) {
+                Ok(true) => {}
+                Ok(false) => {
+                    self.driver_local.set_pending_tx(Some(byte));
+                    return;
+                }
+                Err(_) => {
+                    self.telemetry.driver_task_budget_overrun();
+                    self.driver_local.set_pending_tx(Some(byte));
+                    return;
+                }
             }
             match self.driver.write_byte(byte) {
                 Ok(()) => {
@@ -2428,9 +2640,13 @@ where
         }
 
         while !self.tx.is_empty() {
-            if self.serial_byte_budget_available(budget).is_err() {
-                self.telemetry.driver_task_budget_overrun();
-                return;
+            match self.serial_byte_budget_available(budget) {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(_) => {
+                    self.telemetry.driver_task_budget_overrun();
+                    return;
+                }
             }
             let Some(byte) = self.tx.dequeue() else {
                 break;
@@ -2457,7 +2673,10 @@ where
     fn serial_byte_budget_available(
         &self,
         budget: &DriverServiceBudget,
-    ) -> Result<(), DriverServiceBudgetError> {
+    ) -> Result<bool, DriverServiceBudgetError> {
+        if !self.ordinary_root_control_turn.byte_available() {
+            return Ok(false);
+        }
         if budget.ops_left() == 0 {
             return Err(DriverServiceBudgetError::OperationsExhausted);
         }
@@ -2467,17 +2686,31 @@ where
         if budget.frames_left() == 0 {
             return Err(DriverServiceBudgetError::FramesExhausted);
         }
-        Ok(())
+        Ok(true)
+    }
+
+    fn serial_rx_byte_budget_available(
+        &self,
+        budget: &DriverServiceBudget,
+    ) -> Result<bool, DriverServiceBudgetError> {
+        if !self.ordinary_root_control_turn.rx_byte_available() {
+            return Ok(false);
+        }
+        self.serial_byte_budget_available(budget)
     }
 
     fn charge_serial_byte(
-        &self,
+        &mut self,
         budget: &mut DriverServiceBudget,
     ) -> Result<(), DriverServiceBudgetError> {
-        self.serial_byte_budget_available(budget)?;
+        if !self.serial_byte_budget_available(budget)? {
+            return Err(DriverServiceBudgetError::BytesExhausted);
+        }
         budget.charge_ops(1)?;
         budget.charge_bytes(1)?;
-        budget.charge_frames(1)
+        budget.charge_frames(1)?;
+        self.ordinary_root_control_turn.charge_byte();
+        Ok(())
     }
 
     fn flush_tx_blocking_unlocked(&mut self) {
@@ -2786,8 +3019,13 @@ fn serial_runtime_drain_rx_budgeted<D, const RX: usize, const TX: usize, const L
     D: SerialDriver,
 {
     loop {
-        if port.serial_byte_budget_available(budget).is_err() {
-            break;
+        match port.serial_rx_byte_budget_available(budget) {
+            Ok(true) => {}
+            Ok(false) => break,
+            Err(_) => {
+                port.telemetry.driver_task_budget_overrun();
+                break;
+            }
         }
         match port.driver.read_byte() {
             Ok(byte) => {
@@ -2832,9 +3070,13 @@ where
             if written != 0 && written % SERIAL_RUNTIME_RX_DRAIN_DURING_TX_INTERVAL == 0 {
                 serial_runtime_drain_rx_budgeted(port, &mut budget);
             }
-            if port.serial_byte_budget_available(&budget).is_err() {
-                port.telemetry.driver_task_budget_overrun();
-                break;
+            match port.serial_byte_budget_available(&budget) {
+                Ok(true) => {}
+                Ok(false) => break,
+                Err(_) => {
+                    port.telemetry.driver_task_budget_overrun();
+                    break;
+                }
             }
             match port.driver.write_byte(byte) {
                 Ok(()) => {
@@ -2871,7 +3113,7 @@ where
     let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
     let contract = <D as SerialDriver>::driver_task_contract();
     if command.opcode == crate::hal::driver_task::DriverTaskOpcode::Service.as_u16() {
-        let progress = port.poll_io_current_tcb(contract);
+        let progress = port.poll_root_context_callback_current_tcb(contract);
         return crate::hal::driver_task::DriverTaskCompletionRecord::progress(
             command.sequence,
             progress as u32,
@@ -2899,7 +3141,7 @@ where
     // The callback-pointer ABI is compatibility-only, not owner-state proof.
     let port = unsafe { &mut *(context as *mut SerialPort<D, RX, TX, LINE>) };
     let contract = <D as SerialDriver>::driver_task_contract();
-    port.poll_io_current_tcb(contract) as usize
+    port.poll_root_context_callback_current_tcb(contract) as usize
 }
 
 #[cfg(feature = "kernel")]
@@ -3378,6 +3620,25 @@ mod tests {
 
         assert_eq!(line.as_str(), "wifx");
         assert!(SERIAL_PROMPT_INPUT_SHADOW.lock().is_empty());
+
+        prompt_shadow_push(b's');
+        invalidate_prompt_input_shadow_quiet();
+        assert_eq!(
+            SERIAL_PROMPT_INPUT_SHADOW_VALID.load(AtomicOrdering::Acquire),
+            0
+        );
+        assert_eq!(
+            SERIAL_PROMPT_INPUT_SHADOW.lock().as_str(),
+            "s",
+            "Recovery invalidation must not acquire or mutate the shadow lock"
+        );
+        prompt_shadow_push(b'n');
+        assert_eq!(SERIAL_PROMPT_INPUT_SHADOW.lock().as_str(), "n");
+        assert_eq!(
+            SERIAL_PROMPT_INPUT_SHADOW_VALID.load(AtomicOrdering::Acquire),
+            1
+        );
+        prompt_shadow_clear();
     }
 
     #[cfg(feature = "kernel")]
@@ -3396,6 +3657,14 @@ mod tests {
             &counter,
             SERIAL_INPUT_RX_TRACE_LIMIT
         ));
+    }
+
+    #[cfg(feature = "kernel")]
+    #[test]
+    fn ordinary_root_control_rx_suppresses_raw_poll_trace() {
+        assert!(serial_input_poll_trace_allowed(1, false));
+        assert!(!serial_input_poll_trace_allowed(0, false));
+        assert!(!serial_input_poll_trace_allowed(1, true));
     }
 
     #[test]
@@ -3430,6 +3699,125 @@ mod tests {
             usize::from(driver_task_contract().budget.max_ops_per_turn)
         );
         assert!(port.telemetry().driver_task_budget_overruns > 0);
+    }
+
+    #[test]
+    fn ordinary_root_control_turn_shares_exact_serial_cap_and_retains_tail() {
+        const TEST_ROOT_CONTROL_SERIAL_BYTES: u32 = 64;
+
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        let output = [b'x'; TEST_ROOT_CONTROL_SERIAL_BYTES as usize + 32];
+        port.enqueue_tx(&output);
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(!port.poll_io());
+        assert_eq!(
+            port.driver_mut().drain_tx().len(),
+            TEST_ROOT_CONTROL_SERIAL_BYTES as usize
+        );
+        assert!(port.tx_pending());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+
+        // Later helpers in the same Operator body share the exhausted cursor.
+        port.flush_tx();
+        assert!(port.driver_mut().drain_tx().is_empty());
+        port.write_bytes_blocking(&[b't'; TEST_ROOT_CONTROL_SERIAL_BYTES as usize]);
+        assert!(port.driver_mut().drain_tx().is_empty());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+        port.finish_ordinary_root_control_turn();
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(!port.poll_io());
+        port.finish_ordinary_root_control_turn();
+        let retained = port.driver_mut().drain_tx();
+        assert_eq!(retained.len(), TEST_ROOT_CONTROL_SERIAL_BYTES as usize);
+        assert_eq!(&retained[..32], &[b'x'; 32]);
+        assert_eq!(
+            &retained[32..],
+            &[b't'; TEST_ROOT_CONTROL_SERIAL_BYTES as usize - 32]
+        );
+        assert!(port.tx_pending(), "the later blocking tail stays ordered");
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(!port.poll_io());
+        port.finish_ordinary_root_control_turn();
+        assert_eq!(port.driver_mut().drain_tx().as_slice(), &[b't'; 32]);
+        assert!(!port.tx_pending());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[test]
+    fn ordinary_root_control_turn_defers_rx_without_driver_budget_overrun() {
+        const TEST_ROOT_CONTROL_SERIAL_BYTES: u32 = 64;
+
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        port.driver_mut()
+            .push_rx(&[b'r'; TEST_ROOT_CONTROL_SERIAL_BYTES as usize + 16]);
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(port.poll_io());
+        assert_eq!(port.rx.len(), TEST_ROOT_CONTROL_SERIAL_BYTES as usize);
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+        assert!(
+            !port.poll_io(),
+            "the same cursor must defer a second RX drain"
+        );
+        assert_eq!(port.rx.len(), TEST_ROOT_CONTROL_SERIAL_BYTES as usize);
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+        port.finish_ordinary_root_control_turn();
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(port.poll_io());
+        port.finish_ordinary_root_control_turn();
+        assert_eq!(port.rx.len(), TEST_ROOT_CONTROL_SERIAL_BYTES as usize + 16);
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[test]
+    fn ordinary_root_control_turn_makes_bounded_rx_and_tx_progress_together() {
+        const TEST_ROOT_CONTROL_SERIAL_BYTES: u32 = 64;
+        const EXPECTED_LANE_BYTES: usize = TEST_ROOT_CONTROL_SERIAL_BYTES as usize / 2;
+
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        port.enqueue_tx(&[b't'; 80]);
+        port.driver_mut().push_rx(&[b'r'; 80]);
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(port.poll_io());
+        port.finish_ordinary_root_control_turn();
+
+        assert_eq!(port.rx.len(), EXPECTED_LANE_BYTES);
+        assert_eq!(port.driver_mut().drain_tx().len(), EXPECTED_LANE_BYTES);
+        assert!(port.tx_pending());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
+    }
+
+    #[test]
+    fn ordinary_root_control_turn_keeps_entry_tx_reserve_across_reentry() {
+        const TEST_ROOT_CONTROL_SERIAL_BYTES: u32 = 64;
+
+        let driver = LoopbackSerial::<2048>::new();
+        let mut port: SerialPort<_, 2048, 2048, 16> = SerialPort::new(driver);
+        port.enqueue_tx(&[b't'; 8]);
+        port.driver_mut().push_rx(&[b'r'; 80]);
+
+        port.begin_ordinary_root_control_turn_with_limit(TEST_ROOT_CONTROL_SERIAL_BYTES);
+        assert!(port.poll_io());
+        assert_eq!(port.rx.len(), 32);
+        assert_eq!(port.driver_mut().drain_tx().as_slice(), &[b't'; 8]);
+        assert!(
+            !port.poll_io(),
+            "later helpers must not reclaim the entry TX reservation for RX"
+        );
+        port.finish_ordinary_root_control_turn();
+
+        assert_eq!(port.rx.len(), 32);
+        assert!(!port.tx_pending());
+        assert_eq!(port.telemetry().driver_task_budget_overruns, 0);
     }
 
     #[test]

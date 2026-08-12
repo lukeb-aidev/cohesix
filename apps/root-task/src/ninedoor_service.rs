@@ -271,6 +271,127 @@ pub struct NineDoorContainmentProof {
     pub generation_fenced: bool,
 }
 
+impl NineDoorContainmentProof {
+    /// Whether every passive-service teardown obligation is proven complete.
+    #[must_use]
+    pub const fn complete(self) -> bool {
+        self.tcb_suspended
+            && self.mappings_scrubbed
+            && self.recovery_reply_revoked
+            && self.capabilities_revoked
+            && self.generation_fenced
+    }
+}
+
+/// One material unit in the exact passive NineDoor containment order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NineDoorContainmentUnit {
+    /// Suspend the passive child even though root-fault already suspended it.
+    SuspendTcb,
+    /// Zero and cache-clean one root-writable request frame.
+    ScrubCleanRequestFrame(usize),
+    /// Unmap one already-clean request frame.
+    UnmapRequestFrame(usize),
+    /// Unmap one root-read-only response cap without discarding its identity.
+    UnmapResponseRead(usize),
+    /// Remap one response source cap writable at its retained root address.
+    MapResponseWritable(usize),
+    /// Zero and cache-clean one persistently writable response frame.
+    ScrubCleanResponseWritable(usize),
+    /// Unmap one already-clean writable response source cap.
+    UnmapResponseWritable(usize),
+    /// Remove the distinct passive-donor recovery Reply authority.
+    RevokeRecoveryReply,
+    /// Delete one indexed standard or timeout fault cap.
+    DeleteFaultCap(usize),
+    /// Revoke the generation anchor and reset its VSpace tracker.
+    RevokeAnchor,
+    /// Publish the exact terminal proof for the fenced generation.
+    Finalize,
+    /// No containment units remain.
+    Complete,
+}
+
+impl NineDoorContainmentUnit {
+    const fn successor(self) -> Self {
+        match self {
+            Self::SuspendTcb => Self::ScrubCleanRequestFrame(0),
+            Self::ScrubCleanRequestFrame(index) => Self::UnmapRequestFrame(index),
+            Self::UnmapRequestFrame(0) => Self::ScrubCleanRequestFrame(1),
+            Self::UnmapRequestFrame(_) => Self::UnmapResponseRead(0),
+            Self::UnmapResponseRead(index) => Self::MapResponseWritable(index),
+            Self::MapResponseWritable(index) => Self::ScrubCleanResponseWritable(index),
+            Self::ScrubCleanResponseWritable(index) => Self::UnmapResponseWritable(index),
+            Self::UnmapResponseWritable(0) => Self::UnmapResponseRead(1),
+            Self::UnmapResponseWritable(_) => Self::RevokeRecoveryReply,
+            Self::RevokeRecoveryReply => Self::DeleteFaultCap(0),
+            Self::DeleteFaultCap(0) => Self::DeleteFaultCap(1),
+            Self::DeleteFaultCap(_) => Self::RevokeAnchor,
+            Self::RevokeAnchor => Self::Finalize,
+            Self::Finalize | Self::Complete => Self::Complete,
+        }
+    }
+}
+
+/// Persistent successor-before-work cursor for passive NineDoor containment.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NineDoorContainmentCursor {
+    unit: NineDoorContainmentUnit,
+}
+
+impl Default for NineDoorContainmentCursor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl NineDoorContainmentCursor {
+    /// Number of request mappings that must be scrubbed independently.
+    pub const REQUEST_FRAME_COUNT: usize = 2;
+    /// Number of response mappings that must be made writable and scrubbed.
+    pub const RESPONSE_FRAME_COUNT: usize = 2;
+    /// Number of standard/timeout fault caps removed before anchor revoke.
+    pub const FAULT_CAP_COUNT: usize = 2;
+
+    /// Start at the mandatory child-suspension proof.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            unit: NineDoorContainmentUnit::SuspendTcb,
+        }
+    }
+
+    /// Unit retained for the next exclusive Recovery turn.
+    #[must_use]
+    pub const fn unit(self) -> NineDoorContainmentUnit {
+        self.unit
+    }
+
+    /// Select one unit and durably expose its successor before material work.
+    pub fn select_next(&mut self) -> NineDoorContainmentUnit {
+        let selected = self.unit;
+        self.unit = selected.successor();
+        selected
+    }
+
+    /// Restore one synchronously failed unit for the next exclusive retry.
+    pub fn restore_selected(&mut self, selected: NineDoorContainmentUnit) {
+        debug_assert_eq!(self.unit, selected.successor());
+        self.unit = selected;
+    }
+}
+
+/// Outcome of one exclusive root-control NineDoor containment turn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NineDoorContainmentTurn {
+    /// No service fault or previously latched containment is pending.
+    Idle,
+    /// One unit completed, one unit failed for retry, or mailbox access contended.
+    InProgress,
+    /// The exact complete proof is available and the runtime may be removed.
+    Complete(NineDoorContainmentProof),
+}
+
 /// Root-side mapping and call-cap contract for one exact service generation.
 ///
 /// The rights bytes are generated attestations, not substitutes for CSpace or

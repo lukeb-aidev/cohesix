@@ -342,18 +342,25 @@ fn activate_root_control_temporal_or_fail(ctx: &BootContext) {
         boot_log::force_uart_line(
             "[critical] arming root-control steady-state SC at event-loop boundary",
         );
-        if let Err(error) =
-            crate::hal::critical_tcb::activate_root_control_temporal_runtime(ctx.critical_runtime)
+        match crate::hal::critical_tcb::activate_root_control_temporal_runtime(ctx.critical_runtime)
         {
-            log::error!(
-                target: "root_task::kernel",
-                "[critical] root-control steady SC activation failed: {error:?}"
-            );
-            boot_log::force_uart_line(
-                "[critical] root-control steady SC activation failed; fail-stop",
-            );
-            loop {
-                sel4::yield_now();
+            // Milestone 26e: surrender the activation-seam remainder
+            // immediately after attaching the steady SC. The next
+            // replenishment begins with the first containment probe or
+            // EventPump phase; no output or helper may spend that first
+            // admitted root-control budget here.
+            Ok(()) => sel4::yield_now(),
+            Err(error) => {
+                log::error!(
+                    target: "root_task::kernel",
+                    "[critical] root-control steady SC activation failed: {error:?}"
+                );
+                boot_log::force_uart_line(
+                    "[critical] root-control steady SC activation failed; fail-stop",
+                );
+                loop {
+                    sel4::yield_now();
+                }
             }
         }
     }

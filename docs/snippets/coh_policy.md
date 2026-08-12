@@ -3,8 +3,8 @@
 <!-- Copyright 2026 Lukas Bower -->
 
 ### coh policy defaults (generated)
-- `manifest.sha256`: `94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329`
-- `policy.sha256`: `df273e55a818fea07aae90a7a6bdcf7d2f048a9083af89be8edc8bb6dc4b8be2`
+- `manifest.sha256`: `013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590`
+- `policy.sha256`: `d3289f3bca0cdba6c4662408b8f9638921a123d68f46f55172e726e47d6c8e4d`
 - `coh.worker.task_abi_schema`: `worker-task-abi/v1`
 - `coh.worker.task_abi_version`: `1`
 - `coh.worker.observation_schema`: `cohesix-worker-observation/v1`

@@ -303,12 +303,12 @@ GENERATED_OUTPUT_PATHS=(
     "docs/snippets/coh_policy.md"
     "apps/swarmui/src/generated.rs"
     "docs/snippets/swarmui_defaults.md"
-    "out/cohsh_policy.toml"
-    "out/cohsh_policy.toml.sha256"
-    "out/coh_policy.toml"
-    "out/coh_policy.toml.sha256"
-    "out/swarmui_defaults.toml"
-    "out/swarmui_defaults.toml.sha256"
+    "configs/generated/cohsh_policy.toml"
+    "configs/generated/cohsh_policy.toml.sha256"
+    "configs/generated/coh_policy.toml"
+    "configs/generated/coh_policy.toml.sha256"
+    "configs/generated/swarmui_defaults.toml"
+    "configs/generated/swarmui_defaults.toml.sha256"
 )
 generated_snapshot_dir=""
 generated_snapshot_ready=0
@@ -611,11 +611,13 @@ try:
             if not part:
                 break
             chunks.extend(part)
+        if len(chunks) != remaining:
+            sys.exit(1)
         data = bytes(chunks)
 except OSError:
     sys.exit(1)
 
-if b"OK AUTH" in data or b"ERR AUTH" in data:
+if data == b"OK AUTH":
     sys.exit(0)
 sys.exit(1)
 PY
@@ -859,7 +861,7 @@ prepare_qemu_artifact() {
         --output "$artifact_manifest"
         --manifest "$manifest"
         --resolved-manifest "$GENERATED_CONFIG_DIR/root_task_resolved.json"
-        --policy "$PROJECT_ROOT/out/cohsh_policy.toml"
+        --policy "$GENERATED_CONFIG_DIR/cohsh_policy.toml"
         --source-digest "$TEST_SOURCE_DIGEST"
         --sel4-build "$SEL4_BUILD_DIR"
         --sel4-profile "$selected_profile"

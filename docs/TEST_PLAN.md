@@ -301,6 +301,25 @@ The target runner consumes target proof and row observations as separate,
 caller-produced records; launching QEMU does not synthesize either record:
 
 ```bash
+python3 scripts/worker_task_evidence.py emit-qemu-target-session \
+  --repo-root . \
+  --qemu-out out/cohesix \
+  --resolved-manifest configs/generated/root_task_resolved.json \
+  --topology configs/generated/root_task_topology.json \
+  --out-dir out/<run>/session
+```
+
+The standalone emitter takes no digest arguments. It verifies the immutable
+QEMU launch record and launch bytes, exact Worker and driver archive/manifests,
+stable git-visible source bytes, Worker ABI sources, and generated-topology /
+resolved-manifest parity before creating a new output directory. It refuses
+aliases, drift, malformed archives, unignored in-repository output, and any
+existing output directory. On PASS it atomically publishes exactly
+`source-inventory.json`, `worker-abi-identity.json`,
+`qemu-cyw43-coexistence.json`, and `target-session.json`; none is direct target
+execution or acceptance evidence.
+
+```bash
 scripts/ci/host_integration_run.sh \
   --matrix configs/host_integration_acceptance.toml \
   --mode live \
@@ -355,8 +374,8 @@ release projection. A build fails if either embedded payload differs from the
 validated source or target code treats typed BootInfo FDT bytes as a CPIO.
 
 Capture each boot through macOS `script`. The ordinary preflight boot remains
-running while the operator drives Worker and service turns from another
-terminal:
+running while the operator drives Worker turns from another terminal; terminal
+service injection uses the separate fresh boots defined below:
 
 ```bash
 RUN=out/m26e-qemu
@@ -402,26 +421,42 @@ python3 scripts/worker_task_evidence.py qemu-gdb $COMMON_GDB \
   --inject-role worker-lora \
   --out "$RUN/preflight/gdb-worker-lora.log"
 
-python3 scripts/worker_task_evidence.py qemu-service-gdb \
-  --gdb "$GDB" --remote 127.0.0.1:1234 \
-  --target-session "$RUN/target-session.json" \
-  --generated-inventory configs/generated/root_task_topology.json \
-  --service ninedoor-service \
+COH_AUTH_TOKEN="$QUEEN_TOKEN" \
+TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR=out/cohesix \
+python3 scripts/ci/test_plan_converge.py \
+  --target qemu --focus ninedoor --launch-existing \
+  --state-dir "$RUN/authenticated-ninedoor"
+
+SERVICE_GDB="--gdb $GDB --remote 127.0.0.1:1234 --target-session $RUN/session/target-session.json --generated-inventory configs/generated/root_task_topology.json --qemu-out out/cohesix --auth-observation $RUN/authenticated-ninedoor/target-observation.json"
+python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
+  --service ninedoor-service --mode during-call-standard \
   --service-elf target/aarch64-unknown-none/release/nine-door-runtime \
-  --out "$RUN/preflight/gdb-ninedoor-service.log"
-python3 scripts/worker_task_evidence.py qemu-service-gdb \
-  --gdb "$GDB" --remote 127.0.0.1:1234 \
-  --target-session "$RUN/target-session.json" \
-  --generated-inventory configs/generated/root_task_topology.json \
-  --service console-network \
+  --out "$RUN/ninedoor-during-call/service.gdb.log"
+python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
+  --service ninedoor-service --mode between-calls-revoke \
+  --service-elf target/aarch64-unknown-none/release/nine-door-runtime \
+  --root-elf target/aarch64-unknown-none/release/root-task \
+  --out "$RUN/ninedoor-between-calls/service.gdb.log"
+python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
+  --service console-network --mode during-call-standard \
   --service-elf target/aarch64-unknown-none/release/console-network-runtime \
-  --out "$RUN/preflight/gdb-console-network.log"
+  --out "$RUN/console-standard-fault/service.gdb.log"
+python3 scripts/worker_task_evidence.py qemu-service-gdb $SERVICE_GDB \
+  --service console-network --mode budget-exhaustion-timeout \
+  --service-elf target/aarch64-unknown-none/release/console-network-runtime \
+  --out "$RUN/console-timeout-fault/service.gdb.log"
 ```
 
-The NineDoor runner is triggered by one ordinary Secure9P request. The
-console-network runner is triggered by one authenticated control turn, service
-reconstruction, then a second authenticated control turn. No VM command or
-namespace fault-injection authority exists.
+Each NineDoor command above attaches to its own fresh exact-artifact boot; its
+matching `service.uart.log` is frozen after terminal teardown. The first is
+triggered by one authenticated ordinary Secure9P Call. The second counts two
+successful root post-prepare returns and requests local revoke between them and
+the next Call. Console-network Standard and Timeout injection likewise use two
+distinct fresh exact-artifact boots because its containment is terminal and
+has no same-boot replacement. Each is triggered by one authenticated control
+turn; the runner neither waits for reconstruction nor attempts a second child
+handler after teardown. No VM command or namespace fault-injection authority
+exists.
 
 The four critical-duty observation hooks occur during startup, so collect them
 on a separate halted boot of the exact same image/session:
@@ -452,15 +487,23 @@ never from caller-supplied projection text.
 
 ```bash
 python3 scripts/worker_task_evidence.py collect-qemu-preflight \
-  --target-session "$RUN/target-session.json" \
+  --target-session "$RUN/session/target-session.json" \
   --generated-inventory configs/generated/root_task_topology.json \
+  --qemu-out out/cohesix \
+  --auth-observation "$RUN/authenticated-ninedoor/target-observation.json" \
   --uart "$RUN/preflight/uart.log" \
   --cohsh "$RUN/preflight/cohsh.log" \
   --gdb-log "$RUN/preflight/gdb-worker-heartbeat.log" \
   --gdb-log "$RUN/preflight/gdb-worker-gpu.log" \
   --gdb-log "$RUN/preflight/gdb-worker-lora.log" \
-  --service-gdb-log "$RUN/preflight/gdb-ninedoor-service.log" \
-  --service-gdb-log "$RUN/preflight/gdb-console-network.log" \
+  --service-gdb-log "$RUN/ninedoor-during-call/service.gdb.log" \
+  --service-gdb-log "$RUN/ninedoor-between-calls/service.gdb.log" \
+  --service-gdb-log "$RUN/console-standard-fault/service.gdb.log" \
+  --service-gdb-log "$RUN/console-timeout-fault/service.gdb.log" \
+  --service-uart "$RUN/ninedoor-during-call/service.uart.log" \
+  --service-uart "$RUN/ninedoor-between-calls/service.uart.log" \
+  --service-uart "$RUN/console-standard-fault/service.uart.log" \
+  --service-uart "$RUN/console-timeout-fault/service.uart.log" \
   --critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
   --worker-archive out/cohesix/worker-images/cohesix-worker-images.cpio \
   --driver-archive out/cohesix/driver-runtimes/cohesix-driver-runtimes.cpio \
@@ -480,14 +523,22 @@ UART/GDB pair before writing its summary and run the final semantic collector:
 
 ```bash
 python3 scripts/worker_task_evidence.py collect-qemu \
-  --target-session "$RUN/target-session.json" \
+  --target-session "$RUN/session/target-session.json" \
   --generated-inventory configs/generated/root_task_topology.json \
+  --qemu-out out/cohesix \
+  --auth-observation "$RUN/authenticated-ninedoor/target-observation.json" \
   --preflight-uart "$RUN/preflight/uart.log" \
   --preflight-gdb-log "$RUN/preflight/gdb-worker-heartbeat.log" \
   --preflight-gdb-log "$RUN/preflight/gdb-worker-gpu.log" \
   --preflight-gdb-log "$RUN/preflight/gdb-worker-lora.log" \
-  --preflight-service-gdb-log "$RUN/preflight/gdb-ninedoor-service.log" \
-  --preflight-service-gdb-log "$RUN/preflight/gdb-console-network.log" \
+  --preflight-service-gdb-log "$RUN/ninedoor-during-call/service.gdb.log" \
+  --preflight-service-gdb-log "$RUN/ninedoor-between-calls/service.gdb.log" \
+  --preflight-service-gdb-log "$RUN/console-standard-fault/service.gdb.log" \
+  --preflight-service-gdb-log "$RUN/console-timeout-fault/service.gdb.log" \
+  --preflight-service-uart "$RUN/ninedoor-during-call/service.uart.log" \
+  --preflight-service-uart "$RUN/ninedoor-between-calls/service.uart.log" \
+  --preflight-service-uart "$RUN/console-standard-fault/service.uart.log" \
+  --preflight-service-uart "$RUN/console-timeout-fault/service.uart.log" \
   --preflight-critical-gdb-log "$RUN/preflight/gdb-critical-duties.log" \
   --uart "$RUN/medium/uart.log" --gdb-log "$RUN/medium/gdb.log" \
   --pressure "$RUN/medium/pressure.summary.json" \
@@ -4495,6 +4546,8 @@ Run the canonical `scripts/m26e_qemu_pressure.sh` command in
 [BENCHMARKS.md](BENCHMARKS.md). It cleans repository `target/` and `out/`,
 rebuilds the selected SMP+MCS seL4 profile, and uses
 `scripts/cohesix-build-run.sh` for one canonical artifact build. The runner
+then invokes the standalone exact-artifact session emitter once; it does not
+synthesize source, ABI, CYW43, or target-session records inline. The runner
 hash-binds frozen collector copies, then a dedicated `-S` critical-duty
 observation and the separate medium/high four-core AArch64 `virt` boots use
 `--launch-existing`, which verifies and launches the same locked elfloader,
@@ -5063,7 +5116,7 @@ idle/trampoline entrypoint, or activation before registry seal. Critical
 permanent-domain retention caps are not grouped reclaimable untyped anchors.
 The QEMU and Pi compiler fixtures must both assert the exact `root-control`
 candidate: `2750 us / 10000 us`, `2500 us` WCET, `5100 us` response, and
-`m26e-qemu-root-bounded-runtime-unit-candidate-v11` provenance. The
+`m26e-qemu-root-exclusive-predispatch-candidate-v23` provenance. The
 QEMU root row must select
 `virtio_operator_serial_io_bytes_per_turn = 64`; the Pi root row and every
 non-root row must select zero. Validation must reject every QEMU root value
@@ -5072,7 +5125,28 @@ nonzero non-VirtIO root bound or a nonzero non-root bound. The fixtures must
 also assert the exact active `console-network-service` candidate:
 `3000 us / 10000 us`,
 `2400 us` WCET, `7500 us` response, and
-`m26e-qemu-console-one-unit-per-refill-candidate-v4` provenance.
+`m26e-qemu-console-bounded-stack-steps-candidate-v6` provenance.
+They must independently assert the exact `root-fault` candidate:
+`3000 us / 10000 us`, `2400 us` per-unit WCET, `2600 us` per-unit response,
+and `m26e-qemu-root-fault-service-units-candidate-v6` provenance. No
+fixture may reinterpret that per-unit response as the end-to-end latency of
+the terminal-critical receive/classify, suspend, and emergency-signal
+sequence.
+The fixtures must additionally preserve the target-specific supervisor
+admission split. QEMU must assert `root-worker-supervisor` at
+`3000 us / 10000 us`, `2400 us` WCET, `4800 us` response, and
+`m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15` provenance,
+and `root-driver-supervisor` at `3000 us / 10000 us`, `2400 us` WCET,
+`2400 us` response, and
+`m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15` provenance.
+Their steady active core-1 demand must be exactly `6000 us`. With the
+root-retained NineDoor bootstrap budget of `3000 us` at priority 128 below both
+supervisors, transient activation demand must equal the exact `9000 us` usable
+capacity of the `10000 us` window after its `1000 us` reserve. Pi must retain
+the earlier compiler truth unchanged: Worker supervisor
+`750/10000 us`, `600 us` WCET, `1400 us` response; driver supervisor
+`1000/10000 us`, `800 us` WCET, `800 us` response; both retain
+`m26e-qemu-candidate-v1` provenance pending the required Pi checkpoint.
 The WCET is a per-phase live candidate because the v2 whole-turn interpretation
 exhausted the complete 2750-us refill at the console-network control wake, and
 the live compact-page run at source `00bf02540` timed out `root-control` at the
@@ -5147,19 +5221,315 @@ unit composed with its pending successor on residual SC. Recovery reached
 Complete with the TCB suspended, SC unbound, mappings scrubbed, capabilities
 revoked, objects deleted, and generation fenced; NineDoor remained healthy.
 Treat this as failure evidence for the v3 child replenishment boundary, not
-containment completeness. The v11 root and v4 child candidates remain pending
-fresh canonical QEMU authentication and fault injection.
+containment completeness.
+
+The canonical v11/v4 run used root ELF SHA-256
+`44971429e4941d751248c216082256f01e187930d9a6d40028e5c89d8611b597`,
+console child ELF SHA-256
+`af08f817191cc51c9354b61f09f3eeb50c8cdf875c660c7231987a426886666d`,
+and CPIO SHA-256
+`9fbb58e1dc6dc508361f37ce0c24219e3e9029dae101e2be789df1bcb1a5b11d`.
+There were four TCP connects. The first three completed authentication attempts
+each wrote 18 bytes and read zero; the fourth connect had no completed
+authentication record. The child consumed the complete `3000 us`, raised timeout
+badge `0x26ee0007`, and stopped at PC `0x213458`, the `seL4_Yield` immediately
+after the composite `PollService` completed and cleared; saved retained state
+identified `PollService` as that completed unit. Root completed console
+containment through cursor discriminant `Complete(6)`, then consumed the
+complete `2750 us` and raised timeout badge `0x26ee0001` at PC `0xf5fbc`, the
+sole recurring outer `seL4_Yield` after an empty Operator. The stored ordinary
+successor was `Runtime`; the retained Runtime successor was `ControlEndpoint`,
+proving the previous Runtime selected `Worker`; output was empty. The child
+fault is the chronological initiating fault and the later root-control timeout
+is the fatal escalation; the emergency fail-stop is downstream, not an
+independent primary fault. V11/v4 fail the live per-unit gate and are not
+qualification evidence. Stage 03, the canonical `.coh` batch, Hive Gateway
+pressure, and complete host-tool validation remained withheld.
+
+The next non-claiming convergence run,
+`out/test-plan-convergence/v12-v5-auth-20260812T010200Z`, bound root ELF
+SHA-256 `7cec5bd582d063adc73830af8cc62e0ec8dbbb33d91bd4701db09ca69e32e6ca`,
+console child ELF SHA-256
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO SHA-256
+`dc36495a5de0df13bfb853ffa33fdc6e7ccc3bbf3a1a3c8c4cd74c8551160c16`.
+All four authentication attempts wrote 18 bytes and read zero. The only target
+timeout was root-control badge `0x26ee0001`, with exact consumption `2750 us`
+and outer-Yield PC `0xf612c`. Stored ordinary successor `Network(2)` proves the
+completed phase was Runtime; stored Runtime successor `StreamFlush(3)` proves
+the selected unit was `BootstrapDrain`, whose staged `Option` was `None`.
+Fault sequence 2 and the console child healthy at Yield-then-Wait prove no
+earlier child fault or Recovery. The result embedded dirty source commit
+`a533290ffe264f0a2bf0af3db4bb4c45d1a4a278`; repository HEAD later advanced to
+`84934dda6`. Treat the run only as immutable diagnostic/failure evidence for
+the generic Runtime-without-control prelude composed with an empty selected
+unit. It cannot qualify either source identity or any acceptance stage.
+
+The next non-claiming convergence run,
+`out/test-plan-convergence/v13-v5-auth-20260812T014607Z`, bound dirty source
+commit `84934dda6fcffbfa536d4e437cc1904c7fdeb0b1`, root ELF SHA-256
+`0275cd7d701263cc1731ca3301d9aeab8a0393651745659f192106a0d558d78f`,
+the unchanged v5 child SHA-256
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO SHA-256
+`142e2aec64662888a9872ff77ff85d1f5f7c351b7aaa478ded8cf99ba9e64f29`.
+All four authentication attempts wrote 18 bytes and read zero, and the first
+failed proof layer was `real-target-operation`. The initiating timeout was
+root-control badge `0x26ee0001` at `sel4::poll` SVC PC `0xce98c`, with caller
+`0x108910` immediately after the child-to-root notification poll inside
+`IsolatedVirtioConsole::poll`. Committed ordinary successor `Operator` and
+lower successor `StageOutput` identify selected unit `ObserveChild`. The child
+remained healthy at `seL4_Wait`. Root-fault then timed out with badge
+`0x26ee0002` at `suspend_tcb` SVC PC `0xce0cc` while targeting root-control TCB
+cap `0x10`; root-emergency fail-stop was downstream. Treat this only as
+diagnostic failure evidence for v13's generic Network-prelude/all-unit adapter
+path and v2's composed terminal-critical containment. It does not qualify or
+falsify child v5.
+
+The exact v16 image bound root ELF SHA-256
+`4fab7abc8707b9829ba66ac525efdfc7afefa812df4bab9abb8cb67d504a76a6`
+and system CPIO SHA-256
+`456558cac05e4d136d3cbc18d1290cc48bebf619ba5459cd623b667dbfff3e96`.
+The prompt serial/output completed, but root-control consumed the complete
+`2750 us` and raised timeout badge `0x26ee0001` at outer-Yield PC `0xf61c4`.
+Saved successors `Runtime` and `ControlEndpoint` identify the completed phase
+as Operator and the earlier Runtime unit as Worker. Exact target disassembly
+showed an approximately `0x42c0`-byte generic EventPump frame and an
+approximately `0x12a0`-byte generic Operator frame still preceded the retained
+output leaf. Root-fault then consumed the complete `3000 us` at the first
+post-classification Yield, PC `0x113938`, before suspension or emergency
+signalling. Treat both as diagnostic failure evidence for v16 root-control and
+v3 root-fault, not child-v5 or interface failure.
+
+The exact v17 non-claiming run
+`out/test-plan-convergence/v17-v4-auth-20260812T041428Z` bound root ELF
+SHA-256 `3d0641bac42d21ce383c47f38628a05db0d2474fab69fc6e14b67ba39a71bd47`,
+the unchanged v5 child SHA-256
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO SHA-256
+`fa478638d6d2b93b654a2615e4dcd1e1d7f666d0945d4e012adcf28da2292af1`.
+All four authentication attempts wrote 18 bytes and read zero, and the first
+failed proof layer was `real-target-operation`. Current fault `.1` was
+root-control at outer-Yield PC `0xf6624`; saved ordinary, Runtime, and Operator
+successors were `Runtime`, `Worker`, and `SerialDispatch`. Treat this as exact
+failure evidence that v17 reached its compact successor-before-work path but
+still composed serial driver admission/RX and TX flush inside `SerialIo`. It
+does not qualify or falsify root-fault v4 or child v5.
+
+The exact v18 non-claiming artifact bound root ELF SHA-256
+`e7d34f018ff308c575fedb79ca7cef5542a7da8e753c09ddb9d55cf9daa79d4e`
+and system CPIO SHA-256
+`0dca41cc6fdd9a877144dcd2db610beaeafef95423a81ce6896b01bb9b8f5cf5`.
+All four authentication attempts wrote 18 bytes and read zero. Root-control
+consumed exactly `2750 us` and raised timeout badge `0x26ee0001` at outer-Yield
+FaultIP `0xf66e4` after a completed Network phase. The ordinary successor was
+`Operator(0)`; isolated lower successor `Disconnect(2)` proves selected unit
+`StageOutput(1)`. Pending egress was zero, deferred diagnostic state was `2`,
+and no child signal occurred. Root-fault timeout `.2` at `suspend_tcb` SVC PC
+`0xce1f4`, with its retained cursor already `SignalEmergency`, was downstream.
+Treat this as exact failure evidence for the v18 split Network prelude, not its
+Operator split, root-fault v4, or child v5.
+
+The exact clean v19 non-claiming artifact bound root ELF SHA-256
+`0737a6f008197fd5b931af104c95164ddcd925fa04a8440439895c1e76b26fca`
+and system CPIO SHA-256
+`51e7b955b449b42b7a0cad569aa187e19a0f71464ffb81080d29733a589e7ed0`.
+All four authentication attempts wrote 18 bytes and read zero. Root-control
+timed out at outer-Yield PC `0xf66dc` after a completed Network phase. Lower
+successor `Ingress(3)` proves selected `Disconnect(2)` was a no-op and did not
+signal the child. Pending egress was empty, the child remained healthy at Wait
+PC `0x21343c`, and root `smoltcp_polls` was `250098`. Treat this as exact
+failure evidence for the composed post-leaf counter refresh, NETDIAG, and
+NineDoor ingest aggregate. It does not falsify the timer prelude, selected NIC
+unit, root-fault v4, or child v5.
+
+The exact immutable v20 launch set bound root ELF SHA-256
+`ed5cb9f587d0d63e6121f8b00b083e68f5a0a7dd23dd6d2bbf0c899e1e85e80f`,
+system CPIO SHA-256
+`ca2a52038eb0814a17c8609f03bec32ff357fdd524edee3e7080ac69ceb7823b`,
+kernel SHA-256
+`865b5a0614f1633ca636800705f97339e78f47065fdaffd2cb4139e4a25630c0`,
+and resolved-manifest SHA-256
+`6dd92e0015a1ec7c14af5321fc35ebc9143673dbe71b09766a83bf3b77a36e0a`.
+Its four authentication attempts wrote 18 bytes and read zero. A same-artifact
+no-input run reached the root marker and prompt before root-emergency
+fail-stop. Root-control timeout `.1` was at outer-Yield PC `0xf680c`; successor
+Operator and retained NETDIAG `Some` prove the timer-plus-NIC visit completed
+and the diagnostic successor had not run. Exact lower-cursor, pending-egress,
+and child state are unconfirmed; stale layout offsets cannot qualify them.
+Treat this only as failure evidence for composing Timer and Nic in one Network
+visit. It does not falsify the selected NIC/lower unit, exclusive diagnostic
+visit, child v5, root-fault v4, or v15 supervisors.
+
+The exact immutable v21 launch set
+`out/cohesix-v21-qemu-20260812T070200Z` bound root ELF SHA-256
+`c3d45ee5650373ed6064de1a7d13691d9473f300ac5ffec11d0f1719ab877de2`,
+system CPIO SHA-256
+`4d164fcc7c9a3605d3d5ca7430895e3cf911f4a294ddb0432d8afafb0966ed64`,
+console child ELF SHA-256
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and kernel SHA-256
+`865b5a0614f1633ca636800705f97339e78f47065fdaffd2cb4139e4a25630c0`.
+The official non-claiming run
+`out/test-plan-convergence/v21-v4-auth-20260812T070901Z` bound dirty commit
+`bf77d71946e958c5a4671db1c4f5bd9edd959aae`, source digest
+`sha256:1b9cbf5125e24c9e36741bfc558d9d5a50cf5f193a4840158a007ab00ac11251`,
+and failed first at `real-target-operation`. It and the controlled exact-image
+run `out/live-diag/v21-20260812T071219Z` each completed four authentication
+attempts that wrote 18 bytes and read zero. The controlled run remained healthy
+at the prompt without TCP input; AUTH then reproduced terminal child timeout
+current-fault `[0x5, 0x26ee0007]`. The child consumed the full `3000 us` refill
+and stopped at post-unit `seL4_Yield` FaultIP `0x213434`. Retained
+`service_pending=1`, `control_pending=1`, and `ingress_pending=0`, combined
+with the v5 successor-before-work contract, prove completed `StackPoll`
+returned `Continuation` with `Session` committed next. Smoltcp 0.13.1
+explicitly documents `Interface::poll` as potentially unbounded because it
+loops ingress and egress. Record this only as exact failure evidence for child
+v5; it does not falsify the v21 root boundary, root-fault v4, or v15
+supervisors.
+
+The exact immutable V22 launch set
+`out/cohesix-v22-qemu-20260812T074004Z` bound root ELF SHA-256
+`d392ee72ada945f5b5ae52e4dee285ed3e7ff67fa9283103a234af9d15e389fc`,
+system CPIO SHA-256
+`7055a956cf84cbaa2c6b00b8c9fe59d73c52c7cd157e07b66960434ac66af64c`,
+console child ELF SHA-256
+`89c241b6198a140170744b02b707a6000486acf39dee0799a302d74605fde52b`,
+and kernel SHA-256
+`865b5a0614f1633ca636800705f97339e78f47065fdaffd2cb4139e4a25630c0`.
+Non-claiming run `out/test-plan-convergence/v22-v4-v6-auth-20260812T074300Z`
+bound dirty commit `bf77d71946e958c5a4671db1c4f5bd9edd959aae` and source digest
+`sha256:4f7473411494f351def533a52e6bf8e3f02037b75c8945992171a16108cf7c28`;
+all four authentication attempts wrote 18 bytes and read zero. Controlled
+exact-image AUTH recorded initiating root-control timeout badge `0x26ee0001`.
+Root-control was inactive at FaultIP/NextIP `0xe9ddc`, before the outer
+phase-successor store after composed response reconciliation and prompt-tail
+queueing; retained phase Operator proves no phase leaf ran. The child remained
+healthy at `seL4_Wait` after `StackEgress`, with Session committed,
+`service_pending=1`, `ingress_pending=1`, and `control_pending=0`.
+
+The same snapshot recorded secondary root-fault timeout badge `0x26ee0002` at
+FaultIP/NextIP `0x113e70`, immediately after the Receive turn's terminal Yield
+SVC at `0x113e6c`. LR `0x113e5c` followed publication of initiating label `5`
+and badge `0x26ee0001`; Classify was already committed. Record these as exact
+failure evidence for v21's composed predispatch and root-fault v4's unprimed
+first Receive respectively, not as child v6 failure or qualification evidence.
+
+The v23 root-control, V6 root-fault, v6 child, and unchanged v15 supervisor
+candidates must start with a
+fresh canonical QEMU convergence canary through authentication and
+standard/timeout fault injection. Stop at its first failed target layer; run
+the focused deterministic regressions below only after the target canary
+reaches the changed live path. For the shortest target-first integration path,
+then run the focused direct base `.coh` batch, Hive Gateway REST core/parity
+batches plus the Python smoke, and Conditional D's no-retry `telemetry-1mb`,
+`telemetry-10mb`, `telemetry-100mb`, and `telemetry-1gb` matrix. Broad host closure and complete staged
+acceptance follow only after convergence passes.
+
+Compatibility review for v23/root-fault-V6/child-V6 and bounded NineDoor containment covers
+`cohsh`, `coh`, all `.coh` scripts, SwarmUI, Hive Gateway,
+`tools/cohesix-py`, `m26e_qemu_pressure.sh`, and `rest_perf_harness.py`. The
+repairs change no verb, frame, ACK/ERR/END state, namespace or authority path,
+timeout, quota, benchmark workload, retry policy, evidence record, or report
+schema, so those implementations and fixtures require no hand-authored change.
+The NineDoor cursor changes only target recovery scheduling. V23 preserves
+v21's separate Timer and Nic visits plus the exclusive NETDIAG visit. Successful
+predispatch housekeeping returns before phase selection; bounded backpressure
+may run exactly one Operator unit without ordinary-phase advance. The NIC still
+runs once per three featured Network visits; the
+unchanged performance workload must therefore be rerun rather than assumed equivalent. Their
+compiler-owned default/QEMU/Pi projections must still regenerate exactly; any
+unexplained drift blocks the target canary.
+
+The intervening v14 artifact set at
+`out/cohesix-v14-qemu-20260812T021853Z` bound root ELF SHA-256
+`4265ee26a8a23b38851167aa046f4adce50764715131d044059b4e08211b9361`,
+system CPIO
+`85a1e211f5cb83ad8ace277d0a4cfe89c22317ffa148e0aeae64611f1bd315d6`,
+kernel
+`865b5a0614f1633ca636800705f97339e78f47065fdaffd2cb4139e4a25630c0`,
+driver archive
+`88a3a9f1df93cb560501ac13275efb20b52985db8878b54372e29a397539474d`,
+and driver manifest
+`ef168c902062ff1c9f08208bc1eadf92773991ee2ce297a28da5ee26e2cfa385`.
+It failed before authentication: `root-worker-supervisor` first exhausted its
+complete `750 us` refill at entry PC `0x1143dc`, timeout badge `0x26ee0004`;
+root-fault received that record, then `root-driver-supervisor` exhausted its
+complete `1000 us` refill at entry PC `0x113d98`, current timeout badge
+`0x26ee0005`. Both generated rows select core 1. Compiler and kernel source
+inspection confirms the core-specific SchedControl ConfigureFlags operation
+precedes SC binding and the MCS bind migrates each TCB to the SC core; a direct
+`TCB.SetAffinity` call is neither required nor valid evidence under MCS. Treat
+this only as cold first-activation failure evidence for the v14 supervisor
+  envelopes. The following v15 image proved both QEMU supervisors reached their
+  healthy blocking waits; it does not qualify Pi, whose supervisor values remain
+  unchanged pending its required image-bound checkpoint.
+
+The following v15 non-claiming convergence run bound dirty source HEAD
+`84934dda6`, root ELF SHA-256
+`6c145a1d81bd57e791781a052f62dfc6dd5d34c7c7ca0aa4e3311a9b5696018c`,
+system CPIO SHA-256
+`07b84ff5dc2a40e2b9039d49b1e37bb88824909fe2fd902c9dd0165b4a643529`,
+and resolved-manifest SHA-256
+`46f3264e862944b84188064941bd581e60a78d80d9a7590dfe4b42fcfa3e7482`.
+Root-control consumed exactly `2750 us` and raised timeout badge
+`0x26ee0001` at the outer `seL4_Yield` after the second retained-output
+Operator emitted and cleared the initial prompt. Saved successors `Runtime`
+and `ControlEndpoint` prove the prior Runtime selected `Worker`; the output
+cursor and FIFO were clear. The entry-time TX snapshot nevertheless kept the
+completed-output Operator on the generic Runtime tail. Root-fault then consumed
+exactly `3000 us` and raised `0x26ee0002` at the return from the
+`SignalEmergency` send. Root-emergency received that signal, emitted its
+fail-stop line, and remained healthy in its terminal yield. Both v15
+supervisors were healthy at `seL4_Wait`, so their cold-activation repair reached
+user entry. Treat this only as failure evidence for root-control composition;
+the v16 root provenance recorded the QEMU-only exclusive retained-output cut.
+The later exact v16 failure above showed that cut still entered the generic
+EventPump and Operator frames. All timing, schema, child v5, supervisor v15,
+capability, ABI, and authority values remain unchanged. Fresh v20/v4 QEMU
+authentication and standard/timeout injection remain required before Stage 03
+or pressure.
 
 The ordinary EventPump regression must prove the QEMU-only cyclic order
 Operator/Dispatch -> Runtime/IPC -> Network -> Operator/Dispatch, exclusive
 per-phase ownership, successor commit before every early return, and the sole
-recurring outer `seL4_Yield` between phases. The QEMU Runtime regression must
+recurring outer `seL4_Yield` between phases. The retained v17 dispatcher
+regression must
+first prove the public EventPump entry selects the exact isolated VirtIO path
+before the generic EventPump frame can be allocated. Its tiny noinline phase
+dispatcher must never call `poll_generic`, `poll_ordinary_operator_turn`, or a
+generic Runtime body. Operator begins the existing shared `64`-byte serial and
+one-record output credits, performs the bounded serial probe, and admits at
+most one eligible material noinline leaf in this exact strict-priority order:
+SerialIo/SerialDispatch, LocalSeat, response-ordered RetainedOutput, NetEvent,
+NetLine, background/high-impact RetainedOutput, then DisplayAttach. The v18
+serial regression must prove `SerialIo` performs exactly one bounded RX-only
+probe, never flushes TX or dispatches input, suppresses the raw-UART RX trace
+only while the admitted ordinary root-control turn is active, and retains `SerialDispatch` when
+entry TX or admitted input is present. A later Operator must select that
+retained `SerialDispatch` before a new probe, commit `RetainedOutput`, perform
+bounded serial consume/echo plus TX flush, and return without another material
+leaf. An idle RX-only probe restores `SerialIo` eligibility before continuing
+the unchanged priority selector. Each
+material leaf must commit its recorded successor before work. An idle compact
+Operator must return directly; Pi, linked-runtime, physical-owner, and other
+non-VirtIO counterfactuals must enter the unchanged generic path. Target
+disassembly must show that the selected compact call chain cannot reach the
+generic v16 EventPump or Operator frames. The QEMU Runtime regression must
 prove one persistent Worker -> ControlEndpoint -> BootstrapDrain -> StreamFlush
 -> RebootTail cursor and exactly one selected unit per Runtime visit, including
-an idle/no-op. Worker performs at most one work item or idle check; no visit may
-search another Runtime unit for work. The successor commits before return, and
-Recovery preserves it. The MCS fault-endpoint poll must compile to a no-op and
-consume no cursor unit. StreamFlush must use one visit per earlier retained
+an idle/no-op. Worker must consume one pending mailbox operation or check one
+retained Heartbeat/GPU/LoRA role slot; ControlEndpoint must perform at most one
+poll and its immediate forward; BootstrapDrain must take one staged `Option`;
+RebootTail must own its visit. No visit may search another Runtime unit for
+work. The successor commits before the compact isolated-VirtIO Runtime prelude,
+and Recovery preserves it. That compact prelude must read the HAL timebase and
+perform one timer poll. An observed tick must update `now_ms`, increment the
+timer metric, publish HAL timebase, and run the existing conditional timer
+trace; without a tick, `now_ms` must take the read timebase. It must then
+reconcile CYW43 network-ready HDMI state and must not execute the generic
+Runtime-without-control tail. The MCS fault-endpoint poll must be absent from the
+cursor. StreamFlush must use one visit per earlier retained
 line, one visit for the retained final line, a later selected no-line visit for
 cursor/bandwidth finalization only, and the following selected visit for END
 only. Tests must reject a line plus finalization, finalization plus END, or two
@@ -5184,6 +5554,42 @@ remain immediate. Tests must prove TX descriptor
 initialization, avail publication, optional notify, and in-flight identity commit
 are atomic; there is no post-publication buffer write, completion wait, duplicate
 publication, or head reuse before bounded reclaim.
+The v23 compact-predispatch behavior guard must prove that TailInFlight invokes
+one response-barrier reconciliation and returns immediately if the barrier
+clears; if it remains in flight, exactly one compact Operator unit runs and the
+turn returns. An eligible prompt likewise invokes one queue attempt and returns
+if `stream_prompt_pending` clears; bounded queue backpressure permits exactly
+one compact Operator unit before return. Both outcomes preserve the ordinary
+phase plus Runtime and Network cursors; only a fallback Operator subcursor may
+advance. Ready reboot remains an exclusive pre-phase return. Only when none of
+those duties applies may the dispatcher read and commit the ordinary phase and
+run one phase leaf. Generic and Pi behavior and adjacent helper ordering remain
+unchanged.
+The v21 Network source guard must additionally prove that, when no retained
+postlude exists, `poll_split_ordinary_virtio_network_turn` reads
+`OrdinaryVirtioNetworkUnit::{Timer, Nic}`, commits `unit.next()` before work,
+and executes only that selected unit. Timer must call exactly
+`poll_runtime_timer_prelude`; Nic must call exactly one
+`poll_one_split_ordinary_virtio_network_unit`, retain one compact observation
+containing telemetry plus originating `now_ms` and last-RX-progress horizon,
+and return. The former composite Network-prelude helper must be absent. Neither
+unit may enter `poll_runtime_inner`, command dispatch, the generic Runtime tail,
+or `reconcile_cyw43_network_ready_hdmi`; the distinct split Runtime prelude
+retains timer/timebase update plus CYW43-ready HDMI reconciliation. A retained
+observation must be taken before the Timer/Nic cursor is read or advanced;
+counters are sampled after the intervening exact compact Operator and Runtime
+visits, only NETDIAG runs, and the visit returns without timer or NIC work.
+Immediate flush accounting, connection identity, and NineDoor ingest
+accounting remain in the Nic visit unchanged. Quarantine clears the retained
+observation but preserves the Timer/Nic cursor. Generic/Pi Runtime and Network
+behavior remains unchanged. `select_isolated_network_turn` must commit the ordinary lower
+successor before dispatch to one distinct noinline
+`poll_{deferred_diagnostic,transmit_egress,observe_child,stage_output,disconnect,ingress,service_tick}_unit`
+adapter; successful child signal may then force the retained cursor back to
+ObserveChild. ObserveChild must not compile through one closure containing all
+seven unit bodies. Console lifecycle-event admission moves to Operator and is
+bounded to at most one event per Operator visit; Network may retain the event
+but may neither drain it nor dispatch policy in the same visit.
 
 The Operator serial regression must instantiate exactly one generated `64`-byte
 I/O credit at isolated VirtIO Operator entry and share it across every
@@ -5202,6 +5608,23 @@ the next Operator, and helper re-entry cannot admit another record. The
 zero-bound Pi/non-VirtIO regression must preserve the existing two-record
 attempt limit and its prior phasing.
 
+The v12 isolated-QEMU Operator regression must require both the split VirtIO
+path and a nonzero `OrdinaryVirtioConsoleOutputTurn` selector. After the first
+bounded serial poll, local-seat priority consume, serial consume/flush, and one
+buffered authenticated-line dispatch attempt, it must build the private pure
+`OrdinaryVirtioOperatorWork` snapshot with exactly these fields:
+`serial_input`, `serial_output`, `local_seat_input`,
+`dispatchable_network_line`, `pending_console_output`, `physical_response`,
+`stream_or_tail`, `reboot`, `serviceable_display`, `serviceable_frontier`, and
+`serviceable_attach`. When `is_empty()` is true, the turn must return before
+`poll_runtime_without_control_tail` and all repeated serial, local-seat,
+output, display, attach, and frontier probes. A real value in any field must
+prevent the cut. Raw post-prompt/frontier flags without an attached
+`LocalSeatRuntime`, quarantine/terminal status itself, timer/Runtime/Network
+work, and global atomic or HAL hints must not manufacture work. Zero-selector,
+Pi, and non-VirtIO counterfactuals must retain their existing behavior, and the
+ordinary and Runtime successors must remain unchanged.
+
 The active child regression must prove that one active-MCS replenishment closes
 at most one logical unit in retained-first priority: completion publication,
 service-event publication, egress publication, service-poll continuation, new
@@ -5213,6 +5636,20 @@ caused by replenishment plus the existing root service tick and notification;
 retained scheduler state must survive. Terminal revoke/shutdown must use only
 its wait-only park. Tests must reject zero or two active yields, Wait-before-Yield,
 a new cap, ABI/schema change, or numeric timing drift.
+Within the retained `ChildTurnUnit::PollService`, the v6 child regression must
+prove a private `ServicePollUnit::StackIngress ->
+ServicePollUnit::StackEgress -> ServicePollUnit::Session` cursor and public
+`ServicePollOutcome::{Continuation, Complete}`. The successor must commit
+before the selected work. `StackIngress` performs exactly one
+`Interface::poll_ingress_single` call and returns `Continuation`;
+`StackEgress` performs exactly one `Interface::poll_egress` call and returns
+`Continuation`. The kernel retains `scheduler.service_pending`, executes the
+existing Yield-then-Wait seam, and later dispatches the successor. `Session`
+owns connection/session RX, tick, TX, close, and relisten work and returns
+`Complete`; only `Complete` clears `service_pending`. Errors must not call
+scheduler completion. Retained completion, event, or egress publication may
+preempt either pending stack successor without losing it, and coalesced badges
+remain hints rather than permission to compose poll units in one refill.
 
 Before each selected phase, the regression must prove
 console-network mailbox precedence and permit a NineDoor probe only when the
@@ -5295,6 +5732,38 @@ wrong, aliased, or duplicate release and any attempt to reuse the Reply while
 associated. Only an explicitly generated `replenish-once` timeout may reply
 once; the current allowlist is empty. Root-fault faults route to
 root-emergency, and root-emergency has no recovery edge.
+For terminal critical-domain and service faults, the source and behavior guard
+must prove private `FaultReplyDisposition::CriticalTerminal { task_index }` and
+the Copy cursor `RootFaultCriticalTurn::{PrimeReceive, Receive, Classify,
+ResolveService, SuspendService, RecoverPassiveService, PublishService,
+SuspendCritical, SignalEmergency}`. The atomic default must map to
+`PrimeReceive`. That one-time turn must commit Receive before exactly one Yield
+and contain no receive, Reply-cap use, copied fault value, classification,
+TCB-cap lookup, suspend, or emergency signal. `Receive` must commit `Classify` before the
+blocking receive, copy only label and badge into the value-only pending record,
+and yield without classification or TCB-cap lookup. A fresh `Classify` turn
+must consume that record exactly once. `Released` must yield before another
+Receive; `RetainedByDriver` must wait for and validate the exact release badge
+and cleared busy state, then yield; `CriticalTerminal` must commit
+`SuspendCritical` and yield before cap lookup or suspension. A fresh
+`SuspendCritical` turn must commit `SignalEmergency` before the exact
+child-local TCB-cap lookup and `suspend_tcb`, then yield; a fresh
+`SignalEmergency` turn must commit `Receive`, signal root-emergency, and yield
+before blocking receive can execute again. The single Reply association remains
+serialized through every boundary. `handle_target_fault` must contain no yield,
+and Worker, driver, and recoverable semantics must remain unchanged. A service
+classification must commit `ResolveService` and yield. `ResolveService` must
+perform exactly one fixed generated lookup plus a nonblocking registry
+lock/scalar snapshot, retain the copied fault and retry itself on contention,
+and otherwise commit `SuspendService`. `SuspendService` must perform one quiet
+bounded suspend syscall and select `RecoverPassiveService` only for a passive
+service with a donated Call; active console must select `PublishService`
+directly. `RecoverPassiveService` may issue at most one recovery Reply and then
+commit `PublishService`. `PublishService` performs one mailbox action, retains
+the snapshot on backpressure, and commits `Receive` only after publication.
+The focused source guards are
+`root_fault_cold_activation_primes_receive_before_any_fault_association` and
+`terminal_critical_fault_commits_one_resumable_action_per_refill`.
 
 NineDoor and temporal-contract schema tests must require
 `root_task.schema = "1.11"` and reject schema 1.10 or older. They must admit
@@ -5375,13 +5844,46 @@ post-validation marker
 `[ninedoor-service] passive child active bootstrap-sc=unbound recovery-reply=installed`,
 with no NineDoor `TCB.SetAffinity`/affinity-failure marker, then complete at
 least two ordinary namespace requests so the first and repeated passive
-donation/atomic-`ReplyRecv` cycles are both live. Inject a NineDoor standard
-fault both during one donated Call and between Calls. The first must return one
-typed failure before containment; the second must issue no Reply. Neither may
-leave the donor blocked, admit a second Reply, preserve old mappings/caps, route
-the active console through the passive path, or stop root-control progress.
+donation/atomic-`ReplyRecv` cycles are both live. Before any injection, one fresh
+exact-artifact boot must produce a non-claiming `ninedoor` convergence `PASS`,
+including the live authenticated-cohsh UART marker and canonical `9p_batch.coh`
+operation. The service runner must bind that frozen observation, UART, QEMU
+launch record, emitted four-file target-session bundle, service ELF, root ELF
+where used, and every byte count/SHA-256 before it may attach GDB.
+
+Use two additional fresh exact-artifact boots because terminal NineDoor has no
+replacement. In the first, redirect the live child request handler to its
+standard-fault hook while a donated Call is active; that Call must return one
+typed failure before containment. In the second, allow two ordinary Calls to
+complete, stop at the root's post-prepare evidence hook after the second Reply
+has returned the donated SC and the child is blocked in atomic `ReplyRecv`, and
+request a root-local `NamespaceServiceBoundary` revoke. Root must consume that
+flag in its normal control path before another Call. This is the mandatory
+between-Calls no-Reply-association case; it is not, and must never be reported
+as, a child standard fault. Neither path may leave a donor blocked, admit a
+second Reply, preserve old mappings/caps, route the active console through the
+passive path, or stop root-control progress.
+Source and behavior guards must prove that the first exclusive root-control
+Recovery turn only consumes the durable fault record, fences new Calls, retains
+the four shared mappings, initializes the cursor at `SuspendTcb`, and returns
+`InProgress`. Later Recovery turns must select exactly these 18 units in order:
+`SuspendTcb`; request 0 `ScrubCleanRequestFrame`, `UnmapRequestFrame`; request 1
+with the same two units; response 0 `UnmapResponseRead`,
+`MapResponseWritable`, `ScrubCleanResponseWritable`,
+`UnmapResponseWritable`; response 1 with the same four units;
+`RevokeRecoveryReply`; `DeleteFaultCap(0)`; `DeleteFaultCap(1)`;
+`RevokeAnchor`; and pure `Finalize`. Each selected unit must expose its
+successor before work and restore only itself after a synchronous error.
+Scrub/clean must use the bounded lock-free cache path, each writable response
+remap must issue exactly one `Page_Map`, and Reply/fault-cap deletion must use
+quiet bounded operations. `Finalize` must only advance to `Complete`; the next
+idempotent `Complete` turn publishes the exact five-field proof, and removal is
+permitted only after that proof. `InProgress`, incomplete proof, and error must
+all consume the exclusive Recovery refill and fence ordinary EventPump work.
+These are common MCS QEMU/Pi containment semantics. Ordinary Pi scheduling is
+unchanged, but fresh Pi containment evidence is still required separately.
 This QEMU qualification is still pending; the marker or a successful boot alone
-does not satisfy the gate.
+does not satisfy this gate and cannot qualify Pi containment.
 
 ### Milestone 26e console-network service-isolation gate
 
@@ -5497,10 +5999,75 @@ second fresh Runtime consumed the full `2750 us` and raised root timeout badge
 run recorded child timeout sequence 1, badge `0x26ee0007`, Terminal, with the
 child at `seL4_Wait`, `service_pending = 1`, and `control_pending = 1`.
 Recovery reached the six-field Complete proof and NineDoor stayed healthy. The
-v11 root and v4 child candidates must repeat authentication and standard/timeout
-fault injection before Stage 03, Hive Gateway pressure benchmarks, or complete
+next canonical v11/v4 run bound root ELF
+`44971429e4941d751248c216082256f01e187930d9a6d40028e5c89d8611b597`,
+console child ELF
+`af08f817191cc51c9354b61f09f3eeb50c8cdf875c660c7231987a426886666d`,
+and CPIO
+`9fbb58e1dc6dc508361f37ce0c24219e3e9029dae101e2be789df1bcb1a5b11d`.
+There were four TCP connects. The first three completed authentication attempts
+each wrote 18 bytes and read zero; the fourth connect had no completed
+authentication record. The child consumed `3000 us`, raised `0x26ee0007`, and
+stopped at PC `0x213458`, the `seL4_Yield` immediately after the composite
+`PollService` completed and cleared; saved retained state identified
+`PollService` as that completed unit. After
+containment reached `Complete(6)`, root consumed `2750 us` and raised
+`0x26ee0001` at outer-Yield PC `0xf5fbc` after an empty Operator, with
+successors `Runtime` and `ControlEndpoint` and empty output. Record this only as
+v11/v4 failure evidence. The later v12/v5 non-claiming run bound root ELF
+`7cec5bd582d063adc73830af8cc62e0ec8dbbb33d91bd4701db09ca69e32e6ca`,
+child ELF
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO
+`dc36495a5de0df13bfb853ffa33fdc6e7ccc3bbf3a1a3c8c4cd74c8551160c16`.
+Its four authentication attempts each wrote 18 bytes and read zero. Root was
+the only timeout: badge `0x26ee0001`, exact `2750 us`, outer-Yield PC
+`0xf612c`, ordinary successor `Network(2)`, Runtime successor
+`StreamFlush(3)`, and empty staged bootstrap `Option`. Fault sequence 2 and the
+healthy child at Yield-then-Wait exclude child failure or Recovery. Because the
+run embedded dirty commit `a533290ffe264f0a2bf0af3db4bb4c45d1a4a278` and
+HEAD later advanced to `84934dda6`, record it only as diagnostic failure of the
+generic Runtime-without-control prelude plus empty `BootstrapDrain`. The v13
+root and v5 child candidates were therefore required to repeat target proof.
+The subsequent v13/v5 non-claiming run bound dirty commit
+`84934dda6fcffbfa536d4e437cc1904c7fdeb0b1`, root ELF
+`0275cd7d701263cc1731ca3301d9aeab8a0393651745659f192106a0d558d78f`,
+the unchanged child ELF
+`920883c5e706688a65e7f168a643dbc527d09d7f48584bfb41fbd0c0ae823cb6`,
+and CPIO
+`142e2aec64662888a9872ff77ff85d1f5f7c351b7aaa478ded8cf99ba9e64f29`.
+All four authentication attempts wrote 18 bytes and read zero. Root-control
+initiated failure with badge `0x26ee0001` at child-notification `sel4::poll`
+SVC PC `0xce98c`, caller `0x108910`; successors `Operator` and `StageOutput`
+identify `ObserveChild`. The healthy v5 child remained at `seL4_Wait`.
+Root-fault then raised badge `0x26ee0002` at `suspend_tcb` SVC PC `0xce0cc`
+against root-control cap `0x10`; emergency fail-stop followed. Record this only
+as diagnostic failure of v13 root-control and v2 root-fault.
+
+The exact clean v19 artifact bound root ELF
+`0737a6f008197fd5b931af104c95164ddcd925fa04a8440439895c1e76b26fca`
+and CPIO
+`51e7b955b449b42b7a0cad569aa187e19a0f71464ffb81080d29733a589e7ed0`.
+Four authentication attempts each wrote 18 bytes and read zero. Root-control
+timed out at outer-Yield PC `0xf66dc` after completed Network. Lower successor
+`Ingress(3)` proves selected `Disconnect(2)` was a no-op without child signal;
+pending egress was empty, the child was healthy at Wait PC `0x21343c`, and
+root `smoltcp_polls` was `250098`. Record this only as failure evidence for the
+post-leaf counter-refresh, NETDIAG, and NineDoor aggregate. The v23/root-fault-V6/child-V6
+target canary must repeat authentication and standard/timeout injection before
+Stage 03, Hive Gateway pressure benchmarks, broad host closure, or complete
 host-tool validation proceeds; none of the prior failures is qualification
 evidence.
+
+The exact v20 root/CPIO hashes were
+`ed5cb9f587d0d63e6121f8b00b083e68f5a0a7dd23dd6d2bbf0c899e1e85e80f`
+and `ca2a52038eb0814a17c8609f03bec32ff357fdd524edee3e7080ac69ceb7823b`.
+That image reached the marker and prompt, then root-control timed out at
+outer-Yield PC `0xf680c`. Successor Operator and retained NETDIAG prove timer
+plus NIC completed and the diagnostic had not run. Lower-cursor, egress, and
+child state remain unconfirmed. Record this only as failure evidence for the
+v20 Timer/Nic composition; it does not qualify or falsify the exclusive
+diagnostic, selected lower unit, child v5, root-fault v4, or v15 supervisors.
 
 Child tests cover partial and oversized frames, malformed authentication,
 constant-time token acceptance, command release only after `AUTH`, one-packet
@@ -5516,9 +6083,17 @@ within an admitted ordinary phase. Operator gives pending physical input/output
 priority and dispatches at most one buffered network line; Runtime/IPC alone
 selects one persistent Worker -> ControlEndpoint -> BootstrapDrain ->
 StreamFlush -> RebootTail unit with serial and network command ingress
-suppressed. Worker performs at most one work item or idle check, each no-op
-still consumes its selected visit, and the successor is retained. The MCS fault
-poll consumes no unit. StreamFlush emits at most one retained line per selected
+suppressed. Worker consumes one pending mailbox operation or checks one retained
+Heartbeat/GPU/LoRA role slot; ControlEndpoint performs at most one poll and its
+immediate forward; BootstrapDrain takes one staged `Option`; RebootTail owns its
+visit. Each no-op still consumes its selected visit, and the successor commits
+before the compact isolated-VirtIO Runtime prelude. The prelude reads HAL
+timebase and polls the timer once. An observed tick updates `now_ms`, increments
+the timer metric, publishes HAL timebase, and runs the existing conditional
+trace; without a tick, `now_ms` takes the read timebase. It then reconciles
+CYW43 network-ready HDMI state; the generic
+Runtime-without-control tail must be absent. MCS fault polling is absent from
+the cursor. StreamFlush emits at most one retained line per selected
 visit; the visit after the final line performs cursor/bandwidth finalization
 only and the following selected visit emits END only. Legacy Pi/non-VirtIO
 Runtime retains its 48-line/16-KiB path. Network alone
@@ -5537,8 +6112,22 @@ exhausted. Entry-time TX backlog must reserve `32` bytes for TX and cap RX at
 `32`; without TX backlog RX may use all `64`. Tests must reject any helper-local
 credit reset, aggregate service above `64`, suppressed pending output under
 sustained RX, or application of this cut to linked-runtime/Pi paths.
-Within each isolated Network phase, source and behavior tests must prove exactly one attempted unit
-per visit, including a no-op. The persistent lower cursor must select
+With a nonzero `OrdinaryVirtioConsoleOutputTurn` selector, the v12 source guard
+must also find the exact `OrdinaryVirtioOperatorWork` fields
+`serial_input`, `serial_output`, `local_seat_input`,
+`dispatchable_network_line`, `pending_console_output`, `physical_response`,
+`stream_or_tail`, `reboot`, `serviceable_display`, `serviceable_frontier`, and
+`serviceable_attach`, plus its pure `is_empty`. An empty snapshot after the
+first bounded priority pass must return before
+`poll_runtime_without_control_tail` and the repeated Operator probes. Raw
+unattached-seat flags, quarantine, timer/Runtime/Network work, atomics, and HAL
+hints cannot prevent the cut; Pi, non-VirtIO, and zero-selector behavior remains
+unchanged.
+Within each originating isolated Network phase, source and behavior tests must
+prove exactly one attempted NIC unit, including a no-op, after the timer
+prelude. That visit retains one compact diagnostic observation and returns. The
+next Network phase must take the observation first, run only NETDIAG, and
+return without timer or NIC work. The persistent lower cursor must select
 ObserveChild -> StageOutput -> Disconnect -> Ingress -> ServiceTick ->
 ObserveChild. Each lower attempt returns; a no-op advances, and a successful
 unit that signals the child forces the next lower attempt to ObserveChild. A
@@ -5556,6 +6145,42 @@ bounded early 0-through-63 and every-64th-success diagnostic gate, continuous
 counters, and Observe -> TX -> DeferredDiagnostic before resuming the preserved
 lower state for sampled successes. A second publication cannot overwrite or
 merge a pending diagnostic; anomalies remain immediate.
+The v23 source guard must prove that `poll_split_ordinary_virtio_compact`
+handles `PhysicalResponseBarrier::TailInFlight` through
+`reconcile_physical_response_barrier`, tests the resulting barrier, and either
+returns or calls exactly one compact Operator unit before returning. The
+eligible `!stream_end_pending && stream_prompt_pending` path must similarly
+call `queue_stream_prompt_tail_if_ready`, test the resulting pending bit, and
+either return or call exactly one compact Operator unit before returning.
+Neither path may read, commit, or dispatch `ordinary_service_phase`; both must
+preserve the Runtime and Network cursors. Ready reboot must return before phase
+load. Only the no-duty path may load the phase, commit `phase.next()`, and call
+one existing Operator, Runtime, or Network leaf. No new phase, cursor, or helper
+is permitted, and generic/Pi call ordering remains unchanged.
+The v21 source guard must prove `poll_split_ordinary_virtio_network_turn`
+first takes a retained diagnostic and returns without reading or advancing
+`ordinary_virtio_network_unit`. Otherwise it reads
+`OrdinaryVirtioNetworkUnit::{Timer, Nic}`, commits `unit.next()` before work,
+and dispatches exactly one unit. Timer calls only
+`poll_runtime_timer_prelude`; Nic calls only one noinline
+`poll_one_split_ordinary_virtio_network_unit`, followed by retention of the
+telemetry, originating `now_ms`, and originating last-RX-progress horizon.
+The former composite `poll_split_ordinary_virtio_network_prelude` must be
+absent. Neither unit may run a generic Runtime tail, command dispatch, event
+drain, or NETDIAG; Timer cannot reconcile CYW43-ready HDMI state. A retained
+diagnostic visit samples counters after the intervening compact Operator and
+Runtime visits, runs only NETDIAG, and leaves the Timer/Nic cursor unchanged.
+Immediate flush, connection-id, and NineDoor ingest accounting remain unchanged
+in the Nic visit. Quarantine clears retained diagnostic state while preserving
+the Timer/Nic cursor; generic/Pi behavior neither uses nor mutates it. The
+adapter must use
+`select_isolated_network_turn`, commit `selection.successor()` before work, and
+dispatch to separate noinline `poll_deferred_diagnostic_unit`,
+`poll_transmit_egress_unit`, `poll_observe_child_unit`,
+`poll_stage_output_unit`, `poll_disconnect_unit`, `poll_ingress_unit`, or
+`poll_service_tick_unit` helpers without one all-unit closure. A successful
+child signal may force the final cursor back to ObserveChild. Operator, not
+Network, drains at most one retained console lifecycle event per visit.
 
 Child-loop source and behavior tests must separately prove one closed logical
 unit per active-MCS replenishment in the retained-first order completion publication
@@ -5567,6 +6192,15 @@ backpressure retention, it must execute exactly one `seL4_Yield` and then one
 `seL4_Wait`; retained state and the existing root service tick drive the
 successor without any new notification cap. Terminal revoke/shutdown uses only
 its wait-only park.
+Within `ChildTurnUnit::PollService`, the v6 source guard must prove
+`ServicePollUnit::StackIngress -> StackEgress -> Session` successor commit
+before dispatch and `ServicePollOutcome::{Continuation, Complete}`.
+`StackIngress` owns exactly one `Interface::poll_ingress_single` call;
+`StackEgress` owns exactly one `Interface::poll_egress` call. Each returns
+`Continuation` and retains `service_pending` across Yield then Wait. `Session`
+owns connection/session RX, tick, TX, close, and relisten; only `Complete`
+clears the unit. An error or preempting retained publication must not lose the
+pending successor.
 
 The isolated VirtIO regression must repeat the same phase-order and ownership
 assertions after console-network quarantine. Quarantine must preserve the outer
@@ -5574,14 +6208,42 @@ phase plus retained Runtime- and Network-unit states while fencing NIC polls; a 
 Operator+Runtime/IPC fallback fails.
 Recovery-turn coverage must independently inject console-only, NineDoor-only,
 and simultaneous pending records before each of the three ordinary phases. It
-must prove console-first conditional probing, one material containment unit
-per outer refill, successor-cursor retention, zero ordinary pump work during
-Recovery, phase-state plus Runtime/Network cursor preservation, and one outer yield before the next
-containment unit or ordinary phase. Console coverage must assert suspend;
-unbind; four indexed frame lifecycle units, each performing scrub plus
-cache-clean plus unmap; two indexed cap deletes; anchor revoke/reset; and final
-proof/quarantine. A containment error still consumes its exclusive Recovery
-turn and cannot fall through into the pump.
+must prove console-first conditional probing, successor-cursor retention, zero
+ordinary pump work during Recovery, phase-state plus Runtime/Network cursor
+preservation, and one outer yield before the next containment turn or ordinary
+phase. Console coverage must assert that mailbox `Retry` performs no authority
+fence, the first latched turn performs only the value/resource latch plus the
+lock-free scalar authority fence, and later refills execute exactly one of the
+fourteen ordered material units: `SuspendTcb`; `UnbindSchedulingContext`;
+`ScrubCleanSharedFrame(0)`, `UnmapSharedFrame(0)`, then the same pair for indices
+1, 2, and 3; `DeleteFaultCap(0)`; `DeleteFaultCap(1)`; `RevokeAnchor`; and pure
+`Finalize`. `Finalize` must leave `Complete` selected; the following idempotent
+`Complete` turn alone publishes the exact proof and permits quarantine. A
+containment error still consumes its exclusive Recovery turn and cannot fall
+through into the pump. NineDoor coverage must separately
+assert one latch-only first turn, then exactly one of the 18 ordered units per
+later refill: suspend; request 0 scrub/clean then unmap; request 1 scrub/clean
+then unmap; response 0 read-unmap, one writable `Page_Map`, scrub/clean, then
+writable-unmap; response 1 with the same four units; quiet recovery-Reply
+delete; two indexed quiet fault-cap deletes; anchor revoke; and pure Finalize.
+Every unit must commit its successor before action and restore only that exact
+unit on synchronous error. Scrub/clean must be bounded and lock-free.
+Finalize must leave `Complete` selected; the following idempotent Complete turn
+must publish the five-field proof and only then permit record removal.
+`InProgress`, incomplete proof, and error all fence ordinary work.
+
+Post-containment coverage must prove one quiet ordinary retained-output unit per
+turn in the exact order `RootSessionTicket -> RootTicketUsage ->
+NineDoorSessionTicket -> NineDoorSessionScope -> NineDoorSessionBinds ->
+PendingStreamCursor -> PendingStream -> Finalize -> Complete`. Each successor
+must be stored before its selected action; heap owners must move to
+reboot-lifetime tombstones without drop, allocation, logging, or audit work.
+Cleanup `Complete` may expose only the retained conditional
+reboot/parser/serial/local-seat/tail/detach diagnostics. Service
+fault/failure/teardown records must precede cleanup diagnostics, console must
+precede NineDoor, queue admission must precede diagnostic commit, backpressure
+must retain the record without eviction, and admission plus flush must occur on
+distinct ordinary turns.
 The QEMU run must additionally show that all generated sources are constructed
 suspended, the exact fault registry is sealed before the console child resumes,
 one authenticated `cohsh` session observes the existing ACK/ERR/END fixtures,
@@ -5597,12 +6259,14 @@ from the generated SchedControl/SC binding. A live VM fault in the console
 entry stack-zero loop or a root-fault timeout during `TCB.Suspend` is a failed
 stack/temporal contract, not acceptable containment evidence. A root-control
 timeout in or after one admitted Runtime unit, Network unit, child logical unit,
-or Recovery primitive fails the v11/v4 candidates; a PC after publication or at
+or Recovery primitive fails the v23/root-fault-V6/child-V6 candidates; a PC after publication or at
 the outer yield still fails the bound. Passing compilation or compiler admission
 cannot replace that live check.
 Scale back network mirroring before command responses; never starve the
 physical operator queues or fatal output. This gate deliberately performs no
-Pi 4 execution and cannot qualify GENET, CYW43, or SDIO behavior.
+Pi 4 execution and cannot qualify NineDoor containment, GENET, CYW43, or SDIO
+behavior on Pi. The common MCS NineDoor containment code changes on QEMU and Pi,
+but ordinary Pi scheduling remains unchanged and fresh Pi evidence is pending.
 
 ### Milestone 26e linked-driver MCS and coexistence gate
 
@@ -5654,7 +6318,7 @@ _Generated by coh-rtc (sha256: `c502a57721e43d5c38f5499767a8668eb593ac74f25cb238
 <!-- coh-rtc:trace-policy:end -->
 
 ## Manifest fingerprints
-- `configs/generated/root_task_resolved.json` — `sha256:b100a7bab9d47965ca5f37826a62535edfb3dfccbebe23a5670bf13f5709fdf9`
+- `configs/generated/root_task_resolved.json` — `sha256:013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590`
 
 ## Transcript fixture hashes
 - `tests/fixtures/transcripts/boot_v0/serial.txt` — `sha256:2ea58218a937f0c702fd67dac83aa838a8c49b9d1fba1e0165dfa93a44ab3c6d`

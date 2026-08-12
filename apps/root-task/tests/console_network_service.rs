@@ -8,7 +8,8 @@ use console_network_abi::{
     PACKET_COMMIT_OFFSET, SHARED_PAGE_BYTES,
 };
 use root_task::console_network_service::{
-    BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentProof,
+    BoundaryError, ConsoleNetworkBoundary, ConsoleNetworkContainmentCursor,
+    ConsoleNetworkContainmentProof, ConsoleNetworkContainmentTurn, ConsoleNetworkContainmentUnit,
     ConsoleNetworkObjectPlan, ServiceState, READY_IDENTITY,
 };
 
@@ -271,6 +272,62 @@ fn stale_records_and_incomplete_teardown_fail_closed() {
 }
 
 #[test]
+fn containment_completion_carries_only_the_exact_full_proof() {
+    let mut cursor = ConsoleNetworkContainmentCursor::new();
+    let units = [
+        ConsoleNetworkContainmentUnit::SuspendTcb,
+        ConsoleNetworkContainmentUnit::UnbindSchedulingContext,
+        ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(0),
+        ConsoleNetworkContainmentUnit::UnmapSharedFrame(0),
+        ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(1),
+        ConsoleNetworkContainmentUnit::UnmapSharedFrame(1),
+        ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(2),
+        ConsoleNetworkContainmentUnit::UnmapSharedFrame(2),
+        ConsoleNetworkContainmentUnit::ScrubCleanSharedFrame(3),
+        ConsoleNetworkContainmentUnit::UnmapSharedFrame(3),
+        ConsoleNetworkContainmentUnit::DeleteFaultCap(0),
+        ConsoleNetworkContainmentUnit::DeleteFaultCap(1),
+        ConsoleNetworkContainmentUnit::RevokeAnchor,
+        ConsoleNetworkContainmentUnit::Finalize,
+    ];
+    for unit in units {
+        assert_eq!(cursor.unit(), unit);
+        let selected = cursor.select_next();
+        assert_eq!(selected, unit);
+        cursor.restore_selected(selected);
+        assert_eq!(
+            cursor.unit(),
+            unit,
+            "restoring a failed selected unit must undo its committed successor",
+        );
+        assert_eq!(cursor.select_next(), unit);
+    }
+    assert_eq!(cursor.unit(), ConsoleNetworkContainmentUnit::Complete);
+    assert_eq!(
+        cursor.select_next(),
+        ConsoleNetworkContainmentUnit::Complete,
+        "complete proof remains idempotently reportable",
+    );
+
+    let incomplete = ConsoleNetworkContainmentProof::default();
+    assert!(!incomplete.complete());
+
+    let complete = ConsoleNetworkContainmentProof {
+        tcb_suspended: true,
+        scheduling_context_unbound: true,
+        mappings_scrubbed: true,
+        capabilities_revoked: true,
+        objects_deleted: true,
+        generation_fenced: true,
+    };
+    assert!(complete.complete());
+    assert_eq!(
+        ConsoleNetworkContainmentTurn::Complete(complete),
+        ConsoleNetworkContainmentTurn::Complete(complete),
+    );
+}
+
+#[test]
 fn mismatched_commits_do_not_advance_root_boundary_state() {
     let mut boundary = ConsoleNetworkBoundary::new(13).expect("generated contract");
     let generation = boundary.generation();
@@ -322,5 +379,61 @@ fn mismatched_commits_do_not_advance_root_boundary_state() {
             .expect("same packet remains admissible after rejection")
             .as_slice(),
         &[7, 8, 9]
+    );
+}
+
+#[test]
+fn accepted_egress_remains_root_owned_after_shared_page_reuse() {
+    let mut boundary = ConsoleNetworkBoundary::new(15).expect("generated contract");
+    let generation = boundary.generation();
+    let first_bytes = [0x11, 0x22, 0x33, 0x44];
+    let second_bytes = [0xaa, 0xbb, 0xcc];
+    let mut shared_page = [0u8; SHARED_PAGE_BYTES];
+
+    PacketPage::publish_into(
+        &mut shared_page,
+        PacketDirection::Egress,
+        generation,
+        1,
+        &first_bytes,
+    )
+    .expect("first bounded egress publication");
+    let retained = boundary
+        .accept_egress(&shared_page)
+        .expect("root copies the first egress record");
+
+    PacketPage::publish_into(
+        &mut shared_page,
+        PacketDirection::Egress,
+        generation,
+        2,
+        &second_bytes,
+    )
+    .expect("shared child page may be reused for the next sequence");
+    assert_eq!(
+        retained.as_slice(),
+        &first_bytes,
+        "root-owned pending bytes must not alias the reused child page",
+    );
+    assert_eq!(
+        boundary
+            .accept_egress(&shared_page)
+            .expect("next exact sequence remains admissible")
+            .as_slice(),
+        &second_bytes,
+    );
+
+    PacketPage::publish_into(
+        &mut shared_page,
+        PacketDirection::Egress,
+        generation,
+        1,
+        &first_bytes,
+    )
+    .expect("stale replay remains ABI-well-formed");
+    assert_eq!(
+        boundary.accept_egress(&shared_page),
+        Err(BoundaryError::StaleIdentity),
+        "shared-page reuse must not make an old sequence admissible again",
     );
 }

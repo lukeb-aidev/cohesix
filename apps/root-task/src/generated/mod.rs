@@ -189,6 +189,7 @@ pub struct TemporalTaskConfig {
     pub response_time_us: u32,
     pub admitted: bool,
     pub wcet_provenance: &'static str,
+    pub virtio_operator_serial_io_bytes_per_turn: u32,
     pub allowed_donors: &'static [&'static str],
     pub reply_objects: u8,
     pub max_donation_depth: u8,
@@ -1041,9 +1042,9 @@ pub struct AuditConfig {
     pub replay_status_max_bytes: u32,
 }
 
-pub const MANIFEST_SCHEMA: &str = "1.10";
+pub const MANIFEST_SCHEMA: &str = "1.11";
 pub const MANIFEST_SHA256: &str =
-    "94e6c732e7d0fe8ae6e5fc117624a695161ace48639177ecd0c80461c93b6329";
+    "013304cfbc552744a142a91d4cc5d95fcc274308cb00db15cc0c2d77fcaeb590";
 pub const TICKET_TABLE_SHA256: &str = bootstrap::TICKET_TABLE_SHA256;
 pub const NAMESPACE_TABLE_SHA256: &str = bootstrap::NAMESPACE_TABLE_SHA256;
 pub const AUDIT_TABLE_SHA256: &str = bootstrap::AUDIT_TABLE_SHA256;
@@ -1127,6 +1128,8 @@ pub const fn temporal_authority_config() -> TemporalAuthorityConfig {
 pub const fn temporal_tasks() -> &'static [TemporalTaskConfig] {
     &bootstrap::TEMPORAL_TASKS
 }
+
+pub const ROOT_CONTROL_VIRTIO_OPERATOR_SERIAL_IO_BYTES_PER_TURN: u32 = 64;
 
 pub const fn ninedoor_service_config() -> NineDoorServiceConfig {
     bootstrap::NINEDOOR_SERVICE_CONFIG

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Author: Lukas Bower
-# Purpose: Clean-build and collect same-boot Milestone 26e QEMU Worker/MCS pressure evidence.
+# Purpose: Collect exact-artifact Milestone 26e QEMU service and Worker/MCS evidence.
 # Copyright 2026 Lukas Bower
 
 set -euo pipefail
@@ -14,7 +14,7 @@ usage() {
 Usage: scripts/m26e_qemu_pressure.sh [options]
 
 Clean-build the canonical four-core QEMU/GICv3 profile, then run separate
-same-artifact medium and high executable-Worker pressure boots. This command
+same-artifact authenticated, service-injection, medium, and high pressure boots. This command
 deletes only the validated repository target/ and out/ contents after moving
 the explicit seL4/toolchain inputs to a temporary directory.
 
@@ -477,10 +477,11 @@ if (( CHECK_ONLY == 1 )); then
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-service-gdb --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-critical-gdb --help >/dev/null
+    "$HARNESS_PYTHON" scripts/worker_task_evidence.py emit-qemu-target-session --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu-preflight --help >/dev/null
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu --help >/dev/null
     log "check-only PASS: inputs are present; no files or processes were changed"
-    log "plan: clean target/out, build release-qemu,bootstrap-trace once, collect critical/medium/high QEMU evidence, run staged QEMU gates, emit final acceptance"
+    log "plan: clean target/out, build once, prove AUTH, run distinct terminal service boots, collect critical/medium/high QEMU evidence, run staged gates, emit final acceptance"
     exit 0
 fi
 
@@ -697,152 +698,17 @@ for artifact in \
     [[ -f "$artifact" && ! -L "$artifact" ]] || die "build artifact is missing or aliased: $artifact"
 done
 
-mkdir -p "$RUN_DIR/session"
 TARGET_SESSION="$RUN_DIR/session/target-session.json"
-
-python3 - \
-    "$REPO_ROOT" "$RUN_DIR/session" "$TARGET_SESSION" \
-    "$RESOLVED_MANIFEST" "$KERNEL_IMAGE" "$ROOT_IMAGE" \
-    "$DRIVER_ARCHIVE" "$DRIVER_MANIFEST" "$WORKER_ARCHIVE" "$WORKER_MANIFEST" \
-    "$GENERATED_INVENTORY" <<'PY'
-import hashlib
-import json
-import os
-from pathlib import Path
-import stat
-import subprocess
-import sys
-
-(
-    repo_raw,
-    session_dir_raw,
-    session_path_raw,
-    manifest_raw,
-    kernel_raw,
-    root_raw,
-    driver_archive_raw,
-    driver_manifest_raw,
-    worker_archive_raw,
-    worker_manifest_raw,
-    topology_raw,
-) = sys.argv[1:]
-repo = Path(repo_raw)
-session_dir = Path(session_dir_raw)
-session_path = Path(session_path_raw)
-
-
-def frozen(path_raw: str) -> tuple[Path, bytes]:
-    path = Path(path_raw)
-    info = path.lstat()
-    if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode):
-        raise SystemExit(f"target-session input is not a regular non-symlink file: {path}")
-    data = path.read_bytes()
-    if not data:
-        raise SystemExit(f"target-session input is empty: {path}")
-    return path, data
-
-
-def digest(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()
-
-
-paths_raw = subprocess.check_output(
-    ["git", "ls-files", "-co", "--exclude-standard", "-z"], cwd=repo
-)
-paths = sorted({Path(os.fsdecode(item)) for item in paths_raw.split(b"\0") if item})
-source_rows = []
-for relative in paths:
-    path = repo / relative
-    if not path.exists() and not path.is_symlink():
-        source_rows.append(
-            {
-                "path": relative.as_posix(),
-                "kind": "deleted",
-                "mode": 0,
-                "sha256": digest(b""),
-                "bytes": 0,
-            }
-        )
-        continue
-    info = path.lstat()
-    if stat.S_ISLNK(info.st_mode):
-        kind = "symlink"
-        payload = os.readlink(path).encode("utf-8")
-    elif stat.S_ISREG(info.st_mode):
-        kind = "file"
-        payload = path.read_bytes()
-    else:
-        raise SystemExit(f"unsupported source inventory entry: {relative}")
-    source_rows.append(
-        {
-            "path": relative.as_posix(),
-            "kind": kind,
-            "mode": stat.S_IMODE(info.st_mode),
-            "sha256": digest(payload),
-            "bytes": len(payload),
-        }
-    )
-source_inventory = {
-    "schema": "cohesix-source-inventory/v1",
-    "algorithm": "git-visible-paths-sha256",
-    "entries": source_rows,
-}
-source_bytes = (json.dumps(source_inventory, sort_keys=True, separators=(",", ":")) + "\n").encode()
-source_path = session_dir / "source-inventory.json"
-source_path.write_bytes(source_bytes)
-
-abi_files = []
-for relative in ("crates/worker-task-abi/Cargo.toml", "crates/worker-task-abi/src/lib.rs"):
-    path, data = frozen(str(repo / relative))
-    abi_files.append({"path": path.relative_to(repo).as_posix(), "sha256": digest(data), "bytes": len(data)})
-abi_record = {
-    "schema": "cohesix-worker-abi-identity/v1",
-    "task_abi_schema": "worker-task-abi/v1",
-    "task_abi_version": 1,
-    "files": abi_files,
-}
-abi_bytes = (json.dumps(abi_record, sort_keys=True, separators=(",", ":")) + "\n").encode()
-(session_dir / "worker-abi-identity.json").write_bytes(abi_bytes)
-
-_, driver_archive = frozen(driver_archive_raw)
-cyw43_record = {
-    "schema": "cohesix-cyw43-coexistence-binding/v1",
-    "target": "qemu",
-    "selected": False,
-    "classification": "not-applicable-physical-driver",
-    "driver_archive_sha256": digest(driver_archive),
-}
-cyw43_bytes = (json.dumps(cyw43_record, sort_keys=True, separators=(",", ":")) + "\n").encode()
-(session_dir / "qemu-cyw43-coexistence.json").write_bytes(cyw43_bytes)
-
-_, manifest = frozen(manifest_raw)
-_, kernel = frozen(kernel_raw)
-_, root = frozen(root_raw)
-_, driver_manifest = frozen(driver_manifest_raw)
-_, worker_archive = frozen(worker_archive_raw)
-_, worker_manifest = frozen(worker_manifest_raw)
-_, topology_bytes = frozen(topology_raw)
-topology = json.loads(topology_bytes)
-if topology.get("manifest_sha256") != digest(manifest):
-    raise SystemExit("generated topology and resolved manifest hashes differ")
-
-session = {
-    "target": "qemu",
-    "source_sha256": digest(source_bytes),
-    "manifest_sha256": digest(manifest),
-    "kernel_sha256": digest(kernel),
-    "root_image_sha256": digest(root),
-    "driver_archive_sha256": digest(driver_archive),
-    "driver_manifest_sha256": digest(driver_manifest),
-    "cyw43_coexistence_record_sha256": digest(cyw43_bytes),
-    "worker_archive_sha256": digest(worker_archive),
-    "worker_image_manifest_sha256": digest(worker_manifest),
-    "worker_abi_sha256": digest(abi_bytes),
-}
-session_path.write_text(json.dumps(session, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-PY
+"$HARNESS_PYTHON" scripts/worker_task_evidence.py emit-qemu-target-session \
+    --repo-root "$REPO_ROOT" \
+    --qemu-out "$OUT_ROOT" \
+    --resolved-manifest "$RESOLVED_MANIFEST" \
+    --topology "$GENERATED_INVENTORY" \
+    --out-dir "$RUN_DIR/session"
 
 log "target session emitted: $TARGET_SESSION"
+AUTH_STATE_DIR="$RUN_DIR/authenticated-ninedoor"
+AUTH_OBSERVATION="$AUTH_STATE_DIR/target-observation.json"
 
 ARTIFACT_BINDINGS="$RUN_DIR/session/artifact-bindings.json"
 python3 - "$ARTIFACT_BINDINGS" \
@@ -871,7 +737,8 @@ python3 - "$ARTIFACT_BINDINGS" \
     gpu-bridge-host="$HOST_TOOLS/gpu-bridge-host" \
     host-ticket-agent="$HOST_TOOLS/host-ticket-agent" \
     source-inventory="$RUN_DIR/session/source-inventory.json" \
-    worker-abi-identity="$RUN_DIR/session/worker-abi-identity.json" <<'PY'
+    worker-abi-identity="$RUN_DIR/session/worker-abi-identity.json" \
+    qemu-cyw43-coexistence="$RUN_DIR/session/qemu-cyw43-coexistence.json" <<'PY'
 import hashlib
 import json
 from pathlib import Path
@@ -910,6 +777,9 @@ FROZEN_COLLECTOR_BINDINGS="$RUN_DIR/session/frozen-collector-bindings.json"
 python3 - "$ARTIFACT_BINDINGS" "$FROZEN_COLLECTOR_BINDINGS" \
     "$FROZEN_COLLECTOR_DIR" \
     target-session=target-session.json \
+    source-inventory=source-inventory.json \
+    worker-abi-identity=worker-abi-identity.json \
+    qemu-cyw43-coexistence=qemu-cyw43-coexistence.json \
     generated-topology=generated-topology.json \
     worker-archive=worker-images.cpio \
     driver-archive=driver-runtimes.cpio \
@@ -1052,6 +922,9 @@ if (
     raise SystemExit("frozen collector directory is aliased or invalid")
 expected = {
     "target-session": "target-session.json",
+    "source-inventory": "source-inventory.json",
+    "worker-abi-identity": "worker-abi-identity.json",
+    "qemu-cyw43-coexistence": "qemu-cyw43-coexistence.json",
     "generated-topology": "generated-topology.json",
     "worker-archive": "worker-images.cpio",
     "driver-archive": "driver-runtimes.cpio",
@@ -1180,20 +1053,6 @@ run_cohsh_command() {
         --tcp-host 127.0.0.1 \
         --tcp-port 31337 \
         --script "$script_path" >> "$boot_dir/cohsh.log" 2>&1
-}
-
-wait_for_cohsh_success() {
-    local boot_dir=$1
-    local command=$2
-    local ordinal=$3
-    local deadline=$(( $(date +%s) + 60 ))
-    while (( $(date +%s) < deadline )); do
-        if run_cohsh_command "$boot_dir" "$command" "$ordinal" OK; then
-            return 0
-        fi
-        sleep 0.2
-    done
-    die "timed out waiting for cohsh command after service reconstruction: $command"
 }
 
 current_worker_id() {
@@ -1660,7 +1519,7 @@ drive_worker_fault_plan() {
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-gdb \
         --gdb "$GDB_BIN" \
         --remote 127.0.0.1:1234 \
-        --target-session "$boot_dir/target-session.json" \
+        --target-session "$TARGET_SESSION" \
         --generated-inventory "$GENERATED_INVENTORY" \
         --worker-image-manifest "$WORKER_MANIFEST" \
         --worker-elf "worker-heartbeat=$WORKER_HEART_ELF" \
@@ -1698,38 +1557,41 @@ drive_worker_fault_plan() {
 drive_service_fault_plan() {
     local boot_dir=$1
     local service=$2
-    local service_elf=$3
-    local teardown_marker=$4
-    local ordinal=$5
-    local gdb_log="$boot_dir/$service.gdb.log"
+    local mode=$3
+    local service_elf=$4
+    local teardown_marker=$5
+    local ordinal=$6
+    local gdb_log="$boot_dir/service.gdb.log"
     local teardown_before
     teardown_before=$(grep -F -c "$teardown_marker" "$boot_dir/uart.live.log" 2>/dev/null || true)
-    "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-service-gdb \
-        --gdb "$GDB_BIN" \
-        --remote 127.0.0.1:1234 \
-        --target-session "$boot_dir/target-session.json" \
-        --generated-inventory "$GENERATED_INVENTORY" \
-        --service "$service" \
-        --service-elf "$service_elf" \
-        --timeout-secs 600 \
-        --out "$gdb_log" &
+    local runner=(
+        "$HARNESS_PYTHON" scripts/worker_task_evidence.py qemu-service-gdb
+        --gdb "$GDB_BIN"
+        --remote 127.0.0.1:1234
+        --target-session "$TARGET_SESSION"
+        --generated-inventory "$GENERATED_INVENTORY"
+        --qemu-out "$OUT_ROOT"
+        --auth-observation "$AUTH_OBSERVATION"
+        --service "$service"
+        --mode "$mode"
+        --service-elf "$service_elf"
+        --timeout-secs 600
+        --out "$gdb_log"
+    )
+    if [[ "$mode" == "between-calls-revoke" ]]; then
+        runner+=(--root-elf "$ROOT_ELF")
+    fi
+    "${runner[@]}" &
     local gdb_pid=$!
     GDB_RUNNER_PID=$gdb_pid
     sleep 1
     run_cohsh_command "$boot_dir" 'ls /' "$ordinal" NONE || true
     wait_for_marker_count "$boot_dir/uart.live.log" "$teardown_marker" $(( teardown_before + 1 )) 120
-    wait_for_port 127.0.0.1 31337 120
-    if [[ "$service" == "console-network" ]]; then
-        run_cohsh_command "$boot_dir" 'ls /' $(( ordinal + 1 )) NONE || true
-        wait_for_marker_count "$boot_dir/uart.live.log" "$teardown_marker" $(( teardown_before + 2 )) 120
-        wait_for_port 127.0.0.1 31337 120
-    fi
     if ! wait "$gdb_pid"; then
         GDB_RUNNER_PID=""
         die "service GDB plan failed for $service"
     fi
     GDB_RUNNER_PID=""
-    wait_for_cohsh_success "$boot_dir" 'ls /' $(( ordinal + 2 ))
 }
 
 drive_operator_lifecycle() {
@@ -2109,6 +1971,40 @@ run_critical_observation_boot() {
     verify_live_artifacts
 }
 
+run_service_fault_boot() {
+    local label=$1
+    local service=$2
+    local mode=$3
+    local service_elf=$4
+    local teardown_marker=$5
+    local ordinal=$6
+    local boot_dir="$RUN_DIR/$label"
+    mkdir -p "$boot_dir"
+
+    /usr/bin/script -q -F "$boot_dir/uart.live.log" \
+        "$BUILD_RUN" --launch-existing "${BUILD_ARGS[@]}" --raw-qemu -- \
+        -pidfile "$boot_dir/qemu.pid" \
+        -gdb tcp:127.0.0.1:1234 \
+        > "$boot_dir/qemu-launch.log" 2>&1 &
+    QEMU_LAUNCHER_PID=$!
+    wait_for_file "$boot_dir/qemu.pid" 180
+    QEMU_PID="$(tr -d '[:space:]' < "$boot_dir/qemu.pid")"
+    [[ "$QEMU_PID" =~ ^[0-9]+$ ]] || die "service QEMU pidfile is malformed"
+    ps -ww -p "$QEMU_PID" -o command= > "$boot_dir/qemu-command.txt"
+    verify_qemu_command "$boot_dir" no
+    wait_for_port 127.0.0.1 31337 180
+    verify_live_artifacts
+
+    drive_service_fault_plan \
+        "$boot_dir" "$service" "$mode" "$service_elf" \
+        "$teardown_marker" "$ordinal"
+
+    stop_pid "$QEMU_PID"; QEMU_PID=""
+    stop_pid "$QEMU_LAUNCHER_PID"; QEMU_LAUNCHER_PID=""
+    freeze_prefix "$boot_dir/uart.live.log" "$boot_dir/service.uart.log"
+    verify_live_artifacts
+}
+
 run_pressure_boot() {
     local label=$1
     local intensity=$2
@@ -2144,15 +2040,6 @@ run_pressure_boot() {
     drive_worker_fault_plan "$boot_dir" worker-gpu 200
     drive_worker_fault_plan "$boot_dir" worker-lora 300
 
-    # Service containment uses external QEMU-only hooks and existing requests;
-    # no operator fault route or target grammar is introduced.
-    drive_service_fault_plan \
-        "$boot_dir" ninedoor-service "$NINEDOOR_ELF" \
-        NINEDOOR_SERVICE_TEARDOWN 350
-    drive_service_fault_plan \
-        "$boot_dir" console-network "$CONSOLE_NETWORK_ELF" \
-        CONSOLE_NETWORK_TEARDOWN 360
-
     drive_receipt_matrix "$boot_dir"
     publish_gpu_fixture "$boot_dir"
     drive_operator_lifecycle "$boot_dir"
@@ -2162,8 +2049,10 @@ run_pressure_boot() {
 
     mkdir -p "$boot_dir/preflight"
     "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu-preflight \
-        --target-session "$boot_dir/target-session.json" \
+        --target-session "$TARGET_SESSION" \
         --generated-inventory "$GENERATED_INVENTORY" \
+        --qemu-out "$OUT_ROOT" \
+        --auth-observation "$AUTH_OBSERVATION" \
         --uart "$boot_dir/preflight.uart.log" \
         --cohsh "$boot_dir/preflight.cohsh.log" \
         --gdb-log "$boot_dir/worker-heartbeat.gdb.log" \
@@ -2177,8 +2066,14 @@ run_pressure_boot() {
         --worker-elf "worker-lora=$WORKER_LORA_ELF" \
         --service-elf "ninedoor-service=$NINEDOOR_ELF" \
         --service-elf "console-network=$CONSOLE_NETWORK_ELF" \
-        --service-gdb-log "$boot_dir/ninedoor-service.gdb.log" \
-        --service-gdb-log "$boot_dir/console-network.gdb.log" \
+        --service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log" \
+        --service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log" \
+        --service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log" \
+        --service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log" \
+        --service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log" \
+        --service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log" \
+        --service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
+        --service-uart "$RUN_DIR/console-timeout-fault/service.uart.log" \
         --root-elf "$ROOT_ELF" \
         --critical-gdb-log "$boot_dir/critical.gdb.log" \
         --integration-dir "$boot_dir/host-integration/integration" \
@@ -2268,6 +2163,33 @@ PY
     stop_pid "$QEMU_LAUNCHER_PID"; QEMU_LAUNCHER_PID=""
 }
 
+log "proving one prior authenticated NineDoor operation on the exact artifacts"
+COH_AUTH_TOKEN="$M26E_CONSOLE_AUTH_TOKEN" \
+TEST_PLAN_CONVERGENCE_QEMU_OUT_DIR="$OUT_ROOT" \
+"$HARNESS_PYTHON" scripts/ci/test_plan_converge.py \
+    --target qemu \
+    --focus ninedoor \
+    --state-dir "$AUTH_STATE_DIR" \
+    --launch-existing
+[[ -s "$AUTH_OBSERVATION" && ! -L "$AUTH_OBSERVATION" ]] || \
+    die "authenticated NineDoor target observation is missing or aliased"
+verify_live_artifacts
+
+# Both services are terminal with no replacement. Every donated-Call fault,
+# local revoke, and budget fault therefore runs in its own fresh boot.
+run_service_fault_boot \
+    ninedoor-during-call ninedoor-service during-call-standard \
+    "$NINEDOOR_ELF" NINEDOOR_SERVICE_TEARDOWN 350
+run_service_fault_boot \
+    ninedoor-between-calls ninedoor-service between-calls-revoke \
+    "$NINEDOOR_ELF" NINEDOOR_SERVICE_TEARDOWN 351
+run_service_fault_boot \
+    console-standard-fault console-network during-call-standard \
+    "$CONSOLE_NETWORK_ELF" CONSOLE_NETWORK_TEARDOWN 360
+run_service_fault_boot \
+    console-timeout-fault console-network budget-exhaustion-timeout \
+    "$CONSOLE_NETWORK_ELF" CONSOLE_NETWORK_TEARDOWN 361
+
 run_pressure_boot medium 4 1 16 2604
 run_pressure_boot high 8 4 32 2608
 
@@ -2289,12 +2211,20 @@ mkdir -p "$FINAL_DIR"
 "$HARNESS_PYTHON" scripts/worker_task_evidence.py collect-qemu \
     --target-session "$FROZEN_TARGET_SESSION" \
     --generated-inventory "$FROZEN_GENERATED_INVENTORY" \
+    --qemu-out "$OUT_ROOT" \
+    --auth-observation "$AUTH_OBSERVATION" \
     --preflight-uart "$RUN_DIR/medium/preflight.uart.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-heartbeat.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-gpu.gdb.log" \
     --preflight-gdb-log "$RUN_DIR/medium/worker-lora.gdb.log" \
-    --preflight-service-gdb-log "$RUN_DIR/medium/ninedoor-service.gdb.log" \
-    --preflight-service-gdb-log "$RUN_DIR/medium/console-network.gdb.log" \
+    --preflight-service-gdb-log "$RUN_DIR/ninedoor-during-call/service.gdb.log" \
+    --preflight-service-gdb-log "$RUN_DIR/ninedoor-between-calls/service.gdb.log" \
+    --preflight-service-gdb-log "$RUN_DIR/console-standard-fault/service.gdb.log" \
+    --preflight-service-gdb-log "$RUN_DIR/console-timeout-fault/service.gdb.log" \
+    --preflight-service-uart "$RUN_DIR/ninedoor-during-call/service.uart.log" \
+    --preflight-service-uart "$RUN_DIR/ninedoor-between-calls/service.uart.log" \
+    --preflight-service-uart "$RUN_DIR/console-standard-fault/service.uart.log" \
+    --preflight-service-uart "$RUN_DIR/console-timeout-fault/service.uart.log" \
     --preflight-critical-gdb-log "$RUN_DIR/medium/critical.gdb.log" \
     --uart "$RUN_DIR/medium/pressure.uart.log" \
     --gdb-log "$RUN_DIR/medium/pressure.gdb.log" \

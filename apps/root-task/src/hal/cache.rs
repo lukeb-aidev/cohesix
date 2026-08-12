@@ -534,6 +534,9 @@ fn range_for_cache(vaddr: usize, len: usize) -> Result<(usize, usize), CacheErro
         .ok_or_else(|| CacheError::new(seL4_RangeError))?;
     let aligned_start = align_down(vaddr, CACHE_LINE_BYTES);
     let aligned_end = align_up(end, CACHE_LINE_BYTES);
+    if aligned_end < end || aligned_end < aligned_start {
+        return Err(CacheError::new(seL4_RangeError));
+    }
     Ok((aligned_start, aligned_end))
 }
 
@@ -555,9 +558,7 @@ fn call_cache_op(
     let end_word =
         seL4_Word::try_from(aligned_end).map_err(|_| CacheError::new(seL4_RangeError))?;
 
-    // SAFETY: `range_for_cache` aligned and bounded the start/end words, and
-    // the label is one of the seL4 AArch64 VSpace cache-maintenance labels.
-    let err = unsafe { call_arm_vspace_op(label, vspace, start_word, end_word) };
+    let err = invoke_cache_op(label, vspace, start_word, end_word);
 
     let timestamp_ms = hal::timebase().now_ms();
     let seq = CACHE_SEQUENCE
@@ -614,6 +615,44 @@ fn call_cache_op(
     } else {
         Ok(())
     }
+}
+
+/// Perform one validated cache-clean syscall without diagnostics or locks.
+///
+/// This is reserved for bounded fault containment, where taking the global
+/// cache diagnostics lock after the kernel call could exceed one Recovery
+/// turn. Ordinary cache maintenance retains the full diagnostic path below.
+pub(crate) fn cache_clean_bounded(
+    vspace: seL4_CPtr,
+    vaddr: usize,
+    len: usize,
+) -> Result<(), CacheError> {
+    if len == 0 {
+        return Ok(());
+    }
+    let (aligned_start, aligned_end) = range_for_cache(vaddr, len)?;
+    let start_word =
+        seL4_Word::try_from(aligned_start).map_err(|_| CacheError::new(seL4_RangeError))?;
+    let end_word =
+        seL4_Word::try_from(aligned_end).map_err(|_| CacheError::new(seL4_RangeError))?;
+    let error = invoke_cache_op(ARMVSPACE_CLEAN_LABEL, vspace, start_word, end_word);
+    if error == seL4_NoError {
+        Ok(())
+    } else {
+        Err(CacheError::new(error))
+    }
+}
+
+#[inline(always)]
+fn invoke_cache_op(
+    label: seL4_Word,
+    vspace: seL4_CPtr,
+    start: seL4_Word,
+    end: seL4_Word,
+) -> seL4_Error {
+    // SAFETY: Both callers derive aligned, representable start/end words via
+    // `range_for_cache`, and pass one of the seL4 AArch64 VSpace cache labels.
+    unsafe { call_arm_vspace_op(label, vspace, start, end) }
 }
 
 pub fn cache_clean(vspace: seL4_CPtr, vaddr: usize, len: usize) -> Result<(), CacheError> {
@@ -749,5 +788,23 @@ mod tests {
         assert_eq!(ARMVSPACE_INVALIDATE_LABEL, ARMVSPACE_CLEAN_LABEL + 1);
         assert_eq!(ARMVSPACE_CLEAN_INVALIDATE_LABEL, ARMVSPACE_CLEAN_LABEL + 2);
         assert_eq!(ARMVSPACE_UNIFY_LABEL, ARMVSPACE_CLEAN_LABEL + 3);
+    }
+
+    #[test]
+    fn bounded_cache_clean_validates_ranges_and_propagates_kernel_errors() {
+        assert_eq!(
+            cache_clean_bounded(1, usize::MAX, 2),
+            Err(CacheError::new(seL4_RangeError))
+        );
+        assert_eq!(
+            cache_clean_bounded(1, usize::MAX - 1, 1),
+            Err(CacheError::new(seL4_RangeError))
+        );
+        set_test_error(Some(seL4_InvalidArgument));
+        assert_eq!(
+            cache_clean_bounded(1, 0x1_001, 63),
+            Err(CacheError::new(seL4_InvalidArgument)),
+        );
+        assert_eq!(cache_clean_bounded(1, 0x1_001, 63), Ok(()));
     }
 }

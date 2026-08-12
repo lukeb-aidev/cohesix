@@ -37282,6 +37282,9 @@ mod tests {
 
         impl crate::event::IpcDispatcher for NullIpc {
             fn dispatch(&mut self, _now_ms: u64) {}
+
+            fn dispatch_runtime_unit(&mut self, _now_ms: u64, _unit: crate::event::RuntimeIpcUnit) {
+            }
         }
 
         struct NullAudit;

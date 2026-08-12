@@ -12,7 +12,10 @@ use console_network_runtime::abi::{
     RuntimeInitDescriptor, CONSOLE_PAYLOAD_BYTES, ETHERNET_FRAME_BYTES,
     RUNTIME_INIT_DESCRIPTOR_BYTES, WAKE_CONTROL, WAKE_PACKET_RX, WAKE_REVOKE, WAKE_SHUTDOWN,
 };
-use console_network_runtime::{ConsoleNetworkService, RuntimeError};
+use console_network_runtime::{
+    ChildTurnReadiness, ChildTurnScheduler, ChildTurnUnit, ConsoleNetworkService, RuntimeError,
+    ServicePollOutcome,
+};
 use heapless::Deque;
 use smoltcp::iface::SocketStorage;
 
@@ -109,6 +112,7 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
     let mut packet_tx_sequence = 0u64;
     let mut event_sequence = 1u64;
     let mut completions: Deque<(ExchangeKind, u64, u64), COMPLETION_DEPTH> = Deque::new();
+    let mut turn_scheduler = ChildTurnScheduler::new();
     publish_exchange(
         event,
         descriptor.generation,
@@ -142,50 +146,6 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             signal_slot(descriptor.supervisor_wake_notification_slot);
             park_for_teardown(descriptor);
         }
-        if badge & WAKE_PACKET_RX != 0 {
-            let snapshot = read_packet(packet_rx, descriptor.generation, last_packet_sequence);
-            match snapshot {
-                Ok((sequence, packet)) => {
-                    last_packet_sequence = sequence;
-                    if service.ingest_packet(packet.as_slice()).is_err() {
-                        enter_standard_fault();
-                    }
-                    if completions
-                        .push_back((ExchangeKind::PacketConsumed, sequence, 0))
-                        .is_err()
-                    {
-                        enter_standard_fault();
-                    }
-                }
-                Err(RuntimeError::Backpressure) => {}
-                Err(_) => enter_standard_fault(),
-            }
-        }
-        if badge & WAKE_CONTROL != 0 {
-            #[cfg(feature = "qemu-evidence")]
-            cohesix_console_network_qemu_evidence_control_handler();
-            match read_control(command, descriptor.generation, last_control_sequence) {
-                Ok((sequence, kind, payload)) => {
-                    last_control_sequence = sequence;
-                    let payload = match core::str::from_utf8(payload.as_slice()) {
-                        Ok(payload) => payload,
-                        Err(_) => enter_standard_fault(),
-                    };
-                    if service.apply_control(kind, payload).is_err() {
-                        enter_standard_fault();
-                    }
-                    if completions
-                        .push_back((ExchangeKind::ControlCompleted, sequence, 0))
-                        .is_err()
-                    {
-                        enter_standard_fault();
-                    }
-                }
-                Err(RuntimeError::Backpressure) => {}
-                Err(_) => enter_standard_fault(),
-            }
-        }
-
         if badge & WAKE_SHUTDOWN != 0 {
             service.revoke();
             event_sequence = next_sequence(event_sequence);
@@ -203,58 +163,59 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
             park_for_teardown(descriptor);
         }
 
-        if service.poll(now_ms(descriptor.timer_clock_hz)).is_err() {
-            enter_standard_fault();
-        }
-        if last_control_sequence > last_output_drained_sequence {
-            if let Some(connection_id) = service.output_drained_connection() {
-                if completions
-                    .push_back((
-                        ExchangeKind::OutputDrained,
-                        last_control_sequence,
-                        connection_id,
-                    ))
-                    .is_err()
-                {
+        let packet_wake = badge & WAKE_PACKET_RX != 0;
+        let control_wake = badge & WAKE_CONTROL != 0;
+        turn_scheduler.retain_notification(packet_wake, control_wake);
+        let unit = turn_scheduler.take_next(ChildTurnReadiness::new(
+            !completions.is_empty(),
+            service.service_event_pending(),
+            service.egress_pending(),
+        ));
+        match unit {
+            ChildTurnUnit::PublishCompletion => {
+                let Some((kind, related_sequence, connection_id)) = completions.pop_front() else {
                     enter_standard_fault();
-                }
-                last_output_drained_sequence = last_control_sequence;
+                };
+                event_sequence = next_sequence(event_sequence);
+                publish_exchange(
+                    event,
+                    descriptor.generation,
+                    kind,
+                    event_sequence,
+                    connection_id,
+                    now_ms(descriptor.timer_clock_hz),
+                    related_sequence,
+                    &[],
+                );
+                signal_slot(descriptor.supervisor_wake_notification_slot);
             }
-        }
-        if let Some((kind, related_sequence, connection_id)) = completions.pop_front() {
-            event_sequence = next_sequence(event_sequence);
-            publish_exchange(
-                event,
-                descriptor.generation,
-                kind,
-                event_sequence,
-                connection_id,
-                now_ms(descriptor.timer_clock_hz),
-                related_sequence,
-                &[],
-            );
-            signal_slot(descriptor.supervisor_wake_notification_slot);
-        } else if let Some(runtime_event) = service.pop_event() {
-            let payload = match runtime_event.payload() {
-                Ok(payload) => payload,
-                Err(_) => enter_standard_fault(),
-            };
-            event_sequence = next_sequence(event_sequence);
-            publish_exchange(
-                event,
-                descriptor.generation,
-                runtime_event.kind(),
-                event_sequence,
-                runtime_event.connection_id(),
-                runtime_event.now_ms(),
-                0,
-                payload.as_bytes(),
-            );
-            signal_slot(descriptor.supervisor_wake_notification_slot);
-        }
-        let mut egress = [0u8; ETHERNET_FRAME_BYTES];
-        match service.take_packet(&mut egress) {
-            Ok(Some(length)) => {
+            ChildTurnUnit::PublishServiceEvent => {
+                let Some(runtime_event) = service.pop_event() else {
+                    enter_standard_fault();
+                };
+                let payload = match runtime_event.payload() {
+                    Ok(payload) => payload,
+                    Err(_) => enter_standard_fault(),
+                };
+                event_sequence = next_sequence(event_sequence);
+                publish_exchange(
+                    event,
+                    descriptor.generation,
+                    runtime_event.kind(),
+                    event_sequence,
+                    runtime_event.connection_id(),
+                    runtime_event.now_ms(),
+                    0,
+                    payload.as_bytes(),
+                );
+                signal_slot(descriptor.supervisor_wake_notification_slot);
+            }
+            ChildTurnUnit::PublishEgress => {
+                let mut egress = [0u8; ETHERNET_FRAME_BYTES];
+                let length = match service.take_packet(&mut egress) {
+                    Ok(Some(length)) => length,
+                    Ok(None) | Err(_) => enter_standard_fault(),
+                };
                 packet_tx_sequence = next_sequence(packet_tx_sequence);
                 publish_packet(
                     packet_tx,
@@ -264,8 +225,78 @@ pub unsafe extern "C" fn _start(descriptor: *const u8) -> ! {
                 );
                 signal_slot(descriptor.packet_tx_wake_notification_slot);
             }
-            Ok(None) => {}
-            Err(_) => enter_standard_fault(),
+            ChildTurnUnit::PollService => {
+                let outcome = match service.poll_service_unit(now_ms(descriptor.timer_clock_hz)) {
+                    Ok(outcome) => outcome,
+                    Err(_) => enter_standard_fault(),
+                };
+                if outcome == ServicePollOutcome::Complete {
+                    if last_control_sequence > last_output_drained_sequence {
+                        if let Some(connection_id) = service.output_drained_connection() {
+                            if completions
+                                .push_back((
+                                    ExchangeKind::OutputDrained,
+                                    last_control_sequence,
+                                    connection_id,
+                                ))
+                                .is_err()
+                            {
+                                enter_standard_fault();
+                            }
+                            last_output_drained_sequence = last_control_sequence;
+                        }
+                    }
+                    turn_scheduler.complete(ChildTurnUnit::PollService);
+                }
+            }
+            ChildTurnUnit::IngestPacket => {
+                let snapshot = read_packet(packet_rx, descriptor.generation, last_packet_sequence);
+                match snapshot {
+                    Ok((sequence, packet)) => {
+                        if service.ingest_packet(packet.as_slice()).is_err() {
+                            enter_standard_fault();
+                        }
+                        last_packet_sequence = sequence;
+                        if completions
+                            .push_back((ExchangeKind::PacketConsumed, sequence, 0))
+                            .is_err()
+                        {
+                            enter_standard_fault();
+                        }
+                        turn_scheduler.complete(ChildTurnUnit::IngestPacket);
+                        turn_scheduler.request_service();
+                    }
+                    Err(RuntimeError::Backpressure) => turn_scheduler.request_service(),
+                    Err(_) => enter_standard_fault(),
+                }
+            }
+            ChildTurnUnit::ApplyControl => {
+                #[cfg(feature = "qemu-evidence")]
+                cohesix_console_network_qemu_evidence_control_handler();
+                match read_control(command, descriptor.generation, last_control_sequence) {
+                    Ok((sequence, kind, payload)) => {
+                        let payload = match core::str::from_utf8(payload.as_slice()) {
+                            Ok(payload) => payload,
+                            Err(_) => enter_standard_fault(),
+                        };
+                        if service.apply_control(kind, payload).is_err() {
+                            enter_standard_fault();
+                        }
+                        last_control_sequence = sequence;
+                        if completions
+                            .push_back((ExchangeKind::ControlCompleted, sequence, 0))
+                            .is_err()
+                        {
+                            enter_standard_fault();
+                        }
+                        turn_scheduler.complete(ChildTurnUnit::ApplyControl);
+                        turn_scheduler.request_service();
+                    }
+                    Err(RuntimeError::Backpressure) => turn_scheduler.request_service(),
+                    Err(_) => enter_standard_fault(),
+                }
+            }
+            ChildTurnUnit::Idle => {}
         }
     }
 }
@@ -278,11 +309,22 @@ fn install_ipc_buffer(descriptor: RuntimeInitDescriptor) {
     }
 }
 
+/// Cross an MCS refill boundary before admitting the next material child unit.
+///
+/// The first call follows the published `Ready` event, and every ordinary
+/// child-unit arm falls through to another call on loop re-entry.  Yielding
+/// before the wait prevents an already-active notification from composing the
+/// next unit on the current refill.  Terminal teardown deliberately uses its
+/// separate wait-only park loop because it performs no further service work.
 fn wait_for_work(descriptor: RuntimeInitDescriptor) -> u64 {
     let mut badge: sel4_sys::seL4_Word = 0;
     // SAFETY: Validation fixes this CPtr to the child's sole Read notification
-    // cap. Waiting blocks its active MCS scheduling context when idle.
+    // cap. On MCS, Yield charges the complete remaining head refill without
+    // raising a timeout fault; the following Wait then blocks when no admitted
+    // work is pending. Keeping both syscalls in this existing block preserves
+    // the unsafe surface while enforcing one material unit per refill.
     let _ = unsafe {
+        sel4_sys::seL4_Yield();
         sel4_sys::seL4_Wait(
             descriptor.child_wake_notification_slot as sel4_sys::seL4_CPtr,
             &mut badge,

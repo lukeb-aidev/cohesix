@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Regression manifest enabling host/policy/audit/replay surfaces."
 
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [profile]
 name = "virt-aarch64"

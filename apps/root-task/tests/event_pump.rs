@@ -59,6 +59,11 @@ impl IpcDispatcher for CountingIpc {
     fn dispatch(&mut self, _now_ms: u64) {
         self.calls += 1;
     }
+
+    #[cfg(all(feature = "kernel", feature = "net-console"))]
+    fn dispatch_runtime_unit(&mut self, _now_ms: u64, _unit: root_task::event::RuntimeIpcUnit) {
+        self.calls += 1;
+    }
 }
 
 struct AuditCapture {

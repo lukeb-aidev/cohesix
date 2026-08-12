@@ -462,12 +462,100 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     root_elf_path = root_dir / "target" / "root-task"
     root_elf_path.write_bytes(root_elf_raw)
 
+    qemu_out = root_dir / "qemu-out"
+    sel4_build = root_dir / "sel4-build"
+    sel4_build.mkdir(parents=True)
+    launch_bytes = {
+        "elfloader": b"canonical-elfloader",
+        "kernel": b"canonical-kernel",
+        "rootserver": root_elf_raw,
+        "initrd": b"canonical-system-cpio",
+    }
+    launch_rows = []
+    for identifier, relative in evidence.QEMU_LAUNCH_ARTIFACTS:
+        path = qemu_out / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        raw = launch_bytes[identifier]
+        path.write_bytes(raw)
+        launch_rows.append(
+            {
+                "id": identifier,
+                "path": relative.as_posix(),
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    launch_record_path = qemu_out / "cohesix-qemu-launch-artifacts.json"
+    _write(
+        launch_record_path,
+        {
+            "schema": evidence.QEMU_LAUNCH_SCHEMA,
+            "profile": "release",
+            "cargo_target": "aarch64-unknown-none",
+            "root_task_features": "release-qemu,bootstrap-trace",
+            "sel4_build_dir": str(sel4_build.resolve()),
+            "gic_version": "3",
+            "artifacts": launch_rows,
+        },
+    )
+
     session = _session("qemu")
+    source_inventory_raw = b'{"schema":"cohesix-source-inventory/v1"}\n'
+    worker_abi_raw = b'{"schema":"cohesix-worker-abi-identity/v1"}\n'
+    cyw43_raw = b'{"schema":"cohesix-cyw43-coexistence-binding/v1"}\n'
+    (root_dir / "source-inventory.json").write_bytes(source_inventory_raw)
+    (root_dir / "worker-abi-identity.json").write_bytes(worker_abi_raw)
+    (root_dir / "qemu-cyw43-coexistence.json").write_bytes(cyw43_raw)
+    session["source_sha256"] = hashlib.sha256(source_inventory_raw).hexdigest()
+    session["worker_abi_sha256"] = hashlib.sha256(worker_abi_raw).hexdigest()
+    session["cyw43_coexistence_record_sha256"] = hashlib.sha256(cyw43_raw).hexdigest()
+    session["kernel_sha256"] = hashlib.sha256(launch_bytes["kernel"]).hexdigest()
+    session["root_image_sha256"] = hashlib.sha256(root_elf_raw).hexdigest()
     session["driver_archive_sha256"] = hashlib.sha256(driver_archive_raw).hexdigest()
     session["worker_archive_sha256"] = hashlib.sha256(archive_raw).hexdigest()
     session["worker_image_manifest_sha256"] = hashlib.sha256(manifest_raw).hexdigest()
     session_path = root_dir / "target-session.json"
     session_raw = _write(session_path, session)
+
+    auth_uart_path = root_dir / "auth-uart.log"
+    auth_uart_path.write_text(
+        "[cohsh-net][auth] auth OK, session established (generation=1 conn_id=1)\n",
+        encoding="utf-8",
+    )
+    operation_path = root_dir / "scripts" / "cohsh" / "9p_batch.coh"
+    operation_path.parent.mkdir(parents=True)
+    operation_path.write_text("attach queen\nEXPECT OK\nls /\n", encoding="utf-8")
+
+    def observation_file(path: Path) -> dict[str, object]:
+        raw = path.read_bytes()
+        return {
+            "path": str(path.resolve()),
+            "present": True,
+            "size_bytes": len(raw),
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        }
+
+    auth_observation_path = root_dir / "target-observation.json"
+    _write(
+        auth_observation_path,
+        {
+            "schema": evidence.QEMU_AUTH_OBSERVATION_SCHEMA,
+            "banner": "NON-CLAIMING TARGET DIAGNOSTIC",
+            "claiming": False,
+            "result": "PASS",
+            "first_failing_proof_layer": None,
+            "detail": "root/service readiness and one live operation proved",
+            "target": "qemu",
+            "focus": "ninedoor",
+            "run_id": "fixture-auth-pass",
+            "profile": evidence.QEMU_AUTH_OBSERVATION_PROFILE,
+            "serial_log": observation_file(auth_uart_path),
+            "serial_source_log": str(auth_uart_path.resolve()),
+            "built_image": observation_file(qemu_out / "cohesix-system.cpio"),
+            "image_identity": observation_file(launch_record_path),
+            "operation_script": observation_file(operation_path),
+        },
+    )
 
     generated = _generated_record("qemu")
     temporal = generated["topology"]["temporal_authority"]
@@ -677,25 +765,54 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             + "\n"
         )
 
-    def service_gdb_text(service: str) -> str:
+    def service_gdb_text(service: str, mode: str) -> str:
         handler = evidence.QEMU_SERVICE_SYMBOLS[service][0]
         lines = [
             "M26E_QEMU_SESSION target=qemu machine=virt gic_version=3 "
             f"root_image_sha256={session['root_image_sha256']} "
             f"worker_archive_sha256={session['worker_archive_sha256']} "
             f"topology_sha256={generated['topology_sha256']}",
-            f"M26E_GDB_SERVICE_ELF service={service} "
+            "M26E_QEMU_AUTH result=PASS "
+            f"observation_sha256={_hash('auth-observation')} "
+            "observation_bytes=64 "
+            f"serial_sha256={_hash('auth-uart')} "
+            "serial_bytes=64 "
+            f"launch_record_sha256={_hash('launch-record')} "
+            "launch_record_bytes=64 "
+            f"target_session_sha256={hashlib.sha256(session_raw).hexdigest()} "
+            f"target_session_bytes={len(session_raw)}",
+            f"M26E_GDB_SERVICE_ELF service={service} mode={mode} "
             f"elf_sha256={hashlib.sha256(service_raw[service]).hexdigest()} "
+            f"elf_bytes={len(service_raw[service])} "
             f"root_image_sha256={session['root_image_sha256']}",
-            f"M26E_GDB_SERVICE_INJECTION service={service} phase=during-ipc "
-            f"symbol={handler} action=redirect-standard-fault result=continued",
         ]
-        if service == "console-network":
-            lines.append(
-                "M26E_GDB_SERVICE_INJECTION service=console-network "
-                f"phase=budget-exhaustion symbol={handler} "
-                "action=redirect-timeout-spin result=continued"
+        if mode == "between-calls-revoke":
+            lines.extend(
+                [
+                    "M26E_GDB_SERVICE_ROOT_ELF "
+                    f"service={service} mode={mode} "
+                    f"elf_sha256={hashlib.sha256(root_elf_raw).hexdigest()} "
+                    f"elf_bytes={len(root_elf_raw)} "
+                    f"root_image_sha256={session['root_image_sha256']}",
+                    "M26E_GDB_SERVICE_INJECTION service=ninedoor-service "
+                    "phase=between-calls "
+                    f"symbol={evidence.QEMU_NINEDOOR_ROOT_SYMBOLS[0]} "
+                    "action=redirect-local-revoke result=continued",
+                ]
             )
+        else:
+            if mode == "budget-exhaustion-timeout":
+                lines.append(
+                    "M26E_GDB_SERVICE_INJECTION service=console-network "
+                    f"phase=budget-exhaustion symbol={handler} "
+                    "action=redirect-timeout-spin result=continued"
+                )
+            else:
+                lines.append(
+                    f"M26E_GDB_SERVICE_INJECTION service={service} "
+                    f"phase=during-call symbol={handler} "
+                    "action=redirect-standard-fault result=continued"
+                )
         return "\n".join(lines) + "\n"
 
     critical_gdb_text = "\n".join(
@@ -716,10 +833,39 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
     ) + "\n"
 
     service_gdb_paths = []
-    for service in evidence.QEMU_SERVICE_SYMBOLS:
-        path = root_dir / f"service-gdb-{service}.log"
-        path.write_text(service_gdb_text(service), encoding="utf-8")
+    for service, mode in evidence.QEMU_SERVICE_EVIDENCE_PLAN:
+        path = root_dir / f"service-gdb-{service}-{mode}.log"
+        path.write_text(service_gdb_text(service, mode), encoding="utf-8")
         service_gdb_paths.append(path)
+
+    ninedoor_teardown = (
+        "NINEDOOR_SERVICE_TEARDOWN generation=1 tcb_suspended=yes "
+        "mappings_scrubbed=yes recovery_reply_revoked=yes "
+        "capabilities_revoked=yes generation_fenced=yes state=terminal"
+    )
+    console_teardown = (
+        "CONSOLE_NETWORK_TEARDOWN generation={generation} tcb_suspended=yes "
+        "scheduling_context_unbound=yes mappings_scrubbed=yes "
+        "capabilities_revoked=yes objects_deleted=yes "
+        "generation_fenced=yes state=terminal"
+    )
+    service_uart_texts = (
+        "[ninedoor-service] generation=1 terminal-fault class=Standard sequence=1\n"
+        f"{ninedoor_teardown}\n",
+        "[ninedoor-service] generation=1 terminal-revoke state=local\n"
+        f"{ninedoor_teardown}\n",
+        "[console-network] generation=1 terminal-fault class=Standard sequence=1\n"
+        + console_teardown.format(generation=1)
+        + "\n",
+        "[console-network] generation=1 terminal-fault class=Timeout sequence=1\n"
+        + console_teardown.format(generation=1)
+        + "\n",
+    )
+    service_uart_paths = []
+    for index, text in enumerate(service_uart_texts, start=1):
+        path = root_dir / f"service-uart-{index}.log"
+        path.write_text(text, encoding="utf-8")
+        service_uart_paths.append(path)
     critical_gdb_path = root_dir / "critical-gdb.log"
     critical_gdb_path.write_text(critical_gdb_text, encoding="utf-8")
 
@@ -905,6 +1051,7 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         preflight_uart=preflight_uart,
         preflight_gdb_log=preflight_gdb_paths,
         preflight_service_gdb_log=service_gdb_paths,
+        preflight_service_uart=service_uart_paths,
         preflight_critical_gdb_log=critical_gdb_path,
         uart=uart_paths,
         cohsh=cohsh_path,
@@ -916,6 +1063,8 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
             for service in evidence.QEMU_SERVICE_SYMBOLS
         ],
         root_elf=root_elf_path,
+        qemu_out=qemu_out,
+        auth_observation=auth_observation_path,
         worker_archive=archive_path,
         driver_archive=driver_archive_path,
         worker_image_manifest=manifest_path,
@@ -923,6 +1072,303 @@ def _live_qemu_inputs(root_dir: Path) -> SimpleNamespace:
         run_dir=run_dir,
         out_dir=root_dir / "collected",
     )
+
+
+def _qemu_target_session_inputs(root_dir: Path) -> SimpleNamespace:
+    repo = root_dir / "repo"
+    repo.mkdir()
+    (repo / ".gitignore").write_text("/out/\n", encoding="utf-8")
+    abi_manifest = repo / "crates/worker-task-abi/Cargo.toml"
+    abi_source = repo / "crates/worker-task-abi/src/lib.rs"
+    abi_manifest.parent.mkdir(parents=True)
+    abi_source.parent.mkdir(parents=True)
+    abi_manifest.write_text("[package]\nname = \"worker-task-abi\"\n", encoding="utf-8")
+    abi_source.write_text(
+        "#![no_std]\npub const WORKER_TASK_ABI_VERSION: u16 = 1;\n",
+        encoding="utf-8",
+    )
+
+    manifest_path = repo / "configs/generated/root_task_resolved.json"
+    topology_path = repo / "configs/generated/root_task_topology.json"
+    manifest = {
+        "profile": {"name": "virt-aarch64"},
+        "worker_runtime": {"task_abi": {"enabled": True, "version": 1}},
+    }
+    manifest_raw = _write(manifest_path, manifest)
+    topology = _generated_record("qemu")
+    topology["manifest_sha256"] = hashlib.sha256(manifest_raw).hexdigest()
+    topology["topology"]["worker_runtime"]["task_abi"] = {
+        "enabled": True,
+        "version": 1,
+    }
+    topology["topology_sha256"] = evidence._canonical_json_sha256(  # noqa: SLF001
+        topology["topology"]
+    )
+    _write(topology_path, topology)
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+
+    qemu_out = repo / "out/cohesix"
+    sel4_build = repo / "out/sel4-build"
+    sel4_build.mkdir(parents=True)
+    launch_rows = []
+    for index, (identifier, relative) in enumerate(
+        evidence.QEMU_LAUNCH_ARTIFACTS, start=1
+    ):
+        raw = f"launch-{identifier}-{index}\n".encode("utf-8")
+        path = qemu_out / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+        launch_rows.append(
+            {
+                "id": identifier,
+                "path": relative.as_posix(),
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    launch_record = {
+        "schema": evidence.QEMU_LAUNCH_SCHEMA,
+        "profile": "release",
+        "cargo_target": "aarch64-unknown-none",
+        "root_task_features": "release-qemu,bootstrap-trace",
+        "sel4_build_dir": str(sel4_build.resolve()),
+        "gic_version": "3",
+        "artifacts": launch_rows,
+    }
+    _write(qemu_out / "cohesix-qemu-launch-artifacts.json", launch_record)
+
+    worker_members = []
+    worker_rows = []
+    for index, (name, role) in enumerate(
+        (
+            ("worker-heart", "worker-heartbeat"),
+            ("worker-gpu", "worker-gpu"),
+            ("worker-lora", "worker-lora"),
+        ),
+        start=1,
+    ):
+        raw = f"canonical-{role}-{index}\n".encode("utf-8")
+        archive_path = f"cohesix/worker/{name}"
+        worker_members.append((archive_path, raw))
+        canonical = qemu_out / "worker-images/canonical" / name
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        canonical.write_bytes(raw)
+        worker_rows.append(
+            {
+                "name": name,
+                "role": role,
+                "abi_version": 1,
+                "entry_version": 1,
+                "entry_symbol": "_start",
+                "entry_vaddr": 0x210000,
+                "flags": ["pointer-free", "init-page-in-x0"],
+                "archive_path": archive_path,
+                "source_sha256": _hash(f"source-{role}"),
+                "image_sha256": hashlib.sha256(raw).hexdigest(),
+                "image_bytes": len(raw),
+                "load_base_vaddr": 0x200000,
+                "load_limit_vaddr": 0x220000,
+                "load_span_bytes": 0x20000,
+                "metadata_vaddr": 0x200100,
+                "metadata_sha256": _hash(f"metadata-{role}"),
+                "stack_bytes": 16_384,
+                "ipc_buffer_bytes": 1_024,
+                "shared_page_bytes": 4_096,
+            }
+        )
+    worker_archive = evidence.worker_images.build_newc(tuple(sorted(worker_members)))
+    worker_archive_path = (
+        qemu_out / "worker-images/cohesix-worker-images.cpio"
+    )
+    worker_archive_path.parent.mkdir(parents=True, exist_ok=True)
+    worker_archive_path.write_bytes(worker_archive)
+    worker_manifest_path = (
+        qemu_out / "worker-images/cohesix-worker-image-manifest.json"
+    )
+    _write(
+        worker_manifest_path,
+        {
+            "schema": "cohesix-worker-image-manifest/v1",
+            "target": "aarch64-unknown-none",
+            "profile": "release",
+            "archive": {
+                "bytes": len(worker_archive),
+                "sha256": hashlib.sha256(worker_archive).hexdigest(),
+            },
+            "images": worker_rows,
+        },
+    )
+
+    driver_members = []
+    driver_rows = []
+    for index, (name, hot_path) in enumerate(
+        evidence.driver_runtimes.COMPONENTS, start=1
+    ):
+        raw = f"driver-{name}-{index}\n".encode("utf-8")
+        archive_path = f"cohesix/bin/{name}"
+        driver_members.append((archive_path, raw))
+        driver_rows.append(
+            {
+                "name": name,
+                "hot_path": hot_path,
+                "archive_path": archive_path,
+                "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            }
+        )
+    driver_archive = evidence.driver_runtimes.build_newc(
+        tuple(sorted(driver_members))
+    )
+    driver_archive_path = (
+        qemu_out / "driver-runtimes/cohesix-driver-runtimes.cpio"
+    )
+    driver_archive_path.parent.mkdir(parents=True, exist_ok=True)
+    driver_archive_path.write_bytes(driver_archive)
+    driver_manifest_path = (
+        qemu_out / "driver-runtimes/cohesix-driver-runtime-manifest.json"
+    )
+    _write(
+        driver_manifest_path,
+        {
+            "schema": evidence.driver_runtimes.SCHEMA,
+            "target": evidence.driver_runtimes.EXPECTED_TARGET,
+            "profile": "release",
+            "scheduler": "mcs-active-sc",
+            "runtime_init_abi_version": (
+                evidence.driver_runtimes.RUNTIME_INIT_ABI_VERSION
+            ),
+            "archive": {
+                "name": evidence.driver_runtimes.ARCHIVE_NAME,
+                "bytes": len(driver_archive),
+                "sha256": hashlib.sha256(driver_archive).hexdigest(),
+            },
+            "classic_comparator": {
+                "provenance": "retired-26d-classic-driver-archive",
+                "sha256": _hash("classic-driver"),
+                "record_sha256": _hash("classic-record"),
+            },
+            "components": driver_rows,
+        },
+    )
+    run_dir = repo / "out/run"
+    run_dir.mkdir()
+    return SimpleNamespace(
+        repo_root=repo,
+        qemu_out=qemu_out,
+        resolved_manifest=manifest_path,
+        topology=topology_path,
+        out_dir=run_dir / "session",
+        worker_archive=worker_archive_path,
+        driver_archive=driver_archive_path,
+        launch_root=qemu_out / "staging/rootserver",
+    )
+
+
+def _stub_session_manifest_validators(monkeypatch: pytest.MonkeyPatch) -> None:
+    def verify_worker(manifest_path: Path, archive_path: Path) -> dict[str, object]:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archive = archive_path.read_bytes()
+        if manifest["archive"] != {
+            "bytes": len(archive),
+            "sha256": hashlib.sha256(archive).hexdigest(),
+        }:
+            raise evidence.worker_images.WorkerImageError(
+                "Worker archive identity does not match"
+            )
+        return manifest
+
+    def verify_driver(manifest_path: Path, archive_path: Path) -> dict[str, object]:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        archive = archive_path.read_bytes()
+        if manifest["archive"] != {
+            "name": evidence.driver_runtimes.ARCHIVE_NAME,
+            "bytes": len(archive),
+            "sha256": hashlib.sha256(archive).hexdigest(),
+        }:
+            raise evidence.driver_runtimes.DriverRuntimeManifestError(
+                "driver archive identity does not match"
+            )
+        return manifest
+
+    monkeypatch.setattr(evidence.worker_images, "verify_manifest", verify_worker)
+    monkeypatch.setattr(evidence.driver_runtimes, "verify_manifest", verify_driver)
+
+
+def test_qemu_target_session_emitter_derives_exact_frozen_graph(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_session_manifest_validators(monkeypatch)
+    inputs = _qemu_target_session_inputs(tmp_path)
+    evidence._emit_qemu_target_session(inputs)  # noqa: SLF001
+
+    assert {path.name for path in inputs.out_dir.iterdir()} == {
+        "source-inventory.json",
+        "worker-abi-identity.json",
+        "qemu-cyw43-coexistence.json",
+        "target-session.json",
+    }
+    session = json.loads((inputs.out_dir / "target-session.json").read_text())
+    evidence._target_session(session, "qemu")  # noqa: SLF001
+    assert session["root_image_sha256"] == hashlib.sha256(
+        inputs.launch_root.read_bytes()
+    ).hexdigest()
+    assert session["worker_archive_sha256"] == hashlib.sha256(
+        inputs.worker_archive.read_bytes()
+    ).hexdigest()
+    assert session["driver_archive_sha256"] == hashlib.sha256(
+        inputs.driver_archive.read_bytes()
+    ).hexdigest()
+    for name, field in (
+        ("source-inventory.json", "source_sha256"),
+        ("worker-abi-identity.json", "worker_abi_sha256"),
+        ("qemu-cyw43-coexistence.json", "cyw43_coexistence_record_sha256"),
+    ):
+        assert hashlib.sha256((inputs.out_dir / name).read_bytes()).hexdigest() == session[
+            field
+        ]
+    with pytest.raises(evidence.EvidenceError, match="must not already exist"):
+        evidence._emit_qemu_target_session(inputs)  # noqa: SLF001
+
+
+def test_qemu_target_session_emitter_rejects_launch_byte_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_session_manifest_validators(monkeypatch)
+    inputs = _qemu_target_session_inputs(tmp_path)
+    inputs.launch_root.write_bytes(b"tampered-root\n")
+    with pytest.raises(evidence.EvidenceError, match="launch artifact bytes differ"):
+        evidence._emit_qemu_target_session(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
+
+
+def test_qemu_target_session_emitter_rejects_manifest_topology_drift(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_session_manifest_validators(monkeypatch)
+    inputs = _qemu_target_session_inputs(tmp_path)
+    topology = json.loads(inputs.topology.read_text())
+    topology["manifest_sha256"] = "0" * 64
+    _write(inputs.topology, topology)
+    with pytest.raises(evidence.EvidenceError, match="selected target manifest"):
+        evidence._emit_qemu_target_session(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
+
+
+def test_qemu_target_session_emitter_rejects_worker_archive_tamper(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_session_manifest_validators(monkeypatch)
+    inputs = _qemu_target_session_inputs(tmp_path)
+    inputs.worker_archive.write_bytes(inputs.worker_archive.read_bytes() + b"tamper")
+    with pytest.raises(evidence.EvidenceError, match="canonical Worker/driver"):
+        evidence._emit_qemu_target_session(inputs)  # noqa: SLF001
+    assert not inputs.out_dir.exists()
 
 
 def test_component_validator_accepts_exact_three_role_graph() -> None:
@@ -938,10 +1384,13 @@ def test_live_qemu_preflight_and_final_collection_are_semantically_derived(
         SimpleNamespace(
             target_session=inputs.target_session,
             generated_inventory=inputs.generated_inventory,
+            qemu_out=inputs.qemu_out,
+            auth_observation=inputs.auth_observation,
             uart=inputs.preflight_uart,
             cohsh=inputs.cohsh,
             gdb_log=inputs.preflight_gdb_log,
             service_gdb_log=inputs.preflight_service_gdb_log,
+            service_uart=inputs.preflight_service_uart,
             critical_gdb_log=inputs.preflight_critical_gdb_log,
             worker_archive=inputs.worker_archive,
             driver_archive=inputs.driver_archive,
@@ -1076,6 +1525,11 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
         for symbol in symbols:
             symbol_lines.append(f"{address:016x} T {symbol}")
             address += 0x100
+    for symbol in evidence.QEMU_NINEDOOR_ROOT_SYMBOLS:
+        symbol_lines.append(
+            f"{address:016x} T {evidence.QEMU_NINEDOOR_ROOT_MODULE}::{symbol}"
+        )
+        address += 0x100
     for symbol in evidence.QEMU_CRITICAL_SYMBOLS:
         symbol_lines.append(f"{address:016x} T {symbol}")
         address += 0x100
@@ -1087,19 +1541,27 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
     )
     fake_nm.chmod(0o755)
 
-    for service in evidence.QEMU_SERVICE_SYMBOLS:
+    for service, mode in evidence.QEMU_SERVICE_EVIDENCE_PLAN:
         handler = evidence.QEMU_SERVICE_SYMBOLS[service][0]
-        rows = [
-            "M26E_GDB_SERVICE_INJECTION "
-            f"service={service} phase=during-ipc symbol={handler} "
-            "action=redirect-standard-fault result=continued"
-        ]
-        if service == "console-network":
-            rows.append(
+        if mode == "between-calls-revoke":
+            rows = [
+                "M26E_GDB_SERVICE_INJECTION service=ninedoor-service "
+                "phase=between-calls "
+                f"symbol={evidence.QEMU_NINEDOOR_ROOT_SYMBOLS[0]} "
+                "action=redirect-local-revoke result=continued"
+            ]
+        else:
+            rows = [
+                "M26E_GDB_SERVICE_INJECTION "
+                f"service={service} phase=during-call symbol={handler} "
+                "action=redirect-standard-fault result=continued"
+            ]
+        if mode == "budget-exhaustion-timeout":
+            rows = [
                 "M26E_GDB_SERVICE_INJECTION service=console-network "
                 f"phase=budget-exhaustion symbol={handler} "
                 "action=redirect-timeout-spin result=continued"
-            )
+            ]
         fake_gdb.write_text(
             "#!/bin/sh\nprintf '%s\\n' "
             + " ".join(repr(row) for row in rows)
@@ -1107,7 +1569,7 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
             encoding="utf-8",
         )
         fake_gdb.chmod(0o755)
-        output = tmp_path / f"runner-{service}.log"
+        output = tmp_path / f"runner-{service}-{mode}.log"
         evidence._qemu_service_gdb(  # noqa: SLF001 - production runner contract
             SimpleNamespace(
                 gdb=fake_gdb,
@@ -1115,14 +1577,23 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
                 remote="127.0.0.1:1234",
                 target_session=inputs.target_session,
                 generated_inventory=inputs.generated_inventory,
+                qemu_out=inputs.qemu_out,
+                auth_observation=inputs.auth_observation,
                 service=service,
+                mode=mode,
                 service_elf=Path(service_paths[service]),
+                root_elf=(
+                    inputs.root_elf if mode == "between-calls-revoke" else None
+                ),
                 timeout_secs=5,
                 out=output,
             )
         )
-        assert f"M26E_GDB_SERVICE_ELF service={service}" in output.read_text(
-            encoding="utf-8"
+        transcript = output.read_text(encoding="utf-8")
+        assert f"M26E_GDB_SERVICE_ELF service={service} mode={mode}" in transcript
+        assert "M26E_QEMU_AUTH result=PASS" in transcript
+        assert ("M26E_GDB_SERVICE_ROOT_ELF" in transcript) == (
+            mode == "between-calls-revoke"
         )
 
     critical_rows = [
@@ -1153,6 +1624,41 @@ def test_qemu_service_and_critical_gdb_runners_bind_exact_elfs(
     assert critical_output.read_text(encoding="utf-8").count(
         "M26E_GDB_CRITICAL_OBSERVATION"
     ) == 4
+
+
+def test_qemu_service_evidence_rejects_auth_bypass_and_copied_session(
+    tmp_path: Path,
+) -> None:
+    inputs = _live_qemu_inputs(tmp_path)
+    session_raw = inputs.target_session.read_bytes()
+    session = json.loads(session_raw)
+
+    observation = json.loads(inputs.auth_observation.read_text(encoding="utf-8"))
+    uart_path = Path(observation["serial_log"]["path"])
+    uart_path.write_text("Cohesix console ready\n", encoding="utf-8")
+    uart_raw = uart_path.read_bytes()
+    observation["serial_log"]["size_bytes"] = len(uart_raw)
+    observation["serial_log"]["sha256"] = hashlib.sha256(uart_raw).hexdigest()
+    _write(inputs.auth_observation, observation)
+    with pytest.raises(evidence.EvidenceError, match="live authenticated cohsh"):
+        evidence._validate_authenticated_qemu_observation(  # noqa: SLF001
+            inputs.auth_observation,
+            inputs.qemu_out,
+            inputs.target_session,
+            session,
+            session_raw,
+        )
+
+    copied_dir = tmp_path / "copied-session"
+    copied_dir.mkdir()
+    copied_session = copied_dir / "target-session.json"
+    copied_session.write_bytes(session_raw)
+    with pytest.raises(evidence.EvidenceError, match="source-inventory"):
+        evidence._validate_emitted_target_session_bundle(  # noqa: SLF001
+            copied_session,
+            session,
+            session_raw,
+        )
 
 
 def test_component_emitter_binds_explicit_session_integrations_and_observations(

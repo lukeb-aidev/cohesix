@@ -6,7 +6,7 @@ author = "Lukas Bower"
 purpose = "Root-task manifest input for coh-rtc."
 
 [root_task]
-schema = "1.10"
+schema = "1.11"
 
 [root_task.affinity]
 enabled = true
@@ -359,7 +359,8 @@ timeout_badge = 653131777
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2500
-wcet_provenance = "m26e-qemu-root-operator-runtime-ipc-network-phase-candidate-v4"
+wcet_provenance = "m26e-qemu-root-exclusive-predispatch-candidate-v23"
+virtio_operator_serial_io_bytes_per_turn = 64
 fault_handler = "root-fault"
 critical_reserve = true
 
@@ -385,7 +386,7 @@ timeout_badge = 653131778
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2400
-wcet_provenance = "m26e-qemu-containment-candidate-v2"
+wcet_provenance = "m26e-qemu-root-fault-service-units-candidate-v6"
 fault_handler = "root-emergency"
 critical_reserve = true
 
@@ -423,12 +424,12 @@ core = 1
 scheduling_context_slot = 4
 scheduling_context_bits = 8
 sched_control_core = 1
-budget_us = 750
+budget_us = 3000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 1400
+response_time_us = 4800
 admitted = true
 max_refills = 2
 priority = 210
@@ -436,8 +437,8 @@ mcp = 210
 timeout_badge = 653131780
 timeout_policy = "terminal"
 consumed_time_evidence = true
-wcet_us = 600
-wcet_provenance = "m26e-qemu-candidate-v1"
+wcet_us = 2400
+wcet_provenance = "m26e-qemu-root-worker-supervisor-cold-activation-candidate-v15"
 fault_handler = "root-fault"
 critical_reserve = true
 
@@ -449,12 +450,12 @@ core = 1
 scheduling_context_slot = 5
 scheduling_context_bits = 8
 sched_control_core = 1
-budget_us = 1000
+budget_us = 3000
 period_us = 10000
 deadline_us = 10000
 blocking_us = 0
 jitter_us = 0
-response_time_us = 800
+response_time_us = 2400
 admitted = true
 max_refills = 2
 priority = 220
@@ -462,8 +463,8 @@ mcp = 220
 timeout_badge = 653131781
 timeout_policy = "terminal"
 consumed_time_evidence = true
-wcet_us = 800
-wcet_provenance = "m26e-qemu-candidate-v1"
+wcet_us = 2400
+wcet_provenance = "m26e-qemu-root-driver-supervisor-cold-activation-candidate-v15"
 fault_handler = "root-fault"
 critical_reserve = true
 
@@ -558,7 +559,7 @@ timeout_badge = 653131783
 timeout_policy = "terminal"
 consumed_time_evidence = true
 wcet_us = 2400
-wcet_provenance = "m26e-qemu-console-auth-candidate-v2"
+wcet_provenance = "m26e-qemu-console-bounded-stack-steps-candidate-v6"
 fault_handler = "root-fault"
 
 [console_network_service]

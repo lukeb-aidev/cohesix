@@ -44,6 +44,19 @@ impl DocFragments {
             manifest.root_task.schema
         )
         .ok();
+        if let Some(root_control) = manifest
+            .temporal_authority
+            .tasks
+            .iter()
+            .find(|task| task.id == "root-control")
+        {
+            writeln!(
+                schema_md,
+                "- `temporal_authority.root-control.virtio_operator_serial_io_bytes_per_turn`: `{}`",
+                root_control.virtio_operator_serial_io_bytes_per_turn
+            )
+            .ok();
+        }
         let affinity = &manifest.root_task.affinity;
         writeln!(
             schema_md,
