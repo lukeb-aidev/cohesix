@@ -2507,7 +2507,7 @@ Commands:
 Checks:
   - Interactive cohsh commands (tail, ping, ls, cat, echo, spawn, kill, bind, mount) remain attached without reconnect loops.
   - SwarmUI console session stays connected and updates hive telemetry.
-  - Regression pack passes unchanged.
+  - Applicable regression pack passes with existing contract outputs unchanged.
   - virtio-net TX logs show written_len == payload_len for console frames; no invalid UTF-8 in console stream.
 Deliverables:
   - Updated qemu + cohsh logs showing stable tail output.
@@ -2562,7 +2562,7 @@ Commands:
 Checks:
   - All interactive cohsh commands succeed without reconnect loops for both queen and worker roles.
   - SwarmUI console transport remains attached and renders hive updates.
-  - Regression pack passes unchanged.
+  - Applicable regression pack passes with existing contract outputs unchanged.
 Deliverables:
   - Updated QEMU + cohsh logs validating interactive parity and SwarmUI stability.
 
@@ -3185,7 +3185,7 @@ Deliverables:
 - Clients cannot choose names or paths.
 - Quotas and eviction/refusal behaviour are deterministic.
 - No new in-VM network services are introduced.
-- Regression Pack passes unchanged.
+- Applicable regression pack passes with existing contract outputs unchanged.
 - Documentation reflects actual behaviour.
 
 ---
@@ -3226,7 +3226,8 @@ Deliver host-only mount views for Secure9P namespaces, GPU lease UX, and pull-ba
 - Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
 - Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
 - Console semantics preserved (ACK-before-side-effects) for console-backed flows.
-- Regression pack runs unchanged; output drift fails and new tests are additive.
+- Applicable regressions pass; canonical output fixtures remain authoritative,
+  while tests evolve only under `AGENTS.md` Test Discipline.
 - CI runs mock-mode tests on x86_64.
 
 **Compiler touchpoints**
@@ -3813,7 +3814,8 @@ Provide a `coh run` wrapper that validates leases, runs a user command, and reco
 - Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
 - Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
 - Console semantics preserved (ACK-before-side-effects) for console-backed flows.
-- Regression pack runs unchanged; output drift fails and new tests are additive.
+- Applicable regressions pass; canonical output fixtures remain authoritative,
+  while tests evolve only under `AGENTS.md` Test Discipline.
 - CI runs mock-mode tests on x86_64.
 
 **Compiler touchpoints**
@@ -3898,7 +3900,8 @@ Provide `coh peft` commands that export LoRA jobs, import adapters, and atomical
 - Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
 - Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
 - Console semantics preserved (ACK-before-side-effects) for console-backed flows.
-- Regression pack runs unchanged; output drift fails and new tests are additive.
+- Applicable regressions pass; canonical output fixtures remain authoritative,
+  while tests evolve only under `AGENTS.md` Test Discipline.
 - CI runs mock-mode tests on x86_64.
 
 **Compiler touchpoints**
@@ -4016,7 +4019,8 @@ Deliver the `cohesix` Python client, runnable examples, `coh doctor`, and Alpha 
 - Bounded memory and bounded work per operation (no unbounded queues, no infinite retries) are enforced by limits and tests.
 - Secure9P invariants preserved (msize <= 8192, path validation, fid lifecycle).
 - Console semantics preserved (ACK-before-side-effects) for console-backed flows.
-- Regression pack runs unchanged; output drift fails and new tests are additive.
+- Applicable regressions pass; canonical output fixtures remain authoritative,
+  while tests evolve only under `AGENTS.md` Test Discipline.
 - CI runs mock-mode tests on x86_64.
 
 **Compiler touchpoints**
@@ -4120,7 +4124,7 @@ Enable a non-mock PEFT flow by publishing live `/gpu/models` and `/gpu/telemetry
 - Per-path polling respects min/max bounds; defaults match the values above.
 - `docs/TEST_PLAN.md` includes a non-mock PEFT flow section and live telemetry checks; new steps pass on macOS 26 and Ubuntu 24 bundles.
 - `docs/HOST_TOOLS.md` and `docs/GPU_NODES.md` document the live publish flow and required commands.
-- Regression pack runs unchanged; output drift fails.
+- Applicable regression pack passes; existing contract-output drift fails.
 - After Test Plan gates pass, release bundle minor version increments (e.g., `Cohesix-0.2.0-alpha2` → `Cohesix-0.3.0-alpha2`), with directory and tarball names updated.
 
 **Compiler touchpoints**
@@ -8893,11 +8897,13 @@ Deliverables: target-qualified refreshed evidence proving seL4 16 upgrade safety
 [Milestones](#Milestones)
 
 **Status:** In Progress — QEMU-first implementation and qualification are
-active now that Milestone 26d is complete. Pi 4 build, flash, execution, and
-fresh-hardware acceptance remain deferred until every host and four-core QEMU
-task gate below passes. Milestone 26e cannot close, and no Worker-runtime
-release acceptance may be emitted, until the later exact-image Pi 4 evidence
-also passes.
+active now that Milestone 26d is complete. Lightweight, non-claiming Pi 4
+checkpoints occur at the architectural boundaries required by
+`docs/TEST_PLAN.md`; they do not bypass the QEMU-first task order or qualify a
+release. Full Pi 4 qualification and fresh-hardware acceptance remain deferred
+until every required host and four-core QEMU task gate below passes. Milestone
+26e cannot close, and no Worker-runtime release acceptance may be emitted,
+until the later exact-image Pi 4 evidence also passes.
 
 **Why now (userspace TCB reduction):** Milestone 26d establishes honest
 seL4 16 kernel/profile truth and records that NineDoor parsing, TCP/smoltcp,
@@ -10038,7 +10044,8 @@ This milestone is **not** an extension of the existing host-side sidecar spool m
 - No general filesystem or POSIX surface introduced.
 - `/proc` remains read-only; spool append/ack writes are accepted only through documented role-scoped control paths.
 - VM vs Pi 4 boot profile semantics remain byte‑stable unless explicitly profile‑gated.
-- Regression pack passes unchanged; new tests are additive.
+- Applicable regressions pass; canonical output fixtures remain authoritative,
+  while tests evolve only under `AGENTS.md` Test Discipline.
 - Persistence-enabled benchmark evidence shows bounded spool/settings latency and no material status-read regression against the accepted 26d rolling baseline; any full hardware throughput rerun is required only if the active network/runtime hot path changed.
 
 ### Compiler touchpoints
@@ -11634,7 +11641,7 @@ Implementation requirements:
   not claim production Worker ticket/lease binding, complete driver-inventory
   ledger projection, or structured quarantine evidence until 28g exists.
 - Milestone 28d host-side AI control cannot be enabled in target profiles unless delegated REST identity, writer-epoch fencing, and audit/replay requirements are all active.
-- Regression pack passes unchanged in compatibility mode; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
+- Applicable regression pack preserves compatibility-mode contract outputs; any production-mode fixture update caused by delegated REST identity or strict Queen intent envelopes follows the documented breaking-change process.
 - Gateway authority benchmark evidence shows delegated REST identity, idempotency, writer-epoch refusal, and audit/replay emission stay bounded; any material status/read or write-path regression is classified before downstream MCP/A2A or AI host-control milestones depend on the gateway.
 
 ---
@@ -17255,7 +17262,10 @@ To prevent drift:
    - Enforced in the compiler and restated here: 9P2000.L, `msize ≤ 8192`, walk depth ≤ 8, no `..`, no fid reuse after clunk, no in-VM TCP listeners except the authenticated root-task console, CPIO < 4 MiB, no POSIX façade, maintain `no_std` for VM artefacts.
 
 5. **Regression Pack (post–Milestone 7c)**
-   - From Milestone 8 onward, any change that lands **MUST** re-run the shared regression pack from earlier milestones, not just new tests.
+   - From Milestone 8 onward, `docs/TEST_PLAN.md` and the declarative test
+     catalog determine development convergence and applicable acceptance
+     closure. Non-claiming convergence may precede the shared regression pack,
+     but never satisfies or replaces final staged acceptance.
    - Note: `.coh` scripts live in `scripts/cohsh/` and follow `docs/USERLAND_AND_CLI.md`.
    - The regression pack includes at minimum:
      - `tests/integration/qemu_tcp_console.rs` (Milestone 7 TCP console flow).
@@ -17266,9 +17276,12 @@ To prevent drift:
      - `scripts/cohsh/observe_watch.coh` (observability `/proc` grammar).
      - `scripts/cohsh/cas_roundtrip.coh` (CAS update round-trip).
    - CI for each Milestone ≥ 8 must:
-     - Run the full regression pack unchanged and fail on any output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
+     - Run the applicable canonical regression pack and fail on unexplained output drift (including ACK/ERR/END lines, `/proc` grammars, and telemetry formats).
      - Only permit intentional behaviour changes when the relevant CLI scripts, doc snippets, and manifest fields are updated **in the same change**.
-   - The regression pack is treated as the canonical “no-regression” harness; new tests are **additive**, not substitutes.
+   - Canonical protocol/as-built fixtures remain authoritative unless their
+     governing contract intentionally changes. Tests may be added, simplified,
+     consolidated, replaced, or removed under `AGENTS.md` Test Discipline;
+     test count is not a compatibility guarantee.
 
 6. **Cross-Milestone Stability Rules**
    - Changes to console ACK/ERR/END grammar, NineDoor error codes, or `/proc` node formats MUST be treated as breaking changes and require:

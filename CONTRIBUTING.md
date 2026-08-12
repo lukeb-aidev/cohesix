@@ -28,11 +28,12 @@ Read these sources in order:
 Every contribution must cite the exact active milestone or submilestone and
 task title/ID that authorizes it. If no active task covers the change, update
 and review the build plan first. Do not present cleanup, preparation, or future
-work as authorization.
+work as authorization. A direct governance-repair task may reconcile canonical
+documents without authorizing unrelated product implementation.
 
 Use the task template in `AGENTS.md` without changing its fields. Keep the
-change atomic: one stated goal, its tests, any required regeneration, and the
-matching documentation.
+change atomic: one stated goal, its applicable tests/evidence, any required
+regeneration, and the matching documentation.
 
 ## 2. Preserve Cohesix invariants
 
@@ -79,8 +80,9 @@ faithful to the existing protocol and authority model.
 
 - Follow idiomatic Rust, Python PEP 8 with type hints, and the repository's
   existing patterns.
-- Add or update tests for every touched logic path, including invalid and
-  boundary inputs.
+- Add or update tests only for distinct touched invariants under the Test
+  Discipline in `AGENTS.md`, including relevant invalid and boundary inputs.
+  Do not duplicate target behavior in host mocks merely because code changed.
 - Keep `unsafe` use exceptional and document each block with a precise
   `SAFETY:` invariant. Do not increase risk indicators without the exception
   process defined in `AGENTS.md`.
@@ -88,14 +90,20 @@ faithful to the existing protocol and authority model.
   formats unless the full breaking-change process is authorized.
 - Update public docs in the same change as public behavior. Describe what the
   selected profiles build today, and keep planned work clearly labelled.
-- Add the required native-comment metadata to every new or modified
-  human-authored file: author, purpose, and 2026 copyright for Lukas Bower.
+- Retain concise author, purpose, and current-year Lukas Bower copyright
+  metadata in human-authored, comment-capable files. Do not make commentless
+  formats invalid or invent metadata sidecars solely to satisfy this rule.
 - Remove only artifacts made obsolete by the scoped change. Do not fold
   unrelated cleanup into the contribution.
 
 ## 5. Validate locally
 
-Run the repository baseline from the workspace root:
+During target development, use the non-claiming convergence workflow and
+changed-path selection defined by `docs/TEST_PLAN.md` before broad closure.
+Convergence evidence never replaces acceptance evidence.
+
+Before merging AI-assisted Rust, run the repository baseline from the workspace
+root:
 
 ```bash
 cargo fmt --all -- --check
@@ -110,8 +118,13 @@ scripts/ci/test_plan_run.sh --list
 git diff --check
 ```
 
-Then run the staged Test Plan with a unique evidence directory and every
-surface-specific gate required by the active task:
+Documentation-only and non-Rust changes run their applicable documentation,
+metadata, generated-consistency, link, and surface checks; do not run unrelated
+Rust commands merely to satisfy a generic checklist.
+
+Run the complete staged Test Plan with a unique evidence directory when the
+active task or `docs/TEST_PLAN.md` requires acceptance, and before any milestone
+or release claim:
 
 ```bash
 scripts/ci/test_plan_run.sh --state-dir out/test-plan/<run-id>
