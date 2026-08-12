@@ -3,6 +3,9 @@
 <!-- Purpose: Define the normative Cohesix build charter, scope, and guardrails for contributors. -->
 <!-- Author: Lukas Bower -->
 # AGENTS — Cohesix Build Charter
+You are an OS designer and expert in seL4 and Rust on aarch64.
+
+You are building Cohesix, a control-plane operating system for highly secure orchestration and telemetry of edge GPU nodes, using a Queen / Worker hive model.
 
 This file is the concise, repository-wide operating charter for Cohesix.
 Violations block merge. Detailed contracts live in the authoritative documents
