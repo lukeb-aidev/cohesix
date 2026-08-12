@@ -80,9 +80,19 @@ product implementation.
   contracts.
 - Validate all user-controlled input and fail with typed deterministic errors.
   Never hard-code secrets.
-- Operator priority, bounded response flushing, scheduling budgets, namespaces,
-  driver mechanics, and Pi evidence follow their owning documents in the map
-  below.
+- Scheduling budgets, namespaces, driver mechanics, and Pi evidence follow
+  their owning documents in the map below.
+- Without an authenticated `cohsh`/TCP session, service physical operator input
+  first: serial, then local-seat USB keyboard, then HDMI feedback when present.
+- With an authenticated `cohsh`/TCP session, give that primary shell bounded
+  response-flush priority without starving serial/local-seat input, emergency
+  diagnostics, or fatal status.
+- Under load, preserve command liveness and bounded `ACK`/`ERR`/`END` on every
+  active operator surface. Reduce only nonessential mirroring, redraws,
+  progress breadcrumbs, verbose telemetry, and large tails.
+- Keep serial and local-seat operators informed with rate-limited, bounded
+  `idle`, `busy`, `high-load`, or `overload` summaries and the strongest known
+  blocker; status reporting cannot create unbounded queues.
 - Prefer the simplest design that preserves seL4 semantics, deterministic
   bounds, and manifest fidelity. Prevent stack overflow and memory corruption;
   reuse existing instrumentation before adding carefully bounded diagnostics.
@@ -123,10 +133,14 @@ product implementation.
 - Add or update only the tests and target evidence required by Test Discipline
   and TEST_PLAN. Update public documentation with public behavior or interface
   changes.
-- Material interface, lifecycle, authority, schema, default, namespace, or
-  performance changes require a same-change compatibility review of host tools,
-  `tools/cohesix-py`, benchmarks, fixtures, and docs. Record affected changes
-  and reviewed surfaces requiring no change.
+- Any material Cohesix change—including generated/as-built interfaces, schemas,
+  defaults, bounds, namespaces, authority, lifecycle or evidence semantics,
+  supported workflows, or performance-relevant behavior—requires a same-change
+  compatibility review of the complete host-tool suite, `tools/cohesix-py`
+  library, and performance benchmark scripts.
+- Update every affected implementation, generated contract, test or fixture,
+  benchmark workload or report schema, and document together. Record reviewed
+  surfaces requiring no change; unexplained cross-surface drift blocks merge.
 
 ## Test Discipline
 
@@ -238,6 +252,8 @@ Deliverables: <files, logs, doc updates>
   [SECURE9P.md](docs/SECURE9P.md), and
   [USERLAND_AND_CLI.md](docs/USERLAND_AND_CLI.md)
 - Security and threat boundaries: [SECURITY.md](docs/SECURITY.md)
+- Host-tool catalog and composition: [HOST_TOOLS.md](docs/HOST_TOOLS.md)
+- Performance methodology and reports: [BENCHMARKS.md](docs/BENCHMARKS.md)
 - Testing and evidence: [TEST_PLAN.md](docs/TEST_PLAN.md)
 - Contribution and language guidance: [CONTRIBUTING.md](CONTRIBUTING.md),
   [CODING_GUIDELINES.md](docs/CODING_GUIDELINES.md), and
